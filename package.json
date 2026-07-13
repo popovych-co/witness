@@ -1,0 +1,23 @@
+{
+  "name": "specflow",
+  "version": "0.1.0",
+  "description": "brainstorm-to-PR pipeline: specs are state, plans are motion, transitions are evidence-gated",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "specflow": "./dist/bin.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": { "yaml": "^2.7.0" },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
