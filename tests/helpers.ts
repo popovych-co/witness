@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { main, type Ctx } from '../src/cli.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
@@ -87,7 +89,10 @@ export async function seededRepo(recap: unknown = RECAP): Promise<TestRepo> {
 export async function writeSpec(repo: TestRepo, id: string, meta: unknown = SPEC_META, body = SPEC_BODY, effort = 'auth-hardening'): Promise<CliResult> {
   repo.write(`m-${id}.json`, JSON.stringify(meta))
   repo.write(`b-${id}.md`, body)
-  return repo.cli(['write', id, '--effort', effort, '--meta', `m-${id}.json`, '--body', `b-${id}.md`])
+  const res = await repo.cli(['write', id, '--effort', effort, '--meta', `m-${id}.json`, '--body', `b-${id}.md`])
+  rmSync(join(repo.root, `m-${id}.json`), { force: true })
+  rmSync(join(repo.root, `b-${id}.md`), { force: true })
+  return res
 }
 
 export const PLAN_META = {
@@ -103,5 +108,85 @@ export const PLAN_BODY = '## Step: s1\nImplement rotation with TDD.\n'
 export async function writePlan(repo: TestRepo, id: string, meta: unknown = PLAN_META, body = PLAN_BODY, effort = 'auth-hardening'): Promise<CliResult> {
   repo.write(`m-${id}.json`, JSON.stringify(meta))
   repo.write(`b-${id}.md`, body)
-  return repo.cli(['write', id, '--effort', effort, '--meta', `m-${id}.json`, '--body', `b-${id}.md`])
+  const res = await repo.cli(['write', id, '--effort', effort, '--meta', `m-${id}.json`, '--body', `b-${id}.md`])
+  rmSync(join(repo.root, `m-${id}.json`), { force: true })
+  rmSync(join(repo.root, `b-${id}.md`), { force: true })
+  return res
+}
+
+export function vitestBin(): string {
+  const req = createRequire(import.meta.url)
+  return join(dirname(req.resolve('vitest/package.json')), 'vitest.mjs')
+}
+
+export function fixtureEnv(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    PATH: process.env.PATH ?? '',
+    HOME: process.env.HOME ?? '',
+    SPECFLOW_TRUST_CMDS: '1',
+    VITEST_BIN: vitestBin(),
+    CI: '',
+    ...extra,
+  }
+}
+
+export function fakeCtx(root: string, opts: { tty?: boolean; answers?: string[]; env?: Record<string, string> } = {}): Ctx {
+  const answers = [...(opts.answers ?? [])]
+  return {
+    cwd: root,
+    env: { ...opts.env },
+    isTTY: opts.tty ?? answers.length > 0,
+    out: () => {},
+    err: () => {},
+    ask: async () => answers.shift() ?? '',
+  }
+}
+
+export function copyFixture(repo: TestRepo, name: 'vitest-single' | 'workspace'): void {
+  const src = fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
+  cpSync(src, repo.root, { recursive: true })
+  repo.git('add', '-A')
+  repo.git('commit', '-m', `fixture: ${name}`)
+}
+
+export function singleConfig(mode: 'filtered' | 'full-suite'): string {
+  const vb = vitestBin()
+  if (mode === 'filtered') {
+    return `schema: 1\ncriteria:\n  runner: 'node "${vb}" run -t "@spec:{id}" --passWithNoTests'\n`
+  }
+  return `schema: 1\ncriteria:\n  runner: full-suite\n  report: junit:**/reports/junit.xml\nship:\n  test: 'node "${vb}" run --reporter=junit --outputFile=reports/junit.xml'\n`
+}
+
+export function workspaceConfig(mode: 'filtered' | 'full-suite'): string {
+  if (mode === 'filtered') {
+    return `schema: 1\ncriteria:\n  runner: 'sh run-filtered.sh {id}'\n`
+  }
+  return `schema: 1\ncriteria:\n  runner: full-suite\n  report: junit:packages/*/reports/junit.xml\nship:\n  test: 'sh run-all.sh'\n`
+}
+
+export function stampLive(repo: TestRepo, id: string): void {
+  const rel = `specs/${id}.md`
+  repo.write(rel, repo.read(rel).replace('status: draft', 'status: live'))
+  repo.git('add', rel)
+  repo.git('commit', '-m', `stamp live: ${id}`, '-m', 'Specflow-State: 1')
+}
+
+export const TOKEN_FIXED = 'export function rotateDue(elapsed: number, ttl: number): boolean {\n  return elapsed >= ttl * 0.8\n}\n\nexport function nextToken(prev: string): string {\n  return `${prev}-r`\n}\n'
+
+export const TOKEN_BROKEN = 'export function rotateDue(): boolean {\n  return false\n}\n\nexport function nextToken(prev: string): string {\n  return prev\n}\n'
+
+export const TOKEN_TESTS_TAGGED = "import { expect, it } from 'vitest'\nimport { nextToken, rotateDue } from '../src/token'\n\nit('rotates token before expiry @spec:auth-refresh', () => {\n  expect(rotateDue(90, 100)).toBe(true)\n})\n\nit('issues a fresh token on rotation @spec:auth-refresh', () => {\n  expect(nextToken('a1')).not.toBe('a1')\n})\n"
+
+export const TOKEN_TESTS_UNTAGGED = "import { expect, it } from 'vitest'\n\nit('plain untagged unit test', () => {\n  expect(1 + 1).toBe(2)\n})\n"
+
+export function breakSingleFixture(repo: TestRepo): void {
+  repo.write('src/token.ts', TOKEN_BROKEN)
+  repo.git('add', 'src/token.ts')
+  repo.git('commit', '-m', 'break token rotation')
+}
+
+export function fixSingleFixture(repo: TestRepo): void {
+  repo.write('src/token.ts', TOKEN_FIXED)
+  repo.git('add', 'src/token.ts')
+  repo.git('commit', '-m', 'fix token rotation')
 }

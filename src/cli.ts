@@ -26,6 +26,9 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   index: () => import('./verbs/index-verb.js'),
   satisfy: () => import('./verbs/satisfy.js'),
   log: () => import('./verbs/log.js'),
+  'test-evidence': () => import('./verbs/evidence.js'),
+  'verify-red': () => import('./verbs/evidence.js').then((m) => ({ run: m.runVerifyRed })),
+  adopt: () => import('./verbs/adopt.js'),
 }
 
 export function version(): string {

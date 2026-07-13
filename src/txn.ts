@@ -9,6 +9,7 @@ export interface TxnMarker {
   op: string
   files: string[]
   journal?: { stream: string; line: string }
+  journalMulti?: Array<{ stream: string; line: string }>
 }
 
 const markerPath = (root: string) => join(root, '.specflow', 'txn.json')
@@ -47,11 +48,12 @@ export function rollbackTxn(root: string, marker: TxnMarker): void {
 }
 
 export function completeTxn(root: string, marker: TxnMarker): Result<{ sha: string }> {
-  if (marker.journal) {
-    const p = join(root, marker.journal.stream)
+  const items = [...(marker.journal ? [marker.journal] : []), ...(marker.journalMulti ?? [])]
+  for (const { stream, line } of items) {
+    const p = join(root, stream)
     const current = existsSync(p) ? readFileSync(p, 'utf8') : ''
     const lastLine = current.split('\n').filter(Boolean).at(-1)
-    if (lastLine !== marker.journal.line) appendFileSync(p, marker.journal.line + '\n')
+    if (lastLine !== line) appendFileSync(p, line + '\n')
   }
   const res = stateCommit(root, marker.files, `${marker.op} (recovered)`)
   if (res.ok) rmSync(markerPath(root), { force: true })

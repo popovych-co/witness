@@ -1,5 +1,6 @@
 import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { reconcileRows } from '../drift.js'
 import { primaryRoot } from '../gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { renderRefusal } from '../refusal.js'
@@ -67,6 +68,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith('plans/')))))
   const blocked = blockedRows(canon, ctx)
   if (blocked.length) rows('blocked', ['doc', 'why'], blocked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  const reconcile = reconcileRows(root, canon)
+  if (reconcile.length) {
+    rows('reconcile', ['spec', 'why', 'detail'], reconcile as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
   if (canon.docs.some((d) => (Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []).some((n) => typeof n.cmd === 'string'))) {
     ctx.out('note: cmd needs are not executed at scan — run specflow check')
   }
@@ -81,7 +86,9 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
         ? 'specflow recap --file <recap.json>'
         : emptyEffort
           ? `specflow write --effort ${emptyEffort.slug} --meta <m.json> --body <b.md> <spec-id>`
-          : 'specflow check'
+          : reconcile.some((r) => r.why === 'drift' || r.why === 'unconfirmed')
+            ? 'specflow check --drift'
+            : 'specflow check'
   ctx.out(`next: ${next}`)
   ctx.out('help: specflow check · index · diff <id> · log <id>')
   return EXIT.OK

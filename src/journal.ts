@@ -29,9 +29,12 @@ export function streamExists(root: string, id: string): boolean {
   return existsSync(join(root, journalRel(id)))
 }
 
+export const entryLine = (entry: { t: EntryType; [k: string]: unknown }): string =>
+  JSON.stringify({ v: 1, ...entry })
+
 export function appendEntry(root: string, id: string, entry: { t: EntryType; [k: string]: unknown }): string {
   mkdirSync(dir(root), { recursive: true })
-  const line = JSON.stringify({ v: 1, ...entry })
+  const line = entryLine(entry)
   appendFileSync(join(root, journalRel(id)), line + '\n')
   return line
 }

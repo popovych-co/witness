@@ -1,0 +1,5 @@
+{
+  "name": "fixture-vitest-single",
+  "private": true,
+  "type": "module"
+}

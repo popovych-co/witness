@@ -1,13 +1,17 @@
 import { execFileSync } from 'node:child_process'
 import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { adoptedCommits } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, primaryRoot } from '../gitio.js'
 import { contentAtSha } from '../history.js'
 import { readStream } from '../journal.js'
+import { sourceTags } from '../matcher.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
+import { criteriaExcludes } from '../runner.js'
 import { findById, findCycle, loadCanon } from '../scan.js'
 import { kv, rows } from '../toon.js'
 import { pendingTxn } from '../txn.js'
@@ -32,7 +36,8 @@ function probe(cmd: string, args: string[]): boolean {
   }
 }
 
-export async function run(ctx: Ctx): Promise<number> {
+export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
+  if (argv.includes('--drift')) return runDrift(ctx, argv)
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
   const root = rootRes.value
@@ -87,13 +92,16 @@ export async function run(ctx: Ctx): Promise<number> {
     }
   }
 
+  const absolved = adoptedCommits(root)
   auditStateCommits(root).forEach((c) => {
-    if (!c.trailered) findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit', `${c.subject} — revert it or re-apply via specflow write`))
+    if (!c.trailered && !absolved.has(c.sha)) {
+      findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit', `${c.subject} — adopt: specflow adopt <path> · or revert`))
+    }
   })
   if (pendingTxn(root)) {
     findings.push(f('error', 'audit', '.specflow/txn.json', 'pending-txn', 'crashed invocation — specflow recover --complete | --rollback'))
   } else if (dirtyStatePaths(root).length) {
-    dirtyStatePaths(root).forEach((p) => findings.push(f('error', 'audit', p, 'hand-edit-in-progress', 'uncommitted change on a state path — revert or re-apply via specflow write')))
+    dirtyStatePaths(root).forEach((p) => findings.push(f('error', 'audit', p, 'hand-edit-in-progress', 'uncommitted change on a state path — adopt: specflow adopt <path> · or revert')))
   }
 
   const journalDir = join(root, '.specflow', 'journal')
@@ -104,6 +112,15 @@ export async function run(ctx: Ctx): Promise<number> {
       const entries = readStream(root, id)
       if (entries[0]?.t === 'recap') continue
       if (!findById(canon, id)) findings.push(f('warn', 'journal', file, 'orphan-journal', 'stream matches no doc (frozen lineage or stray)'))
+    }
+  }
+
+  if (cfg.ok) {
+    const src = sourceTags(root, criteriaExcludes(cfg.value))
+    for (const [tag, files] of src.files) {
+      if (!findById(canon, tag)) {
+        findings.push(f('warn', 'criteria', tag, 'orphan-tag', `${files[0] ?? '?'} tags a spec that does not exist`))
+      }
     }
   }
 
