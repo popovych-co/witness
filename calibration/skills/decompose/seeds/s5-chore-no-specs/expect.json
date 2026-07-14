@@ -1,0 +1,1 @@
+{ "defect": "a chore writes no spec content — the valid output is an empty artifact set", "expect_empty": true }

@@ -1,0 +1,8 @@
+{
+  "effort": "stop-declined-retries",
+  "class": "fix",
+  "goals": [{ "id": "g1", "text": "Payment retries stop immediately on a hard decline (card_declined)" }],
+  "non_goals": [{ "id": "n1", "text": "No changes to retry timing for soft failures" }],
+  "constraints": [],
+  "slices": []
+}

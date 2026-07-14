@@ -1,0 +1,8 @@
+{
+  "effort": "cal-implement",
+  "class": "feature",
+  "goals": [{ "id": "g1", "text": "The promised utility behavior exists with tagged tests" }],
+  "non_goals": [],
+  "constraints": [],
+  "slices": []
+}

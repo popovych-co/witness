@@ -1,0 +1,8 @@
+{
+  "type": "spec",
+  "summary": "Numbers clamp into an inclusive range",
+  "depends": [],
+  "needs": [],
+  "criteria": [{ "id": "ac-clamp", "test": "@spec:clamp-range" }],
+  "covers": ["g1"]
+}

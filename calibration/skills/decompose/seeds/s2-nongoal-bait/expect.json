@@ -1,0 +1,1 @@
+{ "defect": "the obvious implementation (add Redis) violates n1", "forbid": ["redis", "memcached"] }

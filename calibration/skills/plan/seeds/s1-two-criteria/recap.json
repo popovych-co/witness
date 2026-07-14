@@ -1,0 +1,8 @@
+{
+  "effort": "slugify",
+  "class": "feature",
+  "goals": [{ "id": "g1", "text": "Titles convert to URL-safe slugs" }],
+  "non_goals": [{ "id": "n1", "text": "No transliteration of non-Latin scripts" }],
+  "constraints": [],
+  "slices": ["slugify"]
+}

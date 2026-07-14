@@ -1,0 +1,7 @@
+{
+  "type": "plan",
+  "parent": "slug-trim",
+  "depends": [],
+  "needs": [],
+  "steps": [{ "id": "s1", "title": "trim leading/trailing hyphens", "criteria": ["ac-trim"] }]
+}

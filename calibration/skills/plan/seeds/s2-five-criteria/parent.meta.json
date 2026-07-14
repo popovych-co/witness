@@ -1,0 +1,14 @@
+{
+  "type": "spec",
+  "summary": "Passwords are validated against the published policy",
+  "depends": [],
+  "needs": [],
+  "criteria": [
+    { "id": "ac-min", "test": "@spec:password-policy" },
+    { "id": "ac-upper", "test": "@spec:password-policy" },
+    { "id": "ac-digit", "test": "@spec:password-policy" },
+    { "id": "ac-common", "test": "@spec:password-policy" },
+    { "id": "ac-suite", "cmd": "node --test --test-name-pattern \"@spec:password-policy\" tests/" }
+  ],
+  "covers": ["g1"]
+}

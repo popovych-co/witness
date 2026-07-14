@@ -1,0 +1,10 @@
+{
+  "type": "spec",
+  "summary": "Access tokens expire after 15 minutes",
+  "depends": [],
+  "needs": [],
+  "criteria": [
+    { "id": "ac-expiry", "test": "@spec:token-expiry" }
+  ],
+  "covers": ["g1"]
+}

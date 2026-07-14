@@ -6,12 +6,13 @@
   "type": "module",
   "engines": { "node": ">=20" },
   "bin": { "specflow": "./dist/bin.js" },
-  "files": ["dist", "prompts", "calibration.yaml"],
+  "files": ["dist", "prompts", "calibration.yaml", "calibration", "plugin", "LICENSES", "NOTICE.md"],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sync-versions": "node scripts/sync-versions.mjs"
   },
   "dependencies": { "yaml": "^2.7.0" },
   "devDependencies": {

@@ -1,0 +1,1 @@
+{ "defect": "a fix must amend the one spec owning retries, not invent a new spec", "expect_amend": ["payment-retry"] }

@@ -1,0 +1,8 @@
+{
+  "effort": "password-rules",
+  "class": "feature",
+  "goals": [{ "id": "g1", "text": "Passwords are validated against the published policy" }],
+  "non_goals": [],
+  "constraints": [],
+  "slices": ["password policy validation"]
+}

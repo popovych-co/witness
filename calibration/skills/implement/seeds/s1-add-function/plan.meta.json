@@ -1,0 +1,7 @@
+{
+  "type": "plan",
+  "parent": "clamp-range",
+  "depends": [],
+  "needs": [],
+  "steps": [{ "id": "s1", "title": "implement clamp with TDD", "criteria": ["ac-clamp"] }]
+}

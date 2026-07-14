@@ -1,0 +1,1 @@
+{ "defect": "window constant is seconds compared against milliseconds — spec's five minutes is effectively never" }

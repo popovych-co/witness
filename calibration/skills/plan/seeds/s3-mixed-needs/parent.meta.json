@@ -1,0 +1,11 @@
+{
+  "type": "spec",
+  "summary": "Outbound webhooks are HMAC-signed and verifiable",
+  "depends": [],
+  "needs": [{ "env": "WEBHOOK_SIGNING_KEY" }],
+  "criteria": [
+    { "id": "ac-sign", "test": "@spec:webhook-signatures" },
+    { "id": "ac-verify", "test": "@spec:webhook-signatures" }
+  ],
+  "covers": ["g1"]
+}

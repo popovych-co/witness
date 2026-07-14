@@ -1,0 +1,11 @@
+{
+  "type": "spec",
+  "summary": "Titles convert to lowercase URL-safe slugs",
+  "depends": [],
+  "needs": [],
+  "criteria": [
+    { "id": "ac-fmt", "test": "@spec:slug-format" },
+    { "id": "ac-len", "cmd": "node --test --test-name-pattern \"@spec:slug-format\" tests/" }
+  ],
+  "covers": ["g1"]
+}

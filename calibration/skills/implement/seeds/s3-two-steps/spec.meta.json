@@ -1,0 +1,11 @@
+{
+  "type": "spec",
+  "summary": "Strings pad to a fixed width on either side",
+  "depends": [],
+  "needs": [],
+  "criteria": [
+    { "id": "ac-left", "test": "@spec:pad-strings" },
+    { "id": "ac-right", "test": "@spec:pad-strings" }
+  ],
+  "covers": ["g1"]
+}

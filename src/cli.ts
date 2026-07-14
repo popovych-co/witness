@@ -38,6 +38,7 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   abandon: () => import('./verbs/abandon.js'),
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
+  calibrate: () => import('./verbs/calibrate.js'),
 }
 
 export function version(): string {

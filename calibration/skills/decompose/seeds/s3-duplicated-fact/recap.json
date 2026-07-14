@@ -1,0 +1,11 @@
+{
+  "effort": "session-expiry",
+  "class": "feature",
+  "goals": [
+    { "id": "g1", "text": "Web sessions expire after 30 idle minutes" },
+    { "id": "g2", "text": "Mobile API sessions expire after 30 idle minutes" }
+  ],
+  "non_goals": [{ "id": "n1", "text": "No remember-me extension of the idle window" }],
+  "constraints": [],
+  "slices": ["web expiry", "mobile expiry"]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "specflow",
+  "owner": { "name": "Kostiantyn Popovych" },
+  "plugins": [
+    {
+      "name": "specflow",
+      "source": "./plugin",
+      "description": "Brainstorm → PR through five evidence-gated stages: stage skills, /specflow engine, state-write guard, dashboard on session start."
+    }
+  ]
+}

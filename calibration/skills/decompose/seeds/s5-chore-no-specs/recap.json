@@ -1,0 +1,8 @@
+{
+  "effort": "bump-node-runtime",
+  "class": "chore",
+  "goals": [{ "id": "g1", "text": "CI and production run Node 22 LTS" }],
+  "non_goals": [{ "id": "n1", "text": "No dependency major-version bumps in the same effort" }],
+  "constraints": [],
+  "slices": []
+}

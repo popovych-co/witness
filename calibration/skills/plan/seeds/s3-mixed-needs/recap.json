@@ -1,0 +1,8 @@
+{
+  "effort": "webhook-signing",
+  "class": "feature",
+  "goals": [{ "id": "g1", "text": "Outbound webhooks are HMAC-signed and verifiable" }],
+  "non_goals": [],
+  "constraints": [],
+  "slices": ["webhook signing"]
+}

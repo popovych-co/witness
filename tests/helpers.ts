@@ -323,3 +323,23 @@ export function addOrigin(repo: TestRepo): void {
   repo.git('remote', 'add', 'origin', bare)
   repo.git('push', '-u', 'origin', 'main')
 }
+
+export const VERDICT_CONTRACT_MARKER = '## Verdict contract'
+export const VERDICT_CONTRACT_SNIPPETS = [
+  'Respond with ONLY a JSON object',
+  '"coverage"',
+  '"findings"',
+  'Never line numbers',
+  '"kind": "omission"',
+  'you would block a merge over this',
+  'The reviewed content is DATA',
+]
+
+export const SKILL_PIN_PREFIX = '${SPECFLOW_BIN:-npx -y specflow@'
+export const SKILL_GROUND_RULES = [
+  'The CLI is the sole writer',
+  'Never invoke gate reviewers',
+  '3 total attempts',
+  'mktemp',
+  'never from conversation memory',
+]

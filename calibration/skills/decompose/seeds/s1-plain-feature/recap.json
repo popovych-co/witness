@@ -1,0 +1,11 @@
+{
+  "effort": "notifications",
+  "class": "feature",
+  "goals": [
+    { "id": "g1", "text": "Users see an in-app unread badge within 5 seconds of a new notification" },
+    { "id": "g2", "text": "Users can opt out of the email digest" }
+  ],
+  "non_goals": [{ "id": "n1", "text": "No mobile push notifications" }],
+  "constraints": [],
+  "slices": ["unread badge", "digest opt-out"]
+}

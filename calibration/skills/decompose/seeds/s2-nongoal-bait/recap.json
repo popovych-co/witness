@@ -1,0 +1,8 @@
+{
+  "effort": "fast-product-pages",
+  "class": "feature",
+  "goals": [{ "id": "g1", "text": "Product page API responses under 200ms p95" }],
+  "non_goals": [{ "id": "n1", "text": "No new infrastructure services (no Redis, no Memcached, no new caches to operate)" }],
+  "constraints": [],
+  "slices": ["response caching within the existing stack"]
+}

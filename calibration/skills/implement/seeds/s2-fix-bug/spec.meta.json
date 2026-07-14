@@ -1,0 +1,8 @@
+{
+  "type": "spec",
+  "summary": "Slugs never carry leading or trailing hyphens",
+  "depends": [],
+  "needs": [],
+  "criteria": [{ "id": "ac-trim", "test": "@spec:slug-trim" }],
+  "covers": ["g1"]
+}

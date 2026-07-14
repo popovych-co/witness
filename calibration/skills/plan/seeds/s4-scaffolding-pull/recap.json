@@ -1,0 +1,8 @@
+{
+  "effort": "expiry-windows",
+  "class": "feature",
+  "goals": [{ "id": "g1", "text": "Access tokens expire after 15 minutes" }],
+  "non_goals": [],
+  "constraints": [],
+  "slices": ["token expiry"]
+}

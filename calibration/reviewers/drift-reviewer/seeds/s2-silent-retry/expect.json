@@ -1,0 +1,1 @@
+{ "defect": "spec promises 401 with no retry; code retries and returns the stale token" }

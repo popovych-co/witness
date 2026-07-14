@@ -1,0 +1,21 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, registry-url: 'https://registry.npmjs.org' }
+      - run: npm ci
+      - run: npm run build
+      - run: npm run sync-versions
+      - run: git diff --exit-code   # a tag with unsynced pins must not ship
+      - run: npx vitest run
+      - name: require a non-empty shipped calibration matrix
+        run: node -e "const{parse}=require('yaml');const m=parse(require('fs').readFileSync('calibration.yaml','utf8'));if(!m.models||m.models.length===0){console.error('calibration.yaml is empty — run specflow calibrate --publish before releasing');process.exit(1)}"
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

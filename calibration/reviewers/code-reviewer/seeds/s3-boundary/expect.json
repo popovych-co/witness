@@ -1,0 +1,1 @@
+{ "defect": "off-by-one admits qty 100 past the stated 1..99 clamp" }

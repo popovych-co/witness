@@ -1,0 +1,10 @@
+{
+  "type": "plan",
+  "parent": "pad-strings",
+  "depends": [],
+  "needs": [],
+  "steps": [
+    { "id": "s1", "title": "implement padLeft with TDD", "criteria": ["ac-left"] },
+    { "id": "s2", "title": "implement padRight with TDD", "criteria": ["ac-right"] }
+  ]
+}

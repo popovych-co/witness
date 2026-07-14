@@ -1,0 +1,1 @@
+{ "defect": "check-then-take across awaits — concurrent reserves oversell" }
