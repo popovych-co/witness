@@ -29,6 +29,15 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   'test-evidence': () => import('./verbs/evidence.js'),
   'verify-red': () => import('./verbs/evidence.js').then((m) => ({ run: m.runVerifyRed })),
   adopt: () => import('./verbs/adopt.js'),
+  gate: () => import('./verbs/gate.js'),
+  decide: () => import('./verbs/decide.js'),
+  start: () => import('./verbs/start.js'),
+  clean: () => import('./verbs/clean.js'),
+  ship: () => import('./verbs/ship.js'),
+  next: () => import('./verbs/next.js'),
+  abandon: () => import('./verbs/abandon.js'),
+  rename: () => import('./verbs/rename.js'),
+  sync: () => import('./verbs/sync.js'),
 }
 
 export function version(): string {

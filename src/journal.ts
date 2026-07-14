@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 export type EntryType =
   | 'recap' | 'write' | 'write-refused' | 'gate-run'
-  | 'human-decision' | 'drift-check' | 'test-evidence' | 'adopt'
+  | 'human-decision' | 'drift-check' | 'test-evidence' | 'adopt' | 'status'
 
 export interface Entry {
   v: 1
@@ -19,6 +19,23 @@ export interface RecapEntry extends Entry {
   non_goals: Array<{ id: string; text: string }>
   constraints: Array<{ id: string; text: string }>
   slices: string[]
+}
+
+export type StatusCause = 'gate-approve' | 'start' | 'ship' | 'merge' | 'abandon' | 'supersede'
+
+export interface StatusEntry {
+  v: 1
+  t: 'status'
+  artifact: string
+  from: string
+  to: string
+  cause: StatusCause
+  run_id?: string
+  worktree?: string
+  branch?: string
+  pr?: number
+  by?: string
+  note?: string
 }
 
 const dir = (root: string) => join(root, '.specflow', 'journal')

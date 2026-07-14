@@ -6,7 +6,7 @@
   "type": "module",
   "engines": { "node": ">=20" },
   "bin": { "specflow": "./dist/bin.js" },
-  "files": ["dist"],
+  "files": ["dist", "prompts", "calibration.yaml"],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",

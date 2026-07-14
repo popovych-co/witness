@@ -1,0 +1,24 @@
+#!/bin/sh
+# specflow protocol-tier fake claude: records calls, answers canned verdict envelopes.
+set -e
+if [ "$1" = "--version" ]; then echo "claude fake 0.0.0"; exit 0; fi
+dir="${SPECFLOW_FAKE_DIR:?SPECFLOW_FAKE_DIR unset}"
+mkdir -p "$dir/claude-calls"
+n=0
+for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
+n=$((n + 1))
+call="$dir/claude-calls/call-$n"
+mkdir -p "$call"
+printf '%s\n' "$@" > "$call/argv"
+cat > "$call/stdin"
+if [ -f "$dir/claude-fail" ] && [ "$n" -le "$(cat "$dir/claude-fail")" ]; then
+  echo "fake claude: injected failure for call $n" >&2
+  exit 1
+fi
+body="$dir/verdict.json"
+[ -f "$dir/verdict-$n.json" ] && body="$dir/verdict-$n.json"
+node -e '
+  const fs = require("fs")
+  const result = fs.readFileSync(process.argv[1], "utf8")
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result }))
+' "$body"

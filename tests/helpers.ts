@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, type Ctx } from '../src/cli.js'
+import { splitDoc, serializeDoc } from '../src/fm.js'
+import { worktreePath } from '../src/worktree.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
 
@@ -12,14 +14,19 @@ export interface CliOpts {
   answers?: string[]
   tty?: boolean
   env?: Record<string, string>
+  cwd?: string
 }
 
 export interface TestRepo {
   root: string
+  effort: string
   git: (...args: string[]) => string
   write: (rel: string, content: string) => void
   read: (rel: string) => string
   cli: (args: string[], opts?: CliOpts) => Promise<CliResult>
+  writeRecap: (patch: Record<string, unknown>) => string
+  flipStatus: (id: string, status: string) => void
+  setMeta: (id: string, patch: Record<string, unknown>) => void
 }
 
 export function tmpRepo(): TestRepo {
@@ -43,7 +50,7 @@ export function tmpRepo(): TestRepo {
     const errs: string[] = []
     const answers = [...(opts.answers ?? [])]
     const ctx: Ctx = {
-      cwd: root,
+      cwd: opts.cwd ?? root,
       env: { ...process.env, ...opts.env },
       isTTY: opts.tty ?? answers.length > 0,
       out: (l) => outs.push(l),
@@ -54,7 +61,33 @@ export function tmpRepo(): TestRepo {
     return { code, stdout: outs.join('\n'), stderr: errs.join('\n') }
   }
 
-  return { root, git, write, read, cli }
+  const writeRecap = (patch: Record<string, unknown>) => {
+    const rel = 'recap-amend.json'
+    write(rel, JSON.stringify({ ...RECAP, ...patch }))
+    return rel
+  }
+
+  const flipStatus = (id: string, status: string) => {
+    const rel = existsSync(join(root, 'specs', `${id}.md`)) ? `specs/${id}.md` : `plans/${id}.md`
+    write(rel, read(rel).replace(/status: \S+/, `status: ${status}`))
+    git('add', rel)
+    git('commit', '-m', `flip status: ${id} -> ${status}`, '-m', 'Specflow-State: 1')
+  }
+
+  const setMeta = (id: string, patch: Record<string, unknown>) => {
+    const rel = existsSync(join(root, 'specs', `${id}.md`)) ? `specs/${id}.md` : `plans/${id}.md`
+    const doc = splitDoc(read(rel))
+    if (!doc.ok) throw new Error(`unparseable doc: ${id}`)
+    write(rel, serializeDoc({ meta: { ...doc.value.meta, ...patch }, body: doc.value.body }))
+    git('add', rel)
+    git('commit', '-m', `set meta: ${id}`, '-m', 'Specflow-State: 1')
+  }
+
+  return { root, effort: 'auth-hardening', git, write, read, cli, writeRecap, flipStatus, setMeta }
+}
+
+export function approve(repo: TestRepo, id: string): void {
+  repo.flipStatus(id, 'approved')
 }
 
 export const RECAP = {
@@ -77,16 +110,53 @@ export const SPEC_META = {
 
 export const SPEC_BODY = '## Motivation\nTokens leak.\n\n## Behavior\nRotate before expiry.\n'
 
-export async function seededRepo(recap: unknown = RECAP): Promise<TestRepo> {
+export interface SeedOpts {
+  class?: 'feature' | 'fix' | 'chore'
+  slug?: string
+  goals?: Array<{ id: string; text: string }>
+  preexisting?: string[]
+  noRecap?: boolean
+}
+
+export async function seededRepo(opts: SeedOpts = {}): Promise<TestRepo> {
   const repo = tmpRepo()
   await repo.cli(['init'])
+
+  const preexisting = opts.preexisting ?? []
+  if (preexisting.length > 0) {
+    repo.write('bootstrap-recap.json', JSON.stringify({
+      effort: 'bootstrap', class: 'feature', goals: [{ id: 'g1', text: 'bootstrap seed' }],
+      non_goals: [], constraints: [], slices: [],
+    }))
+    const br = await repo.cli(['recap', '--file', 'bootstrap-recap.json'])
+    rmSync(join(repo.root, 'bootstrap-recap.json'), { force: true })
+    if (br.code !== 0) throw new Error(`bootstrap recap failed: ${br.stderr}`)
+    repo.effort = 'bootstrap'
+    for (const id of preexisting) {
+      const wr = await writeSpec(repo, id)
+      if (wr.code !== 0) throw new Error(`bootstrap write ${id} failed: ${wr.stderr}`)
+      approve(repo, id)
+      stampLive(repo, id)
+    }
+  }
+
+  if (opts.noRecap) return repo
+
+  const slug = opts.slug ?? 'auth-hardening'
+  const recap = {
+    effort: slug, class: opts.class ?? 'feature',
+    goals: opts.goals ?? RECAP.goals, non_goals: [], constraints: [], slices: [],
+  }
   repo.write('recap.json', JSON.stringify(recap))
   const res = await repo.cli(['recap', '--file', 'recap.json'])
+  rmSync(join(repo.root, 'recap.json'), { force: true })
   if (res.code !== 0) throw new Error(`recap failed: ${res.stderr}`)
+  repo.effort = slug
   return repo
 }
 
-export async function writeSpec(repo: TestRepo, id: string, meta: unknown = SPEC_META, body = SPEC_BODY, effort = 'auth-hardening'): Promise<CliResult> {
+export async function writeSpec(repo: TestRepo, id: string, opts: Record<string, unknown> = {}, body = SPEC_BODY, effort = repo.effort): Promise<CliResult> {
+  const meta = { ...SPEC_META, ...opts }
   repo.write(`m-${id}.json`, JSON.stringify(meta))
   repo.write(`b-${id}.md`, body)
   const res = await repo.cli(['write', id, '--effort', effort, '--meta', `m-${id}.json`, '--body', `b-${id}.md`])
@@ -105,7 +175,8 @@ export const PLAN_META = {
 
 export const PLAN_BODY = '## Step: s1\nImplement rotation with TDD.\n'
 
-export async function writePlan(repo: TestRepo, id: string, meta: unknown = PLAN_META, body = PLAN_BODY, effort = 'auth-hardening'): Promise<CliResult> {
+export async function writePlan(repo: TestRepo, id: string, opts: Record<string, unknown> = {}, body = PLAN_BODY, effort = repo.effort): Promise<CliResult> {
+  const meta = { ...PLAN_META, ...opts }
   repo.write(`m-${id}.json`, JSON.stringify(meta))
   repo.write(`b-${id}.md`, body)
   const res = await repo.cli(['write', id, '--effort', effort, '--meta', `m-${id}.json`, '--body', `b-${id}.md`])
@@ -130,21 +201,49 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
   }
 }
 
-export function fakeCtx(root: string, opts: { tty?: boolean; answers?: string[]; env?: Record<string, string> } = {}): Ctx {
+export function fakeBinDir(): string {
+  return resolve(import.meta.dirname, '..', 'fixtures', 'fakebin')
+}
+
+export function fakeScenario(): string {
+  return mkdtempSync(join(tmpdir(), 'specflow-fake-'))
+}
+
+export function gateEnv(scenario: string, extra: Record<string, string> = {}): Record<string, string> {
+  const base = fixtureEnv(extra)
+  return { ...base, PATH: `${fakeBinDir()}${delimiter}${base.PATH}`, SPECFLOW_FAKE_DIR: scenario }
+}
+
+export function putVerdict(scenario: string, verdict: unknown, call?: number): void {
+  const name = call === undefined ? 'verdict.json' : `verdict-${call}.json`
+  writeFileSync(join(scenario, name), JSON.stringify(verdict, null, 2))
+}
+
+export function ghState(scenario: string, pr: number, state: string): void {
+  writeFileSync(join(scenario, `pr-${pr}-state`), `${state}\n`)
+}
+
+export function fakeCtx(root: string, opts: {
+  tty?: boolean; answers?: string[]; env?: Record<string, string>
+  out?: (line: string) => void; err?: (line: string) => void
+} = {}): Ctx {
   const answers = [...(opts.answers ?? [])]
   return {
     cwd: root,
     env: { ...opts.env },
     isTTY: opts.tty ?? answers.length > 0,
-    out: () => {},
-    err: () => {},
+    out: opts.out ?? (() => {}),
+    err: opts.err ?? (() => {}),
     ask: async () => answers.shift() ?? '',
   }
 }
 
+export function fixturePath(name: 'vitest-single' | 'workspace'): string {
+  return fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
+}
+
 export function copyFixture(repo: TestRepo, name: 'vitest-single' | 'workspace'): void {
-  const src = fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
-  cpSync(src, repo.root, { recursive: true })
+  cpSync(fixturePath(name), repo.root, { recursive: true })
   repo.git('add', '-A')
   repo.git('commit', '-m', `fixture: ${name}`)
 }
@@ -165,10 +264,7 @@ export function workspaceConfig(mode: 'filtered' | 'full-suite'): string {
 }
 
 export function stampLive(repo: TestRepo, id: string): void {
-  const rel = `specs/${id}.md`
-  repo.write(rel, repo.read(rel).replace('status: draft', 'status: live'))
-  repo.git('add', rel)
-  repo.git('commit', '-m', `stamp live: ${id}`, '-m', 'Specflow-State: 1')
+  repo.flipStatus(id, 'live')
 }
 
 export const TOKEN_FIXED = 'export function rotateDue(elapsed: number, ttl: number): boolean {\n  return elapsed >= ttl * 0.8\n}\n\nexport function nextToken(prev: string): string {\n  return `${prev}-r`\n}\n'
@@ -189,4 +285,41 @@ export function fixSingleFixture(repo: TestRepo): void {
   repo.write('src/token.ts', TOKEN_FIXED)
   repo.git('add', 'src/token.ts')
   repo.git('commit', '-m', 'fix token rotation')
+}
+
+export async function shippableRepo(): Promise<{ repo: TestRepo; wt: string; planId: string; specId: string }> {
+  const repo = await seededRepo()
+  // ship.test/ship.lint: trivial always-green commands — ship-gate tests (Tasks 14/15/21)
+  // need these lanes configured and passing; singleConfig('filtered') carries no ship section.
+  writeFileSync(join(repo.root, 'specflow.config.yaml'), `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n`)
+  repo.git('add', 'specflow.config.yaml'); repo.git('commit', '-m', 'runner config')
+  await writeSpec(repo, 'auth-refresh')          // criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }]
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  repo.flipStatus('auth-refresh-plan-1', 'approved')
+  await repo.cli(['start', 'auth-refresh-plan-1'])
+  const wt = worktreePath(repo.root, 'auth-refresh-plan-1')
+
+  // fixture lands on the branch: tests first (red), then the implementation (green).
+  // TOKEN_BROKEN/TOKEN_FIXED (not a hand-rolled stub) — they export the same
+  // rotateDue/nextToken names the fixture's own tests/token.test.ts imports.
+  cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+  execFileSync('git', ['add', '-A'], { cwd: wt })
+  execFileSync('git', ['commit', '-m', 'wip: tagged tests + stub'], { cwd: wt })
+  let r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+  if (r.code !== 0) throw new Error(`red phase: ${r.stdout}\n${r.stderr}`)
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  execFileSync('git', ['add', '-A'], { cwd: wt })
+  execFileSync('git', ['commit', '-m', 'feat: rotate token'], { cwd: wt })
+  r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+  if (r.code !== 0) throw new Error(`green phase: ${r.stdout}\n${r.stderr}`)
+  return { repo, wt, planId: 'auth-refresh-plan-1', specId: 'auth-refresh' }
+}
+
+export function addOrigin(repo: TestRepo): void {
+  const bare = `${repo.root}-origin.git`
+  execFileSync('git', ['init', '--bare', bare])
+  repo.git('remote', 'add', 'origin', bare)
+  repo.git('push', '-u', 'origin', 'main')
 }

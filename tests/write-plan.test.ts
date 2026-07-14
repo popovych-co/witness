@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import { canonicalSha } from '../src/sha.js'
-import { PLAN_META, RECAP, SPEC_META, seededRepo, writePlan, writeSpec, type TestRepo } from './helpers.js'
+import { PLAN_META, SPEC_META, seededRepo, stampLive, writePlan, writeSpec, type TestRepo } from './helpers.js'
 
 function specSha(repo: TestRepo): string {
   const doc = splitDoc(repo.read('specs/auth-refresh.md'))
@@ -14,9 +14,9 @@ describe('specflow write (plan)', () => {
   it('stamps derives-from from the parent and journals the write', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
+    stampLive(repo, 'auth-refresh')
     const res = await writePlan(repo, 'auth-refresh-plan-1')
     expect(res.code).toBe(0)
-    expect(res.stderr).toContain('parent auth-refresh is draft')
     const doc = splitDoc(repo.read('plans/auth-refresh-plan-1.md'))
     expect(doc.ok && doc.value.meta['derives-from']).toBe(specSha(repo))
     expect(doc.ok && doc.value.meta.status).toBe('draft')
@@ -28,6 +28,7 @@ describe('specflow write (plan)', () => {
   it('accepts a matching supplied pin and refuses a stale one', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
+    stampLive(repo, 'auth-refresh')
     const good = await writePlan(repo, 'p-good', { ...PLAN_META, 'derives-from': specSha(repo) })
     expect(good.code).toBe(0)
     const stale = await writePlan(repo, 'p-stale', { ...PLAN_META, 'derives-from': 'f'.repeat(64) })
@@ -38,6 +39,7 @@ describe('specflow write (plan)', () => {
   it('refuses steps referencing unknown criteria', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
+    stampLive(repo, 'auth-refresh')
     const res = await writePlan(repo, 'p-bad', {
       ...PLAN_META,
       steps: [{ id: 's1', title: 'x', criteria: ['ac-ghost'] }],
@@ -49,6 +51,7 @@ describe('specflow write (plan)', () => {
   it('enforces delta totality: new criteria must be realized, unchanged ones need not be', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
+    stampLive(repo, 'auth-refresh')
     expect((await writePlan(repo, 'plan-1')).code).toBe(0)
     await writeSpec(repo, 'auth-refresh', {
       ...SPEC_META,
@@ -57,6 +60,7 @@ describe('specflow write (plan)', () => {
         { id: 'ac-revoke', cmd: 'npm run smoke:revoke' },
       ],
     })
+    stampLive(repo, 'auth-refresh')
     const missing = await writePlan(repo, 'plan-2', {
       ...PLAN_META,
       steps: [{ id: 's1', title: 'rehash old work', criteria: ['ac-rotate'] }],
@@ -72,7 +76,10 @@ describe('specflow write (plan)', () => {
   })
 
   it('allows principles parents for chores only', async () => {
-    const chore = await seededRepo({ ...RECAP, effort: 'dep-bump', class: 'chore' })
+    const chore = await seededRepo({ slug: 'dep-bump', class: 'chore' })
+    chore.write('specs/principles.md', chore.read('specs/principles.md').replace('status: draft', 'status: approved'))
+    chore.git('add', 'specs/principles.md')
+    chore.git('commit', '-m', 'stamp approved: principles', '-m', 'Specflow-State: 1')
     const ok = await writePlan(chore, 'bump-plan', {
       type: 'plan', parent: 'principles', depends: [], needs: [],
       steps: [{ id: 's1', title: 'bump deps', scaffolding: true }],

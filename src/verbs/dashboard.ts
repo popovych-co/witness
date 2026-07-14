@@ -3,8 +3,12 @@ import { loadConfig } from '../config.js'
 import { reconcileRows } from '../drift.js'
 import { primaryRoot } from '../gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
+import { loadMatrix, resolveModel } from '../model.js'
+import { computeNext } from './next.js'
 import { renderRefusal } from '../refusal.js'
+import { pendingDecision } from '../rounds.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
+import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
 import { pendingTxn } from '../txn.js'
 
@@ -41,11 +45,17 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const root = rootRes.value
   const cfg = loadConfig(root)
   ctx.out(kv('specflow', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
+  if (cfg.ok) {
+    const modelR = resolveModel(cfg.value, loadMatrix(root))
+    if (modelR.ok && modelR.value.warning) ctx.out(kv('model-floor', modelR.value.warning))
+  }
 
   const txn = pendingTxn(root)
   if (txn) ctx.out(kv('pending-txn', txn.op))
 
-  const canon = loadCanon(root)
+  const canon0 = loadCanon(root)
+  const lazy = lazyStamp(root, ctx, canon0)
+  const canon = lazy.stamped.length > 0 ? loadCanon(root) : canon0
   const efforts = effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
   const effortRows = efforts.map((slug) => {
     const recap = latestRecap(root, slug)
@@ -72,23 +82,29 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (reconcile.length) {
     rows('reconcile', ['spec', 'why', 'detail'], reconcile as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
+  if (lazy.stale.length) {
+    rows('stale', ['plan', 'why'], lazy.stale as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const pendingGates: Array<{ gate: string; target: string; round: number; outcome: string }> = []
+  for (const plan of canon.docs.filter((d) => d.meta.type === 'plan')) {
+    const id = String(plan.meta.id)
+    for (const gate of ['plan', 'implement', 'ship']) {
+      const p = pendingDecision(readStream(root, id), gate)
+      if (p) pendingGates.push({ gate, target: id, round: p.round, outcome: p.outcome })
+    }
+  }
+  for (const slug of efforts) {
+    const p = pendingDecision(readStream(root, slug), 'decompose')
+    if (p) pendingGates.push({ gate: 'decompose', target: slug, round: p.round, outcome: p.outcome })
+  }
+  if (pendingGates.length) {
+    rows('gates', ['gate', 'target', 'round', 'outcome'], pendingGates as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
   if (canon.docs.some((d) => (Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []).some((n) => typeof n.cmd === 'string'))) {
     ctx.out('note: cmd needs are not executed at scan — run specflow check')
   }
 
-  const hasErrors = canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)
-  const emptyEffort = effortRows.find((e) => e.writes.size === 0)
-  const next = txn
-    ? 'specflow recover --complete | --rollback'
-    : hasErrors
-      ? 'specflow check'
-      : efforts.length === 0
-        ? 'specflow recap --file <recap.json>'
-        : emptyEffort
-          ? `specflow write --effort ${emptyEffort.slug} --meta <m.json> --body <b.md> <spec-id>`
-          : reconcile.some((r) => r.why === 'drift' || r.why === 'unconfirmed')
-            ? 'specflow check --drift'
-            : 'specflow check'
+  const next = cfg.ok ? computeNext(root, ctx, canon, cfg.value).line : 'specflow check'
   ctx.out(`next: ${next}`)
   ctx.out('help: specflow check · index · diff <id> · log <id>')
   return EXIT.OK

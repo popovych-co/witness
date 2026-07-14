@@ -7,14 +7,18 @@ import { loadConfig } from '../config.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, primaryRoot } from '../gitio.js'
 import { contentAtSha } from '../history.js'
-import { readStream } from '../journal.js'
+import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
+import { pendingDecision } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
 import { findById, findCycle, loadCanon } from '../scan.js'
+import { canonicalSha } from '../sha.js'
+import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
 import { pendingTxn } from '../txn.js'
+import { listWorktrees, worktreePath } from '../worktree.js'
 
 interface Finding {
   level: 'error' | 'warn'
@@ -47,7 +51,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, x.got)))
   else if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
 
-  const canon = loadCanon(root)
+  const canon0 = loadCanon(root)
+  const lazy = lazyStamp(root, ctx, canon0)
+  const canon = lazy.stamped.length > 0 ? loadCanon(root) : canon0
   canon.errors.forEach((x) => findings.push(f('error', 'parse', x.field, x.rule, x.got)))
   for (const doc of canon.docs) {
     doc.violations.forEach((x) => findings.push(f('error', 'schema', `${doc.rel}: ${x.field}`, x.rule, x.got)))
@@ -79,6 +85,36 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     const pin = plan.meta['derives-from']
     if (typeof pin === 'string' && !contentAtSha(root, parent.rel, pin)) {
       findings.push(f('error', 'invariants', `${plan.rel}: derives-from`, 'pin-unresolvable', `no committed version of ${parent.rel} matches ${pin.slice(0, 7)}`))
+    }
+  }
+
+  for (const plan of canon.docs.filter((d) => d.meta.type === 'plan')) {
+    const id = String(plan.meta.id)
+    if (String(plan.meta.status) === 'in-progress') {
+      const parent = findById(canon, String(plan.meta.parent))
+      if (parent && canonicalSha(parent.meta, parent.body) !== String(plan.meta['derives-from'])) {
+        findings.push(f('warn', 'motion', id, 'mid-flight-amendment',
+          `parent ${String(parent.meta.id)} moved off the pin — ship will re-verify against current content`))
+      }
+      if (!existsSync(worktreePath(root, id))) {
+        findings.push(f('warn', 'motion', id, 'missing-worktree', `specflow start ${id} recreates it`))
+      }
+    }
+    for (const gate of ['plan', 'implement', 'ship']) {
+      if (pendingDecision(readStream(root, id), gate)) {
+        findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `specflow decide ${gate} ${id} --show`))
+      }
+    }
+  }
+  for (const slug of effortStreams(root)) {
+    if (pendingDecision(readStream(root, slug), 'decompose')) {
+      findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', `specflow decide decompose ${slug} --show`))
+    }
+  }
+  for (const planId of listWorktrees(root)) {
+    const doc = findById(canon, planId)
+    if (!doc || ['done', 'abandoned'].includes(String(doc.meta.status))) {
+      findings.push(f('warn', 'motion', planId, 'stray-worktree', 'specflow clean sweeps it'))
     }
   }
 

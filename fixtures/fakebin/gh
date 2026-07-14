@@ -1,0 +1,42 @@
+#!/bin/sh
+# specflow protocol-tier fake gh: PR lifecycle from a scenario state dir.
+set -e
+if [ "$1" = "--version" ]; then echo "gh fake 0.0.0"; exit 0; fi
+dir="${SPECFLOW_FAKE_DIR:?SPECFLOW_FAKE_DIR unset}"
+mkdir -p "$dir"
+echo "$*" >> "$dir/gh-calls"
+sub="$1 $2"
+case "$sub" in
+  "auth status") echo "Logged in to github.com (fake)"; exit 0 ;;
+  "pr create")
+    n=$(cat "$dir/pr-counter" 2>/dev/null || echo 0); n=$((n + 1))
+    echo "$n" > "$dir/pr-counter"
+    echo "OPEN" > "$dir/pr-$n-state"
+    head=""
+    prev=""
+    for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done
+    [ -n "$head" ] && echo "$head" > "$dir/pr-$n-head"
+    echo "https://github.com/fake/fake/pull/$n"; exit 0 ;;
+  "pr list")
+    head=""
+    prev=""
+    for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done
+    for f in "$dir"/pr-*-head; do
+      [ -e "$f" ] || continue
+      if [ "$(cat "$f")" = "$head" ]; then
+        n=$(basename "$f" | sed 's/pr-\([0-9]*\)-head/\1/')
+        printf '[{"number":%s}]\n' "$n"; exit 0
+      fi
+    done
+    echo "[]"; exit 0 ;;
+  "pr view")
+    state=$(cat "$dir/pr-$3-state" 2>/dev/null || echo "")
+    [ -z "$state" ] && { echo "no pull requests found for $3" >&2; exit 1; }
+    printf '{"state":"%s"}\n' "$state"; exit 0 ;;
+  "pr checks")
+    status=$(cat "$dir/pr-$3-checks" 2>/dev/null || echo pass)
+    if [ "$status" = "pass" ]; then echo "All checks were successful"; exit 0; fi
+    echo "Some checks were not successful"; exit 1 ;;
+esac
+echo "fake gh: unhandled: $*" >&2
+exit 64

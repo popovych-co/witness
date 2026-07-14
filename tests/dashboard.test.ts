@@ -16,7 +16,7 @@ describe('specflow dashboard (no-arg)', () => {
     const afterRecap = await repo.cli([])
     expect(afterRecap.stdout).toContain('efforts[1]{slug,class,specs,plans}:')
     expect(afterRecap.stdout).toContain('auth-hardening,feature,0,0')
-    expect(afterRecap.stdout).toContain('next: specflow write --effort auth-hardening')
+    expect(afterRecap.stdout).toContain('next: specflow write <spec-id> --effort auth-hardening')
   })
 
   it('computes blockedness live from depends and needs', async () => {

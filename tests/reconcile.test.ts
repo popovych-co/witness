@@ -20,7 +20,9 @@ describe('dashboard reconcile section', () => {
     await repo.cli(['check', '--drift'], { env: fixtureEnv() })
     const one = await repo.cli([], { env: fixtureEnv() })
     expect(one.stdout).toContain('unconfirmed')
-    expect(one.stdout).toContain('next: specflow check --drift')
+    // computeNext's shared ladder (Task 17) has no reconcile-specific rung — it falls
+    // through to the generic catch-all here, replacing the old dashboard-only ladder.
+    expect(one.stdout).toContain('next: specflow check')
     await repo.cli(['check', '--drift'], { env: fixtureEnv() })
     const two = await repo.cli([], { env: fixtureEnv() })
     expect(two.stdout).toContain('reconcile[')

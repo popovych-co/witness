@@ -1,12 +1,12 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
-import { writeDoc } from '../fm.js'
+import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
-import { appendEntry, journalRel, latestRecap, streamExists, type RecapEntry } from '../journal.js'
+import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry, type StatusEntry } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { baseForSpec, contentAtSha } from '../history.js'
@@ -124,6 +124,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   try {
     const canon = loadCanon(root)
     const existing = findById(canon, id!)
+    const refuseWrite = (viol: Violation[]): number => {
+      journalRefusal(ctx, root, effort, id!, viol)
+      renderRefusal(viol).forEach(ctx.err)
+      return EXIT.REFUSED
+    }
     const built =
       manifest.type === 'plan'
         ? buildPlanMeta(root, id!, manifest, recap, canon, existing, body)
@@ -131,12 +136,46 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (existing && existing.meta.type !== manifest.type) {
       built.violations.push(v('type', 'type-immutable', `${id} is a ${existing.meta.type}`, 'amendments keep the original type'))
     }
-    if (built.violations.length) {
-      journalRefusal(ctx, root, effort, id!, built.violations)
-      renderRefusal(built.violations).forEach(ctx.err)
-      return EXIT.REFUSED
-    }
+    if (built.violations.length) return refuseWrite(built.violations)
     built.warnings.forEach((w) => ctx.err(`warn: ${w}`))
+
+    // supersedes effects (re-slice): resolved after validation, before the txn, so a
+    // refusal here never touches disk. Applies only to specs — buildPlanMeta never sets
+    // meta.supersedes, so this is a no-op for plan writes.
+    const supersedes = built.meta.supersedes === undefined ? undefined : String(built.meta.supersedes)
+    let reslice: { doc: CanonDoc; entry: StatusEntry; line: string } | undefined
+    if (supersedes !== undefined) {
+      if (supersedes === id) {
+        return refuseWrite([v('supersedes', 'self-supersede', id!, 'a different spec')])
+      }
+      if (((manifest.depends ?? []) as string[]).includes(supersedes)) {
+        return refuseWrite([v('depends', 'supersedes-in-depends', supersedes,
+          'a re-slice must not depend on the doc it deletes')])
+      }
+      const target = findById(canon, supersedes)
+      if (!target) {
+        const alreadyTerminal = readStream(root, supersedes)
+          .some((e) => e.t === 'status' && (e as unknown as StatusEntry).to === 'superseded')
+        if (!alreadyTerminal) {
+          return refuseWrite([v('supersedes', 'unknown-supersedes', supersedes,
+            'an existing spec (or one already journal-terminal)')])
+        }
+      } else {
+        const dependents = canon.docs
+          .filter((d) => String(d.meta.id) !== id)
+          .filter((d) => ((d.meta.depends ?? []) as string[]).includes(supersedes))
+          .map((d) => String(d.meta.id))
+        if (dependents.length > 0) {
+          return refuseWrite([v('supersedes', 'dangling-depends', dependents.join(' '),
+            'dependents rewritten first — the re-slice rewrites them before deleting')])
+        }
+        const entry: StatusEntry = {
+          v: 1, t: 'status', artifact: supersedes, from: String(target.meta.status),
+          to: 'superseded', cause: 'supersede', by: id!,
+        }
+        reslice = { doc: target, entry, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) }
+      }
+    }
 
     const rel = existing ? existing.rel : `${manifest.type === 'plan' ? 'plans' : 'specs'}/${id}.md`
     const stream = journalRel(effort)
@@ -145,18 +184,37 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal(unrelated.map((p) => v(p, 'unrelated-dirty', 'uncommitted change on a state path', 'revert or re-apply via specflow write, then re-run'))).forEach(ctx.err)
       return EXIT.REFUSED
     }
-    const sha = canonicalSha(built.meta, body)
+    // serializeDoc normalizes body whitespace (leading/trailing) on write, and splitDoc
+    // reflects that on every future read — hashing the raw pre-write body here would
+    // make this entry's sha permanently disagree with canonicalSha(reReadDoc), even
+    // when nothing was ever amended. Round-trip through the same normalization so the
+    // journaled sha matches what every later loadCanon()/readDoc() will compute.
+    const roundTripped = splitDoc(serializeDoc({ meta: built.meta, body }))
+    const sha = roundTripped.ok
+      ? canonicalSha(roundTripped.value.meta, roundTripped.value.body)
+      : canonicalSha(built.meta, body)
     const entry = {
       t: 'write' as const, effort, artifact: id!, sha,
       ...(manifest.type === 'plan' ? {} : { covers: built.covers }),
+      ...(existing === undefined ? { created: true } : {}),
+      ...(supersedes !== undefined ? { supersedes } : {}),
     }
     const line = JSON.stringify({ v: 1, ...entry })
-    const res = withTxn(root, { op: `write(${id})`, files: [rel, stream], journal: { stream, line } }, () => {
+    const files = [rel, stream, ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : [])]
+    const res = withTxn(root, {
+      op: `write(${id})`, files, journal: { stream, line },
+      ...(reslice ? { journalMulti: [{ stream: journalRel(reslice.entry.artifact), line: reslice.line }] } : {}),
+    }, () => {
       writeDoc(join(root, rel), { meta: built.meta, body })
       crashPoint(ctx.env, 'artifact-write')
+      if (reslice) {
+        unlinkSync(join(root, reslice.doc.rel))
+        appendEntry(root, reslice.entry.artifact, reslice.entry as unknown as { t: 'status'; [k: string]: unknown })
+        crashPoint(ctx.env, 'reslice-commit')
+      }
       appendEntry(root, effort, entry)
       crashPoint(ctx.env, 'journal-append')
-      return stateCommit(root, [rel, stream], `write(${id}): ${existing ? 'amend' : 'create'} ${manifest.type}`)
+      return stateCommit(root, files, `write(${id}): ${existing ? 'amend' : 'create'} ${manifest.type}`)
     })
     if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
     ctx.out(kv('written', id))
@@ -199,7 +257,8 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
     violations.push(v('parent', 'kind', String(parent.meta.type), 'a spec (or principles for chores)'))
   }
   if (parent.meta.status === 'draft') {
-    warnings.push(`parent ${parentId} is draft — gates (later slice) will require approved`)
+    violations.push(v('parent', 'parent-not-approved', String(parentId),
+      'a parent stamped approved by its gate — run: specflow gate decompose --effort <slug>'))
   }
   const computed = canonicalSha(parent.meta, parent.body)
   const supplied = manifest['derives-from']

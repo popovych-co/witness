@@ -4,16 +4,19 @@ import type { Ctx } from './cli.js'
 import { EXIT } from './cli.js'
 import { loadConfig } from './config.js'
 import { runCriteria, type CriteriaResult } from './criteria.js'
-import { writeDoc } from './fm.js'
+import { serializeDoc, writeDoc } from './fm.js'
 import { acquireLock } from './lock.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import type { TestOutcome } from './junit.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { refuse, renderRefusal, v, type Result, ok } from './refusal.js'
+import { invokeClaude, parseVerdictText, resolvePrompt } from './reviewer.js'
 import { runFullSuite, runnerConfig } from './runner.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from './scan.js'
+import { canonicalSha } from './sha.js'
 import { kv, rows } from './toon.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
+import { parseVerdict, verdictViolations } from './verdict.js'
 
 export const newRunId = (): string => `r-${randomBytes(4).toString('hex')}`
 
@@ -100,10 +103,70 @@ export async function driftSweep(root: string, ctx: Ctx, canon: Canon): Promise<
   return ok(runs)
 }
 
+export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: string): Promise<number> {
+  if (ctx.env.CI) {
+    renderRefusal([v('deep', 'deep-in-ci', 'CI env', 'a local run — CI never invokes reviewers or writes state')])
+      .forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  const doc = findById(canon, specId)
+  if (!doc || doc.meta.type !== 'spec') {
+    renderRefusal([v('spec', 'unknown-spec', specId, 'a live spec id')]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  const lane = await runCriteria(root, ctx, doc, {})
+  const lensR = resolvePrompt('drift-reviewer')
+  if (!lensR.ok) { renderRefusal(lensR.violations).forEach(ctx.err); return EXIT.REFUSED }
+  const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ') : 'unrunnable'})\n`
+  const invoked = invokeClaude(ctx, { cwd: root, prompt })
+  if (!invoked.ok) { renderRefusal(invoked.violations).forEach(ctx.err); return EXIT.REFUSED }
+  const rawR = parseVerdictText(invoked.value.text)
+  const parsed = rawR.ok ? parseVerdict(rawR.value) : rawR
+  const violations = parsed.ok
+    ? verdictViolations(parsed.value, { kind: 'tree', root, files: [] })
+    : parsed.violations
+  const entry = {
+    v: 1 as const, t: 'drift-check' as const, run_id: newRunId(), artifact: specId,
+    artifact_sha: lane.ok ? lane.value.sha : canonicalSha(doc.meta, doc.body),
+    ok: lane.ok && lane.value.ok, tags: lane.ok ? lane.value.tagCount : 0,
+    criteria: lane.ok ? lane.value.criteria.map((c) => ({ id: c.id, kind: c.kind, ok: c.ok, detail: c.detail })) : [],
+    deep: true,
+    ...(violations.length === 0 && parsed.ok ? { verdict: parsed.value } : { malformed: violations }),
+  }
+  const lockR = acquireLock(root)
+  if (!lockR.ok) { renderRefusal(lockR.violations).forEach(ctx.err); return EXIT.BLOCKED }
+  try {
+    const txn = withTxn(root, {
+      op: 'drift-deep', files: [journalRel(specId)],
+      journalMulti: [{ stream: specId, line: entryLine(entry as unknown as { t: 'drift-check'; [k: string]: unknown }) }],
+    }, () => {
+      appendEntry(root, specId, entry as unknown as { t: 'drift-check'; [k: string]: unknown })
+      crashPoint(ctx.env, 'drift-journal')
+      return stateCommit(root, [journalRel(specId)], `drift-deep(${specId})`)
+    })
+    if (!txn.ok) { renderRefusal(txn.violations).forEach(ctx.err); return EXIT.REFUSED }
+  } finally {
+    lockR.value()
+  }
+  const blocking = parsed.ok && violations.length === 0
+    ? parsed.value.findings.filter((f) => f.blocking).length : 1
+  return (lane.ok && lane.value.ok && blocking === 0) ? EXIT.OK : EXIT.FINDINGS
+}
+
 export async function runDrift(ctx: Ctx, argv: string[]): Promise<number> {
   if (argv.includes('--deep')) {
-    renderRefusal([v('--deep', 'reserved', 'reviewer drift lane', 'lands with gates (Plan 3)')]).forEach(ctx.err)
-    return EXIT.REFUSED
+    const specId = argv.find((a) => !a.startsWith('--'))
+    const rootRes0 = primaryRoot(ctx.cwd)
+    if (!rootRes0.ok) { renderRefusal(rootRes0.violations).forEach(ctx.err); return EXIT.REFUSED }
+    if (!specId) {
+      renderRefusal([v('spec-id', 'required', 'absent', 'specflow check --drift --deep <spec-id>')]).forEach(ctx.err)
+      return EXIT.REFUSED
+    }
+    if (argv.includes('--ci')) {
+      renderRefusal([v('deep', 'deep-in-ci', '--ci', 'a local run — CI never invokes reviewers or writes state')]).forEach(ctx.err)
+      return EXIT.REFUSED
+    }
+    return deepDrift(rootRes0.value, ctx, loadCanon(rootRes0.value), specId)
   }
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }

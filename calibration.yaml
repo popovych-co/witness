@@ -1,0 +1,5 @@
+# specflow shipped calibration matrix.
+# Populated by `specflow calibrate <model>` at release time (Plan 4).
+# Until then no model is calibrated: every gate-run stamps calibration: "none"
+# and the dashboard warns below-floor — which is the truth.
+models: []

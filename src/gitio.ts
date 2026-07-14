@@ -15,7 +15,10 @@ export function tryGit(root: string, ...args: string[]): { ok: boolean; out: str
     return { ok: true, out: git(root, ...args) }
   } catch (e) {
     const err = e as { stdout?: Buffer | string; stderr?: Buffer | string }
-    return { ok: false, out: String(err.stdout ?? err.stderr ?? e).trim() }
+    // most git failures (like `pull --rebase` with no upstream) write to stderr with
+    // an empty stdout — `??` only falls through on nullish, so it must prefer the
+    // first NON-EMPTY stream, not just the first non-nullish one
+    return { ok: false, out: String(err.stdout || err.stderr || e).trim() }
   }
 }
 
@@ -48,14 +51,21 @@ export function dirtyStatePaths(root: string): string[] {
   if (!res.ok || res.out === '') return []
   return res.out
     .split('\n')
-    .map((l) => l.slice(3).replace(/^"|"$/g, ''))
+    // a rename (e.g. from `git mv`) porcelain-formats as "old -> new" on one line —
+    // split it into its two paths so each is checked against the caller's planned set
+    .flatMap((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> '))
     .filter((p) => !LOCAL_STATE_FILES.has(p))
 }
 
 export const TRAILER = 'Specflow-State: 1'
 
 export function commitWithTrailer(root: string, files: string[], subject: string): Result<{ sha: string }> {
-  git(root, 'add', '--', ...files)
+  // tryGit, not git: a path already fully processed by a prior `git mv` (both sides
+  // of a rename staged atomically) is absent from working tree AND index, so `add`
+  // reports it unmatched — even though the rename itself is already staged. `commit
+  // --only` resolves its pathspecs against the index-vs-HEAD diff, where the rename
+  // is visible, so it still succeeds and is the real validation here.
+  tryGit(root, 'add', '--', ...files)
   git(root, 'commit', '--only', '-m', subject, '-m', TRAILER, '--', ...files)
   return ok({ sha: git(root, 'rev-parse', 'HEAD') })
 }

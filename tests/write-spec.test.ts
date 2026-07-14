@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
-import { RECAP, SPEC_BODY, SPEC_META, seededRepo, writeSpec } from './helpers.js'
+import { SPEC_BODY, SPEC_META, seededRepo, writeSpec } from './helpers.js'
 
 describe('specflow write (spec)', () => {
   it('creates a draft spec, journals a write entry, commits with the trailer', async () => {
@@ -67,7 +67,7 @@ describe('specflow write (spec)', () => {
   })
 
   it('trips the chore-writes-spec tripwire', async () => {
-    const repo = await seededRepo({ ...RECAP, effort: 'dep-bump', class: 'chore' })
+    const repo = await seededRepo({ slug: 'dep-bump', class: 'chore' })
     const res = await writeSpec(repo, 'auth-refresh', SPEC_META, SPEC_BODY, 'dep-bump')
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('class-tripwire')
