@@ -75,7 +75,19 @@ export function composeReviewed(
   if (suite.kind === 'tree') return { reviewed: { kind: 'tree', root: dir, files }, context: '' }
   const docs = files
     .filter((f) => f.endsWith('.md'))
-    .map((f) => ({ id: f.replace(/\.md$/, '').split('/').pop() as string, body: readFileSync(join(dir, f), 'utf8') }))
+    .map((f) => {
+      const body = readFileSync(join(dir, f), 'utf8')
+      const filenameId = f.replace(/\.md$/, '').split('/').pop() as string
+      // Prefer the doc's own frontmatter id (matches production: gates/decompose.ts
+      // and gates/plan.ts both derive Reviewed.docs[].id from CanonDoc.meta.id, never
+      // the filename). Fixture files that carry a canon-doc id in frontmatter must
+      // resolve the same way calibration measures, or the model's natural anchors
+      // (which follow the id it reads, not the file it came from) never resolve.
+      const parsed = splitDoc(body)
+      const metaId = parsed.ok ? parsed.value.meta.id : undefined
+      const id = typeof metaId === 'string' && metaId !== '' ? metaId : filenameId
+      return { id, body }
+    })
   const context = files
     .filter((f) => f.endsWith('.json'))
     .map((f) => `### ${f}\n\n${readFileSync(join(dir, f), 'utf8')}`)

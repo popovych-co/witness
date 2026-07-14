@@ -4,6 +4,9 @@ export function addItem(cart, sku, priceCents, qty) {
   if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) {
     throw new RangeError(`qty must be 1..${MAX_QTY}`);
   }
+  if (!Number.isInteger(priceCents) || priceCents < 0) {
+    throw new RangeError('priceCents must be a non-negative integer');
+  }
   return { ...cart, lines: [...(cart.lines ?? []), { sku, priceCents, qty }] };
 }
 
