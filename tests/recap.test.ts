@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { latestRecap, readStream } from '../src/journal.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
@@ -33,6 +36,20 @@ describe('specflow recap', () => {
     expect(repo.git('log', '-1', '--format=%s')).toBe('recap(auth-hardening): feature')
     expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
     expect(res.stdout).toContain('next: specflow write --effort auth-hardening')
+  })
+
+  it('honors an absolute --file path outside the repo', async () => {
+    const repo = await initialized()
+    const dir = mkdtempSync(join(tmpdir(), 'specflow-recap-abs-'))
+    const abs = join(dir, 'recap.json')
+    writeFileSync(abs, JSON.stringify(RECAP))
+    try {
+      const res = await repo.cli(['recap', '--file', abs])
+      expect(res.code).toBe(0)
+      expect(readStream(repo.root, 'auth-hardening')).toHaveLength(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('refuses schema violations with structured rows', async () => {

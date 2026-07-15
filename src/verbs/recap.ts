@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
@@ -79,7 +79,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(join(ctx.cwd, values.file), 'utf8'))
+    // resolve, not join: an absolute --file must be honored as-is (join would
+    // glue it under cwd — /repo + /tmp/x → /repo/tmp/x)
+    parsed = JSON.parse(readFileSync(resolve(ctx.cwd, values.file), 'utf8'))
   } catch (e) {
     renderRefusal([v('--file', 'input-json', String((e as Error).message).slice(0, 120), 'readable JSON file')]).forEach(ctx.err)
     return EXIT.REFUSED

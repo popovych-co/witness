@@ -1,5 +1,5 @@
 import { readFileSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
@@ -112,8 +112,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   let manifest: Manifest
   let body: string
   try {
-    manifest = JSON.parse(readFileSync(join(ctx.cwd, values.meta!), 'utf8')) as Manifest
-    body = readFileSync(join(ctx.cwd, values.body!), 'utf8')
+    // resolve, not join: absolute --meta/--body paths (scratch dirs) must be honored as-is
+    manifest = JSON.parse(readFileSync(resolve(ctx.cwd, values.meta!), 'utf8')) as Manifest
+    body = readFileSync(resolve(ctx.cwd, values.body!), 'utf8')
   } catch (e) {
     renderRefusal([v('--meta/--body', 'input-unreadable', String((e as Error).message).slice(0, 120), 'readable manifest JSON and body file')]).forEach(ctx.err)
     return EXIT.REFUSED
