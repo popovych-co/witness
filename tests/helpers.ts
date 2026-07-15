@@ -287,7 +287,10 @@ export function fixSingleFixture(repo: TestRepo): void {
   repo.git('commit', '-m', 'fix token rotation')
 }
 
-export async function shippableRepo(): Promise<{ repo: TestRepo; wt: string; planId: string; specId: string }> {
+export async function shippableRepo(
+  opts: { commit?: boolean } = {},
+): Promise<{ repo: TestRepo; wt: string; planId: string; specId: string }> {
+  const commit = opts.commit ?? true
   const repo = await seededRepo()
   // ship.test/ship.lint: trivial always-green commands — ship-gate tests (Tasks 14/15/21)
   // need these lanes configured and passing; singleConfig('filtered') carries no ship section.
@@ -305,13 +308,17 @@ export async function shippableRepo(): Promise<{ repo: TestRepo; wt: string; pla
   // rotateDue/nextToken names the fixture's own tests/token.test.ts imports.
   cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
-  execFileSync('git', ['add', '-A'], { cwd: wt })
-  execFileSync('git', ['commit', '-m', 'wip: tagged tests + stub'], { cwd: wt })
+  if (commit) {
+    execFileSync('git', ['add', '-A'], { cwd: wt })
+    execFileSync('git', ['commit', '-m', 'wip: tagged tests + stub'], { cwd: wt })
+  }
   let r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`red phase: ${r.stdout}\n${r.stderr}`)
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
-  execFileSync('git', ['add', '-A'], { cwd: wt })
-  execFileSync('git', ['commit', '-m', 'feat: rotate token'], { cwd: wt })
+  if (commit) {
+    execFileSync('git', ['add', '-A'], { cwd: wt })
+    execFileSync('git', ['commit', '-m', 'feat: rotate token'], { cwd: wt })
+  }
   r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`green phase: ${r.stdout}\n${r.stderr}`)
   return { repo, wt, planId: 'auth-refresh-plan-1', specId: 'auth-refresh' }

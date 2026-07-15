@@ -34,7 +34,7 @@ $SPECFLOW ship <plan-id>
 The CLI derives the phase from world state (`pr:` field, journal, PR head) — killed anywhere, re-running converges. Your job per outcome:
 
 - **Gate ran and stopped** (it *always stops* — the ship gate is a standing stop): render the checks (tests · lint · drift lane) and the reviewer findings verbatim, print `specflow decide ship <plan-id> --approve | --revise --note "…" | --stop`, END YOUR TURN. The two-lane drift check ran inside: deterministic lane fail-closed, drift-reviewer advisory.
-- **After the human approves** → run `$SPECFLOW ship <plan-id>` again: it pushes the branch, opens the PR (`pr:` stamped), rebases if main moved, and watches CI.
+- **After the human approves** → run `$SPECFLOW ship <plan-id>` again: it commits the worktree (the sole code commit — implement leaves everything uncommitted), pushes the branch, opens the PR (`pr:` stamped), rebases if main moved, and watches CI.
 - **`semantic-conflict`** → the CLI aborted its mechanical rebase; the conflict is yours (next section), then re-run ship.
 - **CI red** → investigate in the worktree; fix under TDD discipline (a behavior fix gets a red first — reuse the implement protocol); commit, `git push --force-with-lease` if you rebased, plain push otherwise; re-run `$SPECFLOW ship <plan-id>` to re-watch.
 - **CI green** → tell the human the PR is ready to merge. **Never merge it yourself** — merging is the human's act on GitHub; the lazy stamp flips `plan → done`, `spec → live` on the next scan (`$SPECFLOW next` after merging shows it).

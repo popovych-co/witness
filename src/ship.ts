@@ -135,7 +135,19 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   }
   if (phase === 'pr') {
     const parent = findById(canon, String(plan.meta.parent))
-    const created = createPr(ctx, wt, root, plan, String(parent?.meta.summary ?? 'specflow change'))
+    const parentSummary = String(parent?.meta.summary ?? 'specflow change')
+    // implement leaves the worktree uncommitted — ship owns the sole code commit
+    if (tryGit(wt, 'status', '--porcelain').out !== '') {
+      tryGit(wt, 'add', '-A')
+      const committed = tryGit(wt, 'commit', '-m', `${planId}: ${parentSummary}`)
+      if (!committed.ok) {
+        renderRefusal([v('commit', 'ship-commit-failed', committed.out.slice(0, 200),
+          'a committable worktree — resolve and re-run specflow ship')]).forEach((l) => ctx.err(l))
+        return EXIT.REFUSED
+      }
+      ctx.out(kv('commit', `${planId}: ${parentSummary}`))
+    }
+    const created = createPr(ctx, wt, root, plan, parentSummary)
     if (!created.ok) { renderRefusal(created.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const stamped = stampPr(ctx, root, planId, created.value)
     if (!stamped.ok) { renderRefusal(stamped.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }

@@ -45,9 +45,9 @@ One plan = one fresh subagent working **inside the worktree** — clean context,
 > 2. Run `${SPECFLOW_BIN:-npx -y specflow@0.1.0} test-evidence <plan-id> --phase red` from the worktree. It must record a genuine red. If it reports the test passes before implementation (`vacuous`), STOP and report — the test asserts nothing, or the behavior already exists.
 > 3. Write the minimal code to make it pass. No speculative generality.
 > 4. Run `… test-evidence <plan-id> --phase green` — it must record green.
-> 5. Refactor freely while green; commit in the worktree with a message naming the step (`git add -A && git commit -m "s1: rotate tokens on refresh"`).
+> 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design.
 >
-> Never touch `specs/` or `plans/` (state lives on main; the CLI routes it). Never push, never open PRs — ship is a later stage. Scaffolding steps skip evidence (nothing tagged changes). When every step is done, report the worktree diff summary.
+> Never touch `specs/` or `plans/` (state lives on main; the CLI routes it). Never `git commit`, never push, never open PRs — ship is a later stage and owns the sole code commit (evidence and gates read the working tree directly, so nothing needs committing here). Scaffolding steps skip evidence (nothing tagged changes). When every step is done, report the worktree diff summary.
 
 If code landed before its red was witnessed (you or the subagent slipped), reconstruct instead of faking: `$SPECFLOW verify-red <plan-id>` (stashes non-test changes, expects red, restores, expects green — safe in the isolated worktree).
 

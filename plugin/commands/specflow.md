@@ -13,7 +13,7 @@ Resolve the CLI once:
 SPECFLOW="${SPECFLOW_BIN:-npx -y specflow@0.1.0}"
 ```
 
-If the repo has no `specflow.config.yaml`, run `$SPECFLOW init` first (one bootstrap commit), then proceed.
+If the repo has no `specflow.config.yaml`, run `$SPECFLOW init` first (one bootstrap commit), then proceed. If init or any verb refuses on a dirty tree, the human commits or cleans it — **never `git commit` yourself, anywhere, at any stage**: the CLI makes its own state commits, and the ship phase makes the sole code commit.
 
 ## Loop
 

@@ -24,8 +24,8 @@ const CLEAN = {
   findings: [],
 }
 
-async function approvedShip() {
-  const seed = await shippableRepo()
+async function approvedShip(opts: { commit?: boolean } = {}) {
+  const seed = await shippableRepo(opts)
   addOrigin(seed.repo)
   const scenario = fakeScenario()
   putVerdict(scenario, CLEAN)
@@ -50,6 +50,17 @@ describe('specflow ship', () => {
     expect(calls).toContain('pr create')
     expect(calls).toContain('pr checks 1 --watch')
     expect(repo.git('log', '-1', '--format=%B')).toContain('ship(auth-refresh-plan-1): pr #1')
+  })
+
+  it('uncommitted worktree: pr phase makes the sole code commit before push', async () => {
+    const { repo, wt, planId, ctx } = await approvedShip({ commit: false })
+    // nothing ahead of main before ship — implement left the worktree uncommitted
+    expect(execFileSync('git', ['log', '--oneline', 'main..HEAD'], { cwd: wt, encoding: 'utf8' })).toBe('')
+    expect(await runShip(ctx, planId)).toBe(0)
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: wt, encoding: 'utf8' })).toBe('')
+    const subject = execFileSync('git', ['log', '-1', '--format=%s'], { cwd: wt, encoding: 'utf8' }).trim()
+    expect(subject).toBe('auth-refresh-plan-1: Refresh tokens rotate before expiry')
+    expect(findById(loadCanon(repo.root), planId)!.meta.pr).toBe(1)
   })
 
   it('re-entry never mints a second PR and resumes at the watch', async () => {
