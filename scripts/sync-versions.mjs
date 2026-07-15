@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stamp package.json's version across every plugin surface: plugin.json's
-// `version` field and every `specflow@<semver>` pin in plugin text files.
+// `version` field and every `@specflow/cli@<semver>` pin in plugin text files.
 // Idempotent; run before tagging a release (release.yml verifies via the test).
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
-const PIN = /specflow@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g;
+const PIN = /@specflow\/cli@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g;
 
 function walk(dir) {
   return readdirSync(dir).flatMap((name) => {
@@ -27,10 +27,10 @@ if (manifest.version !== version) {
 }
 for (const f of walk(join(root, 'plugin')).filter((p) => /\.(md|sh|mjs|json)$/.test(p))) {
   const before = readFileSync(f, 'utf8');
-  const after = before.replace(PIN, `specflow@${version}`);
+  const after = before.replace(PIN, `@specflow/cli@${version}`);
   if (after !== before) {
     writeFileSync(f, after);
     stamped += 1;
   }
 }
-console.log(`specflow@${version}: ${stamped} file(s) restamped`);
+console.log(`@specflow/cli@${version}: ${stamped} file(s) restamped`);

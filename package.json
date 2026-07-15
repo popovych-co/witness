@@ -1,9 +1,12 @@
 {
-  "name": "specflow",
+  "name": "@specflow/cli",
   "version": "0.1.2",
   "description": "brainstorm-to-PR pipeline: specs are state, plans are motion, transitions are evidence-gated",
   "license": "MIT",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },

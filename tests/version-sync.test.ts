@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 const root = join(__dirname, '..');
 const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version as string;
-const PIN = /specflow@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/g;
+const PIN = /@specflow\/cli@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/g;
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -28,12 +28,12 @@ describe('plugin version pin', () => {
     expect(m.plugins).toEqual([expect.objectContaining({ name: 'specflow', source: './plugin' })]);
   });
 
-  it('every specflow@ pin under plugin/ equals the package version', () => {
+  it('every @specflow/cli@ pin under plugin/ equals the package version', () => {
     const files = walk(join(root, 'plugin')).filter((f) => /\.(md|sh|mjs|json)$/.test(f));
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
       for (const m of readFileSync(f, 'utf8').matchAll(PIN)) {
-        expect(`${f}: ${m[0]}`).toBe(`${f}: specflow@${pkgVersion}`);
+        expect(`${f}: ${m[0]}`).toBe(`${f}: @specflow/cli@${pkgVersion}`);
       }
     }
   });

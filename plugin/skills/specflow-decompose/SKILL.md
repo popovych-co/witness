@@ -10,7 +10,7 @@ description: Slice a specflow effort's confirmed recap into vertical spec slices
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y specflow@0.1.2}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @specflow/cli@0.1.2}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
