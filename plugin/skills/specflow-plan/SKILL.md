@@ -15,7 +15,7 @@ parent's criteria. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y specflow@0.1.0}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y specflow@0.1.1}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
