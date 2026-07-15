@@ -8,7 +8,8 @@ import { rows } from '../toon.js'
 export async function run(ctx: Ctx): Promise<number> {
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
-  const specs = loadCanon(rootRes.value).docs.filter((d) => d.rel.startsWith('specs/'))
+  const canon = loadCanon(rootRes.value)
+  const specs = canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`))
   const groups = new Map<string, typeof specs>()
   for (const doc of specs) {
     const dir = dirname(doc.rel)

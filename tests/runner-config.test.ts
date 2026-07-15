@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { Config } from '../src/config.js'
+import { DEFAULT_PATHS, type Config } from '../src/config.js'
 import { criteriaExcludes, runnerConfig } from '../src/runner.js'
 
-const cfg = (raw: Record<string, unknown>): Config => ({ schema: 1, raw })
+const cfg = (raw: Record<string, unknown>): Config => ({ schema: 1, raw, paths: DEFAULT_PATHS })
 
 describe('runnerConfig', () => {
   it('parses a filtered template containing {id}', () => {

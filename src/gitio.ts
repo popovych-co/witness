@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { dirname } from 'node:path'
+import { canonPaths } from './config.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 export function git(root: string, ...args: string[]): string {
@@ -33,10 +34,13 @@ export function primaryRoot(cwd: string): Result<string> {
   return ok(dirname(common))
 }
 
-export const STATE_DIRS = ['specs', 'plans', '.specflow'] as const
+export function stateDirs(root: string): string[] {
+  const p = canonPaths(root)
+  return [p.specs, p.plans, '.specflow']
+}
 
-export function isStatePath(rel: string): boolean {
-  return STATE_DIRS.some((d) => rel === d || rel.startsWith(d + '/'))
+export function isStatePath(root: string, rel: string): boolean {
+  return stateDirs(root).some((d) => rel === d || rel.startsWith(d + '/'))
 }
 
 const LOCAL_STATE_FILES = new Set([
@@ -47,7 +51,7 @@ const LOCAL_STATE_FILES = new Set([
 ])
 
 export function dirtyStatePaths(root: string): string[] {
-  const res = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...STATE_DIRS)
+  const res = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...stateDirs(root))
   if (!res.ok || res.out === '') return []
   return res.out
     .split('\n')
@@ -71,9 +75,10 @@ export function commitWithTrailer(root: string, files: string[], subject: string
 }
 
 export function stateCommit(root: string, files: string[], subject: string): Result<{ sha: string }> {
-  const bad = files.filter((f) => !isStatePath(f))
+  const dirs = stateDirs(root)
+  const bad = files.filter((f) => !isStatePath(root, f))
   if (bad.length) {
-    return refuse(bad.map((f) => v(f, 'out-of-scope', f, 'state commits touch only specs/, plans/, .specflow/')))
+    return refuse(bad.map((f) => v(f, 'out-of-scope', f, `state commits touch only ${dirs.map((d) => `${d}/`).join(', ')}`)))
   }
   const planned = new Set(files)
   const unrelated = dirtyStatePaths(root).filter((p) => !planned.has(p))
@@ -92,9 +97,10 @@ export interface CommitAudit {
 }
 
 export function auditStateCommits(root: string): CommitAudit[] {
+  const p = canonPaths(root)
   const res = tryGit(
     root, 'log', '--format=%H%x1f%s%x1f%(trailers:key=Specflow-State,valueonly=true)',
-    '--', 'specs', 'plans', '.specflow/journal',
+    '--', p.specs, p.plans, '.specflow/journal',
   )
   if (!res.ok || res.out === '') return []
   return res.out.split('\n').filter(Boolean).map((line) => {

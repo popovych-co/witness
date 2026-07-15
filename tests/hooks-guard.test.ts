@@ -53,6 +53,30 @@ describe('guard-state hook — Edit/Write/MultiEdit', () => {
   });
 });
 
+describe('guard-state hook — configured canon paths', () => {
+  function docsRepo(config: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'sfhook-'));
+    writeFileSync(join(dir, 'specflow.config.yaml'), config);
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+    mkdirSync(join(dir, 'specs'), { recursive: true });
+    return dir;
+  }
+
+  it('guards the configured roots and releases the defaults (flow style)', () => {
+    const repo = docsRepo('schema: 1\npaths: { specs: docs/specs, plans: docs/plans }\n');
+    expect(runGuard({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'docs', 'specs', 'a.md') }, cwd: repo }).code).toBe(2);
+    expect(runGuard({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'specs', 'a.md') }, cwd: repo }).code).toBe(0);
+    expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'echo hi > docs/specs/a.md' }, cwd: repo }).code).toBe(2);
+    expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'echo hi > specs/a.md' }, cwd: repo }).code).toBe(0);
+  });
+
+  it('reads block-style paths too', () => {
+    const repo = docsRepo('schema: 1\npaths:\n  specs: docs/specs\n  plans: docs/plans\n');
+    expect(runGuard({ tool_name: 'Write', tool_input: { file_path: join(repo, 'docs', 'specs', 'a.md') }, cwd: repo }).code).toBe(2);
+    expect(runGuard({ tool_name: 'Write', tool_input: { file_path: join(repo, 'plans', 'p.md') }, cwd: repo }).code).toBe(0);
+  });
+});
+
 describe('guard-state hook — Bash (best-effort)', () => {
   it('blocks writes into state paths', () => {
     const repo = specflowRepo();

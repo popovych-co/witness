@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { canonPaths, type CanonPaths } from './config.js'
 import { readDoc } from './fm.js'
 import { type Violation } from './refusal.js'
 import { validateDoc } from './schemas.js'
@@ -14,12 +15,14 @@ export interface CanonDoc {
 export interface Canon {
   docs: CanonDoc[]
   errors: Violation[]
+  paths: CanonPaths
 }
 
 export function loadCanon(root: string): Canon {
   const docs: CanonDoc[] = []
   const errors: Violation[] = []
-  for (const dir of ['specs', 'plans']) {
+  const paths = canonPaths(root)
+  for (const dir of [paths.specs, paths.plans]) {
     const base = join(root, dir)
     if (!existsSync(base)) continue
     for (const f of readdirSync(base, { recursive: true, encoding: 'utf8' })) {
@@ -38,7 +41,7 @@ export function loadCanon(root: string): Canon {
       })
     }
   }
-  return { docs, errors }
+  return { docs, errors, paths }
 }
 
 export function findById(canon: Canon, id: string): CanonDoc | undefined {

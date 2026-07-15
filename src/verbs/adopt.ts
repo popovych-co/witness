@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { adoptedCommits, lastWitnessed, untrailedCommitsFor } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
+import { canonPaths } from '../config.js'
 import { runCriteria } from '../criteria.js'
 import { clearDrift, stampDrift } from '../drift.js'
 import { readDoc } from '../fm.js'
@@ -16,13 +17,14 @@ import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [rel] = argv.filter((a) => !a.startsWith('--'))
-  if (!rel || !(rel.startsWith('specs/') || rel.startsWith('plans/')) || !rel.endsWith('.md')) {
-    renderRefusal([v('path', 'usage', String(rel ?? ''), 'specflow adopt <specs/... | plans/...>.md')]).forEach(ctx.err)
-    return EXIT.REFUSED
-  }
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
   const root = rootRes.value
+  const paths = canonPaths(root)
+  if (!rel || !(rel.startsWith(`${paths.specs}/`) || rel.startsWith(`${paths.plans}/`)) || !rel.endsWith('.md')) {
+    renderRefusal([v('path', 'usage', String(rel ?? ''), `specflow adopt <${paths.specs}/... | ${paths.plans}/...>.md`)]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
   const blocked = guardTxn(ctx, root)
   if (blocked !== undefined) return blocked
 

@@ -4,7 +4,7 @@
 // plus best-effort Bash matching (Decision 31). Exit 2 = block (stderr is fed
 // back to the model). Any parse/read failure exits 0: a broken hook must never
 // brick a session.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 function configRoot(startDir) {
@@ -17,12 +17,35 @@ function configRoot(startDir) {
   }
 }
 
-function isStateRel(rel) {
-  const posix = rel.split('\\').join('/');
-  return posix === 'specs' || posix === 'plans' || posix.startsWith('specs/') || posix.startsWith('plans/');
+// Canon roots from the repo's `paths:` config key (flow or block style),
+// extracted without a YAML dependency — the hook must stay standalone.
+// Anything unparseable falls back to the defaults: friction, not the guarantee.
+function canonDirs(root) {
+  try {
+    const text = readFileSync(join(root, 'specflow.config.yaml'), 'utf8');
+    const flow = text.match(/^paths:[ \t]*\{([^}]*)\}/m);
+    const section = flow ? flow[1] : (text.match(/^paths:[ \t]*\n((?:[ \t]+\S.*\n?)*)/m) || [])[1] || '';
+    const dir = (key) => {
+      const m = section.match(new RegExp(`(?:^|[\\s{,])${key}:[ \\t]*['"]?([^'"\\s,}#]+)`, 'm'));
+      return m ? m[1].replace(/\/+$/, '') : key;
+    };
+    return [dir('specs'), dir('plans')];
+  } catch {
+    return ['specs', 'plans'];
+  }
 }
 
-const STATE_PATH = /(^|[\s"'=;|&(])(\.\/)?(specs|plans)\//;
+function isStateRel(rel, dirs) {
+  const posix = rel.split('\\').join('/');
+  return dirs.some((d) => posix === d || posix.startsWith(`${d}/`));
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function statePathRe(dirs) {
+  return new RegExp(`(^|[\\s"'=;|&(])(\\./)?(${dirs.map(escapeRe).join('|')})/`);
+}
+
 const WRITEISH = /(>>?|\btee\b|\bsed\b[^\n]*\s-i\b|\bmv\b|\bcp\b|\brm\b|\btouch\b|\btruncate\b|\bdd\b)/;
 
 function block(what) {
@@ -56,14 +79,18 @@ process.stdin.on('end', () => {
       if (!root) process.exit(0);
       const rel = relative(root, abs);
       if (rel.startsWith('..')) process.exit(0);
-      if (isStateRel(rel)) block(rel.split('\\').join('/'));
+      if (isStateRel(rel, canonDirs(root))) block(rel.split('\\').join('/'));
       process.exit(0);
     }
     if (tool === 'Bash') {
       const cmd = input.tool_input && input.tool_input.command;
       if (typeof cmd !== 'string') process.exit(0);
-      if (!configRoot(cwd)) process.exit(0);
-      if (STATE_PATH.test(cmd) && WRITEISH.test(cmd)) block('a specs/ or plans/ path in that command');
+      const root = configRoot(cwd);
+      if (!root) process.exit(0);
+      const dirs = canonDirs(root);
+      if (statePathRe(dirs).test(cmd) && WRITEISH.test(cmd)) {
+        block(`a ${dirs.map((d) => `${d}/`).join(' or ')} path in that command`);
+      }
       process.exit(0);
     }
     process.exit(0);

@@ -86,8 +86,8 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (effortRows.length) {
     rows('efforts', ['slug', 'class', 'specs', 'plans'], effortRows as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
-  ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith('specs/')))))
-  ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith('plans/')))))
+  ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
+  ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))
   const blocked = blockedRows(canon, ctx)
   if (blocked.length) rows('blocked', ['doc', 'why'], blocked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   const reconcile = reconcileRows(root, canon)

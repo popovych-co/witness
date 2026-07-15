@@ -178,7 +178,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       }
     }
 
-    const rel = existing ? existing.rel : `${manifest.type === 'plan' ? 'plans' : 'specs'}/${id}.md`
+    const rel = existing ? existing.rel : `${manifest.type === 'plan' ? cfg.value.paths.plans : cfg.value.paths.specs}/${id}.md`
     const stream = journalRel(effort)
     const unrelated = dirtyStatePaths(root).filter((p) => p !== rel && p !== stream)
     if (unrelated.length) {

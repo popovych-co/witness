@@ -40,7 +40,7 @@ export function runnerConfig(cfg: Config): Result<RunnerConfig> {
 export function criteriaExcludes(cfg: Config): string[] {
   const crit = (cfg.raw.criteria ?? {}) as Record<string, unknown>
   const extra = Array.isArray(crit.exclude) ? (crit.exclude as string[]).filter((g) => typeof g === 'string') : []
-  return ['specs/**', 'plans/**', '.specflow/**', ...extra]
+  return [`${cfg.paths.specs}/**`, `${cfg.paths.plans}/**`, '.specflow/**', ...extra]
 }
 
 export interface RunOutcome {

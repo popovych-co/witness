@@ -6,8 +6,9 @@ five-stage pipeline with evidence-gated transitions. Specs are **state**
 the sole writer of both, and every transition leaves evidence in an
 append-only journal.
 
-Status: slice 1 of 4 — the deterministic state core. Gates, criteria
-execution, and the Claude Code plugin land in later slices.
+Status: all four slices landed — state core, deterministic evidence, gates &
+motion, plugin + calibration. Reviewer calibration is the remaining pre-1.0
+work (`docs/graduation.md`).
 
 ## Quickstart
 
@@ -30,6 +31,18 @@ npx specflow                          # dashboard: where you are, the one next a
 | `index` | id · summary · status · depends across the canon |
 | `satisfy <id> --need <text\|n>` | flip a manual need via the write path |
 | `log <id>` | render a journal stream |
+| `gate <decompose\|plan\|implement\|ship> <id>` | run the reviewer gate; journals the round, stamps on pass |
+| `decide <gate> <id> --approve\|--revise` | record the human decision on a stopped gate |
+| `start <plan-id>` | create/re-attach the plan's worktree (`.specflow/worktrees/<id>`) |
+| `next` | the one next action across every effort |
+| `ship <plan-id>` | lanes → ship gate → PR → CI watch |
+| `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
+| `adopt <path>` | absolve a finished hand-edit into the journal |
+| `abandon <id\|--effort <slug>>` | wind a plan/effort down with status reverts |
+| `rename <old> <new>` | id rename across canon, refs, journal |
+| `clean` | reap stale worktrees |
+| `sync` | pull --rebase + push state commits |
+| `calibrate <model>` | run the reviewer calibration battery |
 | `recover [--complete\|--rollback]` | resolve a crashed write transaction |
 | *(no verb)* | dashboard |
 
@@ -42,6 +55,7 @@ npx specflow                          # dashboard: where you are, the one next a
 - **Frontmatter is position** — the CLI derives "where are we" by scanning it; nothing else stores pipeline state.
 - **The journal is history** — `.specflow/journal/<id>.jsonl`, append-only, committed, never compacted.
 - **Every state commit carries `Specflow-State: 1`** — `specflow check` audits that spec/plan diffs appear only in trailer-bearing commits.
+- **Canon roots are configurable** — `paths: { specs: docs/specs, plans: docs/plans }` in `specflow.config.yaml` (defaults: `specs/`, `plans/`); scan, commit scoping, the guard hook, and criteria excludes all follow it. `git mv` existing docs when changing it.
 - Local, never committed: `.specflow/{lock,txn.json,allow.json,calibration.local.yaml}`.
 
 ## Development

@@ -13,7 +13,7 @@ Resolve the CLI once per session:
 SPECFLOW="${SPECFLOW_BIN:-npx -y specflow@0.1.1}"
 ```
 
-- **Never edit `specs/**` or `plans/**`** — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
+- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
 - **Never invoke gate reviewers or relay verdicts.** `specflow gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
 - **Refusal repair loop:** a `specflow` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
 - **Re-entrancy:** derive position from CLI output (`$SPECFLOW next`, the dashboard, `log`, `index`) — never from conversation memory. Killed and re-run, you must converge.
@@ -82,7 +82,7 @@ Get these right the first time — the dashboard trends your first-try valid rat
 - `criteria`: ≥ 1 entry, unique ids, each exactly one of `test` (value must be `@spec:<this-spec-id>`) or `cmd`. A criterion that cannot fail is not a criterion.
 - `covers`: the recap goal ids this spec honestly advances — the critic judges the mapping's quality.
 - Body: exactly the `## Motivation` and `## Behavior` headings; behavior-only — internal interfaces never appear in a spec.
-- `id`: `[a-z0-9-]+`; new ids land at `specs/<id>.md`.
+- `id`: `[a-z0-9-]+`; new ids land at `specs/<id>.md` (or the repo's configured specs dir).
 - `needs`: external prerequisites only, machine-checkable (`env:` / `cmd:` / `manual:` + `satisfied`).
 
 ## Gate

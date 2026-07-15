@@ -41,4 +41,4 @@ Every turn is `specflow next`, read, act on the first matching row, repeat:
 - An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human `specflow satisfy <id> --need <text>`), `slug-reuse`, lock contention, calibration floor stops under `--manual`.
 - A skill ended its turn for a gate stop — that stop is yours too; do not restart the loop until the human decides.
 
-**Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** — that is what the skills' write path is for. If the dashboard warns the reviewer model is uncalibrated, surface the warning; under `--manual` treat it as a stop.
+**Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** (or wherever the repo's `paths:` config relocates them) — that is what the skills' write path is for. If the dashboard warns the reviewer model is uncalibrated, surface the warning; under `--manual` treat it as a stop.
