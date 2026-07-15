@@ -610,7 +610,7 @@ export async function runSkillSuites(
 export function publishScore(pkgRoot: string, model: string, report: CalReport): Result<{ path: string }> {
   const pkgPath = join(pkgRoot, 'package.json')
   const name = existsSync(pkgPath) ? (JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string }).name : undefined
-  if (name !== '@specflow/cli') return refuse([v('--publish', 'not-package-repo', name ?? 'no package.json', 'run inside the specflow repo')])
+  if (name !== '@whatmatters/specflow') return refuse([v('--publish', 'not-package-repo', name ?? 'no package.json', 'run inside the specflow repo')])
   const resultsDir = join(pkgRoot, 'calibration-results')
   mkdirSync(resultsDir, { recursive: true })
   const scorePath = join(resultsDir, `${model}.json`)

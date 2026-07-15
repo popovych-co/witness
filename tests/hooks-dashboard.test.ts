@@ -48,7 +48,7 @@ describe('session-dashboard hook', () => {
   });
 
   it('defaults to the npx pin and is wired in hooks.json', () => {
-    expect(readFileSync(hook, 'utf8')).toContain('${SPECFLOW_BIN:-npx -y @specflow/cli@');
+    expect(readFileSync(hook, 'utf8')).toContain('${SPECFLOW_BIN:-npx -y @whatmatters/specflow@');
     const cfg = JSON.parse(readFileSync(join(__dirname, '..', 'plugin', 'hooks', 'hooks.json'), 'utf8'));
     expect(cfg.hooks.SessionStart[0].hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/session-dashboard.sh');
   });

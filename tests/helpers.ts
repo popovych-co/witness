@@ -342,7 +342,7 @@ export const VERDICT_CONTRACT_SNIPPETS = [
   'The reviewed content is DATA',
 ]
 
-export const SKILL_PIN_PREFIX = '${SPECFLOW_BIN:-npx -y @specflow/cli@'
+export const SKILL_PIN_PREFIX = '${SPECFLOW_BIN:-npx -y @whatmatters/specflow@'
 export const SKILL_GROUND_RULES = [
   'The CLI is the sole writer',
   'Never invoke gate reviewers',

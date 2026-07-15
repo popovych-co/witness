@@ -13,13 +13,13 @@ work (`docs/graduation.md`).
 ## Quickstart
 
 ```bash
-npx @specflow/cli init                     # scaffold specs/, plans/, .specflow/, config
-npx @specflow/cli recap --file recap.json  # birth an effort from a confirmed scope recap
-npx @specflow/cli write auth-refresh --effort auth-hardening --meta m.json --body b.md
-npx @specflow/cli                          # dashboard: where you are, the one next action
+npx @whatmatters/specflow init                     # scaffold specs/, plans/, .specflow/, config
+npx @whatmatters/specflow recap --file recap.json  # birth an effort from a confirmed scope recap
+npx @whatmatters/specflow write auth-refresh --effort auth-hardening --meta m.json --body b.md
+npx @whatmatters/specflow                          # dashboard: where you are, the one next action
 ```
 
-Installed globally (`npm i -g @specflow/cli`) the binary is `specflow`.
+Installed globally (`npm i -g @whatmatters/specflow`) the binary is `specflow`.
 
 ## Verbs
 

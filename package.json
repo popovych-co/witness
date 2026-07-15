@@ -1,5 +1,5 @@
 {
-  "name": "@specflow/cli",
+  "name": "@whatmatters/specflow",
   "version": "0.1.3",
   "description": "brainstorm-to-PR pipeline: specs are state, plans are motion, transitions are evidence-gated",
   "license": "MIT",
