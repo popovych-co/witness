@@ -12,6 +12,8 @@ const DEFAULT_CONFIG = `# specflow.config.yaml — the whole surface
 schema: 1
 gates:
   model: claude-fable-5      # reviewer model pin — exact id, aliases refused
+  # any gate block may pin its own model (wins over the global pin), e.g.
+  # decompose: { reviewers: [slicing-critic], model: claude-opus-4-8 }
   decompose: { reviewers: [slicing-critic] }
   plan: { reviewers: [plan-critic] }
   implement:

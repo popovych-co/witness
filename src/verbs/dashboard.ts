@@ -1,6 +1,7 @@
 import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { reconcileRows } from '../drift.js'
+import { DEFAULT_BATTERIES } from '../gate.js'
 import { primaryRoot } from '../gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { loadMatrix, resolveModel } from '../model.js'
@@ -46,8 +47,19 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const cfg = loadConfig(root)
   ctx.out(kv('specflow', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
   if (cfg.ok) {
-    const modelR = resolveModel(cfg.value, loadMatrix(root))
-    if (modelR.ok && modelR.value.warning) ctx.out(kv('model-floor', modelR.value.warning))
+    const matrix = loadMatrix(root)
+    // one line per distinct warning, labeled with the gates it applies to —
+    // per-gate model pins can put each gate in a different calibration state
+    const byWarning = new Map<string, string[]>()
+    for (const gate of Object.keys(DEFAULT_BATTERIES)) {
+      const modelR = resolveModel(cfg.value, matrix, gate)
+      if (modelR.ok && modelR.value.warning) {
+        byWarning.set(modelR.value.warning, [...(byWarning.get(modelR.value.warning) ?? []), gate])
+      }
+    }
+    for (const [warning, gates] of byWarning) {
+      ctx.out(kv('model-floor', `${gates.join(' · ')}: ${warning}`))
+    }
   }
 
   const txn = pendingTxn(root)

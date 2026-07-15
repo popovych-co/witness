@@ -126,7 +126,7 @@ export async function runGate(
     if (!lensR.ok) { renderRefusal(lensR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     lenses.push(lensR.value)
   }
-  const modelR = resolveModel(cfgR.value, loadMatrix(root))
+  const modelR = resolveModel(cfgR.value, loadMatrix(root), spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const { chain, calibrationOf, warning } = modelR.value
   if (warning) ctx.err(`warning: ${warning}`)

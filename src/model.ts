@@ -33,11 +33,17 @@ export interface ModelResolution {
   warning?: string
 }
 
-export function resolveModel(cfg: Config, matrix: MatrixInfo): Result<ModelResolution> {
-  const gates = (cfg.raw.gates ?? {}) as { model?: unknown }
-  const pin = gates.model === undefined ? undefined : String(gates.model)
+export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Result<ModelResolution> {
+  const gates = (cfg.raw.gates ?? {}) as Record<string, unknown> & { model?: unknown }
+  const gateBlock = gate !== undefined && typeof gates[gate] === 'object' && gates[gate] !== null
+    ? (gates[gate] as { model?: unknown })
+    : undefined
+  // per-gate pin wins over the global one — each gate is its own task with its own model
+  const pinRaw = gateBlock?.model ?? gates.model
+  const pinField = gateBlock?.model !== undefined ? `gates.${gate}.model` : 'gates.model'
+  const pin = pinRaw === undefined ? undefined : String(pinRaw)
   if (pin !== undefined && MODEL_ALIASES.includes(pin)) {
-    return refuse([v('gates.model', 'alias-refused', pin,
+    return refuse([v(pinField, 'alias-refused', pin,
       'an exact model id — aliases re-point under the calibration (Decision 55)')])
   }
   const calibrated = [...matrix.shipped, ...matrix.local.filter((m) => !matrix.shipped.includes(m))]

@@ -44,6 +44,24 @@ describe('resolveModel', () => {
     expect(r.value.calibrationOf('test-model-2')).toBe('local')
   })
 
+  it('per-gate pin wins over the global pin; other gates keep the global', async () => {
+    const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n  decompose: { model: test-model-2 }\n')
+    const d = resolveModel(cfg, loadMatrix(repo.root), 'decompose')
+    expect(d.ok && d.value.chain[0]).toBe('test-model-2')
+    const p = resolveModel(cfg, loadMatrix(repo.root), 'plan')
+    expect(p.ok && p.value.chain[0]).toBe('test-model-1')
+  })
+
+  it('refuses an alias in a per-gate pin, naming the gate field', async () => {
+    const { repo, cfg } = await cfgWith('gates:\n  ship: { model: opus }\n')
+    const r = resolveModel(cfg, loadMatrix(repo.root), 'ship')
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.violations[0].rule).toBe('alias-refused')
+      expect(r.violations[0].field).toBe('gates.ship.model')
+    }
+  })
+
   it('unpinned: chain is calibrated ids then session default, no refusal', async () => {
     const { repo, cfg } = await cfgWith('')
     const r = resolveModel(cfg, loadMatrix(repo.root))

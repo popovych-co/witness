@@ -94,6 +94,20 @@ describe('gate engine', () => {
     expect(() => readFileSync(join(scenario, 'claude-calls/call-2/stdin'), 'utf8')).toThrow()
   })
 
+  it('a per-gate model pin reaches the reviewer invocation and the journal', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    // init's config already pins a global gates.model — the per-gate pin must beat it
+    const cfgPath = join(repo.root, 'specflow.config.yaml')
+    writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8').replace(
+      'plan: { reviewers: [plan-critic] }',
+      'plan: { reviewers: [plan-critic], model: test-plan-model }'))
+    repo.git('add', 'specflow.config.yaml'); repo.git('commit', '-m', 'pin plan model')
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    expect(runs(repo)[0].model).toBe('test-plan-model')
+    expect(readFileSync(join(scenario, 'claude-calls/call-1/argv'), 'utf8')).toContain('test-plan-model')
+  })
+
   it('malformed verdict (unresolvable anchor) → one reroll, then outcome malformed, fail-closed stop', async () => {
     const { repo, scenario, ctx } = await gateRepo()
     putVerdict(scenario, {
