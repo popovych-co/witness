@@ -58,7 +58,7 @@ export function journalEvidence(
   const marker = {
     op: `test-evidence(${planId}): ${phase}`,
     files: [journalRel(planId)],
-    journalMulti: [{ stream: journalRel(planId), line: entryLine(entry) }],
+    journalMulti: [{ stream: planId, line: entryLine(entry) }],
   }
   return withTxn(stateRoot, marker, () => {
     appendEntry(stateRoot, planId, entry)

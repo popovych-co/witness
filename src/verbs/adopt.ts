@@ -80,7 +80,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const lock = acquireLock(root)
   if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
   try {
-    const marker = { op: `adopt(${id})`, files, journalMulti: [{ stream: journalRel(id), line: entryLine(entry) }] }
+    const marker = { op: `adopt(${id})`, files, journalMulti: [{ stream: id, line: entryLine(entry) }] }
     const committed = withTxn(root, marker, () => {
       if (doc && reverify && !reverify.ok) stampDrift(root, doc, currentSha)
       else if (doc && reverify?.ok && doc.meta.drift !== undefined) clearDrift(root, doc)

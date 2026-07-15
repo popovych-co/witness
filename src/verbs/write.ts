@@ -203,8 +203,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const line = JSON.stringify({ v: 1, ...entry })
     const files = [rel, stream, ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : [])]
     const res = withTxn(root, {
-      op: `write(${id})`, files, journal: { stream, line },
-      ...(reslice ? { journalMulti: [{ stream: journalRel(reslice.entry.artifact), line: reslice.line }] } : {}),
+      op: `write(${id})`, files, journal: { stream: effort, line },
+      ...(reslice ? { journalMulti: [{ stream: reslice.entry.artifact, line: reslice.line }] } : {}),
     }, () => {
       writeDoc(join(root, rel), { meta: built.meta, body })
       crashPoint(ctx.env, 'artifact-write')
@@ -236,7 +236,7 @@ function journalRefusal(ctx: Ctx, root: string, effort: string, artifact: string
   }
   const line = JSON.stringify({ v: 1, ...entry })
   const stream = journalRel(effort)
-  const res = withTxn(root, { op: `write-refused(${artifact})`, files: [stream], journal: { stream, line } }, () => {
+  const res = withTxn(root, { op: `write-refused(${artifact})`, files: [stream], journal: { stream: effort, line } }, () => {
     appendEntry(root, effort, entry)
     return stateCommit(root, [stream], `write-refused(${artifact})`)
   })

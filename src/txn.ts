@@ -3,11 +3,15 @@ import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { EXIT } from './cli.js'
 import { git, stateCommit, tryGit } from './gitio.js'
+import { journalRel } from './journal.js'
 import { type Result } from './refusal.js'
 
 export interface TxnMarker {
   op: string
   files: string[]
+  // stream is a journal stream id (artifact/effort id), never a path — completeTxn
+  // resolves it through journalRel; markers persist to txn.json, so both writers
+  // and the recovery reader must agree on this
   journal?: { stream: string; line: string }
   journalMulti?: Array<{ stream: string; line: string }>
 }
@@ -49,8 +53,9 @@ export function rollbackTxn(root: string, marker: TxnMarker): void {
 
 export function completeTxn(root: string, marker: TxnMarker): Result<{ sha: string }> {
   const items = [...(marker.journal ? [marker.journal] : []), ...(marker.journalMulti ?? [])]
+  if (items.length) mkdirSync(join(root, '.specflow', 'journal'), { recursive: true })
   for (const { stream, line } of items) {
-    const p = join(root, stream)
+    const p = join(root, journalRel(stream))
     const current = existsSync(p) ? readFileSync(p, 'utf8') : ''
     const lastLine = current.split('\n').filter(Boolean).at(-1)
     if (lastLine !== line) appendFileSync(p, line + '\n')

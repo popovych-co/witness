@@ -62,7 +62,7 @@ describe('recovery', () => {
     repo.write('.specflow/txn.json', JSON.stringify({
       op: 'write(a)',
       files: ['specs/a.md', '.specflow/journal/e.jsonl'],
-      journal: { stream: '.specflow/journal/e.jsonl', line: '{"v":1,"t":"write","artifact":"a"}' },
+      journal: { stream: 'e', line: '{"v":1,"t":"write","artifact":"a"}' },
     }))
   }
 
@@ -92,6 +92,23 @@ describe('recovery', () => {
     const res = completeTxn(repo.root, pendingTxn(repo.root)!)
     expect(res.ok).toBe(true)
     expect(readFileSync(join(repo.root, '.specflow/journal/e.jsonl'), 'utf8')).toBe('{"v":1,"t":"write","artifact":"a"}\n')
+  })
+
+  it('complete resolves id streams into the journal dir, never the repo root', () => {
+    // regression: gate/decide markers carry bare artifact ids; completeTxn used to
+    // join them onto the root, leaving stray `<root>/<plan-id>` files
+    const repo = seeded()
+    repo.write('specs/a.md', 'v2-crashed')
+    repo.write('.specflow/txn.json', JSON.stringify({
+      op: 'gate-plan',
+      files: ['specs/a.md', '.specflow/journal/a-plan-1.jsonl'],
+      journalMulti: [{ stream: 'a-plan-1', line: '{"v":1,"t":"gate-run","artifact":"a-plan-1"}' }],
+    }))
+    const res = completeTxn(repo.root, pendingTxn(repo.root)!)
+    expect(res.ok).toBe(true)
+    expect(readFileSync(join(repo.root, '.specflow/journal/a-plan-1.jsonl'), 'utf8'))
+      .toBe('{"v":1,"t":"gate-run","artifact":"a-plan-1"}\n')
+    expect(existsSync(join(repo.root, 'a-plan-1'))).toBe(false)
   })
 
   it('the recover verb blocks non-TTY without a flag and honors --rollback', async () => {

@@ -116,7 +116,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
     const line = JSON.stringify({ v: 1, ...entry })
     const stream = journalRel(recap.effort)
-    const res = withTxn(root, { op: `recap(${recap.effort})`, files: [stream], journal: { stream, line } }, () => {
+    const res = withTxn(root, { op: `recap(${recap.effort})`, files: [stream], journal: { stream: recap.effort, line } }, () => {
       appendEntry(root, recap.effort, entry)
       crashPoint(ctx.env, 'journal-append')
       return stateCommit(root, [stream], `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}`)

@@ -223,7 +223,7 @@ export async function runDrift(ctx: Ctx, argv: string[]): Promise<number> {
         ...entries.map((e) => journalRel(e.spec)),
         ...actions.filter((a) => a.stamp || a.clear).map((a) => a.doc!.rel),
       ])],
-      journalMulti: entries.map((e) => ({ stream: journalRel(e.spec), line: entryLine(e.entry) })),
+      journalMulti: entries.map((e) => ({ stream: e.spec, line: entryLine(e.entry) })),
     }
     const committed = withTxn(root, marker, () => {
       for (const { spec, entry } of entries) appendEntry(root, spec, entry)
