@@ -140,10 +140,12 @@ describe('implement contract (scripted agent)', () => {
     }
   };
 
+  // spawns real vitest runs repeatedly — comfortably under 10s alone, but the
+  // default 20s bound flakes under full-suite parallel load
   it('3/3 with a red→green agent; 0/3 with a no-op agent', async () => {
     const pass = await runCalibrateWithAgent(tmpRepo().root, fakeScenario(), scriptedAgent);
     expect(pass.out).toMatch(/implement.*3\/3/s);
     const idle = await runCalibrateWithAgent(tmpRepo().root, fakeScenario(), async () => {});
     expect(idle.code).toBe(1);
-  });
+  }, 60_000);
 });
