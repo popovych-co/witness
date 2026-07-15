@@ -15,7 +15,7 @@ tests carry the parent spec's tag in their NAME. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.3}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.4}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
@@ -42,7 +42,7 @@ One plan = one fresh subagent working **inside the worktree** — clean context,
 >
 > Protocol per step, in order — red/green/refactor with witnessed evidence:
 > 1. Write the failing test FIRST. The test's NAME carries the tag `@spec:<parent-id>` (in the title string — never a comment; e.g. `it("rotates token before expiry @spec:auth-refresh")`).
-> 2. Run `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.3} test-evidence <plan-id> --phase red` from the worktree. It must record a genuine red. If it reports the test passes before implementation (`vacuous`), STOP and report — the test asserts nothing, or the behavior already exists.
+> 2. Run `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.4} test-evidence <plan-id> --phase red` from the worktree. It must record a genuine red. If it reports the test passes before implementation (`vacuous`), STOP and report — the test asserts nothing, or the behavior already exists.
 > 3. Write the minimal code to make it pass. No speculative generality.
 > 4. Run `… test-evidence <plan-id> --phase green` — it must record green.
 > 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design.
