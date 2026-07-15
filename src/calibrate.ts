@@ -12,7 +12,7 @@ import { git, stateCommit } from './gitio.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { PROMPT_NAMES, invokeClaude, parseVerdictText, resolvePrompt } from './reviewer.js'
 import { findById, loadCanon } from './scan.js'
-import { parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
+import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import { createWorktree } from './worktree.js'
 
 export interface CalSeed { id: string; overlay: string; defect: string }
@@ -127,7 +127,10 @@ export function runSample(
 ): Result<{ valid: boolean; blocking: number; why: string }> {
   const { dir, files } = materialize(suite, overlay)
   const { reviewed, context } = composeReviewed(suite, dir, files)
-  const prompt = `${lens}\n\n${renderReviewed(reviewed, context)}\n`
+  // same anchor-menu injection as the gate path — calibration must measure the
+  // prompt condition production reviewers actually see
+  const menu = anchorMenu(reviewed)
+  const prompt = `${lens}\n\n${menu ? `${menu}\n\n` : ''}${renderReviewed(reviewed, context)}\n`
   const invoked = invokeClaude(ctx, { cwd: dir, prompt, model })
   if (!invoked.ok) return invoked // invocation-layer failure aborts the run
   const raw = parseVerdictText(invoked.value.text)

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { parseVerdict, resolveAnchor, verdictViolations, type Reviewed } from '../src/verdict.js'
+import { anchorMenu, parseVerdict, resolveAnchor, verdictViolations, type Reviewed } from '../src/verdict.js'
 
 const SPEC_DOCS: Reviewed = {
   kind: 'docs',
@@ -106,5 +106,30 @@ describe('verdictViolations — fail-closed', () => {
       findings: [{ blocking: true, anchor: { kind: 'omission' as const, scope: 'no/such/dir' }, claim: 'x' }],
     }
     expect(verdictViolations(bogus, t).map((x) => x.rule)).toContain('anchor-unresolvable')
+  })
+})
+
+describe('anchorMenu', () => {
+  it('lists doc ids and doc-scoped headings; every listed line resolves verbatim', () => {
+    const reviewed: Reviewed = {
+      kind: 'docs',
+      docs: [
+        { id: 'alpha', body: '## One\ntext\n### Two deep\n' },
+        { id: 'beta', body: 'no headings at all' },
+      ],
+    }
+    const menu = anchorMenu(reviewed)
+    expect(menu).toContain('## Valid anchors')
+    expect(menu).toContain('- alpha')
+    expect(menu).toContain('- alpha > ## One')
+    expect(menu).toContain('- alpha > ### Two deep')
+    expect(menu).toContain('- beta')
+    for (const line of menu.split('\n').filter((l) => l.startsWith('- '))) {
+      expect(resolveAnchor(line.slice(2), reviewed)).toBeUndefined()
+    }
+  })
+
+  it('is empty for tree reviews', () => {
+    expect(anchorMenu({ kind: 'tree', root: '/', files: [] })).toBe('')
   })
 })

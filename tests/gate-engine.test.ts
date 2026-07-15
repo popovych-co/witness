@@ -74,6 +74,10 @@ describe('gate engine', () => {
     const statuses = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'status')
     expect(statuses.length).toBe(1)
     expect(repo.git('log', '-1', '--format=%B')).toContain('Specflow-State: 1')
+    // doc reviews carry the verbatim anchor menu ahead of the reviewed content
+    const stdin = readFileSync(join(scenario, 'claude-calls/call-1/stdin'), 'utf8')
+    expect(stdin).toContain('## Valid anchors')
+    expect(stdin).toContain('- auth-refresh > ## Behavior')
   })
 
   it('blocking finding → stopped, no stamp; resume renders without appending', async () => {
@@ -90,7 +94,7 @@ describe('gate engine', () => {
     expect(() => readFileSync(join(scenario, 'claude-calls/call-2/stdin'), 'utf8')).toThrow()
   })
 
-  it('malformed verdict (unresolvable anchor) → outcome malformed, fail-closed stop', async () => {
+  it('malformed verdict (unresolvable anchor) → one reroll, then outcome malformed, fail-closed stop', async () => {
     const { repo, scenario, ctx } = await gateRepo()
     putVerdict(scenario, {
       coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
@@ -99,7 +103,27 @@ describe('gate engine', () => {
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(1)
     const [entry] = runs(repo)
     expect(entry!.outcome).toBe('malformed')
+    expect(entry!.rerolled).toEqual(['plan-critic'])
     expect(entry!.malformed![0]!.violations[0]!.rule).toBe('anchor-unresolvable')
+    // both attempts consumed claude calls; the retry carried the rejection back
+    const retry = readFileSync(join(scenario, 'claude-calls/call-2/stdin'), 'utf8')
+    expect(retry).toContain('## Previous attempt rejected')
+    expect(retry).toContain('anchor-unresolvable')
+  })
+
+  it('malformed first attempt + clean reroll → verdict counted, round not poisoned', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, {
+      coverage: [{ anchor: 'auth-refresh > ## Nowhere', note: 'ghost' }],
+      findings: [],
+    }, 1)
+    putVerdict(scenario, CLEAN('auth-refresh'), 2)
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    const [entry] = runs(repo)
+    expect(entry!.outcome).toBe('passed')
+    expect(entry!.rerolled).toEqual(['plan-critic'])
+    expect(entry!.malformed).toBeUndefined()
+    expect(entry!.verdicts).toHaveLength(1)
   })
 
   it('previously seen content re-appends its cached verdict and counts a round', async () => {

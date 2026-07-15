@@ -55,6 +55,20 @@ function headingLines(body: string): string[] {
   return body.split('\n').filter((l) => HEADING_RE.test(l)).map(collapse)
 }
 
+// every line is a verbatim-copyable anchor that resolveAnchor accepts — the menu
+// exists because reviewers paraphrasing headings was the top malformed-verdict cause
+export function anchorMenu(reviewed: Reviewed): string {
+  if (reviewed.kind !== 'docs') return ''
+  const lines = reviewed.docs.flatMap((d) => [d.id, ...headingLines(d.body).map((h) => `${d.id} > ${h}`)])
+  return [
+    '## Valid anchors',
+    '',
+    'Every line below is a resolvable anchor — copy one VERBATIM per coverage/finding item. Deeper ` > ` chains of one doc\'s headings in document order also resolve; anything else rejects the whole verdict.',
+    '',
+    ...lines.map((l) => `- ${l}`),
+  ].join('\n')
+}
+
 function resolveDocPath(segments: string[], body: string): string | undefined {
   const heads = headingLines(body)
   let cursor = -1

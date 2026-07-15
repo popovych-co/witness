@@ -12,7 +12,7 @@ import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { invokeClaude, parseVerdictText, promptsSha, resolvePrompt, type Lens } from './reviewer.js'
-import { parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
+import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
   appendKind, boundReached, keyOf, roundsSinceApprove, sameKey,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
@@ -77,6 +77,7 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
   ctx.out(kv('model', `${entry.model} · calibration: ${entry.calibration}${entry.cached ? ' · cached' : ''}`))
   if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
+  if (entry.rerolled?.length) ctx.out(kv('rerolled', entry.rerolled.join(' · ')))
   ctx.out(rows('checks', ['name', 'ok', 'detail'],
     entry.checks.map((c) => ({ name: c.name, ok: String(c.ok), detail: c.detail ?? '' }))).join('\n'))
   const findings = (entry.verdicts ?? []).flatMap((rv) =>
@@ -160,6 +161,7 @@ export async function runGate(
     let verdicts: ReviewerVerdict[] = []
     const malformed: NonNullable<GateRunEntry['malformed']> = []
     const fallback: string[] = []
+    const rerolled: string[] = []
     let rung = 0
     let model = chain[0]!
     let cached = false
@@ -169,26 +171,42 @@ export async function runGate(
       model = kind.from.model
       cached = true
     } else {
+      const menu = anchorMenu(input.reviewed)
       for (const lens of lenses) {
-        const prompt = `${lens.contents}\n\n## Reviewed content\n\n${input.promptBody}\n`
-        let answered: string | undefined
-        for (;;) {
-          const id = chain[rung]!
-          const r = invokeClaude(ctx, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
-          if (r.ok) { answered = r.value.text; model = id; break }
-          if (rung >= chain.length - 1) {
-            renderRefusal(r.violations).forEach((l) => ctx.err(l))
-            return EXIT.REFUSED
+        let prompt = `${lens.contents}\n\n${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${input.promptBody}\n`
+        for (let attempt = 0; ; attempt++) {
+          let answered: string | undefined
+          for (;;) {
+            const id = chain[rung]!
+            const r = invokeClaude(ctx, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
+            if (r.ok) { answered = r.value.text; model = id; break }
+            if (rung >= chain.length - 1) {
+              renderRefusal(r.violations).forEach((l) => ctx.err(l))
+              return EXIT.REFUSED
+            }
+            fallback.push(id)
+            rung += 1
           }
-          fallback.push(id)
-          rung += 1
+          const rawR = parseVerdictText(answered)
+          const parsedR = rawR.ok ? parseVerdict(rawR.value) : rawR
+          const violations = parsedR.ok ? verdictViolations(parsedR.value, input.reviewed) : parsedR.violations
+          if (parsedR.ok && violations.length === 0) {
+            verdicts.push({ reviewer: lens.name, coverage: parsedR.value.coverage, findings: parsedR.value.findings })
+            break
+          }
+          if (attempt === 0) {
+            // one self-repair reroll per reviewer — a single flaky verdict would
+            // otherwise poison the whole round as 'malformed'; the reroll is not
+            // part of the gate key, so cached rounds replay the settled result
+            rerolled.push(lens.name)
+            prompt += `\n## Previous attempt rejected\n\n${
+              violations.map((x) => `- ${x.field}: ${x.rule} — got ${x.got}; want ${x.want}`).join('\n')
+            }\n\nRe-emit the complete corrected verdict JSON.\n`
+            continue
+          }
+          malformed.push({ reviewer: lens.name, violations })
+          break
         }
-        const rawR = parseVerdictText(answered)
-        const parsedR = rawR.ok ? parseVerdict(rawR.value) : rawR
-        if (!parsedR.ok) { malformed.push({ reviewer: lens.name, violations: parsedR.violations }); continue }
-        const violations = verdictViolations(parsedR.value, input.reviewed)
-        if (violations.length) { malformed.push({ reviewer: lens.name, violations }); continue }
-        verdicts.push({ reviewer: lens.name, coverage: parsedR.value.coverage, findings: parsedR.value.findings })
       }
     }
 
@@ -208,6 +226,7 @@ export async function runGate(
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
       ...(fallback.length ? { fallback } : {}),
+      ...(rerolled.length ? { rerolled } : {}),
       ...(outcome === 'stopped' && input.standingStop ? { standing: input.standingStop } : {}),
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       checks: input.checks,

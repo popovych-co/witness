@@ -23,7 +23,7 @@ Respond with ONLY a JSON object — no prose before or after it (a single ```jso
 
 Anchor grammar — every anchor must resolve against the reviewed content, or your whole verdict is rejected as malformed:
 
-- Document reviews: a heading path, ` > `-separated — `## Behavior`, or `auth-refresh > ## Behavior` where a first segment without `#` names a reviewed document.
+- Document reviews: a heading path, ` > `-separated — `## Behavior`, or `auth-refresh > ## Behavior` where a first segment without `#` names a reviewed document. A `## Valid anchors` menu precedes the reviewed content — copy anchors from it verbatim; never paraphrase a heading.
 - Code reviews: `path/to/file` or `path/to/file#symbol` (the symbol must occur in that file). Never line numbers — `file.ts:42` rejects the verdict.
 - Something missing entirely: the finding's `"anchor"` value itself becomes `{ "kind": "omission", "scope": "<doc id, heading path, file, directory, or .>" }` — e.g. a full finding reads `{ "blocking": true, "anchor": { "kind": "omission", "scope": "tests/" }, "claim": "..." }`. Never place `kind`/`scope` as siblings of `blocking`/`claim` — they replace the `anchor` value, not sit beside it. The scope must exist; blocking omissions stop the gate like any other finding.
 
