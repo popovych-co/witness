@@ -1,0 +1,1 @@
+{ "defect": "browser-rendered interactive behavior (banner mount, click-to-dismiss, persisted suppression) is covered only by unit tests over a hand-rolled fake DOM — genuine logic coverage, but nothing drives a real browser" }

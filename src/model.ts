@@ -33,12 +33,13 @@ export interface ModelResolution {
   warning?: string
 }
 
-export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Result<ModelResolution> {
+// the stage's model pin from config — per-gate wins over the global gates.model;
+// the same pin drives that stage's gate reviewers AND its worker agent (implement)
+export function stagePin(cfg: Config, gate?: string): Result<string | undefined> {
   const gates = (cfg.raw.gates ?? {}) as Record<string, unknown> & { model?: unknown }
   const gateBlock = gate !== undefined && typeof gates[gate] === 'object' && gates[gate] !== null
     ? (gates[gate] as { model?: unknown })
     : undefined
-  // per-gate pin wins over the global one — each gate is its own task with its own model
   const pinRaw = gateBlock?.model ?? gates.model
   const pinField = gateBlock?.model !== undefined ? `gates.${gate}.model` : 'gates.model'
   const pin = pinRaw === undefined ? undefined : String(pinRaw)
@@ -46,6 +47,13 @@ export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Re
     return refuse([v(pinField, 'alias-refused', pin,
       'an exact model id — aliases re-point under the calibration (Decision 55)')])
   }
+  return ok(pin)
+}
+
+export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Result<ModelResolution> {
+  const pinR = stagePin(cfg, gate)
+  if (!pinR.ok) return refuse(pinR.violations)
+  const pin = pinR.value
   const calibrated = [...matrix.shipped, ...matrix.local.filter((m) => !matrix.shipped.includes(m))]
   const chain: string[] = []
   if (pin !== undefined) chain.push(pin)

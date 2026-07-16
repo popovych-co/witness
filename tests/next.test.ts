@@ -44,6 +44,25 @@ describe('specflow next — the ladder', () => {
     expect(out).toContain('stage: implement')
   })
 
+  it('gates every draft plan before any approved plan starts (plans-first)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-mfa')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-mfa-plan-1', {
+      parent: 'auth-mfa',
+      steps: [{ id: 's1', title: 'mfa step', criteria: ['ac-mfa'] }],
+    })
+    await writePlan(repo, 'auth-refresh-plan-1')
+    // the alphabetically-first plan is already approved; its sibling is still draft —
+    // stage-major order gates the draft before anything starts
+    repo.flipStatus('auth-mfa-plan-1', 'approved')
+    const out = await nextLine(repo)
+    expect(out).toContain('gate plan auth-refresh-plan-1')
+    expect(out).not.toContain('start')
+  })
+
   it('after evidence: implement gate; after implement passes: ship', async () => {
     const { repo, planId } = await shippableRepo()
     expect(await nextLine(repo)).toContain(`gate implement ${planId}`)

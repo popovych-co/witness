@@ -1,0 +1,1 @@
+{ "defect": "the slice's own backend (code validation and use-limit decrement in src/redeem-server.mjs) never boots — the Puppeteer test intercepts /api/redeem and answers with canned fixtures, so a real browser renders real pixels over a faked slice: UI-only coverage posing as end-to-end" }

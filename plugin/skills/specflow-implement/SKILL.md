@@ -31,11 +31,11 @@ SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.4}"
 $SPECFLOW start <plan-id>
 ```
 
-Prints the worktree path (`.specflow/worktrees/<plan-id>`, branch `specflow/<plan-id>`). Re-entry is safe: `in-progress` re-attaches or recreates. Refusals go to the human, with the remedy the CLI names: `blocked-deps` (a dependency isn't live/done yet), `needs-unmet` (show `specflow satisfy …` for manual needs), `not-approved`.
+Prints the worktree path (`.specflow/worktrees/<plan-id>`, branch `specflow/<plan-id>`) and `agent-model:` — the config's implement-stage model pin (`gates.implement.model`, falling back to `gates.model`). Re-entry is safe: `in-progress` re-attaches or recreates. Refusals go to the human, with the remedy the CLI names: `blocked-deps` (a dependency isn't live/done yet), `needs-unmet` (show `specflow satisfy …` for manual needs), `not-approved`.
 
 ## Dispatch a fresh subagent
 
-One plan = one fresh subagent working **inside the worktree** — clean context, real isolation. Dispatch it with this prompt, filling the placeholders from the plan doc:
+One plan = one fresh subagent working **inside the worktree** — clean context, real isolation. **Dispatch it on the model `start` printed as `agent-model:`** — map the exact id to your dispatch surface's nearest knob (e.g. `claude-sonnet-5` → `sonnet`); `session-default` means inherit the session model, never substitute your own judgment for the pin. Dispatch it with this prompt, filling the placeholders from the plan doc:
 
 > Work in `<worktree-path>` (cd there first; every file you touch lives under it).
 > You are implementing plan `<plan-id>` for spec `<parent-id>`. Its step sections follow: <paste the plan's `## Step:` sections>.
@@ -46,6 +46,8 @@ One plan = one fresh subagent working **inside the worktree** — clean context,
 > 3. Write the minimal code to make it pass. No speculative generality.
 > 4. Run `… test-evidence <plan-id> --phase green` — it must record green.
 > 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design.
+>
+> UI work TDDs at the browser, end-to-end: when a step changes what the browser renders or how the user interacts with it (markup, styles, routes, client-side behavior), the failing test in step 1 is a **Puppeteer** test driving the real UI **through the whole slice** — headless, tagged in its NAME like any test, living in the repo's regular suite so the criteria runner reaches it (Puppeteer is a library, not a runner — a test the runner can't reach has unwitnessable evidence). Everything the repo owns runs real: the test owns the slice's lifecycle — build, boot the backend and its store, serve the frontend; never assume a running dev server (evidence runs in a clean worktree). Fake only what the repo does not own (third-party services). Stubbing the slice's own backend — request interception, mocked fetch, canned API fixtures — turns the test UI-only, and the implement gate's pr-test lens flags it like any substitution. Unit/component tests may accompany a browser test, never replace it.
 >
 > Never touch `specs/` or `plans/` (state lives on main; the CLI routes it). Never `git commit`, never push, never open PRs — ship is a later stage and owns the sole code commit (evidence and gates read the working tree directly, so nothing needs committing here). Scaffolding steps skip evidence (nothing tagged changes). When every step is done, report the worktree diff summary.
 

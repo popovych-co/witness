@@ -68,6 +68,45 @@ describe('specflow start', () => {
   })
 })
 
+describe('specflow start — agent-model', () => {
+  it('prints the implement-stage pin on fresh and re-entrant start', async () => {
+    const repo = await approvedPlanRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\ngates:\n  implement: { model: claude-sonnet-5 }\n')
+    repo.git('add', 'specflow.config.yaml')
+    repo.git('commit', '-m', 'pin implement model')
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('agent-model: claude-sonnet-5')
+    const again = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(again.code).toBe(0)
+    expect(again.stdout).toContain('agent-model: claude-sonnet-5')
+  })
+
+  it('falls back to the global gates.model pin, then session-default', async () => {
+    const repo = await approvedPlanRepo()                  // init config: gates.model claude-fable-5
+    const global = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(global.stdout).toContain('agent-model: claude-fable-5')
+
+    const bare = await approvedPlanRepo()
+    bare.write('specflow.config.yaml', 'schema: 1\n')      // no gates at all
+    bare.git('add', 'specflow.config.yaml')
+    bare.git('commit', '-m', 'bare config')
+    const r = await bare.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.stdout).toContain('agent-model: session-default')
+  })
+
+  it('refuses an alias pin before touching state', async () => {
+    const repo = await approvedPlanRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\ngates:\n  implement: { model: sonnet }\n')
+    repo.git('add', 'specflow.config.yaml')
+    repo.git('commit', '-m', 'alias pin')
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('alias-refused')
+    expect(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status).toBe('approved')
+  })
+})
+
 describe('specflow clean', () => {
   it('reaps stray worktrees of terminal plans, keeps live ones and branches', async () => {
     const repo = await approvedPlanRepo()

@@ -97,11 +97,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     }
   }
 
+  // plans-first: every written plan gates before any plan starts or advances —
+  // an approved sibling must not short-circuit a draft out of review (stage-major order)
+  for (const plan of plans) {
+    const id = String(plan.meta.id)
+    if (String(plan.meta.status) === 'draft') return { line: `specflow gate plan ${id}`, target: id }
+  }
+
   for (const plan of plans) {
     const id = String(plan.meta.id)
     const status = String(plan.meta.status)
     const entries = readStream(root, id)
-    if (status === 'draft') return { line: `specflow gate plan ${id}`, target: id }
     if (status === 'approved') return { line: `specflow start ${id}`, target: id }
     if (status !== 'in-progress') continue
     const wt = worktreePath(root, id)

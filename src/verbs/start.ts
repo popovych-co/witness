@@ -10,6 +10,7 @@ import { evaluateNeeds } from '../needs.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
+import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { branchName, createWorktree, worktreePath } from '../worktree.js'
 import { existsSync } from 'node:fs'
 import type { Need } from '../dsl.js'
@@ -34,12 +35,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
   const base = ship.branch ?? 'main'
 
+  // the implement-stage pin drives the worker agent too — surfaced so the
+  // orchestrator dispatches the implementer on the configured model
+  const pinR = stagePin(cfgR.value, 'implement')
+  if (!pinR.ok) { renderRefusal(pinR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const agentModel = pinR.value ?? SESSION_DEFAULT
+
   if (status === 'in-progress') {
     const had = existsSync(worktreePath(root, planId))
     const wt = createWorktree(root, planId, base)
     if (!wt.ok) { renderRefusal(wt.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('start', `${planId} already in-progress — worktree ${had ? 'present' : 'recreated'}`))
     ctx.out(kv('worktree', wt.value.path))
+    ctx.out(kv('agent-model', agentModel))
     return EXIT.OK
   }
   if (status !== 'approved') {
@@ -92,6 +100,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('start', `${planId} approved → in-progress`))
   ctx.out(kv('worktree', wt.value.path))
   ctx.out(kv('branch', branchName(planId)))
+  ctx.out(kv('agent-model', agentModel))
   ctx.out(`help: implement inside the worktree; specflow test-evidence ${planId} --phase red|green as you go`)
   return EXIT.OK
 }
