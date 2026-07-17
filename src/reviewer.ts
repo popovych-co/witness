@@ -4,14 +4,15 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Ctx } from './cli.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export const PROMPT_NAMES = [
   'slicing-critic', 'plan-critic', 'code-reviewer', 'silent-failure-hunter',
   'type-design', 'pr-test', 'drift-reviewer',
 ] as const
 
-export interface Lens { name: string; contents: string }
+export interface LensDoc { path: string; contents: string }
+export interface Lens { name: string; contents: string; docs?: LensDoc[] }
 
 export function promptsDir(): string {
   return join(dirname(fileURLToPath(import.meta.url)), '..', 'prompts')
@@ -26,12 +27,54 @@ export function resolvePrompt(name: string): Result<Lens> {
   return ok({ name, contents: readFileSync(path, 'utf8') })
 }
 
+// docs.<key> → which lenses at which gates consume it. The design-stage plan
+// extends this map (design → design-critic / design-reviewer); keys here must
+// stay in lockstep with DOC_KEYS in config.ts — no key without a consumer.
+const DOC_CONSUMERS: Record<string, { lenses: string[]; gates: string[] }> = {
+  conventions: { lenses: ['code-reviewer'], gates: ['implement', 'ship'] },
+}
+
+export function docKeysFor(gate: string, lens: string): string[] {
+  return Object.entries(DOC_CONSUMERS)
+    .filter(([, c]) => c.lenses.includes(lens) && c.gates.includes(gate))
+    .map(([k]) => k)
+}
+
+export function loadLensDocs(root: string, paths: string[]): Result<LensDoc[]> {
+  const docs: LensDoc[] = []
+  const violations: Violation[] = []
+  for (const p of paths) {
+    const abs = join(root, p)
+    if (!existsSync(abs)) {
+      violations.push(v('docs', 'doc-missing', p,
+        'an existing file — gates inject configured docs fail-closed; fix the path or restore the file'))
+      continue
+    }
+    docs.push({ path: p, contents: readFileSync(abs, 'utf8') })
+  }
+  return violations.length ? refuse(violations) : ok(docs)
+}
+
+export function docsBlock(docs: LensDoc[]): string {
+  if (docs.length === 0) return ''
+  return `## Repo conventions (injected from docs config)\n\n${
+    docs.map((d) => `### ${d.path}\n\n${d.contents}`).join('\n\n')
+  }\n\n`
+}
+
 export function promptsSha(lenses: Lens[]): string {
   const h = createHash('sha256')
   for (const l of [...lenses].sort((a, b) => a.name.localeCompare(b.name))) {
     h.update(`lens ${l.name} ${l.contents.length}\n`)
     h.update(l.contents)
     h.update('\n')
+    // injected docs are part of what the reviewer read — an edited doc is a
+    // different reviewer, exactly like an edited lens (verdict-cache key)
+    for (const d of l.docs ?? []) {
+      h.update(`doc ${d.path} ${d.contents.length}\n`)
+      h.update(d.contents)
+      h.update('\n')
+    }
   }
   return h.digest('hex')
 }

@@ -60,4 +60,22 @@ describe('specflow check', () => {
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('orphan-journal')
   })
+
+  it('flags a configured docs path that does not exist', async () => {
+    const repo = await seededRepo()
+    repo.write('specflow.config.yaml',
+      repo.read('specflow.config.yaml') + 'docs:\n  conventions: [docs/conventions.md]\n')
+    repo.git('add', 'specflow.config.yaml')
+    repo.git('commit', '-m', 'register a doc that does not exist')
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(1)
+    expect(res.stdout).toContain('doc-missing')
+    expect(res.stdout).toContain('docs/conventions.md')
+    // restore the file → the finding clears
+    repo.write('docs/conventions.md', 'rules')
+    repo.git('add', 'docs/conventions.md')
+    repo.git('commit', '-m', 'add the doc')
+    const ok = await repo.cli(['check'])
+    expect(ok.stdout).not.toContain('doc-missing')
+  })
 })

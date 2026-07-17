@@ -164,6 +164,16 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   else if (!probe('gh', ['auth', 'status'])) findings.push(f('warn', 'probes', 'gh', 'unauthenticated', 'run gh auth login'))
   if (!probe('claude', ['--version'])) findings.push(f('warn', 'probes', 'claude', 'missing', 'gate reviewers (later slice) will stop loudly'))
 
+  if (cfg.ok) {
+    for (const [key, paths] of Object.entries(cfg.value.docs)) {
+      for (const p of paths ?? []) {
+        if (!existsSync(join(root, p))) {
+          findings.push(f('error', 'config', `docs.${key}`, 'doc-missing', `${p} — gates inject configured docs fail-closed`))
+        }
+      }
+    }
+  }
+
   const errors = findings.filter((x) => x.level === 'error')
   if (findings.length) rows('findings', ['level', 'area', 'field', 'rule', 'detail'], findings as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   ctx.out(kv('checks', `${canon.docs.length} docs · ${auditStateCommits(root).length} commits audited · ${errors.length} errors`))

@@ -12,10 +12,15 @@ export interface CanonPaths {
 
 export const DEFAULT_PATHS: CanonPaths = { specs: 'specs', plans: 'plans' }
 
+export const DOC_KEYS = ['conventions'] as const
+export type DocKey = (typeof DOC_KEYS)[number]
+export type DocsRegistry = Partial<Record<DocKey, string[]>>
+
 export interface Config {
   schema: number
   raw: Record<string, unknown>
   paths: CanonPaths
+  docs: DocsRegistry
   warning?: string
 }
 
@@ -50,6 +55,42 @@ export function resolvePaths(raw: Record<string, unknown>): Result<CanonPaths> {
     }
   }
   return violations.length ? refuse(violations) : ok({ specs, plans })
+}
+
+export function resolveDocs(raw: Record<string, unknown>): Result<DocsRegistry> {
+  const conf = raw.docs
+  if (conf === undefined) return ok({})
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) {
+    return refuse([v('docs', 'invalid', String(conf), 'a map of doc keys to path lists')])
+  }
+  const violations: Violation[] = []
+  const out: DocsRegistry = {}
+  for (const [key, val] of Object.entries(conf as Record<string, unknown>)) {
+    if (!(DOC_KEYS as readonly string[]).includes(key)) {
+      violations.push(v(`docs.${key}`, 'unknown-doc-key', key,
+        `a key with a shipped consumer (${DOC_KEYS.join(' | ')})`))
+      continue
+    }
+    if (!Array.isArray(val) || val.length === 0 || !val.every((x) => typeof x === 'string' && x !== '')) {
+      violations.push(v(`docs.${key}`, 'invalid', JSON.stringify(val), 'a non-empty list of repo-relative file paths'))
+      continue
+    }
+    const paths: string[] = []
+    for (const p of val as string[]) {
+      const norm = p.replace(/\/+$/, '')
+      if (isAbsolute(norm) || norm.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) {
+        violations.push(v(`docs.${key}`, 'invalid', norm, 'a repo-relative file path without . or .. segments'))
+        continue
+      }
+      if (norm === '.specflow' || norm.startsWith('.specflow/')) {
+        violations.push(v(`docs.${key}`, 'reserved', norm, 'a path outside .specflow/'))
+        continue
+      }
+      paths.push(norm)
+    }
+    out[key as DocKey] = paths
+  }
+  return violations.length ? refuse(violations) : ok(out)
 }
 
 // Lenient path resolution for callers without a loaded Config (canon scan, git
@@ -90,10 +131,13 @@ export function loadConfig(root: string): Result<Config> {
   }
   const paths = resolvePaths(obj)
   if (!paths.ok) return refuse(paths.violations)
+  const docs = resolveDocs(obj)
+  if (!docs.ok) return refuse(docs.violations)
   return ok({
     schema,
     raw: obj,
     paths: paths.value,
+    docs: docs.value,
     warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run specflow migrate (reserved)` : undefined,
   })
 }

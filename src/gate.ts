@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, version, type Ctx } from './cli.js'
-import { loadConfig, type Config } from './config.js'
+import { loadConfig, type Config, type DocKey } from './config.js'
 import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
@@ -11,7 +11,7 @@ import { newRunId } from './drift.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
-import { invokeClaude, parseVerdictText, promptsSha, resolvePrompt, type Lens } from './reviewer.js'
+import { docKeysFor, docsBlock, invokeClaude, loadLensDocs, parseVerdictText, promptsSha, resolvePrompt, type Lens } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
   ROUND_BOUND, appendKind, boundReached, gateRuns, keyOf, roundsSinceApprove, sameKey,
@@ -124,7 +124,14 @@ export async function runGate(
   for (const name of batteryR.value) {
     const lensR = resolvePrompt(name)
     if (!lensR.ok) { renderRefusal(lensR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    lenses.push(lensR.value)
+    const lens = lensR.value
+    const docPaths = docKeysFor(spec.gate, name).flatMap((k) => cfgR.value.docs[k as DocKey] ?? [])
+    if (docPaths.length > 0) {
+      const docsR = loadLensDocs(root, docPaths)
+      if (!docsR.ok) { renderRefusal(docsR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+      lens.docs = docsR.value
+    }
+    lenses.push(lens)
   }
   const modelR = resolveModel(cfgR.value, loadMatrix(root), spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -188,7 +195,7 @@ export async function runGate(
     } else {
       const menu = anchorMenu(input.reviewed)
       for (const lens of lenses) {
-        let prompt = `${lens.contents}\n\n${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${input.promptBody}\n`
+        let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${input.promptBody}\n`
         for (let attempt = 0; ; attempt++) {
           let answered: string | undefined
           for (;;) {

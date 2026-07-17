@@ -11,6 +11,8 @@ import { kv } from '../toon.js'
 const DEFAULT_CONFIG = `# specflow.config.yaml — the whole surface
 schema: 1
 # paths: { specs: docs/specs, plans: docs/plans }   # optional canon roots (defaults: specs, plans); git mv existing docs when changing
+# docs:                      # repo docs registry — enumerated keys, unknown keys refused
+#   conventions: [docs/code/architecture.md]   # → injected into code-reviewer at implement + ship (cache-keyed)
 gates:
   model: claude-fable-5      # reviewer model pin — exact id, aliases refused
   # any gate block may pin its own model (wins over the global pin), e.g.

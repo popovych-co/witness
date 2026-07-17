@@ -40,3 +40,40 @@ describe('loadConfig', () => {
     expect(!res.ok && res.violations[0]?.rule).toBe('required')
   })
 })
+
+describe('resolveDocs (docs registry)', () => {
+  it('absent docs key → empty registry', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.docs).toEqual({})
+  })
+
+  it('accepts enumerated keys and exposes them on Config', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  conventions: [docs/code/architecture.md, CLAUDE.md]\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.docs.conventions).toEqual(['docs/code/architecture.md', 'CLAUDE.md'])
+  })
+
+  it('refuses a key with no shipped consumer', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  design: [docs/ui/design-language.md]\n')
+    const res = loadConfig(repo.root)
+    expect(!res.ok && res.violations[0]?.rule).toBe('unknown-doc-key')
+    expect(!res.ok && res.violations[0]?.want).toContain('conventions')
+  })
+
+  it('refuses empty lists, non-lists, traversal and .specflow paths', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  conventions: []\n')
+    expect(loadConfig(repo.root).ok).toBe(false)
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  conventions: CLAUDE.md\n')
+    expect(loadConfig(repo.root).ok).toBe(false)
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  conventions: [../escape.md]\n')
+    expect(loadConfig(repo.root).ok).toBe(false)
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  conventions: [.specflow/journal/x.md]\n')
+    const res = loadConfig(repo.root)
+    expect(!res.ok && res.violations[0]?.rule).toBe('reserved')
+  })
+})
