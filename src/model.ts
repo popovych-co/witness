@@ -64,8 +64,12 @@ export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Re
     matrix.shipped.includes(id) ? 'shipped' : matrix.local.includes(id) ? 'local' : 'none'
 
   const head = chain[0]!
-  const warning = calibrationOf(head) === 'none'
-    ? `reviewer model ${head === SESSION_DEFAULT ? '(session default)' : head} is below the model floor — no calibration matrix entry covers it`
-    : undefined
+  const headLabel = head === SESSION_DEFAULT ? '(session default)' : head
+  const matrixEmpty = matrix.shipped.length === 0 && matrix.local.length === 0
+  const warning = calibrationOf(head) !== 'none'
+    ? undefined
+    : matrixEmpty
+      ? `calibration matrix is empty — no calibrated model exists yet; ${headLabel} runs uncalibrated`
+      : `reviewer model ${headLabel} is below the model floor — no calibration matrix entry covers it`
   return ok({ chain, calibrationOf, warning })
 }

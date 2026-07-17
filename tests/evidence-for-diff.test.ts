@@ -87,6 +87,44 @@ describe('evidenceForDiff', () => {
     expect(report.satisfied).toBe(false)
   })
 
+  it('a later genuine red supersedes an earlier vacuous one', async () => {
+    const { repo, base } = await tddRepo()
+    // vacuous first: impl + tagged tests land together, red run passes
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'both at once')
+    await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { env: fixtureEnv() })
+    // then an honest cycle: break impl, observe red, fix, observe green
+    repo.write('src/token.ts', TOKEN_BROKEN)
+    repo.git('add', 'src/token.ts')
+    repo.git('commit', '-m', 'break')
+    await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { env: fixtureEnv() })
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', 'src/token.ts')
+    repo.git('commit', '-m', 'fix')
+    await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { env: fixtureEnv() })
+    const report = evidenceForDiff(repo.root, repo.root, plan(repo), base)
+    expect(report.required).toEqual([{ tag: 'auth-refresh', red: true, green: true, vacuous: false }])
+    expect(report.satisfied).toBe(true)
+  })
+
+  it('green recorded before the latest red does not satisfy', async () => {
+    const { repo, base } = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'tagged tests + impl')
+    await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { env: fixtureEnv() })
+    repo.write('src/token.ts', TOKEN_BROKEN)
+    repo.git('add', 'src/token.ts')
+    repo.git('commit', '-m', 'break')
+    await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { env: fixtureEnv() })
+    const report = evidenceForDiff(repo.root, repo.root, plan(repo), base)
+    expect(report.satisfied).toBe(false)
+    expect(report.required[0]).toMatchObject({ red: true, green: false })
+  })
+
   it('an untouched-tests diff needs no evidence — trivially satisfied', async () => {
     const { repo, base } = await tddRepo()
     repo.write('src/token.ts', TOKEN_FIXED)

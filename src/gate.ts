@@ -14,7 +14,7 @@ import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { invokeClaude, parseVerdictText, promptsSha, resolvePrompt, type Lens } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
-  appendKind, boundReached, keyOf, roundsSinceApprove, sameKey,
+  ROUND_BOUND, appendKind, boundReached, gateRuns, keyOf, roundsSinceApprove, sameKey,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
@@ -73,7 +73,7 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume'): void {
   ctx.out(kv('gate', entry.gate))
   ctx.out(kv('target', entry.artifact))
-  ctx.out(kv('round', `${entry.round}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
+  ctx.out(kv('round', `${entry.round} of ${ROUND_BOUND}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
   ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
   ctx.out(kv('model', `${entry.model} · calibration: ${entry.calibration}${entry.cached ? ' · cached' : ''}`))
   if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
@@ -93,7 +93,7 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   if (entry.standing) ctx.out(kv('standing-stop', entry.standing))
   ctx.out(kv('outcome', entry.outcome))
   if (entry.outcome !== 'passed') {
-    ctx.out(`help: specflow decide ${entry.gate} ${entry.artifact} --approve | --revise --note "<why>" | --stop`)
+    ctx.out(`help: specflow decide ${entry.gate} ${entry.artifact} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`)
   }
 }
 
@@ -150,8 +150,23 @@ export async function runGate(
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    ctx.out(`help: specflow decide ${spec.gate} ${target} --approve --override | --stop`)
+    ctx.out(`help: specflow decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
+    ctx.out(`help: or discard the plan: specflow abandon ${target}`)
     return EXIT.BLOCKED
+  }
+  if (!flags.fresh) {
+    // malformed rounds don't spend the bound (rounds.ts) — this brake is what
+    // stops an unreliable battery from re-running for free forever instead
+    const tail = gateRuns(entries, spec.gate).slice(-2)
+    const sameSetup = (r: GateRunEntry) =>
+      r.outcome === 'malformed' && r.model === key.model && r.prompts_sha === key.prompts_sha
+    if (tail.length === 2 && tail.every(sameSetup)) {
+      renderRefusal([v('reviewers', 'malformed-streak',
+        `${tail.length} consecutive malformed rounds on ${tail[1]!.model}`,
+        `a changed gates.${spec.gate}.model pin or updated prompts — the battery is emitting invalid verdicts (or force with --fresh)`,
+      )]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
   }
 
   const lockR = acquireLock(root)
@@ -210,6 +225,9 @@ export async function runGate(
       }
     }
 
+    if (fallback.length > 0 && chain[0] !== SESSION_DEFAULT && fallback.includes(chain[0]!)) {
+      ctx.err(`warning: head model ${chain[0]} failed to invoke — reviewers ran on ${model}; check gates.${spec.gate}.model`)
+    }
     const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length
     const checksGreen = input.checks.every((c) => c.ok)
     const outcome: GateRunEntry['outcome'] =

@@ -55,7 +55,9 @@ describe('implement gate', () => {
     const all = runs(repo, planId)
     expect(all.length).toBe(2)                                    // appended, not resumed
     expect(all[1]!.reviewed_sha).not.toBe(first.reviewed_sha)
-    expect(all[1]!.round).toBe(2)                                  // and it counted
+    // both rounds end malformed here (the canned verdict under-covers the diff),
+    // and malformed runs never spend the budget (D67) — the label stays 1
+    expect(all[1]!.round).toBe(1)
   })
 
   it('missing red→green evidence fails the evidence check', async () => {

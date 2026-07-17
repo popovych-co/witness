@@ -50,6 +50,22 @@ async function stoppedGate() {
 const decisions = (repo: { root: string }, id = 'auth-refresh') =>
   readStream(repo.root, id).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
 
+// three stopped rounds → bound reached, third round pending
+async function boundRepo() {
+  const { repo } = await stoppedGate()
+  for (const round of [1, 2]) {
+    appendEntry(repo.root, 'auth-refresh', {
+      v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh', round, decision: 'revise',
+    })
+    appendEntry(repo.root, 'auth-refresh', {
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
+      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0',
+      model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+    })
+  }
+  return repo
+}
+
 describe('specflow decide', () => {
   it('refuses when nothing is pending', async () => {
     synthetic()
@@ -98,6 +114,40 @@ describe('specflow decide', () => {
     const forced = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve', '--override'])
     expect(forced.code).toBe(0)
     expect(decisions(repo).at(-1)).toMatchObject({ decision: 'approve', override: true })
+  })
+
+  it('at the bound, revise --upstream is exempt and resets the budget', async () => {
+    const repo = await boundRepo()
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--upstream', 'auth-refresh', '--note', 'plan is wrong'])
+    expect(r.code).toBe(0)
+    expect(decisions(repo).some((d) => d.decision === 'revise-upstream' && d.round === 3)).toBe(true)
+  })
+
+  it('livelock regression: after a stop at the bound, every exit still works', async () => {
+    // exit 1: reopen the parent — used to refuse nothing-pending forever
+    const a = await boundRepo()
+    expect((await a.cli(['decide', 'plan', 'auth-refresh', '--stop'])).code).toBe(0)
+    const upstream = await a.cli(['decide', 'plan', 'auth-refresh', '--revise', '--upstream', 'auth-refresh'])
+    expect(upstream.code).toBe(0)
+    expect(decisions(a).at(-1)!.caused_by).toBeDefined()
+    // exit 2: force-approve as-is
+    const b = await boundRepo()
+    await b.cli(['decide', 'plan', 'auth-refresh', '--stop'])
+    expect((await b.cli(['decide', 'plan', 'auth-refresh', '--approve', '--override'])).code).toBe(0)
+    // plain revise stays refused at the bound, and the refusal names the live exits
+    const c = await boundRepo()
+    await c.cli(['decide', 'plan', 'auth-refresh', '--stop'])
+    const plain = await c.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x'])
+    expect(plain.code).toBe(2)
+    expect(plain.stdout + plain.stderr).toContain('--revise --upstream')
+  })
+
+  it('off the bound, nothing-pending still refuses decisions', async () => {
+    const { repo } = await stoppedGate()
+    await repo.cli(['decide', 'plan', 'auth-refresh', '--stop'])
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('nothing-pending')
   })
 
   it('revise-upstream writes linked entries in both journals', async () => {

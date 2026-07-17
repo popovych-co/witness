@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { appendEntry } from '../src/journal.js'
 import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writeSpec, writePlan } from './helpers.js'
 
 async function nextLine(repo: { cli: (a: string[], o?: object) => Promise<{ code: number; stdout: string }> }, env?: object) {
@@ -79,5 +80,24 @@ describe('specflow next — the ladder', () => {
     })
     await repo.cli(['gate', 'implement', planId], { env: gateEnv(scenario) })
     expect(await nextLine(repo)).toContain(`ship ${planId}`)
+  })
+
+  it('a bound-stuck gate with no pending decision surfaces as the next action', async () => {
+    const { repo, planId } = await shippableRepo()
+    for (const round of [1, 2, 3]) {
+      appendEntry(repo.root, planId, {
+        v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round,
+        run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0',
+        model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+      })
+      appendEntry(repo.root, planId, {
+        v: 1, t: 'human-decision', gate: 'implement', artifact: planId, round,
+        decision: round < 3 ? 'revise' : 'stop',
+      })
+    }
+    const out = await nextLine(repo)
+    expect(out).toContain(`decide implement ${planId}`)
+    expect(out).toContain('bound')
+    expect(out).not.toContain('test-evidence')
   })
 })

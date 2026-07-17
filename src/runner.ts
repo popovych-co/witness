@@ -8,7 +8,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 export type RunnerConfig =
-  | { mode: 'filtered'; template: string }
+  | { mode: 'filtered'; template: string; reportGlob?: string }
   | { mode: 'full-suite'; reportGlob: string; suiteCmd: string }
 
 export function runnerConfig(cfg: Config): Result<RunnerConfig> {
@@ -33,6 +33,13 @@ export function runnerConfig(cfg: Config): Result<RunnerConfig> {
   }
   if (!runner.includes('{id}')) {
     return refuse([v('criteria.runner', 'no-id-placeholder', runner, 'template must interpolate {id} (or use full-suite)')])
+  }
+  const report = crit.report
+  if (report !== undefined) {
+    if (typeof report !== 'string' || !report.startsWith('junit:')) {
+      return refuse([v('criteria.report', 'report-format', String(report), 'junit:<glob> (only junit is supported)')])
+    }
+    return ok({ mode: 'filtered', template: runner, reportGlob: report.slice('junit:'.length) })
   }
   return ok({ mode: 'filtered', template: runner })
 }

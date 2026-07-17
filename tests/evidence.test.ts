@@ -4,8 +4,9 @@ import { isTestPath } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
 import type { TestRepo } from './helpers.js'
 import {
+  TOKEN_BROKEN, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
   breakSingleFixture, copyFixture, fakeCtx, fixSingleFixture, fixtureEnv, seededRepo,
-  singleConfig, stampLive, writePlan, writeSpec,
+  singleConfig, stampLive, vitestBin, writePlan, writeSpec,
 } from './helpers.js'
 
 async function planRepo(): Promise<TestRepo> {
@@ -29,6 +30,11 @@ describe('isTestPath', () => {
     expect(isTestPath('contest/entry.ts')).toBe(false)
   })
 })
+
+const reportedConfig = () => {
+  const vb = vitestBin()
+  return `schema: 1\ncriteria:\n  runner: 'node "${vb}" run -t "@spec:{id}" --passWithNoTests --reporter=junit --outputFile=reports/junit.xml'\n  report: junit:**/reports/junit.xml\n`
+}
 
 describe('specflow test-evidence', () => {
   it('records a red/green pair across the TDD loop', async () => {
@@ -66,6 +72,35 @@ describe('specflow test-evidence', () => {
     const repo = await planRepo()
     expect((await repo.cli(['test-evidence', 'nope', '--phase', 'red'], { env: fixtureEnv() })).code).toBe(2)
     expect((await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'purple'], { env: fixtureEnv() })).code).toBe(2)
+  })
+
+  it('records real per-test outcomes from the junit report (filtered + report)', async () => {
+    const repo = await planRepo()
+    repo.write('specflow.config.yaml', reportedConfig())
+    repo.write('src/token.ts', TOKEN_BROKEN)
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'red state')
+    const r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { env: fixtureEnv() })
+    expect(r.code).toBe(0)
+    const entries = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'test-evidence')
+    const tests = entries.at(-1)!.tests as Array<{ name: string; ok: boolean }>
+    expect(tests.length).toBeGreaterThanOrEqual(2)
+    expect(tests.every((t) => t.name.includes('@spec:auth-refresh'))).toBe(true)
+    expect(tests.some((t) => !t.ok)).toBe(true)
+  })
+
+  it('refuses filter-matched-nothing before journaling when zero tests match', async () => {
+    const repo = await planRepo()
+    repo.write('specflow.config.yaml', reportedConfig())
+    repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)   // no tagged tests anywhere
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'untagged only')
+    const r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { env: fixtureEnv() })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('filter-matched-nothing')
+    const entries = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'test-evidence')
+    expect(entries).toEqual([])
   })
 
   it('routes the journal append main-side when run from a linked worktree', async () => {

@@ -4,6 +4,7 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { loadConfig } from './config.js'
 import { entryLine, appendEntry, journalRel, readStream } from './journal.js'
+import { mergeReports, reportFiles } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { runFiltered, runFullSuite, runnerConfig } from './runner.js'
@@ -37,17 +38,36 @@ export async function runSpecTests(
   if (!rcRes.ok) return rcRes
   const rc = rcRes.value
   if (rc.mode === 'filtered') {
+    if (rc.reportGlob !== undefined) {
+      for (const f of reportFiles(runRoot, rc.reportGlob)) rmSync(join(runRoot, f))
+    }
     const run = await runFiltered(runRoot, ctx, rc.template, parentId, trustRoot)
     if (!run.ok) return run
-    const tests = [{ name: `@spec:${parentId}`, ok: run.value.exitZero }]
-    return ok({ runner: 'filtered', tests, allOk: run.value.exitZero })
+    if (rc.reportGlob === undefined) {
+      const tests = [{ name: `@spec:${parentId}`, ok: run.value.exitZero }]
+      return ok({ runner: 'filtered', tests, allOk: run.value.exitZero })
+    }
+    const merged = mergeReports(runRoot, rc.reportGlob)
+    if (!merged.ok) return merged
+    const tests = merged.value
+      .filter((t) => matchesTag(t.name, parentId))
+      .map((t) => ({ name: t.name, ok: t.status === 'passed' }))
+    if (tests.length === 0) {
+      return refuse([v('criteria.runner', 'filter-matched-nothing', `0 tests matched @spec:${parentId}`,
+        'a runner whose filter reaches the tagged tests — check the template forwards the pattern')])
+    }
+    return ok({ runner: 'filtered', tests, allOk: tests.every((t) => t.ok) })
   }
   const suite = await runFullSuite(runRoot, ctx, rc, trustRoot)
   if (!suite.ok) return suite
   const tests = suite.value.tests
     .filter((t) => matchesTag(t.name, parentId))
     .map((t) => ({ name: t.name, ok: t.status === 'passed' }))
-  return ok({ runner: 'full-suite', tests, allOk: tests.length > 0 && tests.every((t) => t.ok) })
+  if (tests.length === 0) {
+    return refuse([v('criteria.report', 'filter-matched-nothing', `0 tests matched @spec:${parentId}`,
+      'tagged tests present in the merged junit reports')])
+  }
+  return ok({ runner: 'full-suite', tests, allOk: tests.every((t) => t.ok) })
 }
 
 export function journalEvidence(
@@ -173,12 +193,28 @@ export function evidenceForDiff(runRoot: string, stateRoot: string, plan: CanonD
   const entries = readStream(stateRoot, planId).filter((e) => e.t === 'test-evidence')
   const matching = (e: (typeof entries)[number], tag: string): Array<{ name: string; ok: boolean }> =>
     (Array.isArray(e.tests) ? (e.tests as Array<{ name: string; ok: boolean }>) : []).filter((t) => matchesTag(t.name, tag))
-  const required = diffTags(runRoot, base).map((tag) => ({
-    tag,
-    red: entries.some((e) => e.phase === 'red' && matching(e, tag).some((t) => !t.ok)),
-    green: entries.some((e) => e.phase === 'green' && matching(e, tag).some((t) => t.ok)),
-    vacuous: entries.some((e) => e.phase === 'red' && e.vacuous === true && matching(e, tag).length > 0),
-  }))
+  const required = diffTags(runRoot, base).map((tag) => {
+    // latest-cycle semantics: the newest red matching the tag is the verdict on
+    // "was failure observed"; a green only counts if it post-dates that red.
+    // One early vacuous red must not poison the tag forever (append-only journal).
+    let lastRedIdx = -1
+    let lastGreenIdx = -1
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!
+      if (matching(e, tag).length === 0) continue
+      if (e.phase === 'red') lastRedIdx = i
+      else if (e.phase === 'green') lastGreenIdx = i
+    }
+    const lastRed = lastRedIdx >= 0 ? entries[lastRedIdx]! : undefined
+    const lastGreen = lastGreenIdx >= 0 ? entries[lastGreenIdx]! : undefined
+    return {
+      tag,
+      red: lastRed !== undefined && matching(lastRed, tag).some((t) => !t.ok),
+      green: lastGreen !== undefined && lastGreenIdx > lastRedIdx &&
+        matching(lastGreen, tag).every((t) => t.ok),
+      vacuous: lastRed?.vacuous === true,
+    }
+  })
   return {
     plan: planId,
     base,

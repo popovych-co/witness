@@ -25,4 +25,15 @@ describe('cli entry', () => {
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('usage: specflow')
   })
+
+  it('every verb answers --help with a usage line instead of crashing', async () => {
+    const repo = tmpRepo()
+    for (const verb of ['recover', 'init', 'recap', 'write', 'diff', 'check', 'index', 'satisfy', 'log',
+      'test-evidence', 'verify-red', 'adopt', 'gate', 'decide', 'start', 'clean', 'ship', 'next',
+      'abandon', 'rename', 'sync', 'calibrate']) {
+      const r = await repo.cli([verb, '--help'])
+      expect(r.code, `${verb} --help`).toBe(0)
+      expect(r.stdout, `${verb} --help`).toContain('usage: specflow')
+    }
+  })
 })

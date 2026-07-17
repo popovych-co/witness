@@ -164,6 +164,52 @@ describe('gate engine', () => {
     expect(runs(repo).length).toBe(3)
   })
 
+  it('bound short-circuit and render advertise every live exit and the budget', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, BLOCKING('auth-refresh'))
+    const out: string[] = []
+    const ctxOut = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l: string) => out.push(l) })
+    await runGate(ctxOut, 'plan', 'auth-refresh', { fresh: false, manual: false })
+    expect(out.join('\n')).toContain('round: 1 of 3')
+    expect(out.join('\n')).toContain('--revise --upstream')
+    for (const round of [1, 2]) {
+      journalDecision(repo, 'auth-refresh', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh', round, decision: 'revise' })
+      await writeSpec(repo, 'auth-refresh', { ...SPEC_META, summary: `content ${round}` })
+      await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+    }
+    journalDecision(repo, 'auth-refresh', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh', round: 3, decision: 'stop' })
+    await writeSpec(repo, 'auth-refresh', { ...SPEC_META, summary: 'content after stop' })
+    const out2: string[] = []
+    const ctx2 = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l: string) => out2.push(l) })
+    expect(await runGate(ctx2, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(3)
+    const text = out2.join('\n')
+    expect(text).toContain('--approve --override')
+    expect(text).toContain('--revise --upstream')
+    expect(text).toContain('specflow abandon auth-refresh')
+  })
+
+  it('two consecutive malformed rounds on the same model+prompts → third run refused with remedy', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, {
+      coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
+      findings: [{ blocking: true, anchor: 'auth-refresh > ## Nowhere', claim: 'ghost' }],
+    })
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: true, manual: false })).toBe(1)
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: true, manual: false })).toBe(1)
+    expect(runs(repo).every((r) => r.outcome === 'malformed')).toBe(true)
+    // changed content would normally trigger a fresh (costly) battery run —
+    // the brake refuses it while the same model+prompts keep emitting garbage
+    await writeSpec(repo, 'auth-refresh', { ...SPEC_META, summary: 'revised after malformed rounds' })
+    const errs: string[] = []
+    const ctx3 = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
+    expect(await runGate(ctx3, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(2)
+    expect(errs.join('\n')).toContain('malformed-streak')
+    expect(runs(repo).length).toBe(2)
+    // --fresh is the explicit escape hatch: forces a live re-run anyway
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: true, manual: false })).toBe(1)
+    expect(runs(repo).length).toBe(3)
+  })
+
   it('a revise that lands identical content is an explicit changed-nothing stop', async () => {
     const { repo, scenario, ctx } = await gateRepo()
     putVerdict(scenario, BLOCKING('auth-refresh'))
@@ -188,15 +234,19 @@ describe('gate engine', () => {
   })
 
   it('walks the model fallback chain on invocation failure and records it', async () => {
-    const { repo, scenario, ctx } = await gateRepo()
+    const { repo, scenario } = await gateRepo()
     writeFileSync(join(repo.root, 'specflow.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
     writeFileSync(join(repo.root, '.specflow/calibration.local.yaml'), 'models:\n  - test-model-2\n')
     putVerdict(scenario, CLEAN('auth-refresh'))
     writeFileSync(join(scenario, 'claude-fail'), '1')
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
     const [entry] = runs(repo)
     expect(entry!.fallback).toEqual(['test-model-1'])
     expect(entry!.model).toBe('test-model-2')
     expect(entry!.calibration).toBe('local')
+    // a dead head model is config rot — it must be named, not silently absorbed
+    expect(errs.join('\n')).toContain('test-model-1 failed to invoke')
   })
 })

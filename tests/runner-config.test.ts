@@ -35,6 +35,16 @@ describe('runnerConfig', () => {
     expect(!res.ok && res.violations[0]?.field).toBe('ship.test')
   })
 
+  it('filtered mode accepts an optional junit report', () => {
+    const r = runnerConfig(cfg({ criteria: { runner: 'run {id}', report: 'junit:**/junit.xml' } }))
+    expect(r.ok && r.value).toEqual({ mode: 'filtered', template: 'run {id}', reportGlob: '**/junit.xml' })
+  })
+
+  it('filtered mode refuses a non-junit report', () => {
+    const r = runnerConfig(cfg({ criteria: { runner: 'run {id}', report: 'tap:foo' } }))
+    expect(!r.ok && r.violations[0]?.rule).toBe('report-format')
+  })
+
   it('refuses a missing runner', () => {
     const res = runnerConfig(cfg({}))
     expect(!res.ok && res.violations[0]?.field).toBe('criteria.runner')

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import {
-  appendKind, boundReached, keyOf, pendingDecision, roundsSinceApprove, type GateRunEntry,
+  ROUND_BOUND, appendKind, boundReached, keyOf, pendingDecision, roundsSinceApprove, type GateRunEntry,
 } from '../src/rounds.js'
 
 const KEY = { gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '0.1.0' }
@@ -21,6 +21,9 @@ const revise = (round: number): Entry => ({
 const approve = (round: number): Entry => ({
   v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh-plan-1', round, decision: 'approve',
 } as Entry)
+const decide = (decision: 'revise-upstream' | 'stop', round = 1): Entry => ({
+  v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh-plan-1', round, decision,
+} as Entry)
 const key = (sha: string) => ({ reviewed_sha: sha, ...KEY })
 
 describe('roundsSinceApprove', () => {
@@ -29,6 +32,30 @@ describe('roundsSinceApprove', () => {
     expect(roundsSinceApprove([run('a', 'stopped', 1), approve(1), run('b', 'stopped', 1)], 'plan')).toBe(1)
     expect(roundsSinceApprove([run('a', 'passed', 1)], 'plan')).toBe(0)
     expect(roundsSinceApprove([run('a', 'stopped', 1)], 'ship')).toBe(0)
+  })
+
+  it('exports the bound as a constant', () => {
+    expect(ROUND_BOUND).toBe(3)
+  })
+
+  it('malformed runs do not count toward the bound — the battery failed, not the artifact', () => {
+    const entries = [run('a', 'stopped', 1), run('b', 'malformed', 2), run('c', 'stopped', 2)]
+    expect(roundsSinceApprove(entries, 'plan')).toBe(2)
+    expect(boundReached(entries, 'plan')).toBe(false)
+    expect(boundReached([...entries, run('d', 'stopped', 3)], 'plan')).toBe(true)
+  })
+
+  it('revise-upstream resets the budget — a new plan version is a new game', () => {
+    const three = [run('a', 'stopped', 1), revise(1), run('b', 'stopped', 2), revise(2), run('c', 'stopped', 3)]
+    expect(boundReached(three, 'plan')).toBe(true)
+    const reopened = [...three, decide('revise-upstream', 3)]
+    expect(roundsSinceApprove(reopened, 'plan')).toBe(0)
+    expect(boundReached(reopened, 'plan')).toBe(false)
+  })
+
+  it('stop and plain revise do not reset', () => {
+    expect(roundsSinceApprove([run('a', 'stopped', 1), decide('stop'), run('b', 'stopped', 2)], 'plan')).toBe(2)
+    expect(roundsSinceApprove([run('a', 'stopped', 1), revise(1), run('b', 'stopped', 2)], 'plan')).toBe(2)
   })
 })
 

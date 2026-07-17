@@ -41,6 +41,32 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   calibrate: () => import('./verbs/calibrate.js'),
 }
 
+// answered centrally so no verb can crash on --help (several parse argv
+// strictly); each line mirrors the verb's own usage refusal where one exists
+const VERB_USAGE: Record<string, string> = {
+  abandon: 'specflow abandon <plan-id | effort-slug>',
+  adopt: 'specflow adopt <specs/... | plans/...>.md',
+  calibrate: 'specflow calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
+  check: 'specflow check',
+  clean: 'specflow clean',
+  decide: 'specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact>] [--show]',
+  diff: 'specflow diff <spec-id>',
+  gate: 'specflow gate <decompose|plan|implement|ship> <target> [--fresh] [--manual]',
+  index: 'specflow index',
+  init: 'specflow init',
+  log: 'specflow log <stream> [--all] [--lineage]',
+  next: 'specflow next',
+  recap: 'specflow recap --file <recap.json> [--amend]',
+  recover: 'specflow recover [--complete | --rollback]',
+  rename: 'specflow rename <old-id> <new-id>',
+  satisfy: 'specflow satisfy <doc-id> --need <text | index>',
+  ship: 'specflow ship <plan-id>',
+  start: 'specflow start <plan-id>',
+  sync: 'specflow sync',
+  'test-evidence': 'specflow test-evidence <plan-id> --phase red|green',
+  'verify-red': 'specflow verify-red <plan-id> [--base <ref>]',
+}
+
 export function version(): string {
   const pkg = JSON.parse(
     readFileSync(join(new URL('.', import.meta.url).pathname, '..', 'package.json'), 'utf8'),
@@ -74,6 +100,10 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.OK
   }
   const load = VERBS[verb]
+  if (load && (rest.includes('--help') || rest.includes('-h'))) {
+    ctx.out(`usage: ${VERB_USAGE[verb] ?? `specflow ${verb} [flags]`}`)
+    return EXIT.OK
+  }
   if (!load) {
     ctx.err(`unknown verb: ${verb}`)
     ctx.err(usage())

@@ -22,7 +22,7 @@ describe('resolveModel', () => {
     if (!r.ok) expect(r.violations[0].rule).toBe('alias-refused')
   })
 
-  it('pins first, warns below-floor when uncalibrated (shipped matrix is empty)', async () => {
+  it('pins first; an empty matrix warns as such (nothing is calibrated yet)', async () => {
     const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
     const r = resolveModel(cfg, loadMatrix(repo.root))
     expect(r.ok).toBe(true)
@@ -30,7 +30,18 @@ describe('resolveModel', () => {
     expect(r.value.chain[0]).toBe('test-model-1')
     expect(r.value.chain[r.value.chain.length - 1]).toBe(SESSION_DEFAULT)
     expect(r.value.calibrationOf('test-model-1')).toBe('none')
-    expect(r.value.warning).toContain('floor')
+    expect(r.value.warning).toContain('calibration matrix is empty')
+    expect(r.value.warning).toContain('test-model-1')
+  })
+
+  it('warns below-floor when the matrix is non-empty but the head is uncalibrated', async () => {
+    const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
+    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
+    writeFileSync(join(repo.root, '.specflow/calibration.local.yaml'), 'models:\n  - test-model-2\n')
+    const r = resolveModel(cfg, loadMatrix(repo.root))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.warning).toContain('below the model floor')
   })
 
   it('reads the local overlay: calibrated ids join the chain and stamp local', async () => {
@@ -68,6 +79,6 @@ describe('resolveModel', () => {
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.chain).toEqual([SESSION_DEFAULT])
-    expect(r.value.warning).toContain('floor')
+    expect(r.value.warning).toContain('calibration matrix is empty')
   })
 })

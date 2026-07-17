@@ -55,23 +55,36 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
-  if (!pending) {
-    renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
-      `a stopped gate-run awaiting a decision — run: specflow gate ${gate} ${target}`)]).forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
-  }
-  const blockedCode = guardTxn(ctx, root)
-  if (blockedCode !== undefined) return blockedCode
-
   const decision = picked[0]!.slice(2) as 'approve' | 'revise' | 'stop'
   const note = flagValue(argv, '--note')
   const override = argv.includes('--override')
   const upstream = flagValue(argv, '--upstream')
   const atBound = boundReached(entries, gate)
 
-  if (decision === 'revise' && atBound) {
+  // at the bound the gate refuses to run again, so no fresh pending decision can
+  // ever exist — the endgame decisions must stay reachable anchored to the last
+  // run, or the target livelocks (incident c2692b93)
+  const boundEndgame = atBound && (decision === 'stop' || (decision === 'approve' && override) ||
+    (decision === 'revise' && upstream !== undefined))
+  const anchor = pending ?? (boundEndgame ? last : undefined)
+  if (!anchor) {
+    // at the bound "run the gate" is a lie — it would only short-circuit back
+    // here; name the decisions that actually work instead
+    renderRefusal([atBound && last
+      ? v('decision', 'bound', `${roundsSinceApprove(entries, gate)} rounds`,
+          '--approve --override | --revise --upstream <id> | --stop (bound reached — the gate will not run again)')
+      : v('gate', 'nothing-pending', `${gate} ${target}`,
+          `a stopped gate-run awaiting a decision — run: specflow gate ${gate} ${target}`),
+    ]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  const blockedCode = guardTxn(ctx, root)
+  if (blockedCode !== undefined) return blockedCode
+
+  if (decision === 'revise' && atBound && upstream === undefined) {
     renderRefusal([v('decision', 'bound', `${roundsSinceApprove(entries, gate)} rounds`,
-      '--approve --override | --stop (3-round bound reached)')]).forEach((l) => ctx.err(l))
+      '--approve --override | --revise --upstream <id> | --stop (bound reached — upstream reopens the parent and resets the budget)')])
+      .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   if (decision === 'approve' && atBound && !override) {
@@ -82,7 +95,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const canon = loadCanon(root)
   const entry: DecisionEntry = {
-    v: 1, t: 'human-decision', gate, artifact: target, round: pending.round,
+    v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,
     ...(override ? { override: true } : {}),
     ...(note ? { note } : {}),
@@ -110,8 +123,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       reopen = {
         stream: upstream,
         entry: {
-          v: 1, t: 'human-decision', gate: upGate, artifact: upstream, round: pending.round,
-          decision: 'revise', caused_by: { artifact: target, gate, round: pending.round },
+          v: 1, t: 'human-decision', gate: upGate, artifact: upstream, round: anchor.round,
+          decision: 'revise', caused_by: { artifact: target, gate, round: anchor.round },
           ...(note ? { note } : {}),
         },
       }
@@ -140,7 +153,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}`))
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
     ctx.out('revise-context: (reconstructed from the journal — survives session death)')
-    renderGateRun(ctx, pending, 'ran')
+    renderGateRun(ctx, anchor, 'ran')
     if (note) ctx.out(kv('note', note))
     if (gate === 'decompose') ctx.out(`help: scope itself implicated → specflow recap --amend ${target}`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)

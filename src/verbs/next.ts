@@ -11,7 +11,7 @@ import { worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { renderRefusal } from '../refusal.js'
 import { kv } from '../toon.js'
-import { lastGateRun, pendingDecision, type DecisionEntry } from '../rounds.js'
+import { boundReached, lastGateRun, pendingDecision, type DecisionEntry } from '../rounds.js'
 
 export function gateSettled(entries: Entry[], gate: string): boolean {
   const last = lastGateRun(entries, gate)
@@ -53,6 +53,31 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     for (const gate of ['plan', 'implement', 'ship']) {
       const p = pendingDecision(entries, gate)
       if (p) return { line: `specflow decide ${gate} ${String(plan.meta.id)} --show`, target: String(plan.meta.id) }
+    }
+  }
+
+  // bound-stuck gates: no pending decision can ever be created (the gate
+  // short-circuits), so the endgame decision itself is the next action —
+  // decisions outrank motion, jammed targets must not be silently skipped
+  for (const e of efforts) {
+    if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose')) {
+      return {
+        line: `specflow decide decompose ${e.slug} --approve --override | --revise --upstream ${e.slug} | --stop`,
+        target: e.slug, note: 'round bound reached — human decision required',
+      }
+    }
+  }
+  for (const plan of plans) {
+    const id = String(plan.meta.id)
+    const entries = readStream(root, id)
+    for (const gate of ['plan', 'implement', 'ship'] as const) {
+      if (boundReached(entries, gate) && !gateSettled(entries, gate)) {
+        const up = gate === 'plan' ? String(plan.meta.parent) : id
+        return {
+          line: `specflow decide ${gate} ${id} --approve --override | --revise --upstream ${up} | --stop`,
+          target: id, note: 'round bound reached — human decision required',
+        }
+      }
     }
   }
 

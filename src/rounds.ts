@@ -76,24 +76,37 @@ export function lastGateRun(entries: Entry[], gate: string): GateRunEntry | unde
   return undefined
 }
 
-function lastApproveIndex(entries: Entry[], gate: string): number {
+export const ROUND_BOUND = 3
+
+// a "reset" opens a fresh round budget: human approve, a passed run, or a
+// revise-upstream (the plan itself changes — a new plan version is a new game;
+// upstream churn is bounded by the upstream gate's own bound)
+function lastResetIndex(entries: Entry[], gate: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]
-    if (isDecision(e, gate) && (e as unknown as DecisionEntry).decision === 'approve') return i
+    if (isDecision(e, gate)) {
+      const d = (e as unknown as DecisionEntry).decision
+      if (d === 'approve' || d === 'revise-upstream') return i
+    }
     if (isRun(e, gate) && (e as unknown as GateRunEntry).outcome === 'passed') return i
   }
   return -1
 }
 
 export function roundsSinceApprove(entries: Entry[], gate: string): number {
-  const since = lastApproveIndex(entries, gate)
+  const since = lastResetIndex(entries, gate)
   let n = 0
-  for (let i = since + 1; i < entries.length; i++) if (isRun(entries[i], gate)) n++
+  for (let i = since + 1; i < entries.length; i++) {
+    const e = entries[i]
+    // malformed = the battery failed to emit a legal verdict — specflow's
+    // failure, not the artifact's; it never spends the human's budget
+    if (isRun(e, gate) && (e as unknown as GateRunEntry).outcome !== 'malformed') n++
+  }
   return n
 }
 
 export function boundReached(entries: Entry[], gate: string): boolean {
-  return roundsSinceApprove(entries, gate) >= 3
+  return roundsSinceApprove(entries, gate) >= ROUND_BOUND
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {
