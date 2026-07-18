@@ -11,7 +11,12 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'calibration', 'reviewers', 'design-reviewer')
 const chrome = process.env.CHROME_BIN ?? 'chrome-headless-shell'
 function render(html, png) {
-  execFileSync(chrome, ['--headless', '--disable-gpu', '--window-size=1200,1600',
+  // 650px tall: tall enough that s3-field-wall's flat 13-field list and s2-buried-action's
+  // savebar (pushed off-screen by its own 1600px spacer) still render meaningfully, short
+  // enough that base/s1/s4's short-content forms don't leave a fixed savebar stranded
+  // ~1150px below the fold — a rendering artifact a real page at a sane viewport wouldn't
+  // have, which calibration against claude-sonnet-5 showed reads as a false buried-action.
+  execFileSync(chrome, ['--headless', '--disable-gpu', '--window-size=1200,650',
     `--screenshot=${png}`, `file://${html}`], { stdio: 'inherit' })
 }
 // walk _src/**/*.html → PNG at the path encoded in the filename (dir__name.png)
