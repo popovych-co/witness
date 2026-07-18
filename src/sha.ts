@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export const VOLATILE_FIELDS = ['status', 'drift', 'pr'] as const
+export const VOLATILE_FIELDS = ['status', 'drift', 'pr', 'design'] as const
 
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']'

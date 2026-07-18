@@ -9,8 +9,8 @@ export interface RawDoc {
 }
 
 const FIELD_ORDER = [
-  'id', 'type', 'status', 'summary', 'parent', 'derives-from',
-  'supersedes', 'depends', 'needs', 'criteria', 'steps', 'pr', 'drift',
+  'id', 'type', 'status', 'summary', 'ui', 'parent', 'derives-from', 'design-from',
+  'supersedes', 'depends', 'needs', 'criteria', 'steps', 'pr', 'drift', 'design',
 ] as const
 
 export function splitDoc(raw: string): Result<RawDoc> {

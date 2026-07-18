@@ -19,10 +19,11 @@ import {
 } from './rounds.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 
-export type GateName = 'decompose' | 'plan' | 'implement' | 'ship'
+export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
 export type ChangeClass = 'feature' | 'fix' | 'chore'
 
 export interface Stamp { artifact: string; to: string }
+export interface MetaStamp { artifact: string; patch: Record<string, unknown>; entryType: string }
 
 export interface GateInput {
   class: ChangeClass
@@ -38,9 +39,10 @@ export interface GateInput {
 
 export interface GateSpec {
   gate: GateName
-  targetKind: 'effort' | 'plan'
+  targetKind: 'effort' | 'plan' | 'spec'
   resolve(root: string, ctx: Ctx, canon: Canon, cfg: Config, target: string): Promise<Result<GateInput>>
   approveStamps?(root: string, canon: Canon, target: string): Stamp[]
+  approveMeta?(root: string, canon: Canon, cfg: Config, target: string): MetaStamp[]
 }
 
 const GATES = new Map<string, GateSpec>()
@@ -57,6 +59,7 @@ export const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, 
     chore: ['code-reviewer'],
   },
   ship: ['drift-reviewer', 'code-reviewer'],
+  design: ['design-critic'],
 }
 
 export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Result<string[]> {
@@ -108,7 +111,7 @@ export async function runGate(
 
   const spec = gateSpec(gateName)
   if (!spec) {
-    renderRefusal([v('gate', 'unknown-gate', gateName, 'decompose | plan | implement | ship')]).forEach((l) => ctx.err(l))
+    renderRefusal([v('gate', 'unknown-gate', gateName, 'decompose | plan | implement | ship | design')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const cfgR = loadConfig(root)

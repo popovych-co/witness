@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writeSpec, writePlan } from './helpers.js'
+import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writeDesign, writeSpec, writePlan } from './helpers.js'
 
 async function nextLine(repo: { cli: (a: string[], o?: object) => Promise<{ code: number; stdout: string }> }, env?: object) {
   const r = await repo.cli(['next'], env ? { env } : undefined)
@@ -99,5 +99,33 @@ describe('specflow next — the ladder', () => {
     expect(out).toContain(`decide implement ${planId}`)
     expect(out).toContain('bound')
     expect(out).not.toContain('test-evidence')
+  })
+})
+
+describe('design stage routing', () => {
+  it('routes an approved ui spec to the design stage before planning', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
+    approve(repo, 'booking-form')
+    const res = await repo.cli(['next'])
+    expect(res.stdout).toContain('specflow design booking-form')
+    expect(res.stdout).toContain('stage: design')
+  })
+
+  it('routes to the design gate once an artifact exists', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
+    approve(repo, 'booking-form')
+    await writeDesign(repo, 'booking-form')
+    const res = await repo.cli(['next'])
+    expect(res.stdout).toContain('specflow gate design booking-form')
+  })
+
+  it('a non-ui approved spec still routes straight to plan', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    const res = await repo.cli(['next'])
+    expect(res.stdout).toContain('write auth-refresh-plan-1')
   })
 })

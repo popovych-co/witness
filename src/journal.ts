@@ -4,6 +4,7 @@ import { join } from 'node:path'
 export type EntryType =
   | 'recap' | 'write' | 'write-refused' | 'gate-run'
   | 'human-decision' | 'drift-check' | 'test-evidence' | 'adopt' | 'status'
+  | 'design-write' | 'design-reconfirm' | 'design-stamp'
 
 export interface Entry {
   v: 1

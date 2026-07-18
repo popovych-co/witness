@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import { canonicalSha } from '../src/sha.js'
-import { PLAN_META, SPEC_META, seededRepo, stampLive, writePlan, writeSpec, type TestRepo } from './helpers.js'
+import { approve, PLAN_META, SPEC_META, seededRepo, stampLive, writePlan, writeSpec, type TestRepo } from './helpers.js'
 
 function specSha(repo: TestRepo): string {
   const doc = splitDoc(repo.read('specs/auth-refresh.md'))
@@ -92,5 +92,25 @@ describe('specflow write (plan)', () => {
     }, '## Step: s1\nx\n')
     expect(bad.code).toBe(2)
     expect(bad.stderr).toContain('class-mismatch')
+  })
+})
+
+describe('design-from pin', () => {
+  it('refuses a plan for a ui spec that has no approved design', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
+    approve(repo, 'booking-form')
+    const wr = await writePlan(repo, 'booking-form-plan-1', { parent: 'booking-form' })
+    expect(wr.code).toBe(2)
+    expect(wr.stderr).toMatch(/design-from|design-not-approved/)
+  })
+
+  it('refuses design-from on a non-ui parent', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    const wr = await writePlan(repo, 'auth-refresh-plan-1', { parent: 'auth-refresh', 'design-from': 'a'.repeat(64) })
+    expect(wr.code).toBe(2)
+    expect(wr.stderr).toContain('design-from')
   })
 })

@@ -1,0 +1,3 @@
+docs-mode calibration for the design-critic (harness builds {kind:'docs'};
+the design gate uses {kind:'design'} — same lens, same blocking bit, anchors
+resolve to the artifact doc's headings/ids and the spec's headings).

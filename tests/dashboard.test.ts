@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { SPEC_META, seededRepo, tmpRepo, writeSpec } from './helpers.js'
+import {
+  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, writeDesign, writeSpec,
+} from './helpers.js'
 
 describe('specflow dashboard (no-arg)', () => {
   it('points a fresh repo at recap, then at write', async () => {
@@ -43,5 +45,31 @@ describe('specflow dashboard (no-arg)', () => {
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('pending-txn: write(x)')
     expect(res.stdout).toContain('next: specflow recover')
+  })
+
+  it('surfaces design-pending ui specs, then a pending design gate once one runs', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
+    approve(repo, 'booking-form')
+
+    let res = await repo.cli([])
+    expect(res.stdout).toContain('design[1]{spec,why}:')
+    expect(res.stdout).toContain('  booking-form,design owed')
+
+    await writeDesign(repo, 'booking-form')
+    res = await repo.cli([])
+    expect(res.stdout).toContain('  booking-form,design gate pending')
+
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [{ anchor: 'design#save-bar', note: 'r' }, { anchor: 'booking-form > ## Behavior', note: 'r' }],
+      findings: [],
+    })
+    const g = await repo.cli(['gate', 'design', 'booking-form'], { env: gateEnv(scenario) })
+    expect(g.code).toBe(1)                                    // always stops
+
+    res = await repo.cli([])
+    expect(res.stdout).toContain('gates[1]{gate,target,round,outcome}:')
+    expect(res.stdout).toContain('  design,booking-form,1,stopped')
   })
 })

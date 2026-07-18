@@ -58,7 +58,7 @@ describe('resolveDocs (docs registry)', () => {
 
   it('refuses a key with no shipped consumer', () => {
     const repo = tmpRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  design: [docs/ui/design-language.md]\n')
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  security: [docs/threat-model.md]\n')
     const res = loadConfig(repo.root)
     expect(!res.ok && res.violations[0]?.rule).toBe('unknown-doc-key')
     expect(!res.ok && res.violations[0]?.want).toContain('conventions')
@@ -75,5 +75,45 @@ describe('resolveDocs (docs registry)', () => {
     repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  conventions: [.specflow/journal/x.md]\n')
     const res = loadConfig(repo.root)
     expect(!res.ok && res.violations[0]?.rule).toBe('reserved')
+  })
+})
+
+describe('paths.designs (design stage)', () => {
+  it('defaults designs to "designs"', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.paths.designs).toBe('designs')
+  })
+
+  it('accepts a custom designs dir', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\npaths:\n  designs: docs/designs\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.paths.designs).toBe('docs/designs')
+  })
+
+  it('refuses designs overlapping or nested with specs/plans', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\npaths:\n  specs: designs\n  designs: designs\n')
+    expect(loadConfig(repo.root).ok).toBe(false)
+    repo.write('specflow.config.yaml', 'schema: 1\npaths:\n  designs: specs/looks\n')
+    const res = loadConfig(repo.root)
+    expect(!res.ok && res.violations[0]?.rule).toBe('nested')
+  })
+
+  it('refuses .specflow and traversal for designs', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\npaths:\n  designs: .specflow/looks\n')
+    expect(!loadConfig(repo.root).ok).toBe(true)
+  })
+})
+
+describe('DOC_KEYS (design consumer shipped)', () => {
+  it('accepts the design key now that the design gate consumes it', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\ndocs:\n  design: [docs/ui/design-language.md]\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.docs.design).toEqual(['docs/ui/design-language.md'])
   })
 })

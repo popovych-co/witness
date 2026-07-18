@@ -8,7 +8,7 @@ import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export const PROMPT_NAMES = [
   'slicing-critic', 'plan-critic', 'code-reviewer', 'silent-failure-hunter',
-  'type-design', 'pr-test', 'drift-reviewer',
+  'type-design', 'pr-test', 'drift-reviewer', 'design-critic',
 ] as const
 
 export interface LensDoc { path: string; contents: string }
@@ -32,6 +32,7 @@ export function resolvePrompt(name: string): Result<Lens> {
 // stay in lockstep with DOC_KEYS in config.ts — no key without a consumer.
 const DOC_CONSUMERS: Record<string, { lenses: string[]; gates: string[] }> = {
   conventions: { lenses: ['code-reviewer'], gates: ['implement', 'ship'] },
+  design: { lenses: ['design-critic'], gates: ['design'] },
 }
 
 export function docKeysFor(gate: string, lens: string): string[] {

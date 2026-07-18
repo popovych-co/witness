@@ -185,6 +185,19 @@ export async function writePlan(repo: TestRepo, id: string, opts: Record<string,
   return res
 }
 
+export const DESIGN_HTML =
+  '<!doctype html>\n<html><head><style>body{font-family:system-ui}</style></head>\n' +
+  '<body>\n  <header id="eyebrow">Bookings</header>\n' +
+  '  <main id="essentials"><h1>New service</h1></main>\n' +
+  '  <footer id="save-bar"><button>Save</button></footer>\n</body></html>\n'
+
+export async function writeDesign(repo: TestRepo, specId: string, html = DESIGN_HTML, env?: Record<string, string>): Promise<CliResult> {
+  repo.write(`d-${specId}.html`, html)
+  const res = await repo.cli(['design', specId, '--file', `d-${specId}.html`], env ? { env } : {})
+  rmSync(join(repo.root, `d-${specId}.html`), { force: true })
+  return res
+}
+
 export function vitestBin(): string {
   const req = createRequire(import.meta.url)
   return join(dirname(req.resolve('vitest/package.json')), 'vitest.mjs')

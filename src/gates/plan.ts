@@ -7,6 +7,7 @@ import { findById } from '../scan.js'
 import { effortOf, planPairSha } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput } from '../gate.js'
+import { designPending, designStamp } from '../design.js'
 import type { GateCheck } from '../rounds.js'
 
 registerGate({
@@ -46,6 +47,17 @@ registerGate({
       detail: pin === parentSha
         ? `pin ${short(parentSha)}`
         : `derives-from ${short(pin)} but parent is at ${short(parentSha)} — rewrite the plan (specflow write re-stamps the pin)` })
+
+    if (parent.meta.ui === true) {
+      const stamp = designStamp(parent)
+      const planPin = plan.meta['design-from']
+      const okPin = stamp !== undefined && !designPending(root, parent) && planPin === stamp.sha
+      checks.push({ name: 'design-pin', ok: okPin,
+        detail: okPin ? `design ${short(stamp!.sha)}`
+          : !stamp ? `${String(parent.meta.id)} has no approved design — gate design first`
+          : designPending(root, parent) ? `${String(parent.meta.id)} design is stale — re-approve or reconfirm`
+          : `design-from ${short(String(planPin ?? 'absent'))} ≠ current design ${short(stamp.sha)}` })
+    }
 
     const base = baseForSpec(root, canon, String(parent.meta.id), planId)
     const promptBody = [

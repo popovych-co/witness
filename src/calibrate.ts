@@ -71,7 +71,7 @@ export function composeReviewed(
   suite: ReviewerSuite,
   dir: string,
   files: string[],
-): { reviewed: Reviewed; context: string } {
+): { reviewed: Exclude<Reviewed, { kind: 'design' }>; context: string } {
   if (suite.kind === 'tree') return { reviewed: { kind: 'tree', root: dir, files }, context: '' }
   const docs = files
     .filter((f) => f.endsWith('.md'))
@@ -95,7 +95,7 @@ export function composeReviewed(
   return { reviewed: { kind: 'docs', docs }, context }
 }
 
-export function renderReviewed(reviewed: Reviewed, context: string): string {
+export function renderReviewed(reviewed: Exclude<Reviewed, { kind: 'design' }>, context: string): string {
   const parts: string[] = []
   if (context !== '') parts.push(`## Calibration context\n\n${context}`)
   parts.push('## Reviewed content')

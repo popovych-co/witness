@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { designPending } from '../design.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, primaryRoot } from '../gitio.js'
 import { contentAtSha } from '../history.js'
@@ -109,6 +110,15 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   for (const slug of effortStreams(root)) {
     if (pendingDecision(readStream(root, slug), 'decompose')) {
       findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', `specflow decide decompose ${slug} --show`))
+    }
+  }
+  for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
+    const id = String(spec.meta.id)
+    if (pendingDecision(readStream(root, id), 'design')) {
+      findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `specflow decide design ${id} --show`))
+    }
+    if (designPending(root, spec) && String(spec.meta.status) === 'approved') {
+      findings.push(f('warn', 'motion', id, 'design-pending', `ui spec owes a design — specflow design ${id} --file <html>`))
     }
   }
   for (const planId of listWorktrees(root)) {

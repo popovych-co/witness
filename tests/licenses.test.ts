@@ -8,6 +8,7 @@ const LICENSE_FILES = [
   'superpowers-MIT.txt',
   'mattpocock-skills-MIT.txt',
   'no-mistakes-MIT.txt',
+  'frontend-design-Apache-2.0.txt',
 ];
 
 describe('LICENSES/', () => {
@@ -40,6 +41,24 @@ describe('NOTICE.md', () => {
   it('records the specops zero-text rule', () => {
     expect(notice()).toContain('specops');
     expect(notice().toLowerCase()).toContain('no text was copied');
+  });
+});
+
+describe('design-critic + specflow-design provenance', () => {
+  it('LICENSES carries the frontend-design Apache text', () => {
+    const p = join(root, 'LICENSES', 'frontend-design-Apache-2.0.txt');
+    expect(existsSync(p)).toBe(true);
+    expect(readFileSync(p, 'utf8')).toContain('Apache License');
+  });
+  it('NOTICE maps the design skill to its two sources and states changes', () => {
+    const n = readFileSync(join(root, 'NOTICE.md'), 'utf8');
+    expect(n).toContain('plugin/skills/specflow-design/SKILL.md');
+    expect(n).toContain('frontend-design');
+    expect(n).toContain('redesign-method');   // benoticed process, concept-adapted
+  });
+  it('design-critic prompt is new material (listed as no-upstream)', () => {
+    const n = readFileSync(join(root, 'NOTICE.md'), 'utf8');
+    expect(n).toContain('prompts/design-critic.md');
   });
 });
 

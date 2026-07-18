@@ -1,5 +1,6 @@
 import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
 import { DEFAULT_BATTERIES } from '../gate.js'
 import { primaryRoot } from '../gitio.js'
@@ -94,6 +95,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (reconcile.length) {
     rows('reconcile', ['spec', 'why', 'detail'], reconcile as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
+  const designPend = canon.docs.filter((d) => d.meta.type === 'spec' && designPending(root, d))
+    .map((d) => ({ spec: String(d.meta.id), why: designArtifactCurrent(root, d) ? 'design gate pending' : 'design owed' }))
+  if (designPend.length) {
+    rows('design', ['spec', 'why'], designPend as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
   if (lazy.stale.length) {
     rows('stale', ['plan', 'why'], lazy.stale as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
@@ -104,6 +110,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
       const p = pendingDecision(readStream(root, id), gate)
       if (p) pendingGates.push({ gate, target: id, round: p.round, outcome: p.outcome })
     }
+  }
+  for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
+    const p = pendingDecision(readStream(root, String(spec.meta.id)), 'design')
+    if (p) pendingGates.push({ gate: 'design', target: String(spec.meta.id), round: p.round, outcome: p.outcome })
   }
   for (const slug of efforts) {
     const p = pendingDecision(readStream(root, slug), 'decompose')

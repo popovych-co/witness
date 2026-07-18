@@ -36,7 +36,7 @@ export function primaryRoot(cwd: string): Result<string> {
 
 export function stateDirs(root: string): string[] {
   const p = canonPaths(root)
-  return [p.specs, p.plans, '.specflow']
+  return [p.specs, p.plans, p.designs, '.specflow']
 }
 
 export function isStatePath(root: string, rel: string): boolean {
@@ -100,7 +100,7 @@ export function auditStateCommits(root: string): CommitAudit[] {
   const p = canonPaths(root)
   const res = tryGit(
     root, 'log', '--format=%H%x1f%s%x1f%(trailers:key=Specflow-State,valueonly=true)',
-    '--', p.specs, p.plans, '.specflow/journal',
+    '--', p.specs, p.plans, p.designs, '.specflow/journal',
   )
   if (!res.ok || res.out === '') return []
   return res.out.split('\n').filter(Boolean).map((line) => {

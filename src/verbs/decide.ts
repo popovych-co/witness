@@ -1,9 +1,12 @@
+import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
+import { loadConfig } from '../config.js'
 import '../gates/index.js'
 import { gateSpec, renderGateRun } from '../gate.js'
+import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
-import { appendEntry, entryLine, journalRel, readStream } from '../journal.js'
+import { appendEntry, entryLine, journalRel, readStream, streamExists } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
@@ -26,7 +29,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
-    ctx.err('usage: specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact>] [--show]')
+    ctx.err('usage: specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--show]')
     return EXIT.REFUSED
   }
   const rootR = primaryRoot(ctx.cwd)
@@ -93,6 +96,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
 
+  const cfgR = loadConfig(root)
+  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const canon = loadCanon(root)
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
@@ -103,15 +108,41 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const journalMulti = [{ stream: target, line: '' }]
   const files = [journalRel(target)]
   const stamps = decision === 'approve' ? (spec.approveStamps?.(root, canon, target) ?? []) : []
+  const metaStamps = decision === 'approve' ? (spec.approveMeta?.(root, canon, cfgR.value, target) ?? []) : []
   const prepared = stamps.flatMap((s) => {
     const doc = findById(canon, s.artifact)
     return doc && String(doc.meta.status) !== s.to
       ? [prepareStamp(doc, s.to, 'gate-approve', { run_id: newRunId() })] : []
   })
+  const metaWrites = metaStamps.map((m) => {
+    const doc = findById(canon, m.artifact)!
+    const mEntry = { v: 1 as const, t: m.entryType as 'design-stamp', artifact: m.artifact, ...m.patch, run_id: newRunId() }
+    return {
+      rel: doc.rel, meta: { ...doc.meta, ...m.patch }, body: doc.body, stream: m.artifact,
+      entry: mEntry as unknown as { t: 'design-stamp'; [k: string]: unknown },
+      line: entryLine(mEntry as unknown as { t: 'design-stamp'; [k: string]: unknown }),
+    }
+  })
   let reopen: { stream: string; entry: DecisionEntry } | undefined
   if (entry.decision === 'revise-upstream' && upstream) {
     const upDoc = findById(canon, upstream)
-    if (gate === 'decompose') {
+    if (gate === 'design') {
+      // upstream from the design gate is the spec's SLICING — reopen the effort's
+      // decompose (scope-level changes chain decompose → recap --amend, Decision 52)
+      if (!streamExists(root, upstream)) {
+        renderRefusal([v('upstream', 'unknown-effort', upstream, 'the effort slug whose decompose to reopen')]).forEach((l) => ctx.err(l))
+        return EXIT.REFUSED
+      }
+      entry.upstream = { artifact: upstream, gate: 'decompose' }
+      reopen = {
+        stream: upstream,
+        entry: {
+          v: 1, t: 'human-decision', gate: 'decompose', artifact: upstream, round: anchor.round,
+          decision: 'revise', caused_by: { artifact: target, gate, round: anchor.round },
+          ...(note ? { note } : {}),
+        },
+      }
+    } else if (gate === 'decompose') {
       // upstream from decompose is the scope itself — no second stream, hand off to recap --amend
       entry.upstream = { artifact: target, gate: 'recap' }
     } else if (!upDoc) {
@@ -134,6 +165,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   journalMulti[0]!.line = entryLine(asEntry(entry))
   if (reopen) { journalMulti.push({ stream: reopen.stream, line: entryLine(asEntry(reopen.entry)) }); files.push(journalRel(reopen.stream)) }
   for (const s of prepared) { files.push(s.rel, journalRel(s.stream)); journalMulti.push({ stream: s.stream, line: s.line }) }
+  for (const m of metaWrites) { files.push(m.rel, journalRel(m.stream)); journalMulti.push({ stream: m.stream, line: m.line }) }
 
   const lockR = acquireLock(root)
   if (!lockR.ok) { renderRefusal(lockR.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
@@ -142,6 +174,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       appendEntry(root, target, asEntry(entry))
       if (reopen) appendEntry(root, reopen.stream, asEntry(reopen.entry))
       for (const s of prepared) writeStamp(root, s)
+      for (const m of metaWrites) {
+        writeDoc(join(root, m.rel), { meta: m.meta, body: m.body })
+        appendEntry(root, m.stream, m.entry)
+      }
       crashPoint(ctx.env, 'decide-journal')
       return stateCommit(root, [...new Set(files)], `decide(${gate}): ${target} ${entry.decision}`)
     })

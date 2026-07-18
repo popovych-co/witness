@@ -1,8 +1,9 @@
-import { readFileSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { designPending, designRel, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
 import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
@@ -19,6 +20,7 @@ import { validateDoc } from '../schemas.js'
 export interface Manifest {
   type?: unknown
   summary?: unknown
+  ui?: unknown
   depends?: unknown
   needs?: unknown
   criteria?: unknown
@@ -26,6 +28,7 @@ export interface Manifest {
   supersedes?: unknown
   parent?: unknown
   'derives-from'?: unknown
+  'design-from'?: unknown
   steps?: unknown
 }
 
@@ -52,13 +55,14 @@ function buildSpecMeta(root: string, id: string, manifest: Manifest, recap: Reca
     type,
     status: 'draft',
     ...(type === 'spec' ? { summary: manifest.summary } : {}),
+    ...(type === 'spec' && manifest.ui !== undefined ? { ui: manifest.ui } : {}),
     depends: manifest.depends ?? [],
     needs: manifest.needs ?? [],
     ...(type === 'spec' ? { criteria: manifest.criteria } : {}),
     ...(manifest.supersedes !== undefined ? { supersedes: manifest.supersedes } : {}),
   }
   if (existing) {
-    for (const volatile of ['drift', 'pr'] as const) {
+    for (const volatile of ['drift', 'pr', 'design'] as const) {
       if (existing.meta[volatile] !== undefined) meta[volatile] = existing.meta[volatile]
     }
   }
@@ -201,7 +205,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ...(supersedes !== undefined ? { supersedes } : {}),
     }
     const line = JSON.stringify({ v: 1, ...entry })
-    const files = [rel, stream, ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : [])]
+    const supersededDesignRel = reslice ? designRel(cfg.value.paths, reslice.entry.artifact) : undefined
+    const files = [rel, stream,
+      ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : []),
+      ...(supersededDesignRel && existsSync(join(root, supersededDesignRel)) ? [supersededDesignRel] : []),
+    ]
     const res = withTxn(root, {
       op: `write(${id})`, files, journal: { stream: effort, line },
       ...(reslice ? { journalMulti: [{ stream: reslice.entry.artifact, line: reslice.line }] } : {}),
@@ -210,6 +218,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       crashPoint(ctx.env, 'artifact-write')
       if (reslice) {
         unlinkSync(join(root, reslice.doc.rel))
+        const supersededDesign = designRel(cfg.value.paths, reslice.entry.artifact)
+        if (existsSync(join(root, supersededDesign))) {
+          unlinkSync(join(root, supersededDesign))
+        }
         appendEntry(root, reslice.entry.artifact, reslice.entry as unknown as { t: 'status'; [k: string]: unknown })
         crashPoint(ctx.env, 'reslice-commit')
       }
@@ -266,12 +278,31 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   if (typeof supplied === 'string' && supplied !== computed) {
     violations.push(v('derives-from', 'stale-derivation', short(supplied), `current parent content is ${short(computed)} — re-derive from specflow diff ${parentId}`))
   }
+  const parentUi = parent.meta.ui === true
+  const suppliedDesignFrom = manifest['design-from']
+  if (!parentUi && suppliedDesignFrom !== undefined) {
+    violations.push(v('design-from', 'not-ui-parent', String(parentId), 'omit design-from — the parent spec is not ui-flagged'))
+  }
+  let designFrom: string | undefined
+  if (parentUi) {
+    const stamp = designStamp(parent)
+    if (!stamp || designPending(root, parent)) {
+      violations.push(v('design-from', 'design-not-approved', String(parentId),
+        `an approved, current design — run: specflow design ${parentId} --file <html> && specflow gate design ${parentId}`))
+    } else if (suppliedDesignFrom !== stamp.sha) {
+      violations.push(v('design-from', 'stale-design', short(String(suppliedDesignFrom ?? 'absent')),
+        `the parent's current design sha ${short(stamp.sha)} — pin it in the manifest`))
+    } else {
+      designFrom = stamp.sha
+    }
+  }
   const meta: Record<string, unknown> = {
     id,
     type: 'plan',
     status: 'draft',
     parent: parentId,
     'derives-from': computed,
+    ...(designFrom !== undefined ? { 'design-from': designFrom } : {}),
     depends: manifest.depends ?? [],
     needs: manifest.needs ?? [],
     steps: manifest.steps,

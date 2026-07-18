@@ -1,0 +1,17 @@
+---
+id: booking-form-design
+type: spec
+status: approved
+summary: New-service booking form design
+---
+
+## Look
+
+```html
+<!doctype html><html><body>
+<main id="essentials"><h1>New service</h1><label>Name<input></label><label>Price<input type="number"></label></main>
+<details id="advanced"><summary>Advanced</summary><label>Buffer<input></label></details>
+<nav id="mode"><button aria-pressed="true">Fixed</button><button aria-pressed="false">Flexible</button></nav>
+<footer id="save-bar"><button>Save service</button></footer>
+</body></html>
+```

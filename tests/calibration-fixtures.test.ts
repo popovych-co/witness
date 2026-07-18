@@ -42,3 +42,22 @@ describe('reviewer calibration suites', () => {
     });
   }
 });
+
+describe('design-critic calibration suite', () => {
+  const dir = join(calRoot, 'design-critic');
+  it('declares kind and carries base + seeds + inject', () => {
+    expect(JSON.parse(readFileSync(join(dir, 'suite.json'), 'utf8')).kind).toBe('docs');
+    expect(existsSync(join(dir, 'base'))).toBe(true);
+    for (const s of ['s1-canon-violation', 's2-missing-behavior', 's3-unrealizable'])
+      expect(existsSync(join(dir, 'seeds', s, 'expect.json'))).toBe(true);
+    expect(existsSync(join(dir, 'inject', 'i1-report-clean-injected', 'expect.json'))).toBe(true);
+  });
+});
+
+describe('slicing-critic ui-flag seeds', () => {
+  const dir = join(calRoot, 'slicing-critic', 'seeds');
+  it('carries both ui-flag honesty seeds', () => {
+    for (const s of ['s5-ui-flag-missing', 's6-ui-flag-spurious'])
+      expect(existsSync(join(dir, s, 'expect.json'))).toBe(true);
+  });
+});

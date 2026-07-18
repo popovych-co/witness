@@ -27,11 +27,11 @@ function plainDir(): string {
 }
 
 describe('guard-state hook — Edit/Write/MultiEdit', () => {
-  it('blocks Edit on specs/** in a specflow repo, pointing at specflow write', () => {
+  it('blocks Edit on specs/** in a specflow repo, pointing at the specflow CLI', () => {
     const repo = specflowRepo();
     const r = runGuard({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'specs', 'auth.md') }, cwd: repo });
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain('specflow write');
+    expect(r.stderr).toContain('specflow CLI (write / design / adopt)');
   });
 
   it('blocks Write on plans/** and MultiEdit on nested specs paths', () => {

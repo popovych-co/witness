@@ -1,0 +1,1 @@
+{ "defect": "confirmation-email is purely server-side (a mail-provider handoff with retries) yet carries a spurious ui: true" }

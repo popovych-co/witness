@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  auditStateCommits, dirtyStatePaths, primaryRoot, stateCommit, TRAILER,
+  auditStateCommits, dirtyStatePaths, primaryRoot, stateCommit, stateDirs, TRAILER,
 } from '../src/gitio.js'
 import { tmpRepo } from './helpers.js'
 
@@ -73,5 +73,22 @@ describe('auditStateCommits', () => {
     const audit = auditStateCommits(repo.root)
     expect(audit.find((c) => c.subject === 'sneaky hand edit')?.trailered).toBe(false)
     expect(audit.find((c) => c.subject === 'good')?.trailered).toBe(true)
+  })
+})
+
+describe('designs/ is a state directory', () => {
+  it('stateDirs includes the configured designs dir', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\n')
+    expect(stateDirs(repo.root)).toContain('designs')
+  })
+
+  it('stateCommit accepts a designs/ path', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\n')
+    repo.git('add', 'specflow.config.yaml'); repo.git('commit', '-m', 'cfg')
+    repo.write('designs/auth-refresh.html', '<!doctype html><body><section id="a"></section></body>')
+    const res = stateCommit(repo.root, ['designs/auth-refresh.html'], 'design(auth-refresh)')
+    expect(res.ok).toBe(true)
   })
 })

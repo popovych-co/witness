@@ -35,3 +35,21 @@ describe('/specflow command', () => {
     expect(body()).toContain('specflow gate');
   });
 });
+
+describe('design stage in the motion surfaces', () => {
+  const read = (p: string) => readFileSync(join(__dirname, '..', p), 'utf8');
+  it('the /specflow loop routes stage: design', () => {
+    const cmd = read('plugin/commands/specflow.md');
+    expect(cmd).toMatch(/stage: design/);
+    expect(cmd).toContain('specflow-design');
+  });
+  it('decompose documents the ui flag both directions', () => {
+    const d = read('plugin/skills/specflow-decompose/SKILL.md');
+    expect(d).toContain('ui: true');
+    expect(d.toLowerCase()).toContain('browser');
+  });
+  it('plan requires the approved design for ui parents', () => {
+    const p = read('plugin/skills/specflow-plan/SKILL.md');
+    expect(p).toContain('design-from');
+  });
+});

@@ -29,6 +29,7 @@ Every turn is `specflow next`, read, act on the first matching row, repeat:
 | `next:` names `specflow decide` | A gate is stopped and the decision is the human's. Run `$SPECFLOW decide <gate> <target> --show`, render the checks and findings verbatim, print the three exits (`--approve` · `--revise --note "…"` · `--stop`), and **END YOUR TURN**. Never run `--approve`, `--revise`, or `--stop` on your own judgment. |
 | `stage: brainstorm` | Invoke skill `specflow-brainstorm`. |
 | `stage: decompose` | Invoke skill `specflow-decompose` with `target` (the effort slug). |
+| `stage: design` | Invoke skill `specflow-design` with `target` (the spec id). |
 | `stage: plan` | Invoke skill `specflow-plan` with `target` (the spec id). |
 | `stage: implement` | Invoke skill `specflow-implement` with `target` (the plan id). |
 | `stage: ship`, or `next:` names `specflow ship` | Invoke skill `specflow-ship` with `target` (the plan id). |

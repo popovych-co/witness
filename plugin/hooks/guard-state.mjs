@@ -29,9 +29,9 @@ function canonDirs(root) {
       const m = section.match(new RegExp(`(?:^|[\\s{,])${key}:[ \\t]*['"]?([^'"\\s,}#]+)`, 'm'));
       return m ? m[1].replace(/\/+$/, '') : key;
     };
-    return [dir('specs'), dir('plans')];
+    return [dir('specs'), dir('plans'), dir('designs')];
   } catch {
-    return ['specs', 'plans'];
+    return ['specs', 'plans', 'designs'];
   }
 }
 
@@ -50,9 +50,8 @@ const WRITEISH = /(>>?|\btee\b|\bsed\b[^\n]*\s-i\b|\bmv\b|\bcp\b|\brm\b|\btouch\
 
 function block(what) {
   process.stderr.write(
-    `specflow: ${what} is CLI-written state — hand a manifest to \`specflow write\` ` +
-      `(or \`specflow adopt <path>\` for a finished hand-edit). Direct edits are refused; ` +
-      `the Specflow-State trailer audit catches end-runs.\n`,
+    `specflow: ${what} is CLI-written state — use the specflow CLI (write / design / adopt), ` +
+      `never a direct edit. Direct edits are refused; the Specflow-State trailer audit catches end-runs.\n`,
   );
   process.exit(2);
 }

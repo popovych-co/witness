@@ -10,6 +10,7 @@ export interface Verdict { coverage: CoverageItem[]; findings: Finding[] }
 export type Reviewed =
   | { kind: 'docs'; docs: Array<{ id: string; body: string }> }
   | { kind: 'tree'; root: string; files: string[] }
+  | { kind: 'design'; artifact: { ids: string[] }; spec: { id: string; body: string } }
 
 const isOmission = (a: unknown): a is { kind: 'omission'; scope: string } =>
   typeof a === 'object' && a !== null &&
@@ -58,6 +59,21 @@ function headingLines(body: string): string[] {
 // every line is a verbatim-copyable anchor that resolveAnchor accepts — the menu
 // exists because reviewers paraphrasing headings was the top malformed-verdict cause
 export function anchorMenu(reviewed: Reviewed): string {
+  if (reviewed.kind === 'design') {
+    const lines = [
+      ...reviewed.artifact.ids.map((id) => `design#${id}`),
+      reviewed.spec.id,
+      ...headingLines(reviewed.spec.body).map((h) => `${reviewed.spec.id} > ${h}`),
+    ]
+    return [
+      '## Valid anchors',
+      '',
+      'Copy one line VERBATIM per coverage/finding item. `design#<id>` names an element in the design artifact; `' +
+        reviewed.spec.id + ' > ## Heading` names a section of the parent spec. Anything else rejects the whole verdict.',
+      '',
+      ...lines.map((l) => `- ${l}`),
+    ].join('\n')
+  }
   if (reviewed.kind !== 'docs') return ''
   const lines = reviewed.docs.flatMap((d) => [d.id, ...headingLines(d.body).map((h) => `${d.id} > ${h}`)])
   return [
@@ -98,7 +114,32 @@ function resolveCodeAnchor(anchor: string, root: string): string | undefined {
   return undefined
 }
 
+function resolveDesignAnchor(
+  anchor: AnchorInput,
+  reviewed: { artifact: { ids: string[] }; spec: { id: string; body: string } },
+): string | undefined {
+  const asElement = (scope: string): boolean => scope.startsWith('design#') && reviewed.artifact.ids.includes(scope.slice('design#'.length))
+  const asSpec = (scope: string): string | undefined => {
+    const segments = scope.split(' > ')
+    if (segments[0] === reviewed.spec.id) return resolveDocPath(segments.slice(1), reviewed.spec.body)
+    if (segments[0]!.startsWith('#')) return resolveDocPath(segments, reviewed.spec.body)
+    return `no reviewed anchor "${scope}" (want design#<id> or ${reviewed.spec.id} > ## Heading)`
+  }
+  if (isOmission(anchor)) {
+    const scope = anchor.scope
+    if (scope === '.' || asElement(scope) || asSpec(scope) === undefined) return undefined
+    return `omission scope "${scope}" resolves to no element id or spec heading`
+  }
+  if (anchor.startsWith('design#')) {
+    return reviewed.artifact.ids.includes(anchor.slice('design#'.length))
+      ? undefined
+      : `no element id "${anchor.slice('design#'.length)}" in the design artifact`
+  }
+  return asSpec(anchor)
+}
+
 export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string | undefined {
+  if (reviewed.kind === 'design') return resolveDesignAnchor(anchor, reviewed)
   if (isOmission(anchor)) {
     const scope = anchor.scope
     if (reviewed.kind === 'docs') {
@@ -145,6 +186,14 @@ export function verdictViolations(verdict: Verdict, reviewed: Reviewed): Violati
     if (why) violations.push(v(`coverage[${i}].anchor`, 'anchor-unresolvable', anchorText(c.anchor), why))
   })
 
+  if (reviewed.kind === 'design') {
+    const strings = verdict.coverage.filter((c): c is CoverageItem & { anchor: string } => typeof c.anchor === 'string')
+    const artifactRead = strings.some((c) => c.anchor.startsWith('design#') && reviewed.artifact.ids.includes(c.anchor.slice('design#'.length)))
+    const specRead = strings.some((c) => resolveDesignAnchor(c.anchor, reviewed) === undefined && !c.anchor.startsWith('design#'))
+    if (!artifactRead) violations.push(v('coverage', 'coverage-minimum', 'no design#<id> coverage anchor', '>=1 coverage anchor naming a design artifact element (proof the look was read)'))
+    if (!specRead) violations.push(v('coverage', 'coverage-minimum', 'no parent-spec coverage anchor', '>=1 coverage anchor naming a parent-spec heading (proof the spec was read)'))
+    return violations
+  }
   if (reviewed.kind === 'docs') {
     const covered = new Set<string>()
     verdict.coverage.forEach((c, i) => {

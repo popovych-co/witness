@@ -43,6 +43,8 @@ $SPECFLOW decide plan <plan-id> --show       # ONLY when re-entered after a revi
 
 Every criterion in the delta must be realized by ≥ 1 step; every step maps to ≥ 1 criterion **or** is honestly `scaffolding: true` (rigging only — fixtures, wiring, config; never behavior a criterion owns). `derives-from` is **stamped by the CLI** from the parent's current content — never put it in the manifest; a supplied stale pin refuses.
 
+If the parent spec is `ui`-flagged, its **design must already be approved** (the design stage runs between decompose and plan). Read `designs/<spec-id>.html` — your steps derive from that approved look, not a fresh invention — and put its approved artifact sha in the manifest as `"design-from"` (the CLI refuses a plan whose pin is missing, stale, or present on a non-ui parent; get it from the spec's `design.sha` stamp via `$SPECFLOW log <spec-id>`). A UI step names the design section (`design#<id>`) it realizes alongside its `@spec:` browser test.
+
 ```bash
 DIR=$(mktemp -d)
 cat > "$DIR/meta.json" <<'EOF'

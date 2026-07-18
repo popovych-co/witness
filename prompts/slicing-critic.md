@@ -11,6 +11,7 @@ Work every lens below over every spec, in this order:
 5. **Behavior-only.** Specs describe public, observable surface. Internal interfaces, class names, module layouts, storage schemas inside `## Behavior` are blocking — refactors must never force a state-doc edit.
 6. **Summary accuracy.** The frontmatter `summary` must say what the slice *is* and match the Behavior section. It feeds `specflow index`, which routes every future fix — a summary promising more, less, or different misroutes forever: blocking.
 7. **Depends refs.** Missing edges are the dangerous direction: a spec whose behavior presumes another slice landed, with no `depends` edge, is blocking. Decorative extra edges are notes.
+8. **UI-flag honesty.** A spec whose `## Behavior` describes browser-rendered or interactive surface (a screen, a form, client-side interaction) must carry `ui: true` — it earns a design stage before its plan. A spec so flagged whose behavior is purely non-visual (a backend job, a data contract) must not. A missing flag on a UI slice, or a spurious flag on a non-UI slice, is blocking — the flag routes the whole design stage.
 
 Also watch for **duplicated facts**: one fact (a threshold, format, protocol) written into two specs. Recommend extraction into its own spec — blocking when the duplication would drift, a note otherwise.
 

@@ -35,3 +35,11 @@ describe('canonicalSha', () => {
     expect(canonicalSha(meta, body + '\n\n')).toBe(canonicalSha(meta, body))
   })
 })
+
+describe('design stamp is volatile', () => {
+  it('stamping design leaves the canonical sha unchanged', () => {
+    const before = canonicalSha(meta, body)
+    const after = canonicalSha({ ...meta, design: { sha: 'a'.repeat(64), spec: before } }, body)
+    expect(after).toBe(before)
+  })
+})

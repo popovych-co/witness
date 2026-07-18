@@ -77,6 +77,33 @@ describe('validateDoc: plan', () => {
   })
 })
 
+describe('ui flag', () => {
+  it('accepts ui: true on a spec', () => {
+    expect(validateDoc(specMeta({ ui: true }), SPEC_BODY).some((x) => x.field === 'ui')).toBe(false)
+  })
+  it('rejects a non-true ui value', () => {
+    expect(validateDoc(specMeta({ ui: 'yes' }), SPEC_BODY).some((x) => x.field === 'ui' && x.rule === 'shape')).toBe(true)
+  })
+  it('rejects ui on a non-spec', () => {
+    expect(validateDoc(planMeta({ ui: true }), '## Step: s1\nx\n').some((x) => x.field === 'ui' && x.rule === 'forbidden')).toBe(true)
+  })
+})
+
+describe('design stamp shape', () => {
+  it('accepts a well-formed stamp', () => {
+    const meta = specMeta({ design: { sha: 'a'.repeat(64), spec: 'b'.repeat(64) } })
+    expect(validateDoc(meta, SPEC_BODY).some((x) => x.field === 'design')).toBe(false)
+  })
+  it('refuses a malformed stamp', () => {
+    const meta = specMeta({ design: { sha: 'nope', spec: 42 } })
+    expect(validateDoc(meta, SPEC_BODY).some((x) => x.field === 'design' && x.rule === 'shape')).toBe(true)
+  })
+  it('refuses design on a non-spec', () => {
+    const meta = planMeta({ design: { sha: 'a'.repeat(64), spec: 'b'.repeat(64) } })
+    expect(validateDoc(meta, '## Step: s1\nx\n').some((x) => x.field === 'design' && x.rule === 'forbidden')).toBe(true)
+  })
+})
+
 describe('validateDoc: principles', () => {
   it('accepts the principles doc and forbids criteria on it', () => {
     const meta = { id: 'principles', type: 'principles', status: 'draft', depends: [], needs: [] }

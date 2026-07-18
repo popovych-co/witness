@@ -1,0 +1,1 @@
+{ "defect": "guest-card-payment renders a hosted payment field and decline/success states — browser-visible behavior — yet carries no ui: true flag" }

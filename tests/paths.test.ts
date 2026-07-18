@@ -22,9 +22,9 @@ function docsRepo(): TestRepo {
 describe('resolvePaths', () => {
   it('defaults when the paths key is absent and normalizes trailing slashes', () => {
     const absent = resolvePaths({})
-    expect(absent.ok && absent.value).toEqual({ specs: 'specs', plans: 'plans' })
+    expect(absent.ok && absent.value).toEqual({ specs: 'specs', plans: 'plans', designs: 'designs' })
     const slashed = resolvePaths({ paths: { specs: 'docs/specs/', plans: 'docs/plans' } })
-    expect(slashed.ok && slashed.value).toEqual({ specs: 'docs/specs', plans: 'docs/plans' })
+    expect(slashed.ok && slashed.value).toEqual({ specs: 'docs/specs', plans: 'docs/plans', designs: 'designs' })
   })
 
   it('refuses absolute, dot-segment, and reserved directories', () => {
@@ -50,7 +50,7 @@ describe('canon paths threading', () => {
     repo.write('specflow.config.yaml', 'schema: 1\npaths: { specs: ../escape }\n')
     const cfg = loadConfig(repo.root)
     expect(!cfg.ok && cfg.violations[0]?.field).toBe('paths.specs')
-    expect(canonPaths(repo.root)).toEqual({ specs: 'specs', plans: 'plans' })
+    expect(canonPaths(repo.root)).toEqual({ specs: 'specs', plans: 'plans', designs: 'designs' })
   })
 
   it('loadCanon scans the configured directories and exposes them', () => {
@@ -59,7 +59,7 @@ describe('canon paths threading', () => {
     repo.write('docs/plans/auth-plan-1.md', doc('auth-plan-1', 'plan'))
     repo.write('specs/stray.md', doc('stray', 'spec'))
     const canon = loadCanon(repo.root)
-    expect(canon.paths).toEqual({ specs: 'docs/specs', plans: 'docs/plans' })
+    expect(canon.paths).toEqual({ specs: 'docs/specs', plans: 'docs/plans', designs: 'designs' })
     expect(canon.docs.map((d) => d.rel).sort()).toEqual(['docs/plans/auth-plan-1.md', 'docs/specs/auth.md'])
   })
 

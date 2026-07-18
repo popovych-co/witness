@@ -18,9 +18,10 @@ export async function run(ctx: Ctx): Promise<number> {
   }
   for (const dir of [...groups.keys()].sort()) {
     const items = groups.get(dir)!.sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
-    rows(dir, ['id', 'summary', 'status', 'depends'], items.map((d) => ({
+    rows(dir, ['id', 'summary', 'ui', 'status', 'depends'], items.map((d) => ({
       id: d.meta.id,
       summary: d.meta.summary ?? '',
+      ui: d.meta.ui === true ? 'ui' : '',
       status: d.meta.status,
       depends: Array.isArray(d.meta.depends) ? (d.meta.depends as string[]).join(' ') : '',
     }))).forEach(ctx.out)

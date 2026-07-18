@@ -8,11 +8,12 @@ export const SCHEMA_VERSION = 1
 export interface CanonPaths {
   specs: string
   plans: string
+  designs: string
 }
 
-export const DEFAULT_PATHS: CanonPaths = { specs: 'specs', plans: 'plans' }
+export const DEFAULT_PATHS: CanonPaths = { specs: 'specs', plans: 'plans', designs: 'designs' }
 
-export const DOC_KEYS = ['conventions'] as const
+export const DOC_KEYS = ['conventions', 'design'] as const
 export type DocKey = (typeof DOC_KEYS)[number]
 export type DocsRegistry = Partial<Record<DocKey, string[]>>
 
@@ -47,14 +48,22 @@ export function resolvePaths(raw: Record<string, unknown>): Result<CanonPaths> {
   }
   const specs = pick('specs')
   const plans = pick('plans')
+  const designs = pick('designs')
   if (violations.length === 0) {
-    if (specs === plans) {
-      violations.push(v('paths', 'overlap', `${specs} = ${plans}`, 'distinct specs and plans directories'))
-    } else if (specs.startsWith(`${plans}/`) || plans.startsWith(`${specs}/`)) {
-      violations.push(v('paths', 'nested', `${specs} vs ${plans}`, 'directories that do not contain each other (canon scan is recursive)'))
+    const roots: Array<[string, string]> = [['specs', specs], ['plans', plans], ['designs', designs]]
+    for (let i = 0; i < roots.length; i++) {
+      for (let j = i + 1; j < roots.length; j++) {
+        const [ka, a] = roots[i]!
+        const [kb, b] = roots[j]!
+        if (a === b) {
+          violations.push(v('paths', 'overlap', `${ka}=${kb}=${a}`, 'distinct specs, plans and designs directories'))
+        } else if (a.startsWith(`${b}/`) || b.startsWith(`${a}/`)) {
+          violations.push(v('paths', 'nested', `${a} vs ${b}`, 'directories that do not contain each other (scans are recursive)'))
+        }
+      }
     }
   }
-  return violations.length ? refuse(violations) : ok({ specs, plans })
+  return violations.length ? refuse(violations) : ok({ specs, plans, designs })
 }
 
 export function resolveDocs(raw: Record<string, unknown>): Result<DocsRegistry> {

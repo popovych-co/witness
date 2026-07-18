@@ -26,6 +26,12 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
   if (typeof id === 'string' && (type === 'principles' ? id !== 'principles' : id === 'principles')) {
     out.push(v('id', 'reserved', id, "'principles' is reserved for type: principles"))
   }
+  if (meta.ui !== undefined && type !== 'spec') {
+    out.push(v('ui', 'forbidden', String(meta.ui), 'ui is a spec-only flag'))
+  }
+  if (meta.design !== undefined && type !== 'spec') {
+    out.push(v('design', 'forbidden', 'present', 'design is a spec-only, gate-written stamp'))
+  }
   const depends = meta.depends ?? []
   if (!Array.isArray(depends) || depends.some((d) => typeof d !== 'string' || !ID_RE.test(d))) {
     out.push(v('depends', 'shape', JSON.stringify(meta.depends), 'list of ids matching [a-z0-9-]+'))
@@ -43,6 +49,16 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
       out.push(v('summary', 'required', String(s ?? 'absent'), 'one-liner: what the slice is'))
     } else if (s.length > 120) {
       out.push(v('summary', 'max-length', `${s.length} chars`, '<=120 chars'))
+    }
+    if (meta.ui !== undefined && meta.ui !== true) {
+      out.push(v('ui', 'shape', String(meta.ui), 'true or omitted (a ui spec earns a design stage)'))
+    }
+    if (meta.design !== undefined) {
+      const d = meta.design as { sha?: unknown; spec?: unknown }
+      const hex = (x: unknown): boolean => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x)
+      if (typeof meta.design !== 'object' || meta.design === null || !hex(d.sha) || !hex(d.spec)) {
+        out.push(v('design', 'shape', JSON.stringify(meta.design), '{sha: <64hex>, spec: <64hex>} — the gate-written design stamp'))
+      }
     }
     if (typeof id === 'string') out.push(...validateCriteria(meta.criteria, id))
     if (meta.supersedes !== undefined && (typeof meta.supersedes !== 'string' || !ID_RE.test(meta.supersedes))) {
@@ -62,6 +78,9 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
     const df = meta['derives-from']
     if (typeof df !== 'string' || !/^[0-9a-f]{64}$/.test(df)) {
       out.push(v('derives-from', 'shape', String(df ?? 'absent'), '64-hex canonical content sha'))
+    }
+    if (meta['design-from'] !== undefined && (typeof meta['design-from'] !== 'string' || !/^[0-9a-f]{64}$/.test(String(meta['design-from'])))) {
+      out.push(v('design-from', 'shape', String(meta['design-from']), '64-hex design artifact sha'))
     }
     out.push(...validateSteps(meta.steps, body))
   }

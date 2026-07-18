@@ -4,8 +4,9 @@ import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, type Canon } from '../scan.js'
+import { designArtifactCurrent, designPending } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { effortSpecs, effortWrites } from '../reviewed.js'
+import { effortOf, effortSpecs, effortWrites } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
 import { worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
@@ -25,7 +26,7 @@ export function gateSettled(entries: Entry[], gate: string): boolean {
 
 export interface NextAction {
   line: string
-  stage?: 'brainstorm' | 'decompose' | 'plan' | 'implement' | 'ship'
+  stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
   target?: string
   note?: string
 }
@@ -55,6 +56,12 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
       if (p) return { line: `specflow decide ${gate} ${String(plan.meta.id)} --show`, target: String(plan.meta.id) }
     }
   }
+  const specs = canon.docs.filter((d) => d.meta.type === 'spec')
+    .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
+  for (const spec of specs) {
+    const p = pendingDecision(readStream(root, String(spec.meta.id)), 'design')
+    if (p) return { line: `specflow decide design ${String(spec.meta.id)} --show`, target: String(spec.meta.id) }
+  }
 
   // bound-stuck gates: no pending decision can ever be created (the gate
   // short-circuits), so the endgame decision itself is the next action —
@@ -80,6 +87,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
       }
     }
   }
+  for (const spec of specs) {
+    const id = String(spec.meta.id)
+    const entries = readStream(root, id)
+    if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
+      const eff = effortOf(root, id)
+      return {
+        line: `specflow decide design ${id} --approve --override | --revise --upstream ${eff ?? '<effort>'} | --stop`,
+        target: id, note: 'round bound reached — human decision required',
+      }
+    }
+  }
 
   if (efforts.length === 0) {
     return { line: 'specflow recap --file <recap.json>', stage: 'brainstorm' }
@@ -100,6 +118,20 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (!specsApproved && !gateSettled(e.entries, 'decompose')) {
       return { line: `specflow gate decompose --effort ${e.slug}`, target: e.slug }
     }
+  }
+
+  for (const spec of specs) {
+    if (String(spec.meta.status) !== 'approved') continue
+    if (!designPending(root, spec)) continue
+    const id = String(spec.meta.id)
+    // An artifact authored for the CURRENT spec content is awaiting its gate → gate it.
+    // Otherwise (no artifact, or one authored before a later amendment) → the design
+    // skill authors fresh or, in amend mode, decides re-design vs --reconfirm.
+    // A pending design DECISION was already caught by the top-of-function scan; a stale
+    // prior approval never routes here because designPending re-arms on stamp.spec mismatch.
+    return designArtifactCurrent(root, spec)
+      ? { line: `specflow gate design ${id}`, target: id }
+      : { line: `specflow design ${id} --file <html>`, stage: 'design', target: id }
   }
 
   const ready = (dep: string): boolean => {
