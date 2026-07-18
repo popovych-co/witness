@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { rmSync } from 'node:fs'
 import {
-  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writeSpec,
+  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
 } from './helpers.js'
+import { worktreePath } from '../src/worktree.js'
 
 describe('specflow dashboard (no-arg)', () => {
   it('points a fresh repo at recap, then at write', async () => {
@@ -72,5 +74,26 @@ describe('specflow dashboard (no-arg)', () => {
     res = await repo.cli([])
     expect(res.stdout).toContain('gates[1]{gate,target,round,outcome}:')
     expect(res.stdout).toContain('  design,booking-form,1,stopped')
+  })
+})
+
+describe('in-flight flows', () => {
+  it('lists in-flight flows and flags a missing worktree', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    await repo.cli(['start', 'auth-refresh-plan-1'])
+
+    rmSync(worktreePath(repo.root, 'auth-refresh-plan-1'), { recursive: true, force: true })
+
+    const res = await repo.cli([])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('flows[1]')
+    expect(res.stdout).toContain('auth-refresh-plan-1')
+    expect(res.stdout).toContain('missing')
+
+    await repo.cli(['clean'])
   })
 })

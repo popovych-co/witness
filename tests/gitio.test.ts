@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdirSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   auditStateCommits, dirtyStatePaths, primaryRoot, stateCommit, stateDirs, TRAILER,
@@ -90,5 +90,27 @@ describe('designs/ is a state directory', () => {
     repo.write('designs/auth-refresh.html', '<!doctype html><body><section id="a"></section></body>')
     const res = stateCommit(repo.root, ['designs/auth-refresh.html'], 'design(auth-refresh)')
     expect(res.ok).toBe(true)
+  })
+})
+
+describe('host commit hooks', () => {
+  it('state commits bypass a failing host pre-commit hook', () => {
+    const repo = tmpRepo()
+    repo.write('specs/a.md', 'v1')
+    repo.git('add', 'specs/a.md')
+    repo.git('commit', '-m', 'seed')
+
+    // core.hooksPath is inherited from the user's global config in some setups, which
+    // would make .git/hooks/ inert and the test vacuous — pin it to this repo.
+    repo.git('config', 'core.hooksPath', join(repo.root, '.git', 'hooks'))
+    const hook = join(repo.root, '.git', 'hooks', 'pre-commit')
+    writeFileSync(hook, '#!/bin/sh\necho "hook refuses" >&2\nexit 1\n')
+    chmodSync(hook, 0o755)
+
+    repo.write('specs/a.md', 'v2')
+    const res = stateCommit(repo.root, ['specs/a.md'], 'update a')
+
+    expect(res.ok).toBe(true)
+    expect(repo.git('log', '-1', '--format=%s')).toBe('update a')
   })
 })

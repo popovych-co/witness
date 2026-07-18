@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, witnessDesign, writeDesign, writeSpec, writePlan } from './helpers.js'
-
-async function nextLine(repo: { cli: (a: string[], o?: object) => Promise<{ code: number; stdout: string }> }, env?: object) {
-  const r = await repo.cli(['next'], env ? { env } : undefined)
-  expect(r.code).toBe(0)
-  return r.stdout
-}
+import { approve, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, witnessDesign, writeDesign, writeSpec, writePlan } from './helpers.js'
 
 describe('specflow next — the ladder', () => {
   it('walks recap → write → gate decompose → decide → plan-stage', async () => {

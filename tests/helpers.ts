@@ -1,3 +1,4 @@
+import { expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -347,6 +348,17 @@ export async function shippableRepo(
   r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`green phase: ${r.stdout}\n${r.stderr}`)
   return { repo, wt, planId: 'auth-refresh-plan-1', specId: 'auth-refresh' }
+}
+
+// `specflow next` answers with exactly one line-set; every read-path test wants the
+// stdout and an implicit exit-0 assertion, so this lives here rather than in one file.
+export async function nextLine(
+  repo: { cli: (a: string[], o?: CliOpts) => Promise<CliResult> },
+  opts?: CliOpts,
+): Promise<string> {
+  const r = await repo.cli(['next'], opts)
+  expect(r.code).toBe(0)
+  return r.stdout
 }
 
 export function addOrigin(repo: TestRepo): void {

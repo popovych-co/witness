@@ -1,22 +1,32 @@
 import { existsSync } from 'node:fs'
+import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
-import { findById, loadCanon, type Canon } from '../scan.js'
+import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { effortOf, effortSpecs, effortWrites } from '../reviewed.js'
+import { effortOf, effortSpecs, effortWrites, worktreeTreeSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
-import { worktreePath } from '../worktree.js'
+import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
-import { renderRefusal } from '../refusal.js'
+import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv } from '../toon.js'
 import { boundReached, lastGateRun, pendingDecision, type DecisionEntry } from '../rounds.js'
 
-export function gateSettled(entries: Entry[], gate: string): boolean {
+// A gate is settled only if the verdict that settled it still describes the CURRENT
+// content. `reviewed_sha` is the tree we actually judged; when the caller can compute
+// what that sha is now and the two differ, the approval has lapsed and the gate re-arms.
+// Same doctrine as designPending (design.ts:74) — approval is a fact about a sha, not a
+// permanent fact. Callers that cannot cheaply compute a current sha omit it and get
+// today's behavior.
+export function gateSettled(entries: Entry[], gate: string, currentSha?: string): boolean {
   const last = lastGateRun(entries, gate)
   if (!last) return false
+  // above BOTH settling branches deliberately: a human --approve --override is granted
+  // against a specific tree too, and lapses with it
+  if (currentSha !== undefined && last.reviewed_sha !== currentSha) return false
   if (last.outcome === 'passed') return true
   const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
   return after.some((e) => e.t === 'human-decision' &&
@@ -31,6 +41,75 @@ export interface NextAction {
   note?: string
 }
 
+// The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
+// `specflow start` and ends at the merge stamp. Anything else returns undefined and is
+// not a flow. Exported because `--flow` and the dashboard must answer with the SAME
+// derivation next uses, never a re-derived shorthand.
+export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextAction | undefined {
+  const id = String(plan.meta.id)
+  if (String(plan.meta.status) !== 'in-progress') return undefined
+  const entries = readStream(root, id)
+  const wt = worktreePath(root, id)
+  if (!existsSync(wt)) return { line: `specflow start ${id}`, target: id, note: 'worktree missing — start recreates it' }
+  if (plan.meta.pr !== undefined) return { line: `specflow ship ${id}`, stage: 'ship', target: id }
+  const baseR = diffBase(wt, cfg)
+  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
+  // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
+  // required-tags list trivially passes .every()) — a fresh worktree needs the
+  // implement-stage hint too, not a premature jump to "gate implement".
+  const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
+  if (!satisfied) return { line: `specflow test-evidence ${id} --phase red|green`, stage: 'implement', target: id }
+  if (!gateSettled(entries, 'implement', worktreeTreeSha(wt))) return { line: `specflow gate implement ${id}`, target: id }
+  return { line: `specflow ship ${id}`, stage: 'ship', target: id }
+}
+
+// How far along a flow is — the drain order when several are actionable. Most-advanced
+// first is WIP-limiting, not cosmetic: it pushes flows toward merge instead of fanning
+// them out, which is what keeps concurrent rebases (and therefore lapsed ship gates) rare.
+function flowRank(a: NextAction): number {
+  if (a.stage === 'ship') return 3
+  if (a.line.includes(' gate implement ')) return 2
+  if (a.stage === 'implement') return 1
+  return 0   // worktree missing — needs recreating before it can advance
+}
+
+// A flow can be in-progress and still unable to move: its own gate is awaiting a human
+// decision, or it has hit the round bound (where no pending decision can even be
+// created). Such a flow is NOT tier-1 motion — offering it would loop the driving loop
+// on an action that only re-reports "awaiting decision", and would starve tier 2 of the
+// very decision that unblocks it.
+function flowBlocked(entries: Entry[]): boolean {
+  return ['plan', 'implement', 'ship'].some((gate) =>
+    pendingDecision(entries, gate) !== undefined ||
+    (boundReached(entries, gate) && !gateSettled(entries, gate)))
+}
+
+interface PendingDecisionRef { gate: string; target: string }
+
+// Every human-owed decision in the repo, in the order tier 2 would surface them. One
+// source for both tiers: tier 2 takes the first, tier 1 rides them all in `note:`.
+function pendingDecisionsAll(
+  root: string, efforts: Array<{ slug: string; entries: Entry[] }>,
+  specs: CanonDoc[], plans: CanonDoc[],
+): PendingDecisionRef[] {
+  const out: PendingDecisionRef[] = []
+  for (const e of efforts) {
+    if (pendingDecision(e.entries, 'decompose')) out.push({ gate: 'decompose', target: e.slug })
+  }
+  for (const plan of plans) {
+    const id = String(plan.meta.id)
+    const entries = readStream(root, id)
+    for (const gate of ['plan', 'implement', 'ship']) {
+      if (pendingDecision(entries, gate)) out.push({ gate, target: id })
+    }
+  }
+  for (const spec of specs) {
+    const id = String(spec.meta.id)
+    if (pendingDecision(readStream(root, id), 'design')) out.push({ gate: 'design', target: id })
+  }
+  return out
+}
+
 export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): NextAction {
   if (pendingTxn(root)) return { line: 'specflow recover --complete | --rollback' }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
@@ -42,25 +121,34 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     .filter((e) => latestRecap(root, e.slug) !== undefined && !effortAbandoned(e.entries))
     .sort((a, b) => a.slug.localeCompare(b.slug))
 
-  // 3: pending decisions anywhere
-  for (const e of efforts) {
-    const p = pendingDecision(e.entries, 'decompose')
-    if (p) return { line: `specflow decide decompose ${e.slug} --show`, target: e.slug }
-  }
+  // Hoisted above tier 1: both doc lists are read by every tier below, and they used to
+  // be declared interleaved between the pending-decision scans.
   const plans = canon.docs.filter((d) => d.meta.type === 'plan')
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
-  for (const plan of plans) {
-    const entries = readStream(root, String(plan.meta.id))
-    for (const gate of ['plan', 'implement', 'ship']) {
-      const p = pendingDecision(entries, gate)
-      if (p) return { line: `specflow decide ${gate} ${String(plan.meta.id)} --show`, target: String(plan.meta.id) }
-    }
-  }
   const specs = canon.docs.filter((d) => d.meta.type === 'spec')
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
-  for (const spec of specs) {
-    const p = pendingDecision(readStream(root, String(spec.meta.id)), 'design')
-    if (p) return { line: `specflow decide design ${String(spec.meta.id)} --show`, target: String(spec.meta.id) }
+
+  // TIER 1 — advance something already in flight. A flow that can move must never wait
+  // on a human decision belonging to a DIFFERENT flow: ship always stops (gates/ship.ts),
+  // so a global decision-halt freezes every other flow at the first ship gate.
+  const flows = plans
+    .filter((plan) => !flowBlocked(readStream(root, String(plan.meta.id))))
+    .map((plan) => flowAction(root, cfg, plan))
+    .filter((a): a is NextAction => a !== undefined)
+    .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))
+  if (flows.length > 0) {
+    const waiting = pendingDecisionsAll(root, efforts, specs, plans)
+    return waiting.length > 0
+      ? { ...flows[0]!, note: `${waiting.length} waiting: ${waiting.map((w) => `${w.gate} ${w.target}`).join(' · ')}` }
+      : flows[0]!
+  }
+
+  // TIER 2 — human-owed decisions and bound endgames. Unchanged from today's rungs; they
+  // simply no longer outrank in-flight motion.
+  const pending = pendingDecisionsAll(root, efforts, specs, plans)
+  if (pending.length > 0) {
+    const first = pending[0]!
+    return { line: `specflow decide ${first.gate} ${first.target} --show`, target: first.target }
   }
 
   // bound-stuck gates: no pending decision can ever be created (the gate
@@ -166,29 +254,35 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (String(plan.meta.status) === 'draft') return { line: `specflow gate plan ${id}`, target: id }
   }
 
+  // Starting a flow is tier 3, not tier 1: an approved-but-unstarted plan is new work,
+  // and every in-flight flow was already offered above.
   for (const plan of plans) {
-    const id = String(plan.meta.id)
-    const status = String(plan.meta.status)
-    const entries = readStream(root, id)
-    if (status === 'approved') return { line: `specflow start ${id}`, target: id }
-    if (status !== 'in-progress') continue
-    const wt = worktreePath(root, id)
-    if (!existsSync(wt)) return { line: `specflow start ${id}`, target: id, note: 'worktree missing — start recreates it' }
-    if (plan.meta.pr !== undefined) return { line: `specflow ship ${id}`, stage: 'ship', target: id }
-    const baseR = diffBase(wt, cfg)
-    const files = baseR.ok ? changedFiles(wt, baseR.value) : []
-    // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
-    // required-tags list trivially passes .every()) — a fresh worktree needs the
-    // implement-stage hint too, not a premature jump to "gate implement".
-    const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
-    if (!satisfied) return { line: `specflow test-evidence ${id} --phase red|green`, stage: 'implement', target: id }
-    if (!gateSettled(entries, 'implement')) return { line: `specflow gate implement ${id}`, target: id }
-    return { line: `specflow ship ${id}`, stage: 'ship', target: id }
+    if (String(plan.meta.status) === 'approved') {
+      return { line: `specflow start ${String(plan.meta.id)}`, target: String(plan.meta.id) }
+    }
   }
   return { line: 'specflow check' }
 }
 
-export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
+function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
+  const doc = findById(canon, id)
+  if (!doc || doc.meta.type !== 'plan') {
+    return refuse([v('--flow', 'unknown-flow', id, 'a plans/ doc id')])
+  }
+  const status = String(doc.meta.status)
+  if (status === 'done' || status === 'abandoned') {
+    return refuse([v('--flow', 'terminal-status', status, 'a flow that is still running')])
+  }
+  // deliberately NOT start.ts's `not-approved`: that refuses when status is not
+  // `approved`, this refuses when it is not `in-progress` — an approved-but-unstarted
+  // plan is not yet a flow, and reusing the name would misreport that case.
+  if (status !== 'in-progress') {
+    return refuse([v('--flow', 'not-started', status, `a started plan — run specflow start ${id} first`)])
+  }
+  return ok(doc)
+}
+
+export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value
@@ -197,7 +291,25 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)
   if (lazy.stamped.length > 0) canon = loadCanon(root)
-  const action = computeNext(root, ctx, canon, cfgR.value)
+  const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
+  // Precedence: an explicit --flow is a CLAIM about a flow and refuses when false.
+  // A worktree cwd is AMBIENT context — it may scope a read-only question, never select
+  // a target for a mutation, and it degrades to the global ladder rather than refusing.
+  // (This is why inference lives on `next` alone. Every mutating verb takes its id
+  // explicitly, handed down from `target:` by the stage skills.)
+  let action: NextAction
+  if (values.flow !== undefined) {
+    const flowR = resolveFlow(canon, values.flow)
+    if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    action = flowAction(root, cfgR.value, flowR.value) ?? { line: 'specflow check', target: values.flow }
+  } else {
+    const inferred = worktreeFlow(ctx.cwd, root)
+    const ambient = inferred !== undefined ? findById(canon, inferred) : undefined
+    const scoped = ambient && ambient.meta.type === 'plan'
+      ? flowAction(root, cfgR.value, ambient)
+      : undefined
+    action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
+  }
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))

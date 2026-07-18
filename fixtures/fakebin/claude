@@ -9,6 +9,13 @@ for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
 n=$((n + 1))
 call="$dir/claude-calls/call-$n"
 mkdir -p "$call"
+# lock probe: records whether specflow held its global lock while this reviewer ran.
+# Sound because acquireLock refuses exactly when this file exists with a live pid
+# (src/lock.ts:16-37) — "absent" therefore proves another flow's acquire would succeed.
+# Gate runs have cwd = repo root (gate.ts:225 passes cwd: root), so the relative path
+# resolves there. NOTE: calibrate.ts:143 invokes this same fakebin with cwd = a fixture
+# dir, where the probe always reads `free`. No test may ever assert `held`.
+if [ -e ".specflow/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"
 if [ -f "$dir/claude-fail" ] && [ "$n" -le "$(cat "$dir/claude-fail")" ]; then

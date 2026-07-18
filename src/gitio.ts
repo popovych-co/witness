@@ -70,7 +70,12 @@ export function commitWithTrailer(root: string, files: string[], subject: string
   // --only` resolves its pathspecs against the index-vs-HEAD diff, where the rename
   // is visible, so it still succeeds and is the real validation here.
   tryGit(root, 'add', '--', ...files)
-  git(root, 'commit', '--only', '-m', subject, '-m', TRAILER, '--', ...files)
+  // --no-verify: state commits are machine-authored and scope-restricted to non-source
+  // paths (isStatePath), so a host lint/test hook has nothing to validate here — while
+  // its stash/restore step can destroy the human's unrelated dirty work, and a
+  // tree-mutating hook (formatters) can desync the index from the txn marker.
+  // stateCommit's own `unrelated-dirty` refusal is the real gate on these commits.
+  git(root, 'commit', '--no-verify', '--only', '-m', subject, '-m', TRAILER, '--', ...files)
   return ok({ sha: git(root, 'rev-parse', 'HEAD') })
 }
 

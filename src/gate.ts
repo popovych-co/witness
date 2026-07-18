@@ -195,79 +195,100 @@ export async function runGate(
     }
   }
 
+  // The reviewer battery runs UNLOCKED. It writes nothing — every symbol it produces is
+  // an in-memory local, and reviewer caching is journal-derived (appendKind), not on-disk.
+  // Holding the repo-global lock across a multi-minute LLM battery refuses every state
+  // write in every other flow for its full duration, on a lock whose real job is a ~100ms
+  // commit. The guarded window opens below, immediately before the journal append.
+  let verdicts: ReviewerVerdict[] = []
+  const malformed: NonNullable<GateRunEntry['malformed']> = []
+  const fallback: string[] = []
+  const rerolled: string[] = []
+  let rung = 0
+  let model = chain[0]!
+  let cached = false
+
+  if (kind.kind === 'cached') {
+    verdicts = kind.from.verdicts ?? []
+    model = kind.from.model
+    cached = true
+  } else {
+    for (const lens of lenses) {
+      const ov = input.lensOverrides?.[lens.name]
+      const reviewed = ov?.reviewed ?? input.reviewed
+      const body = ov?.promptBody ?? input.promptBody
+      const menu = anchorMenu(reviewed)
+      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
+      for (let attempt = 0; ; attempt++) {
+        let answered: string | undefined
+        for (;;) {
+          const id = chain[rung]!
+          const r = invokeClaude(ctx, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
+          if (r.ok) { answered = r.value.text; model = id; break }
+          if (rung >= chain.length - 1) {
+            renderRefusal(r.violations).forEach((l) => ctx.err(l))
+            return EXIT.REFUSED
+          }
+          fallback.push(id)
+          rung += 1
+        }
+        const rawR = parseVerdictText(answered)
+        const parsedR = rawR.ok ? parseVerdict(rawR.value) : rawR
+        const violations = parsedR.ok ? verdictViolations(parsedR.value, reviewed) : parsedR.violations
+        if (parsedR.ok && violations.length === 0) {
+          verdicts.push({ reviewer: lens.name, coverage: parsedR.value.coverage, findings: parsedR.value.findings })
+          break
+        }
+        if (attempt === 0) {
+          // one self-repair reroll per reviewer — a single flaky verdict would
+          // otherwise poison the whole round as 'malformed'; the reroll is not
+          // part of the gate key, so cached rounds replay the settled result
+          rerolled.push(lens.name)
+          prompt += `\n## Previous attempt rejected\n\n${
+            violations.map((x) => `- ${x.field}: ${x.rule} — got ${x.got}; want ${x.want}`).join('\n')
+          }\n\nRe-emit the complete corrected verdict JSON.\n`
+          continue
+        }
+        malformed.push({ reviewer: lens.name, violations })
+        break
+      }
+    }
+  }
+
+  if (fallback.length > 0 && chain[0] !== SESSION_DEFAULT && fallback.includes(chain[0]!)) {
+    ctx.err(`warning: head model ${chain[0]} failed to invoke — reviewers ran on ${model}; check gates.${spec.gate}.model`)
+  }
+  const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length
+  const checksGreen = input.checks.every((c) => c.ok)
+  const outcome: GateRunEntry['outcome'] =
+    malformed.length > 0 ? 'malformed'
+    : !checksGreen || blocking > 0 ? 'stopped'
+    : input.standingStop !== undefined || flags.manual ? 'stopped'
+    : 'passed'
+
   const lockR = acquireLock(root)
   if (!lockR.ok) { renderRefusal(lockR.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
   const release = lockR.value
   try {
-    let verdicts: ReviewerVerdict[] = []
-    const malformed: NonNullable<GateRunEntry['malformed']> = []
-    const fallback: string[] = []
-    const rerolled: string[] = []
-    let rung = 0
-    let model = chain[0]!
-    let cached = false
-
-    if (kind.kind === 'cached') {
-      verdicts = kind.from.verdicts ?? []
-      model = kind.from.model
-      cached = true
-    } else {
-      for (const lens of lenses) {
-        const ov = input.lensOverrides?.[lens.name]
-        const reviewed = ov?.reviewed ?? input.reviewed
-        const body = ov?.promptBody ?? input.promptBody
-        const menu = anchorMenu(reviewed)
-        let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
-        for (let attempt = 0; ; attempt++) {
-          let answered: string | undefined
-          for (;;) {
-            const id = chain[rung]!
-            const r = invokeClaude(ctx, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
-            if (r.ok) { answered = r.value.text; model = id; break }
-            if (rung >= chain.length - 1) {
-              renderRefusal(r.violations).forEach((l) => ctx.err(l))
-              return EXIT.REFUSED
-            }
-            fallback.push(id)
-            rung += 1
-          }
-          const rawR = parseVerdictText(answered)
-          const parsedR = rawR.ok ? parseVerdict(rawR.value) : rawR
-          const violations = parsedR.ok ? verdictViolations(parsedR.value, reviewed) : parsedR.violations
-          if (parsedR.ok && violations.length === 0) {
-            verdicts.push({ reviewer: lens.name, coverage: parsedR.value.coverage, findings: parsedR.value.findings })
-            break
-          }
-          if (attempt === 0) {
-            // one self-repair reroll per reviewer — a single flaky verdict would
-            // otherwise poison the whole round as 'malformed'; the reroll is not
-            // part of the gate key, so cached rounds replay the settled result
-            rerolled.push(lens.name)
-            prompt += `\n## Previous attempt rejected\n\n${
-              violations.map((x) => `- ${x.field}: ${x.rule} — got ${x.got}; want ${x.want}`).join('\n')
-            }\n\nRe-emit the complete corrected verdict JSON.\n`
-            continue
-          }
-          malformed.push({ reviewer: lens.name, violations })
-          break
-        }
-      }
+    // The battery ran unlocked, so the journal may have moved under us. `entries` (read
+    // at :160) feeds appendKind, boundReached, and the round number — all three must be
+    // recomputed against the stream as it stands NOW, or two concurrent gate runs on one
+    // target both journal round N and both slip past the bound.
+    // Content staleness is deliberately NOT checked here: the entry we write is honest
+    // (it records the sha we judged), and a stale verdict stops settling its gate at
+    // consumption time (gateSettled's reviewed_sha check).
+    const entriesNow = readStream(root, target)
+    if (boundReached(entriesNow, spec.gate)) {
+      ctx.out(kv('gate', spec.gate))
+      ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
+      ctx.out(`help: specflow decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
+      ctx.out(`help: or discard the plan: specflow abandon ${target}`)
+      return EXIT.BLOCKED
     }
-
-    if (fallback.length > 0 && chain[0] !== SESSION_DEFAULT && fallback.includes(chain[0]!)) {
-      ctx.err(`warning: head model ${chain[0]} failed to invoke — reviewers ran on ${model}; check gates.${spec.gate}.model`)
-    }
-    const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length
-    const checksGreen = input.checks.every((c) => c.ok)
-    const outcome: GateRunEntry['outcome'] =
-      malformed.length > 0 ? 'malformed'
-      : !checksGreen || blocking > 0 ? 'stopped'
-      : input.standingStop !== undefined || flags.manual ? 'stopped'
-      : 'passed'
 
     const entry: GateRunEntry = {
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
-      round: roundsSinceApprove(entries, spec.gate) + 1, run_id: newRunId(),
+      round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
       reviewed_sha: input.reviewedSha, prompts_sha: key.prompts_sha,
       specflow: key.specflow, model, calibration: calibrationOf(model),
       ...(cached ? { cached: true } : {}),

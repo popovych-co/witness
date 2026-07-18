@@ -1,11 +1,11 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import '../src/gates/index.js'
 import { runGate } from '../src/gate.js'
-import { runShip } from '../src/ship.js'
+import { rebaseIfMoved, runShip } from '../src/ship.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
@@ -79,19 +79,47 @@ describe('specflow ship', () => {
   })
 
   it('rebases when main moved; a semantic conflict hands back', async () => {
-    const { repo, wt, planId, ctx } = await approvedShip()
-    // main moves with an unrelated file → mechanical rebase
+    const { repo, wt, planId, scenario, ctx } = await approvedShip()
+    // main moves with an unrelated file → mechanical rebase. The push to origin is what
+    // makes it visible: ship resolves its base from the fetched remote tip, so a
+    // local-only commit is deliberately invisible to the rebase.
     writeFileSync(join(repo.root, 'docs.md'), 'unrelated\n')
-    repo.git('add', 'docs.md'); repo.git('commit', '-m', 'main moved')
-    expect(await runShip(ctx, planId)).toBe(0)
+    repo.git('add', 'docs.md'); repo.git('commit', '-m', 'main moved'); repo.git('push', 'origin', 'main')
+    // an approval is against a base too — a moved one routes back to the gate, which
+    // rebases BEFORE it re-reviews, and the ship gate always stops
+    expect(await runShip(ctx, planId)).toBe(1)
     expect(execFileSync('git', ['log', '--oneline'], { cwd: wt, encoding: 'utf8' })).toContain('main moved')
-    // main now rewrites a file the branch touched → conflict
+
+    // approve the re-review, then main rewrites a file the branch touched → conflict
+    await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })
     repo.write('src/token.ts', TOKEN_CONFLICTING)
-    repo.git('add', 'src/token.ts'); repo.git('commit', '-m', 'conflicting main change')
+    repo.git('add', 'src/token.ts'); repo.git('commit', '-m', 'conflicting main change'); repo.git('push', 'origin', 'main')
     const r = await runShip(ctx, planId)
     expect(r).toBe(1)
-    // rebase aborted — worktree left clean for the skill to resolve deliberately
+    // rebase aborted — worktree left as the skill found it, to resolve deliberately
     expect(execFileSync('git', ['status', '--porcelain'], { cwd: wt, encoding: 'utf8' })).toBe('')
+  })
+
+  it('rebases onto the fetched remote tip, not the stale local ref', async () => {
+    const { repo, wt } = await shippableRepo()
+    addOrigin(repo)
+    execFileSync('git', ['push', '-u', 'origin', 'HEAD'], { cwd: wt })   // addOrigin pushes only main
+
+    // another flow merges to origin/main; the local main ref does NOT move
+    const other = `${repo.root}-other`
+    execFileSync('git', ['clone', `${repo.root}-origin.git`, other])
+    writeFileSync(join(other, 'sibling.txt'), 'from another flow\n')
+    execFileSync('git', ['add', '-A'], { cwd: other })
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'other flow lands'], { cwd: other })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: other })
+
+    const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()
+    const res = rebaseIfMoved(wt, 'main')
+
+    expect(res.ok).toBe(true)
+    expect(res.ok && res.value).toBe('rebased')
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()).not.toBe(before)
+    expect(existsSync(join(wt, 'sibling.txt'))).toBe(true)
   })
 
   it('refuses without an origin remote', async () => {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireLock } from '../src/lock.js'
-import { completeTxn, pendingTxn, rollbackTxn, withTxn } from '../src/txn.js'
+import { completeTxn, guardTxn, pendingTxn, rollbackTxn, withTxn } from '../src/txn.js'
 import { stateCommit } from '../src/gitio.js'
 import { ok } from '../src/refusal.js'
-import { tmpRepo, type TestRepo } from './helpers.js'
+import { fakeCtx, tmpRepo, type TestRepo } from './helpers.js'
 
 function seeded(): TestRepo {
   const repo = tmpRepo()
@@ -119,5 +119,20 @@ describe('recovery', () => {
     const rolled = await repo.cli(['recover', '--rollback'])
     expect(rolled.code).toBe(0)
     expect(repo.read('specs/a.md')).toBe('v1')
+  })
+})
+
+describe('guardTxn message', () => {
+  it('names the files a crashed transaction left at risk', () => {
+    const repo = seeded()
+    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
+    writeFileSync(join(repo.root, '.specflow', 'txn.json'),
+      JSON.stringify({ op: 'gate-ship', files: ['specs/a.md', '.specflow/journal/a.jsonl'] }))
+
+    const errs: string[] = []
+    const code = guardTxn(fakeCtx(repo.root, { err: (l) => errs.push(l) }), repo.root)
+
+    expect(code).toBe(3)
+    expect(errs.join('\n')).toContain('specs/a.md')
   })
 })

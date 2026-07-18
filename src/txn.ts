@@ -69,6 +69,10 @@ export function guardTxn(ctx: Ctx, root: string): number | undefined {
   const m = pendingTxn(root)
   if (!m) return undefined
   ctx.err(`pending transaction from a crashed invocation: ${m.op}`)
+  // `files` is required on every marker and populated at all withTxn sites, so this
+  // localizes the damage everywhere — unlike an optional owner field, which would be
+  // absent at the longest-running write window (gate.ts) and teach a false distinction.
+  ctx.err(`  files: ${m.files.join(', ')}`)
   ctx.err('help: specflow recover --complete | --rollback')
   return EXIT.BLOCKED
 }

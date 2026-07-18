@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { designArtifactCurrent, designPending } from '../design.js'
@@ -6,13 +7,14 @@ import { DEFAULT_BATTERIES } from '../gate.js'
 import { primaryRoot } from '../gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { loadMatrix, resolveModel } from '../model.js'
-import { computeNext } from './next.js'
+import { computeNext, flowAction } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
 import { pendingTxn } from '../txn.js'
+import { worktreePath } from '../worktree.js'
 
 function tally(docs: CanonDoc[]): string {
   const counts = new Map<string, number>()
@@ -89,6 +91,32 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   }
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))
+  // In-flight flows: the orientation surface between sessions, and the one `next` no
+  // longer enumerates. Membership is the same predicate as next's tier 1 — a plan with
+  // status `in-progress` — and `stage`/`next` come from the SAME flowAction next uses,
+  // never re-derived. A shorthand like `pr ? 'ship' : 'implement'` is wrong in three of
+  // the five states a flow occupies (missing worktree, unsatisfied evidence, unsettled
+  // implement gate), which is unacceptable on the screen whose job is orientation.
+  const flowRows = cfg.ok
+    ? canon.docs
+      .filter((d) => d.meta.type === 'plan')
+      .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
+      .flatMap((d) => {
+        const action = flowAction(root, cfg.value, d)
+        if (!action) return []
+        const id = String(d.meta.id)
+        return [{
+          id,
+          stage: action.stage ?? 'gate',
+          next: action.line,
+          worktree: existsSync(worktreePath(root, id)) ? 'present' : 'missing',
+          pr: d.meta.pr ?? '—',
+        }]
+      })
+    : []
+  if (flowRows.length) {
+    rows('flows', ['id', 'stage', 'next', 'worktree', 'pr'], flowRows as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
   const blocked = blockedRows(canon, ctx)
   if (blocked.length) rows('blocked', ['doc', 'why'], blocked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   const reconcile = reconcileRows(root, canon)

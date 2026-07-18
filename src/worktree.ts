@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, sep } from 'node:path'
 import { git, tryGit } from './gitio.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
@@ -9,6 +9,21 @@ export function worktreesDir(root: string): string {
 
 export function worktreePath(root: string, planId: string): string {
   return join(worktreesDir(root), planId)
+}
+
+// primaryRoot resolves a worktree cwd up to the primary root and drops WHICH worktree it
+// was. That identity is the flow, so recover it here rather than re-deriving from git.
+// (Lives here, not in gitio.ts, because gitio.ts is what this module imports — the other
+// direction would close an import cycle.)
+export function worktreeFlow(cwd: string, root: string): string | undefined {
+  const top = tryGit(cwd, 'rev-parse', '--show-toplevel')
+  if (!top.ok) return undefined
+  const dir = worktreesDir(root)
+  if (!top.out.startsWith(dir + sep)) return undefined
+  const rest = top.out.slice(dir.length + 1)
+  // Round-tripping the last path segment back to a plan id is safe: worktreePath is a
+  // bare join with no slugification, and doc ids are /^[a-z0-9-]+$/ (dsl.ts).
+  return rest.length > 0 && !rest.includes(sep) ? rest : undefined
 }
 
 export function branchName(planId: string): string {
