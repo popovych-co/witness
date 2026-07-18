@@ -1,14 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serializeDoc } from '../fm.js'
-import { designPairSha, designRel, elementIds, htmlSha, validateDesignArtifact } from '../design.js'
+import { designPairSha, designRel, designUnseen, elementIds, htmlSha, validateDesignArtifact } from '../design.js'
 import { registerGate, type GateInput, type MetaStamp } from '../gate.js'
 import { latestRecap } from '../journal.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import type { GateCheck } from '../rounds.js'
 import { findById } from '../scan.js'
-import { canonicalSha } from '../sha.js'
+import { canonicalSha, short } from '../sha.js'
 
 registerGate({
   gate: 'design',
@@ -24,6 +24,18 @@ registerGate({
     const rel = designRel(cfg.paths, specId)
     const abs = join(root, rel)
     const html = existsSync(abs) ? readFileSync(abs, 'utf8') : undefined
+
+    // Sight is a PRECONDITION of gating, not a byproduct of it. Refusing here costs no
+    // reviewer call and keeps `resolve` pure — the rejected shape spawned the opener from
+    // this function, which fires on the four runGate paths that write no entry (resume,
+    // changed-nothing, bound, malformed-streak), producing a window the journal never
+    // learns about. An agent that drops the show step now hits a loud refusal its repair
+    // loop already handles, instead of silently gating something nobody was shown.
+    const unseen = designUnseen(root, cfg.paths, specId)
+    if (unseen !== undefined) {
+      return refuse([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
+        `a human shown this artifact — run: specflow design ${specId} --open`)])
+    }
 
     const checks: GateCheck[] = []
     checks.push({ name: 'ui-flag', ok: spec.meta.ui === true, detail: spec.meta.ui === true ? 'ui: true' : 'spec is not ui-flagged' })

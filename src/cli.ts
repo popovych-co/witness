@@ -51,7 +51,7 @@ const VERB_USAGE: Record<string, string> = {
   check: 'specflow check',
   clean: 'specflow clean',
   decide: 'specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--show]',
-  design: 'specflow design <spec-id> --file <html> | --reconfirm',
+  design: 'specflow design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'specflow diff <spec-id>',
   gate: 'specflow gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
   index: 'specflow index',

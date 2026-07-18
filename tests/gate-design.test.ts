@@ -6,7 +6,7 @@ import { canonicalSha } from '../src/sha.js'
 import { designStamp } from '../src/design.js'
 import { splitDoc } from '../src/fm.js'
 import {
-  approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeDesign, writeSpec,
+  approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, witnessDesign, writeDesign, writeSpec,
 } from './helpers.js'
 
 const CLEAN = {
@@ -22,6 +22,7 @@ async function designed() {
   await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
   approve(repo, 'booking-form')
   await writeDesign(repo, 'booking-form')
+  await witnessDesign(repo, 'booking-form')
   const scenario = fakeScenario()
   const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
   return { repo, scenario, ctx }

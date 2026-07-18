@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, writeDesign, writeSpec,
+  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writeSpec,
 } from './helpers.js'
 
 describe('specflow dashboard (no-arg)', () => {
@@ -65,6 +65,7 @@ describe('specflow dashboard (no-arg)', () => {
       coverage: [{ anchor: 'design#save-bar', note: 'r' }, { anchor: 'booking-form > ## Behavior', note: 'r' }],
       findings: [],
     })
+    await witnessDesign(repo, 'booking-form')
     const g = await repo.cli(['gate', 'design', 'booking-form'], { env: gateEnv(scenario) })
     expect(g.code).toBe(1)                                    // always stops
 

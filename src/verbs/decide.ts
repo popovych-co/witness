@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { designUnseen } from '../design.js'
 import '../gates/index.js'
 import { gateSpec, renderGateRun } from '../gate.js'
 import { writeDoc } from '../fm.js'
@@ -11,6 +12,7 @@ import { primaryRoot, stateCommit } from '../gitio.js'
 import { findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
 import { renderRefusal, v } from '../refusal.js'
+import { short } from '../sha.js'
 import { kv } from '../toon.js'
 import {
   boundReached, lastGateRun, pendingDecision, roundsSinceApprove, type DecisionEntry,
@@ -98,6 +100,21 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+
+  // A standing stop is only human judgment if the human was shown the thing. The gate
+  // refuses the same way, but the gate does not run at the round bound (gate.ts:176) —
+  // and approve is the act that stamps, so the line has to hold here too. Sha-keyed:
+  // re-authoring invalidates prior sight, as re-capturing invalidates a witnessed
+  // screenshot (D71). Only approve — revise and stop need no sight to be honest.
+  if (gate === 'design' && decision === 'approve') {
+    const unseen = designUnseen(root, cfgR.value.paths, target)
+    if (unseen !== undefined) {
+      renderRefusal([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
+        `a human shown this artifact — run: specflow design ${target} --open`)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+  }
+
   const canon = loadCanon(root)
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,

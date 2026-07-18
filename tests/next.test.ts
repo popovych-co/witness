@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writeDesign, writeSpec, writePlan } from './helpers.js'
+import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, witnessDesign, writeDesign, writeSpec, writePlan } from './helpers.js'
 
 async function nextLine(repo: { cli: (a: string[], o?: object) => Promise<{ code: number; stdout: string }> }, env?: object) {
   const r = await repo.cli(['next'], env ? { env } : undefined)
@@ -117,6 +117,7 @@ describe('design stage routing', () => {
     await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
     approve(repo, 'booking-form')
     await writeDesign(repo, 'booking-form')
+    await witnessDesign(repo, 'booking-form')          // registered AND shown → the gate is next
     const res = await repo.cli(['next'])
     expect(res.stdout).toContain('specflow gate design booking-form')
   })

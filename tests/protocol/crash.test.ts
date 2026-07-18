@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   DESIGN_HTML, SPEC_META, approve, fakeScenario, gateEnv, putVerdict,
-  seededRepo, writeDesign, writePlan, writeSpec,
+  seededRepo, witnessDesign, writeDesign, writePlan, writeSpec,
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
 import { readStream } from '../../src/journal.js'
@@ -98,6 +98,7 @@ describe('design stage — kill/resume + gating', () => {
       findings: [],
     })
     await writeDesign(repo, 'booking-form')
+    await witnessDesign(repo, 'booking-form')
     const g = await repo.cli(['gate', 'design', 'booking-form'], { env })
     expect(g.code).toBe(1)                                    // always stops
     const dec = await repo.cli(['decide', 'design', 'booking-form', '--approve'])
@@ -175,6 +176,7 @@ describe('design stage — kill/resume + gating', () => {
       findings: [],
     })
     await writeDesign(repo, 'booking-form')
+    await witnessDesign(repo, 'booking-form')
     await repo.cli(['gate', 'design', 'booking-form'], { env: gateEnv(scenario) })
     await repo.cli(['decide', 'design', 'booking-form', '--approve'])
 
@@ -212,6 +214,7 @@ describe('design stage — kill/resume + gating', () => {
       findings: [],
     })
     await writeDesign(repo, 'booking-form')
+    await witnessDesign(repo, 'booking-form')
     await repo.cli(['gate', 'design', 'booking-form'], { env: gateEnv(scenario) })
     await repo.cli(['decide', 'design', 'booking-form', '--approve'])
     await writeSpec(

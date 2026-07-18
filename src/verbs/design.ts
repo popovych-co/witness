@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { hostname, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
@@ -8,6 +9,7 @@ import { writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel, latestRecap } from '../journal.js'
 import { acquireLock } from '../lock.js'
+import { openArtifact } from '../opener.js'
 import { renderRefusal, v } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon, type CanonDoc } from '../scan.js'
@@ -18,10 +20,10 @@ import { crashPoint, guardTxn, withTxn } from '../txn.js'
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv, allowPositionals: true,
-    options: { file: { type: 'string' }, reconfirm: { type: 'boolean' } },
+    options: { file: { type: 'string' }, reconfirm: { type: 'boolean' }, open: { type: 'boolean' } },
   })
   const specId = positionals[0]
-  if (!specId) { ctx.err('usage: specflow design <spec-id> --file <html> | --reconfirm'); return EXIT.REFUSED }
+  if (!specId) { ctx.err('usage: specflow design <spec-id> --file <html> | --reconfirm | --open'); return EXIT.REFUSED }
 
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach(ctx.err); return EXIT.REFUSED }
@@ -37,6 +39,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('spec', 'unknown-spec', specId, 'a specs/ doc id')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
+  if (values.open) return openOnly(ctx, root, designRel(cfgR.value.paths, specId), specId)
   if (spec.meta.ui !== true) {
     renderRefusal([v('spec', 'not-ui', specId, 'a ui-flagged spec — set ui: true at decompose to earn a design stage')]).forEach(ctx.err)
     return EXIT.REFUSED
@@ -59,6 +62,52 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   } finally {
     lock.value()
   }
+}
+
+// The one place anything is ever spawned at a human. Journals a sha-keyed witness that
+// `gate design`, `decide --approve` and `next` all consult. Deliberately reachable for
+// any registered artifact — re-showing a file that exists needs no ui/feature eligibility,
+// and gating it on those would dead-end the very refusals that point here.
+function openOnly(ctx: Ctx, root: string, rel: string, id: string): number {
+  const abs = join(root, rel)
+  if (!existsSync(abs)) {
+    renderRefusal([v('design', 'no-artifact', rel,
+      `a registered design — run: specflow design ${id} --file <html>`)]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  const sha = htmlSha(readFileSync(abs, 'utf8'))
+  const { outcome, command } = openArtifact(ctx.env, abs)
+  if (outcome === 'failed') {
+    renderRefusal([v('design', 'opener-failed', `${command} did not resolve`,
+      `a working platform opener, or SPECFLOW_OPENER — meanwhile open it yourself: file://${abs}`)]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  // `by` is the account and machine the spawn happened on — not a claim about who looked.
+  // It answers "was this shown on my box or someone else's" on a shared branch, which is
+  // the most the CLI can honestly know.
+  const by = `${userInfo().username}@${hostname()}`
+  const stream = journalRel(id)
+  const entry = { t: 'design-shown' as const, artifact: id, sha, opener: command, by }
+  const lock = acquireLock(root)
+  if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
+  try {
+    const res = withTxn(root, {
+      op: `design-open(${id})`, files: [stream], journal: { stream: id, line: entryLine(entry) },
+    }, () => {
+      appendEntry(root, id, entry)
+      crashPoint(ctx.env, 'design-shown')
+      return stateCommit(root, [stream], `design-shown(${id}): ${short(sha)}`)
+    })
+    if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
+  } finally {
+    lock.value()
+  }
+  ctx.out(kv('shown', id))
+  ctx.out(kv('path', rel))
+  ctx.out(kv('sha', short(sha)))
+  ctx.out(kv('opener', command))
+  ctx.out(`next: specflow gate design ${id}`)
+  return EXIT.OK
 }
 
 function persist(

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, beforeAll } from 'vitest'
 import {
   approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, putVerdict,
-  seededRepo, singleConfig, TOKEN_BROKEN, TOKEN_FIXED, writeDesign, writePlan, writeSpec,
+  seededRepo, singleConfig, TOKEN_BROKEN, TOKEN_FIXED, witnessDesign, writeDesign, writePlan, writeSpec,
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
 import { readStream } from '../../src/journal.js'
@@ -77,6 +77,7 @@ describe('the design lens, end to end', () => {
     const designScenario = fakeScenario()
     putVerdict(designScenario, DESIGN_GATE_CLEAN)
     await writeDesign(repo, 'auth-refresh')
+    await witnessDesign(repo, 'auth-refresh')
     const designGate = await repo.cli(['gate', 'design', 'auth-refresh'], { env: gateEnv(designScenario) })
     expect(designGate.code).toBe(1)
     expect((await repo.cli(['decide', 'design', 'auth-refresh', '--approve'])).code).toBe(0)

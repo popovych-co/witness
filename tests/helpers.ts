@@ -208,6 +208,7 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     SPECFLOW_TRUST_CMDS: '1',
+    SPECFLOW_OPENER: noopOpener(),
     VITEST_BIN: vitestBin(),
     CI: '',
     ...extra,
@@ -216,6 +217,17 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
 
 export function fakeBinDir(): string {
   return resolve(import.meta.dirname, '..', 'fixtures', 'fakebin')
+}
+
+// An opener that resolves and does nothing. Tests that must get past the sight
+// precondition use this; tests that assert WHICH path was opened use a recorder.
+export function noopOpener(): string {
+  return join(fakeBinDir(), 'noop-open')
+}
+
+// Register → show. The protocol's normal prelude to `gate design`, as one call.
+export async function witnessDesign(repo: TestRepo, specId: string): Promise<CliResult> {
+  return repo.cli(['design', specId, '--open'], { env: { SPECFLOW_OPENER: noopOpener() } })
 }
 
 export function fakeScenario(): string {
@@ -362,4 +374,5 @@ export const SKILL_GROUND_RULES = [
   '3 total attempts',
   'mktemp',
   'never from conversation memory',
+  'a stop, not a step to drop',
 ]

@@ -4,7 +4,7 @@ import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, type Canon } from '../scan.js'
-import { designArtifactCurrent, designPending } from '../design.js'
+import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { effortOf, effortSpecs, effortWrites } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
@@ -129,9 +129,14 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     // skill authors fresh or, in amend mode, decides re-design vs --reconfirm.
     // A pending design DECISION was already caught by the top-of-function scan; a stale
     // prior approval never routes here because designPending re-arms on stamp.spec mismatch.
-    return designArtifactCurrent(root, spec)
-      ? { line: `specflow gate design ${id}`, target: id }
-      : { line: `specflow design ${id} --file <html>`, stage: 'design', target: id }
+    if (!designArtifactCurrent(root, spec)) {
+      return { line: `specflow design ${id} --file <html>`, stage: 'design', target: id }
+    }
+    // Registered but unshown is the normal state right after --file. Ask for the show
+    // step by name; routing to the gate here would refuse design-unseen every time.
+    return designUnseen(root, cfg.paths, id) !== undefined
+      ? { line: `specflow design ${id} --open`, stage: 'design', target: id }
+      : { line: `specflow gate design ${id}`, target: id }
   }
 
   const ready = (dep: string): boolean => {

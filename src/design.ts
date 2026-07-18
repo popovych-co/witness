@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { CanonPaths } from './config.js'
-import { latestRecap, readStream } from './journal.js'
+import { latestRecap, readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
 import { effortOf } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
@@ -87,4 +89,22 @@ export function designArtifactCurrent(root: string, spec: CanonDoc): boolean {
   return readStream(root, String(spec.meta.id)).some(
     (e) => e.t === 'design-write' && (e as { spec?: string }).spec === cur,
   )
+}
+
+// Pure half: has a human been shown THESE exact bytes? Sha-keyed, because a re-authored
+// artifact is a different thing to look at — the same discipline that makes a re-captured
+// screenshot invalidate its predecessor's witnessed sha (D71).
+export function designShown(entries: Entry[], sha: string): boolean {
+  return entries.some((e) => e.t === 'design-shown' && (e as { sha?: string }).sha === sha)
+}
+
+// The single home for "this artifact is registered but nobody has been shown it".
+// Returns the unwitnessed sha, or undefined when there is nothing to see (no artifact)
+// or a design-shown entry already covers the current bytes. gate/decide/next all consult
+// this — never re-derive the rule.
+export function designUnseen(root: string, paths: CanonPaths, specId: string): string | undefined {
+  const abs = join(root, designRel(paths, specId))
+  if (!existsSync(abs)) return undefined
+  const sha = htmlSha(readFileSync(abs, 'utf8'))
+  return designShown(readStream(root, specId), sha) ? undefined : sha
 }

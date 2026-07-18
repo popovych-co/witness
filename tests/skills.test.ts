@@ -107,3 +107,10 @@ describe('specflow-ship', () => {
     expect(body()).toContain('Never merge');
   });
 });
+
+describe('design-critic prompt', () => {
+  const critic = () => readFileSync(join(__dirname, '..', 'prompts', 'design-critic.md'), 'utf8');
+  it('actively checks for sections the spec does not promise', () => {
+    expect(critic()).toContain('Name every section that renders nothing');
+  });
+});
