@@ -11,7 +11,7 @@ import { newRunId } from './drift.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
-import { docKeysFor, docsBlock, invokeClaude, loadLensDocs, parseVerdictText, promptsSha, resolvePrompt, type Lens } from './reviewer.js'
+import { docKeysFor, docsBlock, invokeClaude, loadLensDocs, parseVerdictText, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
   ROUND_BOUND, appendKind, boundReached, gateRuns, keyOf, roundsSinceApprove, sameKey,
@@ -25,6 +25,12 @@ export type ChangeClass = 'feature' | 'fix' | 'chore'
 export interface Stamp { artifact: string; to: string }
 export interface MetaStamp { artifact: string; patch: Record<string, unknown>; entryType: string }
 
+export interface LensOverride {
+  reviewed?: Reviewed
+  promptBody?: string
+  docs?: LensDoc[]
+}
+
 export interface GateInput {
   class: ChangeClass
   reviewedSha: string
@@ -35,6 +41,8 @@ export interface GateInput {
   standingStop?: string
   stamps: Stamp[]
   repin?: { rel: string; meta: Record<string, unknown>; body: string; sha: string }
+  lensOverrides?: Record<string, LensOverride>   // per-lens reviewed/body/docs (design-reviewer)
+  skipLenses?: string[]                          // battery members to drop this run, journaled `skipped`
 }
 
 export interface GateSpec {
@@ -54,8 +62,8 @@ export const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, 
   decompose: ['slicing-critic'],
   plan: ['plan-critic'],
   implement: {
-    feature: ['code-reviewer', 'silent-failure-hunter', 'type-design', 'pr-test'],
-    fix: ['code-reviewer', 'silent-failure-hunter'],
+    feature: ['code-reviewer', 'silent-failure-hunter', 'type-design', 'pr-test', 'design-reviewer'],
+    fix: ['code-reviewer', 'silent-failure-hunter', 'design-reviewer'],
     chore: ['code-reviewer'],
   },
   ship: ['drift-reviewer', 'code-reviewer'],
@@ -79,6 +87,7 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   ctx.out(kv('round', `${entry.round} of ${ROUND_BOUND}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
   ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
   ctx.out(kv('model', `${entry.model} · calibration: ${entry.calibration}${entry.cached ? ' · cached' : ''}`))
+  if (entry.skipped?.length) ctx.out(kv('skipped', entry.skipped.join(' · ')))
   if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
   if (entry.rerolled?.length) ctx.out(kv('rerolled', entry.rerolled.join(' · ')))
   ctx.out(rows('checks', ['name', 'ok', 'detail'],
@@ -123,17 +132,24 @@ export async function runGate(
 
   const batteryR = batteryFor(cfgR.value, spec.gate, input.class)
   if (!batteryR.ok) { renderRefusal(batteryR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const skip = new Set(input.skipLenses ?? [])
+  const active = batteryR.value.filter((n) => !skip.has(n))
+  const dropped = batteryR.value.filter((n) => skip.has(n))
   const lenses: Lens[] = []
-  for (const name of batteryR.value) {
+  for (const name of active) {
     const lensR = resolvePrompt(name)
     if (!lensR.ok) { renderRefusal(lensR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const lens = lensR.value
     const docPaths = docKeysFor(spec.gate, name).flatMap((k) => cfgR.value.docs[k as DocKey] ?? [])
+    let docs: LensDoc[] = []
     if (docPaths.length > 0) {
       const docsR = loadLensDocs(root, docPaths)
       if (!docsR.ok) { renderRefusal(docsR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-      lens.docs = docsR.value
+      docs = docsR.value
     }
+    const ov = input.lensOverrides?.[name]
+    if (ov?.docs?.length) docs = [...docs, ...ov.docs]     // living design joins prompts_sha
+    if (docs.length) lens.docs = docs
     lenses.push(lens)
   }
   const modelR = resolveModel(cfgR.value, loadMatrix(root), spec.gate)
@@ -196,9 +212,12 @@ export async function runGate(
       model = kind.from.model
       cached = true
     } else {
-      const menu = anchorMenu(input.reviewed)
       for (const lens of lenses) {
-        let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${input.promptBody}\n`
+        const ov = input.lensOverrides?.[lens.name]
+        const reviewed = ov?.reviewed ?? input.reviewed
+        const body = ov?.promptBody ?? input.promptBody
+        const menu = anchorMenu(reviewed)
+        let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
         for (let attempt = 0; ; attempt++) {
           let answered: string | undefined
           for (;;) {
@@ -214,7 +233,7 @@ export async function runGate(
           }
           const rawR = parseVerdictText(answered)
           const parsedR = rawR.ok ? parseVerdict(rawR.value) : rawR
-          const violations = parsedR.ok ? verdictViolations(parsedR.value, input.reviewed) : parsedR.violations
+          const violations = parsedR.ok ? verdictViolations(parsedR.value, reviewed) : parsedR.violations
           if (parsedR.ok && violations.length === 0) {
             verdicts.push({ reviewer: lens.name, coverage: parsedR.value.coverage, findings: parsedR.value.findings })
             break
@@ -255,6 +274,7 @@ export async function runGate(
       ...(flags.manual ? { manual: true } : {}),
       ...(fallback.length ? { fallback } : {}),
       ...(rerolled.length ? { rerolled } : {}),
+      ...(dropped.length ? { skipped: dropped } : {}),
       ...(outcome === 'stopped' && input.standingStop ? { standing: input.standingStop } : {}),
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       checks: input.checks,

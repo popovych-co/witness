@@ -16,7 +16,7 @@ import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './ve
 import { createWorktree } from './worktree.js'
 
 export interface CalSeed { id: string; overlay: string; defect: string }
-export interface ReviewerSuite { reviewer: string; kind: 'docs' | 'tree'; dir: string; seeds: CalSeed[]; injects: CalSeed[] }
+export interface ReviewerSuite { reviewer: string; kind: 'docs' | 'tree' | 'screens'; dir: string; seeds: CalSeed[]; injects: CalSeed[] }
 export interface SideScore { ok: number; total: number }
 export interface ReviewerScore { reviewer: string; catches: SideScore; clean: SideScore; inject: SideScore; pass: boolean }
 export interface SkillScore { skill: string; metric: string; ok: number; total: number; pass: boolean }
@@ -46,7 +46,7 @@ export function loadReviewerSuite(reviewer: string): Result<ReviewerSuite> {
   if (!existsSync(join(dir, 'suite.json'))) {
     return refuse([v('reviewer', 'unknown-suite', reviewer, `one of: ${PROMPT_NAMES.join(' ')}`)])
   }
-  const kind = (JSON.parse(readFileSync(join(dir, 'suite.json'), 'utf8')) as { kind: 'docs' | 'tree' }).kind
+  const kind = (JSON.parse(readFileSync(join(dir, 'suite.json'), 'utf8')) as { kind: 'docs' | 'tree' | 'screens' }).kind
   return ok({ reviewer, kind, dir, seeds: seedList('seeds')(dir), injects: seedList('inject')(dir) })
 }
 
@@ -73,6 +73,10 @@ export function composeReviewed(
   files: string[],
 ): { reviewed: Exclude<Reviewed, { kind: 'design' }>; context: string } {
   if (suite.kind === 'tree') return { reviewed: { kind: 'tree', root: dir, files }, context: '' }
+  if (suite.kind === 'screens') {
+    const captures = files.filter((f) => f.endsWith('.png')).map((f) => ({ name: f.split('/').pop() as string, path: join(dir, f) }))
+    return { reviewed: { kind: 'screens', captures }, context: '' }
+  }
   const docs = files
     .filter((f) => f.endsWith('.md'))
     .map((f) => {
@@ -99,6 +103,11 @@ export function renderReviewed(reviewed: Exclude<Reviewed, { kind: 'design' }>, 
   const parts: string[] = []
   if (context !== '') parts.push(`## Calibration context\n\n${context}`)
   parts.push('## Reviewed content')
+  if (reviewed.kind === 'screens') {
+    parts.push('Read each PNG at its absolute path with the Read tool before judging:')
+    for (const c of reviewed.captures) parts.push(`- ${c.name} — ${c.path}`)
+    return parts.join('\n\n')
+  }
   if (reviewed.kind === 'docs') {
     for (const d of reviewed.docs) parts.push(`### ${d.id}\n\n${d.body}`)
   } else {

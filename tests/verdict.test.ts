@@ -133,3 +133,38 @@ describe('anchorMenu', () => {
     expect(anchorMenu({ kind: 'tree', root: '/', files: [] })).toBe('')
   })
 })
+
+const SCREENS: Reviewed = {
+  kind: 'screens',
+  captures: [{ name: 'initial.png', path: '/w/initial.png' }, { name: 'error.png', path: '/w/error.png' }],
+}
+
+describe('screens reviewed-kind', () => {
+  it('anchorMenu lists capture names', () => {
+    const menu = anchorMenu(SCREENS)
+    expect(menu).toContain('## Valid anchors')
+    expect(menu).toContain('- initial.png')
+    expect(menu).toContain('- error.png')
+  })
+
+  it('resolveAnchor accepts a capture name and an omission over one; rejects strangers', () => {
+    expect(resolveAnchor('initial.png', SCREENS)).toBeUndefined()
+    expect(resolveAnchor({ kind: 'omission', scope: 'error.png' }, SCREENS)).toBeUndefined()
+    expect(resolveAnchor('nope.png', SCREENS)).toContain('no reviewed capture')
+    expect(resolveAnchor({ kind: 'omission', scope: 'ghost.png' }, SCREENS)).toContain('no reviewed capture')
+  })
+
+  it('verdictViolations demands one coverage anchor per capture', () => {
+    const under = parseVerdict({ coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] })
+    expect(under.ok).toBe(true)
+    const vs = verdictViolations(under.ok ? under.value : (undefined as never), SCREENS)
+    expect(vs.some((x) => x.rule === 'coverage-minimum' && x.want.includes('error.png'))).toBe(true)
+
+    const full = parseVerdict({
+      coverage: [{ anchor: 'initial.png', note: 'seen' }, { anchor: 'error.png', note: 'seen' }],
+      findings: [{ blocking: true, anchor: 'initial.png', claim: 'primary action below the fold' }],
+    })
+    expect(full.ok).toBe(true)
+    expect(verdictViolations(full.ok ? full.value : (undefined as never), SCREENS)).toEqual([])
+  })
+})

@@ -85,6 +85,15 @@ describe('specflow-implement', () => {
   });
 });
 
+describe('specflow-implement — capture mandate', () => {
+  const body = () => readFileSync(skillPath('specflow-implement'), 'utf8');
+  it('names the screens dir and per-moment captures', () => {
+    expect(body()).toContain('SPECFLOW_SCREENS_DIR');
+    expect(body()).toContain('design-reviewer');
+    for (const moment of ['initial', 'error', 'success']) expect(body()).toContain(moment);
+  });
+});
+
 describe('specflow-ship', () => {
   const body = () => readFileSync(skillPath('specflow-ship'), 'utf8');
   it('drives the ship phases and always stops for the human', () => {

@@ -21,8 +21,8 @@ gates:
   plan: { reviewers: [plan-critic] }
   implement:
     reviewers:               # per change class; a plain list = all classes
-      feature: [code-reviewer, silent-failure-hunter, type-design, pr-test]
-      fix: [code-reviewer, silent-failure-hunter]
+      feature: [code-reviewer, silent-failure-hunter, type-design, pr-test, design-reviewer]
+      fix: [code-reviewer, silent-failure-hunter, design-reviewer]
       chore: [code-reviewer]
   ship: { reviewers: [drift-reviewer, code-reviewer] }
 criteria:
@@ -35,6 +35,7 @@ const GITIGNORE_BLOCK = `# specflow local (never committed)
 .specflow/txn.json
 .specflow/allow.json
 .specflow/calibration.local.yaml
+.specflow/screens/
 `
 
 const PRINCIPLES_BODY = `# Principles

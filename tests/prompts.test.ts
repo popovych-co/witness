@@ -5,7 +5,7 @@ import { VERDICT_CONTRACT_MARKER, VERDICT_CONTRACT_SNIPPETS } from './helpers';
 import { PROMPT_NAMES } from '../src/reviewer';
 
 const promptPath = (name: string) => join(__dirname, '..', 'prompts', `${name}.md`);
-const NEW_PROMPTS = ['slicing-critic', 'plan-critic', 'drift-reviewer'];
+const NEW_PROMPTS = ['slicing-critic', 'plan-critic', 'drift-reviewer', 'design-reviewer'];
 
 describe('specflow-original reviewer prompts', () => {
   for (const name of NEW_PROMPTS) {
@@ -30,6 +30,15 @@ describe('specflow-original reviewer prompts', () => {
     for (const lens of ['Delta faithfulness', 'Step quality', 'Honest scaffolding']) expect(plan).toContain(lens);
     const drift = readFileSync(promptPath('drift-reviewer'), 'utf8');
     for (const lens of ['Broken promises', 'Value drift', 'Error-path drift', 'Undocumented behavior']) expect(drift).toContain(lens);
+  });
+
+  it('design-reviewer names its four axes and the Read-the-image protocol', () => {
+    const body = readFileSync(promptPath('design-reviewer'), 'utf8');
+    for (const axis of ['Canon compliance', 'Design divergence', 'Behavior visible', 'UX heuristics']) {
+      expect(body).toContain(axis);
+    }
+    expect(body).toContain('Read');            // reads capture files by path
+    expect(body).toContain('capture');
   });
 });
 

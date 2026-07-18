@@ -1,0 +1,20 @@
+<!doctype html><meta charset=utf8><style>
+ body{font:16px system-ui;background:#0b0d10;color:#e7eaee;margin:0;padding:24px}
+ .eyebrow{color:#8b93a1;text-transform:uppercase;letter-spacing:.08em;font-size:12px}
+ h1{margin:.2em 0 1em}.field{margin:0 0 14px}.field label{display:block;color:#aab2c0;font-size:13px}
+ .field input{width:100%;padding:10px;border:1px solid #2a2f3a;background:#12151b;color:#e7eaee;border-radius:8px}
+ .toggle{display:inline-block;padding:8px 14px;border-radius:8px;border:1px solid #2a2f3a}
+ .toggle.active{background:#3b82f6;border-color:#3b82f6;color:#fff}
+ .tuning summary{color:#8b93a1;cursor:pointer;margin:8px 0}
+ .savebar{position:fixed;left:0;right:0;bottom:0;padding:16px 24px;background:#12151b;border-top:1px solid #2a2f3a}
+ .savebar button{background:#3b82f6;color:#fff;border:0;padding:12px 20px;border-radius:8px;font-weight:600}
+</style>
+<div class=eyebrow>Bookings</div><h1>New service</h1>
+<div class=field><label>Name</label><input value="Deep tissue"></div>
+<div class=field><label>Duration</label><input value="60 min"></div>
+<div class=field><label>Price</label><input value="$120"></div>
+<div class=field><label>Booking mode</label>
+  <span class="toggle active">Instant</span> <span class=toggle>Request</span></div>
+<details class=tuning><summary>Advanced tuning (7)</summary>
+  <div class=field><label>Buffer before</label><input value="0 min"></div></details>
+<div class=savebar><button>Save service</button></div>

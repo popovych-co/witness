@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -15,6 +16,21 @@ import { withTxn } from './txn.js'
 export function isTestPath(rel: string): boolean {
   if (/\.(test|spec)\./.test(rel)) return true
   return rel.split('/').some((seg) => seg === 'test' || seg === 'tests' || seg === '__tests__')
+}
+
+export function screensDir(runRoot: string, planId: string): string {
+  return join(runRoot, '.specflow', 'screens', planId)
+}
+
+export interface Capture { name: string; sha: string }
+
+export function collectCaptures(runRoot: string, planId: string): Capture[] {
+  const dir = screensDir(runRoot, planId)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((n) => n.endsWith('.png') && statSync(join(dir, n)).isFile())
+    .sort()
+    .map((name) => ({ name, sha: createHash('sha256').update(readFileSync(join(dir, name))).digest('hex') }))
 }
 
 export function checkoutRoot(cwd: string): Result<string> {
@@ -72,7 +88,7 @@ export async function runSpecTests(
 
 export function journalEvidence(
   stateRoot: string, planId: string, phase: 'red' | 'green', run: SpecTestRun,
-  extra: { reconstructed?: boolean; vacuous?: boolean } = {},
+  extra: { reconstructed?: boolean; vacuous?: boolean; captures?: Capture[] } = {},
 ): Result<{ sha: string }> {
   const entry = { t: 'test-evidence' as const, artifact: planId, phase, runner: run.runner, tests: run.tests, ...extra }
   const marker = {
@@ -90,10 +106,19 @@ export async function recordEvidence(
   runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string,
   phase: 'red' | 'green', extra: { reconstructed?: boolean } = {},
 ): Promise<Result<SpecTestRun>> {
-  const run = await runSpecTests(runRoot, ctx, parentId, stateRoot)
+  // latest-cycle by construction: a fresh empty dir per cycle means captures can
+  // only be this run's. Browser tests screenshot iff SPECFLOW_SCREENS_DIR is set,
+  // so non-UI plans and the gate's own drift lane (which does not set it) write nothing.
+  const dir = screensDir(runRoot, planId)
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+  const runCtx: Ctx = { ...ctx, env: { ...ctx.env, SPECFLOW_SCREENS_DIR: dir } }
+  const run = await runSpecTests(runRoot, runCtx, parentId, stateRoot)
   if (!run.ok) return run
   const vacuous = phase === 'red' && run.value.allOk ? { vacuous: true } : {}
-  const committed = journalEvidence(stateRoot, planId, phase, run.value, { ...extra, ...vacuous })
+  const captures = collectCaptures(runRoot, planId)
+  const capExtra = captures.length ? { captures } : {}
+  const committed = journalEvidence(stateRoot, planId, phase, run.value, { ...extra, ...vacuous, ...capExtra })
   if (!committed.ok) return committed
   return run
 }

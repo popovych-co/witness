@@ -11,6 +11,7 @@ export type Reviewed =
   | { kind: 'docs'; docs: Array<{ id: string; body: string }> }
   | { kind: 'tree'; root: string; files: string[] }
   | { kind: 'design'; artifact: { ids: string[] }; spec: { id: string; body: string } }
+  | { kind: 'screens'; captures: Array<{ name: string; path: string }> }
 
 const isOmission = (a: unknown): a is { kind: 'omission'; scope: string } =>
   typeof a === 'object' && a !== null &&
@@ -72,6 +73,15 @@ export function anchorMenu(reviewed: Reviewed): string {
         reviewed.spec.id + ' > ## Heading` names a section of the parent spec. Anything else rejects the whole verdict.',
       '',
       ...lines.map((l) => `- ${l}`),
+    ].join('\n')
+  }
+  if (reviewed.kind === 'screens') {
+    return [
+      '## Valid anchors',
+      '',
+      'Every capture below is a resolvable anchor — copy one VERBATIM (a bare filename) per coverage/finding item. Anything else rejects the whole verdict.',
+      '',
+      ...reviewed.captures.map((c) => `- ${c.name}`),
     ].join('\n')
   }
   if (reviewed.kind !== 'docs') return ''
@@ -140,6 +150,11 @@ function resolveDesignAnchor(
 
 export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string | undefined {
   if (reviewed.kind === 'design') return resolveDesignAnchor(anchor, reviewed)
+  if (reviewed.kind === 'screens') {
+    const target = isOmission(anchor) ? anchor.scope : anchor
+    if (reviewed.captures.some((c) => c.name === target)) return undefined
+    return `${isOmission(anchor) ? 'omission scope' : 'anchor'} "${target}" names no reviewed capture`
+  }
   if (isOmission(anchor)) {
     const scope = anchor.scope
     if (reviewed.kind === 'docs') {
@@ -209,6 +224,20 @@ export function verdictViolations(verdict: Verdict, reviewed: Reviewed): Violati
       if (!covered.has(d.id)) {
         violations.push(v('coverage', 'coverage-minimum', `docs covered: ${[...covered].sort().join(' ') || '(none)'}`,
           `≥ 1 coverage anchor per reviewed doc — missing ${d.id}`))
+      }
+    }
+  } else if (reviewed.kind === 'screens') {
+    const covered = new Set(
+      verdict.coverage
+        .filter((c): c is CoverageItem & { anchor: string } => typeof c.anchor === 'string')
+        .map((c) => c.anchor)
+        .filter((a) => reviewed.captures.some((c) => c.name === a)),
+    )
+    for (const cap of reviewed.captures) {
+      if (!covered.has(cap.name)) {
+        violations.push(v('coverage', 'coverage-minimum',
+          `captures covered: ${[...covered].sort().join(' ') || '(none)'}`,
+          `≥ 1 coverage anchor per reviewed capture — missing ${cap.name}`))
       }
     }
   } else {

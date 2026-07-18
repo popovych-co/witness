@@ -53,7 +53,15 @@ In the benoticed.co checkout (20-package pnpm monorepo, vitest per package):
 - [ ] One `fix`-class effort brainstorm → PR on benoticed.co with no manual
       CLI calls (the /specflow loop drives everything; humans only decide).
 
-## 4. Bare-install proof
+## 4. Design lens (grill #5) — benoticed graduation
+
+- [ ] `docs.design: [docs/ui/design-language.md, docs/ui/primitives.md]` registered in benoticed's `specflow.config.yaml`.
+- [ ] A `ui`-flagged spec produces an approved `designs/<spec>.html` before its plan can exist (part 2 — the design stage).
+- [ ] A UI plan's implement gate captures screenshots, and `design-reviewer` blocks a screen that violates §4A (eyebrow) / §4C (sticky save bar) — the incident's own rules.
+- [ ] `specflow calibrate <model>` passes the design-reviewer screens suite at the shipped floor; the injection twin survives.
+- [ ] Re-run the incident (booking-services "New service"): the pre-fix ugly form is now blocked at the implement gate, not after ship.
+
+## 5. Bare-install proof
 
 - [ ] On a machine/checkout with no specflow dev setup: plugin install + a
       fresh `claude` session runs `/specflow` on an empty repo through

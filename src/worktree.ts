@@ -21,9 +21,13 @@ export function ensureExcluded(root: string): void {
   const infoDir = join(gitDir, 'info')
   mkdirSync(infoDir, { recursive: true })
   const excludePath = join(infoDir, 'exclude')
-  const line = '.specflow/worktrees/'
   const current = existsSync(excludePath) ? readFileSync(excludePath, 'utf8') : ''
-  if (!current.split('\n').includes(line)) appendFileSync(excludePath, `${line}\n`)
+  const lines = current.split('\n')
+  // screens are witnessed evidence, regenerable, never committed — ignored in every
+  // worktree so they stay out of changedFiles() and the reviewed tree-sha
+  for (const line of ['.specflow/worktrees/', '.specflow/screens/']) {
+    if (!lines.includes(line)) appendFileSync(excludePath, `${line}\n`)
+  }
 }
 
 export function createWorktree(

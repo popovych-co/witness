@@ -21,6 +21,7 @@ export interface GateRunEntry {
   manual?: boolean
   fallback?: string[]
   rerolled?: string[]
+  skipped?: string[]
   standing?: string
   artifact_sha?: string
   checks: GateCheck[]

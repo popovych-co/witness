@@ -16,7 +16,7 @@ describe('reviewer calibration suites', () => {
       const dir = join(calRoot, reviewer);
       it('has suite.json with a valid kind and a non-empty base', () => {
         const suite = JSON.parse(readFileSync(join(dir, 'suite.json'), 'utf8'));
-        expect(['docs', 'tree']).toContain(suite.kind);
+        expect(['docs', 'tree', 'screens']).toContain(suite.kind);
         expect(filesUnder(join(dir, 'base')).length).toBeGreaterThan(0);
       });
       it('has ≥ 4 defect seeds and ≥ 1 injection twin, each well-formed', () => {
