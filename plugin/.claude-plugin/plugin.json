@@ -1,7 +1,7 @@
 {
   "name": "specflow",
-  "description": "Brainstorm → PR through five evidence-gated stages. Skills author, the pinned specflow CLI writes state and witnesses evidence; gates stop where judgment is owed.",
-  "version": "0.1.7",
+  "description": "Brainstorm \u2192 PR through five evidence-gated stages. Skills author, the pinned specflow CLI writes state and witnesses evidence; gates stop where judgment is owed.",
+  "version": "0.1.8",
   "author": {
     "name": "Kostiantyn Popovych"
   }
