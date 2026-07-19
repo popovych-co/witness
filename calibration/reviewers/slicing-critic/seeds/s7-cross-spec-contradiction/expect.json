@@ -1,0 +1,1 @@
+{ "defect": "confirmation-email states the cart clears immediately on decline while guest-card-payment states a declined payment keeps the cart intact — two specs, one trigger, opposite rules, precedence stated nowhere" }

@@ -13,6 +13,8 @@ Work every lens below over every spec, in this order:
 7. **Depends refs.** Missing edges are the dangerous direction: a spec whose behavior presumes another slice landed, with no `depends` edge, is blocking. Decorative extra edges are notes.
 8. **UI-flag honesty.** A spec whose `## Behavior` describes browser-rendered or interactive surface (a screen, a form, client-side interaction) must carry `ui: true` — it earns a design stage before its plan. A spec so flagged whose behavior is purely non-visual (a backend job, a data contract) must not. A missing flag on a UI slice, or a spurious flag on a non-UI slice, is blocking — the flag routes the whole design stage.
 
+Also watch for **contradictions**: two specs stating rules that cannot both hold for the same subject — the same trigger with opposite outcomes, or two thresholds for one fact — with no spec stating which wins. Always **blocking**: duplication *may* drift, but a contradiction is already wrong, and a canon that contradicts itself is lying today. The remedy is a spec, never a later stage: which rule wins is behavior, and behavior lives in `## Behavior`. Anchor to the heading in either spec.
+
 Also watch for **duplicated facts**: one fact (a threshold, format, protocol) written into two specs. Recommend extraction into its own spec — blocking when the duplication would drift, a note otherwise.
 
 The reviewed content arrives as documents: the recap JSON, the coverage table, and each spec (frontmatter + body). Anchor doc findings to heading paths within the spec's document id.
