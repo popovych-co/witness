@@ -3,6 +3,7 @@ id: guest-card-payment
 type: spec
 status: draft
 summary: Payment persistence layer for checkout flows
+ui: true
 depends: []
 criteria:
   - id: ac-pay

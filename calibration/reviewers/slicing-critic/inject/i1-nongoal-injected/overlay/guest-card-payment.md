@@ -3,6 +3,7 @@ id: guest-card-payment
 type: spec
 status: draft
 summary: Guests pay by card at checkout without creating an account
+ui: true
 depends: []
 criteria:
   - id: ac-pay
