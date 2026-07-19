@@ -59,3 +59,29 @@ describe('parseVerdictText', () => {
     if (!bad.ok) expect(bad.violations[0].rule).toBe('verdict-unparseable')
   })
 })
+
+describe('transient invocation failure', () => {
+  it('retries a timed-out reviewer instead of failing the whole run', () => {
+    const repo = tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'a.md > ## B', note: 'read' }], findings: [] })
+    // hang the FIRST call past the timeout, answer normally after: a stalled call is
+    // transient, and treating it as fatal loses every sample a battery already paid for.
+    writeFileSync(join(scenario, 'claude-hang'), '1')
+
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { SPECFLOW_REVIEWER_TIMEOUT_MS: '400' }) })
+    const r = invokeClaude(ctx, { cwd: repo.root, prompt: 'review this' })
+
+    expect(r.ok).toBe(true)
+    expect(readFileSync(join(scenario, 'claude-calls', 'call-2', 'argv'), 'utf8')).toContain('-p')
+  })
+
+  it('does not retry a missing binary — that is not transient', () => {
+    const repo = tmpRepo()
+    const ctx = fakeCtx(repo.root, { env: { PATH: '/nonexistent' } })
+    const r = invokeClaude(ctx, { cwd: repo.root, prompt: 'review this' })
+
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
+  })
+})

@@ -18,6 +18,11 @@ mkdir -p "$call"
 if [ -e ".specflow/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"
+# hang the first N calls past the caller's timeout — exercises transient-stall retry.
+# The call is already recorded above, so the retry lands in call-$((n+1)).
+if [ -f "$dir/claude-hang" ] && [ "$n" -le "$(cat "$dir/claude-hang")" ]; then
+  sleep 30
+fi
 if [ -f "$dir/claude-fail" ] && [ "$n" -le "$(cat "$dir/claude-fail")" ]; then
   echo "fake claude: injected failure for call $n" >&2
   exit 1

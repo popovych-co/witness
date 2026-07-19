@@ -82,32 +82,49 @@ export function promptsSha(lenses: Lens[]): string {
 
 export interface InvokeOpts { cwd: string; prompt: string; model?: string }
 
+const REVIEWER_TIMEOUT_MS = 600_000
+// One stalled call must not cost a whole run: a full calibration battery is ~200
+// invocations over hours, and treating a transient stall as fatal throws away every
+// sample already paid for. Retries are bounded so a genuinely wedged binary still ends.
+const TIMEOUT_RETRIES = 2
+
 export function invokeClaude(ctx: Ctx, opts: InvokeOpts): Result<{ text: string }> {
   const args = ['-p', '--output-format', 'json']
   if (opts.model) args.push('--model', opts.model)
-  const r = spawnSync('claude', args, {
-    cwd: opts.cwd,
-    env: ctx.env as NodeJS.ProcessEnv,
-    input: opts.prompt,
-    encoding: 'utf8',
-    timeout: 600_000,
-    maxBuffer: 64 * 1024 * 1024,
-  })
-  if (r.error) {
-    return refuse([v('claude', 'reviewer-invocation', String((r.error as Error).message),
-      'a runnable claude binary on PATH — gates invoke reviewers headlessly; specflow check probes this')])
-  }
-  if (r.status !== 0) {
-    return refuse([v('claude', 'reviewer-invocation',
-      `exit ${String(r.status)}: ${(r.stderr ?? '').slice(0, 200)}`, 'claude -p exiting 0')])
-  }
-  try {
-    const envelope = JSON.parse(r.stdout) as { result?: unknown }
-    if (typeof envelope.result !== 'string') throw new Error('missing result')
-    return ok({ text: envelope.result })
-  } catch {
-    return refuse([v('claude', 'envelope-unparseable', (r.stdout ?? '').slice(0, 120),
-      'a --output-format json envelope carrying a result string')])
+  const timeout = Number(ctx.env.SPECFLOW_REVIEWER_TIMEOUT_MS) || REVIEWER_TIMEOUT_MS
+  for (let attempt = 0; ; attempt += 1) {
+    const r = spawnSync('claude', args, {
+      cwd: opts.cwd,
+      env: ctx.env as NodeJS.ProcessEnv,
+      input: opts.prompt,
+      encoding: 'utf8',
+      timeout,
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    if (r.error) {
+      // A stall is NOT the missing-binary case. Reporting it as one sent the last
+      // reader hunting a PATH problem on a machine where `claude` answered in 6s.
+      if ((r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+        if (attempt < TIMEOUT_RETRIES) continue
+        return refuse([v('claude', 'reviewer-timeout',
+          `no response in ${timeout}ms after ${attempt + 1} attempts`,
+          'a reviewer that answers within the timeout — raise SPECFLOW_REVIEWER_TIMEOUT_MS if the model is simply slow')])
+      }
+      return refuse([v('claude', 'reviewer-invocation', String((r.error as Error).message),
+        'a runnable claude binary on PATH — gates invoke reviewers headlessly; specflow check probes this')])
+    }
+    if (r.status !== 0) {
+      return refuse([v('claude', 'reviewer-invocation',
+        `exit ${String(r.status)}: ${(r.stderr ?? '').slice(0, 200)}`, 'claude -p exiting 0')])
+    }
+    try {
+      const envelope = JSON.parse(r.stdout) as { result?: unknown }
+      if (typeof envelope.result !== 'string') throw new Error('missing result')
+      return ok({ text: envelope.result })
+    } catch {
+      return refuse([v('claude', 'envelope-unparseable', (r.stdout ?? '').slice(0, 120),
+        'a --output-format json envelope carrying a result string')])
+    }
   }
 }
 
