@@ -95,5 +95,5 @@ $SPECFLOW gate decompose --effort <effort>    # append --manual when the run ask
 
 - **Auto-pass** (green path) → done; hand back to /specflow.
 - **Stop** (standing stop, blocking findings, fix-created-spec tripwire) → render the gate output verbatim, print the human's exits — `specflow decide decompose <effort> --approve | --revise --note "…" | --stop` — and END YOUR TURN. You never decide.
-- **Re-entered after `--revise`** → `decide --show` reconstructs the verdict + human note; findings anchor to spec headings. Fix via new `specflow write` calls (same ids amend in place), self-check totality, re-gate. The 3-round bound is the CLI's — surface it, never fight it.
+- **Re-entered after `--revise`** → `decide --show` reconstructs the verdict + human note; findings anchor to spec headings. Fix via new `specflow write` calls (same ids amend in place), self-check totality, re-gate. The 3-round bound is the CLI's — surface it, never fight it. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **scope itself** (goals wrong, not slicing wrong)? Tell the human that `--revise --upstream` on the stop screen routes back to re-interview via `specflow recap --amend`.

@@ -153,4 +153,9 @@ registerGate({
       skipLenses,
     })
   },
+
+  currentSha(root, _canon, _cfg, planId) {
+    const wt = worktreePath(root, planId)
+    return existsSync(wt) ? worktreeTreeSha(wt) : undefined
+  },
 })

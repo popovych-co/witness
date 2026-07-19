@@ -7,8 +7,14 @@ import { latestRecap } from '../journal.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import type { GateCheck } from '../rounds.js'
-import { findById } from '../scan.js'
+import { findById, type CanonDoc } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
+
+// What this gate judges: the artifact PAIRED with the spec it realizes. With no artifact
+// the spec alone is the sha, so a re-authored spec still lapses a prior verdict. Shared
+// by `resolve` and `currentSha` so the two can never disagree about what moved.
+const reviewedShaOf = (html: string | undefined, spec: CanonDoc): string =>
+  html !== undefined ? designPairSha(html, spec) : canonicalSha(spec.meta, spec.body)
 
 registerGate({
   gate: 'design',
@@ -55,7 +61,7 @@ registerGate({
 
     return ok<GateInput>({
       class: (recap?.class ?? 'feature') as GateInput['class'],
-      reviewedSha: html !== undefined ? designPairSha(html, spec) : canonicalSha(spec.meta, spec.body),
+      reviewedSha: reviewedShaOf(html, spec),
       artifactSha: html !== undefined ? htmlSha(html) : undefined,
       reviewed: { kind: 'design', artifact: { ids }, spec: { id: specId, body: spec.body } },
       promptBody,
@@ -63,6 +69,13 @@ registerGate({
       standingStop: 'design always stops — a human approves every screen (same footing as ship)',
       stamps: [],
     })
+  },
+
+  currentSha(root, canon, cfg, specId) {
+    const spec = findById(canon, specId)
+    if (!spec || spec.meta.type !== 'spec') return undefined
+    const abs = join(root, designRel(cfg.paths, specId))
+    return reviewedShaOf(existsSync(abs) ? readFileSync(abs, 'utf8') : undefined, spec)
   },
 
   approveMeta(root, canon, cfg, specId): MetaStamp[] {

@@ -58,4 +58,4 @@ Conflicts touching `specs/` or `plans/` cannot happen (PR branches carry code on
 
 ## Revise at the ship gate
 
-`decide ship <plan-id> --revise` re-enters here with the verdict (`decide --show`). Drift-lane findings usually mean code and spec disagree — if the *code* is wrong, fix it in the worktree (TDD, evidence); if the **spec** is wrong, tell the human `--revise --upstream` routes to decompose — never edit the spec yourself. A passing lane against amended parent content re-pins `derives-from` automatically (CLI-witnessed); you never touch pins.
+`decide ship <plan-id> --revise` re-enters here with the verdict (`decide --show`). Drift-lane findings usually mean code and spec disagree — if the *code* is wrong, fix it in the worktree (TDD, evidence); if the **spec** is wrong, tell the human `--revise --upstream` routes to decompose — never edit the spec yourself. A passing lane against amended parent content re-pins `derives-from` automatically (CLI-witnessed); you never touch pins. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.

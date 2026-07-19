@@ -122,6 +122,25 @@ export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | 
   return undefined
 }
 
+// A decision carrying `caused_by` is a REOPEN — another gate's `--revise --upstream`
+// instructing this stage to re-author. It is not a disposition of the run above it and
+// can never settle it. Discharged by a later gate-run OR a later human-decision for the
+// same gate: `--approve` is a legitimate answer to a reopen ("looked, the canon was
+// right"), and requiring a run would strand the human at `changed-nothing`, which
+// appends nothing and would loop forever (D67's livelock shape).
+export function openReopen(entries: Entry[], gate: string): DecisionEntry | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]
+    if (isRun(e, gate)) return undefined
+    if (isDecision(e, gate)) {
+      const d = e as unknown as DecisionEntry
+      if (d.caused_by !== undefined) return d
+      return undefined
+    }
+  }
+  return undefined
+}
+
 export type AppendKind =
   | { kind: 'resume'; entry: GateRunEntry }
   | { kind: 'changed-nothing'; entry: GateRunEntry }

@@ -94,6 +94,10 @@ registerGate({
     })
   },
 
+  currentSha(root, canon, _cfg, effort) {
+    return effortReviewedSha(root, canon, effort).sha
+  },
+
   approveStamps(root, canon, effort) {
     return stampsFor(effortSpecs(root, canon, effort))
   },

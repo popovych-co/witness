@@ -89,5 +89,5 @@ $SPECFLOW gate plan <plan-id>    # append --manual when the run asked for it
 
 - **Auto-pass** → done; hand back to /specflow.
 - **Stop** → render the gate output verbatim, print `specflow decide plan <plan-id> --approve | --revise --note "…" | --stop`, END YOUR TURN.
-- **Re-entered after `--revise`** → `decide --show` gives the verdict + note (findings anchor to `<plan-id> > ## Step: <id>`); rewrite via `specflow write` with the same plan id; re-gate. A parent amended mid-flight fails `pin-fresh` — rewriting through `specflow write` re-stamps the pin to current content; your body must then realize the *new* delta (`$SPECFLOW diff` again).
+- **Re-entered after `--revise`** → `decide --show` gives the verdict + note (findings anchor to `<plan-id> > ## Step: <id>`); rewrite via `specflow write` with the same plan id; re-gate. A parent amended mid-flight fails `pin-fresh` — rewriting through `specflow write` re-stamps the pin to current content; your body must then realize the *new* delta (`$SPECFLOW diff` again). `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **spec** (plan faithful, spec wrong)? Tell the human `--revise --upstream <spec-id>` reopens decompose for it.

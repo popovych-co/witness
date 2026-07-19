@@ -85,6 +85,12 @@ registerGate({
     })
   },
 
+  currentSha(_root, canon, _cfg, planId) {
+    const plan = findById(canon, planId)
+    const parent = plan ? findById(canon, String(plan.meta.parent)) : undefined
+    return plan && parent ? planPairSha(plan, parent) : undefined
+  },
+
   approveStamps(_root, canon, planId) {
     const doc = findById(canon, planId)
     return doc && String(doc.meta.status) === 'draft' ? [{ artifact: planId, to: 'approved' }] : []

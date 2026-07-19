@@ -26,7 +26,7 @@ Every turn is `specflow next`, read, act on the first matching row, repeat:
 | Signal | Action |
 |---|---|
 | `note:` contains `multiple ready — choose` | Show the listed spec ids, ask the human which to plan. Then invoke skill `specflow-plan` with the chosen id. |
-| `next:` names `specflow decide` | A gate is stopped and the decision is the human's. Run `$SPECFLOW decide <gate> <target> --show`, render the checks and findings verbatim, print the three exits (`--approve` · `--revise --note "…"` · `--stop`), and **END YOUR TURN**. Never run `--approve`, `--revise`, or `--stop` on your own judgment. |
+| `next:` names `specflow decide` | A gate is stopped and the decision is the human's. Run `$SPECFLOW decide <gate> <target> --show`, render the checks and findings verbatim, render the `exits:` line the CLI emitted verbatim — never a remembered set, which is wrong at the round bound and in the reopened and stale states — and **END YOUR TURN**. Never run `--approve`, `--revise`, or `--stop` on your own judgment. |
 | `stage: brainstorm` | Invoke skill `specflow-brainstorm`. |
 | `stage: decompose` | Invoke skill `specflow-decompose` with `target` (the effort slug). |
 | `stage: design` | Invoke skill `specflow-design` with `target` (the spec id). |

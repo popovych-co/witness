@@ -4,7 +4,7 @@ import { loadConfig, type Config, type DocKey } from './config.js'
 import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
-import { appendEntry, entryLine, journalRel, readStream } from './journal.js'
+import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { loadCanon, findById, type Canon } from './scan.js'
 import { newRunId } from './drift.js'
@@ -49,6 +49,13 @@ export interface GateSpec {
   gate: GateName
   targetKind: 'effort' | 'plan' | 'spec'
   resolve(root: string, ctx: Ctx, canon: Canon, cfg: Config, target: string): Promise<Result<GateInput>>
+  // The sha `resolve` would report for the CURRENT content, without doing resolve's work.
+  // `decide --approve` needs it to refuse stamping bytes no gate read (D75: staleness at
+  // consumption), and resolve() is not usable there — the ship and implement gates run
+  // the test, lint and criteria lanes inside it. Returns undefined when the sha cannot be
+  // computed (no worktree, missing parent); the caller then approves rather than
+  // converting an unrelated condition into a misleading refusal.
+  currentSha?(root: string, canon: Canon, cfg: Config, target: string): string | undefined
   approveStamps?(root: string, canon: Canon, target: string): Stamp[]
   approveMeta?(root: string, canon: Canon, cfg: Config, target: string): MetaStamp[]
 }
@@ -81,6 +88,17 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
   return ok(picked as string[])
 }
 
+// Which decisions are legal RIGHT NOW is a pure function of journal state, so it belongs
+// where the state is. Skills used to recite a fixed triple, which is wrong at the bound
+// (D67's endgame set) — and now wrong in three more states.
+export function liveExits(gate: string, target: string, entries: Entry[], stale: boolean): string {
+  if (stale) return `specflow gate ${gate} ${target}`
+  if (boundReached(entries, gate)) {
+    return `specflow decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
+  }
+  return `specflow decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`
+}
+
 export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume'): void {
   ctx.out(kv('gate', entry.gate))
   ctx.out(kv('target', entry.artifact))
@@ -105,7 +123,11 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   if (entry.standing) ctx.out(kv('standing-stop', entry.standing))
   ctx.out(kv('outcome', entry.outcome))
   if (entry.outcome !== 'passed') {
-    ctx.out(`help: specflow decide ${entry.gate} ${entry.artifact} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`)
+    // `[]` keeps this a pure formatter over the entry it was handed — callers that know
+    // the stream (`--show`) render their own `exits:` line from the real entries. The
+    // non-bound triple is correct for runGate's own post-run render: a run that reached
+    // the bound short-circuits before rendering.
+    ctx.out(`help: ${liveExits(entry.gate, entry.artifact, [], false)}`)
   }
 }
 

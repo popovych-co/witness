@@ -3,11 +3,11 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import '../gates/index.js'
-import { gateSpec, renderGateRun } from '../gate.js'
+import { gateSpec, liveExits, renderGateRun } from '../gate.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
-import { appendEntry, entryLine, journalRel, readStream, streamExists } from '../journal.js'
+import { appendEntry, entryLine, journalRel, readStream, streamExists, type Entry } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
@@ -15,7 +15,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { kv } from '../toon.js'
 import {
-  boundReached, lastGateRun, pendingDecision, roundsSinceApprove, type DecisionEntry,
+  boundReached, lastGateRun, openReopen, pendingDecision, roundsSinceApprove, type DecisionEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 
@@ -43,14 +43,40 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (argv.includes('--show')) {
     if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
-    renderGateRun(ctx, last, 'ran')
-    const lastDecision = [...entries].reverse().find(
-      (e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate,
-    ) as unknown as DecisionEntry | undefined
-    if (lastDecision) {
-      ctx.out(kv('decision', lastDecision.decision))
-      if (lastDecision.note) ctx.out(kv('note', lastDecision.note))
+    const reopen = openReopen(entries, gate)
+    const decisionsAfter = entries
+      .slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+      .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+      .map((e) => e as unknown as DecisionEntry)
+    // A caused_by decision is a REOPEN, not a disposition — it can never settle the run
+    // above it, and pairing the two is what presented 15 settled findings as current.
+    const disposition = decisionsAfter.find((d) => d.caused_by === undefined)
+
+    if (reopen) {
+      ctx.out(kv('gate', gate))
+      ctx.out(kv('target', target))
+      ctx.out(kv('state', 'reopened — the gate must run again'))
+      ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
+      if (reopen.note) ctx.out(kv('note', reopen.note))
+      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · specflow log ${target}`))
+      ctx.out(kv('exits', liveExits(gate, target, entries, true)))
+      return EXIT.OK
     }
+    if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
+      ctx.out(kv('gate', gate))
+      ctx.out(kv('target', target))
+      ctx.out(kv('state', `settled — ${disposition.decision}`))
+      if (disposition.note) ctx.out(kv('note', disposition.note))
+      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · specflow log ${target}`))
+      return EXIT.OK
+    }
+    // pending (no disposition) or revise (the author's input): the verdict is actionable
+    renderGateRun(ctx, last, 'ran')
+    if (disposition) {
+      ctx.out(kv('decision', disposition.decision))
+      if (disposition.note) ctx.out(kv('note', disposition.note))
+    }
+    ctx.out(kv('exits', liveExits(gate, target, entries, false)))
     return EXIT.OK
   }
 
@@ -116,6 +142,32 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   const canon = loadCanon(root)
+
+  // A `human-decision` entry is a RECORD — honest about the sha it judged whatever the
+  // tree does afterward, which is why D76 declined a write-time staleness check. A stamp
+  // is an ASSERTION about current content (`status: approved`, `design: {sha}`), and D75
+  // puts staleness checks at consumption. approveMeta reads the artifact from disk and
+  // never consults the run, so approving after a re-author blessed unreviewed bytes.
+  // `currentSha` is undefined when it cannot be computed (no worktree, missing parent):
+  // approve then proceeds, and the entry still honestly records what it judged — this
+  // check must never convert an unrelated condition into a misleading refusal.
+  if (decision === 'approve') {
+    const now = spec.currentSha?.(root, canon, cfgR.value, target)
+    if (now !== undefined && now !== anchor.reviewed_sha) {
+      // At the bound the gate will not re-run (gate.ts:176), so "go re-gate" would be
+      // the lie D67 was written about. Name the exits that actually work: approve is
+      // genuinely unavailable here — a human cannot honestly stamp bytes no gate read —
+      // but --stop and --revise --upstream both remain, so nothing livelocks.
+      renderRefusal([v('gate', 'stale-verdict',
+        `verdict @${short(anchor.reviewed_sha)}, content @${short(now)}`,
+        atBound
+          ? `specflow decide ${gate} ${target} --revise --upstream <id> | --stop (bound reached — the gate will not re-run)`
+          : `a verdict describing current content — run: specflow gate ${gate} ${target}`)])
+        .forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+  }
+
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,

@@ -7,13 +7,13 @@ import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { effortOf, effortSpecs, effortWrites, worktreeTreeSha } from '../reviewed.js'
+import { effortOf, effortReviewedSha, effortSpecs, effortWrites, planPairSha, worktreeTreeSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv } from '../toon.js'
-import { boundReached, lastGateRun, pendingDecision, type DecisionEntry } from '../rounds.js'
+import { boundReached, lastGateRun, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -27,11 +27,31 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   // above BOTH settling branches deliberately: a human --approve --override is granted
   // against a specific tree too, and lapses with it
   if (currentSha !== undefined && last.reviewed_sha !== currentSha) return false
+  // an explicit reopen from another gate's --revise --upstream un-settles this one until
+  // it is discharged, exactly as a moved sha does — one predicate, both staleness terms
+  if (openReopen(entries, gate) !== undefined) return false
   if (last.outcome === 'passed') return true
   const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
   return after.some((e) => e.t === 'human-decision' &&
     (e as unknown as DecisionEntry).gate === gate &&
     (e as unknown as DecisionEntry).decision === 'approve')
+}
+
+// `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
+// whenever the last run's reviewed sha still matches current content and a revise or
+// reopen sits after it. Routing there asks the human to invoke a verb the CLI will
+// immediately decline, and — since nothing is appended — `next` says it again next turn.
+// The work owed is AUTHORING, so route to the stage. The design stage already does this
+// via designArtifactCurrent; this is the same rule for decompose and plan.
+function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
+  const last = lastGateRun(entries, gate)
+  if (!last) return false
+  if (currentSha === undefined || last.reviewed_sha !== currentSha) return false
+  if (openReopen(entries, gate) !== undefined) return true
+  const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+  return after.some((e) => e.t === 'human-decision' &&
+    (e as unknown as DecisionEntry).gate === gate &&
+    ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
 }
 
 export interface NextAction {
@@ -201,10 +221,20 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     // Settled either by a real gate-run+approve, or (fixture/seed shortcuts) by every
     // effort spec already being past draft — a plan can't legally target a draft parent,
     // so non-draft specs are proof decompose's outcome was reached one way or another.
+    // The shortcut stands in for a gate-run, so an OPEN REOPEN un-discharges it too:
+    // otherwise it short-circuits past gateSettled and the reopen is never routed.
     const specs = effortSpecs(root, canon, e.slug)
-    const specsApproved = specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft')
-    if (!specsApproved && !gateSettled(e.entries, 'decompose')) {
-      return { line: `specflow gate decompose --effort ${e.slug}`, target: e.slug }
+    const reopened = openReopen(e.entries, 'decompose') !== undefined
+    const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft')
+    const effortSha = effortReviewedSha(root, canon, e.slug).sha
+    if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha)) {
+      return authoringOwed(e.entries, 'decompose', effortSha)
+        ? {
+            line: `specflow write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+            stage: 'decompose', target: e.slug,
+            note: 'revise owed — re-author, then the gate has something new to judge',
+          }
+        : { line: `specflow gate decompose --effort ${e.slug}`, target: e.slug }
     }
   }
 
@@ -251,7 +281,18 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // an approved sibling must not short-circuit a draft out of review (stage-major order)
   for (const plan of plans) {
     const id = String(plan.meta.id)
-    if (String(plan.meta.status) === 'draft') return { line: `specflow gate plan ${id}`, target: id }
+    if (String(plan.meta.status) !== 'draft') continue
+    const parent = findById(canon, String(plan.meta.parent))
+    const planSha = parent ? planPairSha(plan, parent) : undefined
+    const entries = readStream(root, id)
+    if (gateSettled(entries, 'plan', planSha)) continue
+    return authoringOwed(entries, 'plan', planSha)
+      ? {
+          line: `specflow write ${id} --effort <slug> --meta m.json --body b.md`,
+          stage: 'plan', target: id,
+          note: 'revise owed — rewrite the plan, then re-gate',
+        }
+      : { line: `specflow gate plan ${id}`, target: id }
   }
 
   // Starting a flow is tier 3, not tier 1: an approved-but-unstarted plan is new work,
