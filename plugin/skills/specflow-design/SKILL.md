@@ -16,7 +16,7 @@ No text copied verbatim; the design-critic lens is new material. -->
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.9}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.10}"
 ```
 
 - **Never edit `specs/**`, `plans/**`, or `designs/**`** — the CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `specflow design`. (A PreToolUse hook blocks direct edits; the trailer audit catches end-runs.)

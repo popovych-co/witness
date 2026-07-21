@@ -15,7 +15,7 @@ tests carry the parent spec's tag in their NAME. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.9}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.10}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
@@ -52,7 +52,7 @@ $SPECFLOW dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> \
 >
 > Protocol per step, in order — red/green/refactor with witnessed evidence:
 > 1. Write the failing test FIRST. The test's NAME carries the tag `@spec:<parent-id>` (in the title string — never a comment; e.g. `it("rotates token before expiry @spec:auth-refresh")`). Run the inner TDD loop against exactly the test under work — `-t` with the test's own name, never the spec tag. Rerunning a failing test is legal; rerunning the suite to watch one test is not. The tagged suite runs only inside the witnessed evidence cycle (the `test-evidence` phases below) at step close — "check nothing broke mid-step" duplicates a run the CLI already witnesses.
-> 2. Run `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.9} test-evidence <plan-id> --phase red` from the worktree. It must record a genuine red. If it reports the test passes before implementation (`vacuous`), STOP — never proceed to green on a vacuous red. First suspect the runner: a filter that never reaches the tagged tests (e.g. a dropped trailing `--` in the root test script) makes every phase lie. Fix the runner or the test until red genuinely fails, then re-record — a later genuine red supersedes the vacuous one (the gate judges the latest cycle). A `filter-matched-nothing` refusal is the same stop signal with the diagnosis built in. If neither applies, the behavior already exists — report instead of implementing.
+> 2. Run `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.10} test-evidence <plan-id> --phase red` from the worktree. It must record a genuine red. If it reports the test passes before implementation (`vacuous`), STOP — never proceed to green on a vacuous red. First suspect the runner: a filter that never reaches the tagged tests (e.g. a dropped trailing `--` in the root test script) makes every phase lie. Fix the runner or the test until red genuinely fails, then re-record — a later genuine red supersedes the vacuous one (the gate judges the latest cycle). A `filter-matched-nothing` refusal is the same stop signal with the diagnosis built in. If neither applies, the behavior already exists — report instead of implementing.
 > 3. Write the minimal code to make it pass. No speculative generality.
 > 4. Run `… test-evidence <plan-id> --phase green` — it must record green.
 > 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design.
