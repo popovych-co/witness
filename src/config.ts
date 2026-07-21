@@ -22,6 +22,7 @@ export interface Config {
   raw: Record<string, unknown>
   paths: CanonPaths
   docs: DocsRegistry
+  implement: ImplementConfig
   warning?: string
 }
 
@@ -102,6 +103,27 @@ export function resolveDocs(raw: Record<string, unknown>): Result<DocsRegistry> 
   return violations.length ? refuse(violations) : ok(out)
 }
 
+export const DEFAULT_STEPS_PER_DISPATCH = 3
+
+export interface ImplementConfig {
+  stepsPerDispatch: number
+}
+
+export function resolveImplement(raw: Record<string, unknown>): Result<ImplementConfig> {
+  const conf = raw.implement
+  if (conf === undefined) return ok({ stepsPerDispatch: DEFAULT_STEPS_PER_DISPATCH })
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) {
+    return refuse([v('implement', 'invalid', String(conf), 'a map of implement-stage settings')])
+  }
+  const val = (conf as Record<string, unknown>).stepsPerDispatch
+  if (val === undefined) return ok({ stepsPerDispatch: DEFAULT_STEPS_PER_DISPATCH })
+  if (typeof val !== 'number' || !Number.isInteger(val) || val < 1) {
+    return refuse([v('implement.stepsPerDispatch', 'invalid', String(val),
+      'an integer >= 1 — steps handed to each fresh implement agent')])
+  }
+  return ok({ stepsPerDispatch: val })
+}
+
 // Lenient path resolution for callers without a loaded Config (canon scan, git
 // state scoping): a missing or broken config falls back to the defaults — the
 // verbs own the refusal messaging via loadConfig, which validates paths strictly.
@@ -142,11 +164,14 @@ export function loadConfig(root: string): Result<Config> {
   if (!paths.ok) return refuse(paths.violations)
   const docs = resolveDocs(obj)
   if (!docs.ok) return refuse(docs.violations)
+  const implement = resolveImplement(obj)
+  if (!implement.ok) return refuse(implement.violations)
   return ok({
     schema,
     raw: obj,
     paths: paths.value,
     docs: docs.value,
+    implement: implement.value,
     warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run specflow migrate (reserved)` : undefined,
   })
 }

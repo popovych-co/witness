@@ -68,3 +68,17 @@ npm test            # vitest, in-process CLI against throwaway git repos
 npm run typecheck
 npm run build
 ```
+
+## Run economics (operator notes)
+
+Non-load-bearing knobs for the machine that hosts long implement runs — the design
+depends on none of them (DESIGN.md row 79):
+
+- **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt
+  cache; on wake the full agent context is re-written at cache-write price. On macOS:
+  `caffeinate -dims` for the session, or plug in and disable sleep.
+- **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`** (set at CLI launch) lowers the harness's
+  auto-compaction threshold as belt-and-suspenders under the dispatch budget. It is
+  documented for main sessions only — whether subagents honor it is unverified.
+- The designed mechanisms are the dispatch budget (`implement.stepsPerDispatch`),
+  the loop-width protocol, and `dispatch-report` telemetry — see DESIGN.md rows 79–81.

@@ -5,6 +5,7 @@ export type EntryType =
   | 'recap' | 'write' | 'write-refused' | 'gate-run'
   | 'human-decision' | 'drift-check' | 'test-evidence' | 'adopt' | 'status'
   | 'design-write' | 'design-reconfirm' | 'design-stamp' | 'design-shown'
+  | 'dispatch'
 
 export interface Entry {
   v: 1

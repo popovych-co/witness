@@ -41,6 +41,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (!pinR.ok) { renderRefusal(pinR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const agentModel = pinR.value ?? SESSION_DEFAULT
 
+  // Row 79: surface the run's shape so the implement skill reads the dispatch
+  // budget mechanically instead of guessing at relay boundaries.
+  const budget = cfgR.value.implement.stepsPerDispatch
+  const stepCount = ((plan.meta.steps ?? []) as unknown[]).length
+  const dispatchLine = `${stepCount} step(s) ≈ ${Math.ceil(stepCount / budget)} dispatch(es) at budget ${budget}`
+
   if (status === 'in-progress') {
     const had = existsSync(worktreePath(root, planId))
     const wt = createWorktree(root, planId, base)
@@ -48,6 +54,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('start', `${planId} already in-progress — worktree ${had ? 'present' : 'recreated'}`))
     ctx.out(kv('worktree', wt.value.path))
     ctx.out(kv('agent-model', agentModel))
+    ctx.out(kv('dispatch-budget', String(budget)))
+    ctx.out(kv('dispatches', dispatchLine))
     return EXIT.OK
   }
   if (status !== 'approved') {
@@ -101,6 +109,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('worktree', wt.value.path))
   ctx.out(kv('branch', branchName(planId)))
   ctx.out(kv('agent-model', agentModel))
+  ctx.out(kv('dispatch-budget', String(budget)))
+  ctx.out(kv('dispatches', dispatchLine))
   ctx.out(`help: implement inside the worktree; specflow test-evidence ${planId} --phase red|green as you go`)
   return EXIT.OK
 }

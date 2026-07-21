@@ -117,3 +117,37 @@ describe('DOC_KEYS (design consumer shipped)', () => {
     expect(res.ok && res.value.docs.design).toEqual(['docs/ui/design-language.md'])
   })
 })
+
+describe('resolveImplement (implement.stepsPerDispatch)', () => {
+  it('defaults to 3 when the key or section is absent', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.implement.stepsPerDispatch).toBe(3)
+  })
+
+  it('accepts a valid integer override', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\nimplement:\n  stepsPerDispatch: 5\n')
+    const res = loadConfig(repo.root)
+    expect(res.ok && res.value.implement.stepsPerDispatch).toBe(5)
+  })
+
+  it('refuses zero, negatives, non-integers and strings', () => {
+    for (const bad of ['0', '-2', '2.5', '"three"']) {
+      const repo = tmpRepo()
+      repo.write('specflow.config.yaml', `schema: 1\nimplement:\n  stepsPerDispatch: ${bad}\n`)
+      const res = loadConfig(repo.root)
+      expect(res.ok, `expected refusal for ${bad}`).toBe(false)
+      expect(!res.ok && res.violations[0]?.field).toBe('implement.stepsPerDispatch')
+      expect(!res.ok && res.violations[0]?.want).toContain('integer >= 1')
+    }
+  })
+
+  it('refuses a non-map implement section', () => {
+    const repo = tmpRepo()
+    repo.write('specflow.config.yaml', 'schema: 1\nimplement: nope\n')
+    const res = loadConfig(repo.root)
+    expect(!res.ok && res.violations[0]?.field).toBe('implement')
+  })
+})

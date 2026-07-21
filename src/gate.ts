@@ -131,6 +131,20 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   }
 }
 
+// Row 79: the human approving a plan sees the run's shape before it starts.
+// Display only — no lens, no threshold; loads config/canon itself so the
+// entry-renderers stay pure formatters.
+export function printDispatchArithmetic(ctx: Ctx, root: string, gateName: string, target: string): void {
+  if (gateName !== 'plan') return
+  const cfg = loadConfig(root)
+  if (!cfg.ok) return
+  const doc = findById(loadCanon(root), target)
+  if (!doc || doc.meta.type !== 'plan') return
+  const budget = cfg.value.implement.stepsPerDispatch
+  const steps = ((doc.meta.steps ?? []) as unknown[]).length
+  ctx.out(kv('dispatches', `${steps} step(s) ≈ ${Math.ceil(steps / budget)} dispatch(es) at budget ${budget}`))
+}
+
 export async function runGate(
   ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean },
 ): Promise<number> {
@@ -187,6 +201,7 @@ export async function runGate(
   const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
   if (kind.kind === 'resume') {
     renderGateRun(ctx, kind.entry, 'resume')
+    printDispatchArithmetic(ctx, root, spec.gate, target)
     return kind.entry.outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   }
   if (kind.kind === 'changed-nothing') {
@@ -360,6 +375,7 @@ export async function runGate(
     if (!txn.ok) { renderRefusal(txn.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
 
     renderGateRun(ctx, entry, 'ran')
+    printDispatchArithmetic(ctx, root, spec.gate, target)
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   } finally {
