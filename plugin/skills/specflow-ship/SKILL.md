@@ -26,6 +26,8 @@ SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.1.10}"
 
 ## Drive the phase machine
 
+You are the ship session — spawned fresh at the primary root via the `run:` handoff `next` printed (no Task subagents anywhere in ship; CI investigation and conflict resolution happen in this session, in the worktree, yourself).
+
 `specflow ship <plan-id>` is the whole phase machine — gate, PR, CI watch:
 
 ```bash

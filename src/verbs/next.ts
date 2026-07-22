@@ -9,6 +9,7 @@ import { designArtifactCurrent, designPending, designUnseen } from '../design.js
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { effortOf, effortReviewedSha, effortSpecs, effortWrites, planPairSha, worktreeTreeSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
+import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -59,6 +60,17 @@ export interface NextAction {
   stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
   target?: string
   note?: string
+  home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
+  run?: string    // paste-ready handoff command for a fresh session in `home`
+}
+
+// Row 82: the handoff command a human pastes into a fresh terminal. The model pin rides
+// `claude --model` literally; SESSION_DEFAULT (or an unloadable pin — config errors
+// surface at start/gate, not here) omits the flag. Single quotes: a double-quoted form
+// trips toon esc() quoting and emits an unpasteable line.
+function handoffLine(home: string, model?: string): string {
+  const modelArg = model && model !== SESSION_DEFAULT ? ` --model ${model}` : ''
+  return `cd '${home}' && claude${modelArg} '/specflow'`
 }
 
 // The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
@@ -70,17 +82,21 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const entries = readStream(root, id)
   const wt = worktreePath(root, id)
+  const pinR = stagePin(cfg, 'implement')
+  const implementModel = pinR.ok ? pinR.value : undefined
+  const inWorktree = { home: wt, run: handoffLine(wt, implementModel) }
+  const atRoot = { home: root, run: handoffLine(root) }
   if (!existsSync(wt)) return { line: `specflow start ${id}`, target: id, note: 'worktree missing — start recreates it' }
-  if (plan.meta.pr !== undefined) return { line: `specflow ship ${id}`, stage: 'ship', target: id }
+  if (plan.meta.pr !== undefined) return { line: `specflow ship ${id}`, stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
   const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
-  if (!satisfied) return { line: `specflow test-evidence ${id} --phase red|green`, stage: 'implement', target: id }
-  if (!gateSettled(entries, 'implement', worktreeTreeSha(wt))) return { line: `specflow gate implement ${id}`, target: id }
-  return { line: `specflow ship ${id}`, stage: 'ship', target: id }
+  if (!satisfied) return { line: `specflow test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
+  if (!gateSettled(entries, 'implement', worktreeTreeSha(wt))) return { line: `specflow gate implement ${id}`, target: id, ...inWorktree }
+  return { line: `specflow ship ${id}`, stage: 'ship', target: id, ...atRoot }
 }
 
 // How far along a flow is — the drain order when several are actionable. Most-advanced
@@ -355,5 +371,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
   if (action.note) ctx.out(kv('note', action.note))
+  if (action.home) ctx.out(kv('home', action.home))
+  if (action.run) ctx.out(kv('run', action.run))
   return EXIT.OK
 }

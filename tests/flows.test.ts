@@ -154,6 +154,20 @@ describe('addressing one flow', () => {
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('auth-logout-plan-1')
     expect(res.stdout).not.toContain(planId)
+    // row 82: the inferred implement row names the very worktree we asked from
+    expect(res.stdout).toContain(`home: ${worktreePath(repo.root, 'auth-logout-plan-1')}`)
+
+    await repo.cli(['clean'])
+  })
+
+  it('ship row hands off home: primary root with a model-free run line', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await settleImplementGate(repo, wt, planId)   // flow advances to ship
+    const out = await nextLine(repo)
+    expect(out).toContain(`specflow ship ${planId}`)
+    expect(out).toContain(`home: ${repo.root}`)
+    expect(out).toContain(`run: cd '${repo.root}' && claude '/specflow'`)
+    expect(out).not.toContain('--model')   // session-default ship model → no flag
 
     await repo.cli(['clean'])
   })

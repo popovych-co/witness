@@ -100,13 +100,13 @@ describe('implement skill carries the economics protocol (rows 79–80)', () => 
   it.each([
     'dispatch-budget',                       // budget read from start output
     'at most the next',                      // ≤N steps per dispatch
-    'never relay mid-red',                   // relay only at evidence-cycle boundaries
+    'never stop mid-red',                    // relay only at evidence-cycle boundaries
     '~15 inner-loop iterations',             // early-exit countable trigger
-    'finishes the red→green it is in',       // early-exit exit ramp
-    'dispatch-report',                       // telemetry call after each return
+    'finish the red→green you are in',       // early-exit exit ramp
+    'dispatch-report',                       // telemetry call at the slice boundary
     "the test's own name, never the spec tag", // loop width: exact test
     'only inside the witnessed evidence cycle', // suite runs at step close only
-    'disposable reader agent',               // fat artifacts stay out of long-lived context
+    'never whole into your context',         // fat artifacts read by section, not whole
     'keep the app server alive',             // D66 guidance line
   ])('mentions %s', (snippet) => {
     expect(skill).toContain(snippet)

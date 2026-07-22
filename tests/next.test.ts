@@ -37,6 +37,16 @@ describe('specflow next — the ladder', () => {
     await repo.cli(['start', 'auth-refresh-plan-1'])
     const out = await nextLine(repo)                       // no evidence yet
     expect(out).toContain('stage: implement')
+    expect(out).toContain(`home: ${repo.root}/.specflow/worktrees/auth-refresh-plan-1`)
+  })
+
+  it('implement and ship rows carry home: and run: for the session handoff', async () => {
+    const { repo, planId } = await shippableRepo()
+    // implement-gate row: belongs in the worktree
+    const out = await nextLine(repo)
+    expect(out).toContain(`gate implement ${planId}`)
+    expect(out).toContain(`home: ${repo.root}/.specflow/worktrees/${planId}`)
+    expect(out).toContain(`run: cd '${repo.root}/.specflow/worktrees/${planId}' && claude '/specflow'`)
   })
 
   it('gates every draft plan before any approved plan starts (plans-first)', async () => {

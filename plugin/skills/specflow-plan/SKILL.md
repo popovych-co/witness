@@ -76,7 +76,7 @@ $SPECFLOW write auth-refresh-plan-1 --effort <effort> --meta "$DIR/meta.json" --
 
 Body discipline (write-validated: exactly one `## Step: <id>` section per manifest step, none missing, none orphaned):
 
-- Each step section is executable by a fresh subagent with zero context: exact paths, the test to write first, expected red, minimal code, expected green.
+- Each step section is executable by a fresh session with zero context: exact paths, the test to write first, expected red, minimal code, expected green.
 - A step realizing browser-visible behavior (markup, styles, routes, client-side interaction) names an **end-to-end Puppeteer** test as its test-to-write-first — the browser drives the slice's real backend and store, faking only third-party boundaries the repo doesn't own. Browser-level e2e TDD is the implement contract; the implement gate's pr-test lens treats a unit test standing in for the browser — or a browser test stubbing the slice's own backend — as a coverage gap.
 - Steps ordered so nothing presumes an artifact a later step creates.
 - Chore-class plans take `parent: principles` when repo-wide; the parent must be `approved`/`live` or the write refuses.

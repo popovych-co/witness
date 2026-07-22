@@ -70,9 +70,9 @@ describe('specflow-plan', () => {
 
 describe('specflow-implement', () => {
   const body = () => readFileSync(skillPath('specflow-implement'), 'utf8');
-  it('starts the worktree and dispatches a fresh subagent', () => {
+  it('starts the worktree; the session is the implementer', () => {
     expect(body()).toContain('specflow start');
-    expect(body()).toContain('fresh subagent');
+    expect(body()).toContain('this session is the implementer');
     expect(body()).toContain('.specflow/worktrees/');
   });
   it('witnesses red and green and gates', () => {

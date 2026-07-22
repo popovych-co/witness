@@ -20,13 +20,14 @@ If the repo has no `specflow.config.yaml`, run `$SPECFLOW init` first (one boots
 Every turn is `specflow next`, read, act on the first matching row, repeat:
 
 1. Run `$SPECFLOW next`.
-2. Read its TOON lines: `next:` (a command line), and optional `stage:`, `target:`, `note:`.
+2. Read its TOON lines: `next:` (a command line), and optional `stage:`, `target:`, `note:`, `home:` (the directory this action's session belongs in), `run:` (the paste-ready handoff command).
 3. Act on the **first** matching row, then go to 1:
 
 | Signal | Action |
 |---|---|
 | `note:` contains `multiple ready — choose` | Show the listed spec ids, ask the human which to plan. Then invoke skill `specflow-plan` with the chosen id. |
 | `next:` names `specflow decide` | A gate is stopped and the decision is the human's. Run `$SPECFLOW decide <gate> <target> --show`, render the checks and findings verbatim, render the `exits:` line the CLI emitted verbatim — never a remembered set, which is wrong at the round bound and in the reopened and stale states — and **END YOUR TURN**. Never run `--approve`, `--revise`, or `--stop` on your own judgment. |
+| `home:` present and ≠ your cwd | This stage belongs to a different session. Print the `run:` line verbatim for the human (if this session is `--manual`-armed, change the argument to `'/specflow --manual'`), say that work continues in the fresh session, and **END YOUR TURN**. Never invoke a stage skill or run the `next:` command from the wrong `home:` — a fresh session is the execution model (no Task subagents, ever). |
 | `stage: brainstorm` | Invoke skill `specflow-brainstorm`. |
 | `stage: decompose` | Invoke skill `specflow-decompose` with `target` (the effort slug). |
 | `stage: design` | Invoke skill `specflow-design` with `target` (the spec id). |

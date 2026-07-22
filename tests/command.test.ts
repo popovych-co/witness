@@ -43,6 +43,12 @@ describe('design stage in the motion surfaces', () => {
     expect(cmd).toMatch(/stage: design/);
     expect(cmd).toContain('specflow-design');
   });
+  it('the /specflow loop hands off when home: is elsewhere', () => {
+    const cmd = read('plugin/commands/specflow.md');
+    expect(cmd).toMatch(/`home:`/);
+    expect(cmd).toMatch(/END YOUR TURN/);
+    expect(cmd).toMatch(/--manual/);
+  });
   it('decompose documents the ui flag both directions', () => {
     const d = read('plugin/skills/specflow-decompose/SKILL.md');
     expect(d).toContain('ui: true');
