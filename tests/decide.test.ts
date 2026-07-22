@@ -5,7 +5,7 @@ import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import type { DecisionEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec } from './helpers.js'
+import { approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const BLOCKING = {
   coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
@@ -64,6 +64,21 @@ async function boundRepo() {
     })
   }
   return repo
+}
+
+// A stopped implement gate-run on a real plan: pins are implement-gate decisions, and
+// the appended entry alone creates the pending decision (same mechanism as boundRepo).
+async function stoppedImplement() {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  appendEntry(repo.root, 'auth-refresh-plan-1', {
+    v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1,
+    run_id: 'r-1', reviewed_sha: 'sha-1', prompts_sha: 'p', specflow: '0',
+    model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+  })
+  return { repo, planId: 'auth-refresh-plan-1' }
 }
 
 describe('specflow decide', () => {
@@ -148,6 +163,32 @@ describe('specflow decide', () => {
     const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
     expect(r.code).toBe(2)
     expect(r.stdout + r.stderr).toContain('nothing-pending')
+  })
+
+  it('--pin journals policy-pin entries alongside the decision', async () => {
+    const { repo, planId } = await stoppedImplement()
+    const r = await repo.cli(['decide', 'implement', planId, '--revise', '--note', 'fix it',
+      '--pin', 'unavailable /book renders the service in full',
+      '--pin', 'price format is $total · $rate/hr'])
+    expect(r.code).toBe(0)
+    const entries = readStream(repo.root, planId)
+    const pins = entries.filter((e) => e.t === 'policy-pin')
+    expect(pins).toHaveLength(2)
+    expect(pins[0]).toMatchObject({ artifact: planId, gate: 'implement', ordinal: 1, text: 'unavailable /book renders the service in full' })
+    expect(pins[1]).toMatchObject({ ordinal: 2 })
+  })
+
+  it('--pin refuses on non-implement gates and on empty text', async () => {
+    // pin-scope is a usage error — it fires before any pending-decision lookup
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const r1 = await repo.cli(['decide', 'decompose', repo.effort, '--revise', '--pin', 'x'])
+    expect(r1.code).toBe(2)
+    expect(r1.stderr).toContain('pin-scope')
+    const { repo: repo2, planId } = await stoppedImplement()
+    const r2 = await repo2.cli(['decide', 'implement', planId, '--revise', '--pin', ''])
+    expect(r2.code).toBe(2)
+    expect(r2.stderr).toContain('pin-empty')
   })
 
   it('revise-upstream writes linked entries in both journals', async () => {

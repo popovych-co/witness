@@ -4,14 +4,14 @@ import { loadConfig, type Config, type DocKey } from './config.js'
 import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
-import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
+import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { loadCanon, findById, type Canon } from './scan.js'
 import { newRunId } from './drift.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
-import { docKeysFor, docsBlock, invokeClaude, loadLensDocs, parseVerdictText, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
+import { docKeysFor, docsBlock, invokeClaude, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
   ROUND_BOUND, appendKind, boundReached, gateRuns, keyOf, roundsSinceApprove, sameKey,
@@ -113,9 +113,10 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   const findings = (entry.verdicts ?? []).flatMap((rv) =>
     rv.findings.map((f) => ({
       reviewer: rv.reviewer, blocking: String(f.blocking),
+      pin: f.contradicts_pin !== undefined ? `#${f.contradicts_pin}` : '',
       anchor: typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`, claim: f.claim,
     })))
-  if (findings.length) ctx.out(rows('findings', ['reviewer', 'blocking', 'anchor', 'claim'], findings).join('\n'))
+  if (findings.length) ctx.out(rows('findings', ['reviewer', 'blocking', 'pin', 'anchor', 'claim'], findings).join('\n'))
   if (entry.malformed?.length) {
     ctx.out(rows('malformed', ['reviewer', 'field', 'rule'],
       entry.malformed.flatMap((m) => m.violations.map((x) => ({ reviewer: m.reviewer, field: x.field, rule: x.rule })))).join('\n'))
@@ -171,6 +172,9 @@ export async function runGate(
   const skip = new Set(input.skipLenses ?? [])
   const active = batteryR.value.filter((n) => !skip.has(n))
   const dropped = batteryR.value.filter((n) => skip.has(n))
+  const entries = readStream(root, target)
+  const pins = policyPins(entries)
+  const pinsText = pinsBlock(pins)
   const lenses: Lens[] = []
   for (const name of active) {
     const lensR = resolvePrompt(name)
@@ -193,10 +197,9 @@ export async function runGate(
   const { chain, calibrationOf, warning } = modelR.value
   if (warning) ctx.err(`warning: ${warning}`)
 
-  const entries = readStream(root, target)
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
-    prompts_sha: promptsSha(lenses), model: chain[0]!, specflow: version(),
+    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, specflow: version(),
   }
   const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
   if (kind.kind === 'resume') {
@@ -255,7 +258,7 @@ export async function runGate(
       const reviewed = ov?.reviewed ?? input.reviewed
       const body = ov?.promptBody ?? input.promptBody
       const menu = anchorMenu(reviewed)
-      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
+      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
       for (let attempt = 0; ; attempt++) {
         let answered: string | undefined
         for (;;) {
@@ -296,11 +299,16 @@ export async function runGate(
     ctx.err(`warning: head model ${chain[0]} failed to invoke — reviewers ran on ${model}; check gates.${spec.gate}.model`)
   }
   const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length
+  const pinConflicts = verdicts.flatMap((x) => x.findings).filter((f) => f.contradicts_pin !== undefined).length
+  const standing = [
+    input.standingStop,
+    pinConflicts > 0 ? 'contradicts-pin — a finding disputes a settled policy pin; the human decides which one dies' : undefined,
+  ].filter((s): s is string => s !== undefined).join(' · ') || undefined
   const checksGreen = input.checks.every((c) => c.ok)
   const outcome: GateRunEntry['outcome'] =
     malformed.length > 0 ? 'malformed'
     : !checksGreen || blocking > 0 ? 'stopped'
-    : input.standingStop !== undefined || flags.manual ? 'stopped'
+    : standing !== undefined || flags.manual ? 'stopped'
     : 'passed'
 
   const lockR = acquireLock(root)
@@ -333,7 +341,7 @@ export async function runGate(
       ...(fallback.length ? { fallback } : {}),
       ...(rerolled.length ? { rerolled } : {}),
       ...(dropped.length ? { skipped: dropped } : {}),
-      ...(outcome === 'stopped' && input.standingStop ? { standing: input.standingStop } : {}),
+      ...(outcome === 'stopped' && standing ? { standing } : {}),
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       checks: input.checks,
       ...(verdicts.length ? { verdicts } : {}),

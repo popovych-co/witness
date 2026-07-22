@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Ctx } from './cli.js'
+import type { PolicyPin } from './journal.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export const PROMPT_NAMES = [
@@ -63,7 +64,17 @@ export function docsBlock(docs: LensDoc[]): string {
   }\n\n`
 }
 
-export function promptsSha(lenses: Lens[]): string {
+// Row 83: settled content policies, injected into every battery for the plan. The
+// contradiction channel is reviewer self-report — deterministic semantic matching of a
+// freeform finding against a pin is not honestly implementable, so the schema carries it.
+export function pinsBlock(pins: PolicyPin[]): string {
+  if (pins.length === 0) return ''
+  return `## Settled policy pins (human decisions — do not re-litigate)\n\n` +
+    `The human has pinned these content policies for this plan. They are settled: a finding that merely disagrees with a pin is not a finding. If a defect you must report can only be fixed by violating a pin, report it AND set \`"contradicts_pin": <pin number>\` on that finding — the gate escalates the conflict to the human. Where pins conflict, the later pin wins.\n\n` +
+    pins.map((p) => `${p.ordinal}. ${p.text}`).join('\n') + '\n\n'
+}
+
+export function promptsSha(lenses: Lens[], extra?: string): string {
   const h = createHash('sha256')
   for (const l of [...lenses].sort((a, b) => a.name.localeCompare(b.name))) {
     h.update(`lens ${l.name} ${l.contents.length}\n`)
@@ -76,6 +87,12 @@ export function promptsSha(lenses: Lens[]): string {
       h.update(d.contents)
       h.update('\n')
     }
+  }
+  // policy pins are part of what every reviewer read — a changed pin-set re-arms review
+  if (extra !== undefined && extra !== '') {
+    h.update(`pins ${extra.length}\n`)
+    h.update(extra)
+    h.update('\n')
   }
   return h.digest('hex')
 }

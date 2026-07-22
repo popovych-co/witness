@@ -3,7 +3,7 @@ import { isAbsolute, join, normalize } from 'node:path'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export type AnchorInput = string | { kind: 'omission'; scope: string }
-export interface Finding { blocking: boolean; anchor: AnchorInput; claim: string }
+export interface Finding { blocking: boolean; anchor: AnchorInput; claim: string; contradicts_pin?: number }
 export interface CoverageItem { anchor: AnchorInput; note: string }
 export interface Verdict { coverage: CoverageItem[]; findings: Finding[] }
 
@@ -44,6 +44,10 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
       if (typeof item?.blocking !== 'boolean') violations.push(v(`findings[${i}].blocking`, 'blocking-shape', String(item?.blocking), 'true | false — the one calibrated bit'))
       if (!isAnchor(item?.anchor)) violations.push(v(`findings[${i}].anchor`, 'anchor-shape', JSON.stringify(item?.anchor), 'a heading path, file[#symbol], or {kind: "omission", scope}'))
       if (typeof item?.claim !== 'string' || item.claim.trim() === '') violations.push(v(`findings[${i}].claim`, 'claim-missing', String(item?.claim), 'a one-sentence claim'))
+      const cp = (item as { contradicts_pin?: unknown }).contradicts_pin
+      if (cp !== undefined && (!Number.isInteger(cp) || (cp as number) < 1)) {
+        violations.push(v(`findings[${i}].contradicts_pin`, 'contradicts-pin-shape', String(cp), 'a pin ordinal (integer ≥1), or omit'))
+      }
     })
   }
   if (violations.length > 0) return refuse(violations)

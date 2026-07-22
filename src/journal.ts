@@ -5,7 +5,7 @@ export type EntryType =
   | 'recap' | 'write' | 'write-refused' | 'gate-run'
   | 'human-decision' | 'drift-check' | 'test-evidence' | 'adopt' | 'status'
   | 'design-write' | 'design-reconfirm' | 'design-stamp' | 'design-shown'
-  | 'dispatch'
+  | 'dispatch' | 'policy-pin'
 
 export interface Entry {
   v: 1
@@ -82,4 +82,15 @@ export function effortStreams(root: string): string[] {
 
 export function effortAbandoned(entries: Entry[]): boolean {
   return entries.some((e) => e.t === 'human-decision' && e.decision === 'abandon-effort')
+}
+
+// Row 83: human-authored content policies, plan-scoped and append-only. All pins are
+// live — supersession is by prompt order (later pins win where they conflict), never
+// by deletion; graduation to spec truth goes through --revise --upstream.
+export interface PolicyPin { ordinal: number; text: string }
+
+export function policyPins(entries: Entry[]): PolicyPin[] {
+  return entries
+    .filter((e) => e.t === 'policy-pin')
+    .map((e, i) => ({ ordinal: Number(e.ordinal ?? i + 1), text: String(e.text ?? '') }))
 }

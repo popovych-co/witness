@@ -7,13 +7,13 @@ import { gateSpec, liveExits, renderGateRun } from '../gate.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
-import { appendEntry, entryLine, journalRel, readStream, streamExists, type Entry } from '../journal.js'
+import { appendEntry, entryLine, journalRel, policyPins, readStream, streamExists, type Entry } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
 import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
-import { kv } from '../toon.js'
+import { kv, rows } from '../toon.js'
 import {
   boundReached, lastGateRun, openReopen, pendingDecision, roundsSinceApprove, type DecisionEntry,
 } from '../rounds.js'
@@ -26,12 +26,16 @@ function flagValue(argv: string[], flag: string): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined
 }
 
+function flagValues(argv: string[], flag: string): string[] {
+  return argv.flatMap((a, i) => (a === flag && argv[i + 1] !== undefined ? [argv[i + 1]!] : []))
+}
+
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
-  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream')
+  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin')
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
-    ctx.err('usage: specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--show]')
+    ctx.err('usage: specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]')
     return EXIT.REFUSED
   }
   const rootR = primaryRoot(ctx.cwd)
@@ -72,6 +76,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
     // pending (no disposition) or revise (the author's input): the verdict is actionable
     renderGateRun(ctx, last, 'ran')
+    const shownPins = policyPins(entries)
+    if (shownPins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], shownPins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (disposition) {
       ctx.out(kv('decision', disposition.decision))
       if (disposition.note) ctx.out(kv('note', disposition.note))
@@ -90,6 +96,17 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const note = flagValue(argv, '--note')
   const override = argv.includes('--override')
   const upstream = flagValue(argv, '--upstream')
+  const pinTexts = flagValues(argv, '--pin')
+  if (pinTexts.length > 0 && gate !== 'implement') {
+    renderRefusal([v('pin', 'pin-scope', gate, 'policy pins are implement-gate decisions on a plan')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  const badPin = pinTexts.find((t) => t.trim() === '' || t.length > 500)
+  if (badPin !== undefined) {
+    renderRefusal([v('pin', 'pin-empty', badPin === '' ? '(empty)' : `${badPin.length} chars`,
+      'non-empty policy text ≤500 chars')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   const atBound = boundReached(entries, gate)
 
   // at the bound the gate refuses to run again, so no fresh pending decision can
@@ -174,6 +191,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ...(override ? { override: true } : {}),
     ...(note ? { note } : {}),
   }
+  const priorPins = entries.filter((e) => e.t === 'policy-pin').length
+  const pinEntries = pinTexts.map((text, i) => ({
+    v: 1 as const, t: 'policy-pin' as const, artifact: target, gate, round: anchor.round,
+    ordinal: priorPins + i + 1, text: text.trim(),
+  }))
   const journalMulti = [{ stream: target, line: '' }]
   const files = [journalRel(target)]
   const stamps = decision === 'approve' ? (spec.approveStamps?.(root, canon, target) ?? []) : []
@@ -232,6 +254,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   journalMulti[0]!.line = entryLine(asEntry(entry))
+  for (const p of pinEntries) journalMulti.push({ stream: target, line: entryLine(p) })
   if (reopen) { journalMulti.push({ stream: reopen.stream, line: entryLine(asEntry(reopen.entry)) }); files.push(journalRel(reopen.stream)) }
   for (const s of prepared) { files.push(s.rel, journalRel(s.stream)); journalMulti.push({ stream: s.stream, line: s.line }) }
   for (const m of metaWrites) { files.push(m.rel, journalRel(m.stream)); journalMulti.push({ stream: m.stream, line: m.line }) }
@@ -241,6 +264,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   try {
     const txn = withTxn(root, { op: `decide-${gate}`, files: [...new Set(files)], journalMulti }, () => {
       appendEntry(root, target, asEntry(entry))
+      for (const p of pinEntries) appendEntry(root, target, p)
       if (reopen) appendEntry(root, reopen.stream, asEntry(reopen.entry))
       for (const s of prepared) writeStamp(root, s)
       for (const m of metaWrites) {
@@ -256,9 +280,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}`))
+  for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
     ctx.out('revise-context: (reconstructed from the journal — survives session death)')
     renderGateRun(ctx, anchor, 'ran')
+    const pins = policyPins(readStream(root, target))
+    if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (note) ctx.out(kv('note', note))
     if (gate === 'decompose') ctx.out(`help: scope itself implicated → specflow recap --amend ${target}`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)

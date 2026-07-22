@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, type TestRepo } from './helpers.js'
+import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec, type TestRepo } from './helpers.js'
 
 // A real decompose gate-run against a fake reviewer: reviewed_sha is the effort's ACTUAL
 // sha, which is what a staleness check compares against. A feature decompose carries a
@@ -103,6 +103,28 @@ describe('decide --show', () => {
     const r = await repo.cli(['decide', 'decompose', s, '--show'])
     expect(r.stdout).toContain('hairline missing')
     expect(r.stdout).toContain('fix the hairline')
+  })
+
+  it('renders journaled pins with the actionable verdict', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    appendEntry(repo.root, 'auth-refresh-plan-1', {
+      v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1,
+      run_id: 'r1', reviewed_sha: 'sha-1', prompts_sha: 'p', specflow: '0', model: 'm',
+      calibration: 'none', checks: [], outcome: 'stopped',
+      verdicts: [{
+        reviewer: 'code-reviewer',
+        coverage: [{ anchor: 'src/a.ts', note: 'read' }],
+        findings: [{ blocking: false, anchor: 'src/a.ts', claim: 'hairline missing' }],
+      }],
+    })
+    await repo.cli(['decide', 'implement', 'auth-refresh-plan-1', '--revise', '--note', 'fix',
+      '--pin', 'render the service in full'])
+    const r = await repo.cli(['decide', 'implement', 'auth-refresh-plan-1', '--show'])
+    expect(r.stdout).toContain('pins[1]{ordinal,text}:')
+    expect(r.stdout).toContain('render the service in full')
   })
 
   it('emits the bound endgame exits, not the normal triple, at the bound', async () => {
