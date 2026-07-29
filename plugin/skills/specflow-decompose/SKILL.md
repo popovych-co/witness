@@ -1,6 +1,6 @@
 ---
 name: specflow-decompose
-description: Slice a specflow effort's confirmed recap into vertical spec slices, or route a fix to the one spec it amends, or route a chore to its parent — manifests handed to specflow write, then the decompose gate. Normally invoked by /specflow with the effort slug.
+description: Slice a specflow effort's confirmed recap into vertical spec slices, or route a fix to the one spec it amends — manifests handed to specflow write, then the decompose gate. Chores never reach this stage. Normally invoked by /specflow with the effort slug.
 ---
 
 # specflow-decompose — recap → sliced specs → gate
@@ -10,7 +10,7 @@ description: Slice a specflow effort's confirmed recap into vertical spec slices
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.1}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.2}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
@@ -33,7 +33,7 @@ The class comes from the recap. Never ask for it again.
 
 - **feature** — slice (next section). Expect the gate to stop for scope approval afterwards: that is the standing stop working, not a failure.
 - **fix** — find **THE one spec** to amend: match the broken behavior against `specflow index` summaries; when summaries tie, grep `specs/` read-only. Amend exactly one spec. If the fix genuinely needs a brand-new spec, write it — the gate's tripwire stops for a human, which is the designed check on your routing (on a young canon this fires often; say so rather than fighting it).
-- **chore** — **write NO specs** (a chore writing spec content is refused at write time, by definition of the class). Choose the parent for the coming plan — the spec whose implementation area the chore touches, else `principles` — report the choice, and hand back. Decompose shrinks to routing; it never skips.
+- **chore** — **write NO specs** (a chore writing spec content is refused at write time, by definition of the class). There is nothing here for you: `next` routes a chore straight to the plan stage, because the decompose gate refuses `nothing-to-gate` without written specs and `write` refuses spec content from a chore — the stage is unsatisfiable in both directions. The parent for the coming plan is chosen when that plan is authored. Hand back immediately if you were invoked for one.
 
 ## Slicing rules (feature)
 

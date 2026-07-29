@@ -33,14 +33,16 @@ Installed globally (`npm i -g @whatmatters/specflow`) the binary is `specflow`.
 | `index` | id · summary · status · depends across the canon |
 | `satisfy <id> --need <text\|n>` | flip a manual need via the write path |
 | `log <id>` | render a journal stream |
-| `gate <decompose\|plan\|implement\|ship> <id>` | run the reviewer gate; journals the round, stamps on pass |
-| `decide <gate> <id> --approve\|--revise` | record the human decision on a stopped gate |
+| `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
+| `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |
+| `design <spec-id> --file <html>\|--open\|--reconfirm` | register/show a `ui` spec's approved look |
 | `start <plan-id>` | create/re-attach the plan's worktree (`.specflow/worktrees/<id>`) |
 | `next` | the one next action across every effort |
 | `ship <plan-id>` | lanes → ship gate → PR → CI watch |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
 | `adopt <path>` | absolve a finished hand-edit into the journal |
-| `abandon <id\|--effort <slug>>` | wind a plan/effort down with status reverts |
+| `abandon <plan-id \| effort-slug>` | wind a plan/effort down; reverts only specs that effort itself wrote |
+| `dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n>` | journal a session slice's telemetry |
 | `rename <old> <new>` | id rename across canon, refs, journal |
 | `clean` | reap stale worktrees |
 | `sync` | pull --rebase + push state commits |

@@ -15,7 +15,7 @@ parent's criteria. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.1}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.2}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
@@ -36,7 +36,7 @@ ls plans/ && cat plans/<spec-id>-plan-*.md   # prior plans for this spec, if any
 $SPECFLOW decide plan <plan-id> --show       # ONLY when re-entered after a revise
 ```
 
-**Effort slug** (write needs `--effort`): the dashboard's efforts table. One active effort → use it. Several → `$SPECFLOW log <slug>` per candidate; the effort whose `write` entries name the parent spec owns this plan. Still ambiguous → ask the human.
+**Effort slug** (write needs `--effort`): **take it from the `$SPECFLOW next` line that routed you here** — next resolves it to a live effort that wrote this plan or its parent, so the slug in that command is the answer. Deriving your own instead risks booking the write onto an abandoned stream. If you arrived without that line: one active effort → use it; several → `$SPECFLOW log <slug>` per candidate, and the effort whose `write` entries name the parent spec owns this plan; still ambiguous → ask the human. If `next` asks for a `recap` instead of a write, no live effort can carry this plan — that recap is the owed work, not the plan.
 
 **Plan id**: `<spec-id>-plan-<n>` — n = 1 + the highest existing n in `plans/` for this spec (a spec accumulates plans over its life; expand-contract amends it twice in one effort).
 
@@ -79,7 +79,7 @@ Body discipline (write-validated: exactly one `## Step: <id>` section per manife
 - Each step section is executable by a fresh session with zero context: exact paths, the test to write first, expected red, minimal code, expected green.
 - A step realizing browser-visible behavior (markup, styles, routes, client-side interaction) names an **end-to-end Puppeteer** test as its test-to-write-first — the browser drives the slice's real backend and store, faking only third-party boundaries the repo doesn't own. Browser-level e2e TDD is the implement contract; the implement gate's pr-test lens treats a unit test standing in for the browser — or a browser test stubbing the slice's own backend — as a coverage gap.
 - Steps ordered so nothing presumes an artifact a later step creates.
-- Chore-class plans take `parent: principles` when repo-wide; the parent must be `approved`/`live` or the write refuses.
+- **Chore-class plans choose their own parent here** — a chore never reaches the decompose stage, so no earlier stage picked one for you. Take the spec whose implementation area the chore touches; take `parent: principles` when the chore is repo-wide. Either way the parent must be `approved`/`live` or the write refuses. Report the choice so the gate stop shows what you routed to.
 
 ## Gate
 

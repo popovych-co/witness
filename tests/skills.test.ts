@@ -50,6 +50,12 @@ describe('specflow-decompose', () => {
     expect(body()).toContain('## Motivation');
     expect(body()).toContain('## Behavior');
   });
+  // `next` skips the whole decompose stage for a chore: the gate refuses nothing-to-gate
+  // without specs and `write` refuses spec content from a chore, so the stage is
+  // unsatisfiable in both directions and the skill must not claim it always runs.
+  it('does not claim the chore path always runs', () => {
+    expect(body()).not.toContain('it never skips');
+  });
 });
 
 describe('specflow-plan', () => {
@@ -65,6 +71,12 @@ describe('specflow-plan', () => {
     expect(body()).toContain('derives-from');
     expect(body()).toContain('gate plan');
     expect(body()).toContain('decide plan');
+  });
+  // A chore never reaches the decompose stage, so choosing its plan's parent lands here:
+  // the spec whose implementation area the chore touches, else `principles`.
+  it('owns the chore parent choice decompose no longer routes', () => {
+    expect(body()).toContain('implementation area');
+    expect(body()).toContain('principles');
   });
 });
 

@@ -51,7 +51,7 @@ const VERB_USAGE: Record<string, string> = {
   calibrate: 'specflow calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
   check: 'specflow check',
   clean: 'specflow clean',
-  decide: 'specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--show]',
+  decide: 'specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
   design: 'specflow design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'specflow diff <spec-id>',
   'dispatch-report': 'specflow dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
