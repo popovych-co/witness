@@ -135,8 +135,23 @@ export function executeAbandon(
   }
 }
 
+// Whether this plan's parent spec is this function's business.
+//
+// `pair-parent` — `abandon <plan-id>`. No effort was named, so the owner is derived,
+// and the pin is the plan's own `derives-from`: unwind exactly the amendment this
+// plan was paired with, refusing if the spec has moved since.
+//
+// `stamp-only` — `abandon <effort-slug>`. The caller reverts every spec the effort
+// itself wrote, pinned on that effort's own write sha, so a second revert here would
+// be duplicate mechanism — and a WRONG one: it must re-derive the owner via effortOf,
+// which tie-breaks alphabetically across every effort that wrote the plan. A plan
+// rewritten by a later effort therefore resolved to a SIBLING effort whose writes did
+// include the parent, and abandon destroyed an approved amendment the abandoned effort
+// never made, walking the spec back past its own write boundary.
+export type Pairing = 'pair-parent' | 'stamp-only'
+
 export function planItems(
-  root: string, canon: Canon, plan: CanonDoc, abandonSet: Set<string>,
+  root: string, canon: Canon, plan: CanonDoc, abandonSet: Set<string>, pairing: Pairing,
 ): Result<AbandonItem> {
   const planId = String(plan.meta.id)
   const status = String(plan.meta.status)
@@ -147,6 +162,7 @@ export function planItems(
     planStamp: prepareStamp(plan, 'abandoned', 'abandon'),
     planId,
   }
+  if (pairing === 'stamp-only') return ok(item)
   const effort = effortOf(root, planId)
   const parentId = String(plan.meta.parent)
   const paired = effort !== undefined && effortWrites(root, effort).has(parentId)

@@ -22,7 +22,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (doc && doc.meta.type === 'plan') {
     if (String(doc.meta.status) === 'abandoned') { ctx.out(kv('abandon', `${target} already abandoned`)); return EXIT.OK }
-    const itemR = planItems(root, canon, doc, new Set([target]))
+    const itemR = planItems(root, canon, doc, new Set([target]), 'pair-parent')
     if (!itemR.ok) { renderRefusal(itemR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const done = executeAbandon(root, ctx, [itemR.value], undefined, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -40,19 +40,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const abandonSet = new Set(writes.keys())
     const items: AbandonItem[] = []
     const problems: Violation[] = []
-    const revertedSpecs = new Set<string>()
     for (const id of writes.keys()) {
       const artifact = findById(canon, id)
       if (!artifact) continue                               // already gone (re-slice, earlier abandon)
       if (artifact.meta.type !== 'plan') continue
-      const itemR = planItems(root, canon, artifact, abandonSet)
+      // 'stamp-only': the spec loop below is this path's sole spec revert, pinned on
+      // THIS effort's write sha. A paired revert here would re-derive the owner and
+      // could land on a sibling effort's amendment — see Pairing in abandon.ts.
+      const itemR = planItems(root, canon, artifact, abandonSet, 'stamp-only')
       if (!itemR.ok) { problems.push(...itemR.violations); continue }
-      if (itemR.value.revert) revertedSpecs.add(String(itemR.value.revert.doc.meta.id))
       items.push(itemR.value)
     }
     for (const [id, w] of writes) {
       const artifact = findById(canon, id)
-      if (!artifact || artifact.meta.type !== 'spec' || revertedSpecs.has(id)) continue
+      if (!artifact || artifact.meta.type !== 'spec') continue
       if (canonicalSha(artifact.meta, artifact.body) !== w.sha) {
         problems.push(v('spec', 'stacked-amendment', id, 'the effort\'s write is no longer the newest'))
         continue

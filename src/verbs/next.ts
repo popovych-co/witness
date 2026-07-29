@@ -146,6 +146,50 @@ function pendingDecisionsAll(
   return out
 }
 
+// Both notes survive: a caller's own note must not silently drop the routing note that
+// explains WHY the line is a recap rather than the write the caller asked for.
+function noteOf(...parts: Array<string | undefined>): { note?: string } {
+  const kept = parts.filter((p): p is string => p !== undefined)
+  return kept.length > 0 ? { note: kept.join(' · ') } : {}
+}
+
+// Authoring a plan is booked under an effort, so `next` must name one a human can
+// actually pass to `--effort`. It used to print the literal placeholder `<slug>`, which
+// is unrunnable — and after `abandon <effort>` there was nothing to substitute either:
+// the plan's authoring effort is terminal, so it is filtered out of the live list, while
+// its parent spec stays approved with no live plan and therefore reads as planless on
+// every subsequent turn. `next` repeated the same unrunnable line forever.
+//
+// Prefer a live effort that already wrote this plan, then one that wrote the parent spec
+// — a plan is authored inside the effort that owns the spec it derives from. `effortOf`
+// is deliberately not used: it answers with an ABANDONED effort whenever that is the only
+// one that ever wrote the artifact, and writes must never be booked onto a terminal stream.
+// With no live candidate the plan is not the next thing owed — an effort to carry it is.
+function liveOwner(
+  root: string, efforts: Array<{ slug: string }>, ...ids: string[]
+): string | undefined {
+  return ids
+    .map((id) => efforts.find((e) => effortWrites(root, e.slug).has(id))?.slug)
+    .find((slug) => slug !== undefined)
+}
+
+// The stage rides with the line: routing to a recap is BRAINSTORM work, and a caller that
+// kept its own `stage: 'plan'` would hand the plan skill a recap command to run.
+function planWriteAction(
+  root: string, efforts: Array<{ slug: string }>, planId: string, parentId: string, target: string,
+): NextAction {
+  const owner = liveOwner(root, efforts, planId, parentId)
+  return owner === undefined
+    ? {
+        line: 'specflow recap --file <recap.json>', stage: 'brainstorm',
+        note: `${planId} is owed, but no live effort can carry the write — open one`,
+      }
+    : {
+        line: `specflow write ${planId} --effort ${owner} --meta m.json --body b.md`,
+        stage: 'plan', target,
+      }
+}
+
 export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): NextAction {
   if (pendingTxn(root)) return { line: 'specflow recover --complete | --rollback' }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
@@ -228,6 +272,21 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   }
   for (const e of efforts) {
     const writes = effortWrites(root, e.slug)
+    // A chore is plan-level motion by definition, so the decompose stage is unsatisfiable
+    // in BOTH directions and must not be routed to at all: `write` refuses spec content
+    // from a chore (class-tripwire, write.ts) while `gate decompose` refuses an effort
+    // with no written specs (nothing-to-gate, gates/decompose.ts). A chore's plans are the
+    // gateable work, and they carry its goals — decompose is simply not owed here.
+    if (latestRecap(root, e.slug)?.class === 'chore') {
+      if (writes.size === 0) {
+        return {
+          line: `specflow write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,
+          stage: 'plan', target: e.slug,
+          note: 'chore: plan-level motion — a chore never writes spec content',
+        }
+      }
+      continue
+    }
     if (writes.size === 0) {
       return {
         line: `specflow write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
@@ -286,10 +345,15 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
     .map((d) => String(d.meta.id)).sort()
   if (planless.length > 0) {
+    // A spec whose plan write can actually be booked outranks one that needs a new effort
+    // opened first — stalling the whole pipeline on a recap while runnable work sits behind
+    // it is a worse answer, and alphabetical order alone does not know the difference.
+    const spec = planless.find((s) => liveOwner(root, efforts, `${s}-plan-1`, s) !== undefined)
+      ?? planless[0]!
+    const act = planWriteAction(root, efforts, `${spec}-plan-1`, spec, spec)
     return {
-      line: `specflow write ${planless[0]}-plan-1 --effort <slug> --meta m.json --body b.md`,
-      stage: 'plan', target: planless[0],
-      ...(planless.length > 1 ? { note: `multiple ready — choose: ${planless.join(' ')}` } : {}),
+      ...act,
+      ...noteOf(act.note, planless.length > 1 ? `multiple ready — choose: ${planless.join(' ')}` : undefined),
     }
   }
 
@@ -302,13 +366,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const planSha = parent ? planPairSha(plan, parent) : undefined
     const entries = readStream(root, id)
     if (gateSettled(entries, 'plan', planSha)) continue
-    return authoringOwed(entries, 'plan', planSha)
-      ? {
-          line: `specflow write ${id} --effort <slug> --meta m.json --body b.md`,
-          stage: 'plan', target: id,
-          note: 'revise owed — rewrite the plan, then re-gate',
-        }
-      : { line: `specflow gate plan ${id}`, target: id }
+    if (!authoringOwed(entries, 'plan', planSha)) return { line: `specflow gate plan ${id}`, target: id }
+    const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
+    return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
   }
 
   // Starting a flow is tier 3, not tier 1: an approved-but-unstarted plan is new work,

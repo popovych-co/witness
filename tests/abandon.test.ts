@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { worktreePath } from '../src/worktree.js'
-import { approve, seededRepo, writeSpec, writePlan } from './helpers.js'
+import { approve, seededRepo, writeSpec, writePlan, PLAN_BODY } from './helpers.js'
 
 describe('specflow abandon <plan>', () => {
   it('reverts the paired amendment, restores the prior live stamp, keeps the journal', async () => {
@@ -58,6 +58,37 @@ describe('specflow abandon <plan>', () => {
     const dependents = await repo2.cli(['abandon', 'auth-refresh-plan-1'])
     expect(dependents.code).toBe(2)
     expect(dependents.stdout + dependents.stderr).toContain('waiting-dependents')
+  })
+
+  it('leaves a spec the abandoned effort never wrote alone, even when a sibling effort wrote both', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })   // bootstrap: auth-refresh live
+    // effort A — sorts first alphabetically — amends the spec AND writes the plan
+    await writeSpec(repo, 'auth-refresh', { summary: 'amended by effort A' })
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+
+    // effort B rewrites the SAME plan and writes no spec at all
+    repo.write('recap-b.json', JSON.stringify({
+      effort: 'ratchet-scope', class: 'chore',
+      goals: [{ id: 'g1', text: 'narrow the ratchet scope' }], non_goals: [], constraints: [], slices: [],
+    }))
+    expect((await repo.cli(['recap', '--file', 'recap-b.json'])).code).toBe(0)
+    expect((await writePlan(repo, 'auth-refresh-plan-1', {}, PLAN_BODY, 'ratchet-scope')).code).toBe(0)
+
+    const r = await repo.cli(['abandon', 'ratchet-scope'])
+    expect(r.code).toBe(0)
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'auth-refresh-plan-1')!.meta.status).toBe('abandoned')
+    // the reported count is the docs actually walked: it read one fewer than it touched,
+    // so the extra spec revert never showed up in the line a human reads
+    expect(r.stdout).toContain('1 artifacts walked')
+    const touched = repo.git('show', '--name-only', '--format=', 'HEAD').split('\n')
+      .filter((f) => f.startsWith('specs/') || f.startsWith('plans/'))
+    expect(touched).toEqual(['plans/auth-refresh-plan-1.md'])
+    const spec = findById(canon, 'auth-refresh')!
+    expect(String(spec.meta.summary)).toBe('amended by effort A')     // effort A's amendment survives
+    expect(spec.meta.status).toBe('approved')
   })
 
   it('abandons a whole effort: terminal entry + per-artifact walks, or wholesale refusal', async () => {
