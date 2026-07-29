@@ -1,6 +1,6 @@
 {
   "name": "@whatmatters/specflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "brainstorm-to-PR pipeline: specs are state, plans are motion, transitions are evidence-gated",
   "license": "MIT",
   "type": "module",
