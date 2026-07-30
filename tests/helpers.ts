@@ -52,7 +52,10 @@ export function tmpRepo(): TestRepo {
     const answers = [...(opts.answers ?? [])]
     const ctx: Ctx = {
       cwd: opts.cwd ?? root,
-      env: { ...process.env, ...opts.env },
+      // SPECFLOW_HARNESS pinned AFTER process.env and BEFORE opts.env: the ambient
+      // session's CLAUDECODE/PI_CODING_AGENT must not decide what `next` renders, and a
+      // harness test must still be able to ask for something else.
+      env: { ...process.env, SPECFLOW_HARNESS: 'claude-code', ...opts.env },
       isTTY: opts.tty ?? answers.length > 0,
       out: (l) => outs.push(l),
       err: (l) => errs.push(l),

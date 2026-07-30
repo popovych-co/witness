@@ -1,0 +1,133 @@
+import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
+  resolveHarness, skillsVisibility,
+} from '../src/harness.js'
+
+const hx = (name: string) => {
+  const r = loadHarness(name)
+  if (!r.ok) throw new Error(JSON.stringify(r.violations))
+  return r.value
+}
+
+describe('harness registry', () => {
+  it('ships a descriptor for every supported harness', () => {
+    expect([...HARNESSES]).toEqual(['claude-code', 'pi'])
+    for (const name of HARNESSES) {
+      const h = hx(name)
+      expect(h.name).toBe(name)
+      expect(h.launch).not.toBe('')
+      expect(h.payload.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('refuses an unknown harness with the valid list', () => {
+    const r = loadHarness('pikachu')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.violations[0]).toMatchObject({ rule: 'unknown-harness', got: 'pikachu', want: 'claude-code | pi' })
+  })
+})
+
+describe('harness resolution — five rungs', () => {
+  it('SPECFLOW_HARNESS outranks detection', () => {
+    const r = resolveHarness({ SPECFLOW_HARNESS: 'pi', CLAUDECODE: '1' }, {})
+    expect(r.ok && r.value.harness.name).toBe('pi')
+    expect(r.ok && r.value.source).toBe('env')
+  })
+
+  it('PI_CODING_AGENT outranks CLAUDECODE, which outranks config', () => {
+    expect(resolveHarness({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' }).ok).toBe(true)
+    const pi = resolveHarness({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' })
+    expect(pi.ok && pi.value.harness.name).toBe('pi')
+    const cc = resolveHarness({ CLAUDECODE: '1' }, { harness: 'pi' })
+    expect(cc.ok && cc.value.harness.name).toBe('claude-code')
+    expect(cc.ok && cc.value.source).toBe('detected')
+  })
+
+  // presence, not value: CLAUDECODE=1 is not a documented contract
+  it('detects on presence even when the value is empty', () => {
+    const r = resolveHarness({ CLAUDECODE: '' }, {})
+    expect(r.ok && r.value.harness.name).toBe('claude-code')
+  })
+
+  it('falls back to config, then to claude-code', () => {
+    const cfg = resolveHarness({}, { harness: 'pi' })
+    expect(cfg.ok && cfg.value.harness.name).toBe('pi')
+    expect(cfg.ok && cfg.value.source).toBe('config')
+    const def = resolveHarness({}, {})
+    expect(def.ok && def.value.harness.name).toBe('claude-code')
+    expect(def.ok && def.value.source).toBe('default')
+  })
+
+  // B2's shape: a config-authority default in a fresh repo emits a runnable-LOOKING,
+  // unrunnable handoff behind a warning that gets scrolled past
+  it('refuses an unknown value on whichever rung supplied it', () => {
+    const env = resolveHarness({ SPECFLOW_HARNESS: 'nope' }, {})
+    expect(env.ok).toBe(false)
+    if (!env.ok) expect(env.violations[0]).toMatchObject({ field: 'SPECFLOW_HARNESS', rule: 'unknown-harness' })
+    const cfg = resolveHarness({}, { harness: 'nope' })
+    expect(cfg.ok).toBe(false)
+    if (!cfg.ok) expect(cfg.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })
+  })
+
+  // the config rung is NOT consulted when detection already answered, so a typo in a
+  // key nothing reads must not brick every verb (specflow check reports it instead)
+  it('ignores an unreadable config value when a detection rung answered', () => {
+    const r = resolveHarness({ CLAUDECODE: '1' }, { harness: 'nope' })
+    expect(r.ok && r.value.harness.name).toBe('claude-code')
+  })
+})
+
+describe('handoff and relay rendering', () => {
+  it('renders the Claude Code handoff exactly as today', () => {
+    expect(handoffLine(hx('claude-code'), '/w/repo', undefined))
+      .toBe("cd '/w/repo' && claude '/specflow'")
+    expect(handoffLine(hx('claude-code'), '/w/repo', 'claude-opus-5'))
+      .toBe("cd '/w/repo' && claude --model claude-opus-5 '/specflow'")
+  })
+
+  // Revision 9: the provider is the harness's own default, never a config key. Pi's
+  // real default is `google`, so a bare `--model claude-opus-5` resolves wrong or not
+  // at all — which is why the flag is a renderer and not a string.
+  it('qualifies the Pi model flag with the harness default provider', () => {
+    expect(handoffLine(hx('pi'), '/w/repo', 'claude-opus-5'))
+      .toBe("cd '/w/repo' && pi --model anthropic/claude-opus-5 '/specflow'")
+    expect(handoffLine(hx('pi'), '/w/repo', undefined))
+      .toBe("cd '/w/repo' && pi '/specflow'")
+  })
+
+  it('names the harness relay command', () => {
+    expect(relayLine(hx('claude-code'))).toBe('/clear then /specflow')
+    expect(relayLine(hx('pi'))).toBe('/new then /specflow')
+  })
+})
+
+describe('skills visibility', () => {
+  const seed = (dir: string) => {
+    for (const s of STAGE_SKILLS) {
+      mkdirSync(join(dir, s), { recursive: true })
+      writeFileSync(join(dir, s, 'SKILL.md'), '---\nname: x\n---\n')
+    }
+  }
+
+  it('reports global, project-only and absent', () => {
+    const home = mkdtempSync(join(tmpdir(), 'hxhome-'))
+    const root = mkdtempSync(join(tmpdir(), 'hxroot-'))
+    expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('absent')
+    seed(join(root, '.pi', 'skills'))
+    expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('project-only')
+    seed(join(home, '.pi', 'agent', 'skills'))
+    expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('global')
+  })
+
+  it('names the six shipped stage skills', () => {
+    expect([...STAGE_SKILLS].sort()).toEqual([
+      'specflow-brainstorm', 'specflow-decompose', 'specflow-design',
+      'specflow-implement', 'specflow-plan', 'specflow-ship',
+    ])
+  })
+})

@@ -3,6 +3,8 @@ import { acquireLock } from '../lock.js'
 import { guardTxn, withTxn } from '../txn.js'
 import { appendEntry, entryLine, journalRel, readStream } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
+import { loadConfig } from '../config.js'
+import { relayLine, resolveHarness } from '../harness.js'
 import { findById, loadCanon } from '../scan.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
@@ -74,6 +76,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     })
     if (!txn.ok) { renderRefusal(txn.violations).forEach(ctx.err); return EXIT.REFUSED }
     ctx.out(kv('dispatch', `${planId} · #${ordinal} · ${completed}/${assigned} step(s)`))
+    // The relay is a session-boundary fact the skill must not hardcode: /clear on
+    // Claude Code, /new on Pi. A broken config must not cost the telemetry entry that
+    // was already journalled, so an unresolvable harness simply omits the line and the
+    // skill stops for the human.
+    const cfgR = loadConfig(root)
+    const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+    if (hxR.ok) ctx.out(kv('relay', relayLine(hxR.value.harness)))
     return EXIT.OK
   } finally {
     lock.ok && lock.value()

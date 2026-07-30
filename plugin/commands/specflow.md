@@ -20,20 +20,20 @@ If the repo has no `specflow.config.yaml`, run `$SPECFLOW init` first (one boots
 Every turn is `specflow next`, read, act on the first matching row, repeat:
 
 1. Run `$SPECFLOW next`.
-2. Read its TOON lines: `next:` (a command line), and optional `stage:`, `target:`, `note:`, `home:` (the directory this action's session belongs in), `run:` (the paste-ready handoff command).
+2. Read its TOON lines: `next:` (a command line), and optional `stage:`, `target:`, `note:`, `home:` (the directory this action's session belongs in), `run:` (the paste-ready handoff command), `relay:` (how a session continues in a fresh context in the same `home:`). `run:` and `relay:` are rendered by the CLI for the harness you are running on — never rewrite them, never substitute a command you remember.
 3. Act on the **first** matching row, then go to 1:
 
 | Signal | Action |
 |---|---|
-| `note:` contains `multiple ready — choose` | Show the listed spec ids, ask the human which to plan. Then invoke skill `specflow-plan` with the chosen id. |
+| `note:` contains `multiple ready — choose` | Show the listed spec ids, ask the human which to plan. Then use the `specflow-plan` skill with the chosen id. |
 | `next:` names `specflow decide` | A gate is stopped and the decision is the human's. Run `$SPECFLOW decide <gate> <target> --show`, render the checks and findings verbatim, render the `exits:` line the CLI emitted verbatim — never a remembered set, which is wrong at the round bound and in the reopened and stale states — and **END YOUR TURN**. Never run `--approve`, `--revise`, or `--stop` on your own judgment. |
-| `home:` present and ≠ your cwd | This stage belongs to a different session. Print the `run:` line verbatim for the human (if this session is `--manual`-armed, change the argument to `'/specflow --manual'`), say that work continues in the fresh session, and **END YOUR TURN**. Never invoke a stage skill or run the `next:` command from the wrong `home:` — a fresh session is the execution model (no Task subagents, ever). |
-| `stage: brainstorm` | Invoke skill `specflow-brainstorm`. |
-| `stage: decompose` | Invoke skill `specflow-decompose` with `target` (the effort slug). |
-| `stage: design` | Invoke skill `specflow-design` with `target` (the spec id). |
-| `stage: plan` | Invoke skill `specflow-plan` with `target` (the spec id). |
-| `stage: implement` | Invoke skill `specflow-implement` with `target` (the plan id). |
-| `stage: ship`, or `next:` names `specflow ship` | Invoke skill `specflow-ship` with `target` (the plan id). |
+| `home:` present and ≠ your cwd | This stage belongs to a different session. Print the `run:` line verbatim for the human (if this session is `--manual`-armed, change the argument to `'/specflow --manual'`), say that work continues in the fresh session, and **END YOUR TURN**. Never use a stage skill or run the `next:` command from the wrong `home:` — a fresh session is the execution model, and it is the only one. |
+| `stage: brainstorm` | Use the `specflow-brainstorm` skill. |
+| `stage: decompose` | Use the `specflow-decompose` skill with `target` (the effort slug). |
+| `stage: design` | Use the `specflow-design` skill with `target` (the spec id). |
+| `stage: plan` | Use the `specflow-plan` skill with `target` (the spec id). |
+| `stage: implement` | Use the `specflow-implement` skill with `target` (the plan id). |
+| `stage: ship`, or `next:` names `specflow ship` | Use the `specflow-ship` skill with `target` (the plan id). |
 | any other `next:` line (`specflow gate …`, `specflow start …`, `specflow check`, `specflow recover …`, `specflow check --drift`) | Run it verbatim via Bash (plus `--manual` on `gate` when armed). Exit 0 or 1 → loop. Exit 2 or 3 → render the refusal; if it names a mechanical remedy you can do without judgment (e.g. `specflow recover --complete`), do it and loop, else stop for the human. |
 
 ## Stop conditions (end your turn)

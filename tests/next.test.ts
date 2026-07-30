@@ -49,6 +49,42 @@ describe('specflow next — the ladder', () => {
     expect(out).toContain(`run: cd '${repo.root}/.specflow/worktrees/${planId}' && claude '/specflow'`)
   })
 
+  it('renders the handoff and relay for the resolved harness', async () => {
+    const { repo, planId } = await shippableRepo()
+    const wt = `${repo.root}/.specflow/worktrees/${planId}`
+
+    const cc = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'claude-code' } })
+    expect(cc).toContain(`run: cd '${wt}' && claude '/specflow'`)
+    expect(cc).toContain('relay: /clear then /specflow')
+
+    const pi = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'pi' } })
+    expect(pi).toContain(`run: cd '${wt}' && pi '/specflow'`)
+    expect(pi).toContain('relay: /new then /specflow')
+  })
+
+  it('carries the implement-stage pin into the Pi handoff, provider-qualified', async () => {
+    const { repo, planId } = await shippableRepo()
+    repo.write('specflow.config.yaml',
+      `${repo.read('specflow.config.yaml')}gates:\n  implement: { model: claude-opus-5 }\n`)
+    repo.git('add', 'specflow.config.yaml')
+    repo.git('commit', '-m', 'pin implement model')
+    const wt = `${repo.root}/.specflow/worktrees/${planId}`
+
+    const pi = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'pi' } })
+    expect(pi).toContain(`run: cd '${wt}' && pi --model anthropic/claude-opus-5 '/specflow'`)
+
+    const cc = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'claude-code' } })
+    expect(cc).toContain(`run: cd '${wt}' && claude --model claude-opus-5 '/specflow'`)
+  })
+
+  it('refuses an unknown harness rather than printing an unrunnable handoff', async () => {
+    const { repo } = await shippableRepo()
+    const r = await repo.cli(['next'], { env: { SPECFLOW_HARNESS: 'pikachu' } })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown-harness')
+    expect(r.stderr).toContain('claude-code | pi')
+  })
+
   it('gates every draft plan before any approved plan starts (plans-first)', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })

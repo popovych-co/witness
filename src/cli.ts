@@ -57,7 +57,7 @@ const VERB_USAGE: Record<string, string> = {
   'dispatch-report': 'specflow dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
   gate: 'specflow gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
   index: 'specflow index',
-  init: 'specflow init',
+  init: 'specflow init [--agent claude-code|pi|auto]',
   log: 'specflow log <stream> [--all] [--lineage]',
   next: 'specflow next',
   recap: 'specflow recap --file <recap.json> [--amend]',

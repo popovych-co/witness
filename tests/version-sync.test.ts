@@ -29,7 +29,7 @@ describe('plugin version pin', () => {
   });
 
   it('every @whatmatters/specflow@ pin under plugin/ equals the package version', () => {
-    const files = walk(join(root, 'plugin')).filter((f) => /\.(md|sh|mjs|json)$/.test(f));
+    const files = walk(join(root, 'plugin')).filter((f) => /\.(md|sh|mjs|json|ts)$/.test(f));
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
       for (const m of readFileSync(f, 'utf8').matchAll(PIN)) {

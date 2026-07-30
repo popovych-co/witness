@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { readdirSync, existsSync } from 'node:fs'
+import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'
-import { EXIT, type Ctx } from '../cli.js'
+import { EXIT, version, type Ctx } from '../cli.js'
+import { HARNESSES, resolveHarness, skillsVisibility } from '../harness.js'
+import { probe } from '../probe.js'
 import { loadConfig } from '../config.js'
 import { designPending } from '../design.js'
 import { runDrift } from '../drift.js'
@@ -31,15 +33,6 @@ interface Finding {
 
 const f = (level: Finding['level'], area: string, field: string, rule: string, detail: string): Finding =>
   ({ level, area, field, rule, detail })
-
-function probe(cmd: string, args: string[]): boolean {
-  try {
-    execFileSync(cmd, args, { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
-}
 
 export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (argv.includes('--drift')) return runDrift(ctx, argv)
@@ -170,9 +163,15 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
   }
 
-  if (!probe('gh', ['--version'])) findings.push(f('warn', 'probes', 'gh', 'missing', 'PR operations (later slice) will stop loudly'))
-  else if (!probe('gh', ['auth', 'status'])) findings.push(f('warn', 'probes', 'gh', 'unauthenticated', 'run gh auth login'))
-  if (!probe('claude', ['--version'])) findings.push(f('warn', 'probes', 'claude', 'missing', 'gate reviewers (later slice) will stop loudly'))
+  if (!probe('gh', ['--version'], ctx.env)) findings.push(f('warn', 'probes', 'gh', 'missing', 'PR operations (later slice) will stop loudly'))
+  else if (!probe('gh', ['auth', 'status'], ctx.env)) findings.push(f('warn', 'probes', 'gh', 'unauthenticated', 'run gh auth login'))
+  // Decision 12: the judgment lane is Claude on EVERY harness — `specflow gate` spawns
+  // `claude -p --output-format json` for every reviewer. This is a machine fact, not a
+  // harness fact, and the wording must not read as optional.
+  if (!probe('claude', ['--version'], ctx.env)) {
+    findings.push(f('warn', 'probes', 'claude', 'missing',
+      'the claude CLI is required for gates on every harness — install and authenticate it'))
+  }
 
   if (cfg.ok) {
     for (const [key, paths] of Object.entries(cfg.value.docs)) {
@@ -180,6 +179,62 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         if (!existsSync(join(root, p))) {
           findings.push(f('error', 'config', `docs.${key}`, 'doc-missing', `${p} — gates inject configured docs fail-closed`))
         }
+      }
+    }
+  }
+
+  // `harness:` is the config rung of the resolution ladder, consulted only when no
+  // detection rung answered — so a typo there is silent on the machine that has one.
+  // check is the diagnostic verb: it reports the value regardless of who answered.
+  const configuredHarness = cfg.ok ? cfg.value.raw.harness : undefined
+  if (configuredHarness !== undefined && !(HARNESSES as readonly string[]).includes(String(configuredHarness))) {
+    findings.push(f('error', 'config', 'harness', 'unknown-harness',
+      `${String(configuredHarness)} — expected ${HARNESSES.join(' | ')}`))
+  }
+
+  const hxR = resolveHarness(ctx.env, cfg.ok ? cfg.value.raw : {})
+  if (!hxR.ok) {
+    hxR.violations.forEach((x) => findings.push(f('error', 'harness', x.field, x.rule, x.got)))
+  } else {
+    const harness = hxR.value.harness
+    // Decision 14: pi resolves project skills cwd-relative with no upward walk, and
+    // implement runs with cwd inside .specflow/worktrees/<plan-id>. A project-scope
+    // install therefore loses every skill in the stage that does the most work.
+    const visibility = skillsVisibility(ctx.env, root, harness)
+    if (visibility === 'project-only') {
+      findings.push(f('warn', 'harness', 'skills', 'skills-project-scope',
+        `${harness.skills.project} is invisible from a worktree cwd — reinstall at global scope (${harness.skills.global} under $HOME)`))
+    } else if (visibility === 'absent' && !harness.bundled) {
+      findings.push(f('warn', 'harness', 'skills', 'skills-not-installed',
+        `${harness.name} sees none of the six stage skills — npx skills add <specflow tarball url> at global scope`))
+    }
+
+    // Revision 3. Skills present + payload absent is the worst state in the design: the
+    // pipeline looks like it works, and nothing blocks a direct edit to canon. `bundled`
+    // is the same bit that silences the skills warning — Claude Code's marketplace plugin
+    // ships engine, guard and dashboard out of band, so absence there proves nothing.
+    const installed = harness.payload.map((p) => p.to).filter((rel) => existsSync(join(root, rel)))
+    if (installed.length === 0) {
+      if (!harness.bundled) {
+        findings.push(f('warn', 'harness', 'payload', 'payload-not-installed',
+          `${harness.name} has no engine, guard or dashboard here — run specflow init --agent ${harness.name}`))
+      }
+    } else {
+      // Revision 1's other half: the sync can restamp, but only if someone knows to run
+      // it. The engine file's pin decides which CLI the whole pipeline runs, so a lagging
+      // pin is a finding, not a detail.
+      // The capture must be a semver and nothing else. Both payloads embed the pin as
+      // `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@<v>}`, so a trailing-delimiter
+      // class that omits `}` swallows the brace and NEVER equals version() — which made
+      // payload-stale fire on every fresh install until Task 9's manual pass caught it.
+      // Same shape as install.ts's PIN, deliberately.
+      const stale = installed.filter((rel) => {
+        const m = /@whatmatters\/specflow@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(readFileSync(join(root, rel), 'utf8'))
+        return m !== null && m[1] !== version()
+      })
+      if (stale.length > 0) {
+        findings.push(f('warn', 'harness', 'payload', 'payload-stale',
+          `${stale.join(' · ')} pin an older CLI than ${version()} — run specflow init --agent ${harness.name} to restamp`))
       }
     }
   }

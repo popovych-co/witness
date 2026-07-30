@@ -1,6 +1,6 @@
 ---
 name: specflow-implement
-description: Implement a specflow plan — you are the implementer; CLI-managed worktree, session slices under the dispatch budget with a /clear relay, red/green TDD with CLI-witnessed evidence per step, then the implement gate. Normally invoked by /specflow with the plan id.
+description: Implement a specflow plan — you are the implementer; CLI-managed worktree, session slices under the dispatch budget with a CLI-printed relay, red/green TDD with CLI-witnessed evidence per step, then the implement gate. Normally invoked by /specflow with the plan id.
 ---
 
 # specflow-implement — plan → tagged tests + code → gate
@@ -18,7 +18,7 @@ Resolve the CLI once per session:
 SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.2}"
 ```
 
-- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with Edit, not with Write, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (A PreToolUse hook blocks you; the trailer audit catches what it can't.)
+- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
 - **Never invoke gate reviewers or relay verdicts.** `specflow gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
 - **Refusal repair loop:** a `specflow` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
@@ -36,7 +36,7 @@ Prints the worktree path (`.specflow/worktrees/<plan-id>`, branch `specflow/<pla
 
 ## Work the plan in slices (session relay)
 
-There is no dispatch and no subagent: **this session is the implementer**, working inside the worktree `start` printed. `start` also prints `dispatch-budget:` (the config's `implement.stepsPerDispatch`) and `dispatches:` (the run's shape). Work the plan as a **relay of session slices**: this session takes **at most the next `dispatch-budget` unfinished steps**, then relays. Derive which steps remain from the journal (`$SPECFLOW log <plan-id>` — steps with a green `test-evidence` are done), never from conversation memory.
+A fresh session is the execution model: **this session is the implementer**, working inside the worktree `start` printed. `start` also prints `dispatch-budget:` (the config's `implement.stepsPerDispatch`) and `dispatches:` (the run's shape). Work the plan as a **relay of session slices**: this session takes **at most the next `dispatch-budget` unfinished steps**, then relays. Derive which steps remain from the journal (`$SPECFLOW log <plan-id>` — steps with a green `test-evidence` are done), never from conversation memory.
 
 Protocol per step, in order — red/green/refactor with witnessed evidence:
 
@@ -63,9 +63,11 @@ $SPECFLOW dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> \
 
 (numbers are your own best-effort report; omit flags you don't have — `--tokens` is usually unknowable from inside the session. Labeled reported telemetry, never gate evidence). Then, if unfinished steps remain, print exactly this and **END YOUR TURN**:
 
-> Slice done. Run `/clear`, then `/specflow` — the next slice continues with fresh context (position re-derives from the journal).
+> Slice done. Run the `relay:` line `dispatch-report` just printed — the next slice continues with fresh context (position re-derives from the journal).
 
-The cleared session re-enters through `/specflow` and converges from CLI output — that re-entrancy is the relay mechanism, and it is why nothing may live only in conversation memory. When NO unfinished steps remain, skip the relay and go to the gate below.
+`dispatch-report` prints a `relay:` line resolved for whatever harness you are running on — print it verbatim. If no `relay:` line came back, the CLI could not resolve the harness: say so, show the human `specflow check`, and end your turn rather than guessing a command.
+
+The fresh session re-enters through `/specflow` and converges from CLI output — that re-entrancy is the relay mechanism, and it is why nothing may live only in conversation memory. When NO unfinished steps remain, skip the relay and go to the gate below.
 
 If code landed before its red was witnessed (a slice slipped), reconstruct instead of faking: `$SPECFLOW verify-red <plan-id>` (stashes non-test changes, expects red, restores, expects green — safe in the isolated worktree).
 

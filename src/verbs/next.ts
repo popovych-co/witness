@@ -10,6 +10,7 @@ import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } f
 import { effortOf, effortReviewedSha, effortSpecs, effortWrites, planPairSha, worktreeTreeSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
+import { handoffLine, relayLine, resolveHarness } from '../harness.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -61,16 +62,8 @@ export interface NextAction {
   target?: string
   note?: string
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
-  run?: string    // paste-ready handoff command for a fresh session in `home`
-}
-
-// Row 82: the handoff command a human pastes into a fresh terminal. The model pin rides
-// `claude --model` literally; SESSION_DEFAULT (or an unloadable pin — config errors
-// surface at start/gate, not here) omits the flag. Single quotes: a double-quoted form
-// trips toon esc() quoting and emits an unpasteable line.
-function handoffLine(home: string, model?: string): string {
-  const modelArg = model && model !== SESSION_DEFAULT ? ` --model ${model}` : ''
-  return `cd '${home}' && claude${modelArg} '/specflow'`
+  model?: string  // model pin the fresh session in `home` runs under; the handoff string
+                  // itself is rendered at the print site, where the harness is known
 }
 
 // The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
@@ -83,9 +76,10 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   const entries = readStream(root, id)
   const wt = worktreePath(root, id)
   const pinR = stagePin(cfg, 'implement')
-  const implementModel = pinR.ok ? pinR.value : undefined
-  const inWorktree = { home: wt, run: handoffLine(wt, implementModel) }
-  const atRoot = { home: root, run: handoffLine(root) }
+  const pin = pinR.ok ? pinR.value : undefined
+  const implementModel = pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined
+  const inWorktree = { home: wt, model: implementModel }
+  const atRoot = { home: root }
   if (!existsSync(wt)) return { line: `specflow start ${id}`, target: id, note: 'worktree missing — start recreates it' }
   if (plan.meta.pr !== undefined) return { line: `specflow ship ${id}`, stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
@@ -405,6 +399,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootR.value
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const hxR = resolveHarness(ctx.env, cfgR.value.raw)
+  if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const harness = hxR.value.harness
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)
   if (lazy.stamped.length > 0) canon = loadCanon(root)
@@ -431,7 +428,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
   if (action.note) ctx.out(kv('note', action.note))
-  if (action.home) ctx.out(kv('home', action.home))
-  if (action.run) ctx.out(kv('run', action.run))
+  if (action.home) {
+    ctx.out(kv('home', action.home))
+    ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
+    ctx.out(kv('relay', relayLine(harness)))
+  }
   return EXIT.OK
 }

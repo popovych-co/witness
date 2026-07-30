@@ -25,7 +25,7 @@ if (manifest.version !== version) {
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   stamped += 1;
 }
-for (const f of walk(join(root, 'plugin')).filter((p) => /\.(md|sh|mjs|json)$/.test(p))) {
+for (const f of walk(join(root, 'plugin')).filter((p) => /\.(md|sh|mjs|json|ts)$/.test(p))) {
   const before = readFileSync(f, 'utf8');
   const after = before.replace(PIN, `@whatmatters/specflow@${version}`);
   if (after !== before) {

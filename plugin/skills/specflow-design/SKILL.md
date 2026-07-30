@@ -19,7 +19,7 @@ Resolve the CLI once per session:
 SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.2}"
 ```
 
-- **Never edit `specs/**`, `plans/**`, or `designs/**`** — the CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `specflow design`. (A PreToolUse hook blocks direct edits; the trailer audit catches end-runs.)
+- **Never edit `specs/**`, `plans/**`, or `designs/**`** — the CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `specflow design`. (The canon guard blocks direct edits; the trailer audit catches end-runs.)
 - **Never invoke gate reviewers or relay verdicts.** `specflow gate design` runs the design-critic itself and journals what it said.
 - **Refusal repair loop:** `specflow design` exiting 2 prints structured violations (`field · rule · got · want`). Fix and retry — **3 total attempts**, then stop and show the human the list verbatim.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
