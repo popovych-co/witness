@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 import type { Config } from './config.js'
+import type { HarnessName } from './harness.js'
+import { parsePin } from './pin.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 export const MODEL_ALIASES = ['sonnet', 'opus', 'haiku', 'fable', 'default', 'latest']
@@ -14,16 +16,23 @@ export function shippedMatrixPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), '..', 'calibration.yaml')
 }
 
-function readModels(path: string): string[] {
+interface MatrixDoc { models?: unknown; matrices?: Record<string, { models?: unknown } | undefined> }
+
+// Per-(harness, model) calibration (Decision 88): a pi-invoked reviewer on the same
+// model id is a DIFFERENT reviewer. Legacy top-level `models:` predates the harness
+// dimension and was only ever measured through claude -p — it reads as claude-code.
+function readModels(path: string, harness: HarnessName): string[] {
   if (!existsSync(path)) return []
-  const doc = parse(readFileSync(path, 'utf8')) as { models?: unknown } | null
-  return Array.isArray(doc?.models) ? doc.models.map(String) : []
+  const doc = parse(readFileSync(path, 'utf8')) as MatrixDoc | null
+  const scoped = doc?.matrices?.[harness]?.models
+  if (Array.isArray(scoped)) return scoped.map(String)
+  return harness === 'claude-code' && Array.isArray(doc?.models) ? doc.models.map(String) : []
 }
 
-export function loadMatrix(root: string): MatrixInfo {
+export function loadMatrix(root: string, harness: HarnessName): MatrixInfo {
   return {
-    shipped: readModels(shippedMatrixPath()),
-    local: readModels(join(root, '.specflow', 'calibration.local.yaml')),
+    shipped: readModels(shippedMatrixPath(), harness),
+    local: readModels(join(root, '.specflow', 'calibration.local.yaml'), harness),
   }
 }
 
@@ -43,9 +52,13 @@ export function stagePin(cfg: Config, gate?: string): Result<string | undefined>
   const pinRaw = gateBlock?.model ?? gates.model
   const pinField = gateBlock?.model !== undefined ? `gates.${gate}.model` : 'gates.model'
   const pin = pinRaw === undefined ? undefined : String(pinRaw)
-  if (pin !== undefined && MODEL_ALIASES.includes(pin)) {
-    return refuse([v(pinField, 'alias-refused', pin,
-      'an exact model id — aliases re-point under the calibration (Decision 55)')])
+  if (pin !== undefined) {
+    const parsed = parsePin(pinField, pin)
+    if (!parsed.ok) return refuse(parsed.violations)
+    if (MODEL_ALIASES.includes(parsed.value.model)) {
+      return refuse([v(pinField, 'alias-refused', pin,
+        'an exact model id — aliases re-point under the calibration (Decision 55)')])
+    }
   }
   return ok(pin)
 }

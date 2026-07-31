@@ -8,6 +8,7 @@ import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry 
 import { primaryRoot, stateCommit } from './gitio.js'
 import { loadCanon, findById, type Canon } from './scan.js'
 import { newRunId } from './drift.js'
+import { resolveHarness } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
@@ -192,7 +193,10 @@ export async function runGate(
     if (docs.length) lens.docs = docs
     lenses.push(lens)
   }
-  const modelR = resolveModel(cfgR.value, loadMatrix(root), spec.gate)
+  const hxR = resolveHarness(ctx.env, cfgR.value.raw)
+  if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const harness = hxR.value.harness
+  const modelR = resolveModel(cfgR.value, loadMatrix(root, harness.name), spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const { chain, calibrationOf, warning } = modelR.value
   if (warning) ctx.err(`warning: ${warning}`)

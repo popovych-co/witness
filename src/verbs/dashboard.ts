@@ -5,6 +5,7 @@ import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
 import { DEFAULT_BATTERIES } from '../gate.js'
 import { primaryRoot } from '../gitio.js'
+import { resolveHarness } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { loadMatrix, resolveModel } from '../model.js'
 import { computeNext, flowAction } from './next.js'
@@ -50,7 +51,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const cfg = loadConfig(root)
   ctx.out(kv('specflow', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
   if (cfg.ok) {
-    const matrix = loadMatrix(root)
+    // Diagnostic surface: a broken harness config must not brick the dashboard —
+    // `check` reports that as a finding, so the floor lines fall back to claude-code.
+    const hxR = resolveHarness(ctx.env, cfg.value.raw)
+    const matrix = loadMatrix(root, hxR.ok ? hxR.value.harness.name : 'claude-code')
     // one line per distinct warning, labeled with the gates it applies to —
     // per-gate model pins can put each gate in a different calibration state
     const byWarning = new Map<string, string[]>()
