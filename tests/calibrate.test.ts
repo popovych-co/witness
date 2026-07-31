@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
-import { distribute, threshold, injectSamples } from '../src/calibrate';
+import { addToLocalOverlay, distribute, threshold, injectSamples, localOverlayPath } from '../src/calibrate';
+import { loadMatrix } from '../src/model';
 import { dirtyStatePaths } from '../src/gitio';
 import { fakeCtx, fakeScenario, gateEnv, putVerdict, tmpRepo } from './helpers';
 
@@ -50,7 +51,7 @@ describe('specflow calibrate (fake claude)', () => {
     expect(r.out).toContain('slicing-critic');
     expect(r.out).toContain('result: PASS');
     const overlay = parse(readFileSync(join(repo.root, '.specflow', 'calibration.local.yaml'), 'utf8'));
-    expect(overlay.models).toContain('claude-fable-5');
+    expect(overlay.matrices['claude-code'].models).toContain('claude-fable-5');
     expect(dirtyStatePaths(repo.root)).toEqual([]); // the overlay is gitignored local config, never dirty state
   });
 
@@ -121,5 +122,17 @@ describe('specflow calibrate (fake claude)', () => {
     writeFileSync(join(scenario, 'claude-fail'), '99');
     const r = await runCalibrate(repo, scenario, ['claude-fable-5', '--only', 'slicing-critic', '--samples', '1']);
     expect(r.code).toBe(2);
+  });
+});
+
+describe('per-harness overlay', () => {
+  it('writes matrices.<harness>.models and leaves legacy models untouched', () => {
+    const repo = tmpRepo();
+    mkdirSync(dirname(localOverlayPath(repo.root)), { recursive: true });
+    writeFileSync(localOverlayPath(repo.root), 'models:\n  - claude-fable-5\n');
+    addToLocalOverlay(repo.root, 'google/gemini-3.6-pro', 'pi');
+    addToLocalOverlay(repo.root, 'google/gemini-3.6-pro', 'pi'); // idempotent
+    expect(loadMatrix(repo.root, 'pi').local).toEqual(['google/gemini-3.6-pro']);
+    expect(loadMatrix(repo.root, 'claude-code').local).toEqual(['claude-fable-5']);
   });
 });

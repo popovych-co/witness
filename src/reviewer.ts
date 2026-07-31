@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Ctx } from './cli.js'
-import { loadHarness, validatePin, type Harness } from './harness.js'
+import { validatePin, type Harness } from './harness.js'
 import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
@@ -143,14 +143,6 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
     }
     return harness.reviewer.parseEnvelope(r.stdout)
   }
-}
-
-// Back-compat shim for gate.ts/calibrate.ts/drift.ts — deleted in the calibrate task
-// once every caller passes a resolved harness.
-export function invokeClaude(ctx: Ctx, opts: InvokeOpts): Result<{ text: string }> {
-  const h = loadHarness('claude-code')
-  if (!h.ok) return refuse(h.violations)
-  return invokeReviewer(ctx, h.value, opts)
 }
 
 export function parseVerdictText(text: string): Result<unknown> {

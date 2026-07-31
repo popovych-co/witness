@@ -2,6 +2,8 @@ import type { Ctx } from '../cli.js'
 import { EXIT } from '../cli.js'
 import { kv, rows } from '../toon.js'
 import { renderRefusal, v } from '../refusal.js'
+import { loadConfig } from '../config.js'
+import { resolveHarness } from '../harness.js'
 import { MODEL_ALIASES } from '../model.js'
 import { primaryRoot } from '../gitio.js'
 import { PROMPT_NAMES } from '../reviewer.js'
@@ -67,12 +69,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
 
-  const reviewers = runReviewers ? await runReviewerSuites(ctx, model, flags.samples, reviewerOnly) : undefined
+  // Decision 88: calibration measures the (harness, model) pair — the same spawn the
+  // gate battery will use. Resolved once, threaded into every suite and the overlay.
+  const cfgR = loadConfig(rootR.value)
+  const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+  if (!hxR.ok) {
+    for (const line of renderRefusal(hxR.violations)) ctx.err(line)
+    return EXIT.REFUSED
+  }
+  const harness = hxR.value.harness
+
+  const reviewers = runReviewers ? await runReviewerSuites(ctx, harness, model, flags.samples, reviewerOnly) : undefined
   if (reviewers && !reviewers.ok) {
     for (const line of renderRefusal(reviewers.violations)) ctx.err(line)
     return EXIT.REFUSED
   }
-  const skills = runSkills ? await runSkillSuites(ctx, model, flags.samples, { only: skillOnly }) : undefined
+  const skills = runSkills ? await runSkillSuites(ctx, harness, model, flags.samples, { only: skillOnly }) : undefined
   if (skills && !skills.ok) {
     for (const line of renderRefusal(skills.violations)) ctx.err(line)
     return EXIT.REFUSED
@@ -100,8 +112,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const pass = reportPass(report)
   ctx.out(kv('result', pass ? 'PASS' : 'FAIL'))
   if (!pass) return EXIT.FINDINGS
-  addToLocalOverlay(rootR.value, model)
-  ctx.out(kv('overlay', `.specflow/calibration.local.yaml + ${model} (gate-runs stamp calibration: local)`))
+  addToLocalOverlay(rootR.value, model, harness.name)
+  ctx.out(kv('overlay', `.specflow/calibration.local.yaml + ${harness.name}/${model} (gate-runs stamp calibration: local)`))
   if (flags.publish) {
     const pub = publishScore(rootR.value, model, report)
     if (!pub.ok) {

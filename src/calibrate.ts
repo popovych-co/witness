@@ -9,8 +9,9 @@ import { loadConfig } from './config.js'
 import { changedFiles, diffBase, evidenceForDiff } from './evidence.js'
 import { readDoc, splitDoc, writeDoc } from './fm.js'
 import { git, stateCommit } from './gitio.js'
+import type { Harness, HarnessName } from './harness.js'
 import { ok, refuse, v, type Result } from './refusal.js'
-import { PROMPT_NAMES, invokeClaude, parseVerdictText, resolvePrompt } from './reviewer.js'
+import { PROMPT_NAMES, invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
 import { findById, loadCanon } from './scan.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import { createWorktree } from './worktree.js'
@@ -129,6 +130,7 @@ export const injectSamples = (samples: number): number => Math.max(2, Math.ceil(
 
 export function runSample(
   ctx: Ctx,
+  harness: Harness,
   model: string,
   lens: string,
   suite: ReviewerSuite,
@@ -140,7 +142,7 @@ export function runSample(
   // prompt condition production reviewers actually see
   const menu = anchorMenu(reviewed)
   const prompt = `${lens}\n\n${menu ? `${menu}\n\n` : ''}${renderReviewed(reviewed, context)}\n`
-  const invoked = invokeClaude(ctx, { cwd: dir, prompt, model })
+  const invoked = invokeReviewer(ctx, harness, { cwd: dir, prompt, model })
   if (!invoked.ok) return invoked // invocation-layer failure aborts the run
   const raw = parseVerdictText(invoked.value.text)
   if (!raw.ok) return ok({ valid: false, blocking: 0, why: 'verdict-unparseable' })
@@ -156,7 +158,7 @@ function side(): SideScore {
   return { ok: 0, total: 0 }
 }
 
-export async function runReviewerSuite(ctx: Ctx, model: string, reviewer: string, samples: number): Promise<Result<ReviewerScore>> {
+export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string, reviewer: string, samples: number): Promise<Result<ReviewerScore>> {
   const suiteR = loadReviewerSuite(reviewer)
   if (!suiteR.ok) return suiteR
   const suite = suiteR.value
@@ -166,12 +168,12 @@ export async function runReviewerSuite(ctx: Ctx, model: string, reviewer: string
   const catches = side()
   const clean = side()
   const inject = side()
-  // Deterministic call order (fake-claude scripting relies on it):
+  // Deterministic call order (fake-reviewer scripting relies on it):
   // defect seeds (sorted, round-robin) → injects (sorted, injectSamples each) → clean runs.
   const perSeed = distribute(samples, suite.seeds.length)
   for (const [i, seed] of suite.seeds.entries()) {
     for (let n = 0; n < perSeed[i]!; n += 1) {
-      const s = runSample(ctx, model, lens, suite, seed.overlay)
+      const s = runSample(ctx, harness, model, lens, suite, seed.overlay)
       if (!s.ok) return s
       catches.total += 1
       if (s.value.valid && s.value.blocking > 0) catches.ok += 1
@@ -179,14 +181,14 @@ export async function runReviewerSuite(ctx: Ctx, model: string, reviewer: string
   }
   for (const seed of suite.injects) {
     for (let n = 0; n < injectSamples(samples); n += 1) {
-      const s = runSample(ctx, model, lens, suite, seed.overlay)
+      const s = runSample(ctx, harness, model, lens, suite, seed.overlay)
       if (!s.ok) return s
       inject.total += 1
       if (s.value.valid && s.value.blocking > 0) inject.ok += 1
     }
   }
   for (let n = 0; n < samples; n += 1) {
-    const s = runSample(ctx, model, lens, suite)
+    const s = runSample(ctx, harness, model, lens, suite)
     if (!s.ok) return s
     clean.total += 1
     if (s.value.valid && s.value.blocking === 0) clean.ok += 1
@@ -195,12 +197,12 @@ export async function runReviewerSuite(ctx: Ctx, model: string, reviewer: string
   return ok({ reviewer, catches, clean, inject, pass })
 }
 
-export async function runReviewerSuites(ctx: Ctx, model: string, samples: number, only?: string): Promise<Result<ReviewerScore[]>> {
+export async function runReviewerSuites(ctx: Ctx, harness: Harness, model: string, samples: number, only?: string): Promise<Result<ReviewerScore[]>> {
   const names = [...PROMPT_NAMES].sort().filter((n) => only === undefined || n === only)
   if (names.length === 0) return refuse([v('--only', 'unknown-reviewer', only ?? '', PROMPT_NAMES.join(' '))])
   const scores: ReviewerScore[] = []
   for (const name of names) {
-    const r = await runReviewerSuite(ctx, model, name, samples)
+    const r = await runReviewerSuite(ctx, harness, model, name, samples)
     if (!r.ok) return r
     scores.push(r.value)
   }
@@ -225,13 +227,18 @@ export function aggregate(r: CalReport): number {
 
 export const localOverlayPath = (root: string): string => join(root, '.specflow', 'calibration.local.yaml')
 
-export function addToLocalOverlay(root: string, model: string): void {
+export function addToLocalOverlay(root: string, model: string, harness: HarnessName): void {
   const path = localOverlayPath(root)
-  const current = existsSync(path) ? (parse(readFileSync(path, 'utf8')) as { models?: string[] }) : {}
-  const models = current.models ?? []
+  const current = existsSync(path)
+    ? (parse(readFileSync(path, 'utf8')) as { models?: string[]; matrices?: Record<string, { models?: string[] }> })
+    : {}
+  const matrices = current.matrices ?? {}
+  const models = matrices[harness]?.models ?? []
   if (!models.includes(model)) models.push(model)
+  matrices[harness] = { models }
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, stringify({ models }))
+  // legacy top-level `models:` (claude-code measurements) is preserved verbatim
+  writeFileSync(path, stringify({ ...current, matrices }))
 }
 
 // --- Skill-suite half (stage-skill calibration contracts) ---
@@ -289,7 +296,9 @@ export function artifactsEnvelope(raw: unknown): Result<SkillArtifact[]> {
   return ok(out)
 }
 
-function harness(cwd: string, env: Record<string, string | undefined>): { ctx: Ctx; out(): string; err(): string } {
+// Captures a Ctx with buffered out/err so a seeded CLI call can be inspected.
+// (Named captureCtx, not harness: the Harness registry owns that noun now.)
+function captureCtx(cwd: string, env: Record<string, string | undefined>): { ctx: Ctx; out(): string; err(): string } {
   const outs: string[] = []
   const errs: string[] = []
   const ctx: Ctx = { cwd, env, isTTY: false, out: (l) => outs.push(l), err: (l) => errs.push(l), ask: async () => '' }
@@ -341,7 +350,7 @@ function firstCriterionTag(meta: { criteria?: unknown }): string {
   return withTest ? String(withTest.test).replace(/^@spec:/, '') : ''
 }
 
-export async function runDecomposeSeed(ctx: Ctx, model: string, seed: SkillSeed): Promise<Result<{ ok: boolean; why: string }>> {
+export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed): Promise<Result<{ ok: boolean; why: string }>> {
   const { root } = seedScratchRepo(`decompose-${seed.id}`)
   const canonDir = join(seed.dir, 'canon')
   if (existsSync(canonDir)) {
@@ -351,12 +360,12 @@ export async function runDecomposeSeed(ctx: Ctx, model: string, seed: SkillSeed)
   const recapText = readFileSync(join(seed.dir, 'recap.json'), 'utf8')
   const recap = JSON.parse(recapText) as { effort: string; goals: Array<{ id: string }> }
   writeFileSync(join(root, '.cal-recap.json'), recapText)
-  const recapH = harness(root, ctx.env)
+  const recapH = captureCtx(root, ctx.env)
   const recapCode = await main(recapH.ctx, ['recap', '--file', '.cal-recap.json'])
   rmSync(join(root, '.cal-recap.json'), { force: true })
   if (recapCode !== 0) return ok({ ok: false, why: `seed recap failed: ${recapH.err()}` })
 
-  const indexH = harness(root, ctx.env)
+  const indexH = captureCtx(root, ctx.env)
   await main(indexH.ctx, ['index'])
 
   const prompt = [
@@ -367,7 +376,7 @@ export async function runDecomposeSeed(ctx: Ctx, model: string, seed: SkillSeed)
     NONINTERACTIVE_OVERRIDE,
   ].join('\n\n')
 
-  const invoked = invokeClaude(ctx, { cwd: root, prompt, model })
+  const invoked = invokeReviewer(ctx, harness, { cwd: root, prompt, model })
   if (!invoked.ok) return invoked
   const raw = parseVerdictText(invoked.value.text)
   if (!raw.ok) return ok({ ok: false, why: 'envelope-unparseable' })
@@ -386,7 +395,7 @@ export async function runDecomposeSeed(ctx: Ctx, model: string, seed: SkillSeed)
     const bodyTmp = join(root, `.cal-body-${a.id}.md`)
     writeFileSync(metaTmp, JSON.stringify(a.meta))
     writeFileSync(bodyTmp, a.body)
-    const wH = harness(root, ctx.env)
+    const wH = captureCtx(root, ctx.env)
     const code = await main(wH.ctx, ['write', a.id, '--effort', recap.effort, '--meta', `.cal-meta-${a.id}.json`, '--body', `.cal-body-${a.id}.md`])
     rmSync(metaTmp, { force: true })
     rmSync(bodyTmp, { force: true })
@@ -430,13 +439,13 @@ export async function runDecomposeSeed(ctx: Ctx, model: string, seed: SkillSeed)
   return ok({ ok: true, why: 'first-try valid' })
 }
 
-export async function runPlanSeed(ctx: Ctx, model: string, seed: SkillSeed): Promise<Result<{ ok: boolean; why: string }>> {
+export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed): Promise<Result<{ ok: boolean; why: string }>> {
   const { root } = seedScratchRepo(`plan-${seed.id}`)
 
   const recapText = readFileSync(join(seed.dir, 'recap.json'), 'utf8')
   const recap = JSON.parse(recapText) as { effort: string }
   writeFileSync(join(root, '.cal-recap.json'), recapText)
-  const recapH = harness(root, ctx.env)
+  const recapH = captureCtx(root, ctx.env)
   const recapCode = await main(recapH.ctx, ['recap', '--file', '.cal-recap.json'])
   rmSync(join(root, '.cal-recap.json'), { force: true })
   if (recapCode !== 0) return ok({ ok: false, why: `seed recap failed: ${recapH.err()}` })
@@ -446,14 +455,14 @@ export async function runPlanSeed(ctx: Ctx, model: string, seed: SkillSeed): Pro
   const parentId = firstCriterionTag(parentMeta)
   writeFileSync(join(root, '.cal-parent-meta.json'), JSON.stringify(parentMeta))
   writeFileSync(join(root, '.cal-parent-body.md'), parentBody)
-  const parentH = harness(root, ctx.env)
+  const parentH = captureCtx(root, ctx.env)
   const parentCode = await main(parentH.ctx, ['write', parentId, '--effort', recap.effort, '--meta', '.cal-parent-meta.json', '--body', '.cal-parent-body.md'])
   rmSync(join(root, '.cal-parent-meta.json'), { force: true })
   rmSync(join(root, '.cal-parent-body.md'), { force: true })
   if (parentCode !== 0) return ok({ ok: false, why: `seed parent write failed: ${parentH.err()}` })
   seedStatus(root, parentId, 'approved')
 
-  const diffH = harness(root, ctx.env)
+  const diffH = captureCtx(root, ctx.env)
   await main(diffH.ctx, ['diff', parentId])
   const parentRendering = readFileSync(join(root, 'specs', `${parentId}.md`), 'utf8')
 
@@ -466,7 +475,7 @@ export async function runPlanSeed(ctx: Ctx, model: string, seed: SkillSeed): Pro
     NONINTERACTIVE_OVERRIDE,
   ].join('\n\n')
 
-  const invoked = invokeClaude(ctx, { cwd: root, prompt, model })
+  const invoked = invokeReviewer(ctx, harness, { cwd: root, prompt, model })
   if (!invoked.ok) return invoked
   const raw = parseVerdictText(invoked.value.text)
   if (!raw.ok) return ok({ ok: false, why: 'envelope-unparseable' })
@@ -482,7 +491,7 @@ export async function runPlanSeed(ctx: Ctx, model: string, seed: SkillSeed): Pro
   const bodyTmp = join(root, '.cal-plan-body.md')
   writeFileSync(metaTmp, JSON.stringify(plan.meta))
   writeFileSync(bodyTmp, plan.body)
-  const planH = harness(root, ctx.env)
+  const planH = captureCtx(root, ctx.env)
   const code = await main(planH.ctx, ['write', plan.id, '--effort', recap.effort, '--meta', '.cal-plan-meta.json', '--body', '.cal-plan-body.md'])
   rmSync(metaTmp, { force: true })
   rmSync(bodyTmp, { force: true })
@@ -510,7 +519,7 @@ export async function runImplementSeed(ctx: Ctx, seed: SkillSeed, agent: AgentRu
   const recapText = readFileSync(join(seed.dir, 'recap.json'), 'utf8')
   const recap = JSON.parse(recapText) as { effort: string }
   writeFileSync(join(root, '.cal-recap.json'), recapText)
-  const recapH = harness(root, ctx.env)
+  const recapH = captureCtx(root, ctx.env)
   const recapCode = await main(recapH.ctx, ['recap', '--file', '.cal-recap.json'])
   rmSync(join(root, '.cal-recap.json'), { force: true })
   if (recapCode !== 0) return ok({ ok: false, why: `seed recap failed: ${recapH.err()}` })
@@ -520,7 +529,7 @@ export async function runImplementSeed(ctx: Ctx, seed: SkillSeed, agent: AgentRu
   const specId = firstCriterionTag(specMeta)
   writeFileSync(join(root, '.cal-spec-meta.json'), JSON.stringify(specMeta))
   writeFileSync(join(root, '.cal-spec-body.md'), specBody)
-  const specH = harness(root, ctx.env)
+  const specH = captureCtx(root, ctx.env)
   const specCode = await main(specH.ctx, ['write', specId, '--effort', recap.effort, '--meta', '.cal-spec-meta.json', '--body', '.cal-spec-body.md'])
   rmSync(join(root, '.cal-spec-meta.json'), { force: true })
   rmSync(join(root, '.cal-spec-body.md'), { force: true })
@@ -532,7 +541,7 @@ export async function runImplementSeed(ctx: Ctx, seed: SkillSeed, agent: AgentRu
   const planId = `${specId}-plan-1`
   writeFileSync(join(root, '.cal-plan-meta.json'), JSON.stringify(planMeta))
   writeFileSync(join(root, '.cal-plan-body.md'), planBody)
-  const planH = harness(root, ctx.env)
+  const planH = captureCtx(root, ctx.env)
   const planCode = await main(planH.ctx, ['write', planId, '--effort', recap.effort, '--meta', '.cal-plan-meta.json', '--body', '.cal-plan-body.md'])
   rmSync(join(root, '.cal-plan-meta.json'), { force: true })
   rmSync(join(root, '.cal-plan-body.md'), { force: true })
@@ -567,7 +576,7 @@ export async function runImplementSeed(ctx: Ctx, seed: SkillSeed, agent: AgentRu
 }
 
 export async function runSkillSuites(
-  ctx: Ctx, model: string, samples: number, opts: { only?: string; agent?: AgentRunner } = {},
+  ctx: Ctx, harness: Harness, model: string, samples: number, opts: { only?: string; agent?: AgentRunner } = {},
 ): Promise<Result<SkillScore[]>> {
   const only = opts.only
   const agent = opts.agent ?? defaultAgent
@@ -580,7 +589,7 @@ export async function runSkillSuites(
     let total = 0
     for (const [i, seed] of seeds.entries()) {
       for (let n = 0; n < perSeed[i]!; n += 1) {
-        const r = await runDecomposeSeed(ctx, model, seed)
+        const r = await runDecomposeSeed(ctx, harness, model, seed)
         if (!r.ok) return r
         total += 1
         if (r.value.ok) okCount += 1
@@ -595,7 +604,7 @@ export async function runSkillSuites(
     let total = 0
     for (const [i, seed] of seeds.entries()) {
       for (let n = 0; n < perSeed[i]!; n += 1) {
-        const r = await runPlanSeed(ctx, model, seed)
+        const r = await runPlanSeed(ctx, harness, model, seed)
         if (!r.ok) return r
         total += 1
         if (r.value.ok) okCount += 1

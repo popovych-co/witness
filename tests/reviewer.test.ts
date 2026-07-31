@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadHarness } from '../src/harness.js'
-import { invokeClaude, invokeReviewer, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
+import { invokeReviewer, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
 import { fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
 
 describe('prompt resolution', () => {
@@ -25,13 +25,15 @@ describe('prompt resolution', () => {
   })
 })
 
-describe('invokeClaude', () => {
+const claudeHarness = (() => { const r = loadHarness('claude-code'); if (!r.ok) throw new Error('registry'); return r.value })()
+
+describe('invokeReviewer via claude-code', () => {
   it('pipes the prompt over stdin, passes the model flag, returns the result text', async () => {
     const repo = await tmpRepo()
     const scenario = fakeScenario()
     putVerdict(scenario, { coverage: [], findings: [] })
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeClaude(ctx, { cwd: repo.root, prompt: 'LENS\n\n## Reviewed content\nBODY', model: 'test-model-1' })
+    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'LENS\n\n## Reviewed content\nBODY', model: 'test-model-1' })
     expect(r.ok).toBe(true)
     if (r.ok) expect(JSON.parse(r.value.text)).toEqual({ coverage: [], findings: [] })
     expect(readFileSync(join(scenario, 'claude-calls/call-1/argv'), 'utf8'))
@@ -45,7 +47,7 @@ describe('invokeClaude', () => {
     putVerdict(scenario, { coverage: [], findings: [] })
     writeFileSync(join(scenario, 'claude-fail'), '1')
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeClaude(ctx, { cwd: repo.root, prompt: 'x' })
+    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'x' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.violations[0].rule).toBe('reviewer-invocation')
   })
@@ -71,7 +73,7 @@ describe('transient invocation failure', () => {
     writeFileSync(join(scenario, 'claude-hang'), '1')
 
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { SPECFLOW_REVIEWER_TIMEOUT_MS: '400' }) })
-    const r = invokeClaude(ctx, { cwd: repo.root, prompt: 'review this' })
+    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this' })
 
     expect(r.ok).toBe(true)
     expect(readFileSync(join(scenario, 'claude-calls', 'call-2', 'argv'), 'utf8')).toContain('-p')
@@ -80,7 +82,7 @@ describe('transient invocation failure', () => {
   it('does not retry a missing binary — that is not transient', () => {
     const repo = tmpRepo()
     const ctx = fakeCtx(repo.root, { env: { PATH: '/nonexistent' } })
-    const r = invokeClaude(ctx, { cwd: repo.root, prompt: 'review this' })
+    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this' })
 
     expect(r.ok).toBe(false)
     expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')

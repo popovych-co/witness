@@ -10,7 +10,8 @@ import { appendEntry, entryLine, journalRel, readStream, type Entry } from './jo
 import type { TestOutcome } from './junit.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { refuse, renderRefusal, v, type Result, ok } from './refusal.js'
-import { invokeClaude, parseVerdictText, resolvePrompt } from './reviewer.js'
+import { resolveHarness } from './harness.js'
+import { invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
 import { runFullSuite, runnerConfig } from './runner.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from './scan.js'
 import { canonicalSha } from './sha.js'
@@ -117,8 +118,14 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   const lane = await runCriteria(root, ctx, doc, {})
   const lensR = resolvePrompt('drift-reviewer')
   if (!lensR.ok) { renderRefusal(lensR.violations).forEach(ctx.err); return EXIT.REFUSED }
+  // Decision 88: the deep lane is a reviewer lane — it runs on the RESOLVED harness,
+  // like every other. A silent claude fallback here would swap the reviewer identity
+  // for pure-pi users on the one check that judges live specs.
+  const cfgR = loadConfig(root)
+  const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+  if (!hxR.ok) { renderRefusal(hxR.violations).forEach(ctx.err); return EXIT.REFUSED }
   const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ') : 'unrunnable'})\n`
-  const invoked = invokeClaude(ctx, { cwd: root, prompt })
+  const invoked = invokeReviewer(ctx, hxR.value.harness, { cwd: root, prompt })
   if (!invoked.ok) { renderRefusal(invoked.violations).forEach(ctx.err); return EXIT.REFUSED }
   const rawR = parseVerdictText(invoked.value.text)
   const parsed = rawR.ok ? parseVerdict(rawR.value) : rawR

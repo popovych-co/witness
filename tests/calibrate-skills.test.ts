@@ -5,6 +5,7 @@ import { loadSkillSeeds, runSkillSuites, type AgentRunner } from '../src/calibra
 import { main } from '../src/cli';
 import { renderRefusal } from '../src/refusal';
 import { fakeCtx, fakeScenario, gateEnv, putVerdict, tmpRepo } from './helpers';
+import { loadHarness } from '../src/harness';
 
 async function runCalibrate(root: string, scenario: string, args: string[]) {
   const outs: string[] = [];
@@ -15,7 +16,9 @@ async function runCalibrate(root: string, scenario: string, args: string[]) {
 
 async function runCalibrateWithAgent(root: string, scenario: string, agent: AgentRunner) {
   const ctx = fakeCtx(root, { env: gateEnv(scenario) });
-  const r = await runSkillSuites(ctx, 'claude-fable-5', 1, { only: 'implement', agent });
+  const hx = loadHarness('claude-code');
+  if (!hx.ok) throw new Error('registry');
+  const r = await runSkillSuites(ctx, hx.value, 'claude-fable-5', 1, { only: 'implement', agent });
   if (!r.ok) return { code: 2, out: renderRefusal(r.violations).join('\n') };
   const pass = r.value.every((s) => s.pass);
   return { code: pass ? 0 : 1, out: r.value.map((s) => `${s.skill} ${s.ok}/${s.total}`).join('\n') };
