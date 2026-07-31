@@ -10,7 +10,7 @@ description: Slice a specflow effort's confirmed recap into vertical spec slices
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.2.2}"
+SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.3.0}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
