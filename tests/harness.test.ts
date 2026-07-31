@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
-  resolveHarness, skillsVisibility,
+  resolveHarness, skillsVisibility, validatePin,
 } from '../src/harness.js'
 
 const hx = (name: string) => {
@@ -129,5 +129,74 @@ describe('skills visibility', () => {
       'specflow-brainstorm', 'specflow-decompose', 'specflow-design',
       'specflow-implement', 'specflow-plan', 'specflow-ship',
     ])
+  })
+})
+
+describe('reviewer contract', () => {
+  const claude = hx('claude-code')
+  const pi = hx('pi')
+
+  it('claude-code spawns claude -p json with model flag and thinking as env budget', () => {
+    const s = claude.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'low' })
+    expect(s.cmd).toBe('claude')
+    expect(s.args).toEqual(['-p', '--output-format', 'json', '--model', 'claude-fable-5'])
+    expect(s.env).toEqual({ MAX_THINKING_TOKENS: '4096' })
+    const off = claude.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'off' })
+    expect(off.env).toEqual({})
+    const sessionDefault = claude.reviewer.spawn(undefined)
+    expect(sessionDefault.args).toEqual(['-p', '--output-format', 'json'])
+  })
+
+  it('pi spawns hermetic print mode with pinned thinking and provider-qualified model', () => {
+    const s = pi.reviewer.spawn({ provider: 'google', model: 'gemini-3.6-pro', thinking: 'low' })
+    expect(s.cmd).toBe('pi')
+    expect(s.args).toEqual(['-p', '--mode', 'json', '--no-session', '--no-extensions',
+      '--no-skills', '--no-context-files', '--thinking', 'low', '--model', 'google/gemini-3.6-pro'])
+    const bare = pi.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'off' })
+    expect(bare.args).toContain('anthropic/claude-fable-5')
+    expect(bare.args).toContain('off')
+    const sessionDefault = pi.reviewer.spawn(undefined)
+    expect(sessionDefault.args).not.toContain('--model')
+    expect(sessionDefault.args).toContain('--thinking')
+  })
+
+  it('claude-code parses the {result} envelope and pi parses the agent_end event stream', () => {
+    const c = claude.reviewer.parseEnvelope(JSON.stringify({ type: 'result', result: 'VERDICT' }))
+    expect(c.ok).toBe(true)
+    if (c.ok) expect(c.value.text).toBe('VERDICT')
+    const stream = [
+      JSON.stringify({ type: 'turn_end', message: { role: 'assistant' } }),
+      JSON.stringify({ type: 'agent_end', messages: [
+        { role: 'user', content: [{ type: 'text', text: 'prompt' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'VERDICT' }], stopReason: 'stop' },
+      ] }),
+      JSON.stringify({ type: 'agent_settled' }),
+    ].join('\n')
+    const p = pi.reviewer.parseEnvelope(stream)
+    expect(p.ok).toBe(true)
+    if (p.ok) expect(p.value.text).toBe('VERDICT')
+  })
+
+  it('pi surfaces in-stream provider errors as reviewer-invocation refusals', () => {
+    const stream = JSON.stringify({ type: 'agent_end', messages: [
+      { role: 'assistant', content: [], stopReason: 'error', errorMessage: '400 third-party billing blocked' },
+    ] })
+    const r = pi.reviewer.parseEnvelope(stream)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.violations[0]!.rule).toBe('reviewer-invocation')
+      expect(r.violations[0]!.got).toContain('billing')
+    }
+    const empty = pi.reviewer.parseEnvelope('not json at all')
+    expect(empty.ok).toBe(false)
+    if (!empty.ok) expect(empty.violations[0]!.rule).toBe('envelope-unparseable')
+  })
+
+  it('validatePin refuses provider-qualified pins on claude-code and passes them on pi', () => {
+    const bad = validatePin(claude, 'gates.model', 'google/gemini-3.6-pro')
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.violations[0]!.rule).toBe('provider-unrunnable')
+    expect(validatePin(claude, 'gates.model', 'claude-fable-5:high').ok).toBe(true)
+    expect(validatePin(pi, 'gates.model', 'google/gemini-3.6-pro:low').ok).toBe(true)
   })
 })

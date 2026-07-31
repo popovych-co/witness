@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export const HARNESSES = ['claude-code', 'pi'] as const
@@ -13,6 +14,8 @@ export const STAGE_SKILLS = [
   'specflow-brainstorm', 'specflow-decompose', 'specflow-design',
   'specflow-implement', 'specflow-plan', 'specflow-ship',
 ] as const
+
+export interface ReviewerSpawn { cmd: string; args: string[]; env: Record<string, string> }
 
 export interface Harness {
   name: HarnessName
@@ -28,6 +31,56 @@ export interface Harness {
   bundled: boolean
   payload: Array<{ from: string; to: string }>
   skills: { project: string; global: string }
+  // The judgment lane: how THIS harness runs a headless reviewer and what its stdout
+  // means. spawn(undefined) is the session-default rung (no model flag). The exact flag
+  // set is part of the reviewer's identity — calibrate measures through the same spawn.
+  reviewer: {
+    spawn(pin: ParsedPin | undefined): ReviewerSpawn
+    parseEnvelope(stdout: string): Result<{ text: string }>
+  }
+}
+
+function parseClaudeEnvelope(stdout: string): Result<{ text: string }> {
+  try {
+    const envelope = JSON.parse(stdout) as { result?: unknown }
+    if (typeof envelope.result !== 'string') throw new Error('missing result')
+    return ok({ text: envelope.result })
+  } catch {
+    return refuse([v('claude', 'envelope-unparseable', stdout.slice(0, 120),
+      'a --output-format json envelope carrying a result string')])
+  }
+}
+
+interface PiMessage {
+  role?: string
+  content?: Array<{ type?: string; text?: string }>
+  stopReason?: string
+  errorMessage?: string
+}
+
+// pi --mode json emits an NDJSON event stream; the terminal agent_end event carries the
+// full message history. Provider failures arrive IN-stream (stopReason: "error") — the
+// process can still exit 0, so exit-code checks alone cannot detect them.
+function parsePiEnvelope(stdout: string): Result<{ text: string }> {
+  let end: { messages?: PiMessage[] } | undefined
+  for (const line of stdout.split('\n')) {
+    if (!line.startsWith('{')) continue
+    try {
+      const evt = JSON.parse(line) as { type?: string }
+      if (evt.type === 'agent_end') end = evt as { messages?: PiMessage[] }
+    } catch { /* interleaved non-JSON output — skip the line, keep scanning */ }
+  }
+  const assistant = end?.messages?.filter((m) => m.role === 'assistant').at(-1)
+  if (assistant?.stopReason === 'error') {
+    return refuse([v('pi', 'reviewer-invocation', (assistant.errorMessage ?? 'provider error').slice(0, 200),
+      'a provider the pinned model can reach — check auth and billing for that provider')])
+  }
+  const text = (assistant?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
+  if (text === '') {
+    return refuse([v('pi', 'envelope-unparseable', stdout.slice(0, 120),
+      'a --mode json event stream whose agent_end carries assistant text')])
+  }
+  return ok({ text })
 }
 
 export type HarnessSource = 'env' | 'detected' | 'config' | 'default'
@@ -53,6 +106,18 @@ const REGISTRY: Record<HarnessName, Harness> = {
       { from: 'plugin/hooks/session-dashboard.sh', to: '.claude/hooks/session-dashboard.sh' },
     ],
     skills: { project: '.claude/skills', global: '.claude/skills' },
+    reviewer: {
+      spawn(pin: ParsedPin | undefined): ReviewerSpawn {
+        const args = ['-p', '--output-format', 'json']
+        const env: Record<string, string> = {}
+        if (pin !== undefined) {
+          args.push('--model', pin.model)
+          if (pin.thinking !== 'off') env.MAX_THINKING_TOKENS = String(CLAUDE_THINKING_BUDGET[pin.thinking])
+        }
+        return { cmd: 'claude', args, env }
+      },
+      parseEnvelope: parseClaudeEnvelope,
+    },
   },
   pi: {
     name: 'pi',
@@ -71,6 +136,18 @@ const REGISTRY: Record<HarnessName, Harness> = {
       { from: 'plugin/hooks/session-dashboard.sh', to: '.pi/extensions/session-dashboard.sh' },
     ],
     skills: { project: '.pi/skills', global: '.pi/agent/skills' },
+    // Hermetic (Decision 88): every omitted flag here is a machine-local variable that
+    // would silently change reviewer behavior — this machine's `defaultThinkingLevel:
+    // xhigh` was the probable true cause of row 87's "stalls on long prompts".
+    reviewer: {
+      spawn(pin: ParsedPin | undefined): ReviewerSpawn {
+        const args = ['-p', '--mode', 'json', '--no-session', '--no-extensions',
+          '--no-skills', '--no-context-files', '--thinking', pin?.thinking ?? 'off']
+        if (pin !== undefined) args.push('--model', `${pin.provider ?? 'anthropic'}/${pin.model}`)
+        return { cmd: 'pi', args, env: {} }
+      },
+      parseEnvelope: parsePiEnvelope,
+    },
   },
 }
 
@@ -163,4 +240,16 @@ export function skillsVisibility(
   if (home !== '' && has(join(home, harness.skills.global))) return 'global'
   if (has(join(root, harness.skills.project))) return 'project-only'
   return 'absent'
+}
+
+// Harness-compat rung of pin validation. Grammar and alias checks live in stagePin
+// (model.ts); THIS check needs the harness, which stagePin deliberately never resolves.
+export function validatePin(harness: Harness, field: string, raw: string): Result<ParsedPin> {
+  const r = parsePin(field, raw)
+  if (!r.ok) return r
+  if (harness.name === 'claude-code' && r.value.provider !== undefined) {
+    return refuse([v(field, 'provider-unrunnable', raw,
+      'a bare model id — the claude CLI cannot run provider-qualified models')])
+  }
+  return r
 }
