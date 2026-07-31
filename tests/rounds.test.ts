@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, keyOf, pendingDecision, roundsSinceApprove, type GateRunEntry,
+  ROUND_BOUND, appendKind, boundReached, keyOf, pendingDecision, roundsSinceApprove, sameKey, type GateRunEntry,
 } from '../src/rounds.js'
 
-const KEY = { gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '0.1.0' }
+const KEY = { gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '0.1.0', harness: 'claude-code' }
 
 function run(sha: string, outcome: 'passed' | 'stopped' | 'malformed', round: number, extra: Partial<GateRunEntry> = {}): GateRunEntry {
   return {
@@ -101,9 +101,21 @@ describe('pendingDecision + bound', () => {
 })
 
 describe('keyOf', () => {
-  it('extracts exactly the five key components', () => {
+  it('extracts exactly the six key components', () => {
     expect(keyOf(run('a', 'stopped', 1))).toEqual({
       reviewed_sha: 'a', gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '0.1.0',
+      harness: 'claude-code',
     })
+  })
+})
+
+describe('harness in the gate key', () => {
+  it('a legacy entry without harness cache-matches a claude-code key and not a pi key', () => {
+    // every pre-88 journal on disk lacks the field: run() builds that exact shape
+    const legacy = run('s1', 'stopped', 1)
+    expect(legacy.harness).toBeUndefined()
+    const claudeKey = key('s1')
+    expect(sameKey(keyOf(legacy), claudeKey)).toBe(true)
+    expect(sameKey(keyOf(legacy), { ...claudeKey, harness: 'pi' })).toBe(false)
   })
 })

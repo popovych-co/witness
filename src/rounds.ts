@@ -16,6 +16,9 @@ export interface GateRunEntry {
   prompts_sha: string
   specflow: string
   model: string
+  // Optional: every pre-88 journal on disk lacks it, and keyOf reads absent as
+  // claude-code — the only harness that could have written one.
+  harness?: string
   calibration: 'shipped' | 'local' | 'none'
   cached?: boolean
   manual?: boolean
@@ -49,6 +52,9 @@ export interface GateKey {
   prompts_sha: string
   model: string
   specflow: string
+  // Required — keys are always constructed fresh from a resolved harness. A pi verdict
+  // must never cache-hit a claude one: same model id, different reviewer.
+  harness: string
 }
 
 const isRun = (e: Entry | undefined, gate: string): e is GateRunEntry & Entry =>
@@ -58,12 +64,13 @@ const isDecision = (e: Entry | undefined, gate: string): e is DecisionEntry & En
 
 export function keyOf(run: GateRunEntry): GateKey {
   const { reviewed_sha, gate, prompts_sha, model, specflow } = run
-  return { reviewed_sha, gate, prompts_sha, model, specflow }
+  return { reviewed_sha, gate, prompts_sha, model, specflow, harness: run.harness ?? 'claude-code' }
 }
 
 export function sameKey(a: GateKey, b: GateKey): boolean {
   return a.reviewed_sha === b.reviewed_sha && a.gate === b.gate &&
-    a.prompts_sha === b.prompts_sha && a.model === b.model && a.specflow === b.specflow
+    a.prompts_sha === b.prompts_sha && a.model === b.model && a.specflow === b.specflow &&
+    a.harness === b.harness
 }
 
 export function gateRuns(entries: Entry[], gate: string): GateRunEntry[] {

@@ -12,10 +12,10 @@ import { resolveHarness } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
-import { docKeysFor, docsBlock, invokeClaude, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
+import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, gateRuns, keyOf, roundsSinceApprove, sameKey,
+  ROUND_BOUND, appendKind, boundReached, gateRuns, roundsSinceApprove,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
@@ -204,6 +204,7 @@ export async function runGate(
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
     prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, specflow: version(),
+    harness: harness.name,
   }
   const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
   if (kind.kind === 'resume') {
@@ -229,7 +230,8 @@ export async function runGate(
     // stops an unreliable battery from re-running for free forever instead
     const tail = gateRuns(entries, spec.gate).slice(-2)
     const sameSetup = (r: GateRunEntry) =>
-      r.outcome === 'malformed' && r.model === key.model && r.prompts_sha === key.prompts_sha
+      r.outcome === 'malformed' && r.model === key.model && r.prompts_sha === key.prompts_sha &&
+      (r.harness ?? 'claude-code') === key.harness
     if (tail.length === 2 && tail.every(sameSetup)) {
       renderRefusal([v('reviewers', 'malformed-streak',
         `${tail.length} consecutive malformed rounds on ${tail[1]!.model}`,
@@ -267,7 +269,7 @@ export async function runGate(
         let answered: string | undefined
         for (;;) {
           const id = chain[rung]!
-          const r = invokeClaude(ctx, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
+          const r = invokeReviewer(ctx, harness, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
           if (r.ok) { answered = r.value.text; model = id; break }
           if (rung >= chain.length - 1) {
             renderRefusal(r.violations).forEach((l) => ctx.err(l))
@@ -339,7 +341,7 @@ export async function runGate(
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
       reviewed_sha: input.reviewedSha, prompts_sha: key.prompts_sha,
-      specflow: key.specflow, model, calibration: calibrationOf(model),
+      specflow: key.specflow, model, harness: harness.name, calibration: calibrationOf(model),
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
       ...(fallback.length ? { fallback } : {}),

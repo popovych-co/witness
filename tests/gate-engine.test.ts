@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
@@ -39,12 +39,12 @@ function registerSynthetic() {
   })
 }
 
-async function gateRepo() {
+async function gateRepo(env: Record<string, string> = {}) {
   registerSynthetic()
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   const scenario = fakeScenario()
-  const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+  const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, env) })
   return { repo, scenario, ctx }
 }
 const runs = (repo: { root: string }) =>
@@ -78,6 +78,18 @@ describe('gate engine', () => {
     const stdin = readFileSync(join(scenario, 'claude-calls/call-1/stdin'), 'utf8')
     expect(stdin).toContain('## Valid anchors')
     expect(stdin).toContain('- auth-refresh > ## Behavior')
+  })
+
+  it('runs the battery through pi when the resolved harness is pi', async () => {
+    const { repo, scenario, ctx } = await gateRepo({ SPECFLOW_HARNESS: 'pi' })
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
+    expect(argv).toContain('--mode\njson')
+    expect(argv).toContain('--thinking\noff')
+    // full routing, no fallback: claude is never spawned on a pi-resolved gate
+    expect(existsSync(join(scenario, 'claude-calls'))).toBe(false)
+    expect(runs(repo)[0]!.harness).toBe('pi')
   })
 
   it('blocking finding → stopped, no stamp; resume renders without appending', async () => {
