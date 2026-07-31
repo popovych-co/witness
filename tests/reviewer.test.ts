@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { invokeClaude, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
+import { loadHarness } from '../src/harness.js'
+import { invokeClaude, invokeReviewer, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
 import { fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
 
 describe('prompt resolution', () => {
@@ -83,5 +84,48 @@ describe('transient invocation failure', () => {
 
     expect(r.ok).toBe(false)
     expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
+  })
+})
+
+const piHarness = (() => { const r = loadHarness('pi'); if (!r.ok) throw new Error('registry'); return r.value })()
+
+describe('invokeReviewer via pi', () => {
+  it('spawns hermetic pi print mode and parses the agent_end envelope', async () => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'LENS\nBODY', model: 'google/gemini-3.6-pro:low' })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(JSON.parse(r.value.text)).toEqual({ coverage: [], findings: [] })
+    const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
+    expect(argv).toContain('--no-session')
+    expect(argv).toContain('--no-extensions')
+    expect(argv).toContain('--thinking\nlow')
+    expect(argv).toContain('--model\ngoogle/gemini-3.6-pro')
+    expect(readFileSync(join(scenario, 'pi-calls/call-1/stdin'), 'utf8')).toContain('BODY')
+  })
+
+  it('surfaces the in-stream provider error as a refusal', async () => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    writeFileSync(join(scenario, 'pi-error'), '400 third-party billing blocked')
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'x' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.violations[0]!.rule).toBe('reviewer-invocation')
+  })
+
+  it('refuses a provider-qualified pin on claude-code before spawning anything', async () => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    const claudeH = loadHarness('claude-code')
+    if (!claudeH.ok) throw new Error('registry')
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = invokeReviewer(ctx, claudeH.value, { cwd: repo.root, prompt: 'x', model: 'google/gemini-3.6-pro' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.violations[0]!.rule).toBe('provider-unrunnable')
+    expect(existsSync(join(scenario, 'claude-calls'))).toBe(false)
   })
 })
