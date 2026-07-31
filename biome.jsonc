@@ -1,0 +1,24 @@
+{
+  // This repo is hand-formatted, and deliberately so: refusal messages, table
+  // rows and long string literals are wrapped where a READER wants the break,
+  // which no formatter reproduces. Measured on 2026-07-31 against biome 2.5.6:
+  // every lineWidth setting rewrites 155 of 180 files (~6.4k lines), because
+  // the wrapping is semantic, not mechanical.
+  //
+  // So the formatter is off, and this file exists to say that ON PURPOSE — an
+  // editor running biome with its defaults (tab indent, double quotes) against
+  // no config is what retabbed three files in 35ca0c9 and produced a diff that
+  // looked like a rewrite of a release gate. With this file present, the same
+  // editor leaves the repo alone.
+  //
+  // House style, if you are wondering what to match: 2-space indent, single
+  // quotes, no semicolons in src/ (scripts/*.mjs keep theirs), wrap for
+  // readability rather than to a column.
+  //
+  // To adopt mechanical formatting instead, do it as ONE commit that touches
+  // nothing else, so `git blame` has a single obvious hop to step over.
+  "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+  "formatter": { "enabled": false },
+  "linter": { "enabled": false },
+  "assist": { "actions": { "source": { "organizeImports": "off" } } }
+}
