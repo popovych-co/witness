@@ -49,3 +49,33 @@ describe('fake gh', () => {
     expect(() => runFake('gh', ['pr', 'view', '9', '--json', 'state'], dir)).toThrow()
   })
 })
+
+describe('fake pi', () => {
+  it('records argv+stdin and emits an agent_end NDJSON envelope carrying the verdict', () => {
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    const out = execFileSync('pi', ['-p', '--mode', 'json', '--thinking', 'off'], {
+      env: gateEnv(scenario) as NodeJS.ProcessEnv, input: 'PROMPT BODY', encoding: 'utf8',
+    })
+    const lines = out.trim().split('\n').map((l) => JSON.parse(l) as { type: string })
+    expect(lines.at(-1)!.type).toBe('agent_settled')
+    const end = lines.find((l) => l.type === 'agent_end') as unknown as {
+      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>
+    }
+    const text = end.messages.at(-1)!.content[0]!.text
+    expect(JSON.parse(text)).toEqual({ coverage: [], findings: [] })
+    expect(readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')).toContain('--thinking\noff')
+    expect(readFileSync(join(scenario, 'pi-calls/call-1/stdin'), 'utf8')).toBe('PROMPT BODY')
+  })
+
+  it('pi-error emits stopReason error with exit 0', () => {
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    writeFileSync(join(scenario, 'pi-error'), '400 third-party billing blocked')
+    const out = execFileSync('pi', ['-p', '--mode', 'json'], {
+      env: gateEnv(scenario) as NodeJS.ProcessEnv, input: 'x', encoding: 'utf8',
+    })
+    expect(out).toContain('"stopReason":"error"')
+    expect(out).toContain('billing')
+  })
+})

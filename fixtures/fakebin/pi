@@ -1,0 +1,44 @@
+#!/bin/sh
+# specflow protocol-tier fake pi: records calls, answers canned NDJSON agent_end
+# envelopes (the --mode json contract parsePiEnvelope consumes). Mirrors fakebin/claude.
+set -e
+if [ "$1" = "--version" ]; then echo "pi fake 0.0.0"; exit 0; fi
+dir="${SPECFLOW_FAKE_DIR:?SPECFLOW_FAKE_DIR unset}"
+mkdir -p "$dir/pi-calls"
+n=0
+for d in "$dir"/pi-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
+n=$((n + 1))
+call="$dir/pi-calls/call-$n"
+mkdir -p "$call"
+if [ -e ".specflow/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
+printf '%s\n' "$@" > "$call/argv"
+cat > "$call/stdin"
+if [ -f "$dir/pi-hang" ] && [ "$n" -le "$(cat "$dir/pi-hang")" ]; then
+  sleep 30
+fi
+if [ -f "$dir/pi-fail" ] && [ "$n" -le "$(cat "$dir/pi-fail")" ]; then
+  echo "fake pi: injected failure for call $n" >&2
+  exit 1
+fi
+# pi-error: the in-stream provider-error shape (billing block) — exit 0, stopReason error.
+if [ -f "$dir/pi-error" ]; then
+  node -e '
+    const fs = require("fs")
+    const msg = fs.readFileSync(process.argv[1], "utf8").trim()
+    const assistant = { role: "assistant", content: [], stopReason: "error", errorMessage: msg }
+    process.stdout.write(JSON.stringify({ type: "agent_end", messages: [assistant] }) + "\n")
+    process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\n")
+  ' "$dir/pi-error"
+  exit 0
+fi
+body="$dir/verdict.json"
+[ -f "$dir/verdict-$n.json" ] && body="$dir/verdict-$n.json"
+node -e '
+  const fs = require("fs")
+  const result = fs.readFileSync(process.argv[1], "utf8")
+  const user = { role: "user", content: [{ type: "text", text: "" }] }
+  const assistant = { role: "assistant", content: [{ type: "text", text: result }], stopReason: "stop" }
+  process.stdout.write(JSON.stringify({ type: "turn_end", message: assistant }) + "\n")
+  process.stdout.write(JSON.stringify({ type: "agent_end", messages: [user, assistant] }) + "\n")
+  process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\n")
+' "$body"
