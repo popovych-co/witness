@@ -65,6 +65,31 @@ describe('workflow tiers', () => {
     expect(Number(setupNode?.with?.['node-version'])).toBeGreaterThanOrEqual(24);
   });
 
+  // Trusted publishing (OIDC) authenticates by the absence of a credential:
+  // any _authToken line — which `registry-url` writes — pre-empts the handshake
+  // (actions/setup-node#1551). Re-adding either is how this silently regresses
+  // to a token that expires.
+  it('release publishes tokenlessly — OIDC, no npm credential in the job', () => {
+    // structural, not substring: the comments in that file NAME these keys to
+    // explain why they are absent, and a text search cannot tell prose from use
+    const y = wf('release.yml');
+    const steps = y.jobs.release.steps as {
+      uses?: string
+      env?: Record<string, string>
+      with?: Record<string, unknown>
+    }[];
+    for (const step of steps) {
+      for (const [key, val] of Object.entries(step.env ?? {})) {
+        expect(key, 'no npm credential in any step env').not.toBe('NODE_AUTH_TOKEN');
+        expect(String(val), 'no npm secret referenced').not.toContain('NPM_TOKEN');
+      }
+      if (step.uses?.startsWith('actions/setup-node')) {
+        expect(Object.keys(step.with ?? {})).not.toContain('registry-url');
+      }
+    }
+    expect(y.permissions['id-token']).toBe('write');
+  });
+
   // pnpm's own publish has lost the npm OIDC/auth path more than once
   // (pnpm/pnpm#11513, #11566) — the release publishes with the npm CLI.
   it('release publishes with the npm CLI, not pnpm publish', () => {

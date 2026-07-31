@@ -18,7 +18,10 @@ jobs:
           # and only Node 24 bundles it (20 -> npm 10.8.2, 22 -> npm 10.9.8).
           node-version: 24
           cache: pnpm
-          registry-url: "https://registry.npmjs.org"
+          # deliberately no registry-url: it writes an _authToken line into
+          # .npmrc, and an empty token there is what breaks the OIDC handshake
+          # (actions/setup-node#1551). Tokenless publishing needs npm to find
+          # NO credential, so it reaches for the trusted publisher instead.
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: pnpm run sync-versions
@@ -28,9 +31,9 @@ jobs:
         run: node scripts/release-gate.mjs
       # install is pnpm's; the publish stays on the npm CLI, whose provenance
       # + OIDC path is the proven one (pnpm/pnpm#11513, pnpm/pnpm#11566).
+      # Auth is npm trusted publishing (OIDC) via id-token: write above — no
+      # NPM_TOKEN, nothing to rotate, nothing to leak.
       - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
