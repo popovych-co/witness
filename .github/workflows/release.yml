@@ -14,7 +14,9 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24, not 20/22: npm trusted publishing (OIDC) needs npm >= 11.5.1,
+          # and only Node 24 bundles it (20 -> npm 10.8.2, 22 -> npm 10.9.8).
+          node-version: 24
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
       - run: pnpm install --frozen-lockfile

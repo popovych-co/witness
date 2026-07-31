@@ -51,6 +51,19 @@ describe("workflow tiers", () => {
 		}
 	});
 
+	// npm trusted publishing (OIDC) requires npm >= 11.5.1, and the runner's npm
+	// comes from the Node it sets up: 20 -> 10.8.2, 22 -> 10.9.8, 24 -> 11.16.0.
+	// Dropping the release job below 24 silently breaks tokenless publishing.
+	it("release runs a Node whose bundled npm can do trusted publishing", () => {
+		const steps = wf("release.yml").jobs.release.steps as {
+			uses?: string;
+			with?: { "node-version"?: number | string };
+		}[];
+		const setupNode = steps.find((s) => s.uses?.startsWith("actions/setup-node"));
+		const nodeVersion = Number(setupNode?.with?.["node-version"]);
+		expect(nodeVersion).toBeGreaterThanOrEqual(24);
+	});
+
 	// pnpm's own publish has lost the npm OIDC/auth path more than once
 	// (pnpm/pnpm#11513, #11566) — the release publishes with the npm CLI.
 	it("release publishes with the npm CLI, not pnpm publish", () => {
