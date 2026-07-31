@@ -91,7 +91,7 @@ beforeAll(() => {
   execFileSync('git', ['-C', root, 'add', '-A'])
   execFileSync('git', ['-C', root, 'commit', '-m', 'runner config'])
   const bare = `${root}-origin.git`
-  execFileSync('git', ['init', '--bare', bare])
+  execFileSync('git', ['init', '--bare', '-b', 'main', bare])   // see helpers.ts addOrigin
   execFileSync('git', ['-C', root, 'remote', 'add', 'origin', bare])
   execFileSync('git', ['-C', root, 'push', '-u', 'origin', 'main'])
 }, 240_000)

@@ -366,7 +366,12 @@ export async function nextLine(
 
 export function addOrigin(repo: TestRepo): void {
   const bare = `${repo.root}-origin.git`
-  execFileSync('git', ['init', '--bare', bare])
+  // -b main: a bare repo's HEAD otherwise follows the ambient init.defaultBranch, and
+  // whether the first push adjusts an unborn HEAD varies by git build. A clone of a repo
+  // whose HEAD names a nonexistent ref lands on an empty default branch, so the next
+  // `push origin main` dies with "src refspec main does not match any" (green on macOS,
+  // red on the ubuntu runner). Pin it.
+  execFileSync('git', ['init', '--bare', '-b', 'main', bare])
   repo.git('remote', 'add', 'origin', bare)
   repo.git('push', '-u', 'origin', 'main')
 }

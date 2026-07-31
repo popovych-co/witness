@@ -313,9 +313,12 @@ export function seedScratchRepo(prefix: string): { root: string } {
   git(root, 'config', 'commit.gpgsign', 'false')
   writeFileSync(
     join(root, 'specflow.config.yaml'),
-    // a bare `tests/` directory arg to `node --test` fails at the CLI level on
-    // Node 24 (it's resolved as a module path, not a test-dir glob) — a glob works.
-    'schema: 1\ncriteria:\n  runner: \'node --test --test-name-pattern "@spec:{id}" "tests/**/*.test.mjs"\'\n',
+    // No path argument at all — the only form portable across our engines range. A bare
+    // `tests/` arg is resolved as a module path on Node 24, and a glob is taken literally
+    // on Node 20 ("Could not find 'tests/**/*.test.mjs'": glob args landed in Node 21),
+    // which silently scores every implement sample 0. Node's default discovery already
+    // walks the repo for *.test.mjs and skips node_modules.
+    'schema: 1\ncriteria:\n  runner: \'node --test --test-name-pattern "@spec:{id}"\'\n',
   )
   writeFileSync(
     join(root, '.gitignore'),
