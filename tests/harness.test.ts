@@ -200,3 +200,24 @@ describe('reviewer contract', () => {
     expect(validatePin(pi, 'gates.model', 'google/gemini-3.6-pro:low').ok).toBe(true)
   })
 })
+
+describe('worker contract', () => {
+  const claude = hx('claude-code')
+  const pi = hx('pi')
+
+  it('claude-code passes the prompt as argv and bypasses its permission gate', () => {
+    const s = claude.worker.spawn('IMPLEMENT THIS')
+    expect(s.cmd).toBe('claude')
+    expect(s.args).toEqual(['-p', 'IMPLEMENT THIS', '--dangerously-skip-permissions'])
+  })
+
+  // pi has no --dangerously-skip-permissions equivalent: its built-in tools are not
+  // approval-gated, and --approve governs trusting project-local files, a different
+  // axis. The worker therefore needs no bypass flag — only an ephemeral session.
+  it('pi passes the prompt as argv with an ephemeral session and no bypass flag', () => {
+    const s = pi.worker.spawn('IMPLEMENT THIS')
+    expect(s.cmd).toBe('pi')
+    expect(s.args).toEqual(['-p', 'IMPLEMENT THIS', '--no-session'])
+    expect(s.args.some((a) => a.includes('dangerously'))).toBe(false)
+  })
+})

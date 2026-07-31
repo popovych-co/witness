@@ -15,7 +15,8 @@ export const STAGE_SKILLS = [
   'specflow-implement', 'specflow-plan', 'specflow-ship',
 ] as const
 
-export interface ReviewerSpawn { cmd: string; args: string[]; env: Record<string, string> }
+export interface HarnessSpawn { cmd: string; args: string[]; env: Record<string, string> }
+export type ReviewerSpawn = HarnessSpawn
 
 export interface Harness {
   name: HarnessName
@@ -37,6 +38,12 @@ export interface Harness {
   reviewer: {
     spawn(pin: ParsedPin | undefined): ReviewerSpawn
     parseEnvelope(stdout: string): Result<{ text: string }>
+  }
+  // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
+  // worktree rather than emitting a verdict. Used by the implement skill-calibration
+  // seed. The prompt rides in argv (both CLIs accept a positional message), not stdin.
+  worker: {
+    spawn(prompt: string): HarnessSpawn
   }
 }
 
@@ -118,6 +125,12 @@ const REGISTRY: Record<HarnessName, Harness> = {
       },
       parseEnvelope: parseClaudeEnvelope,
     },
+    worker: {
+      // claude gates every tool behind an approval prompt, which no headless run can
+      // answer — the bypass flag is what makes print mode able to edit at all.
+      spawn: (prompt: string): HarnessSpawn =>
+        ({ cmd: 'claude', args: ['-p', prompt, '--dangerously-skip-permissions'], env: {} }),
+    },
   },
   pi: {
     name: 'pi',
@@ -147,6 +160,15 @@ const REGISTRY: Record<HarnessName, Harness> = {
         return { cmd: 'pi', args, env: {} }
       },
       parseEnvelope: parsePiEnvelope,
+    },
+    worker: {
+      // No bypass flag exists or is needed: pi's built-in tools are not approval-gated
+      // (`pi --help` lists only --approve/--no-approve, which govern trusting
+      // project-local files). --no-session keeps a calibration run out of the user's
+      // session store; the worker otherwise keeps its skills and context files, which
+      // are exactly what the implement seed is measuring.
+      spawn: (prompt: string): HarnessSpawn =>
+        ({ cmd: 'pi', args: ['-p', prompt, '--no-session'], env: {} }),
     },
   },
 }

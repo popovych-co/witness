@@ -499,18 +499,23 @@ export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, see
   return ok({ ok: true, why: 'first-try valid' })
 }
 
-export type AgentRunner = (ctx: Ctx, worktree: string, prompt: string) => Promise<void>
+export type AgentRunner = (ctx: Ctx, harness: Harness, worktree: string, prompt: string) => Promise<void>
 
-export async function defaultAgent(ctx: Ctx, worktree: string, prompt: string): Promise<void> {
-  spawnSync('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
+// Decision 88 (worker half): the implement seed measures the stage skill as the
+// RESOLVED harness runs it. A claude-only worker measured a reviewer-routed pipeline's
+// other half on the wrong binary — and left `calibrate --only implement` unrunnable for
+// a pure-pi user, the residual the routing decision exists to kill.
+export async function defaultAgent(ctx: Ctx, harness: Harness, worktree: string, prompt: string): Promise<void> {
+  const { cmd, args, env } = harness.worker.spawn(prompt)
+  spawnSync(cmd, args, {
     cwd: worktree,
-    env: { ...ctx.env, SPECFLOW_BIN: `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}` },
+    env: { ...ctx.env, ...env, SPECFLOW_BIN: `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}` },
     timeout: 900_000,
     stdio: 'ignore',
   })
 }
 
-export async function runImplementSeed(ctx: Ctx, seed: SkillSeed, agent: AgentRunner): Promise<Result<{ ok: boolean; why: string }>> {
+export async function runImplementSeed(ctx: Ctx, harness: Harness, seed: SkillSeed, agent: AgentRunner): Promise<Result<{ ok: boolean; why: string }>> {
   const { root } = seedScratchRepo(`implement-${seed.id}`)
   cpSync(join(seed.dir, 'repo'), root, { recursive: true })
   git(root, 'add', '-A')
@@ -558,7 +563,7 @@ export async function runImplementSeed(ctx: Ctx, seed: SkillSeed, agent: AgentRu
     'Your working directory IS the worktree; begin at step s1.',
   ].join('\n\n')
 
-  await agent(ctx, wt.value.path, prompt)
+  await agent(ctx, harness, wt.value.path, prompt)
 
   const cfg = loadConfig(wt.value.path)
   if (!cfg.ok) return cfg
@@ -616,7 +621,7 @@ export async function runSkillSuites(
     const seeds = loadSkillSeeds('implement')
     let okCount = 0
     for (const seed of seeds) {
-      const r = await runImplementSeed(ctx, seed, agent)
+      const r = await runImplementSeed(ctx, harness, seed, agent)
       if (!r.ok) return r
       if (r.value.ok) okCount += 1
     }

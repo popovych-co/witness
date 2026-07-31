@@ -97,7 +97,7 @@ describe('plan contract (fake claude)', () => {
 });
 
 describe('implement contract (scripted agent)', () => {
-  const scriptedAgent: AgentRunner = async (ctx, worktree) => {
+  const scriptedAgent: AgentRunner = async (ctx, _harness, worktree) => {
     const pkg = JSON.parse(readFileSync(join(worktree, 'package.json'), 'utf8')) as { name: string };
     const wctx = fakeCtx(worktree, { env: ctx.env });
     mkdirSync(join(worktree, 'tests'), { recursive: true });
