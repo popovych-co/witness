@@ -1,26 +1,31 @@
 name: release
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 permissions:
-  contents: write   # create the GitHub Release from the tag
-  id-token: write   # npm provenance attestation (OIDC)
+  contents: write # create the GitHub Release from the tag
+  id-token: write # npm provenance attestation (OIDC)
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm version comes from package.json#packageManager
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - run: npm run build
-      - run: npm run sync-versions
-      - run: git diff --exit-code   # a tag with unsynced pins must not ship
-      - run: npx vitest run
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run sync-versions
+      - run: git diff --exit-code # a tag with unsynced pins must not ship
+      - run: pnpm exec vitest run
       - name: release gate (tag/version, calibration)
         run: node scripts/release-gate.mjs
+      # install is pnpm's; the publish stays on the npm CLI, whose provenance
+      # + OIDC path is the proven one (pnpm/pnpm#11513, pnpm/pnpm#11566).
       - run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

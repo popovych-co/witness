@@ -153,10 +153,10 @@ an Anthropic id, and a Pi implement session on a non-Anthropic model is not expr
 ## Development
 
 ```bash
-npm install
-npm test            # vitest, in-process CLI against throwaway git repos
-npm run typecheck
-npm run build
+pnpm install
+pnpm test           # vitest, in-process CLI against throwaway git repos
+pnpm run typecheck
+pnpm run build
 ```
 
 ## Run economics (operator notes)

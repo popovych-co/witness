@@ -1,14 +1,19 @@
 name: ci
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
   pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm version comes from package.json#packageManager
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci
-      - run: npm run build
-      - run: npx vitest run
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm exec vitest run

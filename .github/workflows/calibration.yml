@@ -1,26 +1,30 @@
 name: calibration
 on:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       model:
         description: exact model id to calibrate (the on-model-change trigger)
         required: true
   pull_request:
-    paths: ['prompts/**', 'calibration/**']
+    paths: ["prompts/**", "calibration/**"]
 jobs:
   calibrate:
     runs-on: ubuntu-latest
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      WITNESS_TRUST_CMDS: '1'
+      WITNESS_TRUST_CMDS: "1"
     steps:
       - uses: actions/checkout@v4
+      # pnpm version comes from package.json#packageManager
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci
-      - run: npm run build
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - run: npm install -g @anthropic-ai/claude-code
       # CI never passes the publish flag: the job verdict is the signal; a
       # maintainer publishes matrix updates from a terminal and commits them.
