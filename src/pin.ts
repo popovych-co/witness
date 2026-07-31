@@ -14,7 +14,7 @@ export interface ParsedPin {
 // claude has no --thinking flag; non-off levels render as the documented
 // MAX_THINKING_TOKENS env var. Budgets are pinned constants: the raw pin string is in
 // the verdict-cache key, so a level change re-rolls verdicts; a budget-table change
-// ships as a new specflow version, which is also in the key.
+// ships as a new witness version, which is also in the key.
 export const CLAUDE_THINKING_BUDGET: Record<Exclude<ThinkingLevel, 'off'>, number> = {
   minimal: 1024, low: 4096, medium: 8192, high: 16384, xhigh: 32768, max: 63999,
 }

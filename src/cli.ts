@@ -46,29 +46,29 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
 // answered centrally so no verb can crash on --help (several parse argv
 // strictly); each line mirrors the verb's own usage refusal where one exists
 const VERB_USAGE: Record<string, string> = {
-  abandon: 'specflow abandon <plan-id | effort-slug>',
-  adopt: 'specflow adopt <specs/... | plans/...>.md',
-  calibrate: 'specflow calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
-  check: 'specflow check',
-  clean: 'specflow clean',
-  decide: 'specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
-  design: 'specflow design <spec-id> --file <html> | --reconfirm | --open',
-  diff: 'specflow diff <spec-id>',
-  'dispatch-report': 'specflow dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
-  gate: 'specflow gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
-  index: 'specflow index',
-  init: 'specflow init [--agent claude-code|pi|auto]',
-  log: 'specflow log <stream> [--all] [--lineage]',
-  next: 'specflow next',
-  recap: 'specflow recap --file <recap.json> [--amend]',
-  recover: 'specflow recover [--complete | --rollback]',
-  rename: 'specflow rename <old-id> <new-id>',
-  satisfy: 'specflow satisfy <doc-id> --need <text | index>',
-  ship: 'specflow ship <plan-id>',
-  start: 'specflow start <plan-id>',
-  sync: 'specflow sync',
-  'test-evidence': 'specflow test-evidence <plan-id> --phase red|green',
-  'verify-red': 'specflow verify-red <plan-id> [--base <ref>]',
+  abandon: 'witness abandon <plan-id | effort-slug>',
+  adopt: 'witness adopt <specs/... | plans/...>.md',
+  calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
+  check: 'witness check',
+  clean: 'witness clean',
+  decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
+  design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
+  diff: 'witness diff <spec-id>',
+  'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
+  gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
+  index: 'witness index',
+  init: 'witness init [--agent claude-code|pi|auto]',
+  log: 'witness log <stream> [--all] [--lineage]',
+  next: 'witness next',
+  recap: 'witness recap --file <recap.json> [--amend]',
+  recover: 'witness recover [--complete | --rollback]',
+  rename: 'witness rename <old-id> <new-id>',
+  satisfy: 'witness satisfy <doc-id> --need <text | index>',
+  ship: 'witness ship <plan-id>',
+  start: 'witness start <plan-id>',
+  sync: 'witness sync',
+  'test-evidence': 'witness test-evidence <plan-id> --phase red|green',
+  'verify-red': 'witness verify-red <plan-id> [--base <ref>]',
 }
 
 export function version(): string {
@@ -80,10 +80,10 @@ export function version(): string {
 
 export function usage(): string {
   return [
-    'specflow — spec-led pipeline: specs are state, plans are motion',
-    'usage: specflow <verb> [flags]',
+    'witness — spec-led pipeline: specs are state, plans are motion',
+    'usage: witness <verb> [flags]',
     `verbs: ${Object.keys(VERBS).sort().join(' · ') || '(landing slice by slice)'}`,
-    'help: specflow <verb> --help',
+    'help: witness <verb> --help',
   ].join('\n')
 }
 
@@ -105,7 +105,7 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const load = VERBS[verb]
   if (load && (rest.includes('--help') || rest.includes('-h'))) {
-    ctx.out(`usage: ${VERB_USAGE[verb] ?? `specflow ${verb} [flags]`}`)
+    ctx.out(`usage: ${VERB_USAGE[verb] ?? `witness ${verb} [flags]`}`)
     return EXIT.OK
   }
   if (!load) {

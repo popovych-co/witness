@@ -33,8 +33,8 @@ describe('harness registry', () => {
 })
 
 describe('harness resolution — five rungs', () => {
-  it('SPECFLOW_HARNESS outranks detection', () => {
-    const r = resolveHarness({ SPECFLOW_HARNESS: 'pi', CLAUDECODE: '1' }, {})
+  it('WITNESS_HARNESS outranks detection', () => {
+    const r = resolveHarness({ WITNESS_HARNESS: 'pi', CLAUDECODE: '1' }, {})
     expect(r.ok && r.value.harness.name).toBe('pi')
     expect(r.ok && r.value.source).toBe('env')
   })
@@ -66,16 +66,16 @@ describe('harness resolution — five rungs', () => {
   // B2's shape: a config-authority default in a fresh repo emits a runnable-LOOKING,
   // unrunnable handoff behind a warning that gets scrolled past
   it('refuses an unknown value on whichever rung supplied it', () => {
-    const env = resolveHarness({ SPECFLOW_HARNESS: 'nope' }, {})
+    const env = resolveHarness({ WITNESS_HARNESS: 'nope' }, {})
     expect(env.ok).toBe(false)
-    if (!env.ok) expect(env.violations[0]).toMatchObject({ field: 'SPECFLOW_HARNESS', rule: 'unknown-harness' })
+    if (!env.ok) expect(env.violations[0]).toMatchObject({ field: 'WITNESS_HARNESS', rule: 'unknown-harness' })
     const cfg = resolveHarness({}, { harness: 'nope' })
     expect(cfg.ok).toBe(false)
     if (!cfg.ok) expect(cfg.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })
   })
 
   // the config rung is NOT consulted when detection already answered, so a typo in a
-  // key nothing reads must not brick every verb (specflow check reports it instead)
+  // key nothing reads must not brick every verb (witness check reports it instead)
   it('ignores an unreadable config value when a detection rung answered', () => {
     const r = resolveHarness({ CLAUDECODE: '1' }, { harness: 'nope' })
     expect(r.ok && r.value.harness.name).toBe('claude-code')
@@ -85,9 +85,9 @@ describe('harness resolution — five rungs', () => {
 describe('handoff and relay rendering', () => {
   it('renders the Claude Code handoff exactly as today', () => {
     expect(handoffLine(hx('claude-code'), '/w/repo', undefined))
-      .toBe("cd '/w/repo' && claude '/specflow'")
+      .toBe("cd '/w/repo' && claude '/witness'")
     expect(handoffLine(hx('claude-code'), '/w/repo', 'claude-opus-5'))
-      .toBe("cd '/w/repo' && claude --model claude-opus-5 '/specflow'")
+      .toBe("cd '/w/repo' && claude --model claude-opus-5 '/witness'")
   })
 
   // Revision 9: the provider is the harness's own default, never a config key. Pi's
@@ -95,14 +95,14 @@ describe('handoff and relay rendering', () => {
   // at all — which is why the flag is a renderer and not a string.
   it('qualifies the Pi model flag with the harness default provider', () => {
     expect(handoffLine(hx('pi'), '/w/repo', 'claude-opus-5'))
-      .toBe("cd '/w/repo' && pi --model anthropic/claude-opus-5 '/specflow'")
+      .toBe("cd '/w/repo' && pi --model anthropic/claude-opus-5 '/witness'")
     expect(handoffLine(hx('pi'), '/w/repo', undefined))
-      .toBe("cd '/w/repo' && pi '/specflow'")
+      .toBe("cd '/w/repo' && pi '/witness'")
   })
 
   it('names the harness relay command', () => {
-    expect(relayLine(hx('claude-code'))).toBe('/clear then /specflow')
-    expect(relayLine(hx('pi'))).toBe('/new then /specflow')
+    expect(relayLine(hx('claude-code'))).toBe('/clear then /witness')
+    expect(relayLine(hx('pi'))).toBe('/new then /witness')
   })
 })
 
@@ -126,8 +126,8 @@ describe('skills visibility', () => {
 
   it('names the six shipped stage skills', () => {
     expect([...STAGE_SKILLS].sort()).toEqual([
-      'specflow-brainstorm', 'specflow-decompose', 'specflow-design',
-      'specflow-implement', 'specflow-plan', 'specflow-ship',
+      'witness-brainstorm', 'witness-decompose', 'witness-design',
+      'witness-implement', 'witness-plan', 'witness-ship',
     ])
   })
 })
@@ -228,17 +228,17 @@ describe('thinking-aware handoff rendering', () => {
 
   it('handoff renders the thinking suffix natively on pi', () => {
     expect(handoffLine(pi, '/wt', 'claude-fable-5:low'))
-      .toBe("cd '/wt' && pi --model anthropic/claude-fable-5:low '/specflow'")
+      .toBe("cd '/wt' && pi --model anthropic/claude-fable-5:low '/witness'")
     expect(handoffLine(pi, '/wt', 'google/gemini-3.6-pro'))
-      .toBe("cd '/wt' && pi --model google/gemini-3.6-pro '/specflow'")
+      .toBe("cd '/wt' && pi --model google/gemini-3.6-pro '/witness'")
   })
 
   it('handoff renders non-off thinking as MAX_THINKING_TOKENS on claude-code', () => {
     expect(handoffLine(claude, '/wt', 'claude-fable-5:medium'))
-      .toBe("cd '/wt' && MAX_THINKING_TOKENS=8192 claude --model claude-fable-5 '/specflow'")
+      .toBe("cd '/wt' && MAX_THINKING_TOKENS=8192 claude --model claude-fable-5 '/witness'")
     expect(handoffLine(claude, '/wt', 'claude-fable-5'))
-      .toBe("cd '/wt' && claude --model claude-fable-5 '/specflow'")
+      .toBe("cd '/wt' && claude --model claude-fable-5 '/witness'")
     expect(handoffLine(claude, '/wt', undefined))
-      .toBe("cd '/wt' && claude '/specflow'")
+      .toBe("cd '/wt' && claude '/witness'")
   })
 })

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import register from '../plugin/hooks/specflow-pi.ts';
+import register from '../plugin/hooks/witness-pi.ts';
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown;
 
@@ -24,9 +24,9 @@ function stubPi() {
   return { pi, fire, ctx, notes };
 }
 
-function specflowRepo(): string {
+function witnessRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'piext-'));
-  writeFileSync(join(dir, 'specflow.config.yaml'), 'schema: 1\n');
+  writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
   for (const d of ['specs', 'plans', 'src']) mkdirSync(join(dir, d), { recursive: true });
   return dir;
 }
@@ -35,17 +35,17 @@ describe('pi extension — canon guard', () => {
   it('blocks a write to canon and returns the guard reason to the model', async () => {
     const s = stubPi();
     register(s.pi as never);
-    s.ctx.cwd = specflowRepo();
+    s.ctx.cwd = witnessRepo();
     const r = await s.fire('tool_call', { toolName: 'write', input: { path: 'specs/a.md' } }, s.ctx);
     expect(r).toMatchObject({ block: true });
-    expect((r as { reason: string }).reason).toContain('specflow CLI (write / design / adopt)');
-    expect(s.notes.join()).toContain('specflow');
+    expect((r as { reason: string }).reason).toContain('witness CLI (write / design / adopt)');
+    expect(s.notes.join()).toContain('witness');
   });
 
   it('allows non-canon writes, reads and bash reads', async () => {
     const s = stubPi();
     register(s.pi as never);
-    s.ctx.cwd = specflowRepo();
+    s.ctx.cwd = witnessRepo();
     expect(await s.fire('tool_call', { toolName: 'write', input: { path: 'src/x.ts' } }, s.ctx)).toBeUndefined();
     expect(await s.fire('tool_call', { toolName: 'read', input: { path: 'specs/a.md' } }, s.ctx)).toBeUndefined();
     expect(await s.fire('tool_call', { toolName: 'bash', input: { command: 'cat specs/a.md' } }, s.ctx)).toBeUndefined();
@@ -54,7 +54,7 @@ describe('pi extension — canon guard', () => {
   it('blocks a bash redirection into canon', async () => {
     const s = stubPi();
     register(s.pi as never);
-    s.ctx.cwd = specflowRepo();
+    s.ctx.cwd = witnessRepo();
     const r = await s.fire('tool_call', { toolName: 'bash', input: { command: 'echo x > plans/p.md' } }, s.ctx);
     expect(r).toMatchObject({ block: true });
   });
@@ -62,7 +62,7 @@ describe('pi extension — canon guard', () => {
   it('does not notify when there is no UI (print mode)', async () => {
     const s = stubPi();
     register(s.pi as never);
-    s.ctx.cwd = specflowRepo();
+    s.ctx.cwd = witnessRepo();
     s.ctx.hasUI = false;
     const r = await s.fire('tool_call', { toolName: 'write', input: { path: 'specs/a.md' } }, s.ctx);
     expect(r).toMatchObject({ block: true });
@@ -76,7 +76,7 @@ describe('pi extension — canon guard', () => {
   it('never throws on a malformed event — pi would block the tool if it did', async () => {
     const s = stubPi();
     register(s.pi as never);
-    s.ctx.cwd = specflowRepo();
+    s.ctx.cwd = witnessRepo();
     for (const bad of [{}, { toolName: 'write' }, { toolName: 'write', input: null }, { toolName: 42, input: { path: 1 } }]) {
       expect(await s.fire('tool_call', bad, s.ctx)).toBeUndefined();
     }
@@ -85,11 +85,11 @@ describe('pi extension — canon guard', () => {
   it('still blocks with the guard reason when the UI notification throws', async () => {
     const s = stubPi();
     register(s.pi as never);
-    s.ctx.cwd = specflowRepo();
+    s.ctx.cwd = witnessRepo();
     s.ctx.ui = { notify: () => { throw new Error('no tty'); } };
     const r = await s.fire('tool_call', { toolName: 'write', input: { path: 'specs/a.md' } }, s.ctx);
     expect(r).toMatchObject({ block: true });
-    expect((r as { reason: string }).reason).toContain('specflow CLI (write / design / adopt)');
+    expect((r as { reason: string }).reason).toContain('witness CLI (write / design / adopt)');
   });
 });
 
@@ -104,32 +104,32 @@ describe('pi extension — dashboard injection', () => {
 
   it('injects the dashboard once per session and re-arms on session_start', async () => {
     const s = stubPi();
-    process.env.SPECFLOW_DASHBOARD = fakeDashboard('specflow: 9.9.9 · schema: 1');
+    process.env.WITNESS_DASHBOARD = fakeDashboard('witness: 9.9.9 · schema: 1');
     try {
       register(s.pi as never);
-      s.ctx.cwd = specflowRepo();
+      s.ctx.cwd = witnessRepo();
       const first = await s.fire('before_agent_start', { prompt: 'hi' }, s.ctx);
-      expect(first).toMatchObject({ message: { customType: 'specflow-dashboard', display: true } });
-      expect((first as { message: { content: string } }).message.content).toContain('specflow: 9.9.9');
+      expect(first).toMatchObject({ message: { customType: 'witness-dashboard', display: true } });
+      expect((first as { message: { content: string } }).message.content).toContain('witness: 9.9.9');
 
       expect(await s.fire('before_agent_start', { prompt: 'again' }, s.ctx)).toBeUndefined();
 
       await s.fire('session_start', { reason: 'new' }, s.ctx);
       expect(await s.fire('before_agent_start', { prompt: 'fresh' }, s.ctx)).toBeTruthy();
     } finally {
-      delete process.env.SPECFLOW_DASHBOARD;
+      delete process.env.WITNESS_DASHBOARD;
     }
   });
 
   it('injects nothing when the dashboard script is missing or silent', async () => {
     const s = stubPi();
-    process.env.SPECFLOW_DASHBOARD = join(tmpdir(), 'nope-does-not-exist.sh');
+    process.env.WITNESS_DASHBOARD = join(tmpdir(), 'nope-does-not-exist.sh');
     try {
       register(s.pi as never);
-      s.ctx.cwd = specflowRepo();
+      s.ctx.cwd = witnessRepo();
       expect(await s.fire('before_agent_start', { prompt: 'hi' }, s.ctx)).toBeUndefined();
     } finally {
-      delete process.env.SPECFLOW_DASHBOARD;
+      delete process.env.WITNESS_DASHBOARD;
     }
   });
 });

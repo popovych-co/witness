@@ -11,13 +11,13 @@ function ownUsage(): Map<string, string> {
   const out = new Map<string, string>()
   for (const f of readdirSync(VERBS_DIR).filter((n) => n.endsWith('.ts'))) {
     const src = readFileSync(join(VERBS_DIR, f), 'utf8')
-    const m = /'usage: (specflow [^']+)'/.exec(src)
+    const m = /'usage: (witness [^']+)'/.exec(src)
     if (m) out.set(m[1]!.split(' ')[1]!, m[1]!)
   }
   return out
 }
 
-// `specflow <verb> --help` answers from cli.ts's VERB_USAGE map, while a verb missing
+// `witness <verb> --help` answers from cli.ts's VERB_USAGE map, while a verb missing
 // its required argument answers from its own hand-written string. Nothing kept the two
 // in sync, which is how `decide` came to advertise every flag except `--pin` after that
 // flag shipped: the map is edited in a different file from the verb that grew the flag.

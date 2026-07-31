@@ -1,30 +1,30 @@
 ---
-name: specflow-decompose
-description: Slice a specflow effort's confirmed recap into vertical spec slices, or route a fix to the one spec it amends — manifests handed to specflow write, then the decompose gate. Chores never reach this stage. Normally invoked by /specflow with the effort slug.
+name: witness-decompose
+description: Slice a witness effort's confirmed recap into vertical spec slices, or route a fix to the one spec it amends — manifests handed to witness write, then the decompose gate. Chores never reach this stage. Normally invoked by /witness with the effort slug.
 ---
 
-# specflow-decompose — recap → sliced specs → gate
+# witness-decompose — recap → sliced specs → gate
 
-## Ground rules (every specflow skill)
+## Ground rules (every witness skill)
 
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.4.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.4.0}"
 ```
 
-- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
-- **Never invoke gate reviewers or relay verdicts.** `specflow gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
-- **Refusal repair loop:** a `specflow` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
+- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
+- **Never invoke gate reviewers or relay verdicts.** `witness gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
+- **Refusal repair loop:** a `witness` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
-- **Re-entrancy:** derive position from CLI output (`$SPECFLOW next`, the dashboard, `log`, `index`) — never from conversation memory. Killed and re-run, you must converge.
+- **Re-entrancy:** derive position from CLI output (`$WITNESS next`, the dashboard, `log`, `index`) — never from conversation memory. Killed and re-run, you must converge.
 
 ## Inputs (rebuild them, never remember them)
 
 ```bash
-$SPECFLOW log <effort>     # the latest recap entry is your contract: class, goals g*, non-goals n*, constraints c*
-$SPECFLOW index            # live canon: id · summary · status · depends, grouped by dir
-$SPECFLOW decide decompose <effort> --show   # ONLY when re-entered after a revise
+$WITNESS log <effort>     # the latest recap entry is your contract: class, goals g*, non-goals n*, constraints c*
+$WITNESS index            # live canon: id · summary · status · depends, grouped by dir
+$WITNESS decide decompose <effort> --show   # ONLY when re-entered after a revise
 ```
 
 The class comes from the recap. Never ask for it again.
@@ -32,7 +32,7 @@ The class comes from the recap. Never ask for it again.
 ## Route by class
 
 - **feature** — slice (next section). Expect the gate to stop for scope approval afterwards: that is the standing stop working, not a failure.
-- **fix** — find **THE one spec** to amend: match the broken behavior against `specflow index` summaries; when summaries tie, grep `specs/` read-only. Amend exactly one spec. If the fix genuinely needs a brand-new spec, write it — the gate's tripwire stops for a human, which is the designed check on your routing (on a young canon this fires often; say so rather than fighting it).
+- **fix** — find **THE one spec** to amend: match the broken behavior against `witness index` summaries; when summaries tie, grep `specs/` read-only. Amend exactly one spec. If the fix genuinely needs a brand-new spec, write it — the gate's tripwire stops for a human, which is the designed check on your routing (on a young canon this fires often; say so rather than fighting it).
 - **chore** — **write NO specs** (a chore writing spec content is refused at write time, by definition of the class). There is nothing here for you: `next` routes a chore straight to the plan stage, because the decompose gate refuses `nothing-to-gate` without written specs and `write` refuses spec content from a chore — the stage is unsatisfiable in both directions. The parent for the coming plan is chosen when that plan is authored. Hand back immediately if you were invoked for one.
 
 ## Slicing rules (feature)
@@ -74,7 +74,7 @@ What must observably be true, public surface only. State every `cmd:`
 criterion's expected behavior and thresholds HERE — a fact that lives only
 inside a script has a hidden home and drifts invisibly.
 EOF
-$SPECFLOW write auth-refresh --effort <effort> --meta "$DIR/meta.json" --body "$DIR/body.md"
+$WITNESS write auth-refresh --effort <effort> --meta "$DIR/meta.json" --body "$DIR/body.md"
 ```
 
 Get these right the first time — the dashboard trends your first-try valid rate:
@@ -90,10 +90,10 @@ Get these right the first time — the dashboard trends your first-try valid rat
 ## Gate
 
 ```bash
-$SPECFLOW gate decompose --effort <effort>    # append --manual when the run asked for it
+$WITNESS gate decompose --effort <effort>    # append --manual when the run asked for it
 ```
 
-- **Auto-pass** (green path) → done; hand back to /specflow.
-- **Stop** (standing stop, blocking findings, fix-created-spec tripwire) → render the gate output verbatim, print the human's exits — `specflow decide decompose <effort> --approve | --revise --note "…" | --stop` — and END YOUR TURN. You never decide.
-- **Re-entered after `--revise`** → `decide --show` reconstructs the verdict + human note; findings anchor to spec headings. Fix via new `specflow write` calls (same ids amend in place), self-check totality, re-gate. The 3-round bound is the CLI's — surface it, never fight it. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
-- Findings implicate the **scope itself** (goals wrong, not slicing wrong)? Tell the human that `--revise --upstream` on the stop screen routes back to re-interview via `specflow recap --amend`.
+- **Auto-pass** (green path) → done; hand back to /witness.
+- **Stop** (standing stop, blocking findings, fix-created-spec tripwire) → render the gate output verbatim, print the human's exits — `witness decide decompose <effort> --approve | --revise --note "…" | --stop` — and END YOUR TURN. You never decide.
+- **Re-entered after `--revise`** → `decide --show` reconstructs the verdict + human note; findings anchor to spec headings. Fix via new `witness write` calls (same ids amend in place), self-check totality, re-gate. The 3-round bound is the CLI's — surface it, never fight it. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
+- Findings implicate the **scope itself** (goals wrong, not slicing wrong)? Tell the human that `--revise --upstream` on the stop screen routes back to re-interview via `witness recap --amend`.

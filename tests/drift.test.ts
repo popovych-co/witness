@@ -9,16 +9,16 @@ import {
 async function liveSingleRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   return repo
 }
 
 const trailerCount = (repo: TestRepo): number =>
-  repo.git('log', '--format=%B').split('\n').filter((l) => l.trim() === 'Specflow-State: 1').length
+  repo.git('log', '--format=%B').split('\n').filter((l) => l.trim() === 'Witness-State: 1').length
 
-describe('specflow check --drift (local)', () => {
+describe('witness check --drift (local)', () => {
   it('journals a drift-check entry per live spec in one state commit', async () => {
     const repo = await liveSingleRepo()
     const before = trailerCount(repo)
@@ -63,7 +63,7 @@ describe('specflow check --drift (local)', () => {
   })
 })
 
-describe('specflow check --drift (CI read-only)', () => {
+describe('witness check --drift (CI read-only)', () => {
   it('reports and exits nonzero without writing anything', async () => {
     const repo = await liveSingleRepo()
     breakSingleFixture(repo)

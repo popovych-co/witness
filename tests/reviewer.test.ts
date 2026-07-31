@@ -72,7 +72,7 @@ describe('transient invocation failure', () => {
     // transient, and treating it as fatal loses every sample a battery already paid for.
     writeFileSync(join(scenario, 'claude-hang'), '1')
 
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { SPECFLOW_REVIEWER_TIMEOUT_MS: '400' }) })
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_REVIEWER_TIMEOUT_MS: '400' }) })
     const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this' })
 
     expect(r.ok).toBe(true)

@@ -115,7 +115,7 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
     pin = pinR.value
   }
   const { cmd, args, env } = harness.reviewer.spawn(pin)
-  const timeout = Number(ctx.env.SPECFLOW_REVIEWER_TIMEOUT_MS) || REVIEWER_TIMEOUT_MS
+  const timeout = Number(ctx.env.WITNESS_REVIEWER_TIMEOUT_MS) || REVIEWER_TIMEOUT_MS
   for (let attempt = 0; ; attempt += 1) {
     const r = spawnSync(cmd, args, {
       cwd: opts.cwd,
@@ -132,10 +132,10 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
         if (attempt < TIMEOUT_RETRIES) continue
         return refuse([v(cmd, 'reviewer-timeout',
           `no response in ${timeout}ms after ${attempt + 1} attempts`,
-          'a reviewer that answers within the timeout — raise SPECFLOW_REVIEWER_TIMEOUT_MS if the model is simply slow')])
+          'a reviewer that answers within the timeout — raise WITNESS_REVIEWER_TIMEOUT_MS if the model is simply slow')])
       }
       return refuse([v(cmd, 'reviewer-invocation', String((r.error as Error).message),
-        `a runnable ${cmd} binary on PATH — gates invoke reviewers headlessly; specflow check probes this`)])
+        `a runnable ${cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
     }
     if (r.status !== 0) {
       return refuse([v(cmd, 'reviewer-invocation',

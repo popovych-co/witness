@@ -17,7 +17,7 @@ function spawnCli(repo: TestRepo, args: string[], env: Record<string, string> = 
 async function liveRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   return repo
@@ -27,7 +27,7 @@ describe('crash/resume — drift + adopt write paths', () => {
   it('drift crash between append and commit: recover --complete lands the entry exactly once', async () => {
     const repo = await liveRepo()
     breakSingleFixture(repo)
-    const crashed = spawnCli(repo, ['check', '--drift'], { SPECFLOW_CRASH_AFTER: 'drift-journal' })
+    const crashed = spawnCli(repo, ['check', '--drift'], { WITNESS_CRASH_AFTER: 'drift-journal' })
     expect(crashed.status).toBe(9)
     const pending = await repo.cli(['check'], { env: fixtureEnv() })
     expect(pending.code).toBe(1)
@@ -41,7 +41,7 @@ describe('crash/resume — drift + adopt write paths', () => {
   it('adopt crash: recover --complete finishes the adoption', async () => {
     const repo = await liveRepo()
     repo.write('specs/auth-refresh.md', repo.read('specs/auth-refresh.md').replace('Tokens leak.', 'Tokens leak everywhere.'))
-    const crashed = spawnCli(repo, ['adopt', 'specs/auth-refresh.md'], { SPECFLOW_CRASH_AFTER: 'adopt-journal' })
+    const crashed = spawnCli(repo, ['adopt', 'specs/auth-refresh.md'], { WITNESS_CRASH_AFTER: 'adopt-journal' })
     expect(crashed.status).toBe(9)
     expect(spawnCli(repo, ['recover', '--complete']).status).toBe(0)
     expect(readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'adopt')).toHaveLength(1)
@@ -51,7 +51,7 @@ describe('crash/resume — drift + adopt write paths', () => {
     const repo = await liveRepo()
     const original = repo.read('specs/auth-refresh.md')
     repo.write('specs/auth-refresh.md', original.replace('Tokens leak.', 'Tokens leak everywhere.'))
-    const crashed = spawnCli(repo, ['adopt', 'specs/auth-refresh.md'], { SPECFLOW_CRASH_AFTER: 'adopt-journal' })
+    const crashed = spawnCli(repo, ['adopt', 'specs/auth-refresh.md'], { WITNESS_CRASH_AFTER: 'adopt-journal' })
     expect(crashed.status).toBe(9)
     expect(spawnCli(repo, ['recover', '--rollback']).status).toBe(0)
     expect(readStream(repo.root, 'auth-refresh').some((e) => e.t === 'adopt')).toBe(false)

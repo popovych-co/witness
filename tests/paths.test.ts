@@ -13,8 +13,8 @@ const doc = (id: string, type: 'spec' | 'plan') => [
 
 function docsRepo(): TestRepo {
   const repo = tmpRepo()
-  repo.write('specflow.config.yaml', DOCS_PATHS)
-  repo.git('add', 'specflow.config.yaml')
+  repo.write('witness.config.yaml', DOCS_PATHS)
+  repo.git('add', 'witness.config.yaml')
   repo.git('commit', '-m', 'seed')
   return repo
 }
@@ -29,7 +29,7 @@ describe('resolvePaths', () => {
 
   it('refuses absolute, dot-segment, and reserved directories', () => {
     for (const [specs, rule] of [
-      ['/abs/specs', 'invalid'], ['../up', 'invalid'], ['a/./b', 'invalid'], ['.specflow/specs', 'reserved'],
+      ['/abs/specs', 'invalid'], ['../up', 'invalid'], ['a/./b', 'invalid'], ['.witness/specs', 'reserved'],
     ] as const) {
       const res = resolvePaths({ paths: { specs } })
       expect(!res.ok && res.violations[0]?.rule).toBe(rule)
@@ -47,7 +47,7 @@ describe('resolvePaths', () => {
 describe('canon paths threading', () => {
   it('loadConfig refuses invalid paths; canonPaths falls back to defaults', () => {
     const repo = tmpRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\npaths: { specs: ../escape }\n')
+    repo.write('witness.config.yaml', 'schema: 1\npaths: { specs: ../escape }\n')
     const cfg = loadConfig(repo.root)
     expect(!cfg.ok && cfg.violations[0]?.field).toBe('paths.specs')
     expect(canonPaths(repo.root)).toEqual({ specs: 'specs', plans: 'plans', designs: 'designs' })
@@ -79,6 +79,6 @@ describe('canon paths threading', () => {
     const cfg = loadConfig(repo.root)
     expect(cfg.ok).toBe(true)
     if (!cfg.ok) return
-    expect(criteriaExcludes(cfg.value)).toEqual(['docs/specs/**', 'docs/plans/**', '.specflow/**'])
+    expect(criteriaExcludes(cfg.value)).toEqual(['docs/specs/**', 'docs/plans/**', '.witness/**'])
   })
 })

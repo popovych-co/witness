@@ -26,7 +26,7 @@ async function reopenedAfterApprove() {
   const s = repo.effort
   appendEntry(repo.root, s, {
     v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-    reviewed_sha: 'ba2f352', prompts_sha: 'p', specflow: '0', model: 'm', calibration: 'none',
+    reviewed_sha: 'ba2f352', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
     checks: [], outcome: 'stopped',
     verdicts: [{
       reviewer: 'slicing-critic',
@@ -68,7 +68,7 @@ describe('decide --show', () => {
     const s = repo.effort
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: 'sha-1', prompts_sha: 'p', specflow: '0', model: 'm', calibration: 'none',
+      reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',
@@ -88,7 +88,7 @@ describe('decide --show', () => {
     const s = repo.effort
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: 'sha-1', prompts_sha: 'p', specflow: '0', model: 'm', calibration: 'none',
+      reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',
@@ -112,7 +112,7 @@ describe('decide --show', () => {
     await writePlan(repo, 'auth-refresh-plan-1')
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1,
-      run_id: 'r1', reviewed_sha: 'sha-1', prompts_sha: 'p', specflow: '0', model: 'm',
+      run_id: 'r1', reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm',
       calibration: 'none', checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'code-reviewer',
@@ -134,7 +134,7 @@ describe('decide --show', () => {
     for (const round of [1, 2, 3]) {
       appendEntry(repo.root, s, {
         v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r${round}`,
-        reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0', model: 'm',
+        reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
         calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
       })
     }
@@ -152,7 +152,7 @@ describe('decide --approve staleness', () => {
     const r = await repo.cli(['decide', 'decompose', repo.effort, '--approve'])
     expect(r.code).toBe(2)
     expect(r.stdout + r.stderr).toContain('stale-verdict')
-    expect(r.stdout + r.stderr).toContain('specflow gate decompose')
+    expect(r.stdout + r.stderr).toContain('witness gate decompose')
   })
 
   it('still approves when the artifact has not moved', async () => {
@@ -175,7 +175,7 @@ describe('decide --approve staleness', () => {
     for (const round of [1, 2, 3]) {
       appendEntry(repo.root, s, {
         v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r${round}`,
-        reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0', model: 'm',
+        reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
         calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
       })
     }
@@ -185,6 +185,6 @@ describe('decide --approve staleness', () => {
     expect(all).toContain('stale-verdict')
     expect(all).toContain('--upstream')
     expect(all).toContain('--stop')
-    expect(all).not.toContain('run: specflow gate')   // the gate will not re-run at the bound
+    expect(all).not.toContain('run: witness gate')   // the gate will not re-run at the bound
   })
 })

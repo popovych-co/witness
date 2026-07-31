@@ -31,9 +31,9 @@ describe('kill/resume protocol', () => {
     const repo = await seededRepo()
     repo.write('m.json', JSON.stringify(SPEC_META))
     repo.write('b.md', '## Motivation\nx\n\n## Behavior\ny\n')
-    const crashed = spawnCli(repo.root, ['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm.json', '--body', 'b.md'], { SPECFLOW_CRASH_AFTER: 'artifact-write' })
+    const crashed = spawnCli(repo.root, ['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm.json', '--body', 'b.md'], { WITNESS_CRASH_AFTER: 'artifact-write' })
     expect(crashed.code).toBe(9)
-    expect(existsSync(join(repo.root, '.specflow/txn.json'))).toBe(true)
+    expect(existsSync(join(repo.root, '.witness/txn.json'))).toBe(true)
     expect(existsSync(join(repo.root, 'specs/auth-refresh.md'))).toBe(true)
 
     const blocked = await repo.cli(['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm.json', '--body', 'b.md'])
@@ -52,18 +52,18 @@ describe('kill/resume protocol', () => {
     await writeSpec(repo, 'auth-refresh')
     repo.write('m2.json', JSON.stringify({ ...SPEC_META, summary: 'Rotation plus revocation' }))
     repo.write('b2.md', '## Motivation\nx\n\n## Behavior\ny\n')
-    const crashed = spawnCli(repo.root, ['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm2.json', '--body', 'b2.md'], { SPECFLOW_CRASH_AFTER: 'journal-append' })
+    const crashed = spawnCli(repo.root, ['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm2.json', '--body', 'b2.md'], { WITNESS_CRASH_AFTER: 'journal-append' })
     expect(crashed.code).toBe(9)
 
     const completed = spawnCli(repo.root, ['recover', '--complete'])
     expect(completed.code).toBe(0)
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
-    const journal = readFileSync(join(repo.root, '.specflow/journal/auth-hardening.jsonl'), 'utf8')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
+    const journal = readFileSync(join(repo.root, '.witness/journal/auth-hardening.jsonl'), 'utf8')
     const writes = journal.split('\n').filter((l) => l.includes('"t":"write"'))
     expect(writes).toHaveLength(2)
     expect(repo.read('specs/auth-refresh.md')).toContain('Rotation plus revocation')
 
-    const check = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const check = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(check.code).toBe(0)
   })
 
@@ -84,7 +84,7 @@ describe('design stage — kill/resume + gating', () => {
 
     // next says: design owed
     let n = await repo.cli(['next'])
-    expect(n.stdout).toContain('specflow design booking-form')
+    expect(n.stdout).toContain('witness design booking-form')
 
     // plan write refuses before design is approved
     const early = await writePlan(repo, 'booking-form-plan-1', { parent: 'booking-form' })
@@ -123,10 +123,10 @@ describe('design stage — kill/resume + gating', () => {
     const crashed = spawnCli(
       repo.root,
       ['design', 'booking-form', '--file', 'd-booking-form.html'],
-      { SPECFLOW_CRASH_AFTER: 'design-artifact' },
+      { WITNESS_CRASH_AFTER: 'design-artifact' },
     )
     expect(crashed.code).toBe(9)
-    expect(existsSync(join(repo.root, '.specflow/txn.json'))).toBe(true)
+    expect(existsSync(join(repo.root, '.witness/txn.json'))).toBe(true)
     expect(existsSync(join(repo.root, 'designs/booking-form.html'))).toBe(true)
 
     const blocked = await repo.cli(['design', 'booking-form', '--file', 'd-booking-form.html'])
@@ -150,19 +150,19 @@ describe('design stage — kill/resume + gating', () => {
     const crashed = spawnCli(
       repo.root,
       ['design', 'booking-form', '--file', 'd-booking-form.html'],
-      { SPECFLOW_CRASH_AFTER: 'design-journal' },
+      { WITNESS_CRASH_AFTER: 'design-journal' },
     )
     expect(crashed.code).toBe(9)
 
     const completed = spawnCli(repo.root, ['recover', '--complete'])
     expect(completed.code).toBe(0)
     rmSync(join(repo.root, 'd-booking-form.html'), { force: true })
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
-    const journal = readFileSync(join(repo.root, '.specflow/journal/booking-form.jsonl'), 'utf8')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
+    const journal = readFileSync(join(repo.root, '.witness/journal/booking-form.jsonl'), 'utf8')
     const writes = journal.split('\n').filter((l) => l.includes('"t":"design-write"'))
     expect(writes).toHaveLength(1)
 
-    const check = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const check = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(check.code).toBe(0)
   })
 
@@ -223,16 +223,16 @@ describe('design stage — kill/resume + gating', () => {
       '## Motivation\nTokens must rotate; copy tweak only.\n\n## Behavior\nSame screen, reworded.\n',
     )
 
-    const crashed = spawnCli(repo.root, ['design', 'booking-form', '--reconfirm'], { SPECFLOW_CRASH_AFTER: 'design-reconfirm' })
+    const crashed = spawnCli(repo.root, ['design', 'booking-form', '--reconfirm'], { WITNESS_CRASH_AFTER: 'design-reconfirm' })
     expect(crashed.code).toBe(9)
 
     const completed = spawnCli(repo.root, ['recover', '--complete'])
     expect(completed.code).toBe(0)
-    const journal = readFileSync(join(repo.root, '.specflow/journal/booking-form.jsonl'), 'utf8')
+    const journal = readFileSync(join(repo.root, '.witness/journal/booking-form.jsonl'), 'utf8')
     const reconfirms = journal.split('\n').filter((l) => l.includes('"t":"design-reconfirm"'))
     expect(reconfirms).toHaveLength(1)
 
-    const check = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const check = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(check.code).toBe(0)
   })
 })

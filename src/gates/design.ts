@@ -40,13 +40,13 @@ registerGate({
     const unseen = designUnseen(root, cfg.paths, specId)
     if (unseen !== undefined) {
       return refuse([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
-        `a human shown this artifact — run: specflow design ${specId} --open`)])
+        `a human shown this artifact — run: witness design ${specId} --open`)])
     }
 
     const checks: GateCheck[] = []
     checks.push({ name: 'ui-flag', ok: spec.meta.ui === true, detail: spec.meta.ui === true ? 'ui: true' : 'spec is not ui-flagged' })
     checks.push({ name: 'feature-class', ok: recap?.class === 'feature', detail: `effort class: ${recap?.class ?? 'none'}` })
-    checks.push({ name: 'artifact', ok: html !== undefined, detail: html !== undefined ? rel : `${rel} missing — run: specflow design ${specId} --file <html>` })
+    checks.push({ name: 'artifact', ok: html !== undefined, detail: html !== undefined ? rel : `${rel} missing — run: witness design ${specId} --file <html>` })
     const template = html !== undefined ? validateDesignArtifact(html) : []
     checks.push({ name: 'template', ok: html !== undefined && template.length === 0,
       detail: template.length ? template.map((x) => x.rule).join(' · ') : 'self-contained, id-attributed' })

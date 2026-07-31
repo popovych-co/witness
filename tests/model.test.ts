@@ -7,7 +7,7 @@ import { seededRepo } from './helpers.js'
 
 async function cfgWith(gatesYaml: string) {
   const repo = await seededRepo()
-  const cfgPath = join(repo.root, 'specflow.config.yaml')
+  const cfgPath = join(repo.root, 'witness.config.yaml')
   writeFileSync(cfgPath, `schema: 1\n${gatesYaml}`)
   const cfg = loadConfig(repo.root)
   if (!cfg.ok) throw new Error('config must load')
@@ -36,8 +36,8 @@ describe('resolveModel', () => {
 
   it('warns below-floor when the matrix is non-empty but the head is uncalibrated', async () => {
     const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
-    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
-    writeFileSync(join(repo.root, '.specflow/calibration.local.yaml'), 'models:\n  - test-model-2\n')
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
     const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
     expect(r.ok).toBe(true)
     if (!r.ok) return
@@ -46,8 +46,8 @@ describe('resolveModel', () => {
 
   it('reads the local overlay: calibrated ids join the chain and stamp local', async () => {
     const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
-    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
-    writeFileSync(join(repo.root, '.specflow/calibration.local.yaml'), 'models:\n  - test-model-2\n')
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
     const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
     expect(r.ok).toBe(true)
     if (!r.ok) return
@@ -86,8 +86,8 @@ describe('resolveModel', () => {
 describe('per-harness matrix', () => {
   it('reads legacy top-level models as claude-code and matrices.<name> for pi', async () => {
     const repo = await seededRepo()
-    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
-    writeFileSync(join(repo.root, '.specflow', 'calibration.local.yaml'),
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'calibration.local.yaml'),
       'models:\n  - claude-fable-5\nmatrices:\n  pi:\n    models:\n      - google/gemini-3.6-pro\n')
     expect(loadMatrix(repo.root, 'claude-code').local).toEqual(['claude-fable-5'])
     expect(loadMatrix(repo.root, 'pi').local).toEqual(['google/gemini-3.6-pro'])

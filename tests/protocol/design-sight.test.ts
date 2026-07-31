@@ -53,7 +53,7 @@ describe('design sight — protocol', () => {
     expect(early.code).toBe(2)
     expect(early.stderr).toContain('design-unseen')
 
-    const shown = await repo.cli(['design', 'auth-refresh', '--open'], { env: { SPECFLOW_OPENER: cmd } })
+    const shown = await repo.cli(['design', 'auth-refresh', '--open'], { env: { WITNESS_OPENER: cmd } })
     expect(shown.code).toBe(0)
     expect(await waitForLines(log, 1)).toEqual([abs])
 
@@ -74,7 +74,7 @@ describe('design sight — protocol', () => {
     const scenario = fakeScenario()
     putVerdict(scenario, CLEAN)
 
-    await repo.cli(['design', 'auth-refresh', '--open'], { env: { SPECFLOW_OPENER: cmd } })
+    await repo.cli(['design', 'auth-refresh', '--open'], { env: { WITNESS_OPENER: cmd } })
     await repo.cli(['gate', 'design', 'auth-refresh'], { env: gateEnv(scenario) })
     const revised = await repo.cli(['decide', 'design', 'auth-refresh', '--revise', '--note', 'bar is buried'])
     expect(revised.code).toBe(0)
@@ -87,7 +87,7 @@ describe('design sight — protocol', () => {
     expect(stale.code).toBe(2)
     expect(stale.stderr).toContain('design-unseen')
 
-    const reshown = await repo.cli(['design', 'auth-refresh', '--open'], { env: { SPECFLOW_OPENER: cmd } })
+    const reshown = await repo.cli(['design', 'auth-refresh', '--open'], { env: { WITNESS_OPENER: cmd } })
     expect(reshown.code).toBe(0)
     expect((await waitForLines(log, 2)).length).toBe(2)   // shown once per authored version
 

@@ -80,7 +80,7 @@ export async function runCriteria(
     } else if (typeof c.cmd === 'string') {
       const trust = await ensureTrusted(trustRoot, ctx, c.cmd)
       if (trust !== 'trusted') {
-        criteria.push({ id: cid, kind: 'cmd', ok: false, detail: `untrusted-${trust} — allow interactively or set SPECFLOW_TRUST_CMDS=1` })
+        criteria.push({ id: cid, kind: 'cmd', ok: false, detail: `untrusted-${trust} — allow interactively or set WITNESS_TRUST_CMDS=1` })
         continue
       }
       const run = execCommand(runRoot, ctx, c.cmd)

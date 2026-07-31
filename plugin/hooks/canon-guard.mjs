@@ -1,8 +1,8 @@
-// specflow canon guard — the shared core behind every harness's write block.
+// witness canon guard — the shared core behind every harness's write block.
 //
 // Dependency-free ON PURPOSE (Decision 13): the Claude Code hook runs from
 // ${CLAUDE_PLUGIN_ROOT}, which has no node_modules, and a Pi user's repo has no reason
-// to have @whatmatters/specflow installed. An import from the CLI package would
+// to have @popovych.co/witness installed. An import from the CLI package would
 // resolve-fail into the fail-open path on both — a SILENTLY ABSENT guard. Adapters
 // import this file by relative path and stay thin.
 //
@@ -19,7 +19,7 @@ const BASH_TOOLS = new Set(['Bash', 'bash']);
 function configRoot(startDir) {
   let dir = startDir;
   for (;;) {
-    if (existsSync(join(dir, 'specflow.config.yaml'))) return dir;
+    if (existsSync(join(dir, 'witness.config.yaml'))) return dir;
     const parent = dirname(dir);
     if (parent === dir) return undefined;
     dir = parent;
@@ -30,7 +30,7 @@ function configRoot(startDir) {
 // without a YAML dependency. Anything unparseable falls back to the defaults.
 function canonDirs(root) {
   try {
-    const text = readFileSync(join(root, 'specflow.config.yaml'), 'utf8');
+    const text = readFileSync(join(root, 'witness.config.yaml'), 'utf8');
     const flow = text.match(/^paths:[ \t]*\{([^}]*)\}/m);
     const section = flow ? flow[1] : (text.match(/^paths:[ \t]*\n((?:[ \t]+\S.*\n?)*)/m) || [])[1] || '';
     const dir = (key) => {
@@ -58,8 +58,8 @@ const WRITEISH = /(>>?|\btee\b|\bsed\b[^\n]*\s-i\b|\bmv\b|\bcp\b|\brm\b|\btouch\
 
 function reasonFor(what) {
   return (
-    `specflow: ${what} is CLI-written state — use the specflow CLI (write / design / adopt), ` +
-    'never a direct edit. Direct edits are refused; the Specflow-State trailer audit catches end-runs.'
+    `witness: ${what} is CLI-written state — use the witness CLI (write / design / adopt), ` +
+    'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs.'
   );
 }
 

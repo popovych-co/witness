@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { SPEC_META, seededRepo, writeSpec } from './helpers.js'
 
-describe('specflow index', () => {
+describe('witness index', () => {
   it('lists specs with summary, status, depends, grouped by dir', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
@@ -13,7 +13,7 @@ describe('specflow index', () => {
     })
     repo.write('specs/billing/invoices.md', repo.read('specs/auth-refresh.md').replace(/^id: auth-refresh$/m, 'id: invoices').replace('@spec:auth-refresh', '@spec:invoices'))
     repo.git('add', 'specs/billing/invoices.md')
-    repo.git('commit', '-m', 'seed subdir spec', '-m', 'Specflow-State: 1')
+    repo.git('commit', '-m', 'seed subdir spec', '-m', 'Witness-State: 1')
     const res = await repo.cli(['index'])
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('specs[3]{id,summary,ui,status,depends}:')

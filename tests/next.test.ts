@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
 import { approve, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, witnessDesign, writeDesign, writeSpec, writePlan } from './helpers.js'
 
-describe('specflow next — the ladder', () => {
+describe('witness next — the ladder', () => {
   it('walks recap → write → gate decompose → decide → plan-stage', async () => {
     const repo = await seededRepo({ noRecap: true })
-    expect(await nextLine(repo)).toContain('specflow recap')
+    expect(await nextLine(repo)).toContain('witness recap')
 
     await repo.cli(['recap', '--file', repo.writeRecap({})])
     expect(await nextLine(repo)).toContain('--effort auth-hardening')
@@ -37,7 +37,7 @@ describe('specflow next — the ladder', () => {
     await repo.cli(['start', 'auth-refresh-plan-1'])
     const out = await nextLine(repo)                       // no evidence yet
     expect(out).toContain('stage: implement')
-    expect(out).toContain(`home: ${repo.root}/.specflow/worktrees/auth-refresh-plan-1`)
+    expect(out).toContain(`home: ${repo.root}/.witness/worktrees/auth-refresh-plan-1`)
   })
 
   it('implement and ship rows carry home: and run: for the session handoff', async () => {
@@ -45,41 +45,41 @@ describe('specflow next — the ladder', () => {
     // implement-gate row: belongs in the worktree
     const out = await nextLine(repo)
     expect(out).toContain(`gate implement ${planId}`)
-    expect(out).toContain(`home: ${repo.root}/.specflow/worktrees/${planId}`)
-    expect(out).toContain(`run: cd '${repo.root}/.specflow/worktrees/${planId}' && claude '/specflow'`)
+    expect(out).toContain(`home: ${repo.root}/.witness/worktrees/${planId}`)
+    expect(out).toContain(`run: cd '${repo.root}/.witness/worktrees/${planId}' && claude '/witness'`)
   })
 
   it('renders the handoff and relay for the resolved harness', async () => {
     const { repo, planId } = await shippableRepo()
-    const wt = `${repo.root}/.specflow/worktrees/${planId}`
+    const wt = `${repo.root}/.witness/worktrees/${planId}`
 
-    const cc = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'claude-code' } })
-    expect(cc).toContain(`run: cd '${wt}' && claude '/specflow'`)
-    expect(cc).toContain('relay: /clear then /specflow')
+    const cc = await nextLine(repo, { env: { WITNESS_HARNESS: 'claude-code' } })
+    expect(cc).toContain(`run: cd '${wt}' && claude '/witness'`)
+    expect(cc).toContain('relay: /clear then /witness')
 
-    const pi = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'pi' } })
-    expect(pi).toContain(`run: cd '${wt}' && pi '/specflow'`)
-    expect(pi).toContain('relay: /new then /specflow')
+    const pi = await nextLine(repo, { env: { WITNESS_HARNESS: 'pi' } })
+    expect(pi).toContain(`run: cd '${wt}' && pi '/witness'`)
+    expect(pi).toContain('relay: /new then /witness')
   })
 
   it('carries the implement-stage pin into the Pi handoff, provider-qualified', async () => {
     const { repo, planId } = await shippableRepo()
-    repo.write('specflow.config.yaml',
-      `${repo.read('specflow.config.yaml')}gates:\n  implement: { model: claude-opus-5 }\n`)
-    repo.git('add', 'specflow.config.yaml')
+    repo.write('witness.config.yaml',
+      `${repo.read('witness.config.yaml')}gates:\n  implement: { model: claude-opus-5 }\n`)
+    repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'pin implement model')
-    const wt = `${repo.root}/.specflow/worktrees/${planId}`
+    const wt = `${repo.root}/.witness/worktrees/${planId}`
 
-    const pi = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'pi' } })
-    expect(pi).toContain(`run: cd '${wt}' && pi --model anthropic/claude-opus-5 '/specflow'`)
+    const pi = await nextLine(repo, { env: { WITNESS_HARNESS: 'pi' } })
+    expect(pi).toContain(`run: cd '${wt}' && pi --model anthropic/claude-opus-5 '/witness'`)
 
-    const cc = await nextLine(repo, { env: { SPECFLOW_HARNESS: 'claude-code' } })
-    expect(cc).toContain(`run: cd '${wt}' && claude --model claude-opus-5 '/specflow'`)
+    const cc = await nextLine(repo, { env: { WITNESS_HARNESS: 'claude-code' } })
+    expect(cc).toContain(`run: cd '${wt}' && claude --model claude-opus-5 '/witness'`)
   })
 
   it('refuses an unknown harness rather than printing an unrunnable handoff', async () => {
     const { repo } = await shippableRepo()
-    const r = await repo.cli(['next'], { env: { SPECFLOW_HARNESS: 'pikachu' } })
+    const r = await repo.cli(['next'], { env: { WITNESS_HARNESS: 'pikachu' } })
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('unknown-harness')
     expect(r.stderr).toContain('claude-code | pi')
@@ -127,7 +127,7 @@ describe('specflow next — the ladder', () => {
     for (const round of [1, 2, 3]) {
       appendEntry(repo.root, planId, {
         v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round,
-        run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0',
+        run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
         model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
       })
       appendEntry(repo.root, planId, {
@@ -148,7 +148,7 @@ describe('design stage routing', () => {
     await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
     approve(repo, 'booking-form')
     const res = await repo.cli(['next'])
-    expect(res.stdout).toContain('specflow design booking-form')
+    expect(res.stdout).toContain('witness design booking-form')
     expect(res.stdout).toContain('stage: design')
   })
 
@@ -159,7 +159,7 @@ describe('design stage routing', () => {
     await writeDesign(repo, 'booking-form')
     await witnessDesign(repo, 'booking-form')          // registered AND shown → the gate is next
     const res = await repo.cli(['next'])
-    expect(res.stdout).toContain('specflow gate design booking-form')
+    expect(res.stdout).toContain('witness gate design booking-form')
   })
 
   it('a non-ui approved spec still routes straight to plan', async () => {

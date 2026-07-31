@@ -126,7 +126,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('class', recap.class))
     ctx.out(kv('goals', recap.goals.length))
     if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage re-validates against it'))
-    ctx.out(`next: specflow write --effort ${recap.effort} --meta <m.json> --body <b.md> <spec-id>`)
+    ctx.out(`next: witness write --effort ${recap.effort} --meta <m.json> --body <b.md> <spec-id>`)
     return EXIT.OK
   } finally {
     lock.value()

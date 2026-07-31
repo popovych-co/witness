@@ -93,11 +93,11 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 // where the state is. Skills used to recite a fixed triple, which is wrong at the bound
 // (D67's endgame set) — and now wrong in three more states.
 export function liveExits(gate: string, target: string, entries: Entry[], stale: boolean): string {
-  if (stale) return `specflow gate ${gate} ${target}`
+  if (stale) return `witness gate ${gate} ${target}`
   if (boundReached(entries, gate)) {
-    return `specflow decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
+    return `witness decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
   }
-  return `specflow decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`
+  return `witness decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`
 }
 
 export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume'): void {
@@ -203,7 +203,7 @@ export async function runGate(
 
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
-    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, specflow: version(),
+    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, witness: version(),
     harness: harness.name,
   }
   const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
@@ -221,8 +221,8 @@ export async function runGate(
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    ctx.out(`help: specflow decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
-    ctx.out(`help: or discard the plan: specflow abandon ${target}`)
+    ctx.out(`help: witness decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
+    ctx.out(`help: or discard the plan: witness abandon ${target}`)
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -332,8 +332,8 @@ export async function runGate(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      ctx.out(`help: specflow decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
-      ctx.out(`help: or discard the plan: specflow abandon ${target}`)
+      ctx.out(`help: witness decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
+      ctx.out(`help: or discard the plan: witness abandon ${target}`)
       return EXIT.BLOCKED
     }
 
@@ -341,7 +341,7 @@ export async function runGate(
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
       reviewed_sha: input.reviewedSha, prompts_sha: key.prompts_sha,
-      specflow: key.specflow, model, harness: harness.name, calibration: calibrationOf(model),
+      witness: key.witness, model, harness: harness.name, calibration: calibrationOf(model),
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
       ...(fallback.length ? { fallback } : {}),

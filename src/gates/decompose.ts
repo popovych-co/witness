@@ -20,7 +20,7 @@ registerGate({
 
   async resolve(root, _ctx, canon, _cfg, effort): Promise<Result<GateInput>> {
     if (!streamExists(root, effort)) {
-      return refuse([v('effort', 'unknown-effort', effort, 'an effort born by specflow recap')])
+      return refuse([v('effort', 'unknown-effort', effort, 'an effort born by witness recap')])
     }
     const recap = latestRecap(root, effort)
     if (!recap) return refuse([v('effort', 'unknown-effort', effort, 'a stream whose first entry is a recap')])
@@ -28,7 +28,7 @@ registerGate({
     const docs = effortSpecs(root, canon, effort)
     if (docs.length === 0) {
       return refuse([v('effort', 'nothing-to-gate', effort,
-        `written specs — run: specflow write <id> --effort ${effort} --meta m.json --body b.md`)])
+        `written specs — run: witness write <id> --effort ${effort} --meta m.json --body b.md`)])
     }
 
     const checks: GateCheck[] = []

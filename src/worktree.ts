@@ -4,7 +4,7 @@ import { git, tryGit } from './gitio.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 export function worktreesDir(root: string): string {
-  return join(root, '.specflow', 'worktrees')
+  return join(root, '.witness', 'worktrees')
 }
 
 export function worktreePath(root: string, planId: string): string {
@@ -27,7 +27,7 @@ export function worktreeFlow(cwd: string, root: string): string | undefined {
 }
 
 export function branchName(planId: string): string {
-  return `specflow/${planId}`
+  return `witness/${planId}`
 }
 
 export function ensureExcluded(root: string): void {
@@ -40,7 +40,7 @@ export function ensureExcluded(root: string): void {
   const lines = current.split('\n')
   // screens are witnessed evidence, regenerable, never committed — ignored in every
   // worktree so they stay out of changedFiles() and the reviewed tree-sha
-  for (const line of ['.specflow/worktrees/', '.specflow/screens/']) {
+  for (const line of ['.witness/worktrees/', '.witness/screens/']) {
     if (!lines.includes(line)) appendFileSync(excludePath, `${line}\n`)
   }
 }

@@ -9,7 +9,7 @@ import type { Canon, CanonDoc } from './scan.js'
 import { findById } from './scan.js'
 
 export function worktreeTreeSha(root: string): string {
-  const tmp = mkdtempSync(join(tmpdir(), 'specflow-idx-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'witness-idx-'))
   const env = { ...process.env, GIT_INDEX_FILE: join(tmp, 'index') }
   try {
     execFileSync('git', ['add', '-A'], { cwd: root, env })

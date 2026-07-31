@@ -18,7 +18,7 @@ const WRITE_ONLY = new Set<string>([
   // The revision of the DOC behind a run (plan/spec/html), where `reviewed_sha` is what
   // the reviewer judged — at the code gates a worktree tree-sha, which moves separately.
   // Journaled for post-hoc forensics and deliberately unread: doc staleness is already
-  // covered upstream of settledness. `specflow write` on an in-progress plan re-drafts
+  // covered upstream of settledness. `witness write` on an in-progress plan re-drafts
   // it, so plans-first routing re-gates before the flow can advance; a re-authored spec
   // re-arms designPending via the design stamp. A reader here would duplicate both.
   'artifact_sha',

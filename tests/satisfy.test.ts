@@ -7,7 +7,7 @@ const WITH_MANUAL = {
   needs: [{ env: 'SOME_VAR' }, { manual: 'Stripe sandbox account created', satisfied: false }],
 }
 
-describe('specflow satisfy', () => {
+describe('witness satisfy', () => {
   it('flips a manual need by text and commits with the trailer', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh', WITH_MANUAL)
@@ -17,7 +17,7 @@ describe('specflow satisfy', () => {
     const needs = (doc.ok ? doc.value.meta.needs : []) as Array<Record<string, unknown>>
     expect(needs[1]?.satisfied).toBe(true)
     expect(repo.git('log', '-1', '--format=%s')).toBe('satisfy(auth-refresh): Stripe sandbox account created')
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
   })
 
   it('flips by 1-based index among manual needs and is idempotent', async () => {

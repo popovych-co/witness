@@ -24,7 +24,7 @@ async function waitForLog(log: string, ms = 3000): Promise<string> {
   return ''
 }
 
-describe('specflow design --open', () => {
+describe('witness design --open', () => {
   it('spawns the opener and journals a design-shown entry for the current sha', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh', { ui: true })
@@ -32,7 +32,7 @@ describe('specflow design --open', () => {
     await writeDesign(repo, 'auth-refresh')
     const { cmd, log } = recorder()
 
-    const res = await repo.cli(['design', 'auth-refresh', '--open'], { env: { SPECFLOW_OPENER: cmd } })
+    const res = await repo.cli(['design', 'auth-refresh', '--open'], { env: { WITNESS_OPENER: cmd } })
 
     expect(res.code).toBe(0)
     expect((await waitForLog(log)).trim()).toBe(join(repo.root, 'designs/auth-refresh.html'))
@@ -62,7 +62,7 @@ describe('specflow design --open', () => {
     await writeDesign(repo, 'auth-refresh')
 
     const res = await repo.cli(['design', 'auth-refresh', '--open'],
-      { env: { SPECFLOW_OPENER: 'specflow-no-such-opener-xyz' } })
+      { env: { WITNESS_OPENER: 'witness-no-such-opener-xyz' } })
 
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('opener-failed')

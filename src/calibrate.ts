@@ -225,7 +225,7 @@ export function aggregate(r: CalReport): number {
   return total === 0 ? 0 : okCount / total
 }
 
-export const localOverlayPath = (root: string): string => join(root, '.specflow', 'calibration.local.yaml')
+export const localOverlayPath = (root: string): string => join(root, '.witness', 'calibration.local.yaml')
 
 export function addToLocalOverlay(root: string, model: string, harness: HarnessName): void {
   const path = localOverlayPath(root)
@@ -263,14 +263,14 @@ export function loadSkillSeeds(skill: (typeof SKILL_NAMES)[number]): SkillSeed[]
 }
 
 export function skillMdPath(stage: (typeof SKILL_NAMES)[number]): string {
-  return join(dirname(fileURLToPath(import.meta.url)), '..', 'plugin', 'skills', `specflow-${stage}`, 'SKILL.md')
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'plugin', 'skills', `witness-${stage}`, 'SKILL.md')
 }
 
 export const NONINTERACTIVE_OVERRIDE = `## Calibration override
 
 You are running non-interactively for calibration. Ignore every instruction
 above that says to run commands, ask questions, invoke skills, or use tools —
-you cannot. Author the artifact(s) you would hand to \`specflow write\` and
+you cannot. Author the artifact(s) you would hand to \`witness write\` and
 output ONLY this JSON object, no prose before or after it:
 
 {"artifacts": [{"id": "<artifact-id>", "meta": { ...the manifest JSON... }, "body": "<the markdown body>"}]}
@@ -308,11 +308,11 @@ function captureCtx(cwd: string, env: Record<string, string | undefined>): { ctx
 export function seedScratchRepo(prefix: string): { root: string } {
   const root = mkdtempSync(join(tmpdir(), `cal-${prefix}-`))
   git(root, 'init', '-b', 'main')
-  git(root, 'config', 'user.name', 'specflow-calibration')
-  git(root, 'config', 'user.email', 'calibration@specflow.invalid')
+  git(root, 'config', 'user.name', 'witness-calibration')
+  git(root, 'config', 'user.email', 'calibration@witness.invalid')
   git(root, 'config', 'commit.gpgsign', 'false')
   writeFileSync(
-    join(root, 'specflow.config.yaml'),
+    join(root, 'witness.config.yaml'),
     // No path argument at all — the only form portable across our engines range. A bare
     // `tests/` arg is resolved as a module path on Node 24, and a glob is taken literally
     // on Node 20 ("Could not find 'tests/**/*.test.mjs'": glob args landed in Node 21),
@@ -322,7 +322,7 @@ export function seedScratchRepo(prefix: string): { root: string } {
   )
   writeFileSync(
     join(root, '.gitignore'),
-    '.specflow/lock\n.specflow/allow.json\n.specflow/calibration.local.yaml\n.specflow/worktrees/\n',
+    '.witness/lock\n.witness/allow.json\n.witness/calibration.local.yaml\n.witness/worktrees/\n',
   )
   git(root, 'add', '-A')
   git(root, 'commit', '-m', 'seed')
@@ -375,7 +375,7 @@ export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string
     readFileSync(skillMdPath('decompose'), 'utf8'),
     '## Calibration inputs',
     `### recap.json\n\n${recapText}`,
-    `### specflow index\n\n${indexH.out()}`,
+    `### witness index\n\n${indexH.out()}`,
     NONINTERACTIVE_OVERRIDE,
   ].join('\n\n')
 
@@ -474,7 +474,7 @@ export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, see
     '## Calibration inputs',
     `### recap.json\n\n${recapText}`,
     `### specs/${parentId}.md\n\n${parentRendering}`,
-    `### specflow diff ${parentId}\n\n${diffH.out()}`,
+    `### witness diff ${parentId}\n\n${diffH.out()}`,
     NONINTERACTIVE_OVERRIDE,
   ].join('\n\n')
 
@@ -512,7 +512,7 @@ export async function defaultAgent(ctx: Ctx, harness: Harness, worktree: string,
   const { cmd, args, env } = harness.worker.spawn(prompt)
   spawnSync(cmd, args, {
     cwd: worktree,
-    env: { ...ctx.env, ...env, SPECFLOW_BIN: `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}` },
+    env: { ...ctx.env, ...env, WITNESS_BIN: `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}` },
     timeout: 900_000,
     stdio: 'ignore',
   })
@@ -636,7 +636,7 @@ export async function runSkillSuites(
 export function publishScore(pkgRoot: string, model: string, report: CalReport): Result<{ path: string }> {
   const pkgPath = join(pkgRoot, 'package.json')
   const name = existsSync(pkgPath) ? (JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string }).name : undefined
-  if (name !== '@whatmatters/specflow') return refuse([v('--publish', 'not-package-repo', name ?? 'no package.json', 'run inside the specflow repo')])
+  if (name !== '@popovych.co/witness') return refuse([v('--publish', 'not-package-repo', name ?? 'no package.json', 'run inside the witness repo')])
   const resultsDir = join(pkgRoot, 'calibration-results')
   mkdirSync(resultsDir, { recursive: true })
   const scorePath = join(resultsDir, `${model}.json`)

@@ -28,7 +28,7 @@ const BANNED: Array<[RegExp, string]> = [
   // Anchored so `docs/new` cannot false-positive. `/new` is banned alongside `/clear`
   // so nobody "fixes" a neutrality failure by naming the other harness's command.
   [/(^|[\s("'`])\/(clear|new)\b/,
-    'the relay command is CLI-printed — print the `relay:` line specflow next / dispatch-report emitted, and say nothing about what it contains'],
+    'the relay command is CLI-printed — print the `relay:` line witness next / dispatch-report emitted, and say nothing about what it contains'],
   [/MultiEdit/, 'name no harness-specific tool — say "any file-writing tool"; the guard names the real one when it fires'],
   [/PreToolUse/, 'say "the canon guard" — the hook is a Claude Code implementation detail'],
   // Revision 2: `\bsubagents?\b`, not `Task subagents?`. The narrower pattern left the
@@ -43,7 +43,7 @@ describe('harness neutrality', () => {
   it('scans the skills and the engine file', () => {
     const files = neutralFiles();
     expect(files.length).toBeGreaterThanOrEqual(7);   // six skills + the engine
-    expect(files.some((f) => f.endsWith(join('commands', 'specflow.md')))).toBe(true);
+    expect(files.some((f) => f.endsWith(join('commands', 'witness.md')))).toBe(true);
   });
 
   for (const [pattern, remedy] of BANNED) {

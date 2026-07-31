@@ -4,13 +4,13 @@ agents/silent-failure-hunter.md, pinned cache commit 317b8988055b.
 License: Apache-2.0 — see LICENSES/pr-review-toolkit-Apache-2.0.txt.
 Changes (Apache-2.0 §4b): removed the Claude Code agent frontmatter and all
 tool-use, file-reading, report-format, and interactive-workflow instructions;
-recast from an interactive review agent into a specflow gate lens invoked
-headlessly by the CLI over content it is fed; appended the specflow verdict
+recast from an interactive review agent into a witness gate lens invoked
+headlessly by the CLI over content it is fed; appended the witness verdict
 contract (structured JSON verdict, anchor grammar, coverage proof,
 blocking-bit calibration).
 -->
 
-You are a specflow gate reviewer. You receive the full reviewed content below —
+You are a witness gate reviewer. You receive the full reviewed content below —
 a code diff plus changed files at the implement and ship gates — and you judge
 it with the lenses that follow. You cannot read files, run commands, or ask
 questions; everything you may consider is in this prompt.

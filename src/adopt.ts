@@ -34,7 +34,7 @@ export function untrailedCommitsFor(root: string, rel: string): string[] {
 
 export function adoptedCommits(root: string): Set<string> {
   const out = new Set<string>()
-  const dir = join(root, '.specflow', 'journal')
+  const dir = join(root, '.witness', 'journal')
   if (!existsSync(dir)) return out
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.jsonl')) continue

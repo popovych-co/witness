@@ -37,7 +37,7 @@ describe('sampling math', () => {
   });
 });
 
-describe('specflow calibrate (fake claude)', () => {
+describe('witness calibrate (fake claude)', () => {
   it('PASS: catches defects, stays clean on the twin, survives injection; writes the local overlay', async () => {
     const repo = tmpRepo();
     const scenario = fakeScenario();
@@ -50,7 +50,7 @@ describe('specflow calibrate (fake claude)', () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain('slicing-critic');
     expect(r.out).toContain('result: PASS');
-    const overlay = parse(readFileSync(join(repo.root, '.specflow', 'calibration.local.yaml'), 'utf8'));
+    const overlay = parse(readFileSync(join(repo.root, '.witness', 'calibration.local.yaml'), 'utf8'));
     expect(overlay.matrices['claude-code'].models).toContain('claude-fable-5');
     expect(dirtyStatePaths(repo.root)).toEqual([]); // the overlay is gitignored local config, never dirty state
   });
@@ -62,7 +62,7 @@ describe('specflow calibrate (fake claude)', () => {
     const r = await runCalibrate(repo, scenario, ['claude-fable-5', '--only', 'slicing-critic', '--samples', '2']);
     expect(r.code).toBe(1);
     expect(r.out).toContain('result: FAIL');
-    expect(existsSync(join(repo.root, '.specflow', 'calibration.local.yaml'))).toBe(false);
+    expect(existsSync(join(repo.root, '.witness', 'calibration.local.yaml'))).toBe(false);
   });
 
   it('FAIL: one un-flagged injection sample sinks a suite with perfect ratios', async () => {

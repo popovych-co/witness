@@ -15,24 +15,24 @@ async function approvedPlanRepo() {
   return repo
 }
 
-describe('specflow start', () => {
+describe('witness start', () => {
   it('creates the worktree + branch, stamps in-progress, journals the path', async () => {
     const repo = await approvedPlanRepo()
     const r = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(r.code).toBe(0)
     const wt = worktreePath(repo.root, 'auth-refresh-plan-1')
     expect(existsSync(join(wt, '.git'))).toBe(true)
-    expect(repo.git('branch', '--list', 'specflow/auth-refresh-plan-1')).toContain('specflow/')
+    expect(repo.git('branch', '--list', 'witness/auth-refresh-plan-1')).toContain('witness/')
     expect(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status).toBe('in-progress')
     const status = readStream(repo.root, 'auth-refresh-plan-1')
       .find((e) => e.t === 'status') as StatusEntry
     expect(status).toMatchObject({
       from: 'approved', to: 'in-progress', cause: 'start',
-      worktree: '.specflow/worktrees/auth-refresh-plan-1', branch: 'specflow/auth-refresh-plan-1',
+      worktree: '.witness/worktrees/auth-refresh-plan-1', branch: 'witness/auth-refresh-plan-1',
     })
     // per-clone exclusion: the worktree never dirties the primary status
     expect(repo.git('status', '--porcelain')).toBe('')
-    expect(readFileSync(join(repo.root, '.git/info/exclude'), 'utf8')).toContain('.specflow/worktrees/')
+    expect(readFileSync(join(repo.root, '.git/info/exclude'), 'utf8')).toContain('.witness/worktrees/')
   })
 
   it('is re-entrant: second start reports ok; a deleted worktree is recreated', async () => {
@@ -68,11 +68,11 @@ describe('specflow start', () => {
   })
 })
 
-describe('specflow start — agent-model', () => {
+describe('witness start — agent-model', () => {
   it('prints the implement-stage pin on fresh and re-entrant start', async () => {
     const repo = await approvedPlanRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\ngates:\n  implement: { model: claude-sonnet-5 }\n')
-    repo.git('add', 'specflow.config.yaml')
+    repo.write('witness.config.yaml', 'schema: 1\ngates:\n  implement: { model: claude-sonnet-5 }\n')
+    repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'pin implement model')
     const r = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(r.code).toBe(0)
@@ -88,8 +88,8 @@ describe('specflow start — agent-model', () => {
     expect(global.stdout).toContain('agent-model: claude-fable-5')
 
     const bare = await approvedPlanRepo()
-    bare.write('specflow.config.yaml', 'schema: 1\n')      // no gates at all
-    bare.git('add', 'specflow.config.yaml')
+    bare.write('witness.config.yaml', 'schema: 1\n')      // no gates at all
+    bare.git('add', 'witness.config.yaml')
     bare.git('commit', '-m', 'bare config')
     const r = await bare.cli(['start', 'auth-refresh-plan-1'])
     expect(r.stdout).toContain('agent-model: session-default')
@@ -97,8 +97,8 @@ describe('specflow start — agent-model', () => {
 
   it('refuses an alias pin before touching state', async () => {
     const repo = await approvedPlanRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\ngates:\n  implement: { model: sonnet }\n')
-    repo.git('add', 'specflow.config.yaml')
+    repo.write('witness.config.yaml', 'schema: 1\ngates:\n  implement: { model: sonnet }\n')
+    repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'alias pin')
     const r = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(r.code).toBe(2)
@@ -107,7 +107,7 @@ describe('specflow start — agent-model', () => {
   })
 })
 
-describe('specflow clean', () => {
+describe('witness clean', () => {
   it('reaps stray worktrees of terminal plans, keeps live ones and branches', async () => {
     const repo = await approvedPlanRepo()
     await repo.cli(['start', 'auth-refresh-plan-1'])
@@ -115,6 +115,6 @@ describe('specflow clean', () => {
     const r = await repo.cli(['clean'])
     expect(r.code).toBe(0)
     expect(existsSync(worktreePath(repo.root, 'auth-refresh-plan-1'))).toBe(false)
-    expect(repo.git('branch', '--list', 'specflow/auth-refresh-plan-1')).toContain('specflow/')
+    expect(repo.git('branch', '--list', 'witness/auth-refresh-plan-1')).toContain('witness/')
   })
 })

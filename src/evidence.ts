@@ -19,7 +19,7 @@ export function isTestPath(rel: string): boolean {
 }
 
 export function screensDir(runRoot: string, planId: string): string {
-  return join(runRoot, '.specflow', 'screens', planId)
+  return join(runRoot, '.witness', 'screens', planId)
 }
 
 export interface Capture { name: string; sha: string }
@@ -107,12 +107,12 @@ export async function recordEvidence(
   phase: 'red' | 'green', extra: { reconstructed?: boolean } = {},
 ): Promise<Result<SpecTestRun>> {
   // latest-cycle by construction: a fresh empty dir per cycle means captures can
-  // only be this run's. Browser tests screenshot iff SPECFLOW_SCREENS_DIR is set,
+  // only be this run's. Browser tests screenshot iff WITNESS_SCREENS_DIR is set,
   // so non-UI plans and the gate's own drift lane (which does not set it) write nothing.
   const dir = screensDir(runRoot, planId)
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
-  const runCtx: Ctx = { ...ctx, env: { ...ctx.env, SPECFLOW_SCREENS_DIR: dir } }
+  const runCtx: Ctx = { ...ctx, env: { ...ctx.env, WITNESS_SCREENS_DIR: dir } }
   const run = await runSpecTests(runRoot, runCtx, parentId, stateRoot)
   if (!run.ok) return run
   const vacuous = phase === 'red' && run.value.allOk ? { vacuous: true } : {}

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SKILL_GROUND_RULES, SKILL_PIN_PREFIX } from './helpers';
 
-export const SKILLS = ['specflow-brainstorm', 'specflow-decompose', 'specflow-plan', 'specflow-implement', 'specflow-ship'];
+export const SKILLS = ['witness-brainstorm', 'witness-decompose', 'witness-plan', 'witness-implement', 'witness-ship'];
 const skillPath = (name: string) => join(__dirname, '..', 'plugin', 'skills', name, 'SKILL.md');
 
 describe('stage skills — shared contract', () => {
@@ -20,9 +20,9 @@ describe('stage skills — shared contract', () => {
   }
 });
 
-describe('specflow-brainstorm', () => {
-  const body = () => readFileSync(skillPath('specflow-brainstorm'), 'utf8');
-  it('interviews one question at a time and persists via specflow recap', () => {
+describe('witness-brainstorm', () => {
+  const body = () => readFileSync(skillPath('witness-brainstorm'), 'utf8');
+  it('interviews one question at a time and persists via witness recap', () => {
     expect(body()).toContain('One question per turn');
     expect(body()).toContain('recap --file');
     expect(body()).toContain('recap --amend');
@@ -35,14 +35,14 @@ describe('specflow-brainstorm', () => {
   });
 });
 
-describe('specflow-decompose', () => {
-  const body = () => readFileSync(skillPath('specflow-decompose'), 'utf8');
+describe('witness-decompose', () => {
+  const body = () => readFileSync(skillPath('witness-decompose'), 'utf8');
   it('routes by class and consults the index', () => {
-    expect(body()).toContain('specflow index');
+    expect(body()).toContain('witness index');
     expect(body()).toContain('THE one spec');
     expect(body()).toContain('write NO specs');
   });
-  it('hands manifests to specflow write and gates the effort', () => {
+  it('hands manifests to witness write and gates the effort', () => {
     expect(body()).toContain('write ');
     expect(body()).toContain('--effort');
     expect(body()).toContain('gate decompose');
@@ -58,10 +58,10 @@ describe('specflow-decompose', () => {
   });
 });
 
-describe('specflow-plan', () => {
-  const body = () => readFileSync(skillPath('specflow-plan'), 'utf8');
+describe('witness-plan', () => {
+  const body = () => readFileSync(skillPath('witness-plan'), 'utf8');
   it('derives from the CLI delta and emits the step manifest', () => {
-    expect(body()).toContain('specflow diff');
+    expect(body()).toContain('witness diff');
     expect(body()).toContain('"steps"');
     expect(body()).toContain('scaffolding');
     expect(body()).toContain('## Step:');
@@ -80,12 +80,12 @@ describe('specflow-plan', () => {
   });
 });
 
-describe('specflow-implement', () => {
-  const body = () => readFileSync(skillPath('specflow-implement'), 'utf8');
+describe('witness-implement', () => {
+  const body = () => readFileSync(skillPath('witness-implement'), 'utf8');
   it('starts the worktree; the session is the implementer', () => {
-    expect(body()).toContain('specflow start');
+    expect(body()).toContain('witness start');
     expect(body()).toContain('this session is the implementer');
-    expect(body()).toContain('.specflow/worktrees/');
+    expect(body()).toContain('.witness/worktrees/');
   });
   it('witnesses red and green and gates', () => {
     expect(body()).toContain('test-evidence');
@@ -97,19 +97,19 @@ describe('specflow-implement', () => {
   });
 });
 
-describe('specflow-implement — capture mandate', () => {
-  const body = () => readFileSync(skillPath('specflow-implement'), 'utf8');
+describe('witness-implement — capture mandate', () => {
+  const body = () => readFileSync(skillPath('witness-implement'), 'utf8');
   it('names the screens dir and per-moment captures', () => {
-    expect(body()).toContain('SPECFLOW_SCREENS_DIR');
+    expect(body()).toContain('WITNESS_SCREENS_DIR');
     expect(body()).toContain('design-reviewer');
     for (const moment of ['initial', 'error', 'success']) expect(body()).toContain(moment);
   });
 });
 
-describe('specflow-ship', () => {
-  const body = () => readFileSync(skillPath('specflow-ship'), 'utf8');
+describe('witness-ship', () => {
+  const body = () => readFileSync(skillPath('witness-ship'), 'utf8');
   it('drives the ship phases and always stops for the human', () => {
-    expect(body()).toContain('specflow ship');
+    expect(body()).toContain('witness ship');
     expect(body()).toContain('always stops');
     expect(body()).toContain('decide ship');
   });

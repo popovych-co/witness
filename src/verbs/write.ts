@@ -87,7 +87,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   })
   const id = positionals[0]
   const missing: Violation[] = []
-  if (!id || !ID_RE.test(id)) missing.push(v('id', 'id-charset', String(id ?? 'absent'), 'specflow write <id> with [a-z0-9-]+'))
+  if (!id || !ID_RE.test(id)) missing.push(v('id', 'id-charset', String(id ?? 'absent'), 'witness write <id> with [a-z0-9-]+'))
   for (const flag of ['effort', 'meta', 'body'] as const) {
     if (!values[flag]) missing.push(v(`--${flag}`, 'required', 'absent', `--${flag} <value>`))
   }
@@ -104,12 +104,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const effort = values.effort!
   if (!streamExists(root, effort)) {
-    renderRefusal([v('--effort', 'unknown-effort', effort, 'an effort born by specflow recap')]).forEach(ctx.err)
+    renderRefusal([v('--effort', 'unknown-effort', effort, 'an effort born by witness recap')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const recap = latestRecap(root, effort)
   if (!recap) {
-    renderRefusal([v('--effort', 'unknown-effort', `${effort} has no recap entry`, 'an effort born by specflow recap')]).forEach(ctx.err)
+    renderRefusal([v('--effort', 'unknown-effort', `${effort} has no recap entry`, 'an effort born by witness recap')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
 
@@ -186,7 +186,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const stream = journalRel(effort)
     const unrelated = dirtyStatePaths(root).filter((p) => p !== rel && p !== stream)
     if (unrelated.length) {
-      renderRefusal(unrelated.map((p) => v(p, 'unrelated-dirty', 'uncommitted change on a state path', 'revert or re-apply via specflow write, then re-run'))).forEach(ctx.err)
+      renderRefusal(unrelated.map((p) => v(p, 'unrelated-dirty', 'uncommitted change on a state path', 'revert or re-apply via witness write, then re-run'))).forEach(ctx.err)
       return EXIT.REFUSED
     }
     // serializeDoc normalizes body whitespace (leading/trailing) on write, and splitDoc
@@ -234,7 +234,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('path', rel))
     ctx.out(kv('sha', short(sha)))
     ctx.out(kv('status', 'draft'))
-    ctx.out('next: specflow check · specflow index')
+    ctx.out('next: witness check · witness index')
     return EXIT.OK
   } finally {
     lock.value()
@@ -271,12 +271,12 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   }
   if (parent.meta.status === 'draft') {
     violations.push(v('parent', 'parent-not-approved', String(parentId),
-      'a parent stamped approved by its gate — run: specflow gate decompose --effort <slug>'))
+      'a parent stamped approved by its gate — run: witness gate decompose --effort <slug>'))
   }
   const computed = canonicalSha(parent.meta, parent.body)
   const supplied = manifest['derives-from']
   if (typeof supplied === 'string' && supplied !== computed) {
-    violations.push(v('derives-from', 'stale-derivation', short(supplied), `current parent content is ${short(computed)} — re-derive from specflow diff ${parentId}`))
+    violations.push(v('derives-from', 'stale-derivation', short(supplied), `current parent content is ${short(computed)} — re-derive from witness diff ${parentId}`))
   }
   const parentUi = parent.meta.ui === true
   const suppliedDesignFrom = manifest['design-from']
@@ -288,7 +288,7 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
     const stamp = designStamp(parent)
     if (!stamp || designPending(root, parent)) {
       violations.push(v('design-from', 'design-not-approved', String(parentId),
-        `an approved, current design — run: specflow design ${parentId} --file <html> && specflow gate design ${parentId}`))
+        `an approved, current design — run: witness design ${parentId} --file <html> && witness gate design ${parentId}`))
     } else if (suppliedDesignFrom !== stamp.sha) {
       violations.push(v('design-from', 'stale-design', short(String(suppliedDesignFrom ?? 'absent')),
         `the parent's current design sha ${short(stamp.sha)} — pin it in the manifest`))

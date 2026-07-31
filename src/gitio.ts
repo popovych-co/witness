@@ -36,7 +36,7 @@ export function primaryRoot(cwd: string): Result<string> {
 
 export function stateDirs(root: string): string[] {
   const p = canonPaths(root)
-  return [p.specs, p.plans, p.designs, '.specflow']
+  return [p.specs, p.plans, p.designs, '.witness']
 }
 
 export function isStatePath(root: string, rel: string): boolean {
@@ -44,10 +44,10 @@ export function isStatePath(root: string, rel: string): boolean {
 }
 
 const LOCAL_STATE_FILES = new Set([
-  '.specflow/lock',
-  '.specflow/txn.json',
-  '.specflow/allow.json',
-  '.specflow/calibration.local.yaml',
+  '.witness/lock',
+  '.witness/txn.json',
+  '.witness/allow.json',
+  '.witness/calibration.local.yaml',
 ])
 
 export function dirtyStatePaths(root: string): string[] {
@@ -61,7 +61,7 @@ export function dirtyStatePaths(root: string): string[] {
     .filter((p) => !LOCAL_STATE_FILES.has(p))
 }
 
-export const TRAILER = 'Specflow-State: 1'
+export const TRAILER = 'Witness-State: 1'
 
 export function commitWithTrailer(root: string, files: string[], subject: string): Result<{ sha: string }> {
   // tryGit, not git: a path already fully processed by a prior `git mv` (both sides
@@ -89,7 +89,7 @@ export function stateCommit(root: string, files: string[], subject: string): Res
   const unrelated = dirtyStatePaths(root).filter((p) => !planned.has(p))
   if (unrelated.length) {
     return refuse(unrelated.map((p) =>
-      v(p, 'unrelated-dirty', 'uncommitted change on a state path', 'revert it or re-apply via specflow write, then re-run'),
+      v(p, 'unrelated-dirty', 'uncommitted change on a state path', 'revert it or re-apply via witness write, then re-run'),
     ))
   }
   return commitWithTrailer(root, files, subject)
@@ -104,8 +104,8 @@ export interface CommitAudit {
 export function auditStateCommits(root: string): CommitAudit[] {
   const p = canonPaths(root)
   const res = tryGit(
-    root, 'log', '--format=%H%x1f%s%x1f%(trailers:key=Specflow-State,valueonly=true)',
-    '--', p.specs, p.plans, p.designs, '.specflow/journal',
+    root, 'log', '--format=%H%x1f%s%x1f%(trailers:key=Witness-State,valueonly=true)',
+    '--', p.specs, p.plans, p.designs, '.witness/journal',
   )
   if (!res.ok || res.out === '') return []
   return res.out.split('\n').filter(Boolean).map((line) => {

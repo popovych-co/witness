@@ -49,7 +49,7 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
   const root = rootRes.value
   const cfg = loadConfig(root)
-  ctx.out(kv('specflow', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
+  ctx.out(kv('witness', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
   if (cfg.ok) {
     // Diagnostic surface: a broken harness config must not brick the dashboard —
     // `check` reports that as a finding, so the floor lines fall back to claude-code.
@@ -155,11 +155,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
     rows('gates', ['gate', 'target', 'round', 'outcome'], pendingGates as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   if (canon.docs.some((d) => (Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []).some((n) => typeof n.cmd === 'string'))) {
-    ctx.out('note: cmd needs are not executed at scan — run specflow check')
+    ctx.out('note: cmd needs are not executed at scan — run witness check')
   }
 
-  const next = cfg.ok ? computeNext(root, ctx, canon, cfg.value).line : 'specflow check'
+  const next = cfg.ok ? computeNext(root, ctx, canon, cfg.value).line : 'witness check'
   ctx.out(`next: ${next}`)
-  ctx.out('help: specflow check · index · diff <id> · log <id>')
+  ctx.out('help: witness check · index · diff <id> · log <id>')
   return EXIT.OK
 }

@@ -16,9 +16,9 @@ const THREE_STEP_BODY = '## Step: s1\nA.\n\n## Step: s2\nB.\n\n## Step: s3\nC.\n
 async function planReady(budgetYaml = '') {
   const repo = await seededRepo()
   if (budgetYaml) {
-    repo.write('specflow.config.yaml', repo.read('specflow.config.yaml') + budgetYaml)
-    repo.git('add', 'specflow.config.yaml')
-    repo.git('commit', '-m', 'budget config', '-m', 'Specflow-State: 1')
+    repo.write('witness.config.yaml', repo.read('witness.config.yaml') + budgetYaml)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'budget config', '-m', 'Witness-State: 1')
   }
   await writeSpec(repo, 'auth-refresh')
   approve(repo, 'auth-refresh')
@@ -95,7 +95,7 @@ describe('dispatch-report journals telemetry (row 81)', () => {
 
 describe('implement skill carries the economics protocol (rows 79–80)', () => {
   const skill = readFileSync(
-    join(import.meta.dirname, '..', 'plugin', 'skills', 'specflow-implement', 'SKILL.md'), 'utf8')
+    join(import.meta.dirname, '..', 'plugin', 'skills', 'witness-implement', 'SKILL.md'), 'utf8')
 
   it.each([
     'dispatch-budget',                       // budget read from start output

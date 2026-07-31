@@ -10,7 +10,7 @@ function specSha(repo: TestRepo): string {
   return canonicalSha(doc.value.meta, doc.value.body)
 }
 
-describe('specflow write (plan)', () => {
+describe('witness write (plan)', () => {
   it('stamps derives-from from the parent and journals the write', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
@@ -79,7 +79,7 @@ describe('specflow write (plan)', () => {
     const chore = await seededRepo({ slug: 'dep-bump', class: 'chore' })
     chore.write('specs/principles.md', chore.read('specs/principles.md').replace('status: draft', 'status: approved'))
     chore.git('add', 'specs/principles.md')
-    chore.git('commit', '-m', 'stamp approved: principles', '-m', 'Specflow-State: 1')
+    chore.git('commit', '-m', 'stamp approved: principles', '-m', 'Witness-State: 1')
     const ok = await writePlan(chore, 'bump-plan', {
       type: 'plan', parent: 'principles', depends: [], needs: [],
       steps: [{ id: 's1', title: 'bump deps', scaffolding: true }],

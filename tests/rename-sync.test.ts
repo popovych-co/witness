@@ -4,7 +4,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { readStream, streamExists } from '../src/journal.js'
 import { addOrigin, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec } from './helpers.js'
 
-describe('specflow rename', () => {
+describe('witness rename', () => {
   it('rewrites the id, references, own tag criteria; moves the journal; warns on source tags', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
@@ -50,7 +50,7 @@ describe('specflow rename', () => {
   })
 })
 
-describe('specflow sync', () => {
+describe('witness sync', () => {
   it('pushes accumulated state commits; refuses without an upstream', async () => {
     const repo = await seededRepo()
     const noRemote = await repo.cli(['sync'])

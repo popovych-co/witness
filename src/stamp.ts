@@ -62,7 +62,7 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
     const state = prState(ctx, root, pr)
     if (state === undefined) { result.stale.push({ plan: planId, why: "stale, couldn't check" }); continue }
     if (state === 'CLOSED') {
-      result.stale.push({ plan: planId, why: `pr #${pr} closed unmerged — specflow abandon ${planId}?` })
+      result.stale.push({ plan: planId, why: `pr #${pr} closed unmerged — witness abandon ${planId}?` })
       continue
     }
     if (state !== 'MERGED') { result.stale.push({ plan: planId, why: `pr #${pr} still ${state}` }); continue }

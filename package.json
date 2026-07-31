@@ -1,7 +1,36 @@
 {
-  "name": "@whatmatters/specflow",
+  "name": "@popovych.co/witness",
   "version": "0.4.0",
-  "description": "brainstorm-to-PR pipeline: specs are state, plans are motion, transitions are evidence-gated",
+  "description": "Evidence-gated spec-driven development pipeline for AI coding agents: brainstorm to PR in six stages, where specs are state, plans are motion, and no transition passes without evidence. Drives from Claude Code or Pi.",
+  "keywords": [
+    "spec-driven-development",
+    "sdd",
+    "ai-agent",
+    "agentic-workflow",
+    "claude-code",
+    "claude-code-plugin",
+    "anthropic",
+    "llm",
+    "code-review",
+    "tdd",
+    "test-driven-development",
+    "developer-tools",
+    "cli",
+    "pipeline",
+    "codegen",
+    "ai-coding-assistant",
+    "specs",
+    "agent-skills"
+  ],
+  "homepage": "https://github.com/popovych-co/witness#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/popovych-co/witness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/popovych-co/witness/issues"
+  },
+  "author": "Kostiantyn Popovych",
   "license": "MIT",
   "type": "module",
   "publishConfig": {
@@ -11,7 +40,7 @@
     "node": ">=20"
   },
   "bin": {
-    "specflow": "./dist/bin.js"
+    "witness": "./dist/bin.js"
   },
   "files": [
     "dist",

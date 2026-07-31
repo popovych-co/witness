@@ -52,13 +52,13 @@ describe('gate approval lapses on tree change', () => {
     const { repo, wt, planId } = await shippableRepo()
 
     await settleImplementGate(repo, wt, planId)
-    expect(await nextLine(repo)).toContain(`specflow ship ${planId}`)
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
 
     // an unignored new file changes worktreeTreeSha — the verdict now describes a
     // tree that no longer exists
     writeFileSync(join(worktreePath(repo.root, planId), 'src', 'sneaked-in.ts'), 'export const x = 1\n')
 
-    expect(await nextLine(repo)).toContain(`specflow gate implement ${planId}`)
+    expect(await nextLine(repo)).toContain(`witness gate implement ${planId}`)
 
     await repo.cli(['clean'])
   })
@@ -101,7 +101,7 @@ describe('three-tier ladder', () => {
     const out = await nextLine(repo)
     // tier 1 wins: the other flow keeps moving
     expect(out).toContain('auth-logout-plan-1')
-    expect(out).not.toContain('specflow decide')
+    expect(out).not.toContain('witness decide')
     // but the waiting decision is on screen every turn
     expect(out).toContain('note:')
     expect(out).toContain(planId)
@@ -115,7 +115,7 @@ describe('three-tier ladder', () => {
     await stopShipGate(repo, wt, planId)
 
     // tier 1 empty → today's behavior, unchanged
-    expect(await nextLine(repo)).toContain(`specflow decide ship ${planId} --show`)
+    expect(await nextLine(repo)).toContain(`witness decide ship ${planId} --show`)
 
     await repo.cli(['clean'])
   })
@@ -164,9 +164,9 @@ describe('addressing one flow', () => {
     const { repo, wt, planId } = await shippableRepo()
     await settleImplementGate(repo, wt, planId)   // flow advances to ship
     const out = await nextLine(repo)
-    expect(out).toContain(`specflow ship ${planId}`)
+    expect(out).toContain(`witness ship ${planId}`)
     expect(out).toContain(`home: ${repo.root}`)
-    expect(out).toContain(`run: cd '${repo.root}' && claude '/specflow'`)
+    expect(out).toContain(`run: cd '${repo.root}' && claude '/witness'`)
     expect(out).not.toContain('--model')   // session-default ship model → no flag
 
     await repo.cli(['clean'])

@@ -50,13 +50,13 @@ async function gateRepo(env: Record<string, string> = {}) {
 const runs = (repo: { root: string }) =>
   readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
 
-// Simulates a human-decision entry the way a real `specflow decide` would land it:
+// Simulates a human-decision entry the way a real `witness decide` would land it:
 // appendEntry() alone only touches the working tree — write.ts's unrelated-dirty
-// guard then refuses the next `specflow write` unless this is committed too.
+// guard then refuses the next `witness write` unless this is committed too.
 function journalDecision(repo: { root: string; git: (...args: string[]) => string }, artifact: string, entry: Parameters<typeof appendEntry>[2]): void {
   appendEntry(repo.root, artifact, entry)
-  repo.git('add', `.specflow/journal/${artifact}.jsonl`)
-  repo.git('commit', '-m', `decide(${artifact}): ${(entry as { decision?: string }).decision}`, '-m', 'Specflow-State: 1')
+  repo.git('add', `.witness/journal/${artifact}.jsonl`)
+  repo.git('commit', '-m', `decide(${artifact}): ${(entry as { decision?: string }).decision}`, '-m', 'Witness-State: 1')
 }
 
 describe('gate engine', () => {
@@ -73,7 +73,7 @@ describe('gate engine', () => {
     expect(findById(canon, 'auth-refresh')!.meta.status).toBe('approved')
     const statuses = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'status')
     expect(statuses.length).toBe(1)
-    expect(repo.git('log', '-1', '--format=%B')).toContain('Specflow-State: 1')
+    expect(repo.git('log', '-1', '--format=%B')).toContain('Witness-State: 1')
     // doc reviews carry the verbatim anchor menu ahead of the reviewed content
     const stdin = readFileSync(join(scenario, 'claude-calls/call-1/stdin'), 'utf8')
     expect(stdin).toContain('## Valid anchors')
@@ -81,7 +81,7 @@ describe('gate engine', () => {
   })
 
   it('runs the battery through pi when the resolved harness is pi', async () => {
-    const { repo, scenario, ctx } = await gateRepo({ SPECFLOW_HARNESS: 'pi' })
+    const { repo, scenario, ctx } = await gateRepo({ WITNESS_HARNESS: 'pi' })
     putVerdict(scenario, CLEAN('auth-refresh'))
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
     const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
@@ -109,11 +109,11 @@ describe('gate engine', () => {
   it('a per-gate model pin reaches the reviewer invocation and the journal', async () => {
     const { repo, scenario, ctx } = await gateRepo()
     // init's config already pins a global gates.model — the per-gate pin must beat it
-    const cfgPath = join(repo.root, 'specflow.config.yaml')
+    const cfgPath = join(repo.root, 'witness.config.yaml')
     writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8').replace(
       'plan: { reviewers: [plan-critic] }',
       'plan: { reviewers: [plan-critic], model: test-plan-model }'))
-    repo.git('add', 'specflow.config.yaml'); repo.git('commit', '-m', 'pin plan model')
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'pin plan model')
     putVerdict(scenario, CLEAN('auth-refresh'))
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
     expect(runs(repo)[0].model).toBe('test-plan-model')
@@ -197,7 +197,7 @@ describe('gate engine', () => {
     const text = out2.join('\n')
     expect(text).toContain('--approve --override')
     expect(text).toContain('--revise --upstream')
-    expect(text).toContain('specflow abandon auth-refresh')
+    expect(text).toContain('witness abandon auth-refresh')
   })
 
   it('two consecutive malformed rounds on the same model+prompts → third run refused with remedy', async () => {
@@ -247,8 +247,8 @@ describe('gate engine', () => {
 
   it('walks the model fallback chain on invocation failure and records it', async () => {
     const { repo, scenario } = await gateRepo()
-    writeFileSync(join(repo.root, 'specflow.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
-    writeFileSync(join(repo.root, '.specflow/calibration.local.yaml'), 'models:\n  - test-model-2\n')
+    writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
+    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
     putVerdict(scenario, CLEAN('auth-refresh'))
     writeFileSync(join(scenario, 'claude-fail'), '1')
     const errs: string[] = []

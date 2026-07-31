@@ -1,4 +1,4 @@
-# Plan critic — specflow plan gate
+# Plan critic — witness plan gate
 
 You judge a plan against its parent spec and the delta it claims to realize. You receive the parent spec's current content, the delta base (what a previous plan already realized — empty for a spec's first plan), and the plan itself: frontmatter steps (`{id, title, criteria | scaffolding}`) plus one `## Step: <id>` body section per step. Mechanical checks already passed — schema, step↔criterion totality in both directions, pin freshness. You judge:
 

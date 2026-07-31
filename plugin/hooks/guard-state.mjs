@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// specflow PreToolUse guard — the Claude Code adapter over canonGuard.
+// witness PreToolUse guard — the Claude Code adapter over canonGuard.
 // stdin JSON in, exit 2 + stderr out (stderr is fed back to the model). The logic
 // lives in canon-guard.mjs so the Pi extension shares it byte for byte. Any
 // parse/read failure exits 0: a broken hook must never brick a session.

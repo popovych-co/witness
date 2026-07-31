@@ -7,7 +7,7 @@ import {
 async function liveRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   return repo
@@ -22,7 +22,7 @@ describe('dashboard reconcile section', () => {
     expect(one.stdout).toContain('unconfirmed')
     // computeNext's shared ladder (Task 17) has no reconcile-specific rung — it falls
     // through to the generic catch-all here, replacing the old dashboard-only ladder.
-    expect(one.stdout).toContain('next: specflow check')
+    expect(one.stdout).toContain('next: witness check')
     await repo.cli(['check', '--drift'], { env: fixtureEnv() })
     const two = await repo.cli([], { env: fixtureEnv() })
     expect(two.stdout).toContain('reconcile[')

@@ -17,7 +17,7 @@ import type { Need } from '../dsl.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const planId = argv.find((a) => !a.startsWith('--'))
-  if (!planId) { ctx.err('usage: specflow start <plan-id>'); return EXIT.REFUSED }
+  if (!planId) { ctx.err('usage: witness start <plan-id>'); return EXIT.REFUSED }
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value
@@ -61,7 +61,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (status !== 'approved') {
     const rule = status === 'done' || status === 'abandoned' ? 'terminal-status' : 'not-approved'
     renderRefusal([v('status', rule, status,
-      'an approved plan — run: specflow gate plan ' + planId)]).forEach((l) => ctx.err(l))
+      'an approved plan — run: witness gate plan ' + planId)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
@@ -81,7 +81,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const unmet = needs.filter((n) => n.status !== 'ok')
   if (unmet.length) {
     renderRefusal([v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '),
-      'all needs ok (specflow check shows details; specflow satisfy flips manual ones)')]).forEach((l) => ctx.err(l))
+      'all needs ok (witness check shows details; witness satisfy flips manual ones)')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
@@ -111,6 +111,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('agent-model', agentModel))
   ctx.out(kv('dispatch-budget', String(budget)))
   ctx.out(kv('dispatches', dispatchLine))
-  ctx.out(`help: implement inside the worktree; specflow test-evidence ${planId} --phase red|green as you go`)
+  ctx.out(`help: implement inside the worktree; witness test-evidence ${planId} --phase red|green as you go`)
   return EXIT.OK
 }

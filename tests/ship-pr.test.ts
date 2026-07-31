@@ -36,7 +36,7 @@ async function approvedShip(opts: { commit?: boolean } = {}) {
   return { ...seed, scenario, ctx }
 }
 
-describe('specflow ship', () => {
+describe('witness ship', () => {
   it('phases: gate stop → approve → push + PR + pr-stamp → CI watch', async () => {
     const { repo, planId, scenario, ctx } = await approvedShip()
     const code = await runShip(ctx, planId)                        // pr → watch

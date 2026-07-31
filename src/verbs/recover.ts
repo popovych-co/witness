@@ -24,7 +24,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.OK
   }
   if (dirtyStatePaths(root).length === 0) {
-    rmSync(join(root, '.specflow', 'txn.json'), { force: true })
+    rmSync(join(root, '.witness', 'txn.json'), { force: true })
     ctx.out(kv('recovered', 'already-committed — marker cleared'))
     return EXIT.OK
   }
@@ -36,7 +36,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (!choice) {
     ctx.err(kv('pending', marker.op))
-    ctx.err('help: specflow recover --complete | --rollback')
+    ctx.err('help: witness recover --complete | --rollback')
     return EXIT.BLOCKED
   }
   if (choice === 'rollback') {

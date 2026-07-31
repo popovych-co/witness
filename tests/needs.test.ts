@@ -33,7 +33,7 @@ describe('evaluateNeeds', () => {
     const repo = tmpRepo()
     const first = await evaluateNeeds(repo.root, ctxFor(repo.root, { answers: ['y'] }), [{ cmd: 'true' }])
     expect(first[0]?.status).toBe('ok')
-    expect(readFileSync(join(repo.root, '.specflow/allow.json'), 'utf8')).toContain('"true"')
+    expect(readFileSync(join(repo.root, '.witness/allow.json'), 'utf8')).toContain('"true"')
     const second = await evaluateNeeds(repo.root, ctxFor(repo.root, { tty: false, env: {} }), [{ cmd: 'true' }])
     expect(second[0]?.status).toBe('ok')
   })
@@ -52,11 +52,11 @@ describe('evaluateNeeds', () => {
     expect(existsSync(marker)).toBe(false)
   })
 
-  it('declines when the user says no, and trusts everything under SPECFLOW_TRUST_CMDS=1', async () => {
+  it('declines when the user says no, and trusts everything under WITNESS_TRUST_CMDS=1', async () => {
     const repo = tmpRepo()
     const declined = await evaluateNeeds(repo.root, ctxFor(repo.root, { answers: ['n'] }), [{ cmd: 'true' }])
     expect(declined[0]?.status).toBe('declined')
-    const ci = await evaluateNeeds(repo.root, ctxFor(repo.root, { tty: false, env: { SPECFLOW_TRUST_CMDS: '1' } }), [{ cmd: 'true' }])
+    const ci = await evaluateNeeds(repo.root, ctxFor(repo.root, { tty: false, env: { WITNESS_TRUST_CMDS: '1' } }), [{ cmd: 'true' }])
     expect(ci[0]?.status).toBe('ok')
   })
 })

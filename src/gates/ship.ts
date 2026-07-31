@@ -36,7 +36,7 @@ registerGate({
     const wt = worktreePath(root, planId)
     if (String(plan.meta.status) !== 'in-progress' || !existsSync(wt)) {
       return refuse([v('plan', 'not-started', String(plan.meta.status),
-        `an in-progress plan with a worktree — run: specflow start ${planId}`)])
+        `an in-progress plan with a worktree — run: witness start ${planId}`)])
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {
@@ -61,7 +61,7 @@ registerGate({
     checks.push({ name: 'implement-gate', ok: implementSettled,
       detail: lastImplement
         ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
-        : 'implement gate never ran — specflow gate implement ' + planId })
+        : 'implement gate never ran — witness gate implement ' + planId })
 
     const ship = (cfg.raw.ship ?? {}) as { test?: string; lint?: string }
     checks.push(await commandLane(wt, root, ctx, 'tests', ship.test))

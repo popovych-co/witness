@@ -17,7 +17,7 @@ async function workspaceRepo(): Promise<TestRepo> {
 }
 
 async function sweep(repo: TestRepo, mode: 'filtered' | 'full-suite'): Promise<Array<Pick<CriteriaResult, 'spec' | 'ok' | 'tagCount'>>> {
-  repo.write('specflow.config.yaml', workspaceConfig(mode))
+  repo.write('witness.config.yaml', workspaceConfig(mode))
   const canon = loadCanon(repo.root)
   const ctx = fakeCtx(repo.root, { env: fixtureEnv() })
   const out = []

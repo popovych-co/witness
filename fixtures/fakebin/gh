@@ -1,8 +1,8 @@
 #!/bin/sh
-# specflow protocol-tier fake gh: PR lifecycle from a scenario state dir.
+# witness protocol-tier fake gh: PR lifecycle from a scenario state dir.
 set -e
 if [ "$1" = "--version" ]; then echo "gh fake 0.0.0"; exit 0; fi
-dir="${SPECFLOW_FAKE_DIR:?SPECFLOW_FAKE_DIR unset}"
+dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
 mkdir -p "$dir"
 echo "$*" >> "$dir/gh-calls"
 sub="$1 $2"

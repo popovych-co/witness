@@ -12,7 +12,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [planId] = argv.filter((a) => !a.startsWith('--'))
   const phase = argv[argv.indexOf('--phase') + 1]
   if (!planId || (phase !== 'red' && phase !== 'green')) {
-    renderRefusal([v('args', 'usage', argv.join(' '), 'specflow test-evidence <plan-id> --phase red|green')]).forEach(ctx.err)
+    renderRefusal([v('args', 'usage', argv.join(' '), 'witness test-evidence <plan-id> --phase red|green')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const runRootRes = checkoutRoot(ctx.cwd)
@@ -57,7 +57,7 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
   const [planId] = argv.filter((a) => !a.startsWith('--'))
   const baseArg = argv.includes('--base') ? argv[argv.indexOf('--base') + 1] : undefined
   if (!planId) {
-    renderRefusal([v('args', 'usage', argv.join(' '), 'specflow verify-red <plan-id> [--base <ref>]')]).forEach(ctx.err)
+    renderRefusal([v('args', 'usage', argv.join(' '), 'witness verify-red <plan-id> [--base <ref>]')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const runRootRes = checkoutRoot(ctx.cwd)

@@ -23,10 +23,10 @@ interface HookEntry { matcher?: string; hooks: Array<{ type: string; command: st
 
 export interface SyncResult { written: string[]; restamped: string[]; modified: string[] }
 
-const PIN = /@whatmatters\/specflow@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g
+const PIN = /@popovych\.co\/witness@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g
 
 // Revision 6. Committing the payload is load-bearing: the implement stage runs with cwd
-// inside .specflow/worktrees/<plan-id>, which is a checkout of the branch, so only
+// inside .witness/worktrees/<plan-id>, which is a checkout of the branch, so only
 // committed files reach it. A gitignored target therefore has exactly one honest answer
 // — refuse. `git add -f` would override a rule the human wrote down; writing without
 // committing would leave the payload in the primary root and the worktree with no guard,
@@ -38,7 +38,7 @@ export function preflightPayload(root: string, harness: Harness): Result<void> {
   if (ignored.length === 0) return ok(undefined)
   return refuse(ignored.map((rel) => v(rel, 'payload-ignored', 'matched by .gitignore',
     'a committable path — worktrees are branch checkouts, so only committed payloads reach ' +
-    '.specflow/worktrees/<plan-id>; un-ignore it, or install a different agent here')))
+    '.witness/worktrees/<plan-id>; un-ignore it, or install a different agent here')))
 }
 
 // A shipped file and an installed file that differ ONLY by version pin are the same
@@ -50,7 +50,7 @@ function pinOnlyDifference(shipped: string, installed: string): boolean {
   return shipped.replace(PIN, installedPin) === installed
 }
 
-// Revision 1: SYNC, not install-once. These files are specflow's artifacts that happen
+// Revision 1: SYNC, not install-once. These files are witness's artifacts that happen
 // to live in the user's repo, and the engine file's pin is the single point deciding
 // which CLI version the entire pipeline runs — so an install-once rule pinned every repo
 // to whatever version first touched it, forever, with `payload: already installed`
@@ -64,7 +64,7 @@ export function installPayload(root: string, harness: Harness): Result<SyncResul
     const src = join(packageRoot(), from)
     if (!existsSync(src)) {
       return refuse([v('payload', 'source-missing', from,
-        'a file shipped in the specflow tarball — reinstall @whatmatters/specflow')])
+        'a file shipped in the witness tarball — reinstall @popovych.co/witness')])
     }
     const shipped = readFileSync(src, 'utf8')
     const dst = join(root, to)

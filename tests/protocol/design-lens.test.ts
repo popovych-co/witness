@@ -13,21 +13,21 @@ import { readStream } from '../../src/journal.js'
 const pkgRoot = fileURLToPath(new URL('../..', import.meta.url))
 const bin = join(pkgRoot, 'dist', 'bin.js')
 
-// a genuine subprocess is required for crash-injection (SPECFLOW_CRASH_AFTER + exit 9) —
+// a genuine subprocess is required for crash-injection (WITNESS_CRASH_AFTER + exit 9) —
 // repo.cli() below calls main() in-process and can't be killed mid-transaction.
 function spawnCli(root: string, args: string[], env: Record<string, string> = {}) {
   const res = spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, ...env } })
   return { code: res.status ?? -1, stdout: res.stdout, stderr: res.stderr }
 }
 
-// the browser-e2e stand-in: writes a screen capture when SPECFLOW_SCREENS_DIR is set,
+// the browser-e2e stand-in: writes a screen capture when WITNESS_SCREENS_DIR is set,
 // tagged onto the same spec as the fixture's own red/green tests. Always passes — the
 // fixture's TOKEN_BROKEN/TOKEN_FIXED swap owns red/green, this test owns the screenshot.
 const CAPTURE_TEST = `import { expect, it } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 it('renders the new-service screen @spec:auth-refresh', () => {
-  const dir = process.env.SPECFLOW_SCREENS_DIR
+  const dir = process.env.WITNESS_SCREENS_DIR
   if (dir) writeFileSync(join(dir, 'initial.png'), Buffer.from('PNGBYTES-v1'))
   expect(1).toBe(1)
 })
@@ -67,8 +67,8 @@ beforeAll(() => {
 describe('the design lens, end to end', () => {
   it('approved design → capture → design-reviewer blocks → revise → green, and converges through a crash', async () => {
     const repo = await seededRepo()
-    repo.write('specflow.config.yaml', singleConfig('filtered'))
-    repo.git('add', 'specflow.config.yaml')
+    repo.write('witness.config.yaml', singleConfig('filtered'))
+    repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'runner config')
     await writeSpec(repo, 'auth-refresh', { ui: true })
     approve(repo, 'auth-refresh')
@@ -94,7 +94,7 @@ describe('the design lens, end to end', () => {
     // start + red→green evidence, a screen capture riding the same cycle
     // (the plan gate's auto-pass above already stamped the plan to 'approved')
     await repo.cli(['start', 'auth-refresh-plan-1'])
-    const wt = join(repo.root, '.specflow/worktrees/auth-refresh-plan-1')
+    const wt = join(repo.root, '.witness/worktrees/auth-refresh-plan-1')
     cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     writeFileSync(join(wt, 'tests/capture.test.ts'), CAPTURE_TEST)
@@ -136,7 +136,7 @@ describe('the design lens, end to end', () => {
     putVerdict(greenScenario, treeClean(wt))
     putVerdict(greenScenario, DESIGN_SCREEN_CLEAN, 5)
     const greenEnv = gateEnv(greenScenario)
-    const crashed = spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], { ...greenEnv, SPECFLOW_CRASH_AFTER: 'gate-journal' })
+    const crashed = spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], { ...greenEnv, WITNESS_CRASH_AFTER: 'gate-journal' })
     expect(crashed.code).toBe(9)
     expect(spawnCli(repo.root, ['recover', '--complete']).code).toBe(0)
     const resumed = spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], greenEnv)

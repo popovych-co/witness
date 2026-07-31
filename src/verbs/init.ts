@@ -15,7 +15,7 @@ import { acquireLock } from '../lock.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 
-const DEFAULT_CONFIG = `# specflow.config.yaml — the whole surface
+const DEFAULT_CONFIG = `# witness.config.yaml — the whole surface
 schema: 1
 # paths: { specs: docs/specs, plans: docs/plans }   # optional canon roots (defaults: specs, plans); git mv existing docs when changing
 # docs:                      # repo docs registry — enumerated keys, unknown keys refused
@@ -37,23 +37,23 @@ criteria:
 ship: { test: "npm test", lint: "npm run lint", branch: main }
 `
 
-const GITIGNORE_BLOCK = `# specflow local (never committed)
-.specflow/lock
-.specflow/txn.json
-.specflow/allow.json
-.specflow/calibration.local.yaml
-.specflow/screens/
+const GITIGNORE_BLOCK = `# witness local (never committed)
+.witness/lock
+.witness/txn.json
+.witness/allow.json
+.witness/calibration.local.yaml
+.witness/screens/
 `
 
 const PRINCIPLES_BODY = `# Principles
 
-Repo-wide rules and trade-offs. Amend via \`specflow write\`; chores may name
+Repo-wide rules and trade-offs. Amend via \`witness write\`; chores may name
 this doc as their plan's parent.
 `
 
-const USAGE = 'usage: specflow init [--agent claude-code|pi|auto]'
+const USAGE = 'usage: witness init [--agent claude-code|pi|auto]'
 
-// `--agent` is what makes a second run legal. A bare `specflow init` keeps its tested
+// `--agent` is what makes a second run legal. A bare `witness init` keeps its tested
 // contract — it refuses `already-initialized` — because scaffolding twice is a mistake.
 // Installing a payload set twice is not: it is how a Claude Code repo gains Pi support,
 // and how a half-finished install is completed.
@@ -75,8 +75,8 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const root = rootRes.value
   const scaffolded = existsSync(configPath(root))
   if (scaffolded && agent === undefined) {
-    renderRefusal([v('specflow.config.yaml', 'already-initialized', 'config exists',
-      'specflow is already set up here — specflow init --agent <name> installs an agent payload set')]).forEach(ctx.err)
+    renderRefusal([v('witness.config.yaml', 'already-initialized', 'config exists',
+      'witness is already set up here — witness init --agent <name> installs an agent payload set')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
 
@@ -86,7 +86,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     // claim and refuses when false, listing the harnesses that exist.
     const hxR = agent === 'auto'
       ? resolveHarness(ctx.env, {})
-      : resolveHarness({ SPECFLOW_HARNESS: agent }, {})
+      : resolveHarness({ WITNESS_HARNESS: agent }, {})
     if (!hxR.ok) {
       renderRefusal(hxR.violations.map((x) => ({ ...x, field: '--agent' }))).forEach(ctx.err)
       return EXIT.REFUSED
@@ -111,20 +111,20 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (!scaffolded) {
       writeFileSync(configPath(root), DEFAULT_CONFIG)
       mkdirSync(join(root, 'plans'), { recursive: true })
-      mkdirSync(join(root, '.specflow', 'journal'), { recursive: true })
+      mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
       writeFileSync(join(root, 'plans', '.gitkeep'), '')
-      writeFileSync(join(root, '.specflow', 'journal', '.gitkeep'), '')
+      writeFileSync(join(root, '.witness', 'journal', '.gitkeep'), '')
       const gi = join(root, '.gitignore')
       const existing = existsSync(gi) ? readFileSync(gi, 'utf8') : ''
-      if (!existing.includes('.specflow/lock')) {
+      if (!existing.includes('.witness/lock')) {
         writeFileSync(gi, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + GITIGNORE_BLOCK)
       }
       writeDoc(join(root, 'specs', 'principles.md'), {
         meta: { id: 'principles', type: 'principles', status: 'draft', depends: [], needs: [] },
         body: PRINCIPLES_BODY,
       })
-      files.push('specflow.config.yaml', '.gitignore', 'specs/principles.md',
-        'plans/.gitkeep', '.specflow/journal/.gitkeep')
+      files.push('witness.config.yaml', '.gitignore', 'specs/principles.md',
+        'plans/.gitkeep', '.witness/journal/.gitkeep')
     }
 
     let synced: SyncResult | undefined
@@ -146,7 +146,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       const recorded = recordHarness(readFileSync(configPath(root), 'utf8'), harness.name)
       if (recorded.changed) {
         writeFileSync(configPath(root), recorded.text)
-        if (!files.includes('specflow.config.yaml')) files.push('specflow.config.yaml')
+        if (!files.includes('witness.config.yaml')) files.push('witness.config.yaml')
       }
     }
 
@@ -163,7 +163,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (staged.length > 0) {
       const subject = scaffolded
         ? `init(${harness?.name ?? '?'}): agent payloads`
-        : 'init: specflow scaffold'
+        : 'init: witness scaffold'
       const commit = commitWithTrailer(root, staged, subject)
       if (!commit.ok) {
         renderRefusal(commit.violations).forEach(ctx.err)
@@ -190,12 +190,12 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         ctx.out('note: the claude CLI is required for gates on every harness — install and authenticate it')
       }
       // Revision 6: silent-guard prevention. Prompts are self-revealing when trust is
-      // declined (/specflow simply is not there); the guard is not.
+      // declined (/witness simply is not there); the guard is not.
       if (harness.name === 'pi') {
-        ctx.out('note: pi loads .pi/prompts and .pi/extensions only after the project is trusted — decline it and both /specflow and the canon guard are absent')
+        ctx.out('note: pi loads .pi/prompts and .pi/extensions only after the project is trusted — decline it and both /witness and the canon guard are absent')
       }
     }
-    ctx.out(scaffolded ? 'next: specflow next' : 'next: specflow recap --file <recap.json>')
+    ctx.out(scaffolded ? 'next: witness next' : 'next: witness recap --file <recap.json>')
     return EXIT.OK
   } finally {
     lock.value()

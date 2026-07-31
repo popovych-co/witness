@@ -7,11 +7,11 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { SPEC_META, fakeScenario, gateEnv, seededRepo, writeSpec } from './helpers.js'
 
-describe('specflow check', () => {
+describe('witness check', () => {
   it('passes a clean freshly-written canon', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
-    const res = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('checks:')
   })
@@ -22,7 +22,7 @@ describe('specflow check', () => {
     repo.write('specs/auth-refresh.md', repo.read('specs/auth-refresh.md') + '\nsneaky edit\n')
     repo.git('add', 'specs/auth-refresh.md')
     repo.git('commit', '-m', 'hand edit')
-    const res = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('untrailered-commit')
   })
@@ -31,7 +31,7 @@ describe('specflow check', () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
     repo.write('specs/auth-refresh.md', repo.read('specs/auth-refresh.md') + 'dirt')
-    const res = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('hand-edit-in-progress')
   })
@@ -41,8 +41,8 @@ describe('specflow check', () => {
     await writeSpec(repo, 'auth-refresh')
     repo.write('specs/dupe.md', repo.read('specs/auth-refresh.md'))
     repo.git('add', 'specs/dupe.md')
-    repo.git('commit', '-m', 'dupe', '-m', 'Specflow-State: 1')
-    const res = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    repo.git('commit', '-m', 'dupe', '-m', 'Witness-State: 1')
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('duplicate-id')
   })
@@ -50,7 +50,7 @@ describe('specflow check', () => {
   it('reports unmet needs as warnings, not errors', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh', { ...SPEC_META, needs: [{ env: 'NOT_SET_ANYWHERE' }] })
-    const res = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('need-unmet')
   })
@@ -59,18 +59,18 @@ describe('specflow check', () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
     appendEntry(repo.root, 'ghost-artifact', { t: 'drift-check', artifact: 'ghost-artifact', criteria: [] })
-    repo.git('add', '.specflow/journal/ghost-artifact.jsonl')
-    repo.git('commit', '-m', 'orphan', '-m', 'Specflow-State: 1')
-    const res = await repo.cli(['check'], { env: { SPECFLOW_TRUST_CMDS: '1' } })
+    repo.git('add', '.witness/journal/ghost-artifact.jsonl')
+    repo.git('commit', '-m', 'orphan', '-m', 'Witness-State: 1')
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('orphan-journal')
   })
 
   it('flags a configured docs path that does not exist', async () => {
     const repo = await seededRepo()
-    repo.write('specflow.config.yaml',
-      repo.read('specflow.config.yaml') + 'docs:\n  conventions: [docs/conventions.md]\n')
-    repo.git('add', 'specflow.config.yaml')
+    repo.write('witness.config.yaml',
+      repo.read('witness.config.yaml') + 'docs:\n  conventions: [docs/conventions.md]\n')
+    repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'register a doc that does not exist')
     const res = await repo.cli(['check'])
     expect(res.code).toBe(1)
@@ -85,7 +85,7 @@ describe('specflow check', () => {
   })
 })
 
-describe('specflow check — harness findings', () => {
+describe('witness check — harness findings', () => {
   // Revision 3: this test only works because probe() now takes ctx.env. With the old
   // form it read process.env, so the starved PATH never reached it and the finding never
   // fired on any machine with `claude` installed — i.e. every machine that can run gates.
@@ -104,12 +104,12 @@ describe('specflow check — harness findings', () => {
     expect(claudeRow).not.toContain('later slice')
   })
 
-  // Decision 88: the probe follows the RESOLVED harness. Under SPECFLOW_HARNESS=pi the
+  // Decision 88: the probe follows the RESOLVED harness. Under WITNESS_HARNESS=pi the
   // reviewer lane never spawns claude, so a claude probe would be a false prerequisite.
   it('probes the resolved harness launch binary instead of hard-coding claude', async () => {
     const repo = await seededRepo()
     const scenario = fakeScenario()
-    const res = await repo.cli(['check'], { env: gateEnv(scenario, { SPECFLOW_HARNESS: 'pi' }) })
+    const res = await repo.cli(['check'], { env: gateEnv(scenario, { WITNESS_HARNESS: 'pi' }) })
     expect(res.stdout).not.toContain('required for gates on every harness')
     expect(res.stdout).not.toMatch(/probes.*claude.*missing/)
   })
@@ -118,7 +118,7 @@ describe('specflow check — harness findings', () => {
     const repo = await seededRepo()
     const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
-    const res = await repo.cli(['check'], { env: { PATH: bin, SPECFLOW_HARNESS: 'pi' } })
+    const res = await repo.cli(['check'], { env: { PATH: bin, WITNESS_HARNESS: 'pi' } })
     const row = res.stdout.split('\n').find((l) => l.includes('probes') && l.includes('pi'))
     expect(row).toContain("the pi CLI runs this harness's gate reviewers")
     expect(res.stdout).not.toMatch(/probes.*claude.*missing/)
@@ -131,7 +131,7 @@ describe('specflow check — harness findings', () => {
       mkdirSync(join(repo.root, '.pi', 'skills', s), { recursive: true })
       writeFileSync(join(repo.root, '.pi', 'skills', s, 'SKILL.md'), '---\nname: x\n---\n')
     }
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'pi', HOME: home } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi', HOME: home } })
     expect(res.stdout).toContain('skills-project-scope')
     expect(res.stdout).toContain('worktree')
   })
@@ -139,7 +139,7 @@ describe('specflow check — harness findings', () => {
   it('warns when a harness that needs an ecosystem install has no skills at all', async () => {
     const repo = await seededRepo()
     const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'pi', HOME: home } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi', HOME: home } })
     expect(res.stdout).toContain('skills-not-installed')
   })
 
@@ -149,7 +149,7 @@ describe('specflow check — harness findings', () => {
   it('stays quiet about skills on claude-code', async () => {
     const repo = await seededRepo()
     const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'claude-code', HOME: home } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'claude-code', HOME: home } })
     expect(res.stdout).not.toContain('skills-not-installed')
   })
 
@@ -160,28 +160,28 @@ describe('specflow check — harness findings', () => {
   it('warns when the resolved harness has no payload installed', async () => {
     const repo = await seededRepo()
     const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'pi', HOME: home } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi', HOME: home } })
     expect(res.stdout).toContain('payload-not-installed')
   })
 
   // Found by Task 9's manual pass: the pin is embedded as
-  // `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@<v>}`, so a capture group that stops
+  // `${WITNESS_BIN:-npx -y @popovych.co/witness@<v>}`, so a capture group that stops
   // only at whitespace/quote/paren swallows the closing brace and never equals
   // version() — payload-stale then fired on EVERY fresh install, which is a warning
   // nobody would keep reading.
   it('stays quiet about a payload it just installed at the running version', async () => {
     const repo = await seededRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'pi' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi' } })
     expect(res.stdout).not.toContain('payload-stale')
   })
 
   it('warns when an installed payload pins an older CLI than the one running', async () => {
     const repo = await seededRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const rel = '.pi/prompts/specflow.md'
-    repo.write(rel, repo.read(rel).replace(/@whatmatters\/specflow@[\d.]+/g, '@whatmatters/specflow@0.0.1'))
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'pi' } })
+    const rel = '.pi/prompts/witness.md'
+    repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi' } })
     expect(res.stdout).toContain('payload-stale')
   })
 
@@ -189,7 +189,7 @@ describe('specflow check — harness findings', () => {
   // engine, guard and dashboard out of band, so absence there is not evidence.
   it('stays quiet about payloads on claude-code', async () => {
     const repo = await seededRepo()
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'claude-code' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'claude-code' } })
     expect(res.stdout).not.toContain('payload-not-installed')
   })
 
@@ -197,10 +197,10 @@ describe('specflow check — harness findings', () => {
   // typo would otherwise be invisible forever — check is where it surfaces.
   it('reports an unreadable harness: even when detection answered', async () => {
     const repo = await seededRepo()
-    repo.write('specflow.config.yaml', `${repo.read('specflow.config.yaml')}harness: pikachu\n`)
-    repo.git('add', 'specflow.config.yaml')
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
+    repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'bad harness')
-    const res = await repo.cli(['check'], { env: { SPECFLOW_HARNESS: 'claude-code' } })
+    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'claude-code' } })
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('unknown-harness')
   })

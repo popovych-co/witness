@@ -1,8 +1,19 @@
 {
-  "name": "specflow",
-  "description": "Brainstorm → PR through five evidence-gated stages. Skills author, the pinned specflow CLI writes state and witnesses evidence; gates stop where judgment is owed.",
+  "name": "witness",
+  "description": "Spec-driven development with evidence gates: brainstorm → PR through six stages and five gates. Skills author, the pinned witness CLI writes state and witnesses evidence; gates stop where judgment is owed.",
   "version": "0.4.0",
   "author": {
     "name": "Kostiantyn Popovych"
-  }
+  },
+  "homepage": "https://github.com/popovych-co/witness",
+  "repository": "https://github.com/popovych-co/witness",
+  "license": "MIT",
+  "keywords": [
+    "spec-driven-development",
+    "evidence-gated",
+    "code-review",
+    "tdd",
+    "workflow",
+    "agent-skills"
+  ]
 }

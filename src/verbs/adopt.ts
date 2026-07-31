@@ -22,7 +22,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootRes.value
   const paths = canonPaths(root)
   if (!rel || !(rel.startsWith(`${paths.specs}/`) || rel.startsWith(`${paths.plans}/`)) || !rel.endsWith('.md')) {
-    renderRefusal([v('path', 'usage', String(rel ?? ''), `specflow adopt <${paths.specs}/... | ${paths.plans}/...>.md`)]).forEach(ctx.err)
+    renderRefusal([v('path', 'usage', String(rel ?? ''), `witness adopt <${paths.specs}/... | ${paths.plans}/...>.md`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const blocked = guardTxn(ctx, root)
@@ -96,6 +96,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   ctx.out(kv('adopt', `${id} · ${short(currentSha)} · ${commits.length} commit(s) absolved${unreviewed ? ' · unreviewed-amendment' : ''}`))
   if (reverify) ctx.out(kv('reverify', reverify.ok ? 'lane green — stays live' : 'lane RED — drift stamped immediately (hand-edit, no debounce)'))
-  ctx.out('help: history: specflow log ' + id)
+  ctx.out('help: history: witness log ' + id)
   return reverify && !reverify.ok ? EXIT.FINDINGS : EXIT.OK
 }

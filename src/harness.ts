@@ -11,8 +11,8 @@ export const DEFAULT_HARNESS: HarnessName = 'claude-code'
 // whether the resolved harness can see all of them; a partial install is a warn, not
 // a pass, because the missing one is always the stage you are about to reach.
 export const STAGE_SKILLS = [
-  'specflow-brainstorm', 'specflow-decompose', 'specflow-design',
-  'specflow-implement', 'specflow-plan', 'specflow-ship',
+  'witness-brainstorm', 'witness-decompose', 'witness-design',
+  'witness-implement', 'witness-plan', 'witness-ship',
 ] as const
 
 export interface HarnessSpawn { cmd: string; args: string[]; env: Record<string, string> }
@@ -109,7 +109,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     settings: '.claude/settings.json',
     bundled: true,
     payload: [
-      { from: 'plugin/commands/specflow.md', to: '.claude/commands/specflow.md' },
+      { from: 'plugin/commands/witness.md', to: '.claude/commands/witness.md' },
       { from: 'plugin/hooks/canon-guard.mjs', to: '.claude/hooks/canon-guard.mjs' },
       { from: 'plugin/hooks/guard-state.mjs', to: '.claude/hooks/guard-state.mjs' },
       { from: 'plugin/hooks/session-dashboard.sh', to: '.claude/hooks/session-dashboard.sh' },
@@ -141,12 +141,12 @@ const REGISTRY: Record<HarnessName, Harness> = {
     relay: '/new',
     bundled: false,
     payload: [
-      { from: 'plugin/commands/specflow.md', to: '.pi/prompts/specflow.md' },
+      { from: 'plugin/commands/witness.md', to: '.pi/prompts/witness.md' },
       { from: 'plugin/hooks/canon-guard.mjs', to: '.pi/extensions/canon-guard.mjs' },
       // Source-tree sibling of canon-guard.mjs, exactly as it is in .pi/extensions/:
       // the adapter imports the core with ONE static relative specifier, and a
       // specifier that only resolves after install is a trap no unit test can hold.
-      { from: 'plugin/hooks/specflow-pi.ts', to: '.pi/extensions/specflow.ts' },
+      { from: 'plugin/hooks/witness-pi.ts', to: '.pi/extensions/witness.ts' },
       { from: 'plugin/hooks/session-dashboard.sh', to: '.pi/extensions/session-dashboard.sh' },
     ],
     skills: { project: '.pi/skills', global: '.pi/agent/skills' },
@@ -191,16 +191,16 @@ const relabel = (violations: Violation[], field: string): Violation[] =>
 // CLAUDECODE=1 nor PI_CODING_AGENT=true is a documented value contract.
 //
 // Deliberately NOT wired into loadConfig: every verb calls that, so an invalid
-// `harness:` there would brick `specflow check` on a key nothing read. Verbs that need
+// `harness:` there would brick `witness check` on a key nothing read. Verbs that need
 // a harness ask for one; `check` reports a malformed config value as a finding.
 export function resolveHarness(
   env: Record<string, string | undefined>,
   raw: Record<string, unknown>,
 ): Result<{ harness: Harness; source: HarnessSource }> {
-  const override = env.SPECFLOW_HARNESS
+  const override = env.WITNESS_HARNESS
   if (override !== undefined && override !== '') {
     const r = loadHarness(override)
-    return r.ok ? ok({ harness: r.value, source: 'env' }) : refuse(relabel(r.violations, 'SPECFLOW_HARNESS'))
+    return r.ok ? ok({ harness: r.value, source: 'env' }) : refuse(relabel(r.violations, 'WITNESS_HARNESS'))
   }
   if (env.PI_CODING_AGENT !== undefined) {
     const r = loadHarness('pi')
@@ -250,18 +250,18 @@ export function handoffLine(harness: Harness, home: string, model: string | unde
   const budget = harness.name === 'claude-code' && parsed?.ok === true && parsed.value.thinking !== 'off'
     ? `MAX_THINKING_TOKENS=${CLAUDE_THINKING_BUDGET[parsed.value.thinking]} `
     : ''
-  return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/specflow'`
+  return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/witness'`
 }
 
 // No comma: toon's esc() quotes any value containing one (toon.ts:3), and a quoted
-// `relay: "/clear, then /specflow"` is what the implement skill would then print
+// `relay: "/clear, then /witness"` is what the implement skill would then print
 // verbatim — the same class of defect as the double-quoted handoff note above.
 export function relayLine(harness: Harness): string {
-  return `${harness.relay} then /specflow`
+  return `${harness.relay} then /witness`
 }
 
 // Decision 14. Pi resolves project skills at resolve(cwd, '.pi', 'skills') with no
-// upward walk, and implement runs with cwd inside .specflow/worktrees/<plan-id> — an
+// upward walk, and implement runs with cwd inside .witness/worktrees/<plan-id> — an
 // untracked directory the installer never touched. A project-scope install therefore
 // loses every skill in the stage that does the most work.
 export function skillsVisibility(

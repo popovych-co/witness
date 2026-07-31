@@ -21,7 +21,7 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
   // A PR exists, but the watch is only legitimate while the verdict still describes both
   // this tree AND this base. Either one moving re-arms the gate — otherwise a rebase (or
   // any post-approval edit) merges a tree no battery ever read, and re-running
-  // `specflow ship` is a one-command bypass of every check below.
+  // `witness ship` is a one-command bypass of every check below.
   // `baseMoved` is a SEPARATE input from `treeSha` on purpose: a moved base has not yet
   // touched the worktree, so the tree sha still matches. Routing on the tree alone would
   // detect the moved base forever and never rebase — only the gate phase rebases, and it
@@ -84,10 +84,10 @@ export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, par
   if (found !== undefined) return ok(found)
   const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
     '--title', `${String(plan.meta.id)}: ${parentSummary}`,
-    '--body', `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (specflow).`])
+    '--body', `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`])
   if (!created.ok) {
     return refuse([v('gh', 'pr-create-failed', created.out.slice(0, 200),
-      'gh authenticated with push access — specflow check probes gh auth status')])
+      'gh authenticated with push access — witness check probes gh auth status')])
   }
   const m = /\/pull\/(\d+)\s*$/.exec(created.out.trim())
   if (!m) return refuse([v('gh', 'pr-url-unparseable', created.out.slice(-120), 'a …/pull/<n> URL')])
@@ -135,13 +135,13 @@ export function rebaseIfMoved(wt: string, shipBranch: string, remote = 'origin')
   // --autostash: this runs in the GATE phase, and implement deliberately leaves the
   // worktree uncommitted (ship owns the sole code commit, in the pr phase below), so the
   // tree is normally dirty and a bare rebase refuses with "you have unstaged changes".
-  // Autostash makes the rebase see a clean tree without moving specflow's commit ahead of
+  // Autostash makes the rebase see a clean tree without moving witness's commit ahead of
   // the human's decision. A pop that conflicts fails the rebase and refuses like any other.
   const rebase = tryGit(wt, 'rebase', '--autostash', base)
   if (!rebase.ok) {
     tryGit(wt, 'rebase', '--abort')
     return refuse([v('rebase', 'textual-conflict', `${base} moved`,
-      'resolve in the worktree (rebase manually), then re-run specflow ship — the CLI never freehands a merge')])
+      'resolve in the worktree (rebase manually), then re-run witness ship — the CLI never freehands a merge')])
   }
   // Only push a branch that HAS an upstream. This now runs in the gate phase, before
   // createPr has ever pushed, so on a first ship there is nothing on the remote to
@@ -200,24 +200,24 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     if (rebase.value === 'rebased') ctx.out(kv('rebase', `${shipBranch} moved — rebased before the battery`))
     const code = await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
     if (code !== EXIT.FINDINGS && code !== EXIT.OK) return code
-    ctx.out(`help: specflow decide ship ${planId} --approve to send the PR — ship always stops`)
+    ctx.out(`help: witness decide ship ${planId} --approve to send the PR — ship always stops`)
     return EXIT.FINDINGS
   }
   if (phase === 'awaiting-decision') {
     ctx.out(kv('ship', `${planId} awaits the ship decision`))
-    ctx.out(`help: specflow decide ship ${planId} --show | --approve | --revise --note "<why>" | --stop`)
+    ctx.out(`help: witness decide ship ${planId} --show | --approve | --revise --note "<why>" | --stop`)
     return EXIT.FINDINGS
   }
   if (phase === 'pr') {
     const parent = findById(canon, String(plan.meta.parent))
-    const parentSummary = String(parent?.meta.summary ?? 'specflow change')
+    const parentSummary = String(parent?.meta.summary ?? 'witness change')
     // implement leaves the worktree uncommitted — ship owns the sole code commit
     if (tryGit(wt, 'status', '--porcelain').out !== '') {
       tryGit(wt, 'add', '-A')
       const committed = tryGit(wt, 'commit', '-m', `${planId}: ${parentSummary}`)
       if (!committed.ok) {
         renderRefusal([v('commit', 'ship-commit-failed', committed.out.slice(0, 200),
-          'a committable worktree — resolve and re-run specflow ship')]).forEach((l) => ctx.err(l))
+          'a committable worktree — resolve and re-run witness ship')]).forEach((l) => ctx.err(l))
         return EXIT.REFUSED
       }
       ctx.out(kv('commit', `${planId}: ${parentSummary}`))

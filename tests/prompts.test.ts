@@ -7,7 +7,7 @@ import { PROMPT_NAMES } from '../src/reviewer';
 const promptPath = (name: string) => join(__dirname, '..', 'prompts', `${name}.md`);
 const NEW_PROMPTS = ['slicing-critic', 'plan-critic', 'drift-reviewer', 'design-reviewer'];
 
-describe('specflow-original reviewer prompts', () => {
+describe('witness-original reviewer prompts', () => {
   for (const name of NEW_PROMPTS) {
     it(`${name} carries its lenses and the verdict contract`, () => {
       const body = readFileSync(promptPath(name), 'utf8');

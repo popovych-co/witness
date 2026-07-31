@@ -40,9 +40,9 @@ export interface StatusEntry {
   note?: string
 }
 
-const dir = (root: string) => join(root, '.specflow', 'journal')
+const dir = (root: string) => join(root, '.witness', 'journal')
 
-export const journalRel = (id: string) => `.specflow/journal/${id}.jsonl`
+export const journalRel = (id: string) => `.witness/journal/${id}.jsonl`
 
 export function streamExists(root: string, id: string): boolean {
   return existsSync(join(root, journalRel(id)))

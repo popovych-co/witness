@@ -31,7 +31,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const model = positional[0]
   if (model === undefined || model === '') {
-    for (const line of renderRefusal([v('model', 'required', '', 'specflow calibrate <exact-model-id>')])) ctx.err(line)
+    for (const line of renderRefusal([v('model', 'required', '', 'witness calibrate <exact-model-id>')])) ctx.err(line)
     return EXIT.REFUSED
   }
   if ((MODEL_ALIASES as readonly string[]).includes(model)) {
@@ -113,7 +113,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('result', pass ? 'PASS' : 'FAIL'))
   if (!pass) return EXIT.FINDINGS
   addToLocalOverlay(rootR.value, model, harness.name)
-  ctx.out(kv('overlay', `.specflow/calibration.local.yaml + ${harness.name}/${model} (gate-runs stamp calibration: local)`))
+  ctx.out(kv('overlay', `.witness/calibration.local.yaml + ${harness.name}/${model} (gate-runs stamp calibration: local)`))
   if (flags.publish) {
     const pub = publishScore(rootR.value, model, report)
     if (!pub.ok) {

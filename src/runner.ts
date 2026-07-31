@@ -47,7 +47,7 @@ export function runnerConfig(cfg: Config): Result<RunnerConfig> {
 export function criteriaExcludes(cfg: Config): string[] {
   const crit = (cfg.raw.criteria ?? {}) as Record<string, unknown>
   const extra = Array.isArray(crit.exclude) ? (crit.exclude as string[]).filter((g) => typeof g === 'string') : []
-  return [`${cfg.paths.specs}/**`, `${cfg.paths.plans}/**`, '.specflow/**', ...extra]
+  return [`${cfg.paths.specs}/**`, `${cfg.paths.plans}/**`, '.witness/**', ...extra]
 }
 
 export interface RunOutcome {
@@ -71,7 +71,7 @@ export async function runFiltered(
   const trust = await ensureTrusted(trustRoot, ctx, template)
   if (trust !== 'trusted') {
     return refuse([v('criteria.runner', `untrusted-${trust}`, template,
-      trust === 'blocked' ? 'allow interactively or set SPECFLOW_TRUST_CMDS=1' : 'trust was declined')])
+      trust === 'blocked' ? 'allow interactively or set WITNESS_TRUST_CMDS=1' : 'trust was declined')])
   }
   return ok(execCommand(runRoot, ctx, template.replaceAll('{id}', specId)))
 }
@@ -82,7 +82,7 @@ export async function runFullSuite(
   const trust = await ensureTrusted(trustRoot, ctx, rc.suiteCmd)
   if (trust !== 'trusted') {
     return refuse([v('ship.test', `untrusted-${trust}`, rc.suiteCmd,
-      trust === 'blocked' ? 'allow interactively or set SPECFLOW_TRUST_CMDS=1' : 'trust was declined')])
+      trust === 'blocked' ? 'allow interactively or set WITNESS_TRUST_CMDS=1' : 'trust was declined')])
   }
   for (const f of reportFiles(runRoot, rc.reportGlob)) rmSync(join(runRoot, f))
   const run = execCommand(runRoot, ctx, rc.suiteCmd)

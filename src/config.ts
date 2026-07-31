@@ -41,8 +41,8 @@ export function resolvePaths(raw: Record<string, unknown>): Result<CanonPaths> {
       violations.push(v(`paths.${key}`, 'invalid', norm, 'a repo-relative directory without . or .. segments'))
       return DEFAULT_PATHS[key]
     }
-    if (norm === '.specflow' || norm.startsWith('.specflow/')) {
-      violations.push(v(`paths.${key}`, 'reserved', norm, 'a directory outside .specflow/'))
+    if (norm === '.witness' || norm.startsWith('.witness/')) {
+      violations.push(v(`paths.${key}`, 'reserved', norm, 'a directory outside .witness/'))
       return DEFAULT_PATHS[key]
     }
     return norm
@@ -92,8 +92,8 @@ export function resolveDocs(raw: Record<string, unknown>): Result<DocsRegistry> 
         violations.push(v(`docs.${key}`, 'invalid', norm, 'a repo-relative file path without . or .. segments'))
         continue
       }
-      if (norm === '.specflow' || norm.startsWith('.specflow/')) {
-        violations.push(v(`docs.${key}`, 'reserved', norm, 'a path outside .specflow/'))
+      if (norm === '.witness' || norm.startsWith('.witness/')) {
+        violations.push(v(`docs.${key}`, 'reserved', norm, 'a path outside .witness/'))
         continue
       }
       paths.push(norm)
@@ -139,18 +139,18 @@ export function canonPaths(root: string): CanonPaths {
   }
 }
 
-export const configPath = (root: string) => join(root, 'specflow.config.yaml')
+export const configPath = (root: string) => join(root, 'witness.config.yaml')
 
 export function loadConfig(root: string): Result<Config> {
   const p = configPath(root)
   if (!existsSync(p)) {
-    return refuse([v('specflow.config.yaml', 'missing', 'no config at repo root', 'run specflow init')])
+    return refuse([v('witness.config.yaml', 'missing', 'no config at repo root', 'run witness init')])
   }
   let raw: unknown
   try {
     raw = parseYaml(readFileSync(p, 'utf8'))
   } catch (e) {
-    return refuse([v('specflow.config.yaml', 'yaml-parse', String((e as Error).message).slice(0, 120), 'valid YAML')])
+    return refuse([v('witness.config.yaml', 'yaml-parse', String((e as Error).message).slice(0, 120), 'valid YAML')])
   }
   const obj = (raw ?? {}) as Record<string, unknown>
   const schema = obj.schema
@@ -158,7 +158,7 @@ export function loadConfig(root: string): Result<Config> {
     return refuse([v('schema', 'required', String(schema ?? 'absent'), 'integer schema version')])
   }
   if (schema > SCHEMA_VERSION) {
-    return refuse([v('schema', 'newer-than-cli', String(schema), `<=${SCHEMA_VERSION} — upgrade specflow`)])
+    return refuse([v('schema', 'newer-than-cli', String(schema), `<=${SCHEMA_VERSION} — upgrade witness`)])
   }
   const paths = resolvePaths(obj)
   if (!paths.ok) return refuse(paths.violations)
@@ -172,6 +172,6 @@ export function loadConfig(root: string): Result<Config> {
     paths: paths.value,
     docs: docs.value,
     implement: implement.value,
-    warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run specflow migrate (reserved)` : undefined,
+    warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)` : undefined,
   })
 }

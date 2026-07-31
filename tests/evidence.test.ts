@@ -12,7 +12,7 @@ import {
 async function planRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   const res = await writePlan(repo, 'auth-refresh-plan-1')
@@ -36,7 +36,7 @@ const reportedConfig = () => {
   return `schema: 1\ncriteria:\n  runner: 'node "${vb}" run -t "@spec:{id}" --passWithNoTests --reporter=junit --outputFile=reports/junit.xml'\n  report: junit:**/reports/junit.xml\n`
 }
 
-describe('specflow test-evidence', () => {
+describe('witness test-evidence', () => {
   it('records a red/green pair across the TDD loop', async () => {
     const repo = await planRepo()
     breakSingleFixture(repo)
@@ -76,7 +76,7 @@ describe('specflow test-evidence', () => {
 
   it('records real per-test outcomes from the junit report (filtered + report)', async () => {
     const repo = await planRepo()
-    repo.write('specflow.config.yaml', reportedConfig())
+    repo.write('witness.config.yaml', reportedConfig())
     repo.write('src/token.ts', TOKEN_BROKEN)
     repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
     repo.git('add', '-A')
@@ -92,7 +92,7 @@ describe('specflow test-evidence', () => {
 
   it('refuses filter-matched-nothing before journaling when zero tests match', async () => {
     const repo = await planRepo()
-    repo.write('specflow.config.yaml', reportedConfig())
+    repo.write('witness.config.yaml', reportedConfig())
     repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)   // no tagged tests anywhere
     repo.git('add', '-A')
     repo.git('commit', '-m', 'untagged only')

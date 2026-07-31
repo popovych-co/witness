@@ -4,13 +4,13 @@ import {
   ROUND_BOUND, appendKind, boundReached, keyOf, pendingDecision, roundsSinceApprove, sameKey, type GateRunEntry,
 } from '../src/rounds.js'
 
-const KEY = { gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '0.1.0', harness: 'claude-code' }
+const KEY = { gate: 'plan', prompts_sha: 'p1', model: 'm1', witness: '0.1.0', harness: 'claude-code' }
 
 function run(sha: string, outcome: 'passed' | 'stopped' | 'malformed', round: number, extra: Partial<GateRunEntry> = {}): GateRunEntry {
   return {
     v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
     run_id: `r-${round}`, reviewed_sha: sha, prompts_sha: KEY.prompts_sha,
-    specflow: KEY.specflow, model: KEY.model, calibration: 'none',
+    witness: KEY.witness, model: KEY.model, calibration: 'none',
     checks: [], verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [] }],
     outcome, ...extra,
   }
@@ -103,7 +103,7 @@ describe('pendingDecision + bound', () => {
 describe('keyOf', () => {
   it('extracts exactly the six key components', () => {
     expect(keyOf(run('a', 'stopped', 1))).toEqual({
-      reviewed_sha: 'a', gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '0.1.0',
+      reviewed_sha: 'a', gate: 'plan', prompts_sha: 'p1', model: 'm1', witness: '0.1.0',
       harness: 'claude-code',
     })
   })

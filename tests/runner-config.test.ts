@@ -55,10 +55,10 @@ describe('runnerConfig', () => {
 describe('criteriaExcludes', () => {
   it('always excludes state dirs and appends config globs', () => {
     const out = criteriaExcludes(cfg({ criteria: { exclude: ['fixtures/**'] } }))
-    expect(out).toEqual(['specs/**', 'plans/**', '.specflow/**', 'fixtures/**'])
+    expect(out).toEqual(['specs/**', 'plans/**', '.witness/**', 'fixtures/**'])
   })
 
   it('defaults to state dirs only', () => {
-    expect(criteriaExcludes(cfg({}))).toEqual(['specs/**', 'plans/**', '.specflow/**'])
+    expect(criteriaExcludes(cfg({}))).toEqual(['specs/**', 'plans/**', '.witness/**'])
   })
 })

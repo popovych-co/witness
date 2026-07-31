@@ -20,7 +20,7 @@ function canonicalRender(meta: Record<string, unknown>, body: string): string {
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const id = argv[0]
   if (!id) {
-    renderRefusal([v('id', 'required', 'absent', 'specflow diff <spec-id>')]).forEach(ctx.err)
+    renderRefusal([v('id', 'required', 'absent', 'witness diff <spec-id>')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const rootRes = primaryRoot(ctx.cwd)
@@ -29,7 +29,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const canon = loadCanon(root)
   const spec = findById(canon, id)
   if (!spec || spec.meta.type !== 'spec') {
-    renderRefusal([v('id', 'unknown-spec', id, 'a spec id from specflow index')]).forEach(ctx.err)
+    renderRefusal([v('id', 'unknown-spec', id, 'a spec id from witness index')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const current = canonicalSha(spec.meta, spec.body)
@@ -52,7 +52,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ]).forEach(ctx.out)
     return EXIT.FINDINGS
   }
-  const tmp = mkdtempSync(join(tmpdir(), 'specflow-diff-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'witness-diff-'))
   writeFileSync(join(tmp, 'base.md'), canonicalRender(baseDoc.meta, baseDoc.body))
   writeFileSync(join(tmp, 'current.md'), canonicalRender(spec.meta, spec.body))
   const diff = tryGit(root, 'diff', '--no-index', '--', join(tmp, 'base.md'), join(tmp, 'current.md'))

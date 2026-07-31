@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { SPEC_META, seededRepo, writeSpec } from './helpers.js'
 
-describe('specflow log', () => {
+describe('witness log', () => {
   it('renders recap, write, and write-refused entries in order', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')

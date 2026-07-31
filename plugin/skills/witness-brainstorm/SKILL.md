@@ -1,32 +1,32 @@
 ---
-name: specflow-brainstorm
-description: Stateless scope interview for a specflow effort — one question at a time, each with a firm recommendation, ending in a confirmed scope recap persisted via specflow recap. Use when starting a new effort or re-scoping one; normally invoked by /specflow.
+name: witness-brainstorm
+description: Stateless scope interview for a witness effort — one question at a time, each with a firm recommendation, ending in a confirmed scope recap persisted via witness recap. Use when starting a new effort or re-scoping one; normally invoked by /witness.
 ---
 
-# specflow-brainstorm — scope interview → confirmed recap
+# witness-brainstorm — scope interview → confirmed recap
 
 <!-- Derived (MIT): interview style from mattpocock/skills grill-me (one
 question at a time, always with a recommendation); intent-before-design
 exploration from obra/superpowers brainstorming. Rewritten stateless for
-specflow: ends in a confirmed scope recap, writes no document. See NOTICE.md. -->
+witness: ends in a confirmed scope recap, writes no document. See NOTICE.md. -->
 
-## Ground rules (every specflow skill)
+## Ground rules (every witness skill)
 
 Resolve the CLI once per session:
 
 ```bash
-SPECFLOW="${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.4.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.4.0}"
 ```
 
-- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in specflow.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
-- **Never invoke gate reviewers or relay verdicts.** `specflow gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
-- **Refusal repair loop:** a `specflow` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
+- **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
+- **Never invoke gate reviewers or relay verdicts.** `witness gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
+- **Refusal repair loop:** a `witness` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
-- **Re-entrancy:** derive position from CLI output (`$SPECFLOW next`, the dashboard, `log`, `index`) — never from conversation memory. Killed and re-run, you must converge.
+- **Re-entrancy:** derive position from CLI output (`$WITNESS next`, the dashboard, `log`, `index`) — never from conversation memory. Killed and re-run, you must converge.
 
 ## What you produce
 
-No canon, only evidence: a **confirmed scope recap** persisted by `specflow recap` as the birth entry of the effort journal. This skill writes no spec, no plan, no brief — decompose consumes the recap after you, including after session death.
+No canon, only evidence: a **confirmed scope recap** persisted by `witness recap` as the birth entry of the effort journal. This skill writes no spec, no plan, no brief — decompose consumes the recap after you, including after session death.
 
 ## Interview protocol
 
@@ -58,13 +58,13 @@ cat > "$DIR/recap.json" <<'EOF'
   "slices": ["token rotation"]
 }
 EOF
-$SPECFLOW recap --file "$DIR/recap.json"
+$WITNESS recap --file "$DIR/recap.json"
 ```
 
 - Effort slug: kebab-case `[a-z0-9-]+`, minted from the scope title. A `slug-reuse` refusal means that history exists — mint a different slug; histories never merge, and `--amend` is never the dodge.
-- **Amending scope** — mid-effort scope change, or the decompose gate's stop screen handed off to re-interview: run the interview shortened to what changed, confirm, then `$SPECFLOW recap --amend <effort> --file "$DIR/recap.json"`. An amendment re-arms the decompose gate's feature-class stop: scope changed, scope gets re-approved.
+- **Amending scope** — mid-effort scope change, or the decompose gate's stop screen handed off to re-interview: run the interview shortened to what changed, confirm, then `$WITNESS recap --amend <effort> --file "$DIR/recap.json"`. An amendment re-arms the decompose gate's feature-class stop: scope changed, scope gets re-approved.
 - The refusal repair loop applies (3 attempts, then stop with the violation list).
 
 ## Stateless by design
 
-Session died mid-interview? Start over — nothing was persisted; that is the accepted cost. If the dashboard's efforts table already shows the effort (the recap landed), do not re-interview — hand back to /specflow.
+Session died mid-interview? Start over — nothing was persisted; that is the accepted cost. If the dashboard's efforts table already shows the effort (the recap landed), do not re-interview — hand back to /witness.

@@ -9,7 +9,7 @@ import { fakeCtx, tmpRepo, type TestRepo } from './helpers.js'
 
 function seeded(): TestRepo {
   const repo = tmpRepo()
-  repo.write('.gitignore', '.specflow/lock\n.specflow/txn.json\n.specflow/allow.json\n')
+  repo.write('.gitignore', '.witness/lock\n.witness/txn.json\n.witness/allow.json\n')
   repo.write('specs/a.md', 'v1')
   repo.git('add', '.gitignore', 'specs/a.md')
   repo.git('commit', '-m', 'seed')
@@ -24,7 +24,7 @@ describe('acquireLock', () => {
     const foreign = acquireLock(repo.root, process.pid + 1)
     expect(!foreign.ok && foreign.violations[0]?.rule).toBe('locked')
     if (first.ok) first.value()
-    repo.write('.specflow/lock', JSON.stringify({ pid: 999999999 }))
+    repo.write('.witness/lock', JSON.stringify({ pid: 999999999 }))
     const stolen = acquireLock(repo.root)
     expect(stolen.ok).toBe(true)
     if (stolen.ok) stolen.value()
@@ -58,10 +58,10 @@ describe('withTxn', () => {
 describe('recovery', () => {
   function crashState(repo: TestRepo) {
     repo.write('specs/a.md', 'v2-crashed')
-    repo.write('.specflow/journal/e.jsonl', '{"v":1,"t":"write","artifact":"a"}\n')
-    repo.write('.specflow/txn.json', JSON.stringify({
+    repo.write('.witness/journal/e.jsonl', '{"v":1,"t":"write","artifact":"a"}\n')
+    repo.write('.witness/txn.json', JSON.stringify({
       op: 'write(a)',
-      files: ['specs/a.md', '.specflow/journal/e.jsonl'],
+      files: ['specs/a.md', '.witness/journal/e.jsonl'],
       journal: { stream: 'e', line: '{"v":1,"t":"write","artifact":"a"}' },
     }))
   }
@@ -71,7 +71,7 @@ describe('recovery', () => {
     crashState(repo)
     rollbackTxn(repo.root, pendingTxn(repo.root)!)
     expect(repo.read('specs/a.md')).toBe('v1')
-    expect(existsSync(join(repo.root, '.specflow/journal/e.jsonl'))).toBe(false)
+    expect(existsSync(join(repo.root, '.witness/journal/e.jsonl'))).toBe(false)
     expect(pendingTxn(repo.root)).toBeUndefined()
   })
 
@@ -80,18 +80,18 @@ describe('recovery', () => {
     crashState(repo)
     const res = completeTxn(repo.root, pendingTxn(repo.root)!)
     expect(res.ok).toBe(true)
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
-    expect(readFileSync(join(repo.root, '.specflow/journal/e.jsonl'), 'utf8')).toBe('{"v":1,"t":"write","artifact":"a"}\n')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
+    expect(readFileSync(join(repo.root, '.witness/journal/e.jsonl'), 'utf8')).toBe('{"v":1,"t":"write","artifact":"a"}\n')
     expect(pendingTxn(repo.root)).toBeUndefined()
   })
 
   it('complete appends the pending journal line when the crash preceded the append', () => {
     const repo = seeded()
     crashState(repo)
-    repo.write('.specflow/journal/e.jsonl', '')
+    repo.write('.witness/journal/e.jsonl', '')
     const res = completeTxn(repo.root, pendingTxn(repo.root)!)
     expect(res.ok).toBe(true)
-    expect(readFileSync(join(repo.root, '.specflow/journal/e.jsonl'), 'utf8')).toBe('{"v":1,"t":"write","artifact":"a"}\n')
+    expect(readFileSync(join(repo.root, '.witness/journal/e.jsonl'), 'utf8')).toBe('{"v":1,"t":"write","artifact":"a"}\n')
   })
 
   it('complete resolves id streams into the journal dir, never the repo root', () => {
@@ -99,14 +99,14 @@ describe('recovery', () => {
     // join them onto the root, leaving stray `<root>/<plan-id>` files
     const repo = seeded()
     repo.write('specs/a.md', 'v2-crashed')
-    repo.write('.specflow/txn.json', JSON.stringify({
+    repo.write('.witness/txn.json', JSON.stringify({
       op: 'gate-plan',
-      files: ['specs/a.md', '.specflow/journal/a-plan-1.jsonl'],
+      files: ['specs/a.md', '.witness/journal/a-plan-1.jsonl'],
       journalMulti: [{ stream: 'a-plan-1', line: '{"v":1,"t":"gate-run","artifact":"a-plan-1"}' }],
     }))
     const res = completeTxn(repo.root, pendingTxn(repo.root)!)
     expect(res.ok).toBe(true)
-    expect(readFileSync(join(repo.root, '.specflow/journal/a-plan-1.jsonl'), 'utf8'))
+    expect(readFileSync(join(repo.root, '.witness/journal/a-plan-1.jsonl'), 'utf8'))
       .toBe('{"v":1,"t":"gate-run","artifact":"a-plan-1"}\n')
     expect(existsSync(join(repo.root, 'a-plan-1'))).toBe(false)
   })
@@ -125,9 +125,9 @@ describe('recovery', () => {
 describe('guardTxn message', () => {
   it('names the files a crashed transaction left at risk', () => {
     const repo = seeded()
-    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
-    writeFileSync(join(repo.root, '.specflow', 'txn.json'),
-      JSON.stringify({ op: 'gate-ship', files: ['specs/a.md', '.specflow/journal/a.jsonl'] }))
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'txn.json'),
+      JSON.stringify({ op: 'gate-ship', files: ['specs/a.md', '.witness/journal/a.jsonl'] }))
 
     const errs: string[] = []
     const code = guardTxn(fakeCtx(repo.root, { err: (l) => errs.push(l) }), repo.root)

@@ -18,13 +18,13 @@ export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[]): P
       out.push({ label: n.env, kind: 'env', status: set ? 'ok' : 'unmet', detail: set ? 'set' : 'env var unset' })
     } else if (typeof n.manual === 'string') {
       const done = n.satisfied === true
-      out.push({ label: n.manual, kind: 'manual', status: done ? 'ok' : 'unmet', detail: done ? 'satisfied' : 'flip via specflow satisfy' })
+      out.push({ label: n.manual, kind: 'manual', status: done ? 'ok' : 'unmet', detail: done ? 'satisfied' : 'flip via witness satisfy' })
     } else if (typeof n.cmd === 'string') {
       const trust = await ensureTrusted(root, ctx, n.cmd)
       if (trust !== 'trusted') {
         out.push({
           label: n.cmd, kind: 'cmd', status: trust,
-          detail: trust === 'blocked' ? 'untrusted in non-TTY — allow interactively or set SPECFLOW_TRUST_CMDS=1' : 'trust declined',
+          detail: trust === 'blocked' ? 'untrusted in non-TTY — allow interactively or set WITNESS_TRUST_CMDS=1' : 'trust declined',
         })
         continue
       }

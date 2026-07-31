@@ -25,7 +25,7 @@ function withRecap(repo: TestRepo, recap: unknown, name = 'recap.json'): string 
   return name
 }
 
-describe('specflow recap', () => {
+describe('witness recap', () => {
   it('births the effort journal with a recap entry in a trailer commit', async () => {
     const repo = await initialized()
     const res = await repo.cli(['recap', '--file', withRecap(repo, RECAP)])
@@ -34,13 +34,13 @@ describe('specflow recap', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ v: 1, t: 'recap', effort: 'auth-hardening', class: 'feature' })
     expect(repo.git('log', '-1', '--format=%s')).toBe('recap(auth-hardening): feature')
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
-    expect(res.stdout).toContain('next: specflow write --effort auth-hardening')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
+    expect(res.stdout).toContain('next: witness write --effort auth-hardening')
   })
 
   it('honors an absolute --file path outside the repo', async () => {
     const repo = await initialized()
-    const dir = mkdtempSync(join(tmpdir(), 'specflow-recap-abs-'))
+    const dir = mkdtempSync(join(tmpdir(), 'witness-recap-abs-'))
     const abs = join(dir, 'recap.json')
     writeFileSync(abs, JSON.stringify(RECAP))
     try {

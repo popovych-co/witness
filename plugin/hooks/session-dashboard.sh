@@ -1,6 +1,6 @@
 #!/bin/sh
-# specflow SessionStart hook — inject the dashboard (stdout becomes session
-# context). Silent everywhere that isn't a specflow repo; failures swallowed:
+# witness SessionStart hook — inject the dashboard (stdout becomes session
+# context). Silent everywhere that isn't a witness repo; failures swallowed:
 # session start must never hang or die on this.
-[ -f specflow.config.yaml ] || exit 0
-${SPECFLOW_BIN:-npx -y @whatmatters/specflow@0.4.0} 2>/dev/null || true
+[ -f witness.config.yaml ] || exit 0
+${WITNESS_BIN:-npx -y @popovych.co/witness@0.4.0} 2>/dev/null || true

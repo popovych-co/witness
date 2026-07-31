@@ -9,7 +9,7 @@ import {
 async function liveSingleRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   return repo

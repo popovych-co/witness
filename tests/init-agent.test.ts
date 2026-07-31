@@ -3,27 +3,27 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpRepo } from './helpers.js'
 
-describe('specflow init --agent', () => {
+describe('witness init --agent', () => {
   it('scaffolds and installs the pi payload set in one trailer commit', async () => {
     const repo = tmpRepo()
     const res = await repo.cli(['init', '--agent', 'pi'])
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('agent: pi')
-    expect(repo.read('.pi/prompts/specflow.md')).toContain('# /specflow — the engine')
-    expect(repo.read('.pi/extensions/specflow.ts')).toContain('canonGuard')
+    expect(repo.read('.pi/prompts/witness.md')).toContain('# /witness — the engine')
+    expect(repo.read('.pi/extensions/witness.ts')).toContain('canonGuard')
     expect(repo.read('.pi/extensions/canon-guard.mjs')).toContain('export function canonGuard')
-    expect(repo.read('.pi/extensions/session-dashboard.sh')).toContain('specflow.config.yaml')
-    expect(repo.read('specflow.config.yaml')).toContain('harness: pi')
+    expect(repo.read('.pi/extensions/session-dashboard.sh')).toContain('witness.config.yaml')
+    expect(repo.read('witness.config.yaml')).toContain('harness: pi')
     // committed, not just written: pi resolves .pi/extensions cwd-relative with no
-    // upward walk, so only a COMMITTED payload reaches .specflow/worktrees/<plan-id>
+    // upward walk, so only a COMMITTED payload reaches .witness/worktrees/<plan-id>
     expect(repo.git('status', '--porcelain')).toBe('')
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
   })
 
   it('installs the claude-code payload set with project-dir hook wiring', async () => {
     const repo = tmpRepo()
     expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
-    expect(repo.read('.claude/commands/specflow.md')).toContain('specflow next')
+    expect(repo.read('.claude/commands/witness.md')).toContain('witness next')
     expect(repo.read('.claude/hooks/guard-state.mjs')).toContain('canon-guard.mjs')
     expect(repo.read('.claude/hooks/canon-guard.mjs')).toContain('canonGuard')
     const settings = JSON.parse(repo.read('.claude/settings.json'))
@@ -38,13 +38,13 @@ describe('specflow init --agent', () => {
   it('adds a second harness without touching config, principles or the journal', async () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const config = repo.read('specflow.config.yaml')
+    const config = repo.read('witness.config.yaml')
     const principles = repo.git('rev-parse', 'HEAD:specs/principles.md')
 
     const res = await repo.cli(['init', '--agent', 'claude-code'])
     expect(res.code).toBe(0)
-    expect(repo.read('.claude/commands/specflow.md')).toContain('specflow next')
-    expect(repo.read('specflow.config.yaml')).toBe(config)          // harness: stays pi
+    expect(repo.read('.claude/commands/witness.md')).toContain('witness next')
+    expect(repo.read('witness.config.yaml')).toBe(config)          // harness: stays pi
     expect(repo.git('rev-parse', 'HEAD:specs/principles.md')).toBe(principles)
     expect(repo.git('status', '--porcelain')).toBe('')
   })
@@ -59,19 +59,19 @@ describe('specflow init --agent', () => {
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
 
-  // Revision 1: sync, not install-once. The engine file's `npx -y @whatmatters/specflow@<v>`
+  // Revision 1: sync, not install-once. The engine file's `npx -y @popovych.co/witness@<v>`
   // pin is the single point deciding which CLI the whole pipeline runs; install-once left
   // every repo pinned to whatever version first touched it, forever, silently.
   it('restamps a payload whose only difference is the version pin', async () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const rel = '.pi/prompts/specflow.md'
-    repo.write(rel, repo.read(rel).replace(/@whatmatters\/specflow@[\d.]+/g, '@whatmatters/specflow@0.0.1'))
+    const rel = '.pi/prompts/witness.md'
+    repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
     repo.git('add', rel); repo.git('commit', '-m', 'simulate an upgrade gap')
 
     const res = await repo.cli(['init', '--agent', 'pi'])
     expect(res.code).toBe(0)
-    expect(repo.read(rel)).not.toContain('@whatmatters/specflow@0.0.1')
+    expect(repo.read(rel)).not.toContain('@popovych.co/witness@0.0.1')
     expect(repo.git('status', '--porcelain')).toBe('')
   })
 
@@ -83,13 +83,13 @@ describe('specflow init --agent', () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
     const head = repo.git('rev-parse', 'HEAD')
-    const rel = '.pi/prompts/specflow.md'
-    repo.write(rel, repo.read(rel).replace(/@whatmatters\/specflow@[\d.]+/g, '@whatmatters/specflow@0.0.1'))
+    const rel = '.pi/prompts/witness.md'
+    repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
 
     const res = await repo.cli(['init', '--agent', 'pi'])
     expect(res.code).toBe(0)
     expect(res.stdout).not.toContain('unexpected-error')
-    expect(repo.read(rel)).not.toContain('@whatmatters/specflow@0.0.1')
+    expect(repo.read(rel)).not.toContain('@popovych.co/witness@0.0.1')
     expect(repo.git('status', '--porcelain')).toBe('')
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
@@ -97,7 +97,7 @@ describe('specflow init --agent', () => {
   it('leaves a human-edited payload alone and reports it', async () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const rel = '.pi/prompts/specflow.md'
+    const rel = '.pi/prompts/witness.md'
     repo.write(rel, `${repo.read(rel)}\n<!-- my own note -->\n`)
     repo.git('add', rel); repo.git('commit', '-m', 'local edit')
     const head = repo.git('rev-parse', 'HEAD')
@@ -120,12 +120,12 @@ describe('specflow init --agent', () => {
     const res = await repo.cli(['init', '--agent', 'claude-code'])
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('payload-ignored')
-    expect(existsSync(join(repo.root, '.claude', 'commands', 'specflow.md'))).toBe(false)
-    expect(existsSync(join(repo.root, 'specflow.config.yaml'))).toBe(false)
+    expect(existsSync(join(repo.root, '.claude', 'commands', 'witness.md'))).toBe(false)
+    expect(existsSync(join(repo.root, 'witness.config.yaml'))).toBe(false)
   })
 
   // Revision 6: pi loads project prompts AND extensions only after the project is
-  // trusted. Declining leaves no /specflow (self-revealing) and no guard (silent).
+  // trusted. Declining leaves no /witness (self-revealing) and no guard (silent).
   it('notes the trust requirement on pi', async () => {
     const repo = tmpRepo()
     const res = await repo.cli(['init', '--agent', 'pi'])
@@ -148,10 +148,10 @@ describe('specflow init --agent', () => {
 
   it('resolves --agent auto from the detection rungs', async () => {
     const repo = tmpRepo()
-    const res = await repo.cli(['init', '--agent', 'auto'], { env: { SPECFLOW_HARNESS: 'pi' } })
+    const res = await repo.cli(['init', '--agent', 'auto'], { env: { WITNESS_HARNESS: 'pi' } })
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('agent: pi')
-    expect(repo.read('specflow.config.yaml')).toContain('harness: pi')
+    expect(repo.read('witness.config.yaml')).toContain('harness: pi')
   })
 
   it('refuses an unknown agent, listing the valid ones', async () => {

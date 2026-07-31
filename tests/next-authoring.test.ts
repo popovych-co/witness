@@ -13,7 +13,7 @@ async function approvedEffort() {
   await writeSpec(repo, 'auth-refresh')
   appendEntry(repo.root, repo.effort, {
     v: 1, t: 'gate-run', gate: 'decompose', artifact: repo.effort, round: 1,
-    run_id: 'r1', reviewed_sha: 'stale-sha', prompts_sha: 'p', specflow: '0',
+    run_id: 'r1', reviewed_sha: 'stale-sha', prompts_sha: 'p', witness: '0',
     model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
   })
   return repo
@@ -50,7 +50,7 @@ describe('next — authoring owed, never the gate', () => {
     })
     const r = await repo.cli(['next'])
     expect(r.code).toBe(0)
-    expect(r.stdout).toContain('specflow write')
+    expect(r.stdout).toContain('witness write')
     expect(r.stdout).not.toContain('gate decompose')
   })
 
@@ -62,7 +62,7 @@ describe('next — authoring owed, never the gate', () => {
     })
     const r = await repo.cli(['next'])
     expect(r.code).toBe(0)
-    expect(r.stdout).toContain('specflow write')
+    expect(r.stdout).toContain('witness write')
   })
 
   it('once content moves, routing returns to the gate', async () => {
@@ -106,8 +106,8 @@ describe('next — a plan owed after its authoring effort was abandoned', () => 
   it('emits a command that actually runs — the loop broke because nothing did', async () => {
     const repo = await orphanedPlan()
     const line = await nextLine(repo)
-    const cmd = line.split('\n').find((l) => l.startsWith('next: specflow '))!
-      .replace('next: specflow ', '').split(' ')
+    const cmd = line.split('\n').find((l) => l.startsWith('next: witness '))!
+      .replace('next: witness ', '').split(' ')
     repo.write('m.json', JSON.stringify(PLAN_META))
     repo.write('b.md', PLAN_BODY)
     const r = await repo.cli(cmd)
@@ -151,7 +151,7 @@ describe('next — a planless spec no live effort owns', () => {
   it('asks for the effort that is actually owed, at brainstorm stage', async () => {
     const repo = await orphanedSpec()
     const line = await nextLine(repo)
-    expect(line).toContain('specflow recap')
+    expect(line).toContain('witness recap')
     expect(line).toContain('stage: brainstorm')
     expect(line).toContain('auth-mfa-plan-1 is owed')
     expect(line).not.toContain('<slug>')
@@ -160,8 +160,8 @@ describe('next — a planless spec no live effort owns', () => {
   it('prefers a planless spec a live effort can carry over stalling for a recap', async () => {
     const repo = await orphanedSpec({ ownerIdle: true })
     const line = await nextLine(repo)
-    expect(line).toContain('specflow write zz-tokens-plan-1 --effort aa-owner')
-    expect(line).not.toContain('specflow recap')
+    expect(line).toContain('witness write zz-tokens-plan-1 --effort aa-owner')
+    expect(line).not.toContain('witness recap')
   })
 })
 

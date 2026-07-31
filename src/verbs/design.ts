@@ -23,7 +23,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     options: { file: { type: 'string' }, reconfirm: { type: 'boolean' }, open: { type: 'boolean' } },
   })
   const specId = positionals[0]
-  if (!specId) { ctx.err('usage: specflow design <spec-id> --file <html> | --reconfirm | --open'); return EXIT.REFUSED }
+  if (!specId) { ctx.err('usage: witness design <spec-id> --file <html> | --reconfirm | --open'); return EXIT.REFUSED }
 
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach(ctx.err); return EXIT.REFUSED }
@@ -72,14 +72,14 @@ function openOnly(ctx: Ctx, root: string, rel: string, id: string): number {
   const abs = join(root, rel)
   if (!existsSync(abs)) {
     renderRefusal([v('design', 'no-artifact', rel,
-      `a registered design — run: specflow design ${id} --file <html>`)]).forEach(ctx.err)
+      `a registered design — run: witness design ${id} --file <html>`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const sha = htmlSha(readFileSync(abs, 'utf8'))
   const { outcome, command } = openArtifact(ctx.env, abs)
   if (outcome === 'failed') {
     renderRefusal([v('design', 'opener-failed', `${command} did not resolve`,
-      `a working platform opener, or SPECFLOW_OPENER — meanwhile open it yourself: file://${abs}`)]).forEach(ctx.err)
+      `a working platform opener, or WITNESS_OPENER — meanwhile open it yourself: file://${abs}`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   // `by` is the account and machine the spawn happened on — not a claim about who looked.
@@ -106,7 +106,7 @@ function openOnly(ctx: Ctx, root: string, rel: string, id: string): number {
   ctx.out(kv('path', rel))
   ctx.out(kv('sha', short(sha)))
   ctx.out(kv('opener', command))
-  ctx.out(`next: specflow gate design ${id}`)
+  ctx.out(`next: witness gate design ${id}`)
   return EXIT.OK
 }
 
@@ -150,7 +150,7 @@ function persist(
   ctx.out(kv('design', id))
   ctx.out(kv('path', rel))
   ctx.out(kv('sha', short(sha)))
-  ctx.out(`next: specflow gate design ${id}`)
+  ctx.out(`next: witness gate design ${id}`)
   return EXIT.OK
 }
 
@@ -158,7 +158,7 @@ function reconfirm(ctx: Ctx, root: string, spec: CanonDoc, specSha: string): num
   const id = String(spec.meta.id)
   const stamp = designStamp(spec)
   if (!stamp) {
-    renderRefusal([v('design', 'no-stamp', id, 'an approved design (specflow gate design <id>) — nothing to reconfirm')]).forEach(ctx.err)
+    renderRefusal([v('design', 'no-stamp', id, 'an approved design (witness gate design <id>) — nothing to reconfirm')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   if (!designPending(root, spec)) {

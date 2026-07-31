@@ -17,7 +17,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   })
   const id = positionals[0]
   if (!id || !values.need) {
-    renderRefusal([v('usage', 'required', 'missing id or --need', 'specflow satisfy <doc-id> --need <text | index>')]).forEach(ctx.err)
+    renderRefusal([v('usage', 'required', 'missing id or --need', 'witness satisfy <doc-id> --need <text | index>')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const rootRes = primaryRoot(ctx.cwd)
@@ -27,7 +27,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (blocked !== undefined) return blocked
   const doc = findById(loadCanon(root), id)
   if (!doc) {
-    renderRefusal([v('id', 'unknown-doc', id, 'a doc id from specflow index')]).forEach(ctx.err)
+    renderRefusal([v('id', 'unknown-doc', id, 'a doc id from witness index')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const needs = Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : []

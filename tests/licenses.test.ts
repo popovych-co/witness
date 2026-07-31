@@ -33,7 +33,7 @@ describe('NOTICE.md', () => {
     for (const p of ['prompts/code-reviewer.md', 'prompts/silent-failure-hunter.md', 'prompts/type-design.md', 'prompts/pr-test.md']) {
       expect(n).toContain(p);
     }
-    for (const s of ['specflow-brainstorm', 'specflow-plan', 'specflow-implement', 'specflow-ship']) {
+    for (const s of ['witness-brainstorm', 'witness-plan', 'witness-implement', 'witness-ship']) {
       expect(n).toContain(s);
     }
   });
@@ -44,7 +44,7 @@ describe('NOTICE.md', () => {
   });
 });
 
-describe('design-critic + specflow-design provenance', () => {
+describe('design-critic + witness-design provenance', () => {
   it('LICENSES carries the frontend-design Apache text', () => {
     const p = join(root, 'LICENSES', 'frontend-design-Apache-2.0.txt');
     expect(existsSync(p)).toBe(true);
@@ -52,7 +52,7 @@ describe('design-critic + specflow-design provenance', () => {
   });
   it('NOTICE maps the design skill to its two sources and states changes', () => {
     const n = readFileSync(join(root, 'NOTICE.md'), 'utf8');
-    expect(n).toContain('plugin/skills/specflow-design/SKILL.md');
+    expect(n).toContain('plugin/skills/witness-design/SKILL.md');
     expect(n).toContain('frontend-design');
     expect(n).toContain('redesign-method');   // benoticed process, concept-adapted
   });

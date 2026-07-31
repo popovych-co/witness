@@ -22,7 +22,7 @@ registerGate({
     const effort = effortOf(root, planId)
     if (!effort) {
       return refuse([v('plan', 'no-effort', planId,
-        'a plan written via specflow write --effort <slug> (class is read from the effort stream)')])
+        'a plan written via witness write --effort <slug> (class is read from the effort stream)')])
     }
     const recap = latestRecap(root, effort)
     const parent = findById(canon, String(plan.meta.parent))
@@ -46,7 +46,7 @@ registerGate({
     checks.push({ name: 'pin-fresh', ok: pin === parentSha,
       detail: pin === parentSha
         ? `pin ${short(parentSha)}`
-        : `derives-from ${short(pin)} but parent is at ${short(parentSha)} — rewrite the plan (specflow write re-stamps the pin)` })
+        : `derives-from ${short(pin)} but parent is at ${short(parentSha)} — rewrite the plan (witness write re-stamps the pin)` })
 
     if (parent.meta.ui === true) {
       const stamp = designStamp(parent)

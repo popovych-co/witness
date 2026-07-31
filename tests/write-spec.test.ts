@@ -6,10 +6,10 @@ import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import { SPEC_BODY, SPEC_META, seededRepo, writeSpec } from './helpers.js'
 
-describe('specflow write (spec)', () => {
+describe('witness write (spec)', () => {
   it('honors absolute --meta/--body paths outside the repo', async () => {
     const repo = await seededRepo()
-    const dir = mkdtempSync(join(tmpdir(), 'specflow-write-abs-'))
+    const dir = mkdtempSync(join(tmpdir(), 'witness-write-abs-'))
     writeFileSync(join(dir, 'm.json'), JSON.stringify(SPEC_META))
     writeFileSync(join(dir, 'b.md'), SPEC_BODY)
     try {
@@ -34,7 +34,7 @@ describe('specflow write (spec)', () => {
     expect(writes[0]).toMatchObject({ artifact: 'auth-refresh', covers: ['g1'] })
     expect(String(writes[0]?.sha)).toMatch(/^[0-9a-f]{64}$/)
     expect(repo.git('log', '-1', '--format=%s')).toBe('write(auth-refresh): create spec')
-    expect(repo.git('status', '--porcelain', '--', 'specs', 'plans', '.specflow')).toBe('')
+    expect(repo.git('status', '--porcelain', '--', 'specs', 'plans', '.witness')).toBe('')
   })
 
   it('amendment resets status to draft and preserves pr/drift stamps', async () => {
@@ -44,7 +44,7 @@ describe('specflow write (spec)', () => {
       .replace('status: draft', 'status: live\npr: 7')
     repo.write('specs/auth-refresh.md', stamped)
     repo.git('add', 'specs/auth-refresh.md')
-    repo.git('commit', '-m', 'stamp live', '-m', 'Specflow-State: 1')
+    repo.git('commit', '-m', 'stamp live', '-m', 'Witness-State: 1')
     const res = await writeSpec(repo, 'auth-refresh', { ...SPEC_META, summary: 'Rotation, now with revocation' })
     expect(res.code).toBe(0)
     const doc = splitDoc(repo.read('specs/auth-refresh.md'))

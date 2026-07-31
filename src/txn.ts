@@ -16,7 +16,7 @@ export interface TxnMarker {
   journalMulti?: Array<{ stream: string; line: string }>
 }
 
-const markerPath = (root: string) => join(root, '.specflow', 'txn.json')
+const markerPath = (root: string) => join(root, '.witness', 'txn.json')
 
 export function pendingTxn(root: string): TxnMarker | undefined {
   if (!existsSync(markerPath(root))) return undefined
@@ -24,11 +24,11 @@ export function pendingTxn(root: string): TxnMarker | undefined {
 }
 
 export function crashPoint(env: Record<string, string | undefined>, name: string): void {
-  if (env.SPECFLOW_CRASH_AFTER === name) process.exit(9)
+  if (env.WITNESS_CRASH_AFTER === name) process.exit(9)
 }
 
 export function withTxn<T>(root: string, marker: TxnMarker, fn: () => Result<T>): Result<T> {
-  mkdirSync(join(root, '.specflow'), { recursive: true })
+  mkdirSync(join(root, '.witness'), { recursive: true })
   writeFileSync(markerPath(root), JSON.stringify(marker))
   let res: Result<T>
   try {
@@ -53,7 +53,7 @@ export function rollbackTxn(root: string, marker: TxnMarker): void {
 
 export function completeTxn(root: string, marker: TxnMarker): Result<{ sha: string }> {
   const items = [...(marker.journal ? [marker.journal] : []), ...(marker.journalMulti ?? [])]
-  if (items.length) mkdirSync(join(root, '.specflow', 'journal'), { recursive: true })
+  if (items.length) mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
   for (const { stream, line } of items) {
     const p = join(root, journalRel(stream))
     const current = existsSync(p) ? readFileSync(p, 'utf8') : ''
@@ -73,6 +73,6 @@ export function guardTxn(ctx: Ctx, root: string): number | undefined {
   // localizes the damage everywhere — unlike an optional owner field, which would be
   // absent at the longest-running write window (gate.ts) and teach a false distinction.
   ctx.err(`  files: ${m.files.join(', ')}`)
-  ctx.err('help: specflow recover --complete | --rollback')
+  ctx.err('help: witness recover --complete | --rollback')
   return EXIT.BLOCKED
 }

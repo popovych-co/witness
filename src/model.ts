@@ -32,7 +32,7 @@ function readModels(path: string, harness: HarnessName): string[] {
 export function loadMatrix(root: string, harness: HarnessName): MatrixInfo {
   return {
     shipped: readModels(shippedMatrixPath(), harness),
-    local: readModels(join(root, '.specflow', 'calibration.local.yaml'), harness),
+    local: readModels(join(root, '.witness', 'calibration.local.yaml'), harness),
   }
 }
 

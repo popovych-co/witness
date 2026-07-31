@@ -31,10 +31,10 @@ const PAIR_CLEAN = {
   findings: [],
 }
 // tree verdicts must cover min(5, changed) DISTINCT changed files — compute, don't guess.
-// Diff against merge-base, not literally 'main': specflow's own state commits (start,
+// Diff against merge-base, not literally 'main': witness's own state commits (start,
 // test-evidence) land on main in the PRIMARY checkout while this runs, so main's tip keeps
 // moving ahead of the worktree's branch point — diffing against the moving tip would pull
-// in unrelated files (.specflow/journal/…, plans/…) and, via the slice(0,5) cap, push out
+// in unrelated files (.witness/journal/…, plans/…) and, via the slice(0,5) cap, push out
 // a real one (tests/token.test.ts). merge-base is exactly what the gate's own diffBase uses.
 function treeClean(worktree: string) {
   const base = execFileSync('git', ['-C', worktree, 'merge-base', 'HEAD', 'main'], { encoding: 'utf8' }).trim()
@@ -52,12 +52,12 @@ let env: Record<string, string>
 function cli(args: string[], opts: { cwd?: string; crashAfter?: string; expect?: number[] } = {}): SpawnSyncReturns<string> {
   const r = spawnSync(process.execPath, [BIN, ...args], {
     cwd: opts.cwd ?? root,
-    env: { ...env, ...(opts.crashAfter ? { SPECFLOW_CRASH_AFTER: opts.crashAfter } : {}) },
+    env: { ...env, ...(opts.crashAfter ? { WITNESS_CRASH_AFTER: opts.crashAfter } : {}) },
     encoding: 'utf8',
   })
   const allowed = opts.expect ?? [0]
   if (!allowed.includes(r.status ?? -1)) {
-    throw new Error(`specflow ${args.join(' ')} → ${r.status}\n${r.stdout}\n${r.stderr}`)
+    throw new Error(`witness ${args.join(' ')} → ${r.status}\n${r.stdout}\n${r.stderr}`)
   }
   return r
 }
@@ -77,8 +77,8 @@ beforeAll(() => {
   env = {
     ...fixtureEnv({ VITEST_BIN: vitestBin() }),
     PATH: `${fakeBinDir()}:${process.env.PATH ?? ''}`,
-    SPECFLOW_FAKE_DIR: scenario,
-    SPECFLOW_TRUST_CMDS: '1',
+    WITNESS_FAKE_DIR: scenario,
+    WITNESS_TRUST_CMDS: '1',
   }
   execFileSync('git', ['init', '-b', 'main', root])
   execFileSync('git', ['-C', root, 'config', 'user.email', 'p@t.dev'])
@@ -87,7 +87,7 @@ beforeAll(() => {
   // ship gate's command lanes (tests/lint) need something configured — trivial always-green
   // commands, same choice as helpers.ts's shippableRepo, since the fixture's own suite isn't
   // what's under test here.
-  writeFileSync(join(root, 'specflow.config.yaml'), `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n`)
+  writeFileSync(join(root, 'witness.config.yaml'), `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n`)
   execFileSync('git', ['-C', root, 'add', '-A'])
   execFileSync('git', ['-C', root, 'commit', '-m', 'runner config'])
   const bare = `${root}-origin.git`
@@ -127,7 +127,7 @@ describe('the whole pipeline, killed and resumed at every boundary', () => {
     expect(cli(['log', 'auth-refresh-plan-1']).stdout).toBe(before)
 
     withCrash('start-commit', ['start', 'auth-refresh-plan-1'])
-    wt = join(root, '.specflow/worktrees/auth-refresh-plan-1')
+    wt = join(root, '.witness/worktrees/auth-refresh-plan-1')
     expect(existsSync(wt)).toBe(true)
 
     cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })

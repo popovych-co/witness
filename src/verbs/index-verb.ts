@@ -26,6 +26,6 @@ export async function run(ctx: Ctx): Promise<number> {
       depends: Array.isArray(d.meta.depends) ? (d.meta.depends as string[]).join(' ') : '',
     }))).forEach(ctx.out)
   }
-  ctx.out('help: specflow diff <id> · specflow log <id>')
+  ctx.out('help: witness diff <id> · witness log <id>')
   return EXIT.OK
 }

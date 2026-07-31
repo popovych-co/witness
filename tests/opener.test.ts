@@ -26,23 +26,23 @@ async function waitForLog(log: string, ms = 3000): Promise<string> {
 }
 
 describe('openArtifact', () => {
-  it('spawns SPECFLOW_OPENER with the absolute artifact path', async () => {
+  it('spawns WITNESS_OPENER with the absolute artifact path', async () => {
     const { cmd, log } = recorder()
-    const res = openArtifact({ SPECFLOW_OPENER: cmd }, '/tmp/look.html')
+    const res = openArtifact({ WITNESS_OPENER: cmd }, '/tmp/look.html')
     expect(res.outcome).toBe('spawned')
     expect(res.command).toBe(cmd)
     expect((await waitForLog(log)).trim()).toBe('/tmp/look.html')
   })
 
   it('resolves a bare override off PATH, not just an absolute path', async () => {
-    // the documented escape hatch for nonstandard desktops is `SPECFLOW_OPENER=firefox`,
+    // the documented escape hatch for nonstandard desktops is `WITNESS_OPENER=firefox`,
     // so the probe must be `command -v`, never existsSync
-    const res = openArtifact({ SPECFLOW_OPENER: 'true' }, '/tmp/look.html')
+    const res = openArtifact({ WITNESS_OPENER: 'true' }, '/tmp/look.html')
     expect(res.outcome).toBe('spawned')
   })
 
   it('reports failed when the override does not resolve', () => {
-    const res = openArtifact({ SPECFLOW_OPENER: 'specflow-no-such-opener-xyz' }, '/tmp/look.html')
+    const res = openArtifact({ WITNESS_OPENER: 'witness-no-such-opener-xyz' }, '/tmp/look.html')
     expect(res.outcome).toBe('failed')
   })
 

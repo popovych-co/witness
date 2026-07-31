@@ -11,9 +11,9 @@ function runGuard(input: unknown): { code: number; stderr: string } {
   return { code: r.status ?? -1, stderr: r.stderr };
 }
 
-function specflowRepo(): string {
+function witnessRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'sfhook-'));
-  writeFileSync(join(dir, 'specflow.config.yaml'), 'schema: 1\n');
+  writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
   mkdirSync(join(dir, 'specs'), { recursive: true });
   mkdirSync(join(dir, 'plans'), { recursive: true });
   mkdirSync(join(dir, 'src'), { recursive: true });
@@ -27,27 +27,27 @@ function plainDir(): string {
 }
 
 describe('guard-state hook — Edit/Write/MultiEdit', () => {
-  it('blocks Edit on specs/** in a specflow repo, pointing at the specflow CLI', () => {
-    const repo = specflowRepo();
+  it('blocks Edit on specs/** in a witness repo, pointing at the witness CLI', () => {
+    const repo = witnessRepo();
     const r = runGuard({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'specs', 'auth.md') }, cwd: repo });
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain('specflow CLI (write / design / adopt)');
+    expect(r.stderr).toContain('witness CLI (write / design / adopt)');
   });
 
   it('blocks Write on plans/** and MultiEdit on nested specs paths', () => {
-    const repo = specflowRepo();
+    const repo = witnessRepo();
     expect(runGuard({ tool_name: 'Write', tool_input: { file_path: join(repo, 'plans', 'p1.md') }, cwd: repo }).code).toBe(2);
     expect(runGuard({ tool_name: 'MultiEdit', tool_input: { file_path: join(repo, 'specs', 'sub', 'deep.md') }, cwd: repo }).code).toBe(2);
   });
 
-  it('allows non-state paths in a specflow repo and prefix look-alikes', () => {
-    const repo = specflowRepo();
+  it('allows non-state paths in a witness repo and prefix look-alikes', () => {
+    const repo = witnessRepo();
     mkdirSync(join(repo, 'specsy'), { recursive: true });
     expect(runGuard({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'src', 'x.ts') }, cwd: repo }).code).toBe(0);
     expect(runGuard({ tool_name: 'Edit', tool_input: { file_path: join(repo, 'specsy', 'x.md') }, cwd: repo }).code).toBe(0);
   });
 
-  it('is inert outside specflow repos', () => {
+  it('is inert outside witness repos', () => {
     const dir = plainDir();
     expect(runGuard({ tool_name: 'Edit', tool_input: { file_path: join(dir, 'specs', 'a.md') }, cwd: dir }).code).toBe(0);
   });
@@ -56,7 +56,7 @@ describe('guard-state hook — Edit/Write/MultiEdit', () => {
 describe('guard-state hook — configured canon paths', () => {
   function docsRepo(config: string): string {
     const dir = mkdtempSync(join(tmpdir(), 'sfhook-'));
-    writeFileSync(join(dir, 'specflow.config.yaml'), config);
+    writeFileSync(join(dir, 'witness.config.yaml'), config);
     mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
     mkdirSync(join(dir, 'specs'), { recursive: true });
     return dir;
@@ -79,14 +79,14 @@ describe('guard-state hook — configured canon paths', () => {
 
 describe('guard-state hook — Bash (best-effort)', () => {
   it('blocks writes into state paths', () => {
-    const repo = specflowRepo();
+    const repo = witnessRepo();
     expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'echo hi > specs/a.md' }, cwd: repo }).code).toBe(2);
     expect(runGuard({ tool_name: 'Bash', tool_input: { command: "sed -i '' plans/p.md" }, cwd: repo }).code).toBe(2);
     expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'rm specs/a.md' }, cwd: repo }).code).toBe(2);
   });
 
-  it('allows reads and non-state commands, and everything outside specflow repos', () => {
-    const repo = specflowRepo();
+  it('allows reads and non-state commands, and everything outside witness repos', () => {
+    const repo = witnessRepo();
     expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'cat specs/a.md' }, cwd: repo }).code).toBe(0);
     expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'npm test' }, cwd: repo }).code).toBe(0);
     expect(runGuard({ tool_name: 'Bash', tool_input: { command: 'echo hi > specs/a.md' }, cwd: plainDir() }).code).toBe(0);
@@ -97,7 +97,7 @@ describe('guard-state hook — fail-open', () => {
   it('exits 0 on malformed JSON, empty stdin, and unknown tools', () => {
     expect(spawnSync('node', [guard], { input: 'not json', encoding: 'utf8' }).status).toBe(0);
     expect(spawnSync('node', [guard], { input: '', encoding: 'utf8' }).status).toBe(0);
-    expect(runGuard({ tool_name: 'Glob', tool_input: { pattern: 'specs/**' }, cwd: specflowRepo() }).code).toBe(0);
+    expect(runGuard({ tool_name: 'Glob', tool_input: { pattern: 'specs/**' }, cwd: witnessRepo() }).code).toBe(0);
   });
 });
 

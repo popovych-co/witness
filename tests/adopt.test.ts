@@ -9,7 +9,7 @@ import {
 async function liveRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   return repo
@@ -27,7 +27,7 @@ function editDoc(repo: TestRepo, rel: string, fn: (meta: Record<string, unknown>
 const adoptEntries = (repo: TestRepo): Array<Record<string, unknown>> =>
   readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'adopt') as Array<Record<string, unknown>>
 
-describe('specflow adopt', () => {
+describe('witness adopt', () => {
   it('adopts a dirty prose edit on a live spec: re-verifies, stays live, flags unreviewed', async () => {
     const repo = await liveRepo()
     editDoc(repo, SPEC, (meta, body) => ({ meta, body: body.replace('Tokens leak.', 'Tokens leak. Hand-polished wording.') }))
@@ -54,7 +54,7 @@ describe('specflow adopt', () => {
     const pre = await repo.cli(['check'], { env: fixtureEnv() })
     expect(pre.code).toBe(1)
     expect(pre.stdout).toContain('untrailered-commit')
-    expect(pre.stdout).toContain('specflow adopt')
+    expect(pre.stdout).toContain('witness adopt')
     const res = await repo.cli(['adopt', SPEC], { env: fixtureEnv() })
     expect(res.code).toBe(0)
     expect((adoptEntries(repo).at(-1)?.commits as string[])).toContain(sneaky)

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 
-const allowPath = (root: string) => join(root, '.specflow', 'allow.json')
+const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
 function load(root: string): string[] {
   if (!existsSync(allowPath(root))) return []
@@ -15,13 +15,13 @@ function load(root: string): string[] {
 }
 
 export async function ensureTrusted(root: string, ctx: Ctx, cmd: string): Promise<'trusted' | 'declined' | 'blocked'> {
-  if (ctx.env.SPECFLOW_TRUST_CMDS === '1') return 'trusted'
+  if (ctx.env.WITNESS_TRUST_CMDS === '1') return 'trusted'
   const commands = load(root)
   if (commands.includes(cmd)) return 'trusted'
   if (!ctx.isTTY) return 'blocked'
-  const answer = await ctx.ask(`specflow wants to run: ${cmd}\ntrust this command? saves to .specflow/allow.json (gitignored) [y/N]`)
+  const answer = await ctx.ask(`witness wants to run: ${cmd}\ntrust this command? saves to .witness/allow.json (gitignored) [y/N]`)
   if (!answer.trim().toLowerCase().startsWith('y')) return 'declined'
-  mkdirSync(join(root, '.specflow'), { recursive: true })
+  mkdirSync(join(root, '.witness'), { recursive: true })
   writeFileSync(allowPath(root), JSON.stringify({ commands: [...commands, cmd] }, null, 2))
   return 'trusted'
 }

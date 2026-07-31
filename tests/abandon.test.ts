@@ -5,7 +5,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { worktreePath } from '../src/worktree.js'
 import { approve, seededRepo, writeSpec, writePlan, PLAN_BODY } from './helpers.js'
 
-describe('specflow abandon <plan>', () => {
+describe('witness abandon <plan>', () => {
   it('reverts the paired amendment, restores the prior live stamp, keeps the journal', async () => {
     const repo = await seededRepo({ preexisting: ['auth-refresh'] })   // live spec before the effort
     await writeSpec(repo, 'auth-refresh', { summary: 'amended by this effort' })  // amendment → draft
@@ -36,7 +36,7 @@ describe('specflow abandon <plan>', () => {
     const r = await repo.cli(['abandon', 'auth-refresh-plan-1'])
     expect(r.code).toBe(0)
     expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeUndefined()
-    expect(existsSync(`${repo.root}/.specflow/journal/auth-refresh.jsonl`)).toBe(true)   // journal remembers
+    expect(existsSync(`${repo.root}/.witness/journal/auth-refresh.jsonl`)).toBe(true)   // journal remembers
   })
 
   it('refuses over a stacked amendment and over waiting dependents', async () => {

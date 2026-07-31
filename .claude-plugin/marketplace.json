@@ -1,11 +1,11 @@
 {
-  "name": "specflow",
+  "name": "witness",
   "owner": { "name": "Kostiantyn Popovych" },
   "plugins": [
     {
-      "name": "specflow",
+      "name": "witness",
       "source": "./plugin",
-      "description": "Brainstorm → PR through five evidence-gated stages: stage skills, /specflow engine, state-write guard, dashboard on session start."
+      "description": "Spec-driven development with evidence gates: brainstorm → PR through six stages and five gates. Stage skills, /witness engine, state-write guard, dashboard on session start."
     }
   ]
 }

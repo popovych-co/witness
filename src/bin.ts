@@ -27,7 +27,7 @@ const ctx: Ctx = {
 try {
   process.exit(await main(ctx, process.argv.slice(2)))
 } catch (e) {
-  renderRefusal([v('specflow', 'unexpected-error', String((e as Error).message).slice(0, 200),
+  renderRefusal([v('witness', 'unexpected-error', String((e as Error).message).slice(0, 200),
     'a bug — re-run with the same arguments and report this line')]).forEach((l) => process.stderr.write(`${l}\n`))
   process.exit(EXIT.REFUSED)
 }

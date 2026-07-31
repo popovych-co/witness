@@ -8,7 +8,7 @@ describe('status entries', () => {
     const entry: StatusEntry = {
       v: 1, t: 'status', artifact: 'auth-refresh-plan-1',
       from: 'approved', to: 'in-progress', cause: 'start',
-      worktree: '.specflow/worktrees/auth-refresh-plan-1', branch: 'specflow/auth-refresh-plan-1',
+      worktree: '.witness/worktrees/auth-refresh-plan-1', branch: 'witness/auth-refresh-plan-1',
     }
     appendEntry(repo.root, 'auth-refresh-plan-1', entry)
     const back = readStream(repo.root, 'auth-refresh-plan-1')

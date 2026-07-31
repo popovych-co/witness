@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SKILL_PIN_PREFIX } from './helpers';
 
-const body = () => readFileSync(join(__dirname, '..', 'plugin', 'commands', 'specflow.md'), 'utf8');
+const body = () => readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8');
 
-describe('/specflow command', () => {
+describe('/witness command', () => {
   it('has frontmatter with description and the --manual hint', () => {
     const fm = /^---\n([\s\S]*?)\n---/.exec(body());
     expect(fm).toBeTruthy();
@@ -13,11 +13,11 @@ describe('/specflow command', () => {
     expect(fm![1]).toContain('--manual');
   });
 
-  it('loops over specflow next and invokes every stage skill', () => {
+  it('loops over witness next and invokes every stage skill', () => {
     const b = body();
     expect(b).toContain(SKILL_PIN_PREFIX);
-    expect(b).toContain('specflow next');
-    for (const s of ['specflow-brainstorm', 'specflow-decompose', 'specflow-plan', 'specflow-implement', 'specflow-ship']) {
+    expect(b).toContain('witness next');
+    for (const s of ['witness-brainstorm', 'witness-decompose', 'witness-plan', 'witness-implement', 'witness-ship']) {
       expect(b).toContain(s);
     }
   });
@@ -32,30 +32,30 @@ describe('/specflow command', () => {
 
   it('propagates --manual to every gate invocation', () => {
     expect(body()).toContain('--manual');
-    expect(body()).toContain('specflow gate');
+    expect(body()).toContain('witness gate');
   });
 });
 
 describe('design stage in the motion surfaces', () => {
   const read = (p: string) => readFileSync(join(__dirname, '..', p), 'utf8');
-  it('the /specflow loop routes stage: design', () => {
-    const cmd = read('plugin/commands/specflow.md');
+  it('the /witness loop routes stage: design', () => {
+    const cmd = read('plugin/commands/witness.md');
     expect(cmd).toMatch(/stage: design/);
-    expect(cmd).toContain('specflow-design');
+    expect(cmd).toContain('witness-design');
   });
-  it('the /specflow loop hands off when home: is elsewhere', () => {
-    const cmd = read('plugin/commands/specflow.md');
+  it('the /witness loop hands off when home: is elsewhere', () => {
+    const cmd = read('plugin/commands/witness.md');
     expect(cmd).toMatch(/`home:`/);
     expect(cmd).toMatch(/END YOUR TURN/);
     expect(cmd).toMatch(/--manual/);
   });
   it('decompose documents the ui flag both directions', () => {
-    const d = read('plugin/skills/specflow-decompose/SKILL.md');
+    const d = read('plugin/skills/witness-decompose/SKILL.md');
     expect(d).toContain('ui: true');
     expect(d.toLowerCase()).toContain('browser');
   });
   it('plan requires the approved design for ui parents', () => {
-    const p = read('plugin/skills/specflow-plan/SKILL.md');
+    const p = read('plugin/skills/witness-plan/SKILL.md');
     expect(p).toContain('design-from');
   });
 });

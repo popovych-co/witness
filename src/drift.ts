@@ -166,7 +166,7 @@ export async function runDrift(ctx: Ctx, argv: string[]): Promise<number> {
     const rootRes0 = primaryRoot(ctx.cwd)
     if (!rootRes0.ok) { renderRefusal(rootRes0.violations).forEach(ctx.err); return EXIT.REFUSED }
     if (!specId) {
-      renderRefusal([v('spec-id', 'required', 'absent', 'specflow check --drift --deep <spec-id>')]).forEach(ctx.err)
+      renderRefusal([v('spec-id', 'required', 'absent', 'witness check --drift --deep <spec-id>')]).forEach(ctx.err)
       return EXIT.REFUSED
     }
     if (argv.includes('--ci')) {
@@ -249,6 +249,6 @@ export async function runDrift(ctx: Ctx, argv: string[]): Promise<number> {
   } finally {
     lock.ok && lock.value()
   }
-  ctx.out('help: drift history: specflow log <spec-id>')
+  ctx.out('help: drift history: witness log <spec-id>')
   return failing.length ? EXIT.FINDINGS : EXIT.OK
 }

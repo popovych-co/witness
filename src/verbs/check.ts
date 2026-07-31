@@ -91,33 +91,33 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
           `parent ${String(parent.meta.id)} moved off the pin — ship will re-verify against current content`))
       }
       if (!existsSync(worktreePath(root, id))) {
-        findings.push(f('warn', 'motion', id, 'missing-worktree', `specflow start ${id} recreates it`))
+        findings.push(f('warn', 'motion', id, 'missing-worktree', `witness start ${id} recreates it`))
       }
     }
     for (const gate of ['plan', 'implement', 'ship']) {
       if (pendingDecision(readStream(root, id), gate)) {
-        findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `specflow decide ${gate} ${id} --show`))
+        findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `witness decide ${gate} ${id} --show`))
       }
     }
   }
   for (const slug of effortStreams(root)) {
     if (pendingDecision(readStream(root, slug), 'decompose')) {
-      findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', `specflow decide decompose ${slug} --show`))
+      findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', `witness decide decompose ${slug} --show`))
     }
   }
   for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
     const id = String(spec.meta.id)
     if (pendingDecision(readStream(root, id), 'design')) {
-      findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `specflow decide design ${id} --show`))
+      findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `witness decide design ${id} --show`))
     }
     if (designPending(root, spec) && String(spec.meta.status) === 'approved') {
-      findings.push(f('warn', 'motion', id, 'design-pending', `ui spec owes a design — specflow design ${id} --file <html>`))
+      findings.push(f('warn', 'motion', id, 'design-pending', `ui spec owes a design — witness design ${id} --file <html>`))
     }
   }
   for (const planId of listWorktrees(root)) {
     const doc = findById(canon, planId)
     if (!doc || ['done', 'abandoned'].includes(String(doc.meta.status))) {
-      findings.push(f('warn', 'motion', planId, 'stray-worktree', 'specflow clean sweeps it'))
+      findings.push(f('warn', 'motion', planId, 'stray-worktree', 'witness clean sweeps it'))
     }
   }
 
@@ -134,16 +134,16 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const absolved = adoptedCommits(root)
   auditStateCommits(root).forEach((c) => {
     if (!c.trailered && !absolved.has(c.sha)) {
-      findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit', `${c.subject} — adopt: specflow adopt <path> · or revert`))
+      findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit', `${c.subject} — adopt: witness adopt <path> · or revert`))
     }
   })
   if (pendingTxn(root)) {
-    findings.push(f('error', 'audit', '.specflow/txn.json', 'pending-txn', 'crashed invocation — specflow recover --complete | --rollback'))
+    findings.push(f('error', 'audit', '.witness/txn.json', 'pending-txn', 'crashed invocation — witness recover --complete | --rollback'))
   } else if (dirtyStatePaths(root).length) {
-    dirtyStatePaths(root).forEach((p) => findings.push(f('error', 'audit', p, 'hand-edit-in-progress', 'uncommitted change on a state path — adopt: specflow adopt <path> · or revert')))
+    dirtyStatePaths(root).forEach((p) => findings.push(f('error', 'audit', p, 'hand-edit-in-progress', 'uncommitted change on a state path — adopt: witness adopt <path> · or revert')))
   }
 
-  const journalDir = join(root, '.specflow', 'journal')
+  const journalDir = join(root, '.witness', 'journal')
   if (existsSync(journalDir)) {
     for (const file of readdirSync(journalDir)) {
       if (!file.endsWith('.jsonl')) continue
@@ -199,7 +199,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
 
     // Decision 14: pi resolves project skills cwd-relative with no upward walk, and
-    // implement runs with cwd inside .specflow/worktrees/<plan-id>. A project-scope
+    // implement runs with cwd inside .witness/worktrees/<plan-id>. A project-scope
     // install therefore loses every skill in the stage that does the most work.
     const visibility = skillsVisibility(ctx.env, root, harness)
     if (visibility === 'project-only') {
@@ -207,7 +207,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         `${harness.skills.project} is invisible from a worktree cwd — reinstall at global scope (${harness.skills.global} under $HOME)`))
     } else if (visibility === 'absent' && !harness.bundled) {
       findings.push(f('warn', 'harness', 'skills', 'skills-not-installed',
-        `${harness.name} sees none of the six stage skills — npx skills add <specflow tarball url> at global scope`))
+        `${harness.name} sees none of the six stage skills — npx skills add <witness tarball url> at global scope`))
     }
 
     // Revision 3. Skills present + payload absent is the worst state in the design: the
@@ -218,24 +218,24 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (installed.length === 0) {
       if (!harness.bundled) {
         findings.push(f('warn', 'harness', 'payload', 'payload-not-installed',
-          `${harness.name} has no engine, guard or dashboard here — run specflow init --agent ${harness.name}`))
+          `${harness.name} has no engine, guard or dashboard here — run witness init --agent ${harness.name}`))
       }
     } else {
       // Revision 1's other half: the sync can restamp, but only if someone knows to run
       // it. The engine file's pin decides which CLI the whole pipeline runs, so a lagging
       // pin is a finding, not a detail.
       // The capture must be a semver and nothing else. Both payloads embed the pin as
-      // `${SPECFLOW_BIN:-npx -y @whatmatters/specflow@<v>}`, so a trailing-delimiter
+      // `${WITNESS_BIN:-npx -y @popovych.co/witness@<v>}`, so a trailing-delimiter
       // class that omits `}` swallows the brace and NEVER equals version() — which made
       // payload-stale fire on every fresh install until Task 9's manual pass caught it.
       // Same shape as install.ts's PIN, deliberately.
       const stale = installed.filter((rel) => {
-        const m = /@whatmatters\/specflow@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(readFileSync(join(root, rel), 'utf8'))
+        const m = /@popovych\.co\/witness@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(readFileSync(join(root, rel), 'utf8'))
         return m !== null && m[1] !== version()
       })
       if (stale.length > 0) {
         findings.push(f('warn', 'harness', 'payload', 'payload-stale',
-          `${stale.join(' · ')} pin an older CLI than ${version()} — run specflow init --agent ${harness.name} to restamp`))
+          `${stale.join(' · ')} pin an older CLI than ${version()} — run witness init --agent ${harness.name} to restamp`))
       }
     }
   }

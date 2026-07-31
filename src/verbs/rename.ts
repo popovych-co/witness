@@ -23,7 +23,7 @@ function rewriteRefs(meta: Record<string, unknown>, oldId: string, newId: string
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [oldId, newId] = argv.filter((a) => !a.startsWith('--'))
-  if (!oldId || !newId) { ctx.err('usage: specflow rename <old-id> <new-id>'); return EXIT.REFUSED }
+  if (!oldId || !newId) { ctx.err('usage: witness rename <old-id> <new-id>'); return EXIT.REFUSED }
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value

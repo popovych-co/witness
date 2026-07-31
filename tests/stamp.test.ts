@@ -63,7 +63,7 @@ describe('check surfaces', () => {
     // (flipping auth-refresh-plan-1 itself to done would also clear its in-progress
     // status, which is what mid-flight-amendment requires — so this needs a second,
     // independent worktree rather than reusing the same plan for both findings)
-    mkdirSync(join(seed.repo.root, '.specflow/worktrees/ghost-plan'), { recursive: true })
+    mkdirSync(join(seed.repo.root, '.witness/worktrees/ghost-plan'), { recursive: true })
     const r = await seed.repo.cli(['check'])
     expect(r.stdout).toContain('mid-flight-amendment')
     expect(r.stdout).toContain('stray-worktree')

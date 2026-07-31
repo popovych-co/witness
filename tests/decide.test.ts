@@ -59,7 +59,7 @@ async function boundRepo() {
     })
     appendEntry(repo.root, 'auth-refresh', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
-      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0',
+      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
       model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
     })
   }
@@ -75,13 +75,13 @@ async function stoppedImplement() {
   await writePlan(repo, 'auth-refresh-plan-1')
   appendEntry(repo.root, 'auth-refresh-plan-1', {
     v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1,
-    run_id: 'r-1', reviewed_sha: 'sha-1', prompts_sha: 'p', specflow: '0',
+    run_id: 'r-1', reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0',
     model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
   })
   return { repo, planId: 'auth-refresh-plan-1' }
 }
 
-describe('specflow decide', () => {
+describe('witness decide', () => {
   it('refuses when nothing is pending', async () => {
     synthetic()
     const repo = await seededRepo()
@@ -97,7 +97,7 @@ describe('specflow decide', () => {
     expect(r.code).toBe(0)
     expect(decisions(repo)[0]).toMatchObject({ decision: 'approve', note: 'accepting the risk' })
     expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('approved')
-    expect(repo.git('log', '-1', '--format=%B')).toContain('Specflow-State: 1')
+    expect(repo.git('log', '-1', '--format=%B')).toContain('Witness-State: 1')
   })
 
   it('revise journals and renders the reconstruction payload from the journal', async () => {
@@ -120,7 +120,7 @@ describe('specflow decide', () => {
       })
       appendEntry(repo.root, 'auth-refresh', {
         v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
-        run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', specflow: '0',
+        run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
         model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
       })
     }

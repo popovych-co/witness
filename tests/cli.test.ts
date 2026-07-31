@@ -23,7 +23,7 @@ describe('cli entry', () => {
     const repo = tmpRepo()
     const res = await repo.cli([])
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain('usage: specflow')
+    expect(res.stdout).toContain('usage: witness')
   })
 
   it('every verb answers --help with a usage line instead of crashing', async () => {
@@ -33,7 +33,7 @@ describe('cli entry', () => {
       'abandon', 'rename', 'sync', 'calibrate']) {
       const r = await repo.cli([verb, '--help'])
       expect(r.code, `${verb} --help`).toBe(0)
-      expect(r.stdout, `${verb} --help`).toContain('usage: specflow')
+      expect(r.stdout, `${verb} --help`).toContain('usage: witness')
     }
   })
 })

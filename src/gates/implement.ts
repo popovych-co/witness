@@ -58,7 +58,7 @@ function resolveDesignCaptures(
   }
   if (out.length === 0) {
     return refuse([v('screens', 'screens-matched-nothing', `0 verified captures for the latest green cycle of ${planId}`,
-      'a UI plan (design-from pinned) must witness ≥1 screenshot — name captures in the browser test, then re-run: specflow test-evidence <plan> --phase green')])
+      'a UI plan (design-from pinned) must witness ≥1 screenshot — name captures in the browser test, then re-run: witness test-evidence <plan> --phase green')])
   }
   return ok(out)
 }
@@ -83,7 +83,7 @@ registerGate({
     const wt = worktreePath(root, planId)
     if (String(plan.meta.status) !== 'in-progress' || !existsSync(wt)) {
       return refuse([v('plan', 'not-started', String(plan.meta.status),
-        `an in-progress plan with a worktree — run: specflow start ${planId}`)])
+        `an in-progress plan with a worktree — run: witness start ${planId}`)])
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {

@@ -10,7 +10,7 @@ import {
 async function tddRepo(): Promise<TestRepo> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   await writePlan(repo, 'auth-refresh-plan-1')
@@ -26,7 +26,7 @@ async function tddRepo(): Promise<TestRepo> {
 const phases = (repo: TestRepo): Array<Record<string, unknown>> =>
   readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'test-evidence') as Array<Record<string, unknown>>
 
-describe('specflow verify-red', () => {
+describe('witness verify-red', () => {
   it('reconstructs red from committed work, restores, and confirms green', async () => {
     const repo = await tddRepo()
     repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)

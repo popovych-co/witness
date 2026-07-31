@@ -11,7 +11,7 @@ import { executeAbandon, planItems, specRevertFor, type AbandonItem } from '../a
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const target = argv.find((a) => !a.startsWith('--'))
-  if (!target) { ctx.err('usage: specflow abandon <plan-id | effort-slug>'); return EXIT.REFUSED }
+  if (!target) { ctx.err('usage: witness abandon <plan-id | effort-slug>'); return EXIT.REFUSED }
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value

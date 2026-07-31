@@ -35,7 +35,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
-    ctx.err('usage: specflow decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]')
+    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]')
     return EXIT.REFUSED
   }
   const rootR = primaryRoot(ctx.cwd)
@@ -62,7 +62,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('state', 'reopened — the gate must run again'))
       ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
       if (reopen.note) ctx.out(kv('note', reopen.note))
-      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · specflow log ${target}`))
+      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · witness log ${target}`))
       ctx.out(kv('exits', liveExits(gate, target, entries, true)))
       return EXIT.OK
     }
@@ -71,7 +71,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('target', target))
       ctx.out(kv('state', `settled — ${disposition.decision}`))
       if (disposition.note) ctx.out(kv('note', disposition.note))
-      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · specflow log ${target}`))
+      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · witness log ${target}`))
       return EXIT.OK
     }
     // pending (no disposition) or revise (the author's input): the verdict is actionable
@@ -122,7 +122,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ? v('decision', 'bound', `${roundsSinceApprove(entries, gate)} rounds`,
           '--approve --override | --revise --upstream <id> | --stop (bound reached — the gate will not run again)')
       : v('gate', 'nothing-pending', `${gate} ${target}`,
-          `a stopped gate-run awaiting a decision — run: specflow gate ${gate} ${target}`),
+          `a stopped gate-run awaiting a decision — run: witness gate ${gate} ${target}`),
     ]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -137,7 +137,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (decision === 'approve' && atBound && !override) {
     renderRefusal([v('decision', 'override-required', 'approve at the round bound',
-      'specflow decide … --approve --override')]).forEach((l) => ctx.err(l))
+      'witness decide … --approve --override')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
@@ -153,7 +153,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const unseen = designUnseen(root, cfgR.value.paths, target)
     if (unseen !== undefined) {
       renderRefusal([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
-        `a human shown this artifact — run: specflow design ${target} --open`)]).forEach((l) => ctx.err(l))
+        `a human shown this artifact — run: witness design ${target} --open`)]).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
   }
@@ -178,8 +178,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal([v('gate', 'stale-verdict',
         `verdict @${short(anchor.reviewed_sha)}, content @${short(now)}`,
         atBound
-          ? `specflow decide ${gate} ${target} --revise --upstream <id> | --stop (bound reached — the gate will not re-run)`
-          : `a verdict describing current content — run: specflow gate ${gate} ${target}`)])
+          ? `witness decide ${gate} ${target} --revise --upstream <id> | --stop (bound reached — the gate will not re-run)`
+          : `a verdict describing current content — run: witness gate ${gate} ${target}`)])
         .forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
@@ -287,7 +287,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const pins = policyPins(readStream(root, target))
     if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (note) ctx.out(kv('note', note))
-    if (gate === 'decompose') ctx.out(`help: scope itself implicated → specflow recap --amend ${target}`)
+    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness recap --amend ${target}`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
   }
   return EXIT.OK

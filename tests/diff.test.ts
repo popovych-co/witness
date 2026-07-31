@@ -17,10 +17,10 @@ function seedPlanPinnedAt(repo: TestRepo, pin: string): void {
     '---', '', '## Step: s1', 'do it', '',
   ].join('\n'))
   repo.git('add', 'plans/auth-refresh-plan-1.md')
-  repo.git('commit', '-m', 'seed plan', '-m', 'Specflow-State: 1')
+  repo.git('commit', '-m', 'seed plan', '-m', 'Witness-State: 1')
 }
 
-describe('specflow diff', () => {
+describe('witness diff', () => {
   it('reports an empty base for a never-planned spec', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')

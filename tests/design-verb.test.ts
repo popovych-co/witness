@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
 import { DESIGN_HTML, approve, seededRepo, writeDesign, writeSpec } from './helpers.js'
 
-describe('specflow design', () => {
+describe('witness design', () => {
   it('persists a self-contained artifact for a ui feature spec', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })

@@ -9,20 +9,20 @@ import { screensDir } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
 import { fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
-// A vitest test that, when SPECFLOW_SCREENS_DIR is set, writes a PNG there — the
+// A vitest test that, when WITNESS_SCREENS_DIR is set, writes a PNG there — the
 // stand-in for a Puppeteer capture. Tagged so the criteria runner reaches it.
 const CAPTURE_TEST = `import { expect, it } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 it('renders the screen @spec:auth-refresh', () => {
-  const dir = process.env.SPECFLOW_SCREENS_DIR
+  const dir = process.env.WITNESS_SCREENS_DIR
   if (dir) writeFileSync(join(dir, 'initial.png'), Buffer.from('PNGBYTES-v1'))
   expect(1).toBe(1)
 })
 `
 
 describe('capture convention', () => {
-  it('exports SPECFLOW_SCREENS_DIR and clears the dir each evidence cycle', async () => {
+  it('exports WITNESS_SCREENS_DIR and clears the dir each evidence cycle', async () => {
     const { repo, wt, planId } = await shippableRepo()
     // a stale capture from a prior cycle must not survive into this one
     const dir = screensDir(wt, planId)
@@ -39,7 +39,7 @@ describe('capture convention', () => {
     const { wt, planId } = await shippableRepo()
     writeFileSync(join(screensDir(wt, planId), 'x.png'), Buffer.from('P'))
     const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd: wt, encoding: 'utf8' })
-    expect(untracked).not.toContain('.specflow/screens/')
+    expect(untracked).not.toContain('.witness/screens/')
   })
 })
 
@@ -113,10 +113,10 @@ async function uiPlanRepo() {
   await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
   // design canon (registered) + living design artifact + the pin
   repo.write('docs/design.md', 'Every screen opens with a Bookings eyebrow; primary action is a sticky save bar.')
-  const cfgPath = join(repo.root, 'specflow.config.yaml')
+  const cfgPath = join(repo.root, 'witness.config.yaml')
   writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8') + 'docs:\n  design: [docs/design.md]\n')
   repo.write('designs/auth-refresh.html', '<section id="hero"><h1>New service</h1></section>')
-  repo.git('add', 'docs/design.md', 'specflow.config.yaml', 'designs/auth-refresh.html')
+  repo.git('add', 'docs/design.md', 'witness.config.yaml', 'designs/auth-refresh.html')
   repo.git('commit', '-m', 'design canon + living design')
   repo.setMeta(planId, { 'design-from': 'a'.repeat(64) })
   return { repo, wt, planId, specId }
@@ -190,7 +190,7 @@ describe('implement gate — design-reviewer wiring', () => {
     // amend the approved look — code (and tree-sha) unchanged
     repo.write('designs/auth-refresh.html', '<section id="hero"><h1>New service</h1><nav id="save">Save</nav></section>')
     repo.git('add', 'designs/auth-refresh.html'); repo.git('commit', '-m', 'amend design')
-    // fresh scenario: the fake-claude call counter is global per SPECFLOW_FAKE_DIR, so
+    // fresh scenario: the fake-claude call counter is global per WITNESS_FAKE_DIR, so
     // reusing scenario1 here would push design-reviewer's call past its numbered verdict
     const scenario2 = fakeScenario()
     putVerdict(scenario2, treeClean(files))

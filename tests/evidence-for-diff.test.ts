@@ -10,7 +10,7 @@ import {
 async function tddRepo(): Promise<{ repo: TestRepo; base: string }> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh')
   stampLive(repo, 'auth-refresh')
   await writePlan(repo, 'auth-refresh-plan-1')

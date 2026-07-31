@@ -14,7 +14,7 @@ export interface GateRunEntry {
   run_id: string
   reviewed_sha: string
   prompts_sha: string
-  specflow: string
+  witness: string
   model: string
   // Optional: every pre-88 journal on disk lacks it, and keyOf reads absent as
   // claude-code — the only harness that could have written one.
@@ -51,7 +51,7 @@ export interface GateKey {
   gate: string
   prompts_sha: string
   model: string
-  specflow: string
+  witness: string
   // Required — keys are always constructed fresh from a resolved harness. A pi verdict
   // must never cache-hit a claude one: same model id, different reviewer.
   harness: string
@@ -63,13 +63,13 @@ const isDecision = (e: Entry | undefined, gate: string): e is DecisionEntry & En
   e !== undefined && e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate
 
 export function keyOf(run: GateRunEntry): GateKey {
-  const { reviewed_sha, gate, prompts_sha, model, specflow } = run
-  return { reviewed_sha, gate, prompts_sha, model, specflow, harness: run.harness ?? 'claude-code' }
+  const { reviewed_sha, gate, prompts_sha, model, witness } = run
+  return { reviewed_sha, gate, prompts_sha, model, witness, harness: run.harness ?? 'claude-code' }
 }
 
 export function sameKey(a: GateKey, b: GateKey): boolean {
   return a.reviewed_sha === b.reviewed_sha && a.gate === b.gate &&
-    a.prompts_sha === b.prompts_sha && a.model === b.model && a.specflow === b.specflow &&
+    a.prompts_sha === b.prompts_sha && a.model === b.model && a.witness === b.witness &&
     a.harness === b.harness
 }
 
@@ -106,7 +106,7 @@ export function roundsSinceApprove(entries: Entry[], gate: string): number {
   let n = 0
   for (let i = since + 1; i < entries.length; i++) {
     const e = entries[i]
-    // malformed = the battery failed to emit a legal verdict — specflow's
+    // malformed = the battery failed to emit a legal verdict — witness's
     // failure, not the artifact's; it never spends the human's budget
     if (isRun(e, gate) && (e as unknown as GateRunEntry).outcome !== 'malformed') n++
   }

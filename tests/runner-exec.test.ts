@@ -38,7 +38,7 @@ describe('runFiltered', () => {
     const repo = tmpRepo()
     const yes = await runFiltered(repo.root, fakeCtx(repo.root, { answers: ['y'] }), 'touch ran-{id}.txt', 'spec-a')
     expect(yes.ok).toBe(true)
-    expect(repo.read('.specflow/allow.json')).toContain('touch ran-{id}.txt')
+    expect(repo.read('.witness/allow.json')).toContain('touch ran-{id}.txt')
     const again = await runFiltered(repo.root, fakeCtx(repo.root, { tty: false }), 'touch ran-{id}.txt', 'spec-b')
     expect(again.ok && existsSync(join(repo.root, 'ran-spec-b.txt'))).toBe(true)
   })

@@ -1,21 +1,21 @@
 #!/bin/sh
-# specflow protocol-tier fake claude: records calls, answers canned verdict envelopes.
+# witness protocol-tier fake claude: records calls, answers canned verdict envelopes.
 set -e
 if [ "$1" = "--version" ]; then echo "claude fake 0.0.0"; exit 0; fi
-dir="${SPECFLOW_FAKE_DIR:?SPECFLOW_FAKE_DIR unset}"
+dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
 mkdir -p "$dir/claude-calls"
 n=0
 for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
 n=$((n + 1))
 call="$dir/claude-calls/call-$n"
 mkdir -p "$call"
-# lock probe: records whether specflow held its global lock while this reviewer ran.
+# lock probe: records whether witness held its global lock while this reviewer ran.
 # Sound because acquireLock refuses exactly when this file exists with a live pid
 # (src/lock.ts:16-37) — "absent" therefore proves another flow's acquire would succeed.
 # Gate runs have cwd = repo root (gate.ts:225 passes cwd: root), so the relative path
 # resolves there. NOTE: calibrate.ts:143 invokes this same fakebin with cwd = a fixture
 # dir, where the probe always reads `free`. No test may ever assert `held`.
-if [ -e ".specflow/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
+if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"
 # hang the first N calls past the caller's timeout — exercises transient-stall retry.

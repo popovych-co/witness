@@ -10,7 +10,7 @@ import {
 async function singleRepo(extraCriteria: Array<Record<string, string>> = []): Promise<{ repo: TestRepo; doc: NonNullable<ReturnType<typeof findById>> }> {
   const repo = await seededRepo()
   copyFixture(repo, 'vitest-single')
-  repo.write('specflow.config.yaml', singleConfig('filtered'))
+  repo.write('witness.config.yaml', singleConfig('filtered'))
   await writeSpec(repo, 'auth-refresh', {
     ...SPEC_META,
     criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, ...extraCriteria],
@@ -43,7 +43,7 @@ describe('runCriteria — filtered mode', () => {
   it('fails a spec with zero tagged tests even though the filtered run exits 0', async () => {
     const repo = await seededRepo()
     copyFixture(repo, 'vitest-single')
-    repo.write('specflow.config.yaml', singleConfig('filtered'))
+    repo.write('witness.config.yaml', singleConfig('filtered'))
     await writeSpec(repo, 'ghost', { ...SPEC_META, summary: 'ghost slice', criteria: [{ id: 'ac-g', test: '@spec:ghost' }] })
     stampLive(repo, 'ghost')
     const doc = findById(loadCanon(repo.root), 'ghost')
@@ -77,7 +77,7 @@ describe('runCriteria — full-suite mode', () => {
   it('maps one workspace suite run onto each spec by tag', async () => {
     const repo = await seededRepo()
     copyFixture(repo, 'workspace')
-    repo.write('specflow.config.yaml', workspaceConfig('full-suite'))
+    repo.write('witness.config.yaml', workspaceConfig('full-suite'))
     await writeSpec(repo, 'rate-limit', { ...SPEC_META, summary: 'rate limiting', criteria: [{ id: 'ac-rate', test: '@spec:rate-limit' }] })
     await writeSpec(repo, 'quota', { ...SPEC_META, summary: 'quota tracking', criteria: [{ id: 'ac-quota', test: '@spec:quota' }] })
     stampLive(repo, 'rate-limit')
@@ -92,7 +92,7 @@ describe('runCriteria — full-suite mode', () => {
 
   it('reuses an injected suite instead of re-running it', async () => {
     const repo = await seededRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\ncriteria:\n  runner: full-suite\n  report: junit:**/junit.xml\nship:\n  test: "exit 1"\n')
+    repo.write('witness.config.yaml', 'schema: 1\ncriteria:\n  runner: full-suite\n  report: junit:**/junit.xml\nship:\n  test: "exit 1"\n')
     await writeSpec(repo, 'rate-limit', { ...SPEC_META, summary: 'rate limiting', criteria: [{ id: 'ac-rate', test: '@spec:rate-limit' }] })
     const doc = findById(loadCanon(repo.root), 'rate-limit')
     if (!doc) throw new Error('spec missing')
@@ -105,7 +105,7 @@ describe('runCriteria — full-suite mode', () => {
 
   it('refuses on runner misconfiguration', async () => {
     const repo = await seededRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\ncriteria:\n  runner: full-suite\n')
+    repo.write('witness.config.yaml', 'schema: 1\ncriteria:\n  runner: full-suite\n')
     await writeSpec(repo, 'rate-limit', { ...SPEC_META, summary: 'rate limiting', criteria: [{ id: 'ac-rate', test: '@spec:rate-limit' }] })
     const doc = findById(loadCanon(repo.root), 'rate-limit')
     if (!doc) throw new Error('spec missing')

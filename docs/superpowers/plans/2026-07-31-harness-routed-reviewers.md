@@ -14,10 +14,10 @@
 
 - Refusals use the existing `Result` / `refuse([v(field, rule, got, want)])` pattern from `src/refusal.ts` — never throw for user-facing errors.
 - No commas inside `kv()` output values (toon `esc()` quotes any value containing one — see `src/harness.ts` relayLine comment).
-- `spawnSync` timeout/retry semantics of `invokeClaude` are preserved exactly: `SPECFLOW_REVIEWER_TIMEOUT_MS` override, 600 000 ms default, 2 retries on ETIMEDOUT only.
+- `spawnSync` timeout/retry semantics of `invokeClaude` are preserved exactly: `WITNESS_REVIEWER_TIMEOUT_MS` override, 600 000 ms default, 2 retries on ETIMEDOUT only.
 - Legacy journal entries (no `harness` field) must keep cache-hitting: absent `harness` reads as `claude-code`.
 - Legacy calibration overlays (top-level `models:` list) must keep working: they read as the claude-code matrix.
-- The existing `fixtures/fakebin/claude` contract (call recording under `$SPECFLOW_FAKE_DIR/claude-calls/call-N/{argv,stdin}`, `verdict.json` / `verdict-N.json` bodies, `claude-fail` / `claude-hang` knobs) is mirrored, not changed.
+- The existing `fixtures/fakebin/claude` contract (call recording under `$WITNESS_FAKE_DIR/claude-calls/call-N/{argv,stdin}`, `verdict.json` / `verdict-N.json` bodies, `claude-fail` / `claude-hang` knobs) is mirrored, not changed.
 - Conventional commits (`feat:`, `test:`, `docs:`), one commit per task.
 - Run a task's named test file with `npx vitest run tests/<file>`; full suite with `npx vitest run`.
 
@@ -125,7 +125,7 @@ export interface ParsedPin {
 // claude has no --thinking flag; non-off levels render as the documented
 // MAX_THINKING_TOKENS env var. Budgets are pinned constants: the raw pin string is in
 // the verdict-cache key, so a level change re-rolls verdicts; a budget-table change
-// ships as a new specflow version, which is also in the key.
+// ships as a new witness version, which is also in the key.
 export const CLAUDE_THINKING_BUDGET: Record<Exclude<ThinkingLevel, 'off'>, number> = {
   minimal: 1024, low: 4096, medium: 8192, high: 16384, xhigh: 32768, max: 63999,
 }
@@ -408,7 +408,7 @@ git commit -m "feat: per-harness reviewer spawn/envelope contract and validatePi
 
 **Interfaces:**
 
-- Consumes: the `SPECFLOW_FAKE_DIR` scenario convention from `fixtures/fakebin/claude` and `tests/helpers.ts` (`fakeScenario()`, `gateEnv()`, `putVerdict()`).
+- Consumes: the `WITNESS_FAKE_DIR` scenario convention from `fixtures/fakebin/claude` and `tests/helpers.ts` (`fakeScenario()`, `gateEnv()`, `putVerdict()`).
 - Produces: `pi-calls/call-N/{argv,stdin}` recordings; NDJSON `agent_end` envelope wrapping `verdict.json` / `verdict-N.json`; knobs `pi-fail` (nonzero exit), `pi-hang` (sleep past timeout), `pi-error` (in-stream `stopReason: "error"` with exit 0 — the billing-block shape).
 
 - [ ] **Step 1: Write the failing test**
@@ -461,18 +461,18 @@ Expected: FAIL — `spawn pi ENOENT` is NOT acceptable here: the real `pi` may b
 
 ```sh
 #!/bin/sh
-# specflow protocol-tier fake pi: records calls, answers canned NDJSON agent_end
+# witness protocol-tier fake pi: records calls, answers canned NDJSON agent_end
 # envelopes (the --mode json contract parsePiEnvelope consumes). Mirrors fakebin/claude.
 set -e
 if [ "$1" = "--version" ]; then echo "pi fake 0.0.0"; exit 0; fi
-dir="${SPECFLOW_FAKE_DIR:?SPECFLOW_FAKE_DIR unset}"
+dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
 mkdir -p "$dir/pi-calls"
 n=0
 for d in "$dir"/pi-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
 n=$((n + 1))
 call="$dir/pi-calls/call-$n"
 mkdir -p "$call"
-if [ -e ".specflow/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
+if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"
 if [ -f "$dir/pi-hang" ] && [ "$n" -le "$(cat "$dir/pi-hang")" ]; then
@@ -611,7 +611,7 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
     pin = pinR.value
   }
   const { cmd, args, env } = harness.reviewer.spawn(pin)
-  const timeout = Number(ctx.env.SPECFLOW_REVIEWER_TIMEOUT_MS) || REVIEWER_TIMEOUT_MS
+  const timeout = Number(ctx.env.WITNESS_REVIEWER_TIMEOUT_MS) || REVIEWER_TIMEOUT_MS
   for (let attempt = 0; ; attempt += 1) {
     const r = spawnSync(cmd, args, {
       cwd: opts.cwd,
@@ -628,10 +628,10 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
         if (attempt < TIMEOUT_RETRIES) continue
         return refuse([v(cmd, 'reviewer-timeout',
           `no response in ${timeout}ms after ${attempt + 1} attempts`,
-          'a reviewer that answers within the timeout — raise SPECFLOW_REVIEWER_TIMEOUT_MS if the model is simply slow')])
+          'a reviewer that answers within the timeout — raise WITNESS_REVIEWER_TIMEOUT_MS if the model is simply slow')])
       }
       return refuse([v(cmd, 'reviewer-invocation', String((r.error as Error).message),
-        `a runnable ${cmd} binary on PATH — gates invoke reviewers headlessly; specflow check probes this`)])
+        `a runnable ${cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
     }
     if (r.status !== 0) {
       return refuse([v(cmd, 'reviewer-invocation',
@@ -681,7 +681,7 @@ git commit -m "feat: invokeReviewer routes reviewer spawns through the harness r
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/model.test.ts` (it already has `tmpRepo`-style helpers and writes `.specflow/calibration.local.yaml`; mirror its existing setup for the file-writing test):
+Append to `tests/model.test.ts` (it already has `tmpRepo`-style helpers and writes `.witness/calibration.local.yaml`; mirror its existing setup for the file-writing test):
 
 ```ts
 import { loadMatrix, stagePin } from '../src/model.js'
@@ -689,8 +689,8 @@ import { loadMatrix, stagePin } from '../src/model.js'
 describe('per-harness matrix', () => {
   it('reads legacy top-level models as claude-code and matrices.<name> for pi', async () => {
     const repo = await tmpRepo()
-    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
-    writeFileSync(join(repo.root, '.specflow', 'calibration.local.yaml'),
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'calibration.local.yaml'),
       'models:\n  - claude-fable-5\nmatrices:\n  pi:\n    models:\n      - google/gemini-3.6-pro\n')
     expect(loadMatrix(repo.root, 'claude-code').local).toEqual(['claude-fable-5'])
     expect(loadMatrix(repo.root, 'pi').local).toEqual(['google/gemini-3.6-pro'])
@@ -747,7 +747,7 @@ function readModels(path: string, harness: HarnessName): string[] {
 export function loadMatrix(root: string, harness: HarnessName): MatrixInfo {
   return {
     shipped: readModels(shippedMatrixPath(), harness),
-    local: readModels(join(root, '.specflow', 'calibration.local.yaml'), harness),
+    local: readModels(join(root, '.witness', 'calibration.local.yaml'), harness),
   }
 }
 ```
@@ -817,9 +817,9 @@ Append to `tests/rounds.test.ts` (mirror its existing entry-construction helpers
 ```ts
 describe('harness in the gate key', () => {
   it('a legacy entry without harness cache-matches a claude-code key and not a pi key', () => {
-    const legacy = runEntry({ reviewed_sha: 's1', gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '1.0.0' })
+    const legacy = runEntry({ reviewed_sha: 's1', gate: 'plan', prompts_sha: 'p1', model: 'm1', witness: '1.0.0' })
     delete (legacy as Record<string, unknown>).harness
-    const claudeKey = { reviewed_sha: 's1', gate: 'plan', prompts_sha: 'p1', model: 'm1', specflow: '1.0.0', harness: 'claude-code' }
+    const claudeKey = { reviewed_sha: 's1', gate: 'plan', prompts_sha: 'p1', model: 'm1', witness: '1.0.0', harness: 'claude-code' }
     expect(sameKey(keyOf(legacy), claudeKey)).toBe(true)
     expect(sameKey(keyOf(legacy), { ...claudeKey, harness: 'pi' })).toBe(false)
   })
@@ -828,12 +828,12 @@ describe('harness in the gate key', () => {
 
 (`runEntry` — use the file's existing gate-run fixture builder; copy its construction if named differently.)
 
-Append to `tests/gate-engine.test.ts`, cloning the file's simplest passing-gate scenario (same repo setup, same `putVerdict`), with two changes — `SPECFLOW_HARNESS: 'pi'` in the env and pi-side assertions:
+Append to `tests/gate-engine.test.ts`, cloning the file's simplest passing-gate scenario (same repo setup, same `putVerdict`), with two changes — `WITNESS_HARNESS: 'pi'` in the env and pi-side assertions:
 
 ```ts
   it('runs the battery through pi when the resolved harness is pi', async () => {
     // ...same arrange as the adjacent passing-gate test, but:
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { SPECFLOW_HARNESS: 'pi' }) })
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_HARNESS: 'pi' }) })
     // ...same act (run the gate)...
     const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
     expect(argv).toContain('--mode\njson')
@@ -859,8 +859,8 @@ Expected: FAIL — `harness` missing from `GateKey`; gate spawns `claude` (finds
 
 ```ts
 export function keyOf(run: GateRunEntry): GateKey {
-  const { reviewed_sha, gate, prompts_sha, model, specflow } = run
-  return { reviewed_sha, gate, prompts_sha, model, specflow, harness: run.harness ?? 'claude-code' }
+  const { reviewed_sha, gate, prompts_sha, model, witness } = run
+  return { reviewed_sha, gate, prompts_sha, model, witness, harness: run.harness ?? 'claude-code' }
 }
 ```
 
@@ -883,7 +883,7 @@ export function keyOf(run: GateRunEntry): GateKey {
 - [ ] **Step 4: Run tests**
 
 Run: `npx vitest run tests/rounds.test.ts tests/gate-engine.test.ts`, then `npx vitest run`.
-Expected: PASS. Protocol-tier gate tests still pass on claude-code (default harness; `fixtureEnv` sets no `SPECFLOW_HARNESS`/`PI_CODING_AGENT` — verify in `tests/helpers.ts` and add `SPECFLOW_HARNESS: 'claude-code'` to `fixtureEnv`'s base if the suite itself runs under pi and leaks `PI_CODING_AGENT`).
+Expected: PASS. Protocol-tier gate tests still pass on claude-code (default harness; `fixtureEnv` sets no `WITNESS_HARNESS`/`PI_CODING_AGENT` — verify in `tests/helpers.ts` and add `WITNESS_HARNESS: 'claude-code'` to `fixtureEnv`'s base if the suite itself runs under pi and leaks `PI_CODING_AGENT`).
 
 - [ ] **Step 5: Commit**
 
@@ -969,7 +969,7 @@ export function addToLocalOverlay(root: string, model: string, harness: HarnessN
 Pass `harness` into every suite call; change the overlay call to `addToLocalOverlay(rootR.value, model, harness.name)`; update the output line (no commas — toon):
 
 ```ts
-  ctx.out(kv('overlay', `.specflow/calibration.local.yaml + ${harness.name}/${model} (gate-runs stamp calibration: local)`))
+  ctx.out(kv('overlay', `.witness/calibration.local.yaml + ${harness.name}/${model} (gate-runs stamp calibration: local)`))
 ```
 
 3d. `src/reviewer.ts` — delete the `invokeClaude` shim and its `loadHarness` import if now unused. Update the two legacy `invokeClaude` tests in `tests/reviewer.test.ts` to call `invokeReviewer(ctx, claudeHarness, ...)` with identical assertions (argv/stdin recording proves behavior is unchanged).
@@ -1008,9 +1008,9 @@ Append to `tests/check.test.ts` (mirror its existing probe tests — they contro
   it('probes the resolved harness launch binary instead of hard-coding claude', async () => {
     const repo = await tmpRepo()
     const scenario = fakeScenario()
-    // fake pi IS on the fixture PATH — under SPECFLOW_HARNESS=pi there must be no
+    // fake pi IS on the fixture PATH — under WITNESS_HARNESS=pi there must be no
     // missing-probe finding for pi and no claude probe at all
-    const r = await repo.cli(['check'], { env: gateEnv(scenario, { SPECFLOW_HARNESS: 'pi' }) })
+    const r = await repo.cli(['check'], { env: gateEnv(scenario, { WITNESS_HARNESS: 'pi' }) })
     expect(r.stdout).not.toContain('the claude CLI is required for gates on every harness')
     expect(r.stdout).not.toMatch(/probes.*claude.*missing/)
   })
@@ -1066,18 +1066,18 @@ Append to the reviewer-contract describe block in `tests/harness.test.ts`:
 ```ts
   it('handoff renders the thinking suffix natively on pi', () => {
     expect(handoffLine(pi, '/wt', 'claude-fable-5:low'))
-      .toBe("cd '/wt' && pi --model anthropic/claude-fable-5:low '/specflow'")
+      .toBe("cd '/wt' && pi --model anthropic/claude-fable-5:low '/witness'")
     expect(handoffLine(pi, '/wt', 'google/gemini-3.6-pro'))
-      .toBe("cd '/wt' && pi --model google/gemini-3.6-pro '/specflow'")
+      .toBe("cd '/wt' && pi --model google/gemini-3.6-pro '/witness'")
   })
 
   it('handoff renders non-off thinking as MAX_THINKING_TOKENS on claude-code', () => {
     expect(handoffLine(claude, '/wt', 'claude-fable-5:medium'))
-      .toBe("cd '/wt' && MAX_THINKING_TOKENS=8192 claude --model claude-fable-5 '/specflow'")
+      .toBe("cd '/wt' && MAX_THINKING_TOKENS=8192 claude --model claude-fable-5 '/witness'")
     expect(handoffLine(claude, '/wt', 'claude-fable-5'))
-      .toBe("cd '/wt' && claude --model claude-fable-5 '/specflow'")
+      .toBe("cd '/wt' && claude --model claude-fable-5 '/witness'")
     expect(handoffLine(claude, '/wt', undefined))
-      .toBe("cd '/wt' && claude '/specflow'")
+      .toBe("cd '/wt' && claude '/witness'")
   })
 ```
 
@@ -1115,7 +1115,7 @@ export function handoffLine(harness: Harness, home: string, model: string | unde
   const budget = harness.name === 'claude-code' && parsed?.ok === true && parsed.value.thinking !== 'off'
     ? `MAX_THINKING_TOKENS=${CLAUDE_THINKING_BUDGET[parsed.value.thinking]} `
     : ''
-  return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/specflow'`
+  return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/witness'`
 }
 ```
 
@@ -1146,7 +1146,7 @@ Add to the preamble sentence at DESIGN.md:303: `Row 88 (✹) is grill #11 — ha
 Append after row 87:
 
 ```markdown
-| 88 ✹ | The judgment lane runs on the resolved harness | Overturns row 87's four residuals: `invokeReviewer(ctx, harness, opts)` spawns the RESOLVED harness's headless mode (claude-code: `claude -p --output-format json`; pi: hermetic `pi -p --mode json --no-session --no-extensions --no-skills --no-context-files --thinking <level>` — every omitted flag was a machine-local variable silently changing reviewer behavior, and this machine's `defaultThinkingLevel: xhigh` was the probable true cause of row 87's "stalls on long prompts"). Full routing, NO fallback: a silent claude fallback would swap the reviewer identity mid-pipeline. The pin grammar becomes `[provider/]model[:thinking]` — one knob (row 87's no-`provider:`-key argument dies with the forced-claude pin that justified it); bare pins resolve through the harness default provider, provider-qualified pins refuse `provider-unrunnable` on claude-code, omitted thinking is `off` on every harness, and claude-code renders non-off levels through a pinned `MAX_THINKING_TOKENS` budget table. The verdict-cache key and gate-run entries gain `harness` (absent reads `claude-code` — a pi verdict must never cache-hit a claude one); calibration becomes per-(harness, model): the shipped matrix stays claude-code, `specflow calibrate` routes through the harness and writes `matrices.<name>.models` to the local overlay, and an uncalibrated (harness, model) pair rides the EXISTING floor machinery — loud warning, `--manual` stop, `calibration: local` stamps. `check` probes the resolved harness's launch binary. Residual accepted, not fixed: Anthropic structurally privileges `claude -p` (first-party, plan limits) over third-party harnesses — the empirical probe hit `400 "Third-party apps now draw from your extra usage"` on a fresh `pi -p` spawn against subscription OAuth while `claude -p` answered in 3.6s on the same machine; under full routing that surfaces as a loud in-stream `reviewer-invocation` refusal (pi's `--mode json` reports provider errors as `stopReason: "error"` with exit 0 — the envelope parser, not the exit code, is the error channel), and the remedy is the user's provider choice, not specflow's | Row 87 measured the reviewer lane as the deepest coupling and accepted it four ways (claude-on-every-harness, claude-only calibration, dual-meaning `gates.model`, no provider key); the 2026-07-31 design interview overturned it after a probe re-tested the two operational objections and found both soft — the "long-prompt stall" resolved into closed upstream stdin/loop bugs (earendil-works/pi #161 #2584 #2677 #4303 #5571) compounded by the xhigh default, and headless PNG input is a documented pi feature (`pi -p @screenshot.png` file arguments; the Read tool sends images as attachments) — while the billing asymmetry hardened from anecdote to a reproduced 400. Chosen over two rejected shapes: silent-fallback routing (corrupts the cache key and the calibration claim) and reviewer-lane-stays-claude with an opt-in knob (preserves the dual-meaning pin and the claude-on-PATH requirement for pure-pi users — the two residuals the redesign existed to kill) |
+| 88 ✹ | The judgment lane runs on the resolved harness | Overturns row 87's four residuals: `invokeReviewer(ctx, harness, opts)` spawns the RESOLVED harness's headless mode (claude-code: `claude -p --output-format json`; pi: hermetic `pi -p --mode json --no-session --no-extensions --no-skills --no-context-files --thinking <level>` — every omitted flag was a machine-local variable silently changing reviewer behavior, and this machine's `defaultThinkingLevel: xhigh` was the probable true cause of row 87's "stalls on long prompts"). Full routing, NO fallback: a silent claude fallback would swap the reviewer identity mid-pipeline. The pin grammar becomes `[provider/]model[:thinking]` — one knob (row 87's no-`provider:`-key argument dies with the forced-claude pin that justified it); bare pins resolve through the harness default provider, provider-qualified pins refuse `provider-unrunnable` on claude-code, omitted thinking is `off` on every harness, and claude-code renders non-off levels through a pinned `MAX_THINKING_TOKENS` budget table. The verdict-cache key and gate-run entries gain `harness` (absent reads `claude-code` — a pi verdict must never cache-hit a claude one); calibration becomes per-(harness, model): the shipped matrix stays claude-code, `witness calibrate` routes through the harness and writes `matrices.<name>.models` to the local overlay, and an uncalibrated (harness, model) pair rides the EXISTING floor machinery — loud warning, `--manual` stop, `calibration: local` stamps. `check` probes the resolved harness's launch binary. Residual accepted, not fixed: Anthropic structurally privileges `claude -p` (first-party, plan limits) over third-party harnesses — the empirical probe hit `400 "Third-party apps now draw from your extra usage"` on a fresh `pi -p` spawn against subscription OAuth while `claude -p` answered in 3.6s on the same machine; under full routing that surfaces as a loud in-stream `reviewer-invocation` refusal (pi's `--mode json` reports provider errors as `stopReason: "error"` with exit 0 — the envelope parser, not the exit code, is the error channel), and the remedy is the user's provider choice, not witness's | Row 87 measured the reviewer lane as the deepest coupling and accepted it four ways (claude-on-every-harness, claude-only calibration, dual-meaning `gates.model`, no provider key); the 2026-07-31 design interview overturned it after a probe re-tested the two operational objections and found both soft — the "long-prompt stall" resolved into closed upstream stdin/loop bugs (earendil-works/pi #161 #2584 #2677 #4303 #5571) compounded by the xhigh default, and headless PNG input is a documented pi feature (`pi -p @screenshot.png` file arguments; the Read tool sends images as attachments) — while the billing asymmetry hardened from anecdote to a reproduced 400. Chosen over two rejected shapes: silent-fallback routing (corrupts the cache key and the calibration claim) and reviewer-lane-stays-claude with an opt-in knob (preserves the dual-meaning pin and the claude-on-PATH requirement for pure-pi users — the two residuals the redesign existed to kill) |
 ```
 
 - [ ] **Step 2: Verify the docs tests still pass**
@@ -1173,4 +1173,4 @@ git commit -m "docs: row 88 — harness-routed reviewers overturn row 87's resid
 1. **Spec coverage:** Q2 full routing → Tasks 4, 6, 7, 8. Q3 per-(harness, model) calibration + floor → Tasks 5, 7 (floor warnings need no change — `resolveModel`'s `calibrationOf` now reads harness-scoped lists by construction). Q4+Q6 pin grammar + thinking → Tasks 1, 5, 9. Q5 hermetic spawn + identity-in-key → Tasks 2, 6. NDJSON envelope + in-stream errors → Tasks 2, 3, 4. Probe follows harness → Task 8. DESIGN row → Task 10.
 2. **Known gap, accepted:** `GateRunEntry.harness` is stamped but the dashboard/`next` render of gate-run history does not display it — display is additive and deferred to real need.
 3. **Type consistency:** `ParsedPin` produced in Task 1 is the exact type consumed by Tasks 2, 4, 9. `loadMatrix(root, HarnessName)` (Task 5) matches every call site updated in Tasks 5–7. `invokeReviewer(ctx, Harness, InvokeOpts)` is identical across Tasks 4, 6, 7.
-4. **Fixture-env caveat (Task 6 Step 4):** if the suite itself runs under pi, `PI_CODING_AGENT` may leak into `fixtureEnv` and flip every protocol test to pi — the step includes the check and the one-line fix (`SPECFLOW_HARNESS: 'claude-code'` in the base env).
+4. **Fixture-env caveat (Task 6 Step 4):** if the suite itself runs under pi, `PI_CODING_AGENT` may leak into `fixtureEnv` and flip every protocol test to pi — the step includes the check and the one-line fix (`WITNESS_HARNESS: 'claude-code'` in the base env).

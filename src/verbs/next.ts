@@ -67,7 +67,7 @@ export interface NextAction {
 }
 
 // The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
-// `specflow start` and ends at the merge stamp. Anything else returns undefined and is
+// `witness start` and ends at the merge stamp. Anything else returns undefined and is
 // not a flow. Exported because `--flow` and the dashboard must answer with the SAME
 // derivation next uses, never a re-derived shorthand.
 export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextAction | undefined {
@@ -80,17 +80,17 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   const implementModel = pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined
   const inWorktree = { home: wt, model: implementModel }
   const atRoot = { home: root }
-  if (!existsSync(wt)) return { line: `specflow start ${id}`, target: id, note: 'worktree missing — start recreates it' }
-  if (plan.meta.pr !== undefined) return { line: `specflow ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  if (!existsSync(wt)) return { line: `witness start ${id}`, target: id, note: 'worktree missing — start recreates it' }
+  if (plan.meta.pr !== undefined) return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
   const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
-  if (!satisfied) return { line: `specflow test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
-  if (!gateSettled(entries, 'implement', worktreeTreeSha(wt))) return { line: `specflow gate implement ${id}`, target: id, ...inWorktree }
-  return { line: `specflow ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  if (!satisfied) return { line: `witness test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
+  if (!gateSettled(entries, 'implement', worktreeTreeSha(wt))) return { line: `witness gate implement ${id}`, target: id, ...inWorktree }
+  return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
 }
 
 // How far along a flow is — the drain order when several are actionable. Most-advanced
@@ -175,19 +175,19 @@ function planWriteAction(
   const owner = liveOwner(root, efforts, planId, parentId)
   return owner === undefined
     ? {
-        line: 'specflow recap --file <recap.json>', stage: 'brainstorm',
+        line: 'witness recap --file <recap.json>', stage: 'brainstorm',
         note: `${planId} is owed, but no live effort can carry the write — open one`,
       }
     : {
-        line: `specflow write ${planId} --effort ${owner} --meta m.json --body b.md`,
+        line: `witness write ${planId} --effort ${owner} --meta m.json --body b.md`,
         stage: 'plan', target,
       }
 }
 
 export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): NextAction {
-  if (pendingTxn(root)) return { line: 'specflow recover --complete | --rollback' }
+  if (pendingTxn(root)) return { line: 'witness recover --complete | --rollback' }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
-    return { line: 'specflow check' }
+    return { line: 'witness check' }
   }
 
   const efforts = effortStreams(root)
@@ -222,7 +222,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   const pending = pendingDecisionsAll(root, efforts, specs, plans)
   if (pending.length > 0) {
     const first = pending[0]!
-    return { line: `specflow decide ${first.gate} ${first.target} --show`, target: first.target }
+    return { line: `witness decide ${first.gate} ${first.target} --show`, target: first.target }
   }
 
   // bound-stuck gates: no pending decision can ever be created (the gate
@@ -231,7 +231,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   for (const e of efforts) {
     if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose')) {
       return {
-        line: `specflow decide decompose ${e.slug} --approve --override | --revise --upstream ${e.slug} | --stop`,
+        line: `witness decide decompose ${e.slug} --approve --override | --revise --upstream ${e.slug} | --stop`,
         target: e.slug, note: 'round bound reached — human decision required',
       }
     }
@@ -243,7 +243,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
       if (boundReached(entries, gate) && !gateSettled(entries, gate)) {
         const up = gate === 'plan' ? String(plan.meta.parent) : id
         return {
-          line: `specflow decide ${gate} ${id} --approve --override | --revise --upstream ${up} | --stop`,
+          line: `witness decide ${gate} ${id} --approve --override | --revise --upstream ${up} | --stop`,
           target: id, note: 'round bound reached — human decision required',
         }
       }
@@ -255,14 +255,14 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
       const eff = effortOf(root, id)
       return {
-        line: `specflow decide design ${id} --approve --override | --revise --upstream ${eff ?? '<effort>'} | --stop`,
+        line: `witness decide design ${id} --approve --override | --revise --upstream ${eff ?? '<effort>'} | --stop`,
         target: id, note: 'round bound reached — human decision required',
       }
     }
   }
 
   if (efforts.length === 0) {
-    return { line: 'specflow recap --file <recap.json>', stage: 'brainstorm' }
+    return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   }
   for (const e of efforts) {
     const writes = effortWrites(root, e.slug)
@@ -274,7 +274,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (latestRecap(root, e.slug)?.class === 'chore') {
       if (writes.size === 0) {
         return {
-          line: `specflow write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,
+          line: `witness write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,
           stage: 'plan', target: e.slug,
           note: 'chore: plan-level motion — a chore never writes spec content',
         }
@@ -283,7 +283,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     }
     if (writes.size === 0) {
       return {
-        line: `specflow write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+        line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
         stage: 'decompose', target: e.slug,
       }
     }
@@ -299,11 +299,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha)) {
       return authoringOwed(e.entries, 'decompose', effortSha)
         ? {
-            line: `specflow write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+            line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
             stage: 'decompose', target: e.slug,
             note: 'revise owed — re-author, then the gate has something new to judge',
           }
-        : { line: `specflow gate decompose --effort ${e.slug}`, target: e.slug }
+        : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug }
     }
   }
 
@@ -317,13 +317,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     // A pending design DECISION was already caught by the top-of-function scan; a stale
     // prior approval never routes here because designPending re-arms on stamp.spec mismatch.
     if (!designArtifactCurrent(root, spec)) {
-      return { line: `specflow design ${id} --file <html>`, stage: 'design', target: id }
+      return { line: `witness design ${id} --file <html>`, stage: 'design', target: id }
     }
     // Registered but unshown is the normal state right after --file. Ask for the show
     // step by name; routing to the gate here would refuse design-unseen every time.
     return designUnseen(root, cfg.paths, id) !== undefined
-      ? { line: `specflow design ${id} --open`, stage: 'design', target: id }
-      : { line: `specflow gate design ${id}`, target: id }
+      ? { line: `witness design ${id} --open`, stage: 'design', target: id }
+      : { line: `witness gate design ${id}`, target: id }
   }
 
   const ready = (dep: string): boolean => {
@@ -360,7 +360,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const planSha = parent ? planPairSha(plan, parent) : undefined
     const entries = readStream(root, id)
     if (gateSettled(entries, 'plan', planSha)) continue
-    if (!authoringOwed(entries, 'plan', planSha)) return { line: `specflow gate plan ${id}`, target: id }
+    if (!authoringOwed(entries, 'plan', planSha)) return { line: `witness gate plan ${id}`, target: id }
     const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
   }
@@ -369,10 +369,10 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // and every in-flight flow was already offered above.
   for (const plan of plans) {
     if (String(plan.meta.status) === 'approved') {
-      return { line: `specflow start ${String(plan.meta.id)}`, target: String(plan.meta.id) }
+      return { line: `witness start ${String(plan.meta.id)}`, target: String(plan.meta.id) }
     }
   }
-  return { line: 'specflow check' }
+  return { line: 'witness check' }
 }
 
 function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
@@ -388,7 +388,7 @@ function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
   // `approved`, this refuses when it is not `in-progress` — an approved-but-unstarted
   // plan is not yet a flow, and reusing the name would misreport that case.
   if (status !== 'in-progress') {
-    return refuse([v('--flow', 'not-started', status, `a started plan — run specflow start ${id} first`)])
+    return refuse([v('--flow', 'not-started', status, `a started plan — run witness start ${id} first`)])
   }
   return ok(doc)
 }
@@ -415,7 +415,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.flow !== undefined) {
     const flowR = resolveFlow(canon, values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    action = flowAction(root, cfgR.value, flowR.value) ?? { line: 'specflow check', target: values.flow }
+    action = flowAction(root, cfgR.value, flowR.value) ?? { line: 'witness check', target: values.flow }
   } else {
     const inferred = worktreeFlow(ctx.cwd, root)
     const ambient = inferred !== undefined ? findById(canon, inferred) : undefined

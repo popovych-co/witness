@@ -35,7 +35,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const tokens = intFlag(argv, '--tokens', violations, false)
   const toolUses = intFlag(argv, '--tool-uses', violations, false)
   const durationMs = intFlag(argv, '--duration-ms', violations, false)
-  if (!planId) violations.push(v('plan-id', 'required', 'absent', 'specflow dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n>'))
+  if (!planId) violations.push(v('plan-id', 'required', 'absent', 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n>'))
   if (violations.length) { renderRefusal(violations).forEach(ctx.err); return EXIT.REFUSED }
 
   const rootR = primaryRoot(ctx.cwd)

@@ -44,7 +44,7 @@ function detail(e: Entry): string {
 }
 
 const streamIds = (root: string): string[] => {
-  const dir = join(root, '.specflow', 'journal')
+  const dir = join(root, '.witness', 'journal')
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((f) => f.endsWith('.jsonl'))
@@ -117,7 +117,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   })
   const id = positionals[0]
   if (!values.all && !id) {
-    renderRefusal([v('id', 'required', 'absent', 'specflow log <id> [--lineage] | specflow log --all')]).forEach(ctx.err)
+    renderRefusal([v('id', 'required', 'absent', 'witness log <id> [--lineage] | witness log --all')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const rootRes = primaryRoot(ctx.cwd)

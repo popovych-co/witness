@@ -33,12 +33,12 @@ describe('stateCommit', () => {
     repo.write('specs/a.md', 'content')
     const res = stateCommit(repo.root, ['specs/a.md'], 'write(a): create spec')
     expect(res.ok).toBe(true)
-    expect(TRAILER).toBe('Specflow-State: 1')
-    expect(repo.git('log', '-1', '--format=%(trailers:key=Specflow-State,valueonly=true)')).toBe('1')
+    expect(TRAILER).toBe('Witness-State: 1')
+    expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
     expect(repo.git('log', '-1', '--format=%s')).toBe('write(a): create spec')
   })
 
-  it('refuses paths outside specs/, plans/, .specflow/', () => {
+  it('refuses paths outside specs/, plans/, .witness/', () => {
     const repo = tmpRepo()
     repo.write('src/x.ts', 'x')
     const res = stateCommit(repo.root, ['src/x.ts'], 'nope')
@@ -53,10 +53,10 @@ describe('stateCommit', () => {
     expect(!res.ok && res.violations[0]?.rule).toBe('unrelated-dirty')
   })
 
-  it('ignores specflow local files when checking dirt', () => {
+  it('ignores witness local files when checking dirt', () => {
     const repo = tmpRepo()
-    mkdirSync(join(repo.root, '.specflow'), { recursive: true })
-    repo.write('.specflow/lock', '{"pid":1}')
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    repo.write('.witness/lock', '{"pid":1}')
     repo.write('specs/a.md', 'a')
     expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
   })
@@ -79,14 +79,14 @@ describe('auditStateCommits', () => {
 describe('designs/ is a state directory', () => {
   it('stateDirs includes the configured designs dir', () => {
     const repo = tmpRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\n')
+    repo.write('witness.config.yaml', 'schema: 1\n')
     expect(stateDirs(repo.root)).toContain('designs')
   })
 
   it('stateCommit accepts a designs/ path', () => {
     const repo = tmpRepo()
-    repo.write('specflow.config.yaml', 'schema: 1\n')
-    repo.git('add', 'specflow.config.yaml'); repo.git('commit', '-m', 'cfg')
+    repo.write('witness.config.yaml', 'schema: 1\n')
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'cfg')
     repo.write('designs/auth-refresh.html', '<!doctype html><body><section id="a"></section></body>')
     const res = stateCommit(repo.root, ['designs/auth-refresh.html'], 'design(auth-refresh)')
     expect(res.ok).toBe(true)
