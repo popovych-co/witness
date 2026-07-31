@@ -21,7 +21,10 @@ export type ReviewerSpawn = HarnessSpawn
 export interface Harness {
   name: HarnessName
   launch: string
-  modelFlag: string
+  // No `modelFlag` template: Decision 88 made the model flag a renderer over the PARSED
+  // pin (modelArg), which a format string cannot express — it must choose a provider
+  // per-pin and append pi's native `:thinking` suffix. A leftover template would be a
+  // standing invitation to re-derive the flag from it and restore bug B2.
   defaultProvider?: string
   relay: string
   settings?: string
@@ -102,7 +105,6 @@ const REGISTRY: Record<HarnessName, Harness> = {
   'claude-code': {
     name: 'claude-code',
     launch: 'claude',
-    modelFlag: '--model {model}',
     relay: '/clear',
     settings: '.claude/settings.json',
     bundled: true,
@@ -135,7 +137,6 @@ const REGISTRY: Record<HarnessName, Harness> = {
   pi: {
     name: 'pi',
     launch: 'pi',
-    modelFlag: '--model {provider}/{model}',
     defaultProvider: 'anthropic',
     relay: '/new',
     bundled: false,
@@ -223,23 +224,33 @@ export function resolveHarness(
 // all — and a relay session silently running an unpinned model corrupts what row 83's
 // pins and the calibration story rest on.
 //
-// Revision 9: the provider is the HARNESS's default, never a config key. Decision 12
-// forces the pin to be a claude-runnable id (the same value drives that stage's gate
-// reviewers, model.ts:37), so `anthropic` is a consequence, not a preference — and the
-// only other reachable state was silently wrong: `pi --model google/claude-opus-5`
-// pastes cleanly and resolves to nothing, which is bug B2's exact shape.
+// Revision 9: the provider is the HARNESS's default, never a config key.
+//
+// Extended by Decision 88: the flag renders over the PARSED pin, not the raw string.
+// Treating the whole string as {model} emitted `--model anthropic/google/gemini-3.6-pro`
+// for a provider-qualified pin — pastes cleanly, resolves to nothing: bug B2's shape.
+// Pi renders the provider and its native `:thinking` suffix; claude-code renders the
+// bare id and carries non-off thinking as a MAX_THINKING_TOKENS prefix on the line.
 function modelArg(harness: Harness, model: string | undefined): string {
   if (model === undefined || model === '') return ''
-  const rendered = harness.modelFlag
-    .replace('{provider}', harness.defaultProvider ?? '')
-    .replace('{model}', model)
-  return ` ${rendered}`
+  const parsed = parsePin('gates.model', model)
+  if (!parsed.ok) return ''  // stagePin refused upstream; render nothing rather than garbage
+  const pin = parsed.value
+  if (harness.name === 'pi') {
+    const suffix = pin.thinking === 'off' ? '' : `:${pin.thinking}`
+    return ` --model ${pin.provider ?? harness.defaultProvider ?? ''}/${pin.model}${suffix}`
+  }
+  return ` --model ${pin.model}`
 }
 
 // Single quotes: a double-quoted form trips toon esc() quoting and emits an
 // unpasteable line (see the note this replaces at verbs/next.ts:69).
 export function handoffLine(harness: Harness, home: string, model: string | undefined): string {
-  return `cd '${home}' && ${harness.launch}${modelArg(harness, model)} '/specflow'`
+  const parsed = model !== undefined && model !== '' ? parsePin('gates.model', model) : undefined
+  const budget = harness.name === 'claude-code' && parsed?.ok === true && parsed.value.thinking !== 'off'
+    ? `MAX_THINKING_TOKENS=${CLAUDE_THINKING_BUDGET[parsed.value.thinking]} `
+    : ''
+  return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/specflow'`
 }
 
 // No comma: toon's esc() quotes any value containing one (toon.ts:3), and a quoted

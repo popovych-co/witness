@@ -221,3 +221,24 @@ describe('worker contract', () => {
     expect(s.args.some((a) => a.includes('dangerously'))).toBe(false)
   })
 })
+
+describe('thinking-aware handoff rendering', () => {
+  const claude = hx('claude-code')
+  const pi = hx('pi')
+
+  it('handoff renders the thinking suffix natively on pi', () => {
+    expect(handoffLine(pi, '/wt', 'claude-fable-5:low'))
+      .toBe("cd '/wt' && pi --model anthropic/claude-fable-5:low '/specflow'")
+    expect(handoffLine(pi, '/wt', 'google/gemini-3.6-pro'))
+      .toBe("cd '/wt' && pi --model google/gemini-3.6-pro '/specflow'")
+  })
+
+  it('handoff renders non-off thinking as MAX_THINKING_TOKENS on claude-code', () => {
+    expect(handoffLine(claude, '/wt', 'claude-fable-5:medium'))
+      .toBe("cd '/wt' && MAX_THINKING_TOKENS=8192 claude --model claude-fable-5 '/specflow'")
+    expect(handoffLine(claude, '/wt', 'claude-fable-5'))
+      .toBe("cd '/wt' && claude --model claude-fable-5 '/specflow'")
+    expect(handoffLine(claude, '/wt', undefined))
+      .toBe("cd '/wt' && claude '/specflow'")
+  })
+})
