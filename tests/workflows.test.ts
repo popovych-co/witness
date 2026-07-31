@@ -23,11 +23,21 @@ describe('workflow tiers', () => {
     expect(raw('calibration.yml')).not.toContain('--publish');
   });
 
-  it('release requires tests, version sync, and a non-empty shipped matrix', () => {
+  it('release requires tests, version sync, and the release gate', () => {
     const r = raw('release.yml');
     expect(wf('release.yml').on.push.tags).toBeDefined();
     expect(r).toContain('sync-versions');
-    expect(r).toContain('calibration.yaml');
+    expect(r).toContain('scripts/release-gate.mjs');
     expect(r).toContain('npm publish');
+  });
+
+  it('release publishes with provenance and holds the OIDC permission', () => {
+    const y = wf('release.yml');
+    expect(y.permissions['id-token']).toBe('write');
+    expect(raw('release.yml')).toContain('--provenance');
+  });
+
+  it('release is model-free — no API key on the publish path', () => {
+    expect(raw('release.yml')).not.toContain('ANTHROPIC_API_KEY');
   });
 });
