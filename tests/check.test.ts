@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
-import { SPEC_META, seededRepo, writeSpec } from './helpers.js'
+import { SPEC_META, fakeScenario, gateEnv, seededRepo, writeSpec } from './helpers.js'
 
 describe('specflow check', () => {
   it('passes a clean freshly-written canon', async () => {
@@ -91,17 +91,37 @@ describe('specflow check — harness findings', () => {
   // fired on any machine with `claude` installed — i.e. every machine that can run gates.
   // PATH must still carry git (check shells out to it for the trailer audit), so starve
   // it with a directory holding git and nothing else.
-  it('reports the claude binary as a gate prerequisite, not a later slice', async () => {
+  it('reports the resolved harness launch binary as a gate prerequisite, not a later slice', async () => {
     const repo = await seededRepo()
     const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
     const res = await repo.cli(['check'], { env: { PATH: bin } })
     const claudeRow = res.stdout.split('\n').find((l) => l.includes('claude'))
-    expect(claudeRow).toContain('required for gates on every harness')
+    expect(claudeRow).toContain("runs this harness's gate reviewers")
     // Narrowed to the claude row on purpose: starving PATH also kills the gh probe,
     // whose finding legitimately says "later slice", so asserting over all of stdout
     // would fail on somebody else's row.
     expect(claudeRow).not.toContain('later slice')
+  })
+
+  // Decision 88: the probe follows the RESOLVED harness. Under SPECFLOW_HARNESS=pi the
+  // reviewer lane never spawns claude, so a claude probe would be a false prerequisite.
+  it('probes the resolved harness launch binary instead of hard-coding claude', async () => {
+    const repo = await seededRepo()
+    const scenario = fakeScenario()
+    const res = await repo.cli(['check'], { env: gateEnv(scenario, { SPECFLOW_HARNESS: 'pi' }) })
+    expect(res.stdout).not.toContain('required for gates on every harness')
+    expect(res.stdout).not.toMatch(/probes.*claude.*missing/)
+  })
+
+  it('names the resolved harness binary when THAT binary is the missing one', async () => {
+    const repo = await seededRepo()
+    const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
+    symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
+    const res = await repo.cli(['check'], { env: { PATH: bin, SPECFLOW_HARNESS: 'pi' } })
+    const row = res.stdout.split('\n').find((l) => l.includes('probes') && l.includes('pi'))
+    expect(row).toContain("the pi CLI runs this harness's gate reviewers")
+    expect(res.stdout).not.toMatch(/probes.*claude.*missing/)
   })
 
   it('flags a project-scope skills install as invisible from worktrees', async () => {

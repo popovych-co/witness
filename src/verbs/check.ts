@@ -165,13 +165,6 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
 
   if (!probe('gh', ['--version'], ctx.env)) findings.push(f('warn', 'probes', 'gh', 'missing', 'PR operations (later slice) will stop loudly'))
   else if (!probe('gh', ['auth', 'status'], ctx.env)) findings.push(f('warn', 'probes', 'gh', 'unauthenticated', 'run gh auth login'))
-  // Decision 12: the judgment lane is Claude on EVERY harness — `specflow gate` spawns
-  // `claude -p --output-format json` for every reviewer. This is a machine fact, not a
-  // harness fact, and the wording must not read as optional.
-  if (!probe('claude', ['--version'], ctx.env)) {
-    findings.push(f('warn', 'probes', 'claude', 'missing',
-      'the claude CLI is required for gates on every harness — install and authenticate it'))
-  }
 
   if (cfg.ok) {
     for (const [key, paths] of Object.entries(cfg.value.docs)) {
@@ -197,6 +190,14 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     hxR.violations.forEach((x) => findings.push(f('error', 'harness', x.field, x.rule, x.got)))
   } else {
     const harness = hxR.value.harness
+    // Decision 88: the judgment lane runs on the RESOLVED harness — the probe follows it.
+    // (Decision 12 probed `claude` unconditionally; that was true only while every
+    // harness's reviewers were claude, and it is a false prerequisite for a pi user.)
+    if (!probe(harness.launch, ['--version'], ctx.env)) {
+      findings.push(f('warn', 'probes', harness.launch, 'missing',
+        `the ${harness.launch} CLI runs this harness's gate reviewers — install and authenticate it`))
+    }
+
     // Decision 14: pi resolves project skills cwd-relative with no upward walk, and
     // implement runs with cwd inside .specflow/worktrees/<plan-id>. A project-scope
     // install therefore loses every skill in the stage that does the most work.
