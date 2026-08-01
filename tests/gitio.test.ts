@@ -53,6 +53,32 @@ describe('stateCommit', () => {
     expect(!res.ok && res.violations[0]?.rule).toBe('unrelated-dirty')
   })
 
+  // Row 87's recorded rule — "nothing to COMMIT is the same legal silent success as
+  // nothing to write" — was implemented only at init.ts's own call site, so every other
+  // caller still threw out of gitio. `check --drift` on a repo with no live specs is the
+  // reachable case: the sweep produces no journal entries and no stamps, so `files` is
+  // empty and git dies on `commit --only ... --` with an empty pathspec.
+  it('is a silent success when the path set is empty', () => {
+    const repo = tmpRepo()
+    repo.write('specs/a.md', 'a')
+    stateCommit(repo.root, ['specs/a.md'], 'seed')
+    const head = repo.git('rev-parse', 'HEAD')
+    const res = stateCommit(repo.root, [], 'drift-check: 0/0 failing')
+    expect(res.ok && res.value.sha).toBe(head)
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)   // no empty commit manufactured
+  })
+
+  it('is a silent success when the named paths carry no diff', () => {
+    const repo = tmpRepo()
+    repo.write('specs/a.md', 'a')
+    stateCommit(repo.root, ['specs/a.md'], 'seed')
+    const head = repo.git('rev-parse', 'HEAD')
+    repo.write('specs/a.md', 'a')            // a restamp that restores HEAD content
+    const res = stateCommit(repo.root, ['specs/a.md'], 'restamp(a): no delta')
+    expect(res.ok && res.value.sha).toBe(head)
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+  })
+
   it('ignores witness local files when checking dirt', () => {
     const repo = tmpRepo()
     mkdirSync(join(repo.root, '.witness'), { recursive: true })
