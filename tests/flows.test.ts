@@ -6,7 +6,8 @@ import '../src/gates/index.js'
 import { changedFiles, diffBase } from '../src/evidence.js'
 import { loadConfig } from '../src/config.js'
 import {
-  approve, fakeCtx, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, writePlan, writeSpec,
+  approve, fakeCtx, fakeScenario, gateEnv, ghState, nextLine, putVerdict, seededRepo, shippableRepo,
+  writePlan, writeSpec,
 } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 import type { TestRepo } from './helpers.js'
@@ -58,7 +59,62 @@ describe('gate approval lapses on tree change', () => {
     // tree that no longer exists
     writeFileSync(join(worktreePath(repo.root, planId), 'src', 'sneaked-in.ts'), 'export const x = 1\n')
 
-    expect(await nextLine(repo)).toContain(`witness gate implement ${planId}`)
+    // ...and it names the lapse. A bare `gate implement` row is indistinguishable from a
+    // CLI stuck on a stale answer — which is how a human who just watched that gate pass
+    // reads it, and how the reported two-session deadlock looked from the outside.
+    const out = await nextLine(repo)
+    expect(out).toContain(`witness gate implement ${planId}`)
+    expect(out).toContain('note:')
+    expect(out).toContain('approval lapsed')
+
+    await repo.cli(['clean'])
+  })
+
+  // Two checkouts, one derivation. The reported deadlock was two sessions each routing
+  // to the other, so agreement between them is the invariant worth pinning: both must
+  // name the same stage and the same home, whichever side asks.
+  it('agrees on stage and home from the primary root and from the worktree', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await settleImplementGate(repo, wt, planId)
+
+    const fromRoot = await nextLine(repo)
+    const fromWorktree = await nextLine(repo, { cwd: wt })
+
+    const stageOf = (o: string) => o.split('\n').find((l) => l.startsWith('stage: '))
+    const homeOf = (o: string) => o.split('\n').find((l) => l.startsWith('home: '))
+    expect(stageOf(fromRoot)).toBe('stage: ship')
+    expect(stageOf(fromWorktree)).toBe(stageOf(fromRoot))
+    expect(homeOf(fromWorktree)).toBe(homeOf(fromRoot))
+    expect(homeOf(fromRoot)).toBe(`home: ${repo.root}`)
+
+    await repo.cli(['clean'])
+  })
+})
+
+describe('next surfaces what the merge stamp could not do', () => {
+  // `dashboard` renders lazyStamp's stale rows; `next` computed the same rows and threw
+  // them away. A plan whose PR closed unmerged can never be stamped `done`, so the flow
+  // sits at ship forever — and the one verb the driving loop calls every turn said
+  // nothing about it.
+  // Deliberately the light fixture: a plan carrying `pr:` routes to ship from
+  // flowAction's second line, so neither test evidence nor a settled gate is on this
+  // path. shippableRepo would buy nothing here and costs two vitest subprocesses.
+  it('renders a stale row when the merge stamp cannot proceed', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    const planId = 'auth-refresh-plan-1'
+    await writePlan(repo, planId)
+    repo.flipStatus(planId, 'approved')
+    await repo.cli(['start', planId])
+    repo.setMeta(planId, { pr: 7 })
+    const scenario = fakeScenario()
+    ghState(scenario, 7, 'CLOSED')
+
+    const res = await repo.cli(['next'], { env: gateEnv(scenario) })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('stale')
+    expect(res.stdout).toContain(`witness abandon ${planId}`)
 
     await repo.cli(['clean'])
   })
