@@ -69,13 +69,35 @@ export function dirtyStatePaths(root: string): string[] {
 
 export const TRAILER = 'Witness-State: 1'
 
+// Row 87's rule: nothing to COMMIT is the same legal silent success as nothing to write.
+// It lives here, at the one choke point every state commit passes through, because git
+// rejects BOTH empty cases fatally and a caller cannot tell them apart in advance:
+//   • no paths at all → `commit --only ... --` dies "No paths with --include/--only"
+//     (a drift sweep with no live specs journals nothing and stamps nothing);
+//   • paths with no diff → `commit --only` exits non-zero (a restamp that restores a
+//     file to exactly its HEAD content, or a pathspec the repo gitignores).
+// Either way there is no state to record, so HEAD is already the answer. Implementing
+// this at init.ts's call site alone left every other caller throwing out of gitio and
+// surfacing through bin.ts as `unexpected-error` — "report a bug" on a healthy repo.
+function headSha(root: string): string {
+  const head = tryGit(root, 'rev-parse', 'HEAD')
+  return head.ok ? head.out : ''            // unborn HEAD: no commit exists to name
+}
+
 export function commitWithTrailer(root: string, files: string[], subject: string): Result<{ sha: string }> {
+  if (files.length === 0) return ok({ sha: headSha(root) })
   // tryGit, not git: a path already fully processed by a prior `git mv` (both sides
   // of a rename staged atomically) is absent from working tree AND index, so `add`
   // reports it unmatched — even though the rename itself is already staged. `commit
   // --only` resolves its pathspecs against the index-vs-HEAD diff, where the rename
   // is visible, so it still succeeds and is the real validation here.
   tryGit(root, 'add', '--', ...files)
+  // Ask git what actually changed rather than assuming every file we touched is dirty.
+  // Runs AFTER the add, so a freshly staged untracked path reads as `A ` and commits;
+  // a staged rename reads as `R ` on whichever side the pathspec names.
+  if (tryGit(root, 'status', '--porcelain', '--', ...files).out === '') {
+    return ok({ sha: headSha(root) })
+  }
   // --no-verify: state commits are machine-authored and scope-restricted to non-source
   // paths (isStatePath), so a host lint/test hook has nothing to validate here — while
   // its stash/restore step can destroy the human's unrelated dirty work, and a

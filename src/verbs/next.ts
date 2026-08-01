@@ -14,7 +14,7 @@ import { handoffLine, relayLine, resolveHarness } from '../harness.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
-import { kv } from '../toon.js'
+import { kv, rows } from '../toon.js'
 import { boundReached, lastGateRun, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
@@ -56,6 +56,20 @@ function authoringOwed(entries: Entry[], gate: string, currentSha: string | unde
     ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
 }
 
+// D75 re-arms a gate whose reviewed sha has moved, and `worktreeTreeSha` covers the
+// WHOLE worktree — so any state commit reaching it lapses the gate. That is correct, but
+// the row it produces is a bare `gate implement`, indistinguishable from a CLI stuck on
+// a stale answer. A human who just watched that gate pass reads it as the latter, and
+// with a second session in the worktree answering `ship` the pair looks like a deadlock
+// with no error anywhere. The lapse is a fact the CLI already knows; say it.
+function lapseNote(entries: Entry[], gate: string, currentSha: string | undefined): string | undefined {
+  const last = lastGateRun(entries, gate)
+  if (!last || currentSha === undefined || last.reviewed_sha === currentSha) return undefined
+  // sha-free: asks "was it ever settled", which is the only thing that can lapse
+  if (!gateSettled(entries, gate)) return undefined
+  return `${gate} approval lapsed — judged @${last.reviewed_sha.slice(0, 7)}, worktree now @${currentSha.slice(0, 7)} — re-gate to judge the current tree`
+}
+
 export interface NextAction {
   line: string
   stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
@@ -89,7 +103,13 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   // implement-stage hint too, not a premature jump to "gate implement".
   const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
   if (!satisfied) return { line: `witness test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
-  if (!gateSettled(entries, 'implement', worktreeTreeSha(wt))) return { line: `witness gate implement ${id}`, target: id, ...inWorktree }
+  const treeSha = worktreeTreeSha(wt)
+  if (!gateSettled(entries, 'implement', treeSha)) {
+    return {
+      line: `witness gate implement ${id}`, target: id, ...inWorktree,
+      ...noteOf(lapseNote(entries, 'implement', treeSha)),
+    }
+  }
   return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
 }
 
@@ -212,8 +232,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))
   if (flows.length > 0) {
     const waiting = pendingDecisionsAll(root, efforts, specs, plans)
+    // noteOf, not an overwrite: a lapse note explains WHY this row is the gate rather
+    // than the ship it was a moment ago, and must not be evicted by the waiting list.
     return waiting.length > 0
-      ? { ...flows[0]!, note: `${waiting.length} waiting: ${waiting.map((w) => `${w.gate} ${w.target}`).join(' · ')}` }
+      ? {
+          ...flows[0]!,
+          ...noteOf(flows[0]!.note, `${waiting.length} waiting: ${waiting.map((w) => `${w.gate} ${w.target}`).join(' · ')}`),
+        }
       : flows[0]!
   }
 
@@ -405,6 +430,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)
   if (lazy.stamped.length > 0) canon = loadCanon(root)
+  // `dashboard` renders these; `next` computed them and dropped them. A merge stamp that
+  // cannot proceed (commit refused, PR closed unmerged, lock held) leaves the flow parked
+  // at ship forever, and `next` — the one verb the driving loop calls every turn — said
+  // nothing at all. Printed BEFORE the routing block so it cannot split the contiguous
+  // next:/stage:/target:/note:/home:/run:/relay: unit the stage skills read verbatim.
+  if (lazy.stale.length > 0) {
+    rows('stale', ['plan', 'why'], lazy.stale as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
   // Precedence: an explicit --flow is a CLAIM about a flow and refuses when false.
   // A worktree cwd is AMBIENT context — it may scope a read-only question, never select

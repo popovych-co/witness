@@ -61,6 +61,20 @@ describe('witness check --drift (local)', () => {
     const res = await repo.cli(['check', '--drift', '--deep'], { env: fixtureEnv() })
     expect(res.code).toBe(2)
   })
+
+  // A repo with no live specs sweeps nothing: no journal entries, no drift stamps, so
+  // the state commit's path set is empty. That used to reach `git commit --only ... --`
+  // with an empty pathspec, which git rejects fatally — surfacing as an
+  // `unexpected-error` telling the human to report a bug, on a perfectly clean repo.
+  it('exits 0 without committing when there is nothing to sweep', async () => {
+    const repo = await seededRepo()
+    const before = trailerCount(repo)
+    const res = await repo.cli(['check', '--drift'], { env: fixtureEnv() })
+    expect(res.stderr).not.toContain('unexpected-error')
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('drift-summary: 0/0 failing')
+    expect(trailerCount(repo)).toBe(before)
+  })
 })
 
 describe('witness check --drift (CI read-only)', () => {
