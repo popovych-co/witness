@@ -53,11 +53,11 @@ describe('witness next — the ladder', () => {
     const { repo, planId } = await shippableRepo()
     const wt = `${repo.root}/.witness/worktrees/${planId}`
 
-    const cc = await nextLine(repo, { env: { WITNESS_HARNESS: 'claude-code' } })
+    const cc = await nextLine(repo, { env: { CLAUDECODE: '1' } })
     expect(cc).toContain(`run: cd '${wt}' && claude '/witness'`)
     expect(cc).toContain('relay: /clear then /witness')
 
-    const pi = await nextLine(repo, { env: { WITNESS_HARNESS: 'pi' } })
+    const pi = await nextLine(repo, { env: { PI_CODING_AGENT: 'true' } })
     expect(pi).toContain(`run: cd '${wt}' && pi '/witness'`)
     expect(pi).toContain('relay: /new then /witness')
   })
@@ -70,16 +70,17 @@ describe('witness next — the ladder', () => {
     repo.git('commit', '-m', 'pin implement model')
     const wt = `${repo.root}/.witness/worktrees/${planId}`
 
-    const pi = await nextLine(repo, { env: { WITNESS_HARNESS: 'pi' } })
+    const pi = await nextLine(repo, { env: { PI_CODING_AGENT: 'true' } })
     expect(pi).toContain(`run: cd '${wt}' && pi --model anthropic/claude-opus-5 '/witness'`)
 
-    const cc = await nextLine(repo, { env: { WITNESS_HARNESS: 'claude-code' } })
+    const cc = await nextLine(repo, { env: { CLAUDECODE: '1' } })
     expect(cc).toContain(`run: cd '${wt}' && claude --model claude-opus-5 '/witness'`)
   })
 
   it('refuses an unknown harness rather than printing an unrunnable handoff', async () => {
     const { repo } = await shippableRepo()
-    const r = await repo.cli(['next'], { env: { WITNESS_HARNESS: 'pikachu' } })
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
+    const r = await repo.cli(['next'])
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('unknown-harness')
     expect(r.stderr).toContain('claude-code | pi')

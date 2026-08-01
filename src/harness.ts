@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
-import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { ok, refuse, v, type Result } from './refusal.js'
 
 export const HARNESSES = ['claude-code', 'pi'] as const
 export type HarnessName = (typeof HARNESSES)[number]
@@ -93,7 +93,7 @@ function parsePiEnvelope(stdout: string): Result<{ text: string }> {
   return ok({ text })
 }
 
-export type HarnessSource = 'env' | 'detected' | 'config' | 'default'
+export type HarnessSource = 'detected' | 'config' | 'default'
 
 // Revision 10: a typed constant, not `harness/<name>.json`. Every consumer is
 // TypeScript and the name set is closed by loadHarness's refusal, so a data file bought
@@ -182,9 +182,6 @@ export function loadHarness(name: string): Result<Harness> {
   return ok(harness)
 }
 
-const relabel = (violations: Violation[], field: string): Violation[] =>
-  violations.map((x) => ({ ...x, field }))
-
 // Decision 5. Detection is the authority; config is the fallback. A config-authority
 // default in a fresh repo emits a runnable-LOOKING, unrunnable handoff behind a warning
 // that gets scrolled past — bug B2's exact shape. Detection tests PRESENCE: neither
@@ -193,15 +190,13 @@ const relabel = (violations: Violation[], field: string): Violation[] =>
 // Deliberately NOT wired into loadConfig: every verb calls that, so an invalid
 // `harness:` there would brick `witness check` on a key nothing read. Verbs that need
 // a harness ask for one; `check` reports a malformed config value as a finding.
+//
+// Row 90 removed the WITNESS_HARNESS env rung: configuration has one home, and tests
+// simulate harnesses by setting the detection vars production actually reads.
 export function resolveHarness(
   env: Record<string, string | undefined>,
   raw: Record<string, unknown>,
 ): Result<{ harness: Harness; source: HarnessSource }> {
-  const override = env.WITNESS_HARNESS
-  if (override !== undefined && override !== '') {
-    const r = loadHarness(override)
-    return r.ok ? ok({ harness: r.value, source: 'env' }) : refuse(relabel(r.violations, 'WITNESS_HARNESS'))
-  }
   if (env.PI_CODING_AGENT !== undefined) {
     const r = loadHarness('pi')
     return r.ok ? ok({ harness: r.value, source: 'detected' }) : refuse(r.violations)

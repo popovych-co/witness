@@ -148,7 +148,7 @@ describe('witness init --agent', () => {
 
   it('resolves --agent auto from the detection rungs', async () => {
     const repo = tmpRepo()
-    const res = await repo.cli(['init', '--agent', 'auto'], { env: { WITNESS_HARNESS: 'pi' } })
+    const res = await repo.cli(['init', '--agent', 'auto'], { env: { PI_CODING_AGENT: 'true' } })
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('agent: pi')
     expect(repo.read('witness.config.yaml')).toContain('harness: pi')

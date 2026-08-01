@@ -81,7 +81,7 @@ describe('gate engine', () => {
   })
 
   it('runs the battery through pi when the resolved harness is pi', async () => {
-    const { repo, scenario, ctx } = await gateRepo({ WITNESS_HARNESS: 'pi' })
+    const { repo, scenario, ctx } = await gateRepo({ PI_CODING_AGENT: 'true' })
     putVerdict(scenario, CLEAN('auth-refresh'))
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
     const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')

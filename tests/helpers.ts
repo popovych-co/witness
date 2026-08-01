@@ -52,10 +52,11 @@ export function tmpRepo(): TestRepo {
     const answers = [...(opts.answers ?? [])]
     const ctx: Ctx = {
       cwd: opts.cwd ?? root,
-      // WITNESS_HARNESS pinned AFTER process.env and BEFORE opts.env: the ambient
-      // session's CLAUDECODE/PI_CODING_AGENT must not decide what `next` renders, and a
-      // harness test must still be able to ask for something else.
-      env: { ...process.env, WITNESS_HARNESS: 'claude-code', ...opts.env },
+      // Detection vars scrubbed AFTER process.env and BEFORE opts.env: the ambient
+      // session's CLAUDECODE/PI_CODING_AGENT must not decide what `next` renders
+      // (this suite dogfoods under pi), and a harness test asks for one by setting
+      // the SAME detection var production reads — row 90 killed the env override.
+      env: { ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined, ...opts.env },
       isTTY: opts.tty ?? answers.length > 0,
       out: (l) => outs.push(l),
       err: (l) => errs.push(l),

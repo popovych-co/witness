@@ -104,12 +104,12 @@ describe('witness check — harness findings', () => {
     expect(claudeRow).not.toContain('later slice')
   })
 
-  // Decision 88: the probe follows the RESOLVED harness. Under WITNESS_HARNESS=pi the
+  // Decision 88: the probe follows the RESOLVED harness. Under PI_CODING_AGENT=true the
   // reviewer lane never spawns claude, so a claude probe would be a false prerequisite.
   it('probes the resolved harness launch binary instead of hard-coding claude', async () => {
     const repo = await seededRepo()
     const scenario = fakeScenario()
-    const res = await repo.cli(['check'], { env: gateEnv(scenario, { WITNESS_HARNESS: 'pi' }) })
+    const res = await repo.cli(['check'], { env: gateEnv(scenario, { PI_CODING_AGENT: 'true' }) })
     expect(res.stdout).not.toContain('required for gates on every harness')
     expect(res.stdout).not.toMatch(/probes.*claude.*missing/)
   })
@@ -118,7 +118,7 @@ describe('witness check — harness findings', () => {
     const repo = await seededRepo()
     const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
-    const res = await repo.cli(['check'], { env: { PATH: bin, WITNESS_HARNESS: 'pi' } })
+    const res = await repo.cli(['check'], { env: { PATH: bin, PI_CODING_AGENT: 'true' } })
     const row = res.stdout.split('\n').find((l) => l.includes('probes') && l.includes('pi'))
     expect(row).toContain("the pi CLI runs this harness's gate reviewers")
     expect(res.stdout).not.toMatch(/probes.*claude.*missing/)
@@ -131,7 +131,7 @@ describe('witness check — harness findings', () => {
       mkdirSync(join(repo.root, '.pi', 'skills', s), { recursive: true })
       writeFileSync(join(repo.root, '.pi', 'skills', s, 'SKILL.md'), '---\nname: x\n---\n')
     }
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi', HOME: home } })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', HOME: home } })
     expect(res.stdout).toContain('skills-project-scope')
     expect(res.stdout).toContain('worktree')
   })
@@ -139,7 +139,7 @@ describe('witness check — harness findings', () => {
   it('warns when a harness that needs an ecosystem install has no skills at all', async () => {
     const repo = await seededRepo()
     const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi', HOME: home } })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', HOME: home } })
     expect(res.stdout).toContain('skills-not-installed')
   })
 
@@ -149,7 +149,7 @@ describe('witness check — harness findings', () => {
   it('stays quiet about skills on claude-code', async () => {
     const repo = await seededRepo()
     const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'claude-code', HOME: home } })
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', HOME: home } })
     expect(res.stdout).not.toContain('skills-not-installed')
   })
 
@@ -160,7 +160,7 @@ describe('witness check — harness findings', () => {
   it('warns when the resolved harness has no payload installed', async () => {
     const repo = await seededRepo()
     const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi', HOME: home } })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', HOME: home } })
     expect(res.stdout).toContain('payload-not-installed')
   })
 
@@ -172,7 +172,7 @@ describe('witness check — harness findings', () => {
   it('stays quiet about a payload it just installed at the running version', async () => {
     const repo = await seededRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi' } })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true' } })
     expect(res.stdout).not.toContain('payload-stale')
   })
 
@@ -181,7 +181,7 @@ describe('witness check — harness findings', () => {
     await repo.cli(['init', '--agent', 'pi'])
     const rel = '.pi/prompts/witness.md'
     repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'pi' } })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true' } })
     expect(res.stdout).toContain('payload-stale')
   })
 
@@ -189,7 +189,7 @@ describe('witness check — harness findings', () => {
   // engine, guard and dashboard out of band, so absence there is not evidence.
   it('stays quiet about payloads on claude-code', async () => {
     const repo = await seededRepo()
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'claude-code' } })
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(res.stdout).not.toContain('payload-not-installed')
   })
 
@@ -200,7 +200,7 @@ describe('witness check — harness findings', () => {
     repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'bad harness')
-    const res = await repo.cli(['check'], { env: { WITNESS_HARNESS: 'claude-code' } })
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('unknown-harness')
   })

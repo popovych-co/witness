@@ -32,11 +32,13 @@ describe('harness registry', () => {
   })
 })
 
-describe('harness resolution — five rungs', () => {
-  it('WITNESS_HARNESS outranks detection', () => {
-    const r = resolveHarness({ WITNESS_HARNESS: 'pi', CLAUDECODE: '1' }, {})
-    expect(r.ok && r.value.harness.name).toBe('pi')
-    expect(r.ok && r.value.source).toBe('env')
+describe('harness resolution — three rungs', () => {
+  it('WITNESS_HARNESS is dead — row 90: configuration has one home', () => {
+    const r = resolveHarness({ WITNESS_HARNESS: 'pi' }, {})
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toMatchObject({ harness: { name: 'claude-code' }, source: 'default' })
+    const detected = resolveHarness({ WITNESS_HARNESS: 'claude-code', PI_CODING_AGENT: 'true' }, {})
+    if (detected.ok) expect(detected.value.source).toBe('detected')
   })
 
   it('PI_CODING_AGENT outranks CLAUDECODE, which outranks config', () => {
@@ -66,9 +68,6 @@ describe('harness resolution — five rungs', () => {
   // B2's shape: a config-authority default in a fresh repo emits a runnable-LOOKING,
   // unrunnable handoff behind a warning that gets scrolled past
   it('refuses an unknown value on whichever rung supplied it', () => {
-    const env = resolveHarness({ WITNESS_HARNESS: 'nope' }, {})
-    expect(env.ok).toBe(false)
-    if (!env.ok) expect(env.violations[0]).toMatchObject({ field: 'WITNESS_HARNESS', rule: 'unknown-harness' })
     const cfg = resolveHarness({}, { harness: 'nope' })
     expect(cfg.ok).toBe(false)
     if (!cfg.ok) expect(cfg.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })

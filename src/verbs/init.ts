@@ -5,7 +5,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { configPath } from '../config.js'
 import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
-import { resolveHarness, type Harness } from '../harness.js'
+import { loadHarness, resolveHarness, type Harness } from '../harness.js'
 import {
   installPayload, mergeSettings, preflightPayload, readIfExists, recordHarness,
   writeSettings, type SyncResult,
@@ -83,15 +83,14 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   let harness: Harness | undefined
   if (agent !== undefined) {
     // `auto` is the one value that consults the detection rungs; a named agent is a
-    // claim and refuses when false, listing the harnesses that exist.
-    const hxR = agent === 'auto'
-      ? resolveHarness(ctx.env, {})
-      : resolveHarness({ WITNESS_HARNESS: agent }, {})
+    // claim and refuses when false, listing the harnesses that exist (row 90: no env
+    // impersonation — a name resolves through the registry directly).
+    const hxR = agent === 'auto' ? resolveHarness(ctx.env, {}) : loadHarness(agent)
     if (!hxR.ok) {
       renderRefusal(hxR.violations.map((x) => ({ ...x, field: '--agent' }))).forEach(ctx.err)
       return EXIT.REFUSED
     }
-    harness = hxR.value.harness
+    harness = 'harness' in hxR.value ? hxR.value.harness : hxR.value
     // Revision 6: pre-flight before the lock and before any scaffold write, so a
     // refusal here leaves the repo exactly as it was.
     const pre = preflightPayload(root, harness)
