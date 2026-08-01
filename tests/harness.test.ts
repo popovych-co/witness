@@ -159,6 +159,29 @@ describe('reviewer contract', () => {
     expect(sessionDefault.args).toContain('--thinking')
   })
 
+  it('pi renders declared extensions as -e paths INSIDE the hermetic flag set — row 89', () => {
+    const s = pi.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'off' },
+      ['/home/u/.pi/agent/npm/node_modules/pi-claude-oauth-adapter'])
+    expect(s.args).toEqual(['-p', '--mode', 'json', '--no-session', '--no-extensions',
+      '-e', '/home/u/.pi/agent/npm/node_modules/pi-claude-oauth-adapter',
+      '--no-skills', '--no-context-files', '--thinking', 'off', '--model', 'anthropic/claude-fable-5'])
+    // claude-code accepts and ignores the param — the key is machine config, pi-only in effect
+    const c = hx('claude-code').reviewer.spawn(undefined, ['/anything'])
+    expect(c.args).not.toContain('-e')
+  })
+
+  it('pi maps the extra-usage 400 to the extensions remedy, other provider errors unchanged', () => {
+    const end = (errorMessage: string) => JSON.stringify({
+      type: 'agent_end',
+      messages: [{ role: 'assistant', content: [], stopReason: 'error', errorMessage }],
+    })
+    const oauth = pi.reviewer.parseEnvelope(end('400 {"type":"error","error":{"message":"Third-party apps now draw from your extra usage, not your plan limits."}}'))
+    expect(oauth.ok).toBe(false)
+    if (!oauth.ok) expect(oauth.violations[0]!.want).toContain('.witness/config.local.yaml')
+    const other = pi.reviewer.parseEnvelope(end('529 overloaded'))
+    if (!other.ok) expect(other.violations[0]!.want).toContain('check auth and billing')
+  })
+
   it('claude-code parses the {result} envelope and pi parses the agent_end event stream', () => {
     const c = claude.reviewer.parseEnvelope(JSON.stringify({ type: 'result', result: 'VERDICT' }))
     expect(c.ok).toBe(true)

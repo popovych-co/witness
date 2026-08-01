@@ -39,7 +39,7 @@ export interface Harness {
   // means. spawn(undefined) is the session-default rung (no model flag). The exact flag
   // set is part of the reviewer's identity — calibrate measures through the same spawn.
   reviewer: {
-    spawn(pin: ParsedPin | undefined): ReviewerSpawn
+    spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn
     parseEnvelope(stdout: string): Result<{ text: string }>
   }
   // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
@@ -82,7 +82,16 @@ function parsePiEnvelope(stdout: string): Result<{ text: string }> {
   }
   const assistant = end?.messages?.filter((m) => m.role === 'assistant').at(-1)
   if (assistant?.stopReason === 'error') {
-    return refuse([v('pi', 'reviewer-invocation', (assistant.errorMessage ?? 'provider error').slice(0, 200),
+    const msg = (assistant.errorMessage ?? 'provider error').slice(0, 200)
+    // Anthropic's extra-usage 400 against subscription OAuth is the hermetic spawn
+    // disabling an auth-supplying extension, NOT an auth/billing problem — the old
+    // want text cost a real user rounds of re-login (row 89 overturned row 88's
+    // billing-asymmetry residual on this evidence).
+    if (/Third-party apps|extra usage/i.test(msg)) {
+      return refuse([v('pi', 'reviewer-invocation', msg,
+        'a credential headless pi can use — the reviewer runs hermetic (--no-extensions); if your provider auth is supplied by a pi extension, declare its path in .witness/config.local.yaml reviewerExtensions')])
+    }
+    return refuse([v('pi', 'reviewer-invocation', msg,
       'a provider the pinned model can reach — check auth and billing for that provider')])
   }
   const text = (assistant?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
@@ -116,7 +125,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     ],
     skills: { project: '.claude/skills', global: '.claude/skills' },
     reviewer: {
-      spawn(pin: ParsedPin | undefined): ReviewerSpawn {
+      spawn(pin: ParsedPin | undefined, _extensions?: readonly string[]): ReviewerSpawn {
         const args = ['-p', '--output-format', 'json']
         const env: Record<string, string> = {}
         if (pin !== undefined) {
@@ -153,10 +162,19 @@ const REGISTRY: Record<HarnessName, Harness> = {
     // Hermetic (Decision 88): every omitted flag here is a machine-local variable that
     // would silently change reviewer behavior — this machine's `defaultThinkingLevel:
     // xhigh` was the probable true cause of row 87's "stalls on long prompts".
+    //
+    // Declared reviewerExtensions (machine config) are the ONE sanctioned readmission —
+    // auth transport, journaled per gate-run, never part of the verdict-cache key. The
+    // worker below keeps full discovery on purpose: skills and context files are what
+    // the implement seed measures; auth extensions ride along with everything else there.
     reviewer: {
-      spawn(pin: ParsedPin | undefined): ReviewerSpawn {
-        const args = ['-p', '--mode', 'json', '--no-session', '--no-extensions',
-          '--no-skills', '--no-context-files', '--thinking', pin?.thinking ?? 'off']
+      spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn {
+        const args = ['-p', '--mode', 'json', '--no-session', '--no-extensions']
+        // Declared machine extensions ride INSIDE the hermetic set (row 89): pi's
+        // --no-extensions disables discovery but explicit -e paths still load, so
+        // auth-supplying adapters work without readmitting ambient machine state.
+        for (const e of extensions ?? []) args.push('-e', e)
+        args.push('--no-skills', '--no-context-files', '--thinking', pin?.thinking ?? 'off')
         if (pin !== undefined) args.push('--model', `${pin.provider ?? 'anthropic'}/${pin.model}`)
         return { cmd: 'pi', args, env: {} }
       },
