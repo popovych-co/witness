@@ -92,6 +92,16 @@ describe('gate engine', () => {
     expect(runs(repo)[0]!.harness).toBe('pi')
   })
 
+  it('declared reviewerExtensions reach the pi argv and the gate-run journal entry', async () => {
+    const { repo, scenario, ctx } = await gateRepo({ PI_CODING_AGENT: 'true' })
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    repo.write('.witness/config.local.yaml', "reviewerExtensions: ['/opt/pi/oauth-adapter']\n")
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
+    expect(argv).toContain('-e\n/opt/pi/oauth-adapter')
+    expect(runs(repo)[0]!.reviewer_extensions).toEqual(['/opt/pi/oauth-adapter'])
+  })
+
   it('blocking finding → stopped, no stamp; resume renders without appending', async () => {
     const { repo, scenario, ctx } = await gateRepo()
     putVerdict(scenario, BLOCKING('auth-refresh'))

@@ -19,6 +19,11 @@ export interface GateRunEntry {
   // Optional: every pre-88 journal on disk lacks it, and keyOf reads absent as
   // claude-code — the only harness that could have written one.
   harness?: string
+  // Optional: machine extensions declared for the reviewer spawn (row 89). Journaled
+  // for auditability; deliberately NOT part of the verdict-cache key — auth transport
+  // is not reviewer identity, and keying on it would fragment verdicts across
+  // teammates' auth setups.
+  reviewer_extensions?: string[]
   calibration: 'shipped' | 'local' | 'none'
   cached?: boolean
   manual?: boolean

@@ -12,6 +12,7 @@ import { git, stateCommit } from './gitio.js'
 import type { Harness, HarnessName } from './harness.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { PROMPT_NAMES, invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
+import type { InvokeExtras } from './reviewer.js'
 import { findById, loadCanon } from './scan.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import { createWorktree } from './worktree.js'
@@ -135,6 +136,7 @@ export function runSample(
   lens: string,
   suite: ReviewerSuite,
   overlay?: string,
+  extras?: InvokeExtras,
 ): Result<{ valid: boolean; blocking: number; why: string }> {
   const { dir, files } = materialize(suite, overlay)
   const { reviewed, context } = composeReviewed(suite, dir, files)
@@ -142,7 +144,7 @@ export function runSample(
   // prompt condition production reviewers actually see
   const menu = anchorMenu(reviewed)
   const prompt = `${lens}\n\n${menu ? `${menu}\n\n` : ''}${renderReviewed(reviewed, context)}\n`
-  const invoked = invokeReviewer(ctx, harness, { cwd: dir, prompt, model })
+  const invoked = invokeReviewer(ctx, harness, { cwd: dir, prompt, model, ...extras })
   if (!invoked.ok) return invoked // invocation-layer failure aborts the run
   const raw = parseVerdictText(invoked.value.text)
   if (!raw.ok) return ok({ valid: false, blocking: 0, why: 'verdict-unparseable' })
@@ -158,7 +160,7 @@ function side(): SideScore {
   return { ok: 0, total: 0 }
 }
 
-export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string, reviewer: string, samples: number): Promise<Result<ReviewerScore>> {
+export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string, reviewer: string, samples: number, extras?: InvokeExtras): Promise<Result<ReviewerScore>> {
   const suiteR = loadReviewerSuite(reviewer)
   if (!suiteR.ok) return suiteR
   const suite = suiteR.value
@@ -173,7 +175,7 @@ export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string
   const perSeed = distribute(samples, suite.seeds.length)
   for (const [i, seed] of suite.seeds.entries()) {
     for (let n = 0; n < perSeed[i]!; n += 1) {
-      const s = runSample(ctx, harness, model, lens, suite, seed.overlay)
+      const s = runSample(ctx, harness, model, lens, suite, seed.overlay, extras)
       if (!s.ok) return s
       catches.total += 1
       if (s.value.valid && s.value.blocking > 0) catches.ok += 1
@@ -181,14 +183,14 @@ export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string
   }
   for (const seed of suite.injects) {
     for (let n = 0; n < injectSamples(samples); n += 1) {
-      const s = runSample(ctx, harness, model, lens, suite, seed.overlay)
+      const s = runSample(ctx, harness, model, lens, suite, seed.overlay, extras)
       if (!s.ok) return s
       inject.total += 1
       if (s.value.valid && s.value.blocking > 0) inject.ok += 1
     }
   }
   for (let n = 0; n < samples; n += 1) {
-    const s = runSample(ctx, harness, model, lens, suite)
+    const s = runSample(ctx, harness, model, lens, suite, undefined, extras)
     if (!s.ok) return s
     clean.total += 1
     if (s.value.valid && s.value.blocking === 0) clean.ok += 1
@@ -197,12 +199,12 @@ export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string
   return ok({ reviewer, catches, clean, inject, pass })
 }
 
-export async function runReviewerSuites(ctx: Ctx, harness: Harness, model: string, samples: number, only?: string): Promise<Result<ReviewerScore[]>> {
+export async function runReviewerSuites(ctx: Ctx, harness: Harness, model: string, samples: number, only?: string, extras?: InvokeExtras): Promise<Result<ReviewerScore[]>> {
   const names = [...PROMPT_NAMES].sort().filter((n) => only === undefined || n === only)
   if (names.length === 0) return refuse([v('--only', 'unknown-reviewer', only ?? '', PROMPT_NAMES.join(' '))])
   const scores: ReviewerScore[] = []
   for (const name of names) {
-    const r = await runReviewerSuite(ctx, harness, model, name, samples)
+    const r = await runReviewerSuite(ctx, harness, model, name, samples, extras)
     if (!r.ok) return r
     scores.push(r.value)
   }
@@ -353,7 +355,7 @@ function firstCriterionTag(meta: { criteria?: unknown }): string {
   return withTest ? String(withTest.test).replace(/^@spec:/, '') : ''
 }
 
-export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed): Promise<Result<{ ok: boolean; why: string }>> {
+export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed, extras?: InvokeExtras): Promise<Result<{ ok: boolean; why: string }>> {
   const { root } = seedScratchRepo(`decompose-${seed.id}`)
   const canonDir = join(seed.dir, 'canon')
   if (existsSync(canonDir)) {
@@ -379,7 +381,7 @@ export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string
     NONINTERACTIVE_OVERRIDE,
   ].join('\n\n')
 
-  const invoked = invokeReviewer(ctx, harness, { cwd: root, prompt, model })
+  const invoked = invokeReviewer(ctx, harness, { cwd: root, prompt, model, ...extras })
   if (!invoked.ok) return invoked
   const raw = parseVerdictText(invoked.value.text)
   if (!raw.ok) return ok({ ok: false, why: 'envelope-unparseable' })
@@ -442,7 +444,7 @@ export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string
   return ok({ ok: true, why: 'first-try valid' })
 }
 
-export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed): Promise<Result<{ ok: boolean; why: string }>> {
+export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed, extras?: InvokeExtras): Promise<Result<{ ok: boolean; why: string }>> {
   const { root } = seedScratchRepo(`plan-${seed.id}`)
 
   const recapText = readFileSync(join(seed.dir, 'recap.json'), 'utf8')
@@ -478,7 +480,7 @@ export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, see
     NONINTERACTIVE_OVERRIDE,
   ].join('\n\n')
 
-  const invoked = invokeReviewer(ctx, harness, { cwd: root, prompt, model })
+  const invoked = invokeReviewer(ctx, harness, { cwd: root, prompt, model, ...extras })
   if (!invoked.ok) return invoked
   const raw = parseVerdictText(invoked.value.text)
   if (!raw.ok) return ok({ ok: false, why: 'envelope-unparseable' })
@@ -584,7 +586,8 @@ export async function runImplementSeed(ctx: Ctx, harness: Harness, seed: SkillSe
 }
 
 export async function runSkillSuites(
-  ctx: Ctx, harness: Harness, model: string, samples: number, opts: { only?: string; agent?: AgentRunner } = {},
+  ctx: Ctx, harness: Harness, model: string, samples: number,
+  opts: { only?: string; agent?: AgentRunner; extras?: InvokeExtras } = {},
 ): Promise<Result<SkillScore[]>> {
   const only = opts.only
   const agent = opts.agent ?? defaultAgent
@@ -597,7 +600,7 @@ export async function runSkillSuites(
     let total = 0
     for (const [i, seed] of seeds.entries()) {
       for (let n = 0; n < perSeed[i]!; n += 1) {
-        const r = await runDecomposeSeed(ctx, harness, model, seed)
+        const r = await runDecomposeSeed(ctx, harness, model, seed, opts.extras)
         if (!r.ok) return r
         total += 1
         if (r.value.ok) okCount += 1
@@ -612,7 +615,7 @@ export async function runSkillSuites(
     let total = 0
     for (const [i, seed] of seeds.entries()) {
       for (let n = 0; n < perSeed[i]!; n += 1) {
-        const r = await runPlanSeed(ctx, harness, model, seed)
+        const r = await runPlanSeed(ctx, harness, model, seed, opts.extras)
         if (!r.ok) return r
         total += 1
         if (r.value.ok) okCount += 1

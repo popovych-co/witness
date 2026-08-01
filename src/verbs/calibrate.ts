@@ -2,7 +2,7 @@ import type { Ctx } from '../cli.js'
 import { EXIT } from '../cli.js'
 import { kv, rows } from '../toon.js'
 import { renderRefusal, v } from '../refusal.js'
-import { loadConfig } from '../config.js'
+import { loadConfig, loadLocalConfig } from '../config.js'
 import { resolveHarness } from '../harness.js'
 import { MODEL_ALIASES } from '../model.js'
 import { primaryRoot } from '../gitio.js'
@@ -78,13 +78,25 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   const harness = hxR.value.harness
+  // Row 89: calibration measures through the SAME spawn as the gate battery, declared
+  // extensions included — a reviewer scored without its auth adapter is not the
+  // reviewer production runs.
+  const localR = loadLocalConfig(rootR.value)
+  if (!localR.ok) {
+    for (const line of renderRefusal(localR.violations)) ctx.err(line)
+    return EXIT.REFUSED
+  }
+  const extras = {
+    timeoutMs: cfgR.ok ? cfgR.value.gates.reviewerTimeoutMs : undefined,
+    extensions: localR.value.reviewerExtensions,
+  }
 
-  const reviewers = runReviewers ? await runReviewerSuites(ctx, harness, model, flags.samples, reviewerOnly) : undefined
+  const reviewers = runReviewers ? await runReviewerSuites(ctx, harness, model, flags.samples, reviewerOnly, extras) : undefined
   if (reviewers && !reviewers.ok) {
     for (const line of renderRefusal(reviewers.violations)) ctx.err(line)
     return EXIT.REFUSED
   }
-  const skills = runSkills ? await runSkillSuites(ctx, harness, model, flags.samples, { only: skillOnly }) : undefined
+  const skills = runSkills ? await runSkillSuites(ctx, harness, model, flags.samples, { only: skillOnly, extras }) : undefined
   if (skills && !skills.ok) {
     for (const line of renderRefusal(skills.violations)) ctx.err(line)
     return EXIT.REFUSED
