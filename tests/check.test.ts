@@ -204,4 +204,27 @@ describe('witness check — harness findings', () => {
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('unknown-harness')
   })
+
+  it('reports malformed local config as findings, not a refusal', async () => {
+    const repo = await seededRepo()
+    repo.write('.witness/config.local.yaml', 'harness: pi\n')
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.stdout).toContain('unknown-local-key')
+    expect(res.code).not.toBe(2)
+  })
+
+  it('warns on a declared extension path that does not exist', async () => {
+    const repo = await seededRepo()
+    repo.write('.witness/config.local.yaml', "reviewerExtensions: ['/nope/missing-ext']\n")
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.stdout).toContain('extension-path-missing')
+  })
+
+  it('warns when the local config file is not git-ignored (pre-0.5.0 scaffolds)', async () => {
+    const repo = await seededRepo()
+    repo.write('.gitignore', '.witness/lock\n')  // old block, no config.local.yaml line
+    repo.write('.witness/config.local.yaml', "opener: '/usr/bin/true'\n")
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.stdout).toContain('local-config-unignored')
+  })
 })

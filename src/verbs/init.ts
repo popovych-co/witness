@@ -22,6 +22,7 @@ schema: 1
 #   conventions: [docs/code/architecture.md]   # → injected into code-reviewer at implement + ship (cache-keyed)
 gates:
   model: claude-fable-5      # reviewer model pin — exact id, aliases refused
+  # reviewerTimeoutMs: 600000  # ms per reviewer invocation (machine auth/extension knobs live in .witness/config.local.yaml)
   # any gate block may pin its own model (wins over the global pin), e.g.
   # decompose: { reviewers: [slicing-critic], model: claude-opus-4-8 }
   decompose: { reviewers: [slicing-critic] }
@@ -42,6 +43,7 @@ const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/txn.json
 .witness/allow.json
 .witness/calibration.local.yaml
+.witness/config.local.yaml
 .witness/screens/
 `
 
