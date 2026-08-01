@@ -16,7 +16,7 @@ No text copied verbatim; the design-critic lens is new material. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.1}"
 ```
 
 - **Never edit `specs/**`, `plans/**`, or `designs/**`** — the CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `witness design`. (The canon guard blocks direct edits; the trailer audit catches end-runs.)
