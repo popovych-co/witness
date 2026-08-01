@@ -79,4 +79,22 @@ describe('ship gate', () => {
     const entry = runs(repo, planId).at(-1)!
     expect(entry.checks.find((c) => c.name === 'implement-gate')!.ok).toBe(false)
   })
+
+  // Characterization, deliberately asymmetric with `next`: a moved worktree re-arms the
+  // implement gate for `next` (D75) but must NOT un-settle it for ship. Ship's own pr
+  // stamp moves the tree via the watch-phase rebase, so a sha-sensitive check here is
+  // the approve → pr → lapse → gate livelock D75/D77 record. The asymmetry is the fix,
+  // not a bug — this test exists so nobody "unifies" it back into a deadlock.
+  it('keeps implement-gate settled when the worktree moves after the pass', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, CLEAN)
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    writeFileSync(join(wt, 'shipped-after-the-verdict.md'), 'a state commit reaching the worktree\n')
+
+    expect(await runGate(ctx, 'ship', planId, { fresh: false, manual: false })).toBe(1)
+    const entry = runs(repo, planId).at(-1)!
+    expect(entry.checks.find((c) => c.name === 'implement-gate')!.ok).toBe(true)
+  })
 })

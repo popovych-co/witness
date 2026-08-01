@@ -11,7 +11,8 @@ import { effortOf, worktreeTreeSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
-import { lastGateRun, type DecisionEntry, type GateCheck } from '../rounds.js'
+import { gateSettled } from '../verbs/next.js'
+import { lastGateRun, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
 
 async function commandLane(
@@ -50,14 +51,19 @@ registerGate({
 
     const entries = readStream(root, planId)
     const lastImplement = lastGateRun(entries, 'implement')
-    const implementSettled = (() => {
-      if (!lastImplement) return false
-      if (lastImplement.outcome === 'passed') return true
-      const after = entries.slice(entries.lastIndexOf(lastImplement as unknown as Entry) + 1)
-      return after.some((e) => e.t === 'human-decision' &&
-        (e as unknown as DecisionEntry).gate === 'implement' &&
-        (e as unknown as DecisionEntry).decision === 'approve')
-    })()
+    // One settle predicate, not two. This block used to inline its own copy of
+    // gateSettled, which meant `ship` and `next` could answer "is implement settled?"
+    // differently for the same journal — the split-brain that reads as a deadlock when
+    // two sessions compare notes.
+    //
+    // The missing sha argument is DELIBERATE and load-bearing, not an oversight. D75's
+    // `worktreeTreeSha` covers the whole worktree, so ship's own `pr #N` stamp — pulled
+    // into the worktree by the watch-phase rebase — moves the tree and would lapse the
+    // very gate ship is checking: approve → pr → lapse → gate, the livelock D75/D77
+    // record. `next` re-arms on tree movement because authoring is what it routes to;
+    // ship asks only whether implement was ever settled. Passing a sha here re-opens
+    // that livelock — do not "fix" this by adding one.
+    const implementSettled = gateSettled(entries, 'implement')
     checks.push({ name: 'implement-gate', ok: implementSettled,
       detail: lastImplement
         ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
