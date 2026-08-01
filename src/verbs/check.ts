@@ -5,10 +5,10 @@ import { adoptedCommits } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { HARNESSES, resolveHarness, skillsVisibility } from '../harness.js'
 import { probe } from '../probe.js'
-import { loadConfig } from '../config.js'
+import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { designPending } from '../design.js'
 import { runDrift } from '../drift.js'
-import { auditStateCommits, dirtyStatePaths, primaryRoot } from '../gitio.js'
+import { auditStateCommits, dirtyStatePaths, primaryRoot, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
@@ -44,6 +44,24 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const cfg = loadConfig(root)
   if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, x.got)))
   else if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
+
+  // Machine config is read here as FINDINGS, never a refusal — same doctrine that
+  // keeps harness resolution out of loadConfig (row 87): check must be able to
+  // report a broken machine file rather than brick on it.
+  const local = loadLocalConfig(root)
+  if (!local.ok) {
+    local.violations.forEach((x) => findings.push(f('error', 'local-config', x.field, x.rule, x.got)))
+  } else {
+    for (const p of local.value.reviewerExtensions) {
+      if (!existsSync(p)) findings.push(f('warn', 'local-config', 'reviewerExtensions', 'extension-path-missing', p))
+    }
+  }
+  // init's gitignore write is scaffold-once, so pre-0.5.0 repos never receive the new
+  // ignore line — this finding is their honest path to it.
+  if (existsSync(localConfigPath(root)) && !tryGit(root, 'check-ignore', '-q', '--', '.witness/config.local.yaml').ok) {
+    findings.push(f('warn', 'local-config', '.witness/config.local.yaml', 'local-config-unignored',
+      'machine-local file — add it to .gitignore'))
+  }
 
   const canon0 = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon0)

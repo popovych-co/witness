@@ -16,7 +16,7 @@ No text copied verbatim; the design-critic lens is new material. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.4.1}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.0}"
 ```
 
 - **Never edit `specs/**`, `plans/**`, or `designs/**`** — the CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `witness design`. (The canon guard blocks direct edits; the trailer audit catches end-runs.)
@@ -69,7 +69,7 @@ $WITNESS design <spec-id> --open   # opens the artifact for the human — requir
 ```
 
 - **Register, then show.** `witness gate design` refuses `design-unseen` until the human has been shown the artifact's current bytes, so `--open` is part of the flow, not a nicety. Re-authoring re-arms it: new bytes, new showing. `witness next` names this step by itself — follow it.
-- The opener failing (`opener-failed`) prints a `file://` path. Give the human that path verbatim and stop; do not work around it by pointing `WITNESS_OPENER` at something that does not show anything.
+- The opener failing (`opener-failed`) prints a `file://` path. Give the human that path verbatim and stop; do not work around it by pointing `opener:` in `.witness/config.local.yaml` at something that does not show anything.
 
 ## Gate
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { loadConfig } from '../src/config.js'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveGates,
+} from '../src/config.js'
 import { tmpRepo } from './helpers.js'
 
 describe('loadConfig', () => {
@@ -149,5 +154,69 @@ describe('resolveImplement (implement.stepsPerDispatch)', () => {
     repo.write('witness.config.yaml', 'schema: 1\nimplement: nope\n')
     const res = loadConfig(repo.root)
     expect(!res.ok && res.violations[0]?.field).toBe('implement')
+  })
+})
+
+describe('resolveGates — reviewerTimeoutMs', () => {
+  it('defaults when absent', () => {
+    const r = resolveGates({})
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.reviewerTimeoutMs).toBe(DEFAULT_REVIEWER_TIMEOUT_MS)
+    const r2 = resolveGates({ gates: { model: 'claude-fable-5' } })
+    if (r2.ok) expect(r2.value.reviewerTimeoutMs).toBe(DEFAULT_REVIEWER_TIMEOUT_MS)
+  })
+
+  it('accepts an integer >= 1', () => {
+    const r = resolveGates({ gates: { reviewerTimeoutMs: 120000 } })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.reviewerTimeoutMs).toBe(120000)
+  })
+
+  it('refuses non-integer values', () => {
+    for (const bad of ['600000', 0, -1, 1.5]) {
+      const r = resolveGates({ gates: { reviewerTimeoutMs: bad } })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.violations[0]).toMatchObject({ field: 'gates.reviewerTimeoutMs', rule: 'invalid' })
+    }
+  })
+})
+
+describe('loadLocalConfig — .witness/config.local.yaml', () => {
+  const scratch = () => mkdtempSync(join(tmpdir(), 'witness-local-'))
+  const put = (root: string, yaml: string) => {
+    mkdirSync(join(root, '.witness'), { recursive: true })
+    writeFileSync(localConfigPath(root), yaml)
+  }
+
+  it('missing file is all defaults', () => {
+    const r = loadLocalConfig(scratch())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toEqual({ reviewerExtensions: [] })
+  })
+
+  it('loads reviewerExtensions and opener', () => {
+    const root = scratch()
+    put(root, "reviewerExtensions: ['/a/ext', '/b/ext']\nopener: my-open\n")
+    const r = loadLocalConfig(root)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toEqual({ reviewerExtensions: ['/a/ext', '/b/ext'], opener: 'my-open' })
+  })
+
+  it('refuses unknown keys — closed set', () => {
+    const root = scratch()
+    put(root, 'harness: pi\n')
+    const r = loadLocalConfig(root)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.violations[0]).toMatchObject({ rule: 'unknown-local-key', got: 'harness' })
+  })
+
+  it('refuses wrong types and unparseable yaml', () => {
+    const root = scratch()
+    put(root, 'reviewerExtensions: nope\n')
+    const r = loadLocalConfig(root)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.violations[0]).toMatchObject({ field: 'reviewerExtensions', rule: 'invalid' })
+    put(root, 'opener: [1, 2\n')
+    expect(loadLocalConfig(root).ok).toBe(false)
   })
 })

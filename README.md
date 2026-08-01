@@ -101,13 +101,26 @@ either.
 
 | Key | Meaning |
 |---|---|
-| `harness: claude-code \| pi` | fallback used only when detection cannot answer. Order: `WITNESS_HARNESS` → `PI_CODING_AGENT` → `CLAUDECODE` → `harness:` → `claude-code` |
+| `harness: claude-code \| pi` | fallback used only when detection cannot answer. Order: `PI_CODING_AGENT` → `CLAUDECODE` → `harness:` → `claude-code` |
+| `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
 
-There is no `provider:` key. Harnesses whose `--model` flag is `provider/id` (Pi) are
-rendered with the provider witness knows they need. That is not a preference: `witness
-gate` spawns the Claude CLI for every reviewer on every harness, and `gates.<stage>.model`
-drives **both** those reviewers and the implement session's own model — so the pin must be
-an Anthropic id, and a Pi implement session on a non-Anthropic model is not expressible.
+There is no `provider:` key. `witness gate` spawns the RESOLVED harness's headless
+mode for every reviewer (Decision 88): claude-code renders bare Anthropic ids, pi
+renders `provider/model[:thinking]` with the provider witness knows it needs. The pi
+reviewer runs hermetic (`--no-extensions --no-skills --no-context-files`); machine
+extensions it must keep — e.g. an OAuth adapter that supplies your Anthropic auth —
+are declared in machine config, not env:
+
+```yaml
+# .witness/config.local.yaml — machine facts, gitignored, never committed
+reviewerExtensions:
+  - /Users/you/.pi/agent/npm/node_modules/pi-claude-oauth-adapter
+opener: xdg-open   # optional; nonstandard desktops only
+```
+
+Repo facts live in `witness.config.yaml` (committed); machine facts live in
+`.witness/config.local.yaml` (gitignored). Every key has exactly one home — a key in
+the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 
 ## Verbs
 

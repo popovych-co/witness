@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { EXIT } from './cli.js'
-import { loadConfig } from './config.js'
+import { loadConfig, loadLocalConfig } from './config.js'
 import { runCriteria, type CriteriaResult } from './criteria.js'
 import { serializeDoc, writeDoc } from './fm.js'
 import { acquireLock } from './lock.js'
@@ -124,8 +124,17 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   const cfgR = loadConfig(root)
   const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach(ctx.err); return EXIT.REFUSED }
+  // Repo config may be broken here by design — the timeout falls to the default. A
+  // broken LOCAL file refuses instead: silently dropping declared extensions
+  // reproduces the exact misdiagnosed 400 this release exists to kill.
+  const localR = loadLocalConfig(root)
+  if (!localR.ok) { renderRefusal(localR.violations).forEach(ctx.err); return EXIT.REFUSED }
   const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ') : 'unrunnable'})\n`
-  const invoked = invokeReviewer(ctx, hxR.value.harness, { cwd: root, prompt })
+  const invoked = invokeReviewer(ctx, hxR.value.harness, {
+    cwd: root, prompt,
+    timeoutMs: cfgR.ok ? cfgR.value.gates.reviewerTimeoutMs : undefined,
+    extensions: localR.value.reviewerExtensions,
+  })
   if (!invoked.ok) { renderRefusal(invoked.violations).forEach(ctx.err); return EXIT.REFUSED }
   const rawR = parseVerdictText(invoked.value.text)
   const parsed = rawR.ok ? parseVerdict(rawR.value) : rawR

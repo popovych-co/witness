@@ -15,7 +15,7 @@ parent's criteria. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.4.1}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.0}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)

@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, version, type Ctx } from './cli.js'
-import { loadConfig, type Config, type DocKey } from './config.js'
+import { loadConfig, loadLocalConfig, type Config, type DocKey } from './config.js'
 import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
@@ -196,6 +196,12 @@ export async function runGate(
   const hxR = resolveHarness(ctx.env, cfgR.value.raw)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
+  const localR = loadLocalConfig(root)
+  if (!localR.ok) { renderRefusal(localR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const extras = {
+    timeoutMs: cfgR.value.gates.reviewerTimeoutMs,
+    extensions: localR.value.reviewerExtensions,
+  }
   const modelR = resolveModel(cfgR.value, loadMatrix(root, harness.name), spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const { chain, calibrationOf, warning } = modelR.value
@@ -269,7 +275,7 @@ export async function runGate(
         let answered: string | undefined
         for (;;) {
           const id = chain[rung]!
-          const r = invokeReviewer(ctx, harness, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id })
+          const r = invokeReviewer(ctx, harness, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id, ...extras })
           if (r.ok) { answered = r.value.text; model = id; break }
           if (rung >= chain.length - 1) {
             renderRefusal(r.violations).forEach((l) => ctx.err(l))
@@ -342,6 +348,7 @@ export async function runGate(
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
       reviewed_sha: input.reviewedSha, prompts_sha: key.prompts_sha,
       witness: key.witness, model, harness: harness.name, calibration: calibrationOf(model),
+      ...(localR.value.reviewerExtensions.length ? { reviewer_extensions: localR.value.reviewerExtensions } : {}),
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
       ...(fallback.length ? { fallback } : {}),

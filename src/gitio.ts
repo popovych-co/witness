@@ -48,6 +48,12 @@ const LOCAL_STATE_FILES = new Set([
   '.witness/txn.json',
   '.witness/allow.json',
   '.witness/calibration.local.yaml',
+  // Row 90's machine-config file is this tier too, and the exemption is load-bearing
+  // rather than belt-and-braces: init only gitignores it for repos scaffolded at
+  // >=0.5.0, so on every pre-0.5.0 repo the file is untracked-but-visible under a
+  // state dir — and an unrelated-dirty refusal there would brick the very gate the
+  // declared extensions exist to unblock.
+  '.witness/config.local.yaml',
 ])
 
 export function dirtyStatePaths(root: string): string[] {

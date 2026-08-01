@@ -52,10 +52,11 @@ export function tmpRepo(): TestRepo {
     const answers = [...(opts.answers ?? [])]
     const ctx: Ctx = {
       cwd: opts.cwd ?? root,
-      // WITNESS_HARNESS pinned AFTER process.env and BEFORE opts.env: the ambient
-      // session's CLAUDECODE/PI_CODING_AGENT must not decide what `next` renders, and a
-      // harness test must still be able to ask for something else.
-      env: { ...process.env, WITNESS_HARNESS: 'claude-code', ...opts.env },
+      // Detection vars scrubbed AFTER process.env and BEFORE opts.env: the ambient
+      // session's CLAUDECODE/PI_CODING_AGENT must not decide what `next` renders
+      // (this suite dogfoods under pi), and a harness test asks for one by setting
+      // the SAME detection var production reads — row 90 killed the env override.
+      env: { ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined, ...opts.env },
       isTTY: opts.tty ?? answers.length > 0,
       out: (l) => outs.push(l),
       err: (l) => errs.push(l),
@@ -212,7 +213,6 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     WITNESS_TRUST_CMDS: '1',
-    WITNESS_OPENER: noopOpener(),
     VITEST_BIN: vitestBin(),
     CI: '',
     ...extra,
@@ -229,9 +229,22 @@ export function noopOpener(): string {
   return join(fakeBinDir(), 'noop-open')
 }
 
-// Register → show. The protocol's normal prelude to `gate design`, as one call.
+export function writeLocalConfig(root: string, opts: { opener?: string; reviewerExtensions?: string[] } = {}): void {
+  mkdirSync(join(root, '.witness'), { recursive: true })
+  const lines: string[] = []
+  if (opts.opener !== undefined) lines.push(`opener: '${opts.opener}'`)
+  if (opts.reviewerExtensions !== undefined) {
+    lines.push(`reviewerExtensions: [${opts.reviewerExtensions.map((x) => `'${x}'`).join(', ')}]`)
+  }
+  writeFileSync(join(root, '.witness', 'config.local.yaml'), `${lines.join('\n')}\n`)
+}
+
+// Register → show. The protocol's normal prelude to `gate design`, as one call. The
+// noop opener rides machine config now (row 90) — without it, --open would spawn the
+// REAL platform opener from a test.
 export async function witnessDesign(repo: TestRepo, specId: string): Promise<CliResult> {
-  return repo.cli(['design', specId, '--open'], { env: { WITNESS_OPENER: noopOpener() } })
+  writeLocalConfig(repo.root, { opener: noopOpener() })
+  return repo.cli(['design', specId, '--open'])
 }
 
 export function fakeScenario(): string {

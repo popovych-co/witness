@@ -3,7 +3,7 @@ import { hostname, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { loadConfig } from '../config.js'
+import { loadConfig, loadLocalConfig } from '../config.js'
 import { designPending, designRel, designStamp, htmlSha, validateDesignArtifact } from '../design.js'
 import { writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
@@ -76,10 +76,12 @@ function openOnly(ctx: Ctx, root: string, rel: string, id: string): number {
     return EXIT.REFUSED
   }
   const sha = htmlSha(readFileSync(abs, 'utf8'))
-  const { outcome, command } = openArtifact(ctx.env, abs)
+  const localR = loadLocalConfig(root)
+  if (!localR.ok) { renderRefusal(localR.violations).forEach(ctx.err); return EXIT.REFUSED }
+  const { outcome, command } = openArtifact(localR.value.opener, abs)
   if (outcome === 'failed') {
     renderRefusal([v('design', 'opener-failed', `${command} did not resolve`,
-      `a working platform opener, or WITNESS_OPENER — meanwhile open it yourself: file://${abs}`)]).forEach(ctx.err)
+      `a working platform opener, or opener: in .witness/config.local.yaml — meanwhile open it yourself: file://${abs}`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   // `by` is the account and machine the spawn happened on — not a claim about who looked.

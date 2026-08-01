@@ -99,7 +99,15 @@ export function promptsSha(lenses: Lens[], extra?: string): string {
   return h.digest('hex')
 }
 
-export interface InvokeOpts { cwd: string; prompt: string; model?: string }
+// The two machine-resolved knobs, split out: every reviewer lane resolves them once at
+// its verb boundary (row 90 — invokeReviewer's own cwd is a temp dir under calibration,
+// so it can never load config itself) and threads them down through the fan-out.
+export interface InvokeExtras {
+  timeoutMs?: number
+  extensions?: readonly string[]
+}
+
+export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string }
 
 const REVIEWER_TIMEOUT_MS = 600_000
 // One stalled call must not cost a whole run: a full calibration battery is ~200
@@ -114,8 +122,8 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
     if (!pinR.ok) return refuse(pinR.violations)
     pin = pinR.value
   }
-  const { cmd, args, env } = harness.reviewer.spawn(pin)
-  const timeout = Number(ctx.env.WITNESS_REVIEWER_TIMEOUT_MS) || REVIEWER_TIMEOUT_MS
+  const { cmd, args, env } = harness.reviewer.spawn(pin, opts.extensions)
+  const timeout = opts.timeoutMs ?? REVIEWER_TIMEOUT_MS
   for (let attempt = 0; ; attempt += 1) {
     const r = spawnSync(cmd, args, {
       cwd: opts.cwd,
@@ -132,7 +140,7 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
         if (attempt < TIMEOUT_RETRIES) continue
         return refuse([v(cmd, 'reviewer-timeout',
           `no response in ${timeout}ms after ${attempt + 1} attempts`,
-          'a reviewer that answers within the timeout — raise WITNESS_REVIEWER_TIMEOUT_MS if the model is simply slow')])
+          'a reviewer that answers within the timeout — raise gates.reviewerTimeoutMs in witness.config.yaml if the model is simply slow')])
       }
       return refuse([v(cmd, 'reviewer-invocation', String((r.error as Error).message),
         `a runnable ${cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])

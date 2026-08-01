@@ -26,28 +26,28 @@ async function waitForLog(log: string, ms = 3000): Promise<string> {
 }
 
 describe('openArtifact', () => {
-  it('spawns WITNESS_OPENER with the absolute artifact path', async () => {
+  it('spawns the declared opener with the absolute artifact path', async () => {
     const { cmd, log } = recorder()
-    const res = openArtifact({ WITNESS_OPENER: cmd }, '/tmp/look.html')
+    const res = openArtifact(cmd, '/tmp/look.html')
     expect(res.outcome).toBe('spawned')
     expect(res.command).toBe(cmd)
     expect((await waitForLog(log)).trim()).toBe('/tmp/look.html')
   })
 
   it('resolves a bare override off PATH, not just an absolute path', async () => {
-    // the documented escape hatch for nonstandard desktops is `WITNESS_OPENER=firefox`,
-    // so the probe must be `command -v`, never existsSync
-    const res = openArtifact({ WITNESS_OPENER: 'true' }, '/tmp/look.html')
+    // the documented escape hatch for nonstandard desktops is `opener: firefox` in
+    // .witness/config.local.yaml, so the probe must be `command -v`, never existsSync
+    const res = openArtifact('true', '/tmp/look.html')
     expect(res.outcome).toBe('spawned')
   })
 
   it('reports failed when the override does not resolve', () => {
-    const res = openArtifact({ WITNESS_OPENER: 'witness-no-such-opener-xyz' }, '/tmp/look.html')
+    const res = openArtifact('witness-no-such-opener-xyz', '/tmp/look.html')
     expect(res.outcome).toBe('failed')
   })
 
   it('names the resolved command so the journal can record what was run', () => {
-    const res = openArtifact({}, '/tmp/look.html')
+    const res = openArtifact(undefined, '/tmp/look.html')
     expect(res.command).toBe(process.platform === 'darwin' ? 'open'
       : process.platform === 'win32' ? 'cmd' : 'xdg-open')
   })

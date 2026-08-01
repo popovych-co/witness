@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
-import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { ok, refuse, v, type Result } from './refusal.js'
 
 export const HARNESSES = ['claude-code', 'pi'] as const
 export type HarnessName = (typeof HARNESSES)[number]
@@ -39,7 +39,7 @@ export interface Harness {
   // means. spawn(undefined) is the session-default rung (no model flag). The exact flag
   // set is part of the reviewer's identity — calibrate measures through the same spawn.
   reviewer: {
-    spawn(pin: ParsedPin | undefined): ReviewerSpawn
+    spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn
     parseEnvelope(stdout: string): Result<{ text: string }>
   }
   // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
@@ -82,7 +82,16 @@ function parsePiEnvelope(stdout: string): Result<{ text: string }> {
   }
   const assistant = end?.messages?.filter((m) => m.role === 'assistant').at(-1)
   if (assistant?.stopReason === 'error') {
-    return refuse([v('pi', 'reviewer-invocation', (assistant.errorMessage ?? 'provider error').slice(0, 200),
+    const msg = (assistant.errorMessage ?? 'provider error').slice(0, 200)
+    // Anthropic's extra-usage 400 against subscription OAuth is the hermetic spawn
+    // disabling an auth-supplying extension, NOT an auth/billing problem — the old
+    // want text cost a real user rounds of re-login (row 89 overturned row 88's
+    // billing-asymmetry residual on this evidence).
+    if (/Third-party apps|extra usage/i.test(msg)) {
+      return refuse([v('pi', 'reviewer-invocation', msg,
+        'a credential headless pi can use — the reviewer runs hermetic (--no-extensions); if your provider auth is supplied by a pi extension, declare its path in .witness/config.local.yaml reviewerExtensions')])
+    }
+    return refuse([v('pi', 'reviewer-invocation', msg,
       'a provider the pinned model can reach — check auth and billing for that provider')])
   }
   const text = (assistant?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
@@ -93,7 +102,7 @@ function parsePiEnvelope(stdout: string): Result<{ text: string }> {
   return ok({ text })
 }
 
-export type HarnessSource = 'env' | 'detected' | 'config' | 'default'
+export type HarnessSource = 'detected' | 'config' | 'default'
 
 // Revision 10: a typed constant, not `harness/<name>.json`. Every consumer is
 // TypeScript and the name set is closed by loadHarness's refusal, so a data file bought
@@ -116,7 +125,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     ],
     skills: { project: '.claude/skills', global: '.claude/skills' },
     reviewer: {
-      spawn(pin: ParsedPin | undefined): ReviewerSpawn {
+      spawn(pin: ParsedPin | undefined, _extensions?: readonly string[]): ReviewerSpawn {
         const args = ['-p', '--output-format', 'json']
         const env: Record<string, string> = {}
         if (pin !== undefined) {
@@ -153,10 +162,19 @@ const REGISTRY: Record<HarnessName, Harness> = {
     // Hermetic (Decision 88): every omitted flag here is a machine-local variable that
     // would silently change reviewer behavior — this machine's `defaultThinkingLevel:
     // xhigh` was the probable true cause of row 87's "stalls on long prompts".
+    //
+    // Declared reviewerExtensions (machine config) are the ONE sanctioned readmission —
+    // auth transport, journaled per gate-run, never part of the verdict-cache key. The
+    // worker below keeps full discovery on purpose: skills and context files are what
+    // the implement seed measures; auth extensions ride along with everything else there.
     reviewer: {
-      spawn(pin: ParsedPin | undefined): ReviewerSpawn {
-        const args = ['-p', '--mode', 'json', '--no-session', '--no-extensions',
-          '--no-skills', '--no-context-files', '--thinking', pin?.thinking ?? 'off']
+      spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn {
+        const args = ['-p', '--mode', 'json', '--no-session', '--no-extensions']
+        // Declared machine extensions ride INSIDE the hermetic set (row 89): pi's
+        // --no-extensions disables discovery but explicit -e paths still load, so
+        // auth-supplying adapters work without readmitting ambient machine state.
+        for (const e of extensions ?? []) args.push('-e', e)
+        args.push('--no-skills', '--no-context-files', '--thinking', pin?.thinking ?? 'off')
         if (pin !== undefined) args.push('--model', `${pin.provider ?? 'anthropic'}/${pin.model}`)
         return { cmd: 'pi', args, env: {} }
       },
@@ -182,9 +200,6 @@ export function loadHarness(name: string): Result<Harness> {
   return ok(harness)
 }
 
-const relabel = (violations: Violation[], field: string): Violation[] =>
-  violations.map((x) => ({ ...x, field }))
-
 // Decision 5. Detection is the authority; config is the fallback. A config-authority
 // default in a fresh repo emits a runnable-LOOKING, unrunnable handoff behind a warning
 // that gets scrolled past — bug B2's exact shape. Detection tests PRESENCE: neither
@@ -193,15 +208,13 @@ const relabel = (violations: Violation[], field: string): Violation[] =>
 // Deliberately NOT wired into loadConfig: every verb calls that, so an invalid
 // `harness:` there would brick `witness check` on a key nothing read. Verbs that need
 // a harness ask for one; `check` reports a malformed config value as a finding.
+//
+// Row 90 removed the WITNESS_HARNESS env rung: configuration has one home, and tests
+// simulate harnesses by setting the detection vars production actually reads.
 export function resolveHarness(
   env: Record<string, string | undefined>,
   raw: Record<string, unknown>,
 ): Result<{ harness: Harness; source: HarnessSource }> {
-  const override = env.WITNESS_HARNESS
-  if (override !== undefined && override !== '') {
-    const r = loadHarness(override)
-    return r.ok ? ok({ harness: r.value, source: 'env' }) : refuse(relabel(r.violations, 'WITNESS_HARNESS'))
-  }
   if (env.PI_CODING_AGENT !== undefined) {
     const r = loadHarness('pi')
     return r.ok ? ok({ harness: r.value, source: 'detected' }) : refuse(r.violations)

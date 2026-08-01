@@ -72,8 +72,10 @@ describe('transient invocation failure', () => {
     // transient, and treating it as fatal loses every sample a battery already paid for.
     writeFileSync(join(scenario, 'claude-hang'), '1')
 
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_REVIEWER_TIMEOUT_MS: '400' }) })
-    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this' })
+    // row 90: the timeout is an InvokeOpts field the verb boundary resolves from
+    // gates.reviewerTimeoutMs, not an env knob a test can smuggle in through ctx
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this', timeoutMs: 400 })
 
     expect(r.ok).toBe(true)
     expect(readFileSync(join(scenario, 'claude-calls', 'call-2', 'argv'), 'utf8')).toContain('-p')
@@ -106,6 +108,21 @@ describe('invokeReviewer via pi', () => {
     expect(argv).toContain('--thinking\nlow')
     expect(argv).toContain('--model\ngoogle/gemini-3.6-pro')
     expect(readFileSync(join(scenario, 'pi-calls/call-1/stdin'), 'utf8')).toContain('BODY')
+  })
+
+  it('threads declared extensions into the pi argv', async () => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = invokeReviewer(ctx, piHarness, {
+      cwd: repo.root, prompt: 'LENS\nBODY', model: 'google/gemini-3.6-pro:low',
+      extensions: ['/opt/pi/oauth-adapter'],
+    })
+    expect(r.ok).toBe(true)
+    const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
+    expect(argv).toContain('-e\n/opt/pi/oauth-adapter')
+    expect(argv).toContain('--no-extensions')
   })
 
   it('surfaces the in-stream provider error as a refusal', async () => {

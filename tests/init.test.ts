@@ -12,6 +12,7 @@ describe('witness init', () => {
     expect(repo.read('specs/principles.md')).toContain('status: draft')
     expect(repo.read('.gitignore')).toContain('.witness/lock')
     expect(repo.read('.gitignore')).toContain('.witness/txn.json')
+    expect(repo.read('.gitignore')).toContain('.witness/config.local.yaml')
     expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
     expect(repo.git('status', '--porcelain')).toBe('')
     expect(res.stdout).toContain('next: witness recap')
