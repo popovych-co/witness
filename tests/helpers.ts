@@ -213,7 +213,6 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     WITNESS_TRUST_CMDS: '1',
-    WITNESS_OPENER: noopOpener(),
     VITEST_BIN: vitestBin(),
     CI: '',
     ...extra,
@@ -230,9 +229,22 @@ export function noopOpener(): string {
   return join(fakeBinDir(), 'noop-open')
 }
 
-// Register → show. The protocol's normal prelude to `gate design`, as one call.
+export function writeLocalConfig(root: string, opts: { opener?: string; reviewerExtensions?: string[] } = {}): void {
+  mkdirSync(join(root, '.witness'), { recursive: true })
+  const lines: string[] = []
+  if (opts.opener !== undefined) lines.push(`opener: '${opts.opener}'`)
+  if (opts.reviewerExtensions !== undefined) {
+    lines.push(`reviewerExtensions: [${opts.reviewerExtensions.map((x) => `'${x}'`).join(', ')}]`)
+  }
+  writeFileSync(join(root, '.witness', 'config.local.yaml'), `${lines.join('\n')}\n`)
+}
+
+// Register → show. The protocol's normal prelude to `gate design`, as one call. The
+// noop opener rides machine config now (row 90) — without it, --open would spawn the
+// REAL platform opener from a test.
 export async function witnessDesign(repo: TestRepo, specId: string): Promise<CliResult> {
-  return repo.cli(['design', specId, '--open'], { env: { WITNESS_OPENER: noopOpener() } })
+  writeLocalConfig(repo.root, { opener: noopOpener() })
+  return repo.cli(['design', specId, '--open'])
 }
 
 export function fakeScenario(): string {

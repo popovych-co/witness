@@ -19,14 +19,15 @@ function resolves(cmd: string): boolean {
 }
 
 // Show a file to the human. Returns the resolved command alongside the outcome so the
-// caller can journal WHAT was run — a degenerate opener (`WITNESS_OPENER=/usr/bin/true`)
-// then reads as a degenerate opener in the record instead of as a human looking at a
-// screen. `WITNESS_OPENER` overrides the binary: test seam, and the real escape hatch
-// for nonstandard desktops, so it accepts a bare name off PATH as well as a path.
+// caller can journal WHAT was run — a degenerate opener (`opener: /usr/bin/true` in
+// .witness/config.local.yaml) then reads as a degenerate opener in the record instead
+// of as a human looking at a screen. `opener` is the machine-config value (row 90 —
+// nonstandard desktops declare it there; tests inject it as a parameter), a bare name
+// off PATH or a path.
 export function openArtifact(
-  env: Record<string, string | undefined>, absPath: string,
+  opener: string | undefined, absPath: string,
 ): { outcome: OpenOutcome; command: string } {
-  const argv = env.WITNESS_OPENER ? [env.WITNESS_OPENER] : platformOpener()
+  const argv = opener !== undefined && opener !== '' ? [opener] : platformOpener()
   const [cmd, ...pre] = argv as [string, ...string[]]
 
   // Probe before spawning: a detached spawn reports ENOENT asynchronously, and the

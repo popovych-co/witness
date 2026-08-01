@@ -22,6 +22,12 @@ const WRITE_ONLY = new Set<string>([
   // it, so plans-first routing re-gates before the flow can advance; a re-authored spec
   // re-arms designPending via the design stamp. A reader here would duplicate both.
   'artifact_sha',
+  // The machine extension paths handed to the reviewer spawn (row 89). Unread BY
+  // DESIGN: the verdict-cache key deliberately excludes them — auth transport is not
+  // reviewer identity, and keying on it would fragment verdicts across teammates' auth
+  // setups. That leaves the record as the only place divergence is auditable, which is
+  // exactly the job this field has.
+  'reviewer_extensions',
 ])
 
 function declaredFields(): Map<string, string> {

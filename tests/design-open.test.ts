@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { approve, seededRepo, witnessDesign, writeDesign, writeSpec } from './helpers.js'
+import { approve, seededRepo, witnessDesign, writeDesign, writeLocalConfig, writeSpec } from './helpers.js'
 import { readStream } from '../src/journal.js'
 import { htmlSha } from '../src/design.js'
 
@@ -32,7 +32,8 @@ describe('witness design --open', () => {
     await writeDesign(repo, 'auth-refresh')
     const { cmd, log } = recorder()
 
-    const res = await repo.cli(['design', 'auth-refresh', '--open'], { env: { WITNESS_OPENER: cmd } })
+    writeLocalConfig(repo.root, { opener: cmd })
+    const res = await repo.cli(['design', 'auth-refresh', '--open'])
 
     expect(res.code).toBe(0)
     expect((await waitForLog(log)).trim()).toBe(join(repo.root, 'designs/auth-refresh.html'))
@@ -61,8 +62,8 @@ describe('witness design --open', () => {
     approve(repo, 'auth-refresh')
     await writeDesign(repo, 'auth-refresh')
 
-    const res = await repo.cli(['design', 'auth-refresh', '--open'],
-      { env: { WITNESS_OPENER: 'witness-no-such-opener-xyz' } })
+    writeLocalConfig(repo.root, { opener: 'witness-no-such-opener-xyz' })
+    const res = await repo.cli(['design', 'auth-refresh', '--open'])
 
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('opener-failed')
