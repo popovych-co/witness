@@ -34,6 +34,10 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   decide: () => import('./verbs/decide.js'),
   design: () => import('./verbs/design.js'),
   start: () => import('./verbs/start.js'),
+  // The orientation screen has a name (D101). Bare `witness` stays as its alias, but
+  // an unnamed command cannot be referenced — commands/witness.md instructs the
+  // operator to read "the dashboard" and nothing said which command prints it.
+  status: () => import('./verbs/dashboard.js'),
   clean: () => import('./verbs/clean.js'),
   ship: () => import('./verbs/ship.js'),
   next: () => import('./verbs/next.js'),
@@ -66,6 +70,7 @@ const VERB_USAGE: Record<string, string> = {
   satisfy: 'witness satisfy <doc-id> --need <text | index>',
   ship: 'witness ship <plan-id>',
   start: 'witness start <plan-id>',
+  status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
   sync: 'witness sync',
   'test-evidence': 'witness test-evidence <plan-id> --phase red|green',
   'verify-red': 'witness verify-red <plan-id> [--base <ref>]',
