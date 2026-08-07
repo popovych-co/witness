@@ -45,7 +45,7 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
 // immediately decline, and — since nothing is appended — `next` says it again next turn.
 // The work owed is AUTHORING, so route to the stage. The design stage already does this
 // via designArtifactCurrent; this is the same rule for decompose and plan.
-function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
+export function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
   const last = lastGateRun(entries, gate)
   if (!last) return false
   if (currentSha === undefined || last.reviewed_sha !== currentSha) return false
