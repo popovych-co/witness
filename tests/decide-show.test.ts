@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
+import { loadCanon } from '../src/scan.js'
+import { effortReviewedSha } from '../src/reviewed.js'
 import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec, type TestRepo } from './helpers.js'
 
 // A real decompose gate-run against a fake reviewer: reviewed_sha is the effort's ACTUAL
@@ -131,11 +133,16 @@ describe('decide --show', () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
     const s = repo.effort
+    // The LAST round must have judged the content as it stands: `--override` is an
+    // approve, and approving bytes no battery read is the one thing D75 forbids. With a
+    // fake sha here the honest answer is the endgame MINUS approve — pinned separately
+    // by the moved-content test below.
+    const current = effortReviewedSha(repo.root, loadCanon(repo.root), s).sha
     for (const round of [1, 2, 3]) {
       appendEntry(repo.root, s, {
         v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r${round}`,
-        reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
-        calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+        reviewed_sha: round === 3 ? current : `sha-${round}`, prompts_sha: 'p', witness: '0',
+        model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
       })
     }
     const r = await repo.cli(['decide', 'decompose', s, '--show'])
@@ -187,4 +194,73 @@ describe('decide --approve staleness', () => {
     expect(all).toContain('--stop')
     expect(all).not.toContain('run: witness gate')   // the gate will not re-run at the bound
   })
+})
+
+// D94: --show read state by POSITION (first disposition) and asserted staleness rather
+// than computing it, so it reported a revised gate as revised after the human had
+// approved, and advertised a re-gate in the one state where the gate declines.
+describe('--show tells the truth about a revised or reopened gate', () => {
+  async function stoppedOnCurrentContent() {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const s = repo.effort
+    const sha = effortReviewedSha(repo.root, loadCanon(repo.root), s).sha
+    appendEntry(repo.root, s, {
+      v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
+      reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      checks: [], outcome: 'stopped',
+      verdicts: [{
+        reviewer: 'slicing-critic',
+        coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [],
+      }],
+    })
+    return { repo, effort: s }
+  }
+
+  it('reports the last disposition, not the first', async () => {
+    const { repo, effort } = await stoppedOnCurrentContent()
+    appendEntry(repo.root, effort, { v: 1, t: 'human-decision', gate: 'decompose', artifact: effort, round: 1, decision: 'revise', note: 'tighten scope' })
+    appendEntry(repo.root, effort, { v: 1, t: 'human-decision', gate: 'decompose', artifact: effort, round: 1, decision: 'approve' })
+
+    const shown = await repo.cli(['decide', 'decompose', effort, '--show'])
+    expect(shown.stdout).toContain('state: settled — approve')
+    expect(shown.stdout).not.toContain('decision: revise')
+  })
+
+  it('points a settled gate at the verb that knows what comes next', async () => {
+    const { repo, effort } = await stoppedOnCurrentContent()
+    appendEntry(repo.root, effort, { v: 1, t: 'human-decision', gate: 'decompose', artifact: effort, round: 1, decision: 'approve' })
+    const shown = await repo.cli(['decide', 'decompose', effort, '--show'])
+    expect(shown.stdout).toContain('help: witness next')
+  })
+
+  it('offers decisions, not a re-gate, when a reopen sits on unchanged content', async () => {
+    const { repo, effort } = await stoppedOnCurrentContent()
+    appendEntry(repo.root, effort, {
+      v: 1, t: 'human-decision', gate: 'decompose', artifact: effort, round: 1, decision: 'revise',
+      caused_by: { artifact: 'auth-refresh', gate: 'design', round: 1 },
+    })
+    const shown = await repo.cli(['decide', 'decompose', effort, '--show'])
+    expect(shown.stdout).toContain('--approve')
+    expect(shown.stdout).toContain('--stop')
+  })
+})
+
+// D67 + D94 together: at the bound the gate will not run again, so a moved sha must not
+// route to `witness gate` — it only removes approve from the endgame set.
+it('at the bound with moved content, --show names the endgame minus approve', async () => {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  const s = repo.effort
+  for (const round of [1, 2, 3]) {
+    appendEntry(repo.root, s, {
+      v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r-${round}`,
+      reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
+      calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+    })
+  }
+  const r = await repo.cli(['decide', 'decompose', s, '--show'])
+  expect(r.stdout).toContain('--stop')
+  expect(r.stdout).toContain('--upstream')
+  expect(r.stdout).not.toContain('witness gate decompose')
 })

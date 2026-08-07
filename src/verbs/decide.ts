@@ -62,7 +62,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       .map((e) => e as unknown as DecisionEntry)
     // A caused_by decision is a REOPEN, not a disposition — it can never settle the run
     // above it, and pairing the two is what presented 15 settled findings as current.
-    const disposition = decisionsAfter.find((d) => d.caused_by === undefined)
+    // The LAST disposition is the state (D94): `find` returned the first, so a
+    // revise→approve reported `decision: revise` on a gate that is settled.
+    const disposition = decisionsAfter.filter((d) => d.caused_by === undefined).at(-1)
+    // Staleness is a fact about content, not about being reopened. Hardcoding it printed
+    // `witness gate …` in the one state where the gate answers changed-nothing. An
+    // uncomputable sha is NOT staleness — same doctrine as the approve-time check.
+    const shownSha = spec.currentSha?.(root, canon, cfgR.value, target)
+    const stale = shownSha !== undefined && shownSha !== last.reviewed_sha
 
     if (reopen) {
       ctx.out(kv('gate', gate))
@@ -71,7 +78,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
       if (reopen.note) ctx.out(kv('note', reopen.note))
       ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · witness log ${target}`))
-      ctx.out(kv('exits', liveExits(gate, target, entries, true)))
+      ctx.out(kv('exits', liveExits(gate, target, entries, stale)))
       return EXIT.OK
     }
     if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
@@ -80,6 +87,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('state', `settled — ${disposition.decision}`))
       if (disposition.note) ctx.out(kv('note', disposition.note))
       ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · witness log ${target}`))
+      // no exits: the gate is genuinely terminal here. Point at the one verb that owns
+      // what comes next rather than re-deriving routing in a second place (D101).
+      ctx.out('help: witness next')
       return EXIT.OK
     }
     // pending (no disposition) or revise (the author's input): the verdict is actionable
@@ -90,7 +100,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('decision', disposition.decision))
       if (disposition.note) ctx.out(kv('note', disposition.note))
     }
-    ctx.out(kv('exits', liveExits(gate, target, entries, false)))
+    ctx.out(kv('exits', liveExits(gate, target, entries, stale)))
     return EXIT.OK
   }
 

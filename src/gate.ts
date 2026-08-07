@@ -93,10 +93,16 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 // where the state is. Skills used to recite a fixed triple, which is wrong at the bound
 // (D67's endgame set) — and now wrong in three more states.
 export function liveExits(gate: string, target: string, entries: Entry[], stale: boolean): string {
-  if (stale) return `witness gate ${gate} ${target}`
+  // The bound outranks staleness: at the bound the gate short-circuits and will not run
+  // again (:227), so "re-gate" is the D67 lie whatever the sha says. Stale content only
+  // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
+  // read — which is the same set decide's stale-verdict refusal names.
   if (boundReached(entries, gate)) {
-    return `witness decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
+    return stale
+      ? `witness decide ${gate} ${target} --revise --upstream <id> | --stop`
+      : `witness decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
   }
+  if (stale) return `witness gate ${gate} ${target}`
   return `witness decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`
 }
 
