@@ -242,3 +242,27 @@ describe('addressing one flow', () => {
     await repo.cli(['clean'])
   })
 })
+
+// D93: the gate owns its deterministic checks; the router reads the verdict. This
+// reproduces the 0.5.1 field report — an approve the journal recorded as settled and
+// `next` refused to see, because it re-derived `evidence` in front of the settle check.
+describe('a settled implement gate outranks the evidence hint', () => {
+  it('routes to ship after a human approve even when the evidence check is red', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+
+    // a test tagged for ANOTHER spec makes evidenceForDiff unsatisfiable: the tag has
+    // no red→green pair, and `test-evidence` cannot record one for a foreign spec
+    writeFileSync(join(wt, 'src', 'foreign.test.ts'),
+      "import { expect, it } from 'vitest'\n\nit('foreign @spec:other-spec', () => { expect(1).toBe(1) })\n")
+
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [] })
+    const gate = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
+    expect(gate).toBe(1)                                  // stopped: the evidence check is red
+
+    const decided = await repo.cli(['decide', 'implement', planId, '--approve'])
+    expect(decided.code).toBe(0)
+
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+  })
+})

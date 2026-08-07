@@ -8,7 +8,7 @@ import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { effortOf, effortReviewedSha, effortSpecs, effortWrites, planPairSha, worktreeTreeSha } from '../reviewed.js'
-import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
+import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveHarness } from '../harness.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
@@ -45,15 +45,19 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
 // immediately decline, and — since nothing is appended — `next` says it again next turn.
 // The work owed is AUTHORING, so route to the stage. The design stage already does this
 // via designArtifactCurrent; this is the same rule for decompose and plan.
-function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
+export function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
   const last = lastGateRun(entries, gate)
   if (!last) return false
   if (currentSha === undefined || last.reviewed_sha !== currentSha) return false
   if (openReopen(entries, gate) !== undefined) return true
-  const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-  return after.some((e) => e.t === 'human-decision' &&
-    (e as unknown as DecisionEntry).gate === gate &&
-    ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
+  // The LAST decision is the state (D94). `.some()` read by presence, so an approve
+  // answering a revise left this still claiming authoring — the same read-by-position
+  // defect as decide --show's disposition.
+  const recent = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry)
+    .at(-1)
+  return recent !== undefined && ['revise', 'revise-upstream'].includes(recent.decision)
 }
 
 // D75 re-arms a gate whose reviewed sha has moved, and `worktreeTreeSha` covers the
@@ -68,6 +72,37 @@ function lapseNote(entries: Entry[], gate: string, currentSha: string | undefine
   // sha-free: asks "was it ever settled", which is the only thing that can lapse
   if (!gateSettled(entries, gate)) return undefined
   return `${gate} approval lapsed — judged @${last.reviewed_sha.slice(0, 7)}, worktree now @${currentSha.slice(0, 7)} — re-gate to judge the current tree`
+}
+
+// The owed evidence phase is a DERIVATION (row 85: a placeholder is honest only where
+// the CLI genuinely cannot know the answer). `evidenceForDiff` already computes
+// red/green/vacuous per tag on the way to the gate's own check — this reads that report
+// instead of printing the menu and making the caller resolve it.
+//
+// `verify-red` is preferred where a plain red probe is guaranteed vacuous: with the
+// implementation already written the suite passes as it stands, so the reconstructing
+// verb is the only one that can witness a genuine red.
+function evidenceRow(
+  id: string, parentTag: string, files: string[], report: EvidenceReport | undefined,
+  seat: { home: string; model?: string },
+): NextAction {
+  const base = { stage: 'implement' as const, target: id, ...seat }
+  if (report === undefined) {
+    return {
+      line: `witness test-evidence ${id} --phase red`, ...base,
+      note: 'nothing changed yet — write the failing test first',
+    }
+  }
+  const owed = report.required
+    .filter((r) => !(r.red && r.green && !r.vacuous))
+    .map((r) => `${r.tag} ${!r.red || r.vacuous ? 'red' : 'green'}`)
+    .join(' · ')
+  const parent = report.required.find((r) => r.tag === parentTag)
+  const liveRed = parent !== undefined && parent.red && !parent.vacuous
+  const line = !liveRed && files.some((f) => !isTestPath(f))
+    ? `witness verify-red ${id}`
+    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}`
+  return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
 }
 
 export interface NextAction {
@@ -96,21 +131,39 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   const atRoot = { home: root }
   if (!existsSync(wt)) return { line: `witness start ${id}`, target: id, note: 'worktree missing — start recreates it' }
   if (plan.meta.pr !== undefined) return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  const treeSha = worktreeTreeSha(wt)
+  // D93: the gate owns its deterministic checks; the router reads the verdict and never
+  // re-derives the predicate. Testing `evidence` in front of this is what made a human
+  // `--approve` invisible to the one verb the driving loop calls every turn — the
+  // journal said settled, `next` said test-evidence, and no error printed anywhere.
+  // Sha-sensitivity is load-bearing here: emptying the worktree after an approval moves
+  // the sha and re-arms the gate, which is why this keeps `treeSha` while
+  // `gates/ship.ts` deliberately omits it (row 92).
+  if (gateSettled(entries, 'implement', treeSha)) {
+    return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
-  const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
-  if (!satisfied) return { line: `witness test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
-  const treeSha = worktreeTreeSha(wt)
-  if (!gateSettled(entries, 'implement', treeSha)) {
+  const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
+  if (report === undefined || !report.satisfied) {
+    return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree)
+  }
+  // D94: with the content unchanged the gate answers `changed-nothing` and appends
+  // nothing, so routing there returns this same line every turn. The revise asked for an
+  // edit — say that, and seat the session where the edit happens.
+  if (authoringOwed(entries, 'implement', treeSha)) {
     return {
-      line: `witness gate implement ${id}`, target: id, ...inWorktree,
-      ...noteOf(lapseNote(entries, 'implement', treeSha)),
+      line: `witness test-evidence ${id} --phase green`, stage: 'implement', target: id, ...inWorktree,
+      note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
     }
   }
-  return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  return {
+    line: `witness gate implement ${id}`, target: id, ...inWorktree,
+    ...noteOf(lapseNote(entries, 'implement', treeSha)),
+  }
 }
 
 // How far along a flow is — the drain order when several are actionable. Most-advanced

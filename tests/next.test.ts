@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { approve, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, witnessDesign, writeDesign, writeSpec, writePlan } from './helpers.js'
+import { cpSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { worktreePath } from '../src/worktree.js'
+import {
+  TOKEN_FIXED, approve, fakeScenario, fixturePath, gateEnv, nextLine, putVerdict, seededRepo,
+  shippableRepo, singleConfig, witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
+} from './helpers.js'
 
 describe('witness next — the ladder', () => {
   it('walks recap → write → gate decompose → decide → plan-stage', async () => {
@@ -169,5 +175,46 @@ describe('design stage routing', () => {
     approve(repo, 'auth-refresh')
     const res = await repo.cli(['next'])
     expect(res.stdout).toContain('write auth-refresh-plan-1')
+  })
+})
+
+// D100: the owed phase is a DERIVATION, not a human choice — row 85's rule (a
+// placeholder is honest only where the CLI cannot know the answer). `--phase red|green`
+// was not runnable, and an agent following `next` faithfully never learned that `ship`
+// had been available all along.
+describe('the evidence row names the phase it wants', () => {
+  async function startedFlow(): Promise<{ repo: TestRepo; wt: string }> {
+    const repo = await seededRepo()
+    writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered'))
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    await repo.cli(['start', 'auth-refresh-plan-1'])
+    return { repo, wt: worktreePath(repo.root, 'auth-refresh-plan-1') }
+  }
+
+  it('asks for the red phase by name on an empty worktree', async () => {
+    const { repo } = await startedFlow()
+    const out = await nextLine(repo)
+    expect(out).toContain('--phase red')
+    expect(out).not.toContain('red|green')
+    expect(out).toContain('nothing changed yet')
+  })
+
+  it('prefers verify-red when the implementation is already written', async () => {
+    const { repo, wt } = await startedFlow()
+    cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const out = await nextLine(repo)
+    expect(out).toContain('witness verify-red auth-refresh-plan-1')
+  })
+
+  it('names the tags whose evidence is owed', async () => {
+    const { repo, wt } = await startedFlow()
+    cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    expect(await nextLine(repo)).toContain('evidence owed: auth-refresh')
   })
 })

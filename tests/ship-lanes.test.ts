@@ -98,3 +98,24 @@ describe('ship gate', () => {
     expect(entry.checks.find((c) => c.name === 'implement-gate')!.ok).toBe(true)
   })
 })
+
+// D94, ship side: shipPhase returns 'gate' after a revise, and the gate answers
+// changed-nothing on unchanged content — so `witness ship` spent a turn telling the
+// human to run the command that had just declined.
+describe('a revised ship gate hands back', () => {
+  it('does not re-gate unchanged content after a ship revise', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, CLEAN)
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: false, manual: false })
+    const revised = await repo.cli(['decide', 'ship', planId, '--revise', '--note', 'rename the helper'])
+    expect(revised.code).toBe(0)
+
+    const before = readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length
+    const res = await repo.cli(['ship', planId], { env: gateEnv(scenario) })
+    expect(res.code).toBe(1)
+    expect(res.stdout).toContain('revise owed')
+    expect(res.stdout).toContain(wt)
+    expect(readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length).toBe(before)
+  })
+})

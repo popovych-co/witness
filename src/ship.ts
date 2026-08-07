@@ -12,7 +12,7 @@ import { runGate } from './gate.js'
 import { lastGateRun, type DecisionEntry } from './rounds.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
-import { gateSettled } from './verbs/next.js'
+import { authoringOwed, gateSettled } from './verbs/next.js'
 import { worktreeTreeSha } from './reviewed.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
@@ -185,6 +185,14 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   if (baseMoved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
 
   if (phase === 'gate') {
+    // D94: the gate cannot judge unchanged content twice — it answers changed-nothing
+    // and appends nothing, so routing the human back at it burns a turn on a command
+    // that has already declined. The owed work is the edit the revise asked for.
+    if (authoringOwed(entries, 'ship', worktreeTreeSha(wt))) {
+      ctx.out(kv('ship', `${planId} — revise owed`))
+      ctx.out(`help: edit the code in ${wt} · then re-run witness ship ${planId}`)
+      return EXIT.FINDINGS
+    }
     // Rebase BEFORE the battery, never after: the reviewers must judge the tree that will
     // actually merge. Reviewing first spends a battery — and a human decision — on a tree
     // without any sibling's merged work, which then lapses (gateSettled's reviewed_sha)

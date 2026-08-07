@@ -40,6 +40,11 @@ export interface ModelResolution {
   chain: string[]
   calibrationOf(id: string): 'shipped' | 'local' | 'none'
   warning?: string
+  // Which fact the warning states. `matrix-empty` is a property of this witness BUILD
+  // — calibration.yaml ships `models: []`, so it held for every user, every model,
+  // every run since 0.1.x — and belongs on the orientation surfaces once. `below-floor`
+  // is a property of the caller's own pin and stays per-run news (D98a).
+  warningKind?: 'matrix-empty' | 'below-floor'
 }
 
 // the stage's model pin from config — per-gate wins over the global gates.model;
@@ -79,10 +84,29 @@ export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Re
   const head = chain[0]!
   const headLabel = head === SESSION_DEFAULT ? '(session default)' : head
   const matrixEmpty = matrix.shipped.length === 0 && matrix.local.length === 0
-  const warning = calibrationOf(head) !== 'none'
+  const warningKind = calibrationOf(head) !== 'none'
     ? undefined
-    : matrixEmpty
+    : matrixEmpty ? 'matrix-empty' as const : 'below-floor' as const
+  const warning = warningKind === undefined
+    ? undefined
+    : warningKind === 'matrix-empty'
       ? `calibration matrix is empty — no calibrated model exists yet; ${headLabel} runs uncalibrated`
       : `reviewer model ${headLabel} is below the model floor — no calibration matrix entry covers it`
-  return ok({ chain, calibrationOf, warning })
+  return ok({ chain, calibrationOf, warning, warningKind })
+}
+
+// One renderer for both orientation surfaces (`status` and `check`). Lives here because
+// the grouping rule — one line per distinct warning, labelled with the gates it covers —
+// is a property of the resolution, not of either screen. Returns `[]` when every gate's
+// model is calibrated.
+export function modelFloorLines(root: string, cfg: Config, harness: HarnessName): string[] {
+  const matrix = loadMatrix(root, harness)
+  const byWarning = new Map<string, string[]>()
+  for (const gate of ['decompose', 'plan', 'implement', 'ship', 'design']) {
+    const r = resolveModel(cfg, matrix, gate)
+    if (r.ok && r.value.warning) {
+      byWarning.set(r.value.warning, [...(byWarning.get(r.value.warning) ?? []), gate])
+    }
+  }
+  return [...byWarning].map(([warning, gates]) => `${gates.join(' · ')}: ${warning}`)
 }

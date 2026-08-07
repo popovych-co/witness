@@ -3,11 +3,10 @@ import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
-import { DEFAULT_BATTERIES } from '../gate.js'
 import { primaryRoot } from '../gitio.js'
 import { resolveHarness } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
-import { loadMatrix, resolveModel } from '../model.js'
+import { modelFloorLines } from '../model.js'
 import { computeNext, flowAction } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
@@ -54,18 +53,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
     // Diagnostic surface: a broken harness config must not brick the dashboard —
     // `check` reports that as a finding, so the floor lines fall back to claude-code.
     const hxR = resolveHarness(ctx.env, cfg.value.raw)
-    const matrix = loadMatrix(root, hxR.ok ? hxR.value.harness.name : 'claude-code')
-    // one line per distinct warning, labeled with the gates it applies to —
-    // per-gate model pins can put each gate in a different calibration state
-    const byWarning = new Map<string, string[]>()
-    for (const gate of Object.keys(DEFAULT_BATTERIES)) {
-      const modelR = resolveModel(cfg.value, matrix, gate)
-      if (modelR.ok && modelR.value.warning) {
-        byWarning.set(modelR.value.warning, [...(byWarning.get(modelR.value.warning) ?? []), gate])
-      }
-    }
-    for (const [warning, gates] of byWarning) {
-      ctx.out(kv('model-floor', `${gates.join(' · ')}: ${warning}`))
+    // One line per distinct warning, labelled with the gates it applies to — per-gate
+    // model pins can put each gate in a different calibration state. Shared with
+    // `check` (D98a): the calibration fact must read the same on both surfaces.
+    for (const line of modelFloorLines(root, cfg.value, hxR.ok ? hxR.value.harness.name : 'claude-code')) {
+      ctx.out(kv('model-floor', line))
     }
   }
 

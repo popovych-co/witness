@@ -15,9 +15,10 @@ import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, gateRuns, roundsSinceApprove,
+  ROUND_BOUND, appendKind, boundReached, gateRuns, lastGateRun, roundsSinceApprove,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
+import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
@@ -66,7 +67,7 @@ const GATES = new Map<string, GateSpec>()
 export function registerGate(spec: GateSpec): void { GATES.set(spec.gate, spec) }
 export function gateSpec(name: string): GateSpec | undefined { return GATES.get(name) }
 
-export const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, string[]>> = {
+const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, string[]>> = {
   decompose: ['slicing-critic'],
   plan: ['plan-critic'],
   implement: {
@@ -93,10 +94,16 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 // where the state is. Skills used to recite a fixed triple, which is wrong at the bound
 // (D67's endgame set) — and now wrong in three more states.
 export function liveExits(gate: string, target: string, entries: Entry[], stale: boolean): string {
-  if (stale) return `witness gate ${gate} ${target}`
+  // The bound outranks staleness: at the bound the gate short-circuits and will not run
+  // again (:227), so "re-gate" is the D67 lie whatever the sha says. Stale content only
+  // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
+  // read — which is the same set decide's stale-verdict refusal names.
   if (boundReached(entries, gate)) {
-    return `witness decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
+    return stale
+      ? `witness decide ${gate} ${target} --revise --upstream <id> | --stop`
+      : `witness decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
   }
+  if (stale) return `witness gate ${gate} ${target}`
   return `witness decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`
 }
 
@@ -204,15 +211,37 @@ export async function runGate(
   }
   const modelR = resolveModel(cfgR.value, loadMatrix(root, harness.name), spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const { chain, calibrationOf, warning } = modelR.value
-  if (warning) ctx.err(`warning: ${warning}`)
+  const { chain, calibrationOf, warning, warningKind } = modelR.value
+  // matrix-empty is a fact about this witness build, reported once by `status`/`check`
+  // (D98a). Only the caller's own pin being below the floor is news at run time.
+  if (warning && warningKind === 'below-floor') ctx.err(`warning: ${warning}`)
 
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
     prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, witness: version(),
     harness: harness.name,
   }
+  // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
+  // Content moving is a legitimate, self-explaining reason. A flag is not — `--fresh`
+  // discarded a human decision with nothing printed and nothing journaled about it, and
+  // row 94 removed its other job (escaping the changed-nothing deadlock), so it can
+  // refuse and send the human through the verb that states a retraction and its reason.
+  const settledBefore = gateSettled(entries, spec.gate)
+  if (flags.fresh && settledBefore) {
+    renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
+      `witness decide ${spec.gate} ${target} --revise --note "<why>" — retract the approval, then re-gate`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
+  // A key that moved for a NON-content reason — edited prompt, re-pinned model, new
+  // witness version — un-settles just as quietly as --fresh did. Content moving explains
+  // itself; this does not.
+  const lastRun = lastGateRun(entries, spec.gate)
+  if (settledBefore && kind.kind === 'fresh' && lastRun && lastRun.reviewed_sha === input.reviewedSha) {
+    ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
+  }
   if (kind.kind === 'resume') {
     renderGateRun(ctx, kind.entry, 'resume')
     printDispatchArithmetic(ctx, root, spec.gate, target)

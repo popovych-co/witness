@@ -112,3 +112,23 @@ describe('stagePin grammar', () => {
     if (goodR.ok) expect(goodR.value).toBe('google/gemini-3.6-pro:low')
   })
 })
+
+// D98a: the empty matrix is a property of this witness BUILD (calibration.yaml ships
+// `models: []`), the floor is a property of the user's pin. Only the second is news
+// at gate-run time, so the two facts need distinguishing at the source.
+describe('warningKind', () => {
+  it('labels an empty matrix and a below-floor pin differently', async () => {
+    const { repo, cfg } = await cfgWith('gates:\n  model: claude-opus-5\n')
+
+    const empty = resolveModel(cfg, { shipped: [], local: [] }, 'implement')
+    expect(empty.ok && empty.value.warningKind).toBe('matrix-empty')
+
+    const populated = resolveModel(cfg, { shipped: ['claude-sonnet-5'], local: [] }, 'implement')
+    expect(populated.ok && populated.value.warningKind).toBe('below-floor')
+
+    const calibrated = resolveModel(cfg, { shipped: ['claude-opus-5'], local: [] }, 'implement')
+    expect(calibrated.ok && calibrated.value.warningKind).toBeUndefined()
+    expect(calibrated.ok && calibrated.value.warning).toBeUndefined()
+    void repo
+  })
+})

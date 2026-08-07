@@ -202,3 +202,27 @@ describe('witness decide', () => {
     expect(reopen.caused_by).toMatchObject({ artifact: 'auth-refresh', gate: 'plan' })
   })
 })
+
+// D94: revise → (think better of it) → approve, with nothing edited in between. Before
+// this, `gate` answered `changed-nothing` and `decide` answered `nothing-pending`, each
+// naming the other, and the only escape found in the field was a pointless edit.
+describe('a revised gate still has exits', () => {
+  it('lets a human approve after their own revise when the content has not moved', async () => {
+    const { repo } = await stoppedGate()
+    const revised = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'tighten scope'])
+    expect(revised.code).toBe(0)
+
+    const approved = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
+    expect(approved.code).toBe(0)
+    expect(approved.stdout).toContain('auth-refresh → approve')
+    expect(decisions(repo).map((d) => d.decision)).toEqual(['revise', 'approve'])
+  })
+
+  it('still refuses when there is no gate-run to anchor on', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('nothing-pending')
+  })
+})

@@ -97,3 +97,22 @@ describe('in-flight flows', () => {
     await repo.cli(['clean'])
   })
 })
+
+// D101: commands/witness.md tells the operator to read "the dashboard" and nothing
+// named it — bare `witness` is unreachable from usage(), --help, or prose.
+describe('witness status', () => {
+  it('renders the same dashboard as the bare verb', async () => {
+    const repo = await seededRepo()
+    const bare = await repo.cli([])
+    const named = await repo.cli(['status'])
+    expect(named.code).toBe(0)
+    expect(named.stdout).toBe(bare.stdout)
+    expect(named.stdout).toContain('canon:')
+  })
+
+  it('is listed among the verbs so it can be discovered', async () => {
+    const repo = await seededRepo()
+    const help = await repo.cli(['help'])
+    expect(help.stdout).toContain('status')
+  })
+})
