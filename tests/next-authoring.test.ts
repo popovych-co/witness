@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
+import { runGate } from '../src/gate.js'
+import '../src/gates/index.js'
 import {
-  approve, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, writePlan, writeSpec,
-  PLAN_BODY, PLAN_META, SPEC_BODY, type TestRepo,
+  approve, fakeCtx, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo,
+  writePlan, writeSpec, PLAN_BODY, PLAN_META, SPEC_BODY, type TestRepo,
 } from './helpers.js'
 
 const REOPEN = { artifact: 'auth-refresh', gate: 'design', round: 1 }
@@ -190,5 +192,35 @@ describe('next — chore-class effort', () => {
     const line = await nextLine(repo)
     expect(line).not.toContain('gate decompose')
     expect(line).toContain('gate plan auth-refresh-plan-1')     // the plans are the gateable work
+  })
+})
+
+// D94, implement side: after a revise the owed work is EDITING CODE. Routing to
+// `witness gate implement` sends the loop at a command that appends nothing and returns
+// the same line next turn — the loop's own no-progress stop then fires on a healthy CLI.
+describe('a revised implement gate owes authoring', () => {
+  async function revisedImplement() {
+    const { repo, wt, planId } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [] })
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
+    await repo.cli(['decide', 'implement', planId, '--revise', '--note', 'extract the helper'])
+    return { repo, wt, planId }
+  }
+
+  it('routes to the worktree, not back to the gate', async () => {
+    const { repo, wt, planId } = await revisedImplement()
+    const out = await nextLine(repo)
+    expect(out).not.toContain(`witness gate implement ${planId}`)
+    expect(out).toContain('stage: implement')
+    expect(out).toContain('revise owed')
+    expect(out).toContain(`home: ${wt}`)
+  })
+
+  it('stops claiming authoring once the human approves instead', async () => {
+    const { repo, planId } = await revisedImplement()
+    const approved = await repo.cli(['decide', 'implement', planId, '--approve'])
+    expect(approved.code).toBe(0)
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
   })
 })

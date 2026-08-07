@@ -50,10 +50,14 @@ function authoringOwed(entries: Entry[], gate: string, currentSha: string | unde
   if (!last) return false
   if (currentSha === undefined || last.reviewed_sha !== currentSha) return false
   if (openReopen(entries, gate) !== undefined) return true
-  const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-  return after.some((e) => e.t === 'human-decision' &&
-    (e as unknown as DecisionEntry).gate === gate &&
-    ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
+  // The LAST decision is the state (D94). `.some()` read by presence, so an approve
+  // answering a revise left this still claiming authoring — the same read-by-position
+  // defect as decide --show's disposition.
+  const recent = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry)
+    .at(-1)
+  return recent !== undefined && ['revise', 'revise-upstream'].includes(recent.decision)
 }
 
 // D75 re-arms a gate whose reviewed sha has moved, and `worktreeTreeSha` covers the
@@ -146,6 +150,15 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
     return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree)
+  }
+  // D94: with the content unchanged the gate answers `changed-nothing` and appends
+  // nothing, so routing there returns this same line every turn. The revise asked for an
+  // edit — say that, and seat the session where the edit happens.
+  if (authoringOwed(entries, 'implement', treeSha)) {
+    return {
+      line: `witness test-evidence ${id} --phase green`, stage: 'implement', target: id, ...inWorktree,
+      note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
+    }
   }
   return {
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
