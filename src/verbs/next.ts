@@ -8,7 +8,7 @@ import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { effortOf, effortReviewedSha, effortSpecs, effortWrites, planPairSha, worktreeTreeSha } from '../reviewed.js'
-import { changedFiles, diffBase, evidenceForDiff } from '../evidence.js'
+import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveHarness } from '../harness.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
@@ -70,6 +70,37 @@ function lapseNote(entries: Entry[], gate: string, currentSha: string | undefine
   return `${gate} approval lapsed — judged @${last.reviewed_sha.slice(0, 7)}, worktree now @${currentSha.slice(0, 7)} — re-gate to judge the current tree`
 }
 
+// The owed evidence phase is a DERIVATION (row 85: a placeholder is honest only where
+// the CLI genuinely cannot know the answer). `evidenceForDiff` already computes
+// red/green/vacuous per tag on the way to the gate's own check — this reads that report
+// instead of printing the menu and making the caller resolve it.
+//
+// `verify-red` is preferred where a plain red probe is guaranteed vacuous: with the
+// implementation already written the suite passes as it stands, so the reconstructing
+// verb is the only one that can witness a genuine red.
+function evidenceRow(
+  id: string, parentTag: string, files: string[], report: EvidenceReport | undefined,
+  seat: { home: string; model?: string },
+): NextAction {
+  const base = { stage: 'implement' as const, target: id, ...seat }
+  if (report === undefined) {
+    return {
+      line: `witness test-evidence ${id} --phase red`, ...base,
+      note: 'nothing changed yet — write the failing test first',
+    }
+  }
+  const owed = report.required
+    .filter((r) => !(r.red && r.green && !r.vacuous))
+    .map((r) => `${r.tag} ${!r.red || r.vacuous ? 'red' : 'green'}`)
+    .join(' · ')
+  const parent = report.required.find((r) => r.tag === parentTag)
+  const liveRed = parent !== undefined && parent.red && !parent.vacuous
+  const line = !liveRed && files.some((f) => !isTestPath(f))
+    ? `witness verify-red ${id}`
+    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}`
+  return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
+}
+
 export interface NextAction {
   line: string
   stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
@@ -114,7 +145,7 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   // implement-stage hint too, not a premature jump to "gate implement".
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
-    return { line: `witness test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
+    return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree)
   }
   return {
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
