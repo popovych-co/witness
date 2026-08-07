@@ -15,9 +15,10 @@ import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, gateRuns, roundsSinceApprove,
+  ROUND_BOUND, appendKind, boundReached, gateRuns, lastGateRun, roundsSinceApprove,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
+import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
@@ -220,7 +221,27 @@ export async function runGate(
     prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, witness: version(),
     harness: harness.name,
   }
+  // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
+  // Content moving is a legitimate, self-explaining reason. A flag is not — `--fresh`
+  // discarded a human decision with nothing printed and nothing journaled about it, and
+  // row 94 removed its other job (escaping the changed-nothing deadlock), so it can
+  // refuse and send the human through the verb that states a retraction and its reason.
+  const settledBefore = gateSettled(entries, spec.gate)
+  if (flags.fresh && settledBefore) {
+    renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
+      `witness decide ${spec.gate} ${target} --revise --note "<why>" — retract the approval, then re-gate`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
+  // A key that moved for a NON-content reason — edited prompt, re-pinned model, new
+  // witness version — un-settles just as quietly as --fresh did. Content moving explains
+  // itself; this does not.
+  const lastRun = lastGateRun(entries, spec.gate)
+  if (settledBefore && kind.kind === 'fresh' && lastRun && lastRun.reviewed_sha === input.reviewedSha) {
+    ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
+  }
   if (kind.kind === 'resume') {
     renderGateRun(ctx, kind.entry, 'resume')
     printDispatchArithmetic(ctx, root, spec.gate, target)

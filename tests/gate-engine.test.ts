@@ -286,3 +286,38 @@ describe('calibration reporting', () => {
     expect(err.join('\n')).not.toContain('calibration matrix is empty')
   })
 })
+
+// D99: gateSettled reads only the LAST run, so any new run un-settles the gate. Content
+// moving is a self-explaining reason. A flag is not — and row 94 removed --fresh's other
+// job (escaping the changed-nothing deadlock), so it can afford to refuse.
+describe('a settled approve is never discarded in silence', () => {
+  it('refuses --fresh on a settled gate and names the retraction verb', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+
+    const err: string[] = []
+    const code = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => err.push(l) }),
+      'plan', 'auth-refresh', { fresh: true, manual: false })
+    expect(code).toBe(2)
+    expect(err.join('\n')).toContain('settled-approve')
+    expect(err.join('\n')).toContain('--revise')
+    expect(runs(repo).length).toBe(1)                       // nothing appended
+  })
+
+  it('warns when a reviewer-setup change is about to drop a settled approve', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+
+    // a re-pinned model moves the gate key without moving one byte of content
+    repo.write('witness.config.yaml', 'schema: 1\ngates:\n  plan: { model: claude-sonnet-5 }\n')
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'repin plan model')
+
+    const err: string[] = []
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => err.push(l) }),
+      'plan', 'auth-refresh', { fresh: false, manual: false })
+    expect(err.join('\n')).toContain('discards the settled approve')
+  })
+})
