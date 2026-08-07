@@ -8,10 +8,10 @@ import { designRel } from '../design.js'
 import { git } from '../gitio.js'
 import { latestRecap, readStream } from '../journal.js'
 import type { LensDoc } from '../reviewer.js'
-import { findById } from '../scan.js'
-import { changedFiles, diffBase, evidenceForDiff, screensDir } from '../evidence.js'
+import { findById, type CanonDoc } from '../scan.js'
+import { changedFiles, changedTestSpecs, diffBase, evidenceForDiff, runRegression, screensDir } from '../evidence.js'
 import { runCriteria } from '../criteria.js'
-import { effortOf, worktreeTreeSha } from '../reviewed.js'
+import { effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import type { GateCheck } from '../rounds.js'
@@ -125,8 +125,27 @@ registerGate({
     const missing = report.required.filter((r) => !(r.red && r.green && !r.vacuous))
     checks.push({ name: 'evidence', ok: report.satisfied,
       detail: report.satisfied
-        ? `${report.required.length} tags with red→green pairs`
+        ? (report.required.length > 0
+            ? `${String(plan.meta.parent)}: red→green`
+            : `no ${String(plan.meta.parent)} tests in the diff — nothing to witness`)
         : missing.map((m) => `${m.tag}: red=${m.red} green=${m.green}${m.vacuous ? ' vacuous' : ''}`).join(' · ') })
+
+    // Row 97: the obligation created by editing someone's tests is that those tests still
+    // pass — not that their whole spec is satisfied, which is the out-of-band drift sweep's
+    // job. `runCriteria` is deliberately NOT used here: it executes the foreign spec's `cmd`
+    // criteria, arbitrary trust-gated commands, inside an unattended gate.
+    const foreign = changedTestSpecs(wt, base, String(plan.meta.parent))
+    const regression = await runRegression(wt, ctx, root, foreign, (id) => findById(canon, id) !== undefined)
+    checks.push({
+      name: 'regression',
+      // `unknown` does not fail: witness cannot judge an obligation for a spec it does not
+      // have, and failing it re-creates the unsatisfiable check this row deletes. It is
+      // named in the detail, which is where a typo'd tag surfaces.
+      ok: regression.every((r) => r.state === 'green' || r.state === 'unknown'),
+      detail: regression.length === 0
+        ? 'no foreign spec tests touched'
+        : regression.map((r) => `${r.spec}:${r.state}`).join(' · '),
+    })
 
     const lane = await runCriteria(wt, ctx, parent, { trustRoot: root })
     checks.push({
@@ -142,7 +161,7 @@ registerGate({
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
-      reviewedSha: worktreeTreeSha(wt),
+      reviewedSha: implementReviewedSha(wt, base, plan),
       artifactSha: canonicalSha(plan.meta, plan.body),
       reviewed: { kind: 'tree', root: wt, files },
       promptBody: codePromptBody(wt, base, files,
@@ -154,8 +173,13 @@ registerGate({
     })
   },
 
-  currentSha(root, _canon, _cfg, planId) {
+  currentSha(root, canon, cfg, planId) {
     const wt = worktreePath(root, planId)
-    return existsSync(wt) ? worktreeTreeSha(wt) : undefined
+    const plan = findById(canon, planId)
+    if (!existsSync(wt) || !plan) return undefined
+    const baseR = diffBase(wt, cfg)
+    // undefined is "cannot compute", never "moved": an unresolvable base must not
+    // un-settle a gate or invert `decide --show`'s staleness line.
+    return baseR.ok ? implementReviewedSha(wt, baseR.value, plan) : undefined
   },
 })

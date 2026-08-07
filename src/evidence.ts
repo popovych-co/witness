@@ -5,7 +5,7 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { loadConfig } from './config.js'
 import { entryLine, appendEntry, journalRel, readStream } from './journal.js'
-import { mergeReports, reportFiles } from './junit.js'
+import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { runFiltered, runFullSuite, runnerConfig } from './runner.js'
@@ -47,6 +47,7 @@ export interface SpecTestRun {
 
 export async function runSpecTests(
   runRoot: string, ctx: Ctx, parentId: string, trustRoot: string,
+  opts: { suite?: TestOutcome[] } = {},
 ): Promise<Result<SpecTestRun>> {
   const cfg = loadConfig(runRoot)
   if (!cfg.ok) return cfg
@@ -74,9 +75,18 @@ export async function runSpecTests(
     }
     return ok({ runner: 'filtered', tests, allOk: tests.every((t) => t.ok) })
   }
-  const suite = await runFullSuite(runRoot, ctx, rc, trustRoot)
-  if (!suite.ok) return suite
-  const tests = suite.value.tests
+  // A caller checking several specs at once runs the suite ONCE and hands it here. Without
+  // this the regression lane executes the whole suite per spec, which is the redundancy
+  // `runCriteria` already pays per CRITERION.
+  let all: TestOutcome[]
+  if (opts.suite !== undefined) {
+    all = opts.suite
+  } else {
+    const suite = await runFullSuite(runRoot, ctx, rc, trustRoot)
+    if (!suite.ok) return suite
+    all = suite.value.tests
+  }
+  const tests = all
     .filter((t) => matchesTag(t.name, parentId))
     .map((t) => ({ name: t.name, ok: t.status === 'passed' }))
   if (tests.length === 0) {
@@ -199,6 +209,73 @@ export function diffTags(runRoot: string, base: string): string[] {
   return [...tags].sort()
 }
 
+// Row 97. Editing someone else's tests creates a REGRESSION obligation — those tests still
+// pass — never a red→green one: `red` means "I observed this behaviour missing before I
+// built it", and producing a red on a spec you do not own means deliberately breaking it and
+// journaling that as evidence. Detection reads the CURRENT CONTENT of every changed test
+// file rather than added lines, because the case this exists for (a shared fixture grown
+// from 3 to 24 respondents breaking a `@spec:report-view` e2e) touches no tagged line at all.
+export function changedTestSpecs(runRoot: string, base: string, parentId: string): string[] {
+  const tags = new Set<string>()
+  for (const rel of changedFiles(runRoot, base).filter(isTestPath)) {
+    const abs = join(runRoot, rel)
+    if (!existsSync(abs)) continue                    // deleted: no content left to owe anything
+    for (const tag of extractCanonicalTags(readFileSync(abs, 'utf8'))) tags.add(tag)
+  }
+  tags.delete(parentId)                               // the parent's obligation is red→green
+  return [...tags].sort()
+}
+
+export interface RegressionOutcome {
+  spec: string
+  state: 'green' | 'red' | 'unknown' | 'unrunnable'
+  detail: string
+}
+
+// Never a `Result` refusal: this runs inside a gate's resolve(), and a refusal there aborts
+// the whole gate — a fresh unescapable dead end, the exact class row 97 removes. Every
+// runner problem (filter-matched-nothing included) degrades to a failed check carrying its
+// detail, the shape `runCriteria` has always had.
+//
+// Nothing here journals. `journalEvidence`/`recordEvidence` are what write `test-evidence`
+// entries and neither is on this path — an entry under a tag this plan does not own is
+// exactly the false claim row 97 refuses to let anyone make.
+export async function runRegression(
+  runRoot: string, ctx: Ctx, trustRoot: string, specIds: string[], known: (id: string) => boolean,
+): Promise<RegressionOutcome[]> {
+  const out: RegressionOutcome[] = []
+  const memo = new Map<string, Result<SpecTestRun>>()
+  const runnable = specIds.filter(known)
+  let suite: TestOutcome[] | undefined
+  const cfg = loadConfig(runRoot)
+  const rc = cfg.ok ? runnerConfig(cfg.value) : undefined
+  if (rc?.ok && rc.value.mode === 'full-suite' && runnable.length > 0) {
+    const first = await runFullSuite(runRoot, ctx, rc.value, trustRoot)
+    if (first.ok) suite = first.value.tests           // one suite run for every spec below
+  }
+  for (const id of specIds) {
+    if (!known(id)) {
+      out.push({ spec: id, state: 'unknown', detail: 'no such spec in canon — reported, not run' })
+      continue
+    }
+    let run = memo.get(id)
+    if (run === undefined) {
+      run = await runSpecTests(runRoot, ctx, id, trustRoot, { suite })
+      memo.set(id, run)
+    }
+    if (!run.ok) {
+      out.push({ spec: id, state: 'unrunnable', detail: run.violations.map((x) => x.rule).join(' · ') })
+      continue
+    }
+    const failed = run.value.tests.filter((t) => !t.ok).length
+    out.push({
+      spec: id, state: run.value.allOk ? 'green' : 'red',
+      detail: `${run.value.tests.length} tagged · ${failed} failed`,
+    })
+  }
+  return out
+}
+
 export interface EvidenceRequirement {
   tag: string
   red: boolean
@@ -215,10 +292,16 @@ export interface EvidenceReport {
 
 export function evidenceForDiff(runRoot: string, stateRoot: string, plan: CanonDoc, base: string): EvidenceReport {
   const planId = String(plan.meta.id)
+  const parentId = String(plan.meta.parent)
   const entries = readStream(stateRoot, planId).filter((e) => e.t === 'test-evidence')
   const matching = (e: (typeof entries)[number], tag: string): Array<{ name: string; ok: boolean }> =>
     (Array.isArray(e.tests) ? (e.tests as Array<{ name: string; ok: boolean }>) : []).filter((t) => matchesTag(t.name, tag))
-  const required = diffTags(runRoot, base).map((tag) => {
+  // Row 97: red→green is a claim about the NEW BEHAVIOUR THIS PLAN BUILDS, so the only tag
+  // it can be made for is the plan's own parent — `test-evidence` interpolates
+  // `plan.meta.parent` and nothing else, which is why a foreign tag here was unsatisfiable
+  // AND (before row 93) unwaivable. Every other spec the diff's tests touched is a
+  // regression obligation, checked by `runRegression` at the gate.
+  const required = diffTags(runRoot, base).filter((tag) => tag === parentId).map((tag) => {
     // latest-cycle semantics: the newest red matching the tag is the verdict on
     // "was failure observed"; a green only counts if it post-dates that red.
     // One early vacuous red must not poison the tag forever (append-only journal).

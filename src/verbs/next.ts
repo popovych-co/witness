@@ -7,7 +7,7 @@ import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { effortOf, effortReviewedSha, effortSpecs, effortWrites, planPairSha, worktreeTreeSha } from '../reviewed.js'
+import { effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveHarness } from '../harness.js'
@@ -60,10 +60,10 @@ export function authoringOwed(entries: Entry[], gate: string, currentSha: string
   return recent !== undefined && ['revise', 'revise-upstream'].includes(recent.decision)
 }
 
-// D75 re-arms a gate whose reviewed sha has moved, and `worktreeTreeSha` covers the
-// WHOLE worktree — so any state commit reaching it lapses the gate. That is correct, but
-// the row it produces is a bare `gate implement`, indistinguishable from a CLI stuck on
-// a stale answer. A human who just watched that gate pass reads it as the latter, and
+// D75 re-arms a gate whose reviewed sha has moved — under row 96 that is the diff moving
+// or the base moving, no longer any file in the worktree. Correct either way, but the row
+// it produces is a bare `gate implement`, indistinguishable from a CLI stuck on a stale
+// answer. A human who just watched that gate pass reads it as the latter, and
 // with a second session in the worktree answering `ship` the pair looks like a deadlock
 // with no error anywhere. The lapse is a fact the CLI already knows; say it.
 function lapseNote(entries: Entry[], gate: string, currentSha: string | undefined): string | undefined {
@@ -115,6 +115,16 @@ export interface NextAction {
                   // itself is rendered at the print site, where the harness is known
 }
 
+// One list for both readers. `flowAction` needs it to name an effort that can carry a plan
+// write, and `computeNext` has always built exactly this — a second derivation here is the
+// mistake rows 93 and 95 are both about.
+function liveEfforts(root: string): Array<{ slug: string; entries: Entry[] }> {
+  return effortStreams(root)
+    .map((slug) => ({ slug, entries: readStream(root, slug) }))
+    .filter((e) => latestRecap(root, e.slug) !== undefined && !effortAbandoned(e.entries))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
 // The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
 // `witness start` and ends at the merge stamp. Anything else returns undefined and is
 // not a flow. Exported because `--flow` and the dashboard must answer with the SAME
@@ -131,19 +141,33 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   const atRoot = { home: root }
   if (!existsSync(wt)) return { line: `witness start ${id}`, target: id, note: 'worktree missing — start recreates it' }
   if (plan.meta.pr !== undefined) return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
-  const treeSha = worktreeTreeSha(wt)
+  // Row 95: a reopen on this plan's OWN plan gate is routable motion — the plan is what
+  // needs re-authoring — and every reader was blind to it. Above the implement settle check
+  // on purpose: an implement gate settled against an earlier plan version must not carry
+  // the flow past a reopen saying the plan itself is wrong. Below the `pr` row on purpose
+  // too: a flow already at ship is answered by ship. No `home:` — plan authoring writes
+  // canon at the root, and this matches what computeNext's plans-first loop prints.
+  if (openReopen(entries, 'plan') !== undefined) {
+    const act = planWriteAction(root, liveEfforts(root), id, String(plan.meta.parent), id)
+    return { ...act, ...noteOf(act.note, 'plan gate reopened — re-author, then re-gate the plan') }
+  }
+  const baseR = diffBase(wt, cfg)
+  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
+  // Rows 95 + 96: the identity is the diff plus the plan's content, never the worktree, and
+  // it comes from the SAME derivation the implement gate keys on — deriving it here a second
+  // way is what made every settled gate read as lapsed. undefined means the base cannot be
+  // resolved — "cannot compute", never "moved", so a settled gate stays settled.
+  const diffSha = baseR.ok ? implementReviewedSha(wt, baseR.value, plan) : undefined
   // D93: the gate owns its deterministic checks; the router reads the verdict and never
   // re-derives the predicate. Testing `evidence` in front of this is what made a human
   // `--approve` invisible to the one verb the driving loop calls every turn — the
   // journal said settled, `next` said test-evidence, and no error printed anywhere.
   // Sha-sensitivity is load-bearing here: emptying the worktree after an approval moves
-  // the sha and re-arms the gate, which is why this keeps `treeSha` while
+  // the sha and re-arms the gate, which is why this keeps `diffSha` while
   // `gates/ship.ts` deliberately omits it (row 92).
-  if (gateSettled(entries, 'implement', treeSha)) {
+  if (gateSettled(entries, 'implement', diffSha)) {
     return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
   }
-  const baseR = diffBase(wt, cfg)
-  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
@@ -154,7 +178,7 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   // D94: with the content unchanged the gate answers `changed-nothing` and appends
   // nothing, so routing there returns this same line every turn. The revise asked for an
   // edit — say that, and seat the session where the edit happens.
-  if (authoringOwed(entries, 'implement', treeSha)) {
+  if (authoringOwed(entries, 'implement', diffSha)) {
     return {
       line: `witness test-evidence ${id} --phase green`, stage: 'implement', target: id, ...inWorktree,
       note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
@@ -162,7 +186,7 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   }
   return {
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
-    ...noteOf(lapseNote(entries, 'implement', treeSha)),
+    ...noteOf(lapseNote(entries, 'implement', diffSha)),
   }
 }
 
@@ -181,10 +205,16 @@ function flowRank(a: NextAction): number {
 // created). Such a flow is NOT tier-1 motion — offering it would loop the driving loop
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
-function flowBlocked(entries: Entry[]): boolean {
-  return ['plan', 'implement', 'ship'].some((gate) =>
+function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
+  if (['plan', 'implement', 'ship'].some((gate) =>
     pendingDecision(entries, gate) !== undefined ||
-    (boundReached(entries, gate) && !gateSettled(entries, gate)))
+    (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
+  // Row 95's split: a reopen on the plan's own plan gate is NOT a block — flowAction routes
+  // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
+  // and tier 3 is where it surfaces. Keyed on the effort that owns the PARENT SPEC, which is
+  // where `decide --revise --upstream <spec>` books it.
+  const effort = effortOf(root, String(plan.meta.parent))
+  return effort !== undefined && openReopen(readStream(root, effort), 'decompose') !== undefined
 }
 
 interface PendingDecisionRef { gate: string; target: string }
@@ -263,10 +293,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     return { line: 'witness check' }
   }
 
-  const efforts = effortStreams(root)
-    .map((slug) => ({ slug, entries: readStream(root, slug) }))
-    .filter((e) => latestRecap(root, e.slug) !== undefined && !effortAbandoned(e.entries))
-    .sort((a, b) => a.slug.localeCompare(b.slug))
+  const efforts = liveEfforts(root)
 
   // Hoisted above tier 1: both doc lists are read by every tier below, and they used to
   // be declared interleaved between the pending-decision scans.
@@ -279,7 +306,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // on a human decision belonging to a DIFFERENT flow: ship always stops (gates/ship.ts),
   // so a global decision-halt freezes every other flow at the first ship gate.
   const flows = plans
-    .filter((plan) => !flowBlocked(readStream(root, String(plan.meta.id))))
+    .filter((plan) => !flowBlocked(root, plan, readStream(root, String(plan.meta.id))))
     .map((plan) => flowAction(root, cfg, plan))
     .filter((a): a is NextAction => a !== undefined)
     .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))

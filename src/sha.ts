@@ -29,6 +29,17 @@ export function canonicalSha(meta: Record<string, unknown>, body: string): strin
     .digest('hex')
 }
 
+// Row 95: a re-authored plan re-arms the implement gate, so the plan's content joins that
+// gate's reviewed identity — the battery reads the plan (`codePromptBody` serializes it into
+// the prompt), so the identity should say so. `derives-from` is excluded ON TOP of
+// VOLATILE_FIELDS because ship's own `repin` rewrites it inside the same transaction as the
+// gate run: keep it and the entry invalidates itself the moment it is written, which is
+// row 96's self-invalidation in a second place.
+export function planContentSha(meta: Record<string, unknown>, body: string): string {
+  const { 'derives-from': _repinned, ...rest } = meta
+  return canonicalSha(rest, body)
+}
+
 export function short(sha: string): string {
   return sha.slice(0, 7)
 }

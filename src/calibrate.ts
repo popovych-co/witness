@@ -582,6 +582,13 @@ export async function runImplementSeed(ctx: Ctx, harness: Harness, seed: SkillSe
   const planDoc = findById(loadCanon(root), planId)
   if (!planDoc) return refuse([v('plan', 'seed-plan-missing', planId, 'the plan just written by the seed')])
   const report = evidenceForDiff(wt.value.path, root, planDoc, base.value)
+  // Row 97 narrowed `required` to the parent tag, so an empty list no longer means "nothing
+  // was owed" — it means the agent never wrote a test tagged for the spec it was given, and
+  // `.every()` would pass that vacuously. The seed's whole question is whether the parent's
+  // red→green pair got witnessed.
+  if (report.required.length === 0) {
+    return ok({ ok: false, why: 'no test tagged for the parent spec — nothing was witnessed' })
+  }
   return ok({ ok: report.satisfied, why: report.satisfied ? 'evidence satisfied' : JSON.stringify(report.required) })
 }
 

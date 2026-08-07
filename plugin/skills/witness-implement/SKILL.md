@@ -15,7 +15,7 @@ tests carry the parent spec's tag in their NAME. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.2}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.6.0}"
 ```
 
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
@@ -47,6 +47,8 @@ Protocol per step, in order — red/green/refactor with witnessed evidence:
 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design.
 6. Early exit: if you exceed **~15 inner-loop iterations** inside one step, or you have left the step's scope to fight infrastructure, the economy is to relay — finish the red→green you are in (never stop mid-red), report, and relay so a fresh context continues. Exceeding your slice is never the right economy.
 7. Fat artifacts (the living designs/<spec>.html, long docs) are read **by section** — grep for the anchors/ids you need, then read those offsets — never whole into your context; you would re-pay their tokens on every subsequent request.
+
+**Tests you did not come to change.** When a step makes you edit a test file tagged for a spec other than your parent — a shared fixture, a helper, a suite-wide rename — you owe that spec **green now**, never a red→green pair: `red` means you observed the behavior missing before you built it, and you are not building that spec. The gate's `regression` check runs those specs' tagged tests and fails if any is red. Fix them in the worktree; never journal evidence under a tag this plan does not own, and never weaken the foreign test to pass.
 
 UI work TDDs at the browser, end-to-end: when a step changes what the browser renders or how the user interacts with it (markup, styles, routes, client-side behavior), the failing test in step 1 is a **Puppeteer** test driving the real UI **through the whole slice** — headless, tagged in its NAME like any test, living in the repo's regular suite so the criteria runner reaches it (Puppeteer is a library, not a runner — a test the runner can't reach has unwitnessable evidence). Everything the repo owns runs real: the test owns the slice's lifecycle — build, boot the backend and its store, serve the frontend; never assume a running dev server (evidence runs in a clean worktree) — but inside your own inner loop, keep the app server alive across iterations where the harness allows; the per-run floor is boot + compile, not test time. Fake only what the repo does not own (third-party services). Stubbing the slice's own backend — request interception, mocked fetch, canned API fixtures — turns the test UI-only, and the implement gate's pr-test lens flags it like any substitution. Unit/component tests may accompany a browser test, never replace it.
 

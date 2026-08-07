@@ -7,7 +7,7 @@ import { changedFiles, diffBase } from '../src/evidence.js'
 import { loadConfig } from '../src/config.js'
 import {
   approve, fakeCtx, fakeScenario, gateEnv, ghState, nextLine, putVerdict, seededRepo, shippableRepo,
-  writePlan, writeSpec,
+  stampLive, writePlan, writeSpec,
 } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 import type { TestRepo } from './helpers.js'
@@ -247,22 +247,77 @@ describe('addressing one flow', () => {
 // reproduces the 0.5.1 field report — an approve the journal recorded as settled and
 // `next` refused to see, because it re-derived `evidence` in front of the settle check.
 describe('a settled implement gate outranks the evidence hint', () => {
-  it('routes to ship after a human approve even when the evidence check is red', async () => {
+  it('routes to ship after a human approve even when a deterministic check is red', async () => {
     const { repo, wt, planId } = await shippableRepo()
 
-    // a test tagged for ANOTHER spec makes evidenceForDiff unsatisfiable: the tag has
-    // no red→green pair, and `test-evidence` cannot record one for a foreign spec
-    writeFileSync(join(wt, 'src', 'foreign.test.ts'),
-      "import { expect, it } from 'vitest'\n\nit('foreign @spec:other-spec', () => { expect(1).toBe(1) })\n")
+    // a sibling spec this plan does not own, whose tagged test the diff breaks: the
+    // `regression` check goes red and no `test-evidence` can ever answer it. (Before row 97
+    // this test used a foreign tag to make `evidence` unsatisfiable — that case is now
+    // correctly green, so the red input moves to the check that genuinely stays red.)
+    await writeSpec(repo, 'report-view', { criteria: [{ id: 'ac-view', test: '@spec:report-view' }] })
+    stampLive(repo, 'report-view')
+    writeFileSync(join(wt, 'tests', 'report.test.ts'),
+      "import { expect, it } from 'vitest'\n\nit('renders the report @spec:report-view', () => { expect(1).toBe(2) })\n")
 
     const scenario = fakeScenario()
     putVerdict(scenario, { coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [] })
     const gate = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
-    expect(gate).toBe(1)                                  // stopped: the evidence check is red
+    expect(gate).toBe(1)                                  // stopped: the regression check is red
 
     const decided = await repo.cli(['decide', 'implement', planId, '--approve'])
     expect(decided.code).toBe(0)
 
     expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+
+    await repo.cli(['clean'])
+  })
+})
+
+// Drive a plan's implement gate to `stopped`, leaving a pending human decision to revise.
+async function stopImplementGate(repo: TestRepo, wt: string, planId: string): Promise<void> {
+  const cfg = loadConfig(repo.root)
+  const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
+  const files = changedFiles(wt, base.ok ? base.value : '')
+  const scenario = fakeScenario()
+  putVerdict(scenario, {
+    coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })),
+    findings: [{ blocking: true, anchor: files[0]!, claim: 'the rotation window is unbounded' }],
+  })
+  await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
+}
+
+describe('a reopen on a started plan routes', () => {
+  // The entry was correct and read by nobody: `flowAction` never consulted the plan gate,
+  // `computeNext`'s plan loop filters `status === 'draft'`, and `flowBlocked` saw only
+  // pending decisions — so an in-progress plan's reopen was invisible by construction.
+  it('sends an in-flight plan whose plan gate was reopened to plan authoring', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await stopImplementGate(repo, wt, planId)
+    const r = await repo.cli(['decide', 'implement', planId, '--revise', '--upstream', planId,
+      '--note', 'step s1 prescribes the wrong seam'])
+    expect(r.code).toBe(0)
+
+    const out = await nextLine(repo)
+    expect(out).toContain(`witness write ${planId} --effort ${repo.effort}`)
+    expect(out).toContain('stage: plan')
+    // and it is still TIER 1 — a blanket flowBlocked reopen term strands it here
+    expect(out).not.toContain('witness check')
+
+    await repo.cli(['clean'])
+  })
+
+  // The other half of the split: that work belongs to the effort, and tier 3 is where it
+  // surfaces, so the flow must leave tier 1.
+  it('takes the flow out of tier 1 when the parent decompose is reopened', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await stopImplementGate(repo, wt, planId)
+    await repo.cli(['decide', 'implement', planId, '--revise', '--upstream', 'auth-refresh',
+      '--note', 'the slicing is wrong'])
+
+    const out = await nextLine(repo)
+    expect(out).not.toContain(`witness gate implement ${planId}`)
+    expect(out).toContain(`witness gate decompose --effort ${repo.effort}`)
+
+    await repo.cli(['clean'])
   })
 })

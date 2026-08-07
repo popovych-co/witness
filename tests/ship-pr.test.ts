@@ -114,7 +114,7 @@ describe('witness ship', () => {
     execFileSync('git', ['push', 'origin', 'main'], { cwd: other })
 
     const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()
-    const res = rebaseIfMoved(wt, 'main')
+    const res = rebaseIfMoved(wt, repo.root, 'main')
 
     expect(res.ok).toBe(true)
     expect(res.ok && res.value).toBe('rebased')

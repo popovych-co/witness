@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import { canonicalSha } from '../src/sha.js'
+import { findById, loadCanon } from '../src/scan.js'
 import { approve, PLAN_META, SPEC_META, seededRepo, stampLive, writePlan, writeSpec, type TestRepo } from './helpers.js'
 
 function specSha(repo: TestRepo): string {
@@ -112,5 +113,74 @@ describe('design-from pin', () => {
     const wr = await writePlan(repo, 'auth-refresh-plan-1', { parent: 'auth-refresh', 'design-from': 'a'.repeat(64) })
     expect(wr.code).toBe(2)
     expect(wr.stderr).toContain('design-from')
+  })
+})
+
+describe('re-authoring a plan does not end its flow', () => {
+  // `flowAction` routes an in-flight plan's reopen to this verb (row 95). Hardcoding
+  // `status: draft` here demoted a plan holding a `pr` and a live worktree out of
+  // flow-hood, and `flowAction`, `flowBlocked`, `dashboard` and `--flow` all started
+  // lying about it.
+  it('preserves an in-progress status', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    await repo.cli(['start', 'auth-refresh-plan-1'])
+
+    const again = await writePlan(repo, 'auth-refresh-plan-1', {
+      steps: [{ id: 's1', title: 'rotate tokens on refresh, bounded', criteria: ['ac-rotate'] }],
+    })
+    expect(again.code).toBe(0)
+    expect(again.stdout).toContain('status: in-progress')
+    expect(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status).toBe('in-progress')
+
+    await repo.cli(['clean'])
+  })
+
+  it('leaves a draft plan a draft', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    const again = await writePlan(repo, 'auth-refresh-plan-1')
+    expect(again.stdout).toContain('status: draft')
+  })
+
+  it('refuses a done plan — that one merged, and re-authoring rewrites what shipped', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    const again = await writePlan(repo, 'auth-refresh-plan-1')
+    expect(again.code).toBe(2)
+    expect(again.stderr).toContain('terminal-status')
+  })
+
+  // Row 85's recovery path: `abandon <effort>` stamps the effort's plans abandoned, and
+  // `next` then routes the plan write to a LIVE effort. Refusing here would strand the very
+  // loop row 85 unstranded — a revived plan is new work, so it re-enters at draft.
+  it('revives an abandoned plan as a draft', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'abandoned')
+    const again = await writePlan(repo, 'auth-refresh-plan-1')
+    expect(again.code).toBe(0)
+    expect(again.stdout).toContain('status: draft')
+    expect(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status).toBe('draft')
+  })
+
+  // The narrowness is the point: a spec's approval is a statement about content that just
+  // changed, so re-authoring one still returns it to draft.
+  it('does not extend the rule to specs', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writeSpec(repo, 'auth-refresh')
+    expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('draft')
   })
 })
