@@ -45,6 +45,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const last = lastGateRun(entries, gate)
   const pending = pendingDecision(entries, gate)
 
+  // Hoisted above `--show` (D94): both the anchor rule below and `--show`'s staleness
+  // line need `spec.currentSha`, which takes canon and config. A decision verb that
+  // cannot read the config cannot honestly report state either, so refusing here — and
+  // for `--show` too — is the correct order rather than a regression.
+  const cfgR = loadConfig(root)
+  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const canon = loadCanon(root)
+
   if (argv.includes('--show')) {
     if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
     const reopen = openReopen(entries, gate)
@@ -114,7 +122,29 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // run, or the target livelocks (incident c2692b93)
   const boundEndgame = atBound && (decision === 'stop' || (decision === 'approve' && override) ||
     (decision === 'revise' && upstream !== undefined))
-  const anchor = pending ?? (boundEndgame ? last : undefined)
+
+  // D94: a revise is the author's INPUT, not a disposition — it leaves the run
+  // undisposed, and with the content unchanged `gate` answers `changed-nothing` and
+  // appends nothing, so a pending decision can never reappear. Every exit the human is
+  // shown then refuses, and the only escape found in the field was an edit they did not
+  // need. The verdict still describes current content, so approving it is a true
+  // statement about bytes a battery read.
+  //
+  // `undefined` means the sha CANNOT be computed (no worktree, missing parent) and must
+  // never read as "moved" — the same doctrine the approve-time staleness check states
+  // below. That check still runs and still refuses a genuinely stale approve.
+  const afterLast = last
+    ? entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+        .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+        .map((e) => e as unknown as DecisionEntry)
+    : []
+  const onlyRevises = afterLast.length > 0 &&
+    afterLast.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
+  const nowSha = last !== undefined ? spec.currentSha?.(root, canon, cfgR.value, target) : undefined
+  const unchanged = last !== undefined && (nowSha === undefined || nowSha === last.reviewed_sha)
+  const revisedAnchor = onlyRevises && unchanged && (decision === 'approve' || decision === 'stop')
+
+  const anchor = pending ?? ((boundEndgame || revisedAnchor) ? last : undefined)
   if (!anchor) {
     // at the bound "run the gate" is a lie — it would only short-circuit back
     // here; name the decisions that actually work instead
@@ -141,9 +171,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
 
-  const cfgR = loadConfig(root)
-  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-
   // A standing stop is only human judgment if the human was shown the thing. The gate
   // refuses the same way, but the gate does not run at the round bound (gate.ts:176) —
   // and approve is the act that stamps, so the line has to hold here too. Sha-keyed:
@@ -157,8 +184,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return EXIT.REFUSED
     }
   }
-
-  const canon = loadCanon(root)
 
   // A `human-decision` entry is a RECORD — honest about the sha it judged whatever the
   // tree does afterward, which is why D76 declined a write-time staleness check. A stamp
