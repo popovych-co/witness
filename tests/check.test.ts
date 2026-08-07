@@ -228,3 +228,12 @@ describe('witness check — harness findings', () => {
     expect(res.stdout).toContain('local-config-unignored')
   })
 })
+
+describe('witness check states the calibration fact', () => {
+  it('reports the empty matrix once, on the orientation surface', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('calibration matrix is empty')
+  })
+})

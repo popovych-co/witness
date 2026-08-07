@@ -66,7 +66,7 @@ const GATES = new Map<string, GateSpec>()
 export function registerGate(spec: GateSpec): void { GATES.set(spec.gate, spec) }
 export function gateSpec(name: string): GateSpec | undefined { return GATES.get(name) }
 
-export const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, string[]>> = {
+const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, string[]>> = {
   decompose: ['slicing-critic'],
   plan: ['plan-critic'],
   implement: {
@@ -204,8 +204,10 @@ export async function runGate(
   }
   const modelR = resolveModel(cfgR.value, loadMatrix(root, harness.name), spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const { chain, calibrationOf, warning } = modelR.value
-  if (warning) ctx.err(`warning: ${warning}`)
+  const { chain, calibrationOf, warning, warningKind } = modelR.value
+  // matrix-empty is a fact about this witness build, reported once by `status`/`check`
+  // (D98a). Only the caller's own pin being below the floor is news at run time.
+  if (warning && warningKind === 'below-floor') ctx.err(`warning: ${warning}`)
 
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,

@@ -12,6 +12,7 @@ import { auditStateCommits, dirtyStatePaths, primaryRoot, tryGit } from '../giti
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
+import { modelFloorLines } from '../model.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
@@ -260,6 +261,14 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
 
   const errors = findings.filter((x) => x.level === 'error')
   if (findings.length) rows('findings', ['level', 'area', 'field', 'rule', 'detail'], findings as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  // The calibration state reads the same here as on `status` (D98a) — one renderer, so
+  // the fact the gate run no longer repeats still reaches both orientation surfaces.
+  if (cfg.ok) {
+    const hxR = resolveHarness(ctx.env, cfg.value.raw)
+    for (const line of modelFloorLines(root, cfg.value, hxR.ok ? hxR.value.harness.name : 'claude-code')) {
+      ctx.out(kv('model-floor', line))
+    }
+  }
   ctx.out(kv('checks', `${canon.docs.length} docs · ${auditStateCommits(root).length} commits audited · ${errors.length} errors`))
   return errors.length ? EXIT.FINDINGS : EXIT.OK
 }

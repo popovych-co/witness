@@ -272,3 +272,17 @@ describe('gate engine', () => {
     expect(errs.join('\n')).toContain('test-model-1 failed to invoke')
   })
 })
+
+// D98a: `calibration matrix is empty` fired on every gate run of every repo since
+// 0.1.x — a warning that always fires is not a warning, and its noise is why real
+// reviewer variance had nothing to attach to. It belongs on `status`/`check`.
+describe('calibration reporting', () => {
+  it('does not repeat the empty-matrix fact on every gate run', async () => {
+    const { repo, scenario } = await gateRepo()
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    const err: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => err.push(l) })
+    await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+    expect(err.join('\n')).not.toContain('calibration matrix is empty')
+  })
+})
