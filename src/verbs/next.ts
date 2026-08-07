@@ -96,21 +96,30 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   const atRoot = { home: root }
   if (!existsSync(wt)) return { line: `witness start ${id}`, target: id, note: 'worktree missing — start recreates it' }
   if (plan.meta.pr !== undefined) return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  const treeSha = worktreeTreeSha(wt)
+  // D93: the gate owns its deterministic checks; the router reads the verdict and never
+  // re-derives the predicate. Testing `evidence` in front of this is what made a human
+  // `--approve` invisible to the one verb the driving loop calls every turn — the
+  // journal said settled, `next` said test-evidence, and no error printed anywhere.
+  // Sha-sensitivity is load-bearing here: emptying the worktree after an approval moves
+  // the sha and re-arms the gate, which is why this keeps `treeSha` while
+  // `gates/ship.ts` deliberately omits it (row 92).
+  if (gateSettled(entries, 'implement', treeSha)) {
+    return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
-  const satisfied = files.length > 0 && baseR.ok && evidenceForDiff(wt, root, plan, baseR.value).satisfied
-  if (!satisfied) return { line: `witness test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
-  const treeSha = worktreeTreeSha(wt)
-  if (!gateSettled(entries, 'implement', treeSha)) {
-    return {
-      line: `witness gate implement ${id}`, target: id, ...inWorktree,
-      ...noteOf(lapseNote(entries, 'implement', treeSha)),
-    }
+  const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
+  if (report === undefined || !report.satisfied) {
+    return { line: `witness test-evidence ${id} --phase red|green`, stage: 'implement', target: id, ...inWorktree }
   }
-  return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  return {
+    line: `witness gate implement ${id}`, target: id, ...inWorktree,
+    ...noteOf(lapseNote(entries, 'implement', treeSha)),
+  }
 }
 
 // How far along a flow is — the drain order when several are actionable. Most-advanced
