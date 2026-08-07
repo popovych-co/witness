@@ -149,7 +149,8 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `sync` | pull --rebase + push state commits |
 | `calibrate <model>` | run the reviewer calibration battery |
 | `recover [--complete\|--rollback]` | resolve a crashed write transaction |
-| *(no verb)* | dashboard |
+| `status` | orientation: flows, blocked docs, reconcile rows, pending gates, calibration state |
+| *(no verb)* | the same screen as `status` |
 
 ## Exit codes
 

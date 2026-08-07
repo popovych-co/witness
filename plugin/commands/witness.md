@@ -10,7 +10,7 @@ The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual`
 Resolve the CLI once:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.1}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.5.2}"
 ```
 
 If the repo has no `witness.config.yaml`, run `$WITNESS init` first (one bootstrap commit), then proceed. If init or any verb refuses on a dirty tree, the human commits or cleans it — **never `git commit` yourself, anywhere, at any stage**: the CLI makes its own state commits, and the ship phase makes the sole code commit.
@@ -43,4 +43,4 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 - An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human `witness satisfy <id> --need <text>`), `slug-reuse`, lock contention, calibration floor stops under `--manual`.
 - A skill ended its turn for a gate stop — that stop is yours too; do not restart the loop until the human decides.
 
-**Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** (or wherever the repo's `paths:` config relocates them) — that is what the skills' write path is for. If the dashboard warns the reviewer model is uncalibrated, surface the warning; under `--manual` treat it as a stop.
+**Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** (or wherever the repo's `paths:` config relocates them) — that is what the skills' write path is for. Run `$WITNESS status` — the orientation screen (flows, blocked docs, reconcile rows, pending gates) — when you need position rather than the next action; bare `$WITNESS` prints the same screen. If it reports the reviewer model is uncalibrated, surface that; under `--manual` treat it as a stop.
