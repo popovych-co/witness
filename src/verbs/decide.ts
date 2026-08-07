@@ -9,6 +9,7 @@ import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, streamExists, type Entry } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
+import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
 import { renderRefusal, v } from '../refusal.js'
@@ -274,13 +275,33 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     } else if (!upDoc) {
       renderRefusal([v('upstream', 'unknown-artifact', upstream, 'a canon doc id')]).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
-    } else {
-      const upGate = upDoc.meta.type === 'plan' ? 'plan' : 'decompose'
-      entry.upstream = { artifact: upstream, gate: upGate }
+    } else if (upDoc.meta.type === 'plan') {
+      entry.upstream = { artifact: upstream, gate: 'plan' }
       reopen = {
         stream: upstream,
         entry: {
-          v: 1, t: 'human-decision', gate: upGate, artifact: upstream, round: anchor.round,
+          v: 1, t: 'human-decision', gate: 'plan', artifact: upstream, round: anchor.round,
+          decision: 'revise', caused_by: { artifact: target, gate, round: anchor.round },
+          ...(note ? { note } : {}),
+        },
+      }
+    } else {
+      // Row 95: decompose gates are keyed on EFFORTS — `computeNext` asks
+      // `openReopen(effortEntries, 'decompose')` and nothing anywhere reads a spec's stream
+      // for one — so a decompose reopen written on the spec was unreachable by construction.
+      // Resolve the owner, exactly as the design gate's branch above already does.
+      const owner = effortOf(root, upstream)
+      if (owner === undefined) {
+        renderRefusal([v('upstream', 'unknown-owner', upstream,
+          'a spec some effort wrote — the decompose reopen is booked on the effort stream')])
+          .forEach((l) => ctx.err(l))
+        return EXIT.REFUSED
+      }
+      entry.upstream = { artifact: owner, gate: 'decompose' }
+      reopen = {
+        stream: owner,
+        entry: {
+          v: 1, t: 'human-decision', gate: 'decompose', artifact: owner, round: anchor.round,
           decision: 'revise', caused_by: { artifact: target, gate, round: anchor.round },
           ...(note ? { note } : {}),
         },
@@ -322,6 +343,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const pins = policyPins(readStream(root, target))
     if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (note) ctx.out(kv('note', note))
+    if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
+      ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
+    }
     if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness recap --amend ${target}`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
   }

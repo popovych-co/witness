@@ -144,7 +144,7 @@ describe('witness decide', () => {
     expect((await a.cli(['decide', 'plan', 'auth-refresh', '--stop'])).code).toBe(0)
     const upstream = await a.cli(['decide', 'plan', 'auth-refresh', '--revise', '--upstream', 'auth-refresh'])
     expect(upstream.code).toBe(0)
-    expect(decisions(a).at(-1)!.caused_by).toBeDefined()
+    expect(decisions(a, a.effort).at(-1)!.caused_by).toBeDefined()   // row 95: booked on the effort
     // exit 2: force-approve as-is
     const b = await boundRepo()
     await b.cli(['decide', 'plan', 'auth-refresh', '--stop'])
@@ -197,9 +197,57 @@ describe('witness decide', () => {
     expect(r.code).toBe(0)
     const child = decisions(repo).find((d) => d.decision === 'revise-upstream')!
     expect(child.decision).toBe('revise-upstream')
-    expect(child.upstream).toEqual({ artifact: 'auth-refresh', gate: 'decompose' })
-    const reopen = decisions(repo).find((d) => d.caused_by !== undefined)!
+    // row 95: a SPEC named upstream resolves to the effort that owns it — decompose gates
+    // are keyed on efforts, so the reopen is booked on the effort's stream
+    expect(child.upstream).toEqual({ artifact: repo.effort, gate: 'decompose' })
+    const reopen = decisions(repo, repo.effort).find((d) => d.caused_by !== undefined)!
     expect(reopen.caused_by).toMatchObject({ artifact: 'auth-refresh', gate: 'plan' })
+  })
+
+  it('books a spec-named upstream on the owning effort decompose stream', async () => {
+    const { repo, planId } = await stoppedImplement()
+    const r = await repo.cli(['decide', 'implement', planId, '--revise', '--upstream', 'auth-refresh',
+      '--note', 'the slicing is wrong'])
+    expect(r.code).toBe(0)
+
+    const child = decisions(repo, planId).find((d) => d.decision === 'revise-upstream')!
+    expect(child.upstream).toEqual({ artifact: repo.effort, gate: 'decompose' })
+    const reopen = decisions(repo, repo.effort).find((d) => d.caused_by !== undefined)!
+    expect(reopen).toMatchObject({ gate: 'decompose', artifact: repo.effort })
+    expect(reopen.caused_by).toMatchObject({ artifact: planId, gate: 'implement' })
+    // nothing lands on the spec stream, where no reader would ever look
+    expect(decisions(repo, 'auth-refresh')).toEqual([])
+    expect(r.stdout).toContain(repo.effort)
+  })
+
+  it('refuses a spec no effort ever wrote', async () => {
+    const { repo, planId } = await stoppedImplement()
+    repo.write('specs/orphan.md', [
+      '---',
+      'id: orphan',
+      'type: spec',
+      'status: draft',
+      'summary: hand-made, never written by an effort',
+      'depends: []',
+      'needs: []',
+      'criteria:',
+      '  - id: ac-orphan',
+      "    test: '@spec:orphan'",
+      '---',
+      '',
+      '## Motivation',
+      'Hand-made.',
+      '',
+      '## Behavior',
+      'Never written by an effort.',
+      '',
+    ].join('\n'))
+    repo.git('add', 'specs/orphan.md')
+    repo.git('commit', '-m', 'hand-made spec', '-m', 'Witness-State: 1')
+
+    const r = await repo.cli(['decide', 'implement', planId, '--revise', '--upstream', 'orphan'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown-owner')
   })
 })
 

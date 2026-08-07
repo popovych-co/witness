@@ -8,7 +8,7 @@ import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { changedFiles, diffBase } from '../src/evidence.js'
 import { loadConfig } from '../src/config.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { TOKEN_BROKEN, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
 function treeClean(files: string[]) {
   return {
@@ -31,7 +31,7 @@ describe('implement gate', () => {
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(0)
     const [entry] = runs(repo, planId)
     expect(entry!.outcome).toBe('passed')
-    expect(entry!.reviewed_sha).toMatch(/^[0-9a-f]{40}$/)          // tree-sha, not content sha
+    expect(entry!.reviewed_sha).toMatch(/^[0-9a-f]{64}$/)          // row 96: sha256 over base + the diff's blobs
     expect(entry!.checks.find((c) => c.name === 'evidence')!.ok).toBe(true)
     expect(entry!.checks.find((c) => c.name === 'drift-lane')!.ok).toBe(true)
   })
@@ -62,21 +62,24 @@ describe('implement gate', () => {
 
   it('missing red→green evidence fails the evidence check', async () => {
     const { repo, wt, planId } = await shippableRepo()
-    // a new tag with no recorded evidence — evidence is journaled per-tag (filtered mode
-    // records one synthetic test named `@spec:<id>` per phase), so re-tagging the existing
-    // @spec:auth-refresh tests would just find the already-satisfied requirement from
-    // shippableRepo's own red/green setup. This tag has never been evidenced.
-    writeFileSync(join(wt, 'tests/extra.test.ts'),
-      `import { expect, it } from 'vitest'\nimport { rotateDue } from '../src/token.js'\nit('re-rotates @spec:auth-mfa', () => { expect(rotateDue(200, 100)).toBe(true) })\n`)
+    // Row 97 narrowed `evidence` to the PARENT tag, so a foreign tag no longer lands here
+    // (that is the `regression` check's job). The parent's own pair is broken the way the
+    // field breaks it: a fresh red recorded after the last green, leaving the latest cycle
+    // half-finished. `evidenceForDiff` reads latest-cycle per tag, so green no longer
+    // post-dates the red.
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     execFileSync('git', ['add', '-A'], { cwd: wt })
+    const red = await repo.cli(['test-evidence', planId, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+    expect(red.code).toBe(0)
     const scenario = fakeScenario()
-    putVerdict(scenario, treeClean(['src/token.ts', 'tests/extra.test.ts']))
+    putVerdict(scenario, treeClean(['src/token.ts']))
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(1)
     const entry = runs(repo, planId).at(-1)!
     const evidence = entry.checks.find((c) => c.name === 'evidence')!
     expect(evidence.ok).toBe(false)
-    expect(evidence.detail).toContain('auth-mfa')
+    expect(evidence.detail).toContain('auth-refresh')
+    expect(evidence.detail).toContain('green=false')
   })
 
   it('refuses when the plan was never started', async () => {

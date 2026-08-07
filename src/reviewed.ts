@@ -1,22 +1,49 @@
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { canonicalJson, canonicalSha } from './sha.js'
+import { canonicalJson, canonicalSha, planContentSha } from './sha.js'
+import { changedFiles } from './evidence.js'
+import { git } from './gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from './journal.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { findById } from './scan.js'
 
-export function worktreeTreeSha(root: string): string {
-  const tmp = mkdtempSync(join(tmpdir(), 'witness-idx-'))
-  const env = { ...process.env, GIT_INDEX_FILE: join(tmp, 'index') }
-  try {
-    execFileSync('git', ['add', '-A'], { cwd: root, env })
-    return execFileSync('git', ['write-tree'], { cwd: root, env, encoding: 'utf8' }).trim()
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
-  }
+// Row 96a. The reviewed identity is the DIFF the battery read: the base commit plus the
+// content of every path `changedFiles` reports — exactly what `codePromptBody` renders as
+// `### Changed files`, `### Diff vs base <sha>` and the untracked blocks. `worktreeTreeSha`
+// hashed the WHOLE worktree via `add -A`, so witness's own journal entries and stamps —
+// pulled in by ship's pre-battery rebase — moved the identity the verdict was keyed to, and
+// the entry DESCRIBING a verdict invalidated it one hop later.
+//
+// The base term is required, not optional. A rebase can change the diff TEXT while every
+// blob stays byte-identical; drop the base and a cached verdict replays against a diff no
+// reviewer ever read, and implement loses the rebase re-arming it has today.
+//
+// Deleted paths carry an explicit marker: `hash-object` throws on a missing file, and
+// dropping the path silently would make "this file is gone" invisible to the identity.
+const DELETED_BLOB = '(deleted)'
+
+export function diffReviewedSha(runRoot: string, base: string): string {
+  const pairs = changedFiles(runRoot, base).map((rel) =>
+    existsSync(join(runRoot, rel))
+      ? `${rel}\0${git(runRoot, 'hash-object', '--', rel)}`
+      : `${rel}\0${DELETED_BLOB}`)
+  return sha256([base, '\n', pairs.sort().join('\n')])
+}
+
+// Row 95: implement's identity is the diff AND the plan, because the battery reads both —
+// `codePromptBody` serializes the plan into the prompt — so a re-authored plan re-arms the
+// gate. It lives here rather than in `gates/implement.ts` because there are THREE readers,
+// not two: the gate's `resolve`, the gate's `currentSha`, and `flowAction`, which derives
+// the sha itself instead of calling `currentSha`. Two of the three agreeing is the same
+// split-brain rows 93 and 95 are about — the gate keyed on one sha while `next` checked
+// another, and every settled gate read as lapsed one turn later.
+export function implementReviewedSha(runRoot: string, base: string, plan: CanonDoc): string {
+  return createHash('sha256')
+    .update(diffReviewedSha(runRoot, base))
+    .update('\0')
+    .update(planContentSha(plan.meta, plan.body))
+    .digest('hex')
 }
 
 export interface WriteInfo { sha: string; covers?: string[]; created?: boolean }

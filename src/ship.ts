@@ -4,7 +4,7 @@ import { loadConfig } from './config.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
-import { primaryRoot, stateCommit, tryGit } from './gitio.js'
+import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { findById, loadCanon, type CanonDoc } from './scan.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv } from './toon.js'
@@ -13,7 +13,8 @@ import { lastGateRun, type DecisionEntry } from './rounds.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
-import { worktreeTreeSha } from './reviewed.js'
+import { diffReviewedSha } from './reviewed.js'
+import { diffBase } from './evidence.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
 
@@ -115,7 +116,17 @@ export function stampPr(ctx: Ctx, root: string, planId: string, pr: number): Res
   }
 }
 
-export function rebaseIfMoved(wt: string, shipBranch: string, remote = 'origin'): Result<'clean' | 'rebased'> {
+// One read-only fetch decides the whole routing. A failed fetch (no remote, offline) leaves
+// this false and the phases behave as they did — the gate phase's own rebaseIfMoved is where
+// that condition turns into a structured refusal.
+export function baseMoved(wt: string, root: string, shipBranch: string, remote = 'origin'): boolean {
+  if (!tryGit(wt, 'fetch', remote, shipBranch).ok) return false
+  const base = `${remote}/${shipBranch}`
+  if (tryGit(wt, 'merge-base', '--is-ancestor', base, 'HEAD').ok) return false
+  return !stateOnlyAdvance(wt, root, 'HEAD', base)
+}
+
+export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remote = 'origin'): Result<'clean' | 'rebased'> {
   // Resolve the base from the REMOTE tip, not the local ref: with several flows merging
   // concurrently, local <shipBranch> lags every merge since the human's last pull, so a
   // local ancestry check reports "clean" against a base that is provably behind and the
@@ -132,6 +143,9 @@ export function rebaseIfMoved(wt: string, shipBranch: string, remote = 'origin')
   }
   const base = `${remote}/${shipBranch}`
   if (tryGit(wt, 'merge-base', '--is-ancestor', base, 'HEAD').ok) return ok('clean')
+  // Same predicate as baseMoved: an advance made entirely of witness's own state commits is
+  // bookkeeping, and rebasing onto it moves the base term of every reviewed sha for nothing.
+  if (stateOnlyAdvance(wt, root, 'HEAD', base)) return ok('clean')
   // --autostash: this runs in the GATE phase, and implement deliberately leaves the
   // worktree uncommitted (ship owns the sole code commit, in the pr phase below), so the
   // tree is normally dirty and a bare rebase refuses with "you have unstaged changes".
@@ -179,16 +193,17 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   // One read-only fetch decides the whole routing. A failed fetch (no remote, offline)
   // leaves baseMoved false and the phases behave as they did — the gate phase's own
   // rebaseIfMoved is where that condition turns into a structured refusal.
-  const baseMoved = tryGit(wt, 'fetch', 'origin', shipBranch).ok
-    && !tryGit(wt, 'merge-base', '--is-ancestor', `origin/${shipBranch}`, 'HEAD').ok
-  let phase = shipPhase(plan, entries, worktreeTreeSha(wt), baseMoved)
-  if (baseMoved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
+  const moved = baseMoved(wt, root, shipBranch)
+  const baseR = diffBase(wt, cfgR.value)
+  const reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
+  let phase = shipPhase(plan, entries, reviewedSha, moved)
+  if (moved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
 
   if (phase === 'gate') {
     // D94: the gate cannot judge unchanged content twice — it answers changed-nothing
     // and appends nothing, so routing the human back at it burns a turn on a command
     // that has already declined. The owed work is the edit the revise asked for.
-    if (authoringOwed(entries, 'ship', worktreeTreeSha(wt))) {
+    if (authoringOwed(entries, 'ship', reviewedSha)) {
       ctx.out(kv('ship', `${planId} — revise owed`))
       ctx.out(`help: edit the code in ${wt} · then re-run witness ship ${planId}`)
       return EXIT.FINDINGS
@@ -197,7 +212,7 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     // actually merge. Reviewing first spends a battery — and a human decision — on a tree
     // without any sibling's merged work, which then lapses (gateSettled's reviewed_sha)
     // the moment the rebase lands.
-    const rebase = rebaseIfMoved(wt, shipBranch)
+    const rebase = rebaseIfMoved(wt, root, shipBranch)
     if (!rebase.ok) {
       renderRefusal(rebase.violations).forEach((l) => ctx.err(l))
       // A textual conflict is a hand-back, not a refusal: the human resolves it in the

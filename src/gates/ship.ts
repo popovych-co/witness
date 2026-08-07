@@ -7,7 +7,7 @@ import { changedFiles, diffBase } from '../evidence.js'
 import { runCriteria } from '../criteria.js'
 import { execCommand } from '../runner.js'
 import { ensureTrusted } from '../allowlist.js'
-import { effortOf, worktreeTreeSha } from '../reviewed.js'
+import { diffReviewedSha, effortOf } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
@@ -56,13 +56,15 @@ registerGate({
     // differently for the same journal — the split-brain that reads as a deadlock when
     // two sessions compare notes.
     //
-    // The missing sha argument is DELIBERATE and load-bearing, not an oversight. D75's
-    // `worktreeTreeSha` covers the whole worktree, so ship's own `pr #N` stamp — pulled
-    // into the worktree by the watch-phase rebase — moves the tree and would lapse the
-    // very gate ship is checking: approve → pr → lapse → gate, the livelock D75/D77
-    // record. `next` re-arms on tree movement because authoring is what it routes to;
-    // ship asks only whether implement was ever settled. Passing a sha here re-opens
-    // that livelock — do not "fix" this by adding one.
+    // The missing sha argument is still DELIBERATE, but row 96 killed one of its two
+    // reasons and the surviving one is now the whole reason. It used to rest on
+    // `worktreeTreeSha` hashing the entire worktree, so ship's own `pr #N` stamp — pulled
+    // in by the watch-phase rebase — moved the tree and lapsed the very gate ship was
+    // checking: approve → pr → lapse → gate, the D75/D77 livelock. Under the diff identity
+    // that reason is DEAD: the worktree never edits `plans/<id>.md`, so the stamp is always
+    // equal to base and can never enter the reviewed set. What remains: `next` re-arms on
+    // movement because authoring is what it routes to, while ship asks only whether
+    // implement was EVER settled. Passing a sha here re-opens the livelock — do not add one.
     const implementSettled = gateSettled(entries, 'implement')
     checks.push({ name: 'implement-gate', ok: implementSettled,
       detail: lastImplement
@@ -94,7 +96,7 @@ registerGate({
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
-      reviewedSha: worktreeTreeSha(wt),
+      reviewedSha: diffReviewedSha(wt, base),
       artifactSha: canonicalSha(plan.meta, plan.body),
       reviewed: { kind: 'tree', root: wt, files },
       promptBody: codePromptBody(wt, base, files,
@@ -106,8 +108,11 @@ registerGate({
     })
   },
 
-  currentSha(root, _canon, _cfg, planId) {
+  currentSha(root, _canon, cfg, planId) {
     const wt = worktreePath(root, planId)
-    return existsSync(wt) ? worktreeTreeSha(wt) : undefined
+    if (!existsSync(wt)) return undefined
+    const baseR = diffBase(wt, cfg)
+    // undefined is "cannot compute", never "moved" — same doctrine as the implement gate.
+    return baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
   },
 })

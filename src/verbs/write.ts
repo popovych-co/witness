@@ -233,7 +233,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('written', id))
     ctx.out(kv('path', rel))
     ctx.out(kv('sha', short(sha)))
-    ctx.out(kv('status', 'draft'))
+    ctx.out(kv('status', String(built.meta.status)))
     ctx.out('next: witness check · witness index')
     return EXIT.OK
   } finally {
@@ -296,10 +296,30 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
       designFrom = stamp.sha
     }
   }
+  // Row 95: a plan's lifecycle status is not re-derived by re-authoring it. `flowAction`
+  // now routes an in-flight plan's plan-gate reopen HERE, and a hardcoded `draft` would
+  // demote a plan that holds a `pr` and a live worktree out of flow-hood — `flowAction`,
+  // `flowBlocked`, `dashboard` and `--flow` would all lie about it for a window. Stated
+  // rather than hidden: `in-progress` no longer implies a settled plan gate. Plan-only —
+  // a re-authored SPEC still returns to draft.
+  //
+  // The rule is PRESERVE AN IN-FLIGHT STATUS, and the two terminal statuses part ways
+  // because only one of them is history. `done` refuses: that plan merged, and re-authoring
+  // it would rewrite what shipped. `abandoned` returns to `draft`, because row 85's recovery
+  // IS re-authoring an abandoned plan under a live effort — `abandon <effort>` stamps the
+  // effort's plans abandoned, `next` then names a live effort to carry the write, and
+  // refusing here would strand the very loop row 85 unstranded. A revived plan is new work,
+  // so it re-enters the ladder at draft rather than keeping a status it no longer has.
+  const existingStatus = existing ? String(existing.meta.status) : 'draft'
+  if (existingStatus === 'done') {
+    violations.push(v('status', 'terminal-status', existingStatus,
+      'a plan that has not merged — a done plan is superseded by a new plan, never re-authored'))
+  }
+  const priorStatus = existingStatus === 'abandoned' ? 'draft' : existingStatus
   const meta: Record<string, unknown> = {
     id,
     type: 'plan',
-    status: 'draft',
+    status: priorStatus,
     parent: parentId,
     'derives-from': computed,
     ...(designFrom !== undefined ? { 'design-from': designFrom } : {}),

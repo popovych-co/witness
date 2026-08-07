@@ -43,6 +43,37 @@ export function isStatePath(root: string, rel: string): boolean {
   return stateDirs(root).some((d) => rel === d || rel.startsWith(d + '/'))
 }
 
+// Row 96b. Witness's own state commits reach `origin/main` on every `sync`, and `shipPhase`
+// re-gates on ANY base advance — so the pipeline manufactured its own base movement (7 ship
+// runs for 3 rounds on the audited plan). An advance whose every commit touches only state
+// paths is bookkeeping, not base movement, and this is the ONE predicate both `baseMoved`
+// and `rebaseIfMoved` ask; two copies would let ship rebase in the phase that was just told
+// the base had not moved.
+//
+// Paths are primary and the trailer is secondary, and the conjunction is what keeps both
+// forgeries conservative: a forged trailer on a source commit still reads as real movement
+// (paths decide), and a hand-made commit that happens to touch only state paths reads as
+// real movement too (no trailer). A needless rebase costs a round; a skipped one merges a
+// tree no battery read.
+export function stateOnlyAdvance(wt: string, root: string, from: string, to: string): boolean {
+  const range = tryGit(wt, 'log', '--format=%H', `${from}..${to}`)
+  if (!range.ok) return false
+  const shas = range.out.split('\n').filter(Boolean)
+  if (shas.length === 0) return false
+  return shas.every((sha) => {
+    const trailer = tryGit(wt, 'show', '--no-patch',
+      '--format=%(trailers:key=Witness-State,valueonly=true)', sha)
+    if (!trailer.ok || trailer.out.trim() !== '1') return false
+    // Per COMMIT, never the range's union diff: a commit that adds and deletes a source
+    // file inside the range cancels out in a union and would read as state-only. An empty
+    // name list (a merge commit) is unjudgeable here and therefore not state-only.
+    const touched = tryGit(wt, 'show', '--pretty=format:', '--name-only', sha)
+    if (!touched.ok) return false
+    const paths = touched.out.split('\n').filter(Boolean)
+    return paths.length > 0 && paths.every((p) => isStatePath(root, p))
+  })
+}
+
 const LOCAL_STATE_FILES = new Set([
   '.witness/lock',
   '.witness/txn.json',

@@ -1,7 +1,7 @@
 {
   "name": "witness",
   "description": "Spec-driven development with evidence gates: brainstorm → PR through six stages and five gates. Skills author, the pinned witness CLI writes state and witnesses evidence; gates stop where judgment is owed.",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "author": {
     "name": "Kostiantyn Popovych"
   },
