@@ -249,6 +249,42 @@ describe('witness decide', () => {
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('unknown-owner')
   })
+
+  // Row 108 / 98d. The bound is the DESIGNED terminus: nothing malfunctioned, there is
+  // no row to fix, and re-running is the one thing the bound forbids — gate.ts
+  // short-circuits before invoking. renderRefusal's trailer says the opposite.
+  it('at the bound, prints the terminus rather than a self-repair refusal', async () => {
+    const repo = await boundRepo()
+    await repo.cli(['decide', 'plan', 'auth-refresh', '--stop'])
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
+    expect(r.code).toBe(2)                                        // exit code unchanged
+    const all = r.stdout + r.stderr
+    expect(all).not.toContain('rows are structured for self-repair')
+    expect(all).not.toContain('refused[')
+    expect(all).toContain('bound reached')
+    expect(all).toContain('exits: witness decide plan auth-refresh --approve --override')
+  })
+
+  it('at the bound, a plain revise names the exits without the self-repair trailer', async () => {
+    const repo = await boundRepo()
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x'])
+    expect(r.code).toBe(2)
+    const all = r.stdout + r.stderr
+    expect(all).not.toContain('rows are structured for self-repair')
+    expect(all).toContain('--revise --upstream')
+    expect(all).toContain('upstream reopens the parent and resets the budget')
+  })
+
+  // override-required is GENUINELY a refusal: the human asked for an approve they are
+  // not entitled to, and "fix the row and re-run" is true and useful there.
+  it('keeps override-required a refusal, trailer and all', async () => {
+    const repo = await boundRepo()
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
+    // pending at the bound: the anchor exists, so this is the override-required path
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('override-required')
+    expect(r.stdout + r.stderr).toContain('rows are structured for self-repair')
+  })
 })
 
 // D94: revise → (think better of it) → approve, with nothing edited in between. Before

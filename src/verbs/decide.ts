@@ -31,6 +31,25 @@ function flagValues(argv: string[], flag: string): string[] {
   return argv.flatMap((a, i) => (a === flag && argv[i + 1] !== undefined ? [argv[i + 1]!] : []))
 }
 
+// Row 108. The bound is the designed terminus, not a malfunction, and renderRefusal
+// appends `help: fix each row and re-run — rows are structured for self-repair`, which is
+// false here twice over: there is no row to fix, and re-running is exactly what the bound
+// forbids (gate.ts short-circuits before invoking). The old code knew — it packed the
+// exits list into a violation row's `want` column — so the human at the terminus was
+// handed a violations table instructing them to self-repair. This prints `--show`'s
+// surface instead: state, then the exits that actually work. The exit code is unchanged;
+// the decision the human asked for still did not happen.
+function renderBound(
+  ctx: Ctx, gate: string, target: string, entries: Entry[], stale: boolean, note?: string,
+): number {
+  ctx.err(kv('gate', gate))
+  ctx.err(kv('target', target))
+  ctx.err(kv('state', `bound reached — ${roundsSinceApprove(entries, gate)} rounds; the gate will not run again`))
+  if (note !== undefined) ctx.err(kv('note', note))
+  ctx.err(kv('exits', liveExits(gate, target, entries, stale)))
+  return EXIT.REFUSED
+}
+
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin')
   const [gate, target] = positional
@@ -157,24 +176,24 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const anchor = pending ?? ((boundEndgame || revisedAnchor) ? last : undefined)
   if (!anchor) {
-    // at the bound "run the gate" is a lie — it would only short-circuit back
-    // here; name the decisions that actually work instead
-    renderRefusal([atBound && last
-      ? v('decision', 'bound', `${roundsSinceApprove(entries, gate)} rounds`,
-          '--approve --override | --revise --upstream <id> | --stop (bound reached — the gate will not run again)')
-      : v('gate', 'nothing-pending', `${gate} ${target}`,
-          `a stopped gate-run awaiting a decision — run: witness gate ${gate} ${target}`),
-    ]).forEach((l) => ctx.err(l))
+    if (atBound && last) {
+      // liveExits, not a hardcoded triple: it drops --approve --override when content
+      // moved, which is the same set the stale-verdict refusal below names. A human
+      // cannot honestly stamp bytes no battery read, at the bound or anywhere else.
+      return renderBound(ctx, gate, target, entries, nowSha !== undefined && nowSha !== last.reviewed_sha)
+    }
+    renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
+      `a stopped gate-run awaiting a decision — run: witness gate ${gate} ${target}`)])
+      .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const blockedCode = guardTxn(ctx, root)
   if (blockedCode !== undefined) return blockedCode
 
   if (decision === 'revise' && atBound && upstream === undefined) {
-    renderRefusal([v('decision', 'bound', `${roundsSinceApprove(entries, gate)} rounds`,
-      '--approve --override | --revise --upstream <id> | --stop (bound reached — upstream reopens the parent and resets the budget)')])
-      .forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
+    return renderBound(ctx, gate, target, entries,
+      last !== undefined && nowSha !== undefined && nowSha !== last.reviewed_sha,
+      'upstream reopens the parent and resets the budget')
   }
   if (decision === 'approve' && atBound && !override) {
     renderRefusal([v('decision', 'override-required', 'approve at the round bound',

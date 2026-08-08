@@ -1,7 +1,8 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { pinIn } from './version.js'
 
 export const HARNESSES = ['claude-code', 'pi'] as const
 export type HarnessName = (typeof HARNESSES)[number]
@@ -277,15 +278,39 @@ export function relayLine(harness: Harness): string {
 // upward walk, and implement runs with cwd inside .witness/worktrees/<plan-id> — an
 // untracked directory the installer never touched. A project-scope install therefore
 // loses every skill in the stage that does the most work.
-export function skillsVisibility(
+//
+// Row 103 needs the DIRECTORY, not just the verdict: with `latest` in hand, one pass
+// reports both halves of the skew, and the skills half has to read the files it found.
+export function resolveSkills(
   env: Record<string, string | undefined>, root: string, harness: Harness,
-): 'global' | 'project-only' | 'absent' {
+): { scope: 'global' | 'project-only' | 'absent'; dir?: string } {
   const home = env.HOME ?? env.USERPROFILE ?? ''
   const has = (dir: string): boolean =>
     STAGE_SKILLS.every((s) => existsSync(join(dir, s, 'SKILL.md')))
-  if (home !== '' && has(join(home, harness.skills.global))) return 'global'
-  if (has(join(root, harness.skills.project))) return 'project-only'
-  return 'absent'
+  const global = home === '' ? undefined : join(home, harness.skills.global)
+  if (global !== undefined && has(global)) return { scope: 'global', dir: global }
+  const project = join(root, harness.skills.project)
+  if (has(project)) return { scope: 'project-only', dir: project }
+  return { scope: 'absent' }
+}
+
+export function skillsVisibility(
+  env: Record<string, string | undefined>, root: string, harness: Harness,
+): 'global' | 'project-only' | 'absent' {
+  return resolveSkills(env, root, harness).scope
+}
+
+// What pin does each installed skill carry? Nothing more — whether a pin is a PROBLEM
+// takes the published `latest`, which is check's question and check's alone. A skill
+// whose SKILL.md carries no pin is simply absent from the result: the pin is what makes
+// a skill invoke a particular CLI, so one without it says nothing about skew.
+export function skillPins(dir: string): Array<{ skill: string; pin: string }> {
+  return STAGE_SKILLS.flatMap((skill) => {
+    const p = join(dir, skill, 'SKILL.md')
+    if (!existsSync(p)) return []
+    const pin = pinIn(readFileSync(p, 'utf8'))
+    return pin === undefined ? [] : [{ skill, pin }]
+  })
 }
 
 // Harness-compat rung of pin validation. Grammar and alias checks live in stagePin
