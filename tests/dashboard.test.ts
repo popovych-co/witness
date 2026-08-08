@@ -115,4 +115,16 @@ describe('witness status', () => {
     const help = await repo.cli(['help'])
     expect(help.stdout).toContain('status')
   })
+
+  // One fact, one wording, both orientation surfaces — modelFloorLines' own precedent,
+  // which row 105 cites by name.
+  it('prints the judge with its provenance, as check does', async () => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pi\n`)
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
+    const status = await repo.cli(['status'], { env: { CLAUDECODE: '1' } })
+    const check = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
+    expect(status.stdout).toContain('judge: pi (declared in witness.config.yaml)')
+    expect(check.stdout).toContain('judge: pi (declared in witness.config.yaml)')
+  })
 })

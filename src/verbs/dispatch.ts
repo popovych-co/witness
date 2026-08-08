@@ -4,7 +4,7 @@ import { guardTxn, withTxn } from '../txn.js'
 import { appendEntry, entryLine, journalRel, readStream } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { loadConfig } from '../config.js'
-import { relayLine, resolveHarness } from '../harness.js'
+import { relayLine, resolveDriver } from '../harness.js'
 import { findById, loadCanon } from '../scan.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
@@ -81,7 +81,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // was already journalled, so an unresolvable harness simply omits the line and the
     // skill stops for the human.
     const cfgR = loadConfig(root)
-    const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+    const hxR = resolveDriver(ctx.env, cfgR.ok ? cfgR.value.raw : {})
     if (hxR.ok) ctx.out(kv('relay', relayLine(hxR.value.harness)))
     return EXIT.OK
   } finally {

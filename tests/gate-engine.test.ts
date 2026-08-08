@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { registerGate, runGate, type GateInput } from '../src/gate.js'
-import type { GateRunEntry } from '../src/rounds.js'
+import { roundsSinceApprove, type GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { loadCanon, findById } from '../src/scan.js'
 import { SPEC_META, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec } from './helpers.js'
@@ -263,13 +263,69 @@ describe('gate engine', () => {
     writeFileSync(join(scenario, 'claude-fail'), '1')
     const errs: string[] = []
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
-    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    // Row 107: a fallen-back round carries a standing stop, so it cannot pass on its own.
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(1)
     const [entry] = runs(repo)
     expect(entry!.fallback).toEqual(['test-model-1'])
     expect(entry!.model).toBe('test-model-2')
+    // Row 106: the entry records BOTH — what was asked for and what answered.
+    expect(entry!.pin).toBe('test-model-1')
     expect(entry!.calibration).toBe('local')
-    // a dead head model is config rot — it must be named, not silently absorbed
-    expect(errs.join('\n')).toContain('test-model-1 failed to invoke')
+    expect(entry!.outcome).toBe('stopped')
+    expect(entry!.standing).toContain('fallback — reviewers ran on test-model-2, not the pinned test-model-1')
+    // The stderr warning is retired INTO the standing stop: it fired on the same
+    // condition, unjournaled and non-blocking, and one fact printed twice is the shape
+    // this release removes.
+    expect(errs.join('\n')).not.toContain('failed to invoke')
+  })
+
+  // The terminating story row 107 argues for: two batteries, then a refusal naming the
+  // pin — never a bound, because the rounds are exempt.
+  it('two consecutive fallen-back rounds brake before spending a third battery', async () => {
+    const { repo, scenario } = await gateRepo()
+    writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
+    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
+
+    writeFileSync(join(scenario, 'claude-fail'), '1')     // fails call-1, the pin
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(1)
+    writeFileSync(join(scenario, 'claude-fail'), '3')     // fails call-3, the pin again
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(1)
+    expect(runs(repo).length).toBe(2)
+
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(2)
+    expect(errs.join('\n')).toContain('fallback-streak')
+    expect(errs.join('\n')).toContain('the pinned model is not answering')
+    expect(runs(repo).length).toBe(2)                     // refused before the battery
+    // Exempt throughout: the bound was never in play, which is what makes the remedy
+    // in the next test reachable at all.
+    expect(roundsSinceApprove(readStream(repo.root, 'auth-refresh'), 'plan')).toBe(0)
+  })
+
+  // The point of the exemption. Under row 98 as written, three fallbacks reached the
+  // bound and a config fix could not reopen it — gate.ts:256 short-circuits on
+  // boundReached and lastResetIndex ignores config — so override on distrusted evidence
+  // was the only exit. Here the pin moves, key.pin moves with it, samePin goes false,
+  // and the battery runs.
+  it('fixing the pin clears the brake and the battery runs', async () => {
+    const { repo, scenario } = await gateRepo()
+    writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
+    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    writeFileSync(join(scenario, 'claude-fail'), '1')
+    await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+    writeFileSync(join(scenario, 'claude-fail'), '3')
+    await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+
+    writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: test-model-2\n')
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    const last = runs(repo).at(-1)!
+    expect(last.pin).toBe('test-model-2')
+    expect(last.model).toBe('test-model-2')
+    expect(last.outcome).toBe('passed')
   })
 })
 

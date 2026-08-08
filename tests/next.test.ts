@@ -218,3 +218,49 @@ describe('the evidence row names the phase it wants', () => {
     expect(await nextLine(repo)).toContain('evidence owed: auth-refresh')
   })
 })
+
+// Row 105: the flip is not exempted — it spends a round out of three on content nobody
+// edited — so the CLI names it.
+describe('a judge that changes mid-flow is named', () => {
+  // A round that already ran, journaled under claude-code. Fabricated the way this
+  // file's bound-stuck test fabricates rounds, because every REAL route to a
+  // `gate implement` row that has a prior round behind it disposes of that round first
+  // (approve → the ship row, revise → the authoring row). A passed round whose sha has
+  // since moved is exactly the state D75 re-arms — the one this note annotates.
+  function ranUnder(repo: TestRepo, planId: string, harness?: string): void {
+    appendEntry(repo.root, planId, {
+      v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round: 1,
+      run_id: 'r-1', reviewed_sha: 'sha-before', prompts_sha: 'p', witness: '0',
+      model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+      ...(harness !== undefined ? { harness } : {}),
+    })
+  }
+
+  it('names a judge that changed since the last round', async () => {
+    const { repo, planId } = await shippableRepo()
+    ranUnder(repo, planId)
+    const out = await nextLine(repo, { env: { PI_CODING_AGENT: 'true' } })
+    expect(out).toContain('judge changed — round')
+    expect(out).toContain('claude-code')
+    expect(out).toContain('pi judges now')
+  })
+
+  it('says nothing when the judge is the one that ran the last round', async () => {
+    const { repo, planId } = await shippableRepo()
+    ranUnder(repo, planId)
+    const out = await nextLine(repo, { env: { CLAUDECODE: '1' } })
+    expect(out).not.toContain('judge changed')
+  })
+
+  // A note explains a row; it never decides whether the row prints. The driver refusal
+  // below already covers this config with the accurate message.
+  it('an unresolvable judge costs the note, not the verb', async () => {
+    const { repo, planId } = await shippableRepo()
+    ranUnder(repo, planId)
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
+    const r = await repo.cli(['next'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown-harness')
+    expect(r.stdout).not.toContain('judge changed')
+  })
+})

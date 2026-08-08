@@ -4,7 +4,7 @@ import { loadConfig } from '../config.js'
 import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
 import { primaryRoot } from '../gitio.js'
-import { resolveHarness } from '../harness.js'
+import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
 import { computeNext, flowAction } from './next.js'
@@ -49,14 +49,22 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const root = rootRes.value
   const cfg = loadConfig(root)
   ctx.out(kv('witness', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
+  // Row 105's judgment lane, not its session lane: this feeds modelFloorLines, the one
+  // renderer shared with `check`, and a floor computed on a different ladder from the
+  // judge line above it would have `status` and `check` disagreeing about which
+  // reviewers the same repo spawns. `status` renders no handoff, so it has no driver.
+  // A broken harness config must not brick the dashboard — `check` reports that as a
+  // finding, so both lines degrade to claude-code and say so.
+  //
+  // Resolved ABOVE the config guard because the flows table below needs it too, and
+  // resolving it twice is how one screen's two answers drift apart.
+  const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.raw : {})
   if (cfg.ok) {
-    // Diagnostic surface: a broken harness config must not brick the dashboard —
-    // `check` reports that as a finding, so the floor lines fall back to claude-code.
-    const hxR = resolveHarness(ctx.env, cfg.value.raw)
+    ctx.out(kv('judge', judgeLine(judgeR)))
     // One line per distinct warning, labelled with the gates it applies to — per-gate
     // model pins can put each gate in a different calibration state. Shared with
     // `check` (D98a): the calibration fact must read the same on both surfaces.
-    for (const line of modelFloorLines(root, cfg.value, hxR.ok ? hxR.value.harness.name : 'claude-code')) {
+    for (const line of modelFloorLines(root, cfg.value, judgeR.ok ? judgeR.value.harness.name : DEFAULT_HARNESS)) {
       ctx.out(kv('model-floor', line))
     }
   }
@@ -98,7 +106,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
       .filter((d) => d.meta.type === 'plan')
       .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
       .flatMap((d) => {
-        const action = flowAction(root, cfg.value, d)
+        // `--flow` and this table must answer with the SAME derivation next uses, never a
+        // re-derived shorthand (flowAction's own contract) — so the judge is passed here
+        // too, even though the flows table has no note column and nothing changes on
+        // screen. Diverging the arguments is how the shorthand creeps back in.
+        const action = flowAction(root, cfg.value, d, judgeR.ok ? judgeR.value.harness.name : undefined)
         if (!action) return []
         const id = String(d.meta.id)
         return [{

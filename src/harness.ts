@@ -201,36 +201,80 @@ export function loadHarness(name: string): Result<Harness> {
   return ok(harness)
 }
 
-// Decision 5. Detection is the authority; config is the fallback. A config-authority
-// default in a fresh repo emits a runnable-LOOKING, unrunnable handoff behind a warning
-// that gets scrolled past — bug B2's exact shape. Detection tests PRESENCE: neither
-// CLAUDECODE=1 nor PI_CODING_AGENT=true is a documented value contract.
+// Decision 5, split by Decision 105. TWO questions share three rungs, and the NAME of the
+// function is which question you asked — not an argument, because a lane parameter
+// re-asks it at every call site, lets a wrong value pass review invisibly, and gives a
+// new call site the wrong answer by default. That is exactly how `check` came to audit
+// its caller instead of its repo (row 104). `resolveHarness` is deliberately GONE: the
+// rename is what made the compiler enumerate all nine call sites at once.
 //
-// Deliberately NOT wired into loadConfig: every verb calls that, so an invalid
-// `harness:` there would brick `witness check` on a key nothing read. Verbs that need
-// a harness ask for one; `check` reports a malformed config value as a finding.
+// Deliberately NOT wired into loadConfig: every verb calls that, so an invalid `harness:`
+// there would brick `witness check` on a key nothing read. Verbs that need a harness ask
+// for one; `check` reports a malformed config value as a finding.
 //
 // Row 90 removed the WITNESS_HARNESS env rung: configuration has one home, and tests
 // simulate harnesses by setting the detection vars production actually reads.
-export function resolveHarness(
-  env: Record<string, string | undefined>,
-  raw: Record<string, unknown>,
-): Result<{ harness: Harness; source: HarnessSource }> {
-  if (env.PI_CODING_AGENT !== undefined) {
-    const r = loadHarness('pi')
-    return r.ok ? ok({ harness: r.value, source: 'detected' }) : refuse(r.violations)
-  }
-  if (env.CLAUDECODE !== undefined) {
-    const r = loadHarness('claude-code')
-    return r.ok ? ok({ harness: r.value, source: 'detected' }) : refuse(r.violations)
-  }
+interface Rung { source: HarnessSource; name: string }
+
+// Detection tests PRESENCE: neither CLAUDECODE=1 nor PI_CODING_AGENT=true is a documented
+// value contract.
+function detectedRung(env: Record<string, string | undefined>): Rung | undefined {
+  if (env.PI_CODING_AGENT !== undefined) return { source: 'detected', name: 'pi' }
+  if (env.CLAUDECODE !== undefined) return { source: 'detected', name: 'claude-code' }
+  return undefined
+}
+
+function declaredRung(raw: Record<string, unknown>): Rung | undefined {
   const configured = raw.harness
-  if (configured !== undefined) {
-    const r = loadHarness(String(configured))
-    return r.ok ? ok({ harness: r.value, source: 'config' }) : refuse(r.violations)
+  return configured === undefined ? undefined : { source: 'config', name: String(configured) }
+}
+
+function walk(ladder: Array<Rung | undefined>): Result<{ harness: Harness; source: HarnessSource }> {
+  const rung = ladder.find((r): r is Rung => r !== undefined)
+    ?? { source: 'default' as const, name: DEFAULT_HARNESS }
+  const r = loadHarness(rung.name)
+  return r.ok ? ok({ harness: r.value, source: rung.source }) : refuse(r.violations)
+}
+
+// THE JUDGE — which harness runs this repo's gate reviewers, reads its calibration matrix
+// and is probed for runnability. A committed declaration wins, because reviewer identity
+// is a property of the repo's evidence trail and must be comparable across machines; row
+// 88 already said an identity chosen by ambient environment is the opposite of a pin.
+export function resolveJudge(
+  env: Record<string, string | undefined>, raw: Record<string, unknown>,
+): Result<{ harness: Harness; source: HarnessSource }> {
+  return walk([declaredRung(raw), detectedRung(env)])
+}
+
+// THE DRIVER — which CLI is about to be typed at. Detection wins, because a launch or
+// relay line is a fact about the session that will run it, and a config-authority default
+// in a fresh repo emits a runnable-LOOKING, unrunnable handoff behind a warning that gets
+// scrolled past — bug B2's exact shape.
+export function resolveDriver(
+  env: Record<string, string | undefined>, raw: Record<string, unknown>,
+): Result<{ harness: Harness; source: HarnessSource }> {
+  return walk([detectedRung(env), declaredRung(raw)])
+}
+
+// One renderer for both orientation surfaces, on modelFloorLines' precedent: the judge
+// must read identically on `check` and `status`, or the two screens disagree about which
+// binary judges the same repo. Provenance is RENDERED here, never stored — HarnessSource
+// stays a resolution fact and the wording stays a presentation one.
+//
+// It prints in every state, including `declared`: that line read from a foreign session
+// is exactly what row 105 exists to surface, and a line that appeared only in the bad
+// state would teach people to read its absence as "nothing to know" — the confident
+// silence row 104 spent a release killing. The nudge is not decoration: an UNDECLARED
+// repo's judge still flips with the terminal, and declaring is the only thing that ends it.
+export function judgeLine(r: Result<{ harness: Harness; source: HarnessSource }>): string {
+  if (!r.ok) {
+    // A diagnostic surface must not brick on a broken key — `check` reports it as a
+    // finding and the floor falls back — so say what was fallen back TO, and to what.
+    return `${DEFAULT_HARNESS} (default — harness: ${r.violations[0]?.got ?? '?'} is unreadable; witness check reports it)`
   }
-  const r = loadHarness(DEFAULT_HARNESS)
-  return r.ok ? ok({ harness: r.value, source: 'default' }) : refuse(r.violations)
+  const nudge = 'undeclared; set harness: in witness.config.yaml to pin it'
+  if (r.value.source === 'config') return `${r.value.harness.name} (declared in witness.config.yaml)`
+  return `${r.value.harness.name} (${r.value.source} — ${nudge})`
 }
 
 // Decision 9: the model flag is a renderer, not a string. Pi's default provider is

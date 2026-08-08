@@ -3,7 +3,7 @@ import { EXIT } from '../cli.js'
 import { kv, rows } from '../toon.js'
 import { renderRefusal, v } from '../refusal.js'
 import { loadConfig, loadLocalConfig } from '../config.js'
-import { resolveHarness } from '../harness.js'
+import { resolveJudge } from '../harness.js'
 import { MODEL_ALIASES } from '../model.js'
 import { primaryRoot } from '../gitio.js'
 import { PROMPT_NAMES } from '../reviewer.js'
@@ -72,7 +72,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Decision 88: calibration measures the (harness, model) pair — the same spawn the
   // gate battery will use. Resolved once, threaded into every suite and the overlay.
   const cfgR = loadConfig(rootR.value)
-  const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+  const hxR = resolveJudge(ctx.env, cfgR.ok ? cfgR.value.raw : {})
   if (!hxR.ok) {
     for (const line of renderRefusal(hxR.violations)) ctx.err(line)
     return EXIT.REFUSED

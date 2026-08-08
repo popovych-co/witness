@@ -3,7 +3,7 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
-import { HARNESSES, loadHarness, resolveHarness, resolveSkills, skillPins } from '../harness.js'
+import { DEFAULT_HARNESS, HARNESSES, judgeLine, loadHarness, resolveJudge, resolveSkills, skillPins } from '../harness.js'
 import { packageRoot } from '../install.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
@@ -203,26 +203,28 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
   }
 
-  // `harness:` is the config rung of the resolution ladder, consulted only when no
-  // detection rung answered — so a typo there is silent on the machine that has one.
-  // check is the diagnostic verb: it reports the value regardless of who answered.
+  // `harness:` is rung ONE of the judgment ladder (which binary judges this repo) and
+  // rung TWO of the session ladder (which CLI is about to be typed at), so a typo brings
+  // judgment down everywhere while still being invisible to launch lines on a machine
+  // with a detection var. check is the diagnostic verb: it reports the value regardless
+  // of who answered, and it is the ONLY reporter — resolveJudge can fail on exactly this
+  // input, so pushing its violations too would say one thing twice.
   const configuredHarness = cfg.ok ? cfg.value.raw.harness : undefined
   if (configuredHarness !== undefined && !(HARNESSES as readonly string[]).includes(String(configuredHarness))) {
     findings.push(f('error', 'config', 'harness', 'unknown-harness',
       `${String(configuredHarness)} — expected ${HARNESSES.join(' | ')}`))
   }
 
-  // Row 105 has NOT landed: the judgment lane still resolves detection-first. What row
-  // 104 changed is that the audit below stopped asking this question at all. The probe
-  // keeps it because it asks a genuinely different thing — whether THIS MACHINE can run
-  // the repo's reviewers — as its own D88 comment already says.
-  const hxR = resolveHarness(ctx.env, cfg.ok ? cfg.value.raw : {})
-  if (!hxR.ok) {
-    hxR.violations.forEach((x) => findings.push(f('error', 'harness', x.field, x.rule, x.got)))
-  } else if (!probe(hxR.value.harness.launch, ['--version'], ctx.env)) {
-    const launch = hxR.value.harness.launch
-    findings.push(f('warn', 'probes', launch, 'missing',
-      `the ${launch} CLI runs this harness's gate reviewers — install and authenticate it`))
+  const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.raw : {})
+  if (judgeR.ok) {
+    // Row 104/105: the probe asks whether THIS MACHINE can run THIS REPO's reviewers, so
+    // it follows the judge — which is why it kept a harness resolution when row 104 took
+    // one away from the audit. An unresolvable judge has no binary to probe.
+    const launch = judgeR.value.harness.launch
+    if (!probe(launch, ['--version'], ctx.env)) {
+      findings.push(f('warn', 'probes', launch, 'missing',
+        `the ${launch} CLI runs this harness's gate reviewers — install and authenticate it`))
+    }
   }
 
   // Row 103: ONE query, both halves of the skew. Best-effort and silent on every failure
@@ -311,11 +313,15 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (skillsAbsent.length === HARNESSES.length) {
     ctx.out(kv('skills', `none visible here (${skillsAbsent.join(' · ')})`))
   }
+  // Judge first, then the floor computed FOR that judge: read top to bottom, the second
+  // line is a consequence of the first, and the pair answers "which reviewers will this
+  // repo spawn, and are they calibrated". Stated lines, never findings — neither touches
+  // the findings table nor the exit code, which is a contract about canon validity (101).
   // The calibration state reads the same here as on `status` (D98a) — one renderer, so
   // the fact the gate run no longer repeats still reaches both orientation surfaces.
+  ctx.out(kv('judge', judgeLine(judgeR)))
   if (cfg.ok) {
-    const hxR = resolveHarness(ctx.env, cfg.value.raw)
-    for (const line of modelFloorLines(root, cfg.value, hxR.ok ? hxR.value.harness.name : 'claude-code')) {
+    for (const line of modelFloorLines(root, cfg.value, judgeR.ok ? judgeR.value.harness.name : DEFAULT_HARNESS)) {
       ctx.out(kv('model-floor', line))
     }
   }

@@ -16,6 +16,14 @@ export interface GateRunEntry {
   prompts_sha: string
   witness: string
   model: string
+  // Row 106: the chain head actually REQUESTED. The verdict-cache key is built before
+  // anything is invoked, when only this is knowable; `model` is written afterwards, when
+  // the answering rung is. Those were one field, so every fallen-back round keyed against
+  // a model the key could not contain — permanently `fresh`, which killed resume,
+  // changed-nothing and the malformed-streak brake at once. Optional for READS only:
+  // every journal written before 0.8.0 lacks it and `pin ?? model` is exact for them,
+  // since a round that did not fall back has pin === model. gate.ts writes it always.
+  pin?: string
   // Optional: every pre-88 journal on disk lacks it, and keyOf reads absent as
   // claude-code — the only harness that could have written one.
   harness?: string
@@ -55,7 +63,10 @@ export interface GateKey {
   reviewed_sha: string
   gate: string
   prompts_sha: string
-  model: string
+  // Named for what it is. A key can only ever hold the model that was ASKED for — it is
+  // constructed before invoking — and calling it `model` is what let the streak brake
+  // compare it against the answering rung for three releases without anyone noticing.
+  pin: string
   witness: string
   // Required — keys are always constructed fresh from a resolved harness. A pi verdict
   // must never cache-hit a claude one: same model id, different reviewer.
@@ -68,14 +79,27 @@ const isDecision = (e: Entry | undefined, gate: string): e is DecisionEntry & En
   e !== undefined && e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate
 
 export function keyOf(run: GateRunEntry): GateKey {
-  const { reviewed_sha, gate, prompts_sha, model, witness } = run
-  return { reviewed_sha, gate, prompts_sha, model, witness, harness: run.harness ?? 'claude-code' }
+  const { reviewed_sha, gate, prompts_sha, witness } = run
+  return {
+    reviewed_sha, gate, prompts_sha, witness,
+    pin: run.pin ?? run.model,
+    harness: run.harness ?? 'claude-code',
+  }
 }
 
 export function sameKey(a: GateKey, b: GateKey): boolean {
   return a.reviewed_sha === b.reviewed_sha && a.gate === b.gate &&
-    a.prompts_sha === b.prompts_sha && a.model === b.model && a.witness === b.witness &&
+    a.prompts_sha === b.prompts_sha && a.pin === b.pin && a.witness === b.witness &&
     a.harness === b.harness
+}
+
+// Rows 106 and 107: did this round's reviewers run on something other than what was
+// pinned? One definition for three consumers — the cache/resume exclusion below, the
+// budget exemption in roundsSinceApprove, and gate.ts's streak brake — because the
+// inline form inverts silently, and a flipped exemption is a budget that never spends.
+// False for every pre-0.8.0 entry by construction.
+export function fellBack(run: GateRunEntry): boolean {
+  return (run.pin ?? run.model) !== run.model
 }
 
 export function gateRuns(entries: Entry[], gate: string): GateRunEntry[] {
@@ -106,16 +130,24 @@ function lastResetIndex(entries: Entry[], gate: string): number {
   return -1
 }
 
+// The window the round budget spans, and therefore the window the streak brakes guard:
+// an approve, a revise-upstream or a passed run settles everything before it, so runs on
+// the far side of one can neither spend budget nor trip a brake. gate.ts took the last two
+// runs in the WHOLE stream, so an approved pair of fallen-back rounds — the dismissal row
+// 107 specifies — refused the next legitimate run over rounds already disposed of.
+export function runsSinceReset(entries: Entry[], gate: string): GateRunEntry[] {
+  return gateRuns(entries.slice(lastResetIndex(entries, gate) + 1), gate)
+}
+
 export function roundsSinceApprove(entries: Entry[], gate: string): number {
-  const since = lastResetIndex(entries, gate)
-  let n = 0
-  for (let i = since + 1; i < entries.length; i++) {
-    const e = entries[i]
-    // malformed = the battery failed to emit a legal verdict — witness's
-    // failure, not the artifact's; it never spends the human's budget
-    if (isRun(e, gate) && (e as unknown as GateRunEntry).outcome !== 'malformed') n++
-  }
-  return n
+  // Row 67's principle, stated once and applied twice: the battery failed to deliver the
+  // judgment the human configured — witness's failure, not the artifact's — so it never
+  // spends the human's budget. `malformed` is a verdict witness could not parse; a
+  // fallback is a model witness could not reach. Row 105 deliberately does NOT join them:
+  // a harness flip still spends its round, or a repo could flip judges forever and never
+  // reach the bound.
+  return runsSinceReset(entries, gate)
+    .filter((r) => r.outcome !== 'malformed' && !fellBack(r)).length
 }
 
 export function boundReached(entries: Entry[], gate: string): boolean {
@@ -166,7 +198,15 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
   }
   if (lastRunIdx >= 0) {
     const last = entries[lastRunIdx] as unknown as GateRunEntry
-    if (sameKey(keyOf(last), key)) {
+    // Row 106: a substituted round is not evidence for another one, and `resume` and
+    // `changed-nothing` are both decisions about THIS run taken from THAT one without
+    // invoking anything. Excluding it is what makes a re-gate retry the pin — a
+    // recovered pin yields a real verdict immediately, a dead one falls back again and
+    // row 107's fallback-streak brake stops it with the remedy that is actually true.
+    // Keeping it here traps the human exactly as row 107's own trap does: `resume`
+    // never retries, and `changed-nothing` says `edit the artifact` about an artifact
+    // that was never the problem. Re-SHOWING the entry is `decide --show`'s job.
+    if (!fellBack(last) && sameKey(keyOf(last), key)) {
       const revised = entries.slice(lastRunIdx + 1).some((e) =>
         isDecision(e, gate) &&
         ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
@@ -177,7 +217,11 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     const e = entries[i]
     if (!isRun(e, gate)) continue
     const run = e as unknown as GateRunEntry
-    if (run.outcome !== 'malformed' && run.verdicts && sameKey(keyOf(run), key)) {
+    // The same exclusion, second reason: with `pin` in the key a fallen-back round and a
+    // clean one over the same content share a key, so edit-then-revert would replay an
+    // unpinned verdict into a passing run. Beside the malformed filter, which is here
+    // for the identical reason — a round witness could not complete is not evidence.
+    if (run.outcome !== 'malformed' && !fellBack(run) && run.verdicts && sameKey(keyOf(run), key)) {
       return { kind: 'cached', from: run }
     }
   }

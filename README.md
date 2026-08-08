@@ -131,11 +131,11 @@ either.
 
 | Key | Meaning |
 |---|---|
-| `harness: claude-code \| pi` | fallback used only when detection cannot answer. Order: `PI_CODING_AGENT` → `CLAUDECODE` → `harness:` → `claude-code` |
+| `harness: claude-code \| pi` | **the judge** — which harness runs this repo's gate reviewers, is measured by `calibrate`, and is probed by `check`. Judgment resolves `harness:` → `PI_CODING_AGENT` → `CLAUDECODE` → `claude-code`; session lines (`next`'s handoff, `dispatch`'s relay, `init --agent auto`) resolve detection first, because those name the CLI you are about to type at. Committed, so it binds every teammate's gates; `witness init --agent` writes it once and never re-points it. Undeclared repos are judged by whichever agent's session is open — `witness check` and `witness status` say so |
 | `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
 
-There is no `provider:` key. `witness gate` spawns the RESOLVED harness's headless
-mode for every reviewer (Decision 88): claude-code renders bare Anthropic ids, pi
+There is no `provider:` key. `witness gate` spawns the DECLARED harness's headless
+mode for every reviewer (Decisions 88, 105): claude-code renders bare Anthropic ids, pi
 renders `provider/model[:thinking]` with the provider witness knows it needs. The pi
 reviewer runs hermetic (`--no-extensions --no-skills --no-context-files`); machine
 extensions it must keep — e.g. an OAuth adapter that supplies your Anthropic auth —

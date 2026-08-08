@@ -166,13 +166,24 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
   return { text: `${JSON.stringify(doc, null, 2)}\n`, changed: true }
 }
 
-// The config rung of Decision 5's ladder. Recorded once, on the run that installs the
-// first payload set; a later `--agent` for a second harness leaves it alone, because
-// detection outranks it anyway and rewriting config is not what that run was asked for.
-export function recordHarness(configText: string, name: string): { text: string; changed: boolean } {
-  if (/^harness:/m.test(configText)) return { text: configText, changed: false }
+// The config rung of Decision 5's ladder, and rung ONE of Decision 105's judgment ladder.
+// Recorded once, on the run that installs the first payload set; a later `--agent` for a
+// second harness leaves it alone, because installing a payload set is not being asked to
+// re-point every subsequent verdict. `declared` is what lets the caller SAY so when the
+// two disagree — `{changed: false}` alone cannot tell "already says this" from "says
+// something else", which is why the mismatch was silent.
+//
+// The anchor matters: a commented `# harness: pi` in the scaffold must NOT read as a
+// declaration. Relaxing this to /harness:/ would turn documentation into a permanent,
+// write-once declaration on every repo that ran `witness init`.
+export function recordHarness(configText: string, name: string): { text: string; changed: boolean; declared?: string } {
+  const found = /^harness:\s*(\S+)/m.exec(configText)
+  if (found) return { text: configText, changed: false, declared: found[1] }
   const suffix = configText.endsWith('\n') ? '' : '\n'
-  return { text: `${configText}${suffix}harness: ${name}   # detection wins; this is the fallback\n`, changed: true }
+  return {
+    text: `${configText}${suffix}harness: ${name}   # the judge — which harness runs this repo's gate reviewers; declared wins\n`,
+    changed: true,
+  }
 }
 
 export function writeSettings(root: string, rel: string, text: string): void {

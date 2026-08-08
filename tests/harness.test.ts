@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
-  resolveHarness, resolveSkills, skillPins, skillsVisibility, validatePin,
+  resolveDriver, resolveJudge, resolveSkills, skillPins, skillsVisibility, validatePin,
 } from '../src/harness.js'
 
 const hx = (name: string) => {
@@ -32,35 +32,35 @@ describe('harness registry', () => {
   })
 })
 
-describe('harness resolution — three rungs', () => {
+describe('the session lane — resolveDriver, detection first', () => {
   it('WITNESS_HARNESS is dead — row 90: configuration has one home', () => {
-    const r = resolveHarness({ WITNESS_HARNESS: 'pi' }, {})
+    const r = resolveDriver({ WITNESS_HARNESS: 'pi' }, {})
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.value).toMatchObject({ harness: { name: 'claude-code' }, source: 'default' })
-    const detected = resolveHarness({ WITNESS_HARNESS: 'claude-code', PI_CODING_AGENT: 'true' }, {})
+    const detected = resolveDriver({ WITNESS_HARNESS: 'claude-code', PI_CODING_AGENT: 'true' }, {})
     if (detected.ok) expect(detected.value.source).toBe('detected')
   })
 
   it('PI_CODING_AGENT outranks CLAUDECODE, which outranks config', () => {
-    expect(resolveHarness({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' }).ok).toBe(true)
-    const pi = resolveHarness({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' })
+    expect(resolveDriver({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' }).ok).toBe(true)
+    const pi = resolveDriver({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' })
     expect(pi.ok && pi.value.harness.name).toBe('pi')
-    const cc = resolveHarness({ CLAUDECODE: '1' }, { harness: 'pi' })
+    const cc = resolveDriver({ CLAUDECODE: '1' }, { harness: 'pi' })
     expect(cc.ok && cc.value.harness.name).toBe('claude-code')
     expect(cc.ok && cc.value.source).toBe('detected')
   })
 
   // presence, not value: CLAUDECODE=1 is not a documented contract
   it('detects on presence even when the value is empty', () => {
-    const r = resolveHarness({ CLAUDECODE: '' }, {})
+    const r = resolveDriver({ CLAUDECODE: '' }, {})
     expect(r.ok && r.value.harness.name).toBe('claude-code')
   })
 
   it('falls back to config, then to claude-code', () => {
-    const cfg = resolveHarness({}, { harness: 'pi' })
+    const cfg = resolveDriver({}, { harness: 'pi' })
     expect(cfg.ok && cfg.value.harness.name).toBe('pi')
     expect(cfg.ok && cfg.value.source).toBe('config')
-    const def = resolveHarness({}, {})
+    const def = resolveDriver({}, {})
     expect(def.ok && def.value.harness.name).toBe('claude-code')
     expect(def.ok && def.value.source).toBe('default')
   })
@@ -68,7 +68,7 @@ describe('harness resolution — three rungs', () => {
   // B2's shape: a config-authority default in a fresh repo emits a runnable-LOOKING,
   // unrunnable handoff behind a warning that gets scrolled past
   it('refuses an unknown value on whichever rung supplied it', () => {
-    const cfg = resolveHarness({}, { harness: 'nope' })
+    const cfg = resolveDriver({}, { harness: 'nope' })
     expect(cfg.ok).toBe(false)
     if (!cfg.ok) expect(cfg.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })
   })
@@ -76,8 +76,48 @@ describe('harness resolution — three rungs', () => {
   // the config rung is NOT consulted when detection already answered, so a typo in a
   // key nothing reads must not brick every verb (witness check reports it instead)
   it('ignores an unreadable config value when a detection rung answered', () => {
-    const r = resolveHarness({ CLAUDECODE: '1' }, { harness: 'nope' })
+    const r = resolveDriver({ CLAUDECODE: '1' }, { harness: 'nope' })
     expect(r.ok && r.value.harness.name).toBe('claude-code')
+  })
+})
+
+describe('the judgment lane — resolveJudge, declaration first', () => {
+  // Row 105. A repo declaring `harness: pi`, gated from a Claude Code session, spawned
+  // claude reviewers and read a different calibration matrix, and nothing refused. A
+  // committed key binds every teammate's gates, on the same argument that puts
+  // gates.model in committed config: the evidence trail is comparable across machines.
+  it('a declaration outranks the ambient session', () => {
+    const r = resolveJudge({ CLAUDECODE: '1' }, { harness: 'pi' })
+    expect(r.ok && r.value.harness.name).toBe('pi')
+    expect(r.ok && r.value.source).toBe('config')
+  })
+
+  // The residual, stated so it is not mistaken for a bug: an UNDECLARED repo is still
+  // judged by whatever terminal is open. Declaration is what the row makes able to win;
+  // it does not make declaration mandatory, and `init` writes the key only under --agent.
+  it('falls to detection, then to claude-code, when nothing is declared', () => {
+    const detected = resolveJudge({ PI_CODING_AGENT: 'true' }, {})
+    expect(detected.ok && detected.value.harness.name).toBe('pi')
+    expect(detected.ok && detected.value.source).toBe('detected')
+    const def = resolveJudge({}, {})
+    expect(def.ok && def.value.harness.name).toBe('claude-code')
+    expect(def.ok && def.value.source).toBe('default')
+  })
+
+  // The two lanes disagree on exactly one input, and that is the whole release.
+  it('the two lanes answer differently on a declared repo in a foreign session', () => {
+    const env = { CLAUDECODE: '1' }
+    const raw = { harness: 'pi' }
+    expect(resolveJudge(env, raw).ok && resolveJudge(env, raw).value.harness.name).toBe('pi')
+    expect(resolveDriver(env, raw).ok && resolveDriver(env, raw).value.harness.name).toBe('claude-code')
+  })
+
+  // The typo is no longer invisible to judgment: the config rung is rung ONE here, so it
+  // refuses rather than being skipped. `check` reports it as a finding either way.
+  it('refuses an unreadable declaration even when a detection rung could have answered', () => {
+    const r = resolveJudge({ CLAUDECODE: '1' }, { harness: 'nope' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })
   })
 })
 

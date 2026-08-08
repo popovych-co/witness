@@ -10,12 +10,12 @@ import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } f
 import { effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
-import { handoffLine, relayLine, resolveHarness } from '../harness.js'
+import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
-import { boundReached, lastGateRun, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
+import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -74,6 +74,24 @@ function lapseNote(entries: Entry[], gate: string, currentSha: string | undefine
   return `${gate} approval lapsed — judged @${last.reviewed_sha.slice(0, 7)}, worktree now @${currentSha.slice(0, 7)} — re-gate to judge the current tree`
 }
 
+// Row 105. `appendKind` keys on harness, so a cross-harness run is `fresh` and re-invokes
+// the whole battery — while roundsSinceApprove counts every non-malformed run with no
+// reference to the key, so each flip spends a round out of ROUND_BOUND on content nobody
+// edited. The row refuses to exempt it (a repo could then flip judges forever and never
+// reach the bound), so the cost is real and the CLI says why before it is paid.
+//
+// `undefined` judge means the declaration is unreadable: no note, never a refusal. A note
+// explains a row; it does not decide whether the row prints — the same doctrine lapseNote
+// applies to an uncomputable sha.
+function judgeNote(entries: Entry[], gate: string, judge: string | undefined): string | undefined {
+  if (judge === undefined) return undefined
+  const last = lastGateRun(entries, gate)
+  // `?? 'claude-code'` for the reason keyOf uses it: every pre-88 entry lacks the field,
+  // and claude-code is the only harness that could have written one.
+  if (!last || (last.harness ?? 'claude-code') === judge) return undefined
+  return `judge changed — round ${last.round} ran on ${last.harness ?? 'claude-code'}, ${judge} judges now — the next round re-invokes the whole battery and spends one of ${ROUND_BOUND}`
+}
+
 // The owed evidence phase is a DERIVATION (row 85: a placeholder is honest only where
 // the CLI genuinely cannot know the answer). `evidenceForDiff` already computes
 // red/green/vacuous per tag on the way to the gate's own check — this reads that report
@@ -129,7 +147,7 @@ function liveEfforts(root: string): Array<{ slug: string; entries: Entry[] }> {
 // `witness start` and ends at the merge stamp. Anything else returns undefined and is
 // not a flow. Exported because `--flow` and the dashboard must answer with the SAME
 // derivation next uses, never a re-derived shorthand.
-export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextAction | undefined {
+export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const entries = readStream(root, id)
@@ -186,7 +204,7 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc): NextActio
   }
   return {
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
-    ...noteOf(lapseNote(entries, 'implement', diffSha)),
+    ...noteOf(lapseNote(entries, 'implement', diffSha), judgeNote(entries, 'implement', judge)),
   }
 }
 
@@ -293,6 +311,14 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     return { line: 'witness check' }
   }
 
+  // `next` is the one verb that legitimately holds BOTH lanes, and each feeds named
+  // lines: the DRIVER resolved at the print site renders `run:`/`relay:` (the session
+  // about to be typed at), and the JUDGE here feeds the judge-changed note (which binary
+  // will spend the round). A reader who has internalised "one lane per verb" will
+  // otherwise read this as a mistake.
+  const judgeR = resolveJudge(ctx.env, cfg.raw)
+  const judge = judgeR.ok ? judgeR.value.harness.name : undefined
+
   const efforts = liveEfforts(root)
 
   // Hoisted above tier 1: both doc lists are read by every tier below, and they used to
@@ -307,7 +333,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // so a global decision-halt freezes every other flow at the first ship gate.
   const flows = plans
     .filter((plan) => !flowBlocked(root, plan, readStream(root, String(plan.meta.id))))
-    .map((plan) => flowAction(root, cfg, plan))
+    .map((plan) => flowAction(root, cfg, plan, judge))
     .filter((a): a is NextAction => a !== undefined)
     .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))
   if (flows.length > 0) {
@@ -408,7 +434,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
             stage: 'decompose', target: e.slug,
             note: 'revise owed — re-author, then the gate has something new to judge',
           }
-        : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug }
+        : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug,
+            ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
     }
   }
 
@@ -428,7 +455,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     // step by name; routing to the gate here would refuse design-unseen every time.
     return designUnseen(root, cfg.paths, id) !== undefined
       ? { line: `witness design ${id} --open`, stage: 'design', target: id }
-      : { line: `witness gate design ${id}`, target: id }
+      : { line: `witness gate design ${id}`, target: id,
+          ...noteOf(judgeNote(readStream(root, id), 'design', judge)) }
   }
 
   const ready = (dep: string): boolean => {
@@ -465,7 +493,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const planSha = parent ? planPairSha(plan, parent) : undefined
     const entries = readStream(root, id)
     if (gateSettled(entries, 'plan', planSha)) continue
-    if (!authoringOwed(entries, 'plan', planSha)) return { line: `witness gate plan ${id}`, target: id }
+    if (!authoringOwed(entries, 'plan', planSha)) {
+      return { line: `witness gate plan ${id}`, target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
+    }
     const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
   }
@@ -504,9 +534,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootR.value
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const hxR = resolveHarness(ctx.env, cfgR.value.raw)
+  const hxR = resolveDriver(ctx.env, cfgR.value.raw)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
+  // The judge for the two flowAction calls below, so `--flow` and a worktree cwd answer
+  // with the SAME derivation computeNext does — flowAction's own contract. Diverging the
+  // arguments is how a re-derived shorthand creeps back in.
+  const judgeR = resolveJudge(ctx.env, cfgR.value.raw)
+  const judge = judgeR.ok ? judgeR.value.harness.name : undefined
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)
   if (lazy.stamped.length > 0) canon = loadCanon(root)
@@ -528,12 +563,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.flow !== undefined) {
     const flowR = resolveFlow(canon, values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    action = flowAction(root, cfgR.value, flowR.value) ?? { line: 'witness check', target: values.flow }
+    action = flowAction(root, cfgR.value, flowR.value, judge) ?? { line: 'witness check', target: values.flow }
   } else {
     const inferred = worktreeFlow(ctx.cwd, root)
     const ambient = inferred !== undefined ? findById(canon, inferred) : undefined
     const scoped = ambient && ambient.meta.type === 'plan'
-      ? flowAction(root, cfgR.value, ambient)
+      ? flowAction(root, cfgR.value, ambient, judge)
       : undefined
     action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
   }

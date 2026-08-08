@@ -8,15 +8,15 @@ import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry 
 import { primaryRoot, stateCommit } from './gitio.js'
 import { loadCanon, findById, type Canon } from './scan.js'
 import { newRunId } from './drift.js'
-import { resolveHarness } from './harness.js'
+import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, gateRuns, lastGateRun, roundsSinceApprove,
-  type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
+  ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, roundsSinceApprove,
+  runsSinceReset, type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
 import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
@@ -200,7 +200,7 @@ export async function runGate(
     if (docs.length) lens.docs = docs
     lenses.push(lens)
   }
-  const hxR = resolveHarness(ctx.env, cfgR.value.raw)
+  const hxR = resolveJudge(ctx.env, cfgR.value.raw)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
   const localR = loadLocalConfig(root)
@@ -216,9 +216,14 @@ export async function runGate(
   // (D98a). Only the caller's own pin being below the floor is news at run time.
   if (warning && warningKind === 'below-floor') ctx.err(`warning: ${warning}`)
 
+  // Row 106: the key is built BEFORE invoking, so the only model knowable here is the one
+  // being asked for. Naming it `pin` is what stops the entry's `model` — what actually
+  // answered — from being compared against it by accident, which is how the streak brake
+  // below spent three releases never firing.
+  const pin = chain[0]!
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
-    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), model: chain[0]!, witness: version(),
+    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), pin, witness: version(),
     harness: harness.name,
   }
   // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
@@ -261,12 +266,34 @@ export async function runGate(
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
-    // malformed rounds don't spend the bound (rounds.ts) — this brake is what
-    // stops an unreliable battery from re-running for free forever instead
-    const tail = gateRuns(entries, spec.gate).slice(-2)
+    // Both brakes guard the SAME window as the round budget (rounds.ts): exempt rounds
+    // could otherwise repeat for free, and a run on the far side of an approve was
+    // disposed of and can trip nothing.
+    const tail = runsSinceReset(entries, spec.gate).slice(-2)
+    const samePin = (r: GateRunEntry) =>
+      (r.pin ?? r.model) === key.pin && (r.harness ?? 'claude-code') === key.harness
+    // Row 107. A fallen-back round does not spend the budget, and an exempt round that
+    // repeats forever is D67's livelock — the exemption and this trigger are one change.
+    // `prompts_sha` is deliberately NOT compared: a lens edit has nothing to do with
+    // whether a model answers, and comparing it would let an unrelated edit reset a brake
+    // on a dead pin. Checked first because when both hold, "the pinned model is not
+    // answering" is the true remedy and "your battery emits invalid verdicts" is not.
+    // No --fresh in the want: --fresh bypasses the brake and would spend a battery
+    // re-invoking the same dead pin. Fixing the pin moves key.pin, samePin goes false,
+    // and the battery runs — which is only reachable BECAUSE these rounds were exempt.
+    if (tail.length === 2 && tail.every((r) => fellBack(r) && samePin(r))) {
+      renderRefusal([v(`gates.${spec.gate}.model`, 'fallback-streak',
+        `${tail.length} consecutive rounds fell back from ${key.pin}`,
+        'a reachable gates.<gate>.model — the pinned model is not answering')])
+        .forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    // malformed rounds don't spend the bound either — this brake is what stops an
+    // unreliable battery from re-running for free forever instead. Row 106: "same setup"
+    // always meant the same PIN, and comparing the answering rung meant two malformed
+    // fallen-back rounds never matched, which is the one thing this exists to stop.
     const sameSetup = (r: GateRunEntry) =>
-      r.outcome === 'malformed' && r.model === key.model && r.prompts_sha === key.prompts_sha &&
-      (r.harness ?? 'claude-code') === key.harness
+      r.outcome === 'malformed' && samePin(r) && r.prompts_sha === key.prompts_sha
     if (tail.length === 2 && tail.every(sameSetup)) {
       renderRefusal([v('reviewers', 'malformed-streak',
         `${tail.length} consecutive malformed rounds on ${tail[1]!.model}`,
@@ -286,7 +313,7 @@ export async function runGate(
   const fallback: string[] = []
   const rerolled: string[] = []
   let rung = 0
-  let model = chain[0]!
+  let model = pin
   let cached = false
 
   if (kind.kind === 'cached') {
@@ -336,14 +363,22 @@ export async function runGate(
     }
   }
 
-  if (fallback.length > 0 && chain[0] !== SESSION_DEFAULT && fallback.includes(chain[0]!)) {
-    ctx.err(`warning: head model ${chain[0]} failed to invoke — reviewers ran on ${model}; check gates.${spec.gate}.model`)
-  }
   const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length
   const pinConflicts = verdicts.flatMap((x) => x.findings).filter((f) => f.contradicts_pin !== undefined).length
   const standing = [
     input.standingStop,
     pinConflicts > 0 ? 'contradicts-pin — a finding disputes a settled policy pin; the human decides which one dies' : undefined,
+    // Row 98c, specified by row 107. Composed HERE, after the battery, because whether a
+    // fallback happened is not knowable at resolve() time. Dismissed by a plain
+    // --approve: --override is reserved for the bound and this is a first-round event.
+    // The remedy is deliberately absent — on round one the honest statement is that a
+    // human decides whether the verdict counts; the remedy becomes true only once the pin
+    // proves persistently dead, which is what fallback-streak above prints. It REPLACES
+    // the stderr warning that fired on this same condition: unjournaled and non-blocking,
+    // it let a substituted verdict pass behind a line that scrolls by.
+    model !== pin
+      ? `fallback — reviewers ran on ${model}, not the pinned ${pin}; the human decides whether that verdict counts`
+      : undefined,
   ].filter((s): s is string => s !== undefined).join(' · ') || undefined
   const checksGreen = input.checks.every((c) => c.ok)
   const outcome: GateRunEntry['outcome'] =
@@ -376,7 +411,7 @@ export async function runGate(
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
       reviewed_sha: input.reviewedSha, prompts_sha: key.prompts_sha,
-      witness: key.witness, model, harness: harness.name, calibration: calibrationOf(model),
+      witness: key.witness, model, pin, harness: harness.name, calibration: calibrationOf(model),
       ...(localR.value.reviewerExtensions.length ? { reviewer_extensions: localR.value.reviewerExtensions } : {}),
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
