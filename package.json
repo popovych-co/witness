@@ -1,6 +1,6 @@
 {
   "name": "@popovych.co/witness",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Evidence-gated spec-driven development pipeline for AI coding agents: brainstorm to PR in six stages, where specs are state, plans are motion, and no transition passes without evidence. Drives from Claude Code or Pi.",
   "keywords": [
     "spec-driven-development",

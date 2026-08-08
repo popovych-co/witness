@@ -1,8 +1,10 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { registerGate, runGate, type GateInput } from '../src/gate.js'
-import type { DecisionEntry } from '../src/rounds.js'
+import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
@@ -49,6 +51,22 @@ async function stoppedGate() {
 }
 const decisions = (repo: { root: string }, id = 'auth-refresh') =>
   readStream(repo.root, id).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
+
+// A genuine fallen-back round: pinned model dead, calibrated rung answers. One round, so
+// `claude-fail: 1` is exactly right — call-1 is the pin and call-2 is the rung.
+async function fallenBackGate() {
+  synthetic()
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  repo.write('witness.config.yaml', 'schema: 1\ngates:\n  model: test-model-1\n')
+  repo.write('.witness/calibration.local.yaml', 'models:\n  - test-model-2\n')
+  const scenario = fakeScenario()
+  putVerdict(scenario, { coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
+  writeFileSync(join(scenario, 'claude-fail'), '1')
+  const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+  await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+  return { repo, scenario }
+}
 
 // three stopped rounds → bound reached, third round pending
 async function boundRepo() {
@@ -284,6 +302,30 @@ describe('witness decide', () => {
     expect(r.code).toBe(2)
     expect(r.stdout + r.stderr).toContain('override-required')
     expect(r.stdout + r.stderr).toContain('rows are structured for self-repair')
+  })
+
+  // Row 107: the round cannot pass on its own, and dismissing it costs a plain --approve.
+  // --override is reserved for the bound, and the exemption means the bound is not reached.
+  it('a plain --approve dismisses a fallen-back round', async () => {
+    const { repo } = await fallenBackGate()
+    const last = readStream(repo.root, 'auth-refresh')
+      .filter((e) => e.t === 'gate-run').at(-1) as unknown as GateRunEntry
+    expect(last.outcome).toBe('stopped')
+    expect(last.standing).toContain('fallback — reviewers ran on test-model-2, not the pinned test-model-1')
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
+    expect(res.code).toBe(0)
+    expect(decisions(repo).at(-1)?.decision).toBe('approve')
+    expect(decisions(repo).at(-1)?.override).toBeUndefined()
+  })
+
+  // Re-shown, never re-used. `decide --show` is the surface whose job is showing, which is
+  // what lets appendKind exclude a substituted round from `resume` without losing anything.
+  it('decide --show renders a fallen-back round with its standing stop', async () => {
+    const { repo } = await fallenBackGate()
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--show'])
+    expect(res.code).toBe(0)
+    // Quoted by kv: the standing stop carries a comma, so TOON encodes it as a string.
+    expect(res.stdout).toContain('standing-stop: "fallback — reviewers ran on test-model-2')
   })
 })
 

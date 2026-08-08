@@ -218,4 +218,48 @@ describe('witness init --agent', () => {
     expect(res.stderr).toContain('unknown-harness')
     expect(res.stderr).toContain('claude-code | pi')
   })
+
+  // Write-once, and now audible. Installing a second payload set is legitimate — it is
+  // how a claude-code repo gains pi support — but `--agent pi` reads as "make this repo
+  // pi", and the judge does not move. Say so once, on stderr, and install anyway.
+  it('warns when the installed agent is not the declared judge, and installs anyway', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'pi'])
+    const res = await repo.cli(['init', '--agent', 'claude-code'])
+    expect(res.code).toBe(0)
+    expect(repo.read('witness.config.yaml')).toContain('harness: pi')
+    expect(res.stderr).toContain('this repo declares harness: pi')
+    expect(res.stderr).toContain('claude-code\'s payload is installed, but pi still judges')
+    expect(repo.read('.claude/commands/witness.md')).toContain('# /witness — the engine')
+  })
+
+  it('stays quiet when the installed agent is the declared judge', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'pi'])
+    const res = await repo.cli(['init', '--agent', 'pi'])
+    expect(res.stderr).not.toContain('still judges')
+  })
+
+  // The scaffold documents the key without declaring it. A commented line must not read
+  // as a declaration — `recordHarness` anchors on /^harness:/m for exactly this reason,
+  // and relaxing that regex would silently turn documentation into a permanent, write-once
+  // declaration on every repo.
+  it('the documented harness: line is not a declaration', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init'])
+    expect(repo.read('witness.config.yaml')).toContain('# harness: pi')
+    const check = await repo.cli(['check'])
+    expect(check.stdout).toContain('undeclared')
+    await repo.cli(['init', '--agent', 'pi'])
+    expect(repo.read('witness.config.yaml')).toContain('\nharness: pi')
+  })
+
+  // Row 105: the auto-written trailer said something that is now false.
+  it('the written trailer names the judge, not a fallback', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'pi'])
+    const cfg = repo.read('witness.config.yaml')
+    expect(cfg).not.toContain('detection wins')
+    expect(cfg).toContain('# the judge — which harness runs this repo\'s gate reviewers; declared wins')
+  })
 })

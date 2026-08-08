@@ -253,16 +253,49 @@ describe('witness check — harness findings', () => {
     expect(res.stdout).not.toContain('claude-code: payload')   // claude-code's set is current
   })
 
-  // resolveHarness never consults `harness:` when a detection rung answered, so the
-  // typo would otherwise be invisible forever — check is where it surfaces.
-  it('reports an unreadable harness: even when detection answered', async () => {
+  // The config rung is rung ONE of the judgment ladder now, so `resolveJudge` refuses on
+  // this input too. The explicit validation above is the single reporter, because it names
+  // the expected set where a violation-derived row renders only `got` — one question, one
+  // answer, which is this release's whole theme.
+  it('reports an unreadable harness: exactly once', async () => {
     const repo = await seededRepo()
     repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'bad harness')
     const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(res.code).toBe(1)
-    expect(res.stdout).toContain('unknown-harness')
+    expect(res.stdout.match(/unknown-harness/g)?.length).toBe(1)
+    expect(res.stdout).toContain('judge: claude-code (default — harness: pikachu is unreadable; witness check reports it)')
+  })
+
+  // Row 105: the judge is a repo fact and it prints unconditionally, declared or not.
+  it('names the declared judge and where it was declared', async () => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pi\n`)
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
+    expect(res.stdout).toContain('judge: pi (declared in witness.config.yaml)')
+  })
+
+  // The residual made actionable: an undeclared repo is still judged by the ambient
+  // session, and the nudge is the only thing that closes it.
+  it('names the nudge when nothing is declared', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
+    expect(res.stdout).toContain('judge: claude-code (detected — undeclared; set harness: in witness.config.yaml to pin it)')
+  })
+
+  // The probe follows the judge, which is the behaviour change: it asks whether this
+  // machine can run THIS REPO's reviewers, not the caller's.
+  it('probes the declared judge, not the session harness', async () => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pi\n`)
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
+    const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
+    symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
+    const res = await repo.cli(['check'], { env: { PATH: bin, CLAUDECODE: '1' } })
+    expect(res.stdout).toContain('pi,missing')
+    expect(res.stdout).not.toContain('claude,missing')
   })
 
   // Row 103. version() reads the RUNNING CLI's own package.json and every invocation

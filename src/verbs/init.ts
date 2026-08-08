@@ -5,7 +5,7 @@ import { EXIT, version, type Ctx } from '../cli.js'
 import { configPath } from '../config.js'
 import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
-import { loadHarness, resolveHarness, type Harness } from '../harness.js'
+import { loadHarness, resolveDriver, type Harness } from '../harness.js'
 import {
   installPayload, mergeSettings, preflightPayload, readIfExists, recordHarness,
   writeSettings, type SyncResult,
@@ -20,6 +20,8 @@ schema: 1
 # paths: { specs: docs/specs, plans: docs/plans }   # optional canon roots (defaults: specs, plans); git mv existing docs when changing
 # docs:                      # repo docs registry — enumerated keys, unknown keys refused
 #   conventions: [docs/code/architecture.md]   # → injected into code-reviewer at implement + ship (cache-keyed)
+# harness: pi               # the judge — which harness runs this repo's gate reviewers;
+                            # declared beats the ambient session (init --agent writes it once)
 gates:
   model: claude-fable-5      # reviewer model pin — exact id, aliases refused
   # reviewerTimeoutMs: 600000  # ms per reviewer invocation (machine auth/extension knobs live in .witness/config.local.yaml)
@@ -87,7 +89,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     // `auto` is the one value that consults the detection rungs; a named agent is a
     // claim and refuses when false, listing the harnesses that exist (row 90: no env
     // impersonation — a name resolves through the registry directly).
-    const hxR = agent === 'auto' ? resolveHarness(ctx.env, {}) : loadHarness(agent)
+    const hxR = agent === 'auto' ? resolveDriver(ctx.env, {}) : loadHarness(agent)
     if (!hxR.ok) {
       renderRefusal(hxR.violations.map((x) => ({ ...x, field: '--agent' }))).forEach(ctx.err)
       return EXIT.REFUSED
@@ -148,6 +150,12 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (recorded.changed) {
         writeFileSync(configPath(root), recorded.text)
         if (!files.includes('witness.config.yaml')) files.push('witness.config.yaml')
+      } else if (recorded.declared !== undefined && recorded.declared !== harness.name) {
+        // Not a refusal: a repo carrying both payload sets is legitimate (row 104), and
+        // --agent is how a claude-code repo gains pi support. But `--agent pi` reads as
+        // "make this repo pi" and the judge does not move — and `--agent auto` produces
+        // this state from a command that never mentioned judgment at all.
+        ctx.err(`warning: this repo declares harness: ${recorded.declared} — ${harness.name}'s payload is installed, but ${recorded.declared} still judges; edit harness: in witness.config.yaml to re-point the judge`)
       }
     }
 

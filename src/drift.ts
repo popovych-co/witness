@@ -10,7 +10,7 @@ import { appendEntry, entryLine, journalRel, readStream, type Entry } from './jo
 import type { TestOutcome } from './junit.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { refuse, renderRefusal, v, type Result, ok } from './refusal.js'
-import { resolveHarness } from './harness.js'
+import { resolveJudge } from './harness.js'
 import { invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
 import { runFullSuite, runnerConfig } from './runner.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from './scan.js'
@@ -122,7 +122,7 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   // like every other. A silent claude fallback here would swap the reviewer identity
   // for pure-pi users on the one check that judges live specs.
   const cfgR = loadConfig(root)
-  const hxR = resolveHarness(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+  const hxR = resolveJudge(ctx.env, cfgR.ok ? cfgR.value.raw : {})
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach(ctx.err); return EXIT.REFUSED }
   // Repo config may be broken here by design — the timeout falls to the default. A
   // broken LOCAL file refuses instead: silently dropping declared extensions
