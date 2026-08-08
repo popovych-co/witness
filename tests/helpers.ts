@@ -56,7 +56,15 @@ export function tmpRepo(): TestRepo {
       // session's CLAUDECODE/PI_CODING_AGENT must not decide what `next` renders
       // (this suite dogfoods under pi), and a harness test asks for one by setting
       // the SAME detection var production reads — row 90 killed the env override.
-      env: { ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined, ...opts.env },
+      //
+      // WITNESS_REGISTRY off (row 103): `check` makes a real registry call, and a suite
+      // that reaches the network is slow when it works and flaky when it does not. Tests
+      // that exercise the skew findings override this with a local server's base URL.
+      // It is a test seam, not a config key — see the note in src/registry.ts.
+      env: {
+        ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined,
+        WITNESS_REGISTRY: 'off', ...opts.env,
+      },
       isTTY: opts.tty ?? answers.length > 0,
       out: (l) => outs.push(l),
       err: (l) => errs.push(l),

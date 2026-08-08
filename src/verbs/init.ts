@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { EXIT, type Ctx } from '../cli.js'
+import { EXIT, version, type Ctx } from '../cli.js'
 import { configPath } from '../config.js'
 import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
@@ -136,7 +136,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         return EXIT.REFUSED
       }
       synced = payload.value
-      files.push(...synced.written, ...synced.restamped)
+      files.push(...synced.written, ...synced.overwritten)
       if (harness.settings !== undefined) {
         const merged = mergeSettings(readIfExists(root, harness.settings))
         if (merged.changed) {
@@ -179,10 +179,11 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (harness !== undefined) {
       ctx.out(kv('agent', harness.name))
       ctx.out(kv('payload', files.length > 0 ? files.join(' · ') : 'already installed'))
-      // Never silent: a file we chose not to touch is a file that may now be a version
-      // behind the CLI running this command.
-      if (synced && synced.modified.length > 0) {
-        ctx.out(kv('payload-modified', `${synced.modified.join(' · ')} — locally edited, left alone`))
+      // Never silent: row 102 lets init clobber, and a clobber the human cannot see is
+      // the one thing that would make overwriting the wrong trade. The previous content
+      // is the parent commit's, because row 87 commits the payload.
+      if (synced && synced.overwritten.length > 0) {
+        ctx.out(kv('payload-overwritten', `${synced.overwritten.join(' · ')} — replaced with what ${version()} ships; the previous content is one git revert away`))
       }
       // Revision 4: surface the prerequisite at the one moment the human can act on it
       // cheaply. A note, not a refusal — a machine may legitimately author without ever

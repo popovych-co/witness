@@ -59,10 +59,10 @@ describe('witness init --agent', () => {
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
 
-  // Revision 1: sync, not install-once. The engine file's `npx -y @popovych.co/witness@<v>`
-  // pin is the single point deciding which CLI the whole pipeline runs; install-once left
-  // every repo pinned to whatever version first touched it, forever, silently.
-  it('restamps a payload whose only difference is the version pin', async () => {
+  // Row 102: the rule is content, not pins. This case (an older pin, nothing else
+  // changed) is the one the old rule DID handle; it must keep working, because the
+  // engine file's pin is the single point deciding which CLI the whole pipeline runs.
+  it('upgrades a payload behind the shipped content', async () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
     const rel = '.pi/prompts/witness.md'
@@ -75,39 +75,96 @@ describe('witness init --agent', () => {
     expect(repo.git('status', '--porcelain')).toBe('')
   })
 
-  // Found by Task 9's manual pass: restamping a pin edit that was never committed
-  // restores the file to exactly its HEAD content, so the commit has nothing to
-  // commit — `git commit --only` exits non-zero and threw out of gitio. Nothing to
-  // commit is the same legal silent success as nothing to write.
-  it('restamps an uncommitted pin edit without attempting an empty commit', async () => {
+  // Row 102: the guard that used to protect an edited payload is gone, so the write
+  // clobbers. That is only safe if the previous content is recoverable, and it is
+  // recoverable only from git — so an uncommitted payload edit refuses the WHOLE run
+  // rather than being silently swallowed by an overwrite.
+  it('refuses the whole run when a payload path carries an uncommitted change', async () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
-    const head = repo.git('rev-parse', 'HEAD')
     const rel = '.pi/prompts/witness.md'
-    repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
+    const head = repo.git('rev-parse', 'HEAD')
+    repo.write(rel, `${repo.read(rel)}\n<!-- uncommitted -->\n`)
 
     const res = await repo.cli(['init', '--agent', 'pi'])
-    expect(res.code).toBe(0)
-    expect(res.stdout).not.toContain('unexpected-error')
-    expect(repo.read(rel)).not.toContain('@popovych.co/witness@0.0.1')
-    expect(repo.git('status', '--porcelain')).toBe('')
-    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('payload-dirty')
+    expect(res.stderr).toContain(rel)
+    expect(repo.read(rel)).toContain('<!-- uncommitted -->')   // nothing written
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)           // nothing committed
   })
 
-  it('leaves a human-edited payload alone and reports it', async () => {
+  // --untracked-files=all, not the default: a payload file that exists but was never
+  // committed is exactly the state the guard must catch, and the default `normal` mode
+  // reports an untracked FILE but the pathspec makes that reachable only with `all`.
+  it('counts an untracked-but-present payload file as dirty', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'pi'])
+    const rel = '.pi/extensions/canon-guard.mjs'
+    repo.git('rm', '--cached', rel)
+    repo.git('commit', '-m', 'untrack the guard')
+
+    const res = await repo.cli(['init', '--agent', 'pi'])
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('payload-dirty')
+    expect(res.stderr).toContain(rel)
+  })
+
+  // The write is ORDERED. Without this, running an old CLI in a repo someone else
+  // upgraded silently REVERTS the payload — and the engine file's pin decides which CLI
+  // the whole pipeline runs, so the revert re-freezes the repo one version further back.
+  it('refuses to revert a payload installed by a newer CLI', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'pi'])
+    const rel = '.pi/prompts/witness.md'
+    repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@99.0.0'))
+    repo.git('add', rel); repo.git('commit', '-m', 'installed by a newer CLI')
+
+    const res = await repo.cli(['init', '--agent', 'pi'])
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('cli-behind-payload')
+    expect(repo.read(rel)).toContain('@popovych.co/witness@99.0.0')
+  })
+
+  // Row 102: the payload is witness's artifact. `pinOnlyDifference` could not tell an
+  // untouched-but-outdated file from an edited one — nothing recorded what witness last
+  // wrote — so one release read as "modified" declined every later one, permanently and
+  // compoundingly, and the ${WITNESS_BIN:-npx …@<v>} pin froze with the file. The
+  // asymmetry decides it: a clobbered edit is named here and sits one `git revert` away,
+  // because row 87 already commits the payload; a frozen pin is invisible until someone
+  // diffs a tarball.
+  it('overwrites a human-edited payload, reports it, and leaves it one revert away', async () => {
     const repo = tmpRepo()
     await repo.cli(['init', '--agent', 'pi'])
     const rel = '.pi/prompts/witness.md'
     repo.write(rel, `${repo.read(rel)}\n<!-- my own note -->\n`)
     repo.git('add', rel); repo.git('commit', '-m', 'local edit')
-    const head = repo.git('rev-parse', 'HEAD')
+    const edited = repo.git('rev-parse', 'HEAD')
 
     const res = await repo.cli(['init', '--agent', 'pi'])
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain('payload-modified')
+    expect(res.stdout).toContain('payload-overwritten')
     expect(res.stdout).toContain(rel)
-    expect(repo.read(rel)).toContain('<!-- my own note -->')
-    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+    expect(repo.read(rel)).not.toContain('<!-- my own note -->')
+    expect(repo.git('status', '--porcelain')).toBe('')
+    // named AND recoverable: the edit is the parent commit's content, not lost bytes
+    expect(repo.git('show', `${edited}:${rel}`)).toContain('<!-- my own note -->')
+  })
+
+  // The half the pin probe could never see: three of the five payload files carry no
+  // pin at all (canon-guard.mjs, guard-state.mjs, witness-pi.ts), so a guard bugfix was
+  // undeliverable AND undetectable on every existing repo. Content compare covers all five.
+  it('upgrades a pin-less payload file, which the pin rule could never reach', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'pi'])
+    const rel = '.pi/extensions/canon-guard.mjs'
+    repo.write(rel, '// stale build\n')
+    repo.git('add', rel); repo.git('commit', '-m', 'simulate a repo frozen before a guard bugfix')
+
+    const res = await repo.cli(['init', '--agent', 'pi'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('payload-overwritten')
+    expect(repo.read(rel)).toContain('export function canonGuard')
   })
 
   // Revision 6: pre-flight, so a refusal leaves nothing half-installed. Committing is

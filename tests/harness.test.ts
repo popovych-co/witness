@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
-  resolveHarness, skillsVisibility, validatePin,
+  resolveHarness, resolveSkills, skillPins, skillsVisibility, validatePin,
 } from '../src/harness.js'
 
 const hx = (name: string) => {
@@ -121,6 +121,20 @@ describe('skills visibility', () => {
     expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('project-only')
     seed(join(home, '.pi', 'agent', 'skills'))
     expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('global')
+  })
+
+  it('resolveSkills returns the directory it resolved, so the pin reader can find it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'skhome-'))
+    const root = mkdtempSync(join(tmpdir(), 'skroot-'))
+    for (const s of STAGE_SKILLS) {
+      mkdirSync(join(root, '.pi', 'skills', s), { recursive: true })
+      writeFileSync(join(root, '.pi', 'skills', s, 'SKILL.md'),
+        '---\nname: x\n---\nWITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.1.0}"\n')
+    }
+    const r = resolveSkills({ HOME: home }, root, hx('pi'))
+    expect(r.scope).toBe('project-only')
+    expect(r.dir).toBe(join(root, '.pi', 'skills'))
+    expect(skillPins(r.dir!)).toContainEqual({ skill: 'witness-plan', pin: '0.1.0' })
   })
 
   it('names the six shipped stage skills', () => {

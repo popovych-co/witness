@@ -3,7 +3,10 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
-import { HARNESSES, resolveHarness, skillsVisibility } from '../harness.js'
+import { HARNESSES, loadHarness, resolveHarness, resolveSkills, skillPins } from '../harness.js'
+import { packageRoot } from '../install.js'
+import { latestPublished } from '../registry.js'
+import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
 import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { designPending } from '../design.js'
@@ -41,6 +44,11 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
   const root = rootRes.value
   const findings: Finding[] = []
+  // Absence keeps at most ONE answer for the whole repo, and it is a stated line rather
+  // than a finding (row 104): a permanent warning row for every correctly-configured
+  // plugin user costs attention on every run, and row 87's frequency argument holds.
+  const payloadAbsent: string[] = []
+  const skillsAbsent: string[] = []
 
   const cfg = loadConfig(root)
   if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, x.got)))
@@ -204,63 +212,105 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       `${String(configuredHarness)} — expected ${HARNESSES.join(' | ')}`))
   }
 
+  // Row 105 has NOT landed: the judgment lane still resolves detection-first. What row
+  // 104 changed is that the audit below stopped asking this question at all. The probe
+  // keeps it because it asks a genuinely different thing — whether THIS MACHINE can run
+  // the repo's reviewers — as its own D88 comment already says.
   const hxR = resolveHarness(ctx.env, cfg.ok ? cfg.value.raw : {})
   if (!hxR.ok) {
     hxR.violations.forEach((x) => findings.push(f('error', 'harness', x.field, x.rule, x.got)))
-  } else {
-    const harness = hxR.value.harness
-    // Decision 88: the judgment lane runs on the RESOLVED harness — the probe follows it.
-    // (Decision 12 probed `claude` unconditionally; that was true only while every
-    // harness's reviewers were claude, and it is a false prerequisite for a pi user.)
-    if (!probe(harness.launch, ['--version'], ctx.env)) {
-      findings.push(f('warn', 'probes', harness.launch, 'missing',
-        `the ${harness.launch} CLI runs this harness's gate reviewers — install and authenticate it`))
-    }
+  } else if (!probe(hxR.value.harness.launch, ['--version'], ctx.env)) {
+    const launch = hxR.value.harness.launch
+    findings.push(f('warn', 'probes', launch, 'missing',
+      `the ${launch} CLI runs this harness's gate reviewers — install and authenticate it`))
+  }
 
-    // Decision 14: pi resolves project skills cwd-relative with no upward walk, and
-    // implement runs with cwd inside .witness/worktrees/<plan-id>. A project-scope
-    // install therefore loses every skill in the stage that does the most work.
-    const visibility = skillsVisibility(ctx.env, root, harness)
-    if (visibility === 'project-only') {
-      findings.push(f('warn', 'harness', 'skills', 'skills-project-scope',
-        `${harness.skills.project} is invisible from a worktree cwd — reinstall at global scope (${harness.skills.global} under $HOME)`))
-    } else if (visibility === 'absent' && !harness.bundled) {
-      findings.push(f('warn', 'harness', 'skills', 'skills-not-installed',
-        `${harness.name} sees none of the six stage skills — npx skills add <witness tarball url> at global scope`))
-    }
+  // Row 103: ONE query, both halves of the skew. Best-effort and silent on every failure
+  // — `undefined` means "we do not know", which is never a finding, because an
+  // air-gapped machine must report nothing about the network rather than a complaint
+  // about it. Warn level only: check's exit code is a contract about canon validity
+  // (row 101), and nothing here may move it.
+  const latest = await latestPublished(ctx.env)
+  const behind = (pin: string): boolean =>
+    latest !== undefined && (compareTriple(pin, latest) ?? 0) < 0
+  if (latest !== undefined && behind(version())) {
+    findings.push(f('warn', 'harness', 'cli', 'cli-behind',
+      `running ${version()}, published latest is ${latest} — every invocation surface pins the CLI, so upgrade with ${NPX_LATEST} init --agent <name>`))
+  }
 
-    // Revision 3. Skills present + payload absent is the worst state in the design: the
-    // pipeline looks like it works, and nothing blocks a direct edit to canon. `bundled`
-    // is the same bit that silences the skills warning — Claude Code's marketplace plugin
-    // ships engine, guard and dashboard out of band, so absence there proves nothing.
-    const installed = harness.payload.map((p) => p.to).filter((rel) => existsSync(join(root, rel)))
+  // Row 104. `check` printed `0 errors` in a repo whose .pi/ payload was a release
+  // behind, and `payload-stale` on the same repo in the same second under a different
+  // agent's environment variable — because it reused row 90's SPAWN ladder to choose
+  // what to AUDIT. The audit has no caller: every registry entry is reported over what
+  // exists on disk, so a repo carrying both payload sets reads as the state it is.
+  for (const name of HARNESSES) {
+    const hx = loadHarness(name)
+    if (!hx.ok) continue   // unreachable: HARNESSES is the registry's own key set
+    const harness = hx.value
+    const installed = harness.payload.filter((p) => existsSync(join(root, p.to)))
     if (installed.length === 0) {
-      if (!harness.bundled) {
-        findings.push(f('warn', 'harness', 'payload', 'payload-not-installed',
-          `${harness.name} has no engine, guard or dashboard here — run witness init --agent ${harness.name}`))
-      }
+      // `bundled` EXPLAINS the absence; it does not suppress the report of one, which
+      // is what its comment in harness.ts always claimed it meant.
+      payloadAbsent.push(`${name} — ${harness.bundled
+        ? 'expected under the marketplace plugin'
+        : `run ${NPX_LATEST} init --agent ${name}`}`)
     } else {
-      // Revision 1's other half: the sync can restamp, but only if someone knows to run
-      // it. The engine file's pin decides which CLI the whole pipeline runs, so a lagging
-      // pin is a finding, not a detail.
-      // The capture must be a semver and nothing else. Both payloads embed the pin as
-      // `${WITNESS_BIN:-npx -y @popovych.co/witness@<v>}`, so a trailing-delimiter
-      // class that omits `}` swallows the brace and NEVER equals version() — which made
-      // payload-stale fire on every fresh install until Task 9's manual pass caught it.
-      // Same shape as install.ts's PIN, deliberately.
-      const stale = installed.filter((rel) => {
-        const m = /@popovych\.co\/witness@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(readFileSync(join(root, rel), 'utf8'))
-        return m !== null && m[1] !== version()
+      // Row 102: content, not pins. THREE of the five payload files carry no pin at all
+      // (canon-guard.mjs, guard-state.mjs, witness-pi.ts), so the pin probe left a guard
+      // bugfix undeliverable AND undetectable — silent in both directions.
+      //
+      // A shipped file we cannot read is a PACKAGING failure, not repo staleness, and
+      // "cannot compare" stays silent here: harness.ts:107 names the exact mode — drop
+      // the dir from package.json `files` and the published package breaks while the
+      // whole suite stays green, because vitest reads from the repo root. installPayload
+      // is where that condition refuses (`source-missing`); a diagnostic verb must not
+      // crash on it, and must not report the repo as stale for it either.
+      const stale = installed.filter((p) => {
+        const src = join(packageRoot(), p.from)
+        if (!existsSync(src)) return false
+        return readFileSync(join(root, p.to), 'utf8') !== readFileSync(src, 'utf8')
       })
       if (stale.length > 0) {
-        findings.push(f('warn', 'harness', 'payload', 'payload-stale',
-          `${stale.join(' · ')} pin an older CLI than ${version()} — run witness init --agent ${harness.name} to restamp`))
+        findings.push(f('warn', 'harness', `${name}: payload`, 'payload-stale',
+          `${stale.map((p) => p.to).join(' · ')} differ from what ${version()} ships — run ${NPX_LATEST} init --agent ${name}`))
+      }
+    }
+
+    const skills = resolveSkills(ctx.env, root, harness)
+    if (skills.scope === 'project-only') {
+      // A content question, not an absence: the files ARE here, in a place the stage
+      // that does the most work cannot see.
+      findings.push(f('warn', 'harness', `${name}: skills`, 'skills-project-scope',
+        `${harness.skills.project} is invisible from a worktree cwd — reinstall at global scope (${harness.skills.global} under $HOME)`))
+    } else if (skills.scope === 'absent') {
+      skillsAbsent.push(`${name} — ${harness.bundled
+        ? 'expected under the marketplace plugin'
+        : 'npx skills@latest add <witness tarball url> at global scope'}`)
+    } else {
+      // The second half of the same query. A tarball URL is version-pinned so `skills
+      // update` cannot resolve forward, and each skill pins the CLI it invokes — stale
+      // skills therefore keep running the stale CLI, which reports its own version and
+      // sees nothing wrong. Skills first, then init --agent: the fresh pin is what
+      // invokes a CLI new enough to restamp the payload.
+      const stale = skillPins(skills.dir!).filter((s) => behind(s.pin))
+      if (stale.length > 0) {
+        findings.push(f('warn', 'harness', `${name}: skills`, 'skills-behind',
+          `${stale.map((s) => `${s.skill}@${s.pin}`).join(' · ')} — published latest is ${latest}; re-add the skills tarball at ${latest}, then run ${NPX_LATEST} init --agent ${name}`))
       }
     }
   }
 
   const errors = findings.filter((x) => x.level === 'error')
   if (findings.length) rows('findings', ['level', 'area', 'field', 'rule', 'detail'], findings as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  // Stated, never findings — they touch neither the findings table nor the exit code. The
+  // line appears only when NO harness has one, because a repo driven by pi does not owe a
+  // claude-code payload and naming its absence is the permanent noise row 87 refused.
+  if (payloadAbsent.length === HARNESSES.length) {
+    ctx.out(kv('payload', `none installed here (${payloadAbsent.join(' · ')})`))
+  }
+  if (skillsAbsent.length === HARNESSES.length) {
+    ctx.out(kv('skills', `none visible here (${skillsAbsent.join(' · ')})`))
+  }
   // The calibration state reads the same here as on `status` (D98a) — one renderer, so
   // the fact the gate run no longer repeats still reaches both orientation surfaces.
   if (cfg.ok) {

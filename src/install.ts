@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { version } from './cli.js'
 import { tryGit } from './gitio.js'
 import { type Harness } from './harness.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { NPX_LATEST, compareTriple, pinIn } from './version.js'
 
 // dist/install.js and src/install.ts both sit one level under the package root, so the
 // same '..' works built and under vitest — the pattern model.ts:14 already uses. This is
@@ -21,45 +23,91 @@ const DASHBOARD_CMD = 'sh "$CLAUDE_PROJECT_DIR/.claude/hooks/session-dashboard.s
 
 interface HookEntry { matcher?: string; hooks: Array<{ type: string; command: string }> }
 
-export interface SyncResult { written: string[]; restamped: string[]; modified: string[] }
+export interface SyncResult { written: string[]; overwritten: string[] }
 
-const PIN = /@popovych\.co\/witness@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/g
+// The engine file is the one payload entry every harness carries, and its pin is what
+// decides which CLI the whole pipeline runs — so it is also the only file whose pin can
+// answer "which version installed what is here".
+const ENGINE_SOURCE = 'plugin/commands/witness.md'
 
-// Revision 6. Committing the payload is load-bearing: the implement stage runs with cwd
-// inside .witness/worktrees/<plan-id>, which is a checkout of the branch, so only
-// committed files reach it. A gitignored target therefore has exactly one honest answer
-// — refuse. `git add -f` would override a rule the human wrote down; writing without
-// committing would leave the payload in the primary root and the worktree with no guard,
-// while every `check` reads clean. Called BEFORE the lock and before any scaffold write,
-// so a refusal leaves nothing half-installed.
+// Revision 6, extended by row 102. Committing the payload is load-bearing: the implement
+// stage runs with cwd inside .witness/worktrees/<plan-id>, which is a checkout of the
+// branch, so only committed files reach it. A gitignored target therefore has exactly one
+// honest answer — refuse. `git add -f` would override a rule the human wrote down; writing
+// without committing would leave the payload in the primary root and the worktree with no
+// guard, while every `check` reads clean.
+//
+// Row 102 adds two more preconditions, because the rule that spared an edited file is
+// gone and the write now clobbers:
+//
+//   payload-dirty      — a clobbered edit is recoverable only from git, so an uncommitted
+//                        payload change must refuse rather than be overwritten into
+//                        nothing. --untracked-files=all, so a present-but-untracked
+//                        payload counts.
+//   cli-behind-payload — an older CLI running in a repo a newer one installed would
+//                        REVERT the payload, re-freezing the repo one version further
+//                        back. Equal triples write (the witness-developer case);
+//                        prerelease ordering is out of scope.
+//
+// All three refuse the WHOLE run, called BEFORE the lock and before any scaffold write,
+// so a refusal leaves nothing half-installed — and a half-upgraded payload set (guard at
+// one version, engine at another) is precisely the skew row 102 exists to close.
+//
+// harness.settings is deliberately outside the dirty guard: mergeSettings appends and
+// never clobbers, so a dirty settings file is not at risk.
 export function preflightPayload(root: string, harness: Harness): Result<void> {
-  const ignored = [...harness.payload.map((p) => p.to), ...(harness.settings ? [harness.settings] : [])]
+  const targets = harness.payload.map((p) => p.to)
+  const ignored = [...targets, ...(harness.settings ? [harness.settings] : [])]
     .filter((rel) => tryGit(root, 'check-ignore', '-q', '--', rel).ok)
-  if (ignored.length === 0) return ok(undefined)
-  return refuse(ignored.map((rel) => v(rel, 'payload-ignored', 'matched by .gitignore',
-    'a committable path — worktrees are branch checkouts, so only committed payloads reach ' +
-    '.witness/worktrees/<plan-id>; un-ignore it, or install a different agent here')))
+  if (ignored.length > 0) {
+    return refuse(ignored.map((rel) => v(rel, 'payload-ignored', 'matched by .gitignore',
+      'a committable path — worktrees are branch checkouts, so only committed payloads reach ' +
+      '.witness/worktrees/<plan-id>; un-ignore it, or install a different agent here')))
+  }
+
+  // A failed status call is not evidence of dirt: primaryRoot already proved this is a
+  // repo, and inventing a refusal out of a git error would block the upgrade this row
+  // exists to deliver.
+  const status = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...targets)
+  const dirty = status.ok
+    ? status.out.split('\n').filter((l) => l !== '').map((l) => l.slice(3).trim())
+    : []
+  // The remedy has to cover both authors of the dirt. `init` writes the payload and
+  // commits it under a lock but NOT a transaction (verbs/init.ts), so a crash between
+  // the two leaves a dirty payload the human never wrote — and telling them to commit it
+  // would be telling them to commit bytes they did not author. Name both cases.
+  if (dirty.length > 0) {
+    return refuse(dirty.map((rel) => v(rel, 'payload-dirty', 'uncommitted change on a payload path',
+      'a committed payload tree — init overwrites payload files now, and a clobbered edit is ' +
+      'recoverable only from git; commit it if the change is yours, or revert it — a payload ' +
+      'left dirty by a crashed init should be reverted, never committed')))
+  }
+
+  const engine = harness.payload.find((p) => p.from === ENGINE_SOURCE)
+  const installedPin = engine !== undefined && existsSync(join(root, engine.to))
+    ? pinIn(readFileSync(join(root, engine.to), 'utf8'))
+    : undefined
+  // `?? 0` is the "cannot compare, so do not refuse" rule: an unparseable pin must never
+  // block an upgrade, exactly as compareTriple's undefined contract states.
+  if (engine !== undefined && installedPin !== undefined && (compareTriple(version(), installedPin) ?? 0) < 0) {
+    return refuse([v(engine.to, 'cli-behind-payload', `payload pins ${installedPin}, this CLI is ${version()}`,
+      `a CLI at or ahead of the installed payload — run ${NPX_LATEST} init --agent ${harness.name}`)])
+  }
+  return ok(undefined)
 }
 
-// A shipped file and an installed file that differ ONLY by version pin are the same
-// file, one upgrade apart. Substituting the installed pin into the shipped text and
-// comparing is exact — no heuristics, no diffing.
-function pinOnlyDifference(shipped: string, installed: string): boolean {
-  const installedPin = installed.match(PIN)?.[0]
-  if (installedPin === undefined) return false
-  return shipped.replace(PIN, installedPin) === installed
-}
-
-// Revision 1: SYNC, not install-once. These files are witness's artifacts that happen
-// to live in the user's repo, and the engine file's pin is the single point deciding
-// which CLI version the entire pipeline runs — so an install-once rule pinned every repo
-// to whatever version first touched it, forever, with `payload: already installed`
-// printed on every attempt to fix it. A file the human actually edited is still theirs:
-// report it, never clobber it.
+// Revision 1: SYNC, not install-once. Row 102: three-way, not four. The payload files
+// are witness's artifacts that happen to live in the user's repo — the engine file's pin
+// is the single point deciding which CLI the entire pipeline runs, and there is no
+// sanctioned way to customise any of them (the human's config home is
+// witness.config.yaml, repo prose reaches reviewers through row 68's docs: registry).
+// The rule that spared an edited file was defending an unsupported hack while the file
+// it defended froze the repo forever, so it is gone: differing content is overwritten
+// and NAMED, one `git revert` away because row 87 already commits the payload.
 export function installPayload(root: string, harness: Harness): Result<SyncResult> {
   const pre = preflightPayload(root, harness)
   if (!pre.ok) return refuse(pre.violations)
-  const out: SyncResult = { written: [], restamped: [], modified: [] }
+  const out: SyncResult = { written: [], overwritten: [] }
   for (const { from, to } of harness.payload) {
     const src = join(packageRoot(), from)
     if (!existsSync(src)) {
@@ -74,14 +122,9 @@ export function installPayload(root: string, harness: Harness): Result<SyncResul
       out.written.push(to)
       continue
     }
-    const installed = readFileSync(dst, 'utf8')
-    if (installed === shipped) continue
-    if (pinOnlyDifference(shipped, installed)) {
-      writeFileSync(dst, shipped)
-      out.restamped.push(to)
-      continue
-    }
-    out.modified.push(to)
+    if (readFileSync(dst, 'utf8') === shipped) continue
+    writeFileSync(dst, shipped)
+    out.overwritten.push(to)
   }
   return ok(out)
 }

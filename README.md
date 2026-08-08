@@ -81,11 +81,41 @@ npx @popovych.co/witness init --agent pi
 `<cwd>/.pi/skills` with no upward walk, and the implement stage runs with its cwd inside
 `.witness/worktrees/<plan-id>` — a directory the installer never touched. A
 project-scope install therefore loses every skill in the stage that does the most work.
-Global (`~/.pi/agent/skills`) is cwd-independent. `witness check` warns when the
-resolved harness cannot see all six skills.
+Global (`~/.pi/agent/skills`) is cwd-independent. `witness check` warns when six skills
+are installed where a worktree cannot see them, and states which harnesses have none.
 
 A tarball URL is version-pinned, so `skills update` cannot resolve forward: re-run `add`
 with the new version URL to upgrade.
+
+### Upgrading: skills first, then `init --agent`
+
+Every surface that invokes witness pins the CLI — the engine prompt and all six skills
+carry `npx -y @popovych.co/witness@<version>` — so a repo installed at an older release
+only ever runs that release, which compares its payload against itself and reports clean.
+The freeze is self-concealing, and a repo frozen at **0.6.0 or earlier cannot detect it**,
+because the detection ships in a CLI that repo never invokes. Unstick it from outside, in
+this order:
+
+```bash
+npx skills@latest add https://registry.npmjs.org/@popovych.co/witness/-/witness-<new-version>.tgz
+npx -y @popovych.co/witness@latest init --agent <name>   # restamps the engine, guard and dashboard
+```
+
+Skills first: their fresh pins are what invoke a CLI new enough to see the outdated
+payload. Claude Code users on the marketplace plugin get both halves from
+`/plugin marketplace add` and need no second step.
+
+From **0.7.0** onward the order stops mattering: `witness check` asks the registry what
+the published `latest` is and reports both halves of the skew — a CLI behind `latest`
+(`cli-behind`) and any visible skill pinning something older (`skills-behind`). The query
+is best-effort and silent on failure, so an offline machine reports nothing rather than a
+complaint about the network.
+
+`witness init --agent <name>` overwrites payload files it did not write and names what it
+replaced (`payload-overwritten`); the previous content is one `git revert` away, because
+witness commits the payload. It refuses the whole run if a payload path carries an
+uncommitted change (`payload-dirty`) or if the CLI you are running is older than the
+payload already installed (`cli-behind-payload`).
 
 ### Support tiers
 
