@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type StatusEntry } from '../src/journal.js'
+import { version } from '../src/version.js'
 import { seededRepo, writeSpec, PLAN_META, PLAN_BODY } from './helpers.js'
 
 describe('status entries', () => {
@@ -12,7 +13,9 @@ describe('status entries', () => {
     }
     appendEntry(repo.root, 'auth-refresh-plan-1', entry)
     const back = readStream(repo.root, 'auth-refresh-plan-1')
-    expect(back[back.length - 1]).toEqual(entry)
+    // Row 116 adds the writer stamp on the way out — the caller never supplies it, so the
+    // round trip returns the entry it was given plus the CLI that wrote it.
+    expect(back[back.length - 1]).toEqual({ ...entry, w: version() })
   })
 })
 

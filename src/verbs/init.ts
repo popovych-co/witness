@@ -7,7 +7,7 @@ import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { loadHarness, resolveDriver, type Harness } from '../harness.js'
 import {
-  installPayload, mergeSettings, preflightPayload, readIfExists, recordHarness,
+  installAllHomes, mergeSettings, preflightPayload, readIfExists, recordHarness,
   writeSettings, type SyncResult,
 } from '../install.js'
 import { probe } from '../probe.js'
@@ -132,13 +132,29 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
 
     let synced: SyncResult | undefined
     if (harness !== undefined) {
-      const payload = installPayload(root, harness)
+      const payload = installAllHomes(root, harness)
       if (!payload.ok) {
         renderRefusal(payload.violations).forEach(ctx.err)
         return EXIT.REFUSED
       }
-      synced = payload.value
+      synced = payload.value.find((p) => p.home === root)?.synced ?? { written: [], overwritten: [] }
       files.push(...synced.written, ...synced.overwritten)
+      // Row 117. Each worktree is a separate checkout on a separate branch, so its payload
+      // can only be committed there — the root's commit below cannot reach it.
+      // commitWithTrailer, not a hand-rolled `commit --only`: `--only` resolves its
+      // pathspec against the index, so a freshly written payload the worktree has never
+      // tracked is "did not match any file(s) known to git" until the add it already does.
+      // It also carries the state-commit trailer and treats a no-op as silent success.
+      for (const { home, synced: s } of payload.value.filter((p) => p.home !== root)) {
+        const touched = [...s.written, ...s.overwritten]
+        if (touched.length === 0) continue
+        const committed = commitWithTrailer(home, touched, `init(${harness.name}): agent payloads`)
+        if (!committed.ok) {
+          renderRefusal(committed.violations).forEach(ctx.err)
+          return EXIT.REFUSED
+        }
+        ctx.out(kv('payload-synced', `${home} — ${touched.join(' · ')}`))
+      }
       if (harness.settings !== undefined) {
         const merged = mergeSettings(readIfExists(root, harness.settings))
         if (merged.changed) {

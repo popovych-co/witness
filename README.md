@@ -117,6 +117,21 @@ witness commits the payload. It refuses the whole run if a payload path carries 
 uncommitted change (`payload-dirty`) or if the CLI you are running is older than the
 payload already installed (`cli-behind-payload`).
 
+From **0.10.0** onward `init` installs into **every home of the repository** — the primary
+root and each live `.witness/worktrees/<plan-id>` — because a worktree is a branch
+checkout, so its payload is a different file on a different timeline. A worktree cut
+before an upgrade used to keep the old pin forever, and the old pin is what selects the
+CLI that runs there. Every home is preflighted before any is written, so a dirty payload
+in one refuses the whole run rather than leaving the set half-upgraded, and `witness check`
+now reports `payload-stale` per home and names the stale one.
+
+The same release makes the bound structural: every journal entry records the CLI that
+wrote it, and a CLI older than anything the repository's state has seen refuses every verb
+with `cli-behind-state` rather than answering from rules the repository has moved past.
+`witness floor --show` reports the bound. If you are deliberately rolling back — a bad
+release, say — lower it first with `witness floor --set <version> --note <why>`; the
+decision is journaled, and `floor` is the one verb that still runs under a bound it fails.
+
 ### Support tiers
 
 | Tier | Agents | What they get |

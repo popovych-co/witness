@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { version } from './cli.js'
@@ -125,6 +125,47 @@ export function installPayload(root: string, harness: Harness): Result<SyncResul
     if (readFileSync(dst, 'utf8') === shipped) continue
     writeFileSync(dst, shipped)
     out.overwritten.push(to)
+  }
+  return ok(out)
+}
+
+// Row 117. "Upgrade the repository" has always meant "upgrade one checkout of it":
+// installPayload had exactly one call site and it targeted the primary root, so nothing
+// ever refreshed a live worktree. A worktree is a branch checkout, so its payload is a
+// different file on a different timeline — the same property row 87 relies on to get the
+// payload to the agent at all, read the other way round.
+//
+// Root first, then worktrees in sorted order: the root is the home the human is standing
+// in, and if a later home fails they need the report to read top-down.
+export function payloadHomes(root: string): string[] {
+  const dir = join(root, '.witness', 'worktrees')
+  if (!existsSync(dir)) return [root]
+  return [root, ...readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => join(dir, e.name))
+    .sort()]
+}
+
+// Preflight EVERY home before writing ANY. install.ts's standing doctrine is that a
+// refusal leaves nothing half-installed; across homes that matters more, not less — a
+// half-upgraded set of homes IS the skew row 116 refuses and this row prevents.
+export function installAllHomes(
+  root: string, harness: Harness,
+): Result<Array<{ home: string; synced: SyncResult }>> {
+  const homes = payloadHomes(root)
+  const failures = homes.flatMap((home) => {
+    const pre = preflightPayload(home, harness)
+    // Name the home in the field, or a `payload-dirty` row over `.claude/commands/witness.md`
+    // is ambiguous across four checkouts of the same repository.
+    return pre.ok ? [] : pre.violations.map((x) => ({ ...x, field: home === root ? x.field : `${home}: ${x.field}` }))
+  })
+  if (failures.length > 0) return refuse(failures)
+
+  const out: Array<{ home: string; synced: SyncResult }> = []
+  for (const home of homes) {
+    const synced = installPayload(home, harness)
+    if (!synced.ok) return refuse(synced.violations)
+    out.push({ home, synced: synced.value })
   }
   return ok(out)
 }

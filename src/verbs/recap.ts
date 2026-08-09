@@ -5,7 +5,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
-import { appendEntry, effortAbandoned, journalRel, readStream, streamExists } from '../journal.js'
+import { appendEntry, effortAbandoned, entryLine, journalRel, readStream, streamExists } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
@@ -114,7 +114,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       t: 'recap' as const, effort: recap.effort, class: recap.class,
       goals: recap.goals, non_goals: recap.non_goals, constraints: recap.constraints, slices: recap.slices,
     }
-    const line = JSON.stringify({ v: 1, ...entry })
+    // entryLine, never a second inline JSON.stringify — completeTxn re-appends when this
+    // marker line differs from what appendEntry wrote, so the two must be one derivation.
+    const line = entryLine(entry)
     const stream = journalRel(recap.effort)
     const res = withTxn(root, { op: `recap(${recap.effort})`, files: [stream], journal: { stream: recap.effort, line } }, () => {
       appendEntry(root, recap.effort, entry)
