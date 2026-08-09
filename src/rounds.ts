@@ -54,6 +54,10 @@ export interface DecisionEntry {
   round: number
   decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort'
   override?: boolean
+  // Row 109. A revise that buys the one extra round the bound otherwise forbids. Only ever
+  // set on a `revise`, only ever at the bound, and only once per budget window — the whole
+  // grant is this flag plus the window it sits in, so nothing can drift out of sync with it.
+  repair?: true
   note?: string
   upstream?: { artifact: string; gate: string }
   caused_by?: { artifact: string; gate: string; round: number }
@@ -150,8 +154,56 @@ export function roundsSinceApprove(entries: Entry[], gate: string): number {
     .filter((r) => r.outcome !== 'malformed' && !fellBack(r)).length
 }
 
+// Row 109. The final round's blocking findings can only be VERIFIED by another round, so
+// fixing one at the bound forfeits `--approve` (D75 puts staleness at consumption) and the
+// only exits left are a full upstream re-cycle or a stop. A repair grant buys exactly one
+// more round. It is read from the journal window rather than counted anywhere: the window
+// closes on every reset `lastResetIndex` already knows about, so an approve, a
+// revise-upstream or a passed run refreshes the grant for the next game and nothing else
+// does. A second grant inside one window is therefore a no-op by construction, not by a
+// rule someone has to remember to write.
+export function repairGranted(entries: Entry[], gate: string): boolean {
+  return entries.slice(lastResetIndex(entries, gate) + 1).some((e) =>
+    isDecision(e, gate) && (e as unknown as DecisionEntry).repair === true)
+}
+
+export function roundBudget(entries: Entry[], gate: string): number {
+  return ROUND_BOUND + (repairGranted(entries, gate) ? 1 : 0)
+}
+
 export function boundReached(entries: Entry[], gate: string): boolean {
-  return roundsSinceApprove(entries, gate) >= ROUND_BOUND
+  return roundsSinceApprove(entries, gate) >= roundBudget(entries, gate)
+}
+
+// Which decisions are legal RIGHT NOW is a pure function of journal state, so it lives
+// where the state is — it was in `gate.ts`, which `next.ts` cannot import back (gate.ts
+// already imports next.ts), and that one-way edge is precisely why `next` grew three
+// hand-copied bound triples that then went stale twice over: they miss the repair grant
+// (109), and a fixed set is what this function was written to abolish. Skills used to
+// recite the same triple, which is wrong at the bound (D67's endgame set) and now wrong
+// in three more states.
+// `upstream` is the id the caller already resolved (next knows the owning effort; the gate
+// and decide surfaces do not) — the placeholder is a fallback, never a downgrade of a line
+// that used to name the real target.
+export function liveExits(
+  gate: string, target: string, entries: Entry[], stale: boolean, upstream = '<id>',
+): string {
+  // The bound outranks staleness: at the bound the gate short-circuits and will not run
+  // again (gate.ts), so "re-gate" is the D67 lie whatever the sha says. Stale content only
+  // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
+  // read — which is the same set decide's stale-verdict refusal names.
+  if (boundReached(entries, gate)) {
+    // Row 109: the repair grant is an exit exactly while it is unspent, and it is the one
+    // the human standing at the bound with a fixed finding actually wants — naming it
+    // beside `--upstream` is what stops "fix it and re-gate" from being a move the tool
+    // advertises nowhere and refuses twice.
+    const repair = repairGranted(entries, gate) ? '' : ' | --revise --repair'
+    return stale
+      ? `witness decide ${gate} ${target} --revise --upstream ${upstream}${repair} | --stop`
+      : `witness decide ${gate} ${target} --approve --override | --revise --upstream ${upstream}${repair} | --stop`
+  }
+  if (stale) return `witness gate ${gate} ${target}`
+  return `witness decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream ${upstream} | --stop`
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {

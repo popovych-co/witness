@@ -63,4 +63,29 @@ describe('witness sync', () => {
     expect(r.code).toBe(0)
     expect(repo.git('rev-list', '--count', 'origin/main..main').trim()).toBe('0')
   })
+  // Row 114. `git pull --rebase` refuses on ANY unstaged tracked change, and sync rendered
+  // every non-conflict failure as `rebase conflict — resolve manually`. The field report
+  // read that as a design-guaranteed deadlock ("ship owns the sole code commit, so the work
+  // is always unstaged") — sync runs in the primary root, never a worktree, and the real
+  // cause was one hand-edited tracked file nobody had named.
+  it('a dirty tracked file refuses by name — it is not a rebase conflict', async () => {
+    const repo = await seededRepo()
+    addOrigin(repo)
+    await writeSpec(repo, 'auth-refresh')
+    repo.write('specs/auth-refresh.md', repo.read('specs/auth-refresh.md') + '\nhand edit\n')
+    const r = await repo.cli(['sync'])
+    expect(r.code).toBe(2)
+    const text = r.stdout + r.stderr
+    expect(text).toContain('worktree-dirty')
+    expect(text).toContain('specs/auth-refresh.md')
+    expect(text).not.toContain('rebase conflict')
+  })
+
+  it('untracked files never block a sync — git rebases around them', async () => {
+    const repo = await seededRepo()
+    addOrigin(repo)
+    await writeSpec(repo, 'auth-refresh')
+    repo.write('scratch-notes.md', 'not tracked\n')
+    expect((await repo.cli(['sync'])).code).toBe(0)
+  })
 })

@@ -96,7 +96,7 @@ registerGate({
 
     const pin = plan.meta['design-from']
     const lensOverrides: Record<string, LensOverride> = {}
-    const skipLenses: string[] = []
+    const skipLenses: Array<{ lens: string; why: string }> = []
     if (typeof pin === 'string' && pin !== '') {
       const capR = resolveDesignCaptures(root, wt, planId)
       if (!capR.ok) return capR
@@ -114,7 +114,7 @@ registerGate({
       }
     } else {
       // not UI-work: drop the lens if a battery names it (stages shrink, never skip)
-      skipLenses.push('design-reviewer')
+      skipLenses.push({ lens: 'design-reviewer', why: 'no design-from pin: not UI work' })
     }
 
     const checks: GateCheck[] = []

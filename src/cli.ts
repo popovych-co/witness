@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configPath } from './config.js'
 import { primaryRoot } from './gitio.js'
+import { renderRefusal, v } from './refusal.js'
 
 export interface Ctx {
   cwd: string
@@ -55,7 +56,7 @@ const VERB_USAGE: Record<string, string> = {
   calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
   check: 'witness check',
   clean: 'witness clean',
-  decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
+  decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'witness diff <spec-id>',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
@@ -118,5 +119,21 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.err(usage())
     return EXIT.REFUSED
   }
-  return (await load()).run(ctx, rest)
+  try {
+    return await (await load()).run(ctx, rest)
+  } catch (e) {
+    // Row 113. Eight verbs parse argv with node's strict `parseArgs`, which THROWS on a
+    // stray positional or a mistyped flag. bin.ts's crash net then rendered a typo as
+    // `unexpected-error … a bug — re-run with the same arguments and report this line`:
+    // the tool asked to be reported for a mistake it could answer with its own usage. This
+    // is the one throw class that is a user statement rather than a witness fault, and the
+    // usage line lives right here. Anything else still reaches bin.ts unchanged.
+    const code = (e as { code?: string }).code
+    if (typeof code === 'string' && code.startsWith('ERR_PARSE_ARGS')) {
+      renderRefusal([v(verb, 'bad-arguments', String((e as Error).message).split('.')[0]!.slice(0, 160),
+        VERB_USAGE[verb] ?? `witness ${verb} --help`)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    throw e
+  }
 }

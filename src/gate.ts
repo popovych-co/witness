@@ -15,9 +15,11 @@ import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, roundsSinceApprove,
-  runsSinceReset, type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
+  ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
+  roundsSinceApprove, runsSinceReset,
+  type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
+export { liveExits } from './rounds.js'
 import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 
@@ -44,7 +46,10 @@ export interface GateInput {
   stamps: Stamp[]
   repin?: { rel: string; meta: Record<string, unknown>; body: string; sha: string }
   lensOverrides?: Record<string, LensOverride>   // per-lens reviewed/body/docs (design-reviewer)
-  skipLenses?: string[]                          // battery members to drop this run, journaled `skipped`
+  // Row 115: battery members to drop this run, journaled `skipped` WITH the cause. A bare
+  // name cannot be read — "not applicable" and "could not run" look identical, and only one
+  // of them is benign.
+  skipLenses?: Array<{ lens: string; why: string }>
 }
 
 export interface GateSpec {
@@ -90,27 +95,19 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
   return ok(picked as string[])
 }
 
-// Which decisions are legal RIGHT NOW is a pure function of journal state, so it belongs
-// where the state is. Skills used to recite a fixed triple, which is wrong at the bound
-// (D67's endgame set) — and now wrong in three more states.
-export function liveExits(gate: string, target: string, entries: Entry[], stale: boolean): string {
-  // The bound outranks staleness: at the bound the gate short-circuits and will not run
-  // again (:227), so "re-gate" is the D67 lie whatever the sha says. Stale content only
-  // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
-  // read — which is the same set decide's stale-verdict refusal names.
-  if (boundReached(entries, gate)) {
-    return stale
-      ? `witness decide ${gate} ${target} --revise --upstream <id> | --stop`
-      : `witness decide ${gate} ${target} --approve --override | --revise --upstream <id> | --stop`
-  }
-  if (stale) return `witness gate ${gate} ${target}`
-  return `witness decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream <id> | --stop`
-}
-
-export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume'): void {
+// `entries` is the stream AS OF AFTER this entry: without it the renderer cannot tell the
+// round that spends the budget from any other, and rows 109/110 are both about that round.
+// `help: false` is for callers that render their own `exits:` line (`decide --show`).
+export function renderGateRun(
+  ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume',
+  opts: { entries?: Entry[]; help?: boolean } = {},
+): void {
+  const entries = opts.entries ?? []
+  const budget = opts.entries ? roundBudget(entries, entry.gate) : ROUND_BOUND
+  const atBound = opts.entries !== undefined && boundReached(entries, entry.gate)
   ctx.out(kv('gate', entry.gate))
   ctx.out(kv('target', entry.artifact))
-  ctx.out(kv('round', `${entry.round} of ${ROUND_BOUND}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
+  ctx.out(kv('round', `${entry.round} of ${budget}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
   ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
   ctx.out(kv('model', `${entry.model} · calibration: ${entry.calibration}${entry.cached ? ' · cached' : ''}`))
   if (entry.skipped?.length) ctx.out(kv('skipped', entry.skipped.join(' · ')))
@@ -132,11 +129,19 @@ export function renderGateRun(ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resu
   if (entry.standing) ctx.out(kv('standing-stop', entry.standing))
   ctx.out(kv('outcome', entry.outcome))
   if (entry.outcome !== 'passed') {
-    // `[]` keeps this a pure formatter over the entry it was handed — callers that know
-    // the stream (`--show`) render their own `exits:` line from the real entries. The
-    // non-bound triple is correct for runGate's own post-run render: a run that reached
-    // the bound short-circuits before rendering.
-    ctx.out(`help: ${liveExits(entry.gate, entry.artifact, [], false)}`)
+    // Row 110. The round that SPENDS the budget is the one that has to say so. It rendered
+    // like any other, so the natural next act — fix the finding, re-gate — was advertised
+    // by the help line below and then refused twice: the gate short-circuits, and the edit
+    // that answered the finding forfeits `--approve` under D75. Nothing warned, and the
+    // finding is itself an instruction to edit. Printed above the `help:` suppression, not
+    // inside it: `decide --show` renders its own exits and is the surface a human reads
+    // while deciding — the one place this warning is most owed.
+    if (atBound) {
+      ctx.out(kv('last-round', 'the round budget is spent — the gate will not run again, and an edit from here forfeits --approve (the verdict would describe an older tree)'))
+    }
+    // Without `entries` this stays a pure formatter over the entry it was handed, and the
+    // off-bound triple is the right answer; with them it tells the truth at the bound too.
+    if (opts.help !== false) ctx.out(`help: ${liveExits(entry.gate, entry.artifact, entries, false)}`)
   }
 }
 
@@ -177,9 +182,9 @@ export async function runGate(
 
   const batteryR = batteryFor(cfgR.value, spec.gate, input.class)
   if (!batteryR.ok) { renderRefusal(batteryR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const skip = new Set(input.skipLenses ?? [])
+  const skip = new Map((input.skipLenses ?? []).map((s) => [s.lens, s.why]))
   const active = batteryR.value.filter((n) => !skip.has(n))
-  const dropped = batteryR.value.filter((n) => skip.has(n))
+  const dropped = batteryR.value.filter((n) => skip.has(n)).map((n) => `${n} — ${skip.get(n)!}`)
   const entries = readStream(root, target)
   const pins = policyPins(entries)
   const pinsText = pinsBlock(pins)
@@ -239,7 +244,24 @@ export async function runGate(
     return EXIT.REFUSED
   }
 
-  const kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
+  let kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
+  // Row 112. The cache key is the REVIEWED content digest, but the deterministic checks
+  // read inputs it cannot see — decompose's `goal-coverage`/`spec-coverage` read journaled
+  // `covers`, `amendment-ack` reads a sibling plan's pin, `graph` reads the whole canon. So
+  // correcting a goal mapping left the doc bytes untouched, the key unmoved, and `resume`
+  // served a blocking finding describing a state that no longer existed; `--fresh` was the
+  // only escape, and an operator who did not think of it spent a human decision on it.
+  // `resolve` has already recomputed the checks by this point — the fresh answer was in
+  // hand and thrown away. A flip is a new judgment, so it appends a real round rather than
+  // silently re-rendering; the verdicts are REPLAYED (`cached`), so no battery is spent.
+  // Compared on `ok` alone: a detail carries run output on some gates (timings, paths), and
+  // keying on it would append a round for every re-run of an unchanged tree.
+  const checkOk = (cs: GateCheck[]) => cs.map((c) => `${c.name}:${c.ok}`).sort().join('|')
+  if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') &&
+      checkOk(kind.entry.checks) !== checkOk(input.checks) &&
+      kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {
+    kind = { kind: 'cached' as const, from: kind.entry }
+  }
   // A key that moved for a NON-content reason — edited prompt, re-pinned model, new
   // witness version — un-settles just as quietly as --fresh did. Content moving explains
   // itself; this does not.
@@ -248,7 +270,7 @@ export async function runGate(
     ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
   }
   if (kind.kind === 'resume') {
-    renderGateRun(ctx, kind.entry, 'resume')
+    renderGateRun(ctx, kind.entry, 'resume', { entries })
     printDispatchArithmetic(ctx, root, spec.gate, target)
     return kind.entry.outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   }
@@ -459,7 +481,7 @@ export async function runGate(
     })
     if (!txn.ok) { renderRefusal(txn.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
 
-    renderGateRun(ctx, entry, 'ran')
+    renderGateRun(ctx, entry, 'ran', { entries: [...entriesNow, entry as unknown as Entry] })
     printDispatchArithmetic(ctx, root, spec.gate, target)
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS

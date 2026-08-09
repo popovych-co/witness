@@ -31,7 +31,7 @@ function registerSynthetic() {
             promptBody: 'READ /w/home.png',
           },
         },
-        skipLenses: ['drift-reviewer'],
+        skipLenses: [{ lens: 'drift-reviewer', why: 'synthetic: this gate reviews screens only' }],
         checks: [{ name: 'synthetic', ok: true }],
         stamps: [],
       })
@@ -57,6 +57,6 @@ describe('per-lens review override + skip', () => {
     expect(only).toContain('READ /w/home.png')       // override body
     expect(only).toContain('- home.png')             // screens anchor menu
     expect(only).not.toContain('DEFAULT-BODY')       // default body not used for this lens
-    expect(runs(repo.root)[0]!.skipped).toEqual(['drift-reviewer'])
+    expect(runs(repo.root)[0]!.skipped).toEqual(['drift-reviewer — synthetic: this gate reviews screens only'])
   })
 })

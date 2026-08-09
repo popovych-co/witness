@@ -16,7 +16,8 @@ import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { kv, rows } from '../toon.js'
 import {
-  boundReached, lastGateRun, openReopen, pendingDecision, roundsSinceApprove, type DecisionEntry,
+  ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
+  roundsSinceApprove, type DecisionEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 
@@ -55,7 +56,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
-    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]')
+    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]')
     return EXIT.REFUSED
   }
   const rootR = primaryRoot(ctx.cwd)
@@ -113,7 +114,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return EXIT.OK
     }
     // pending (no disposition) or revise (the author's input): the verdict is actionable
-    renderGateRun(ctx, last, 'ran')
+    renderGateRun(ctx, last, 'ran', { entries, help: false })
     const shownPins = policyPins(entries)
     if (shownPins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], shownPins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (disposition) {
@@ -133,6 +134,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const decision = picked[0]!.slice(2) as 'approve' | 'revise' | 'stop'
   const note = flagValue(argv, '--note')
   const override = argv.includes('--override')
+  const repair = argv.includes('--repair')
   const upstream = flagValue(argv, '--upstream')
   const pinTexts = flagValues(argv, '--pin')
   if (pinTexts.length > 0 && gate !== 'implement') {
@@ -147,11 +149,35 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const atBound = boundReached(entries, gate)
 
+  // Row 109. The grant is a REVISE — the human is sending the artifact back, they are just
+  // paying for the round that verifies the fix. Refusing the other spellings is not
+  // pedantry: `--approve --repair` reads as "approve and let it re-run", which is not a
+  // state this machine has, and silently ignoring the flag would journal an approve the
+  // human believed was something else.
+  if (repair && decision !== 'revise') {
+    renderRefusal([v('repair', 'repair-scope', `--${decision}`,
+      'witness decide … --revise --repair — a repair grant sends the artifact back for one verified round')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  if (repair && !atBound) {
+    renderRefusal([v('repair', 'repair-not-at-bound',
+      `${roundsSinceApprove(entries, gate)} of ${ROUND_BOUND} rounds spent`,
+      `the round bound — below it a plain revise already re-gates: witness decide ${gate} ${target} --revise --note "<why>"`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  if (repair && repairGranted(entries, gate)) {
+    renderRefusal([v('repair', 'repair-spent', 'one repair round was already granted in this budget window',
+      liveExits(gate, target, entries, false))]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   // at the bound the gate refuses to run again, so no fresh pending decision can
   // ever exist — the endgame decisions must stay reachable anchored to the last
   // run, or the target livelocks (incident c2692b93)
   const boundEndgame = atBound && (decision === 'stop' || (decision === 'approve' && override) ||
-    (decision === 'revise' && upstream !== undefined))
+    (decision === 'revise' && (upstream !== undefined || repair)))
 
   // D94: a revise is the author's INPUT, not a disposition — it leaves the run
   // undisposed, and with the content unchanged `gate` answers `changed-nothing` and
@@ -190,52 +216,57 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const blockedCode = guardTxn(ctx, root)
   if (blockedCode !== undefined) return blockedCode
 
-  if (decision === 'revise' && atBound && upstream === undefined) {
+  if (decision === 'revise' && atBound && upstream === undefined && !repair) {
     return renderBound(ctx, gate, target, entries,
       last !== undefined && nowSha !== undefined && nowSha !== last.reviewed_sha,
-      'upstream reopens the parent and resets the budget')
-  }
-  if (decision === 'approve' && atBound && !override) {
-    renderRefusal([v('decision', 'override-required', 'approve at the round bound',
-      'witness decide … --approve --override')]).forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
+      'upstream reopens the parent and resets the budget; --repair buys one more round here')
   }
 
-  // A standing stop is only human judgment if the human was shown the thing. The gate
-  // refuses the same way, but the gate does not run at the round bound (gate.ts:176) —
-  // and approve is the act that stamps, so the line has to hold here too. Sha-keyed:
-  // re-authoring invalidates prior sight, as re-capturing invalidates a witnessed
-  // screenshot (D71). Only approve — revise and stop need no sight to be honest.
-  if (gate === 'design' && decision === 'approve') {
-    const unseen = designUnseen(root, cfgR.value.paths, target)
-    if (unseen !== undefined) {
-      renderRefusal([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
-        `a human shown this artifact — run: witness design ${target} --open`)]).forEach((l) => ctx.err(l))
-      return EXIT.REFUSED
-    }
-  }
-
-  // A `human-decision` entry is a RECORD — honest about the sha it judged whatever the
-  // tree does afterward, which is why D76 declined a write-time staleness check. A stamp
-  // is an ASSERTION about current content (`status: approved`, `design: {sha}`), and D75
-  // puts staleness checks at consumption. approveMeta reads the artifact from disk and
-  // never consults the run, so approving after a re-author blessed unreviewed bytes.
-  // `currentSha` is undefined when it cannot be computed (no worktree, missing parent):
-  // approve then proceeds, and the entry still honestly records what it judged — this
-  // check must never convert an unrelated condition into a misleading refusal.
+  // Row 111. Every reason an approve cannot happen, in ONE refusal. These used to fire
+  // sequentially: `--approve` reported `override-required`, and only the re-run carrying
+  // `--override` reported the `stale-verdict` that was the actual blocker — the operator
+  // learned the real state one refusal later than the tool knew it, and at the bound that
+  // costs a round of thinking on an exit that was never available.
   if (decision === 'approve') {
+    const blockers = []
+    if (atBound && !override) {
+      blockers.push(v('decision', 'override-required', 'approve at the round bound',
+        'witness decide … --approve --override'))
+    }
+    // A standing stop is only human judgment if the human was shown the thing. The gate
+    // refuses the same way, but the gate does not run at the round bound (gate.ts:176) —
+    // and approve is the act that stamps, so the line has to hold here too. Sha-keyed:
+    // re-authoring invalidates prior sight, as re-capturing invalidates a witnessed
+    // screenshot (D71). Only approve — revise and stop need no sight to be honest.
+    if (gate === 'design') {
+      const unseen = designUnseen(root, cfgR.value.paths, target)
+      if (unseen !== undefined) {
+        blockers.push(v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
+          `a human shown this artifact — run: witness design ${target} --open`))
+      }
+    }
+    // A `human-decision` entry is a RECORD — honest about the sha it judged whatever the
+    // tree does afterward, which is why D76 declined a write-time staleness check. A stamp
+    // is an ASSERTION about current content (`status: approved`, `design: {sha}`), and D75
+    // puts staleness checks at consumption. approveMeta reads the artifact from disk and
+    // never consults the run, so approving after a re-author blessed unreviewed bytes.
+    // `currentSha` is undefined when it cannot be computed (no worktree, missing parent):
+    // approve then proceeds, and the entry still honestly records what it judged — this
+    // check must never convert an unrelated condition into a misleading refusal.
     const now = spec.currentSha?.(root, canon, cfgR.value, target)
     if (now !== undefined && now !== anchor.reviewed_sha) {
       // At the bound the gate will not re-run (gate.ts:176), so "go re-gate" would be
-      // the lie D67 was written about. Name the exits that actually work: approve is
-      // genuinely unavailable here — a human cannot honestly stamp bytes no gate read —
-      // but --stop and --revise --upstream both remain, so nothing livelocks.
-      renderRefusal([v('gate', 'stale-verdict',
+      // the lie D67 was written about. `liveExits` names the ones that actually work —
+      // including the repair grant while it is unspent, which is the exit an operator who
+      // just fixed the finding is looking for.
+      blockers.push(v('gate', 'stale-verdict',
         `verdict @${short(anchor.reviewed_sha)}, content @${short(now)}`,
         atBound
-          ? `witness decide ${gate} ${target} --revise --upstream <id> | --stop (bound reached — the gate will not re-run)`
-          : `a verdict describing current content — run: witness gate ${gate} ${target}`)])
-        .forEach((l) => ctx.err(l))
+          ? `${liveExits(gate, target, entries, true)} (bound reached — the gate will not re-run as it stands)`
+          : `a verdict describing current content — run: witness gate ${gate} ${target}`))
+    }
+    if (blockers.length > 0) {
+      renderRefusal(blockers).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
   }
@@ -244,6 +275,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,
     ...(override ? { override: true } : {}),
+    ...(repair ? { repair: true as const } : {}),
     ...(note ? { note } : {}),
   }
   const priorPins = entries.filter((e) => e.t === 'policy-pin').length
@@ -356,9 +388,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}`))
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
+  if (repair) {
+    // What was bought, and that it does not come again — a grant the human forgets is
+    // spent is a second walk into the same wall.
+    ctx.out(kv('repair', `one extra round granted — round ${ROUND_BOUND + 1} of ${ROUND_BOUND + 1} is the last, and the grant does not refresh until an approve, a revise-upstream or a passed run`))
+    ctx.out(`help: fix the finding, then re-run: witness gate ${gate} ${target}`)
+  }
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
     ctx.out('revise-context: (reconstructed from the journal — survives session death)')
-    renderGateRun(ctx, anchor, 'ran')
+    renderGateRun(ctx, anchor, 'ran', { entries, help: false })
     const pins = policyPins(readStream(root, target))
     if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (note) ctx.out(kv('note', note))
