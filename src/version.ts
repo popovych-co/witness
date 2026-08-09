@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 // The one home for "which version of witness is which". install.ts parsed the pin to
 // decide whether a payload was only a pin apart (row 102 killed that rule) and check.ts
 // re-declared the same regex inline — one question answered in two places, which is the
@@ -39,3 +42,16 @@ export function compareTriple(a: string, b: string): number | undefined {
 // through a frozen /witness is `npx …@0.5.1 init`, which restamps 0.5.1 onto 0.5.1 — a
 // no-op that reads as compliance. Remedies name the version.
 export const NPX_LATEST = 'npx -y @popovych.co/witness@latest'
+
+// Row 116. Moved here from cli.ts. `journal.ts` stamps every entry with it and cannot
+// import the CLI shell without closing a cycle (cli → verbs/* → journal). This module
+// already claimed to be the one home for "which version of witness is which" while the
+// reader itself lived in the shell — the same split rows 93, 95 and 96 keep naming. The
+// single readFileSync is the exception to this file's no-I/O rule and the only one it
+// may ever have.
+export function version(): string {
+  const pkg = JSON.parse(
+    readFileSync(join(new URL('.', import.meta.url).pathname, '..', 'package.json'), 'utf8'),
+  ) as { version: string }
+  return pkg.version
+}

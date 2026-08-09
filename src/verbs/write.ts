@@ -204,7 +204,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ...(existing === undefined ? { created: true } : {}),
       ...(supersedes !== undefined ? { supersedes } : {}),
     }
-    const line = JSON.stringify({ v: 1, ...entry })
+    // entryLine, never a second inline JSON.stringify: completeTxn decides whether to
+    // re-append by comparing this marker line against the last journal line, so any field
+    // entryLine adds and this does not makes the two differ and the recovery duplicate the
+    // entry. Row 116's `w` stamp is what caught it; the shape is the one rows 93, 95 and
+    // 96 all name, and every other txn writer already calls entryLine.
+    const line = entryLine(entry)
     const supersededDesignRel = reslice ? designRel(cfg.value.paths, reslice.entry.artifact) : undefined
     const files = [rel, stream,
       ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : []),
@@ -246,7 +251,7 @@ function journalRefusal(ctx: Ctx, root: string, effort: string, artifact: string
     t: 'write-refused' as const, effort, artifact,
     rules: violations.map(({ field, rule }) => ({ field, rule })),
   }
-  const line = JSON.stringify({ v: 1, ...entry })
+  const line = entryLine(entry)
   const stream = journalRel(effort)
   const res = withTxn(root, { op: `write-refused(${artifact})`, files: [stream], journal: { stream: effort, line } }, () => {
     appendEntry(root, effort, entry)

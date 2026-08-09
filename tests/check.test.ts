@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,7 +8,8 @@ import { version } from '../src/cli.js'
 import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
-import { SPEC_META, fakeScenario, gateEnv, seededRepo, writeSpec } from './helpers.js'
+import { worktreePath } from '../src/worktree.js'
+import { SPEC_META, fakeScenario, gateEnv, seededRepo, shippableRepo, writeSpec } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -205,6 +206,26 @@ describe('witness check — harness findings', () => {
     repo.write(rel, repo.read(rel).replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
     const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true' } })
     expect(res.stdout).toContain('payload-stale')
+  })
+
+  // Row 118. A frozen worktree is precisely what row 116 CANNOT see — the floor binds only
+  // CLIs at or after the version that introduced it, and the homes that matter were cut
+  // before it. `check` is the verb that finds them, and it was asking its question about
+  // the primary root only, so four checkouts of one repository read as one.
+  it('reports a stale payload inside a live worktree, and names the home', async () => {
+    const { repo, planId } = await shippableRepo()
+    await repo.cli(['init', '--agent', 'claude-code'])
+    const wt = worktreePath(repo.root, planId)
+    const rel = join('.claude', 'commands', 'witness.md')
+    writeFileSync(join(wt, rel),
+      readFileSync(join(wt, rel), 'utf8').replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
+
+    const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
+    const res = await repo.cli(['check'], { env: { HOME: home } })
+    expect(res.stdout).toContain('payload-stale')
+    expect(res.stdout).toContain(planId)
+
+    await repo.cli(['clean'])
   })
 
   // The field report: `check` reported `0 errors` in a repo whose .pi/ payload was a

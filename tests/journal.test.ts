@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   appendEntry, effortStreams, latestRecap, readStream, streamExists,
 } from '../src/journal.js'
+import { version } from '../src/version.js'
 import { tmpRepo } from './helpers.js'
 
 describe('journal', () => {
-  it('appends NDJSON with v:1 and reads it back in order', () => {
+  it('appends NDJSON with v:1, the writer stamp, and reads it back in order', () => {
     const repo = tmpRepo()
     const line = appendEntry(repo.root, 'auth-hardening', { t: 'recap', effort: 'auth-hardening', class: 'feature', goals: [{ id: 'g1', text: 'x' }], non_goals: [], constraints: [], slices: [] })
-    expect(line).toBe(JSON.stringify({ v: 1, t: 'recap', effort: 'auth-hardening', class: 'feature', goals: [{ id: 'g1', text: 'x' }], non_goals: [], constraints: [], slices: [] }))
+    // Row 116: schema, then author, then content — a human reading raw jsonl learns which
+    // CLI wrote a line before they read what it says.
+    expect(line).toBe(JSON.stringify({ v: 1, w: version(), t: 'recap', effort: 'auth-hardening', class: 'feature', goals: [{ id: 'g1', text: 'x' }], non_goals: [], constraints: [], slices: [] }))
     appendEntry(repo.root, 'auth-hardening', { t: 'write', effort: 'auth-hardening', artifact: 'auth-refresh', sha: 'a'.repeat(64), covers: ['g1'] })
     const entries = readStream(repo.root, 'auth-hardening')
     expect(entries.map((e) => e.t)).toEqual(['recap', 'write'])

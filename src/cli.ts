@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { configPath } from './config.js'
+import { stateFloor } from './floor.js'
 import { primaryRoot } from './gitio.js'
 import { renderRefusal, v } from './refusal.js'
+import { NPX_LATEST, compareTriple, version } from './version.js'
 
 export interface Ctx {
   cwd: string
@@ -46,6 +47,9 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
   calibrate: () => import('./verbs/calibrate.js'),
+  // Row 116's valve. Exempt from the floor gate in `main`, because a repository that
+  // refuses every verb must still be able to run the one that unrefuses it.
+  floor: () => import('./verbs/floor.js'),
 }
 
 // answered centrally so no verb can crash on --help (several parse argv
@@ -57,6 +61,7 @@ const VERB_USAGE: Record<string, string> = {
   check: 'witness check',
   clean: 'witness clean',
   decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
+  floor: 'witness floor --show | --set <triple> --note <why>',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'witness diff <spec-id>',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
@@ -77,12 +82,10 @@ const VERB_USAGE: Record<string, string> = {
   'verify-red': 'witness verify-red <plan-id> [--base <ref>]',
 }
 
-export function version(): string {
-  const pkg = JSON.parse(
-    readFileSync(join(new URL('.', import.meta.url).pathname, '..', 'package.json'), 'utf8'),
-  ) as { version: string }
-  return pkg.version
-}
+// Row 116 moved the body to version.ts, which journal.ts can import without closing a
+// cycle. Re-exported here because eleven call sites already ask the CLI shell for it and
+// the question they are asking has not changed.
+export { version }
 
 export function usage(): string {
   return [
@@ -98,6 +101,41 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
   if (verb === '--version' || verb === '-v') {
     ctx.out(version())
     return EXIT.OK
+  }
+  // Row 116. Above the verb table on purpose — including above the bare-`witness`
+  // dashboard route, which reads the same state every verb does. The invariant is "one
+  // repository, one witness version", and a per-verb opt-in is a list some future verb
+  // forgets to join.
+  //
+  // This is the guard row 102's `cli-behind-payload` structurally could not be. That one
+  // fires inside the home it protects, so a home frozen at an old pin runs an old CLI that
+  // never learned to check — which is how two sessions a lifecycle apart each computed a
+  // different next stage, each redirected to the other's home, and each honestly ended its
+  // turn. The state is the one thing every home shares, so the state is where the bound
+  // belongs.
+  //
+  // Forward-only, and the text must never imply otherwise: a CLI published before this row
+  // cannot run this code. Homes already frozen are found by `check` and repaired by `init`.
+  //
+  // Two exemptions, both load-bearing. `floor` is how a bad publish is recovered from — a
+  // repository that refuses every verb must still be able to run the one that unrefuses it.
+  // An explicit help request is information, and refusing to print a usage line teaches
+  // the human nothing they can act on.
+  const helpRequested = verb === 'help' || verb === '--help'
+    || rest.includes('--help') || rest.includes('-h')
+  if (!helpRequested && verb !== 'floor') {
+    const gateRoot = primaryRoot(ctx.cwd)
+    if (gateRoot.ok) {
+      const floor = stateFloor(gateRoot.value)
+      if (floor !== undefined && (compareTriple(version(), floor.pin) ?? 0) < 0) {
+        renderRefusal([v('witness', 'cli-behind-state',
+          `this CLI is ${version()}, this repository's state was written by ${floor.pin}`,
+          `a CLI at or ahead of ${floor.pin} — run ${NPX_LATEST} init --agent <name>; if you are `
+          + `deliberately rolling back, lower the bound first with witness floor --set ${version()} --note <why>`,
+        )]).forEach((l) => ctx.err(l))
+        return EXIT.REFUSED
+      }
+    }
   }
   if (!verb || verb === 'help' || verb === '--help') {
     if (!verb) {

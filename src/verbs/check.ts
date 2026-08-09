@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { DEFAULT_HARNESS, HARNESSES, judgeLine, loadHarness, resolveJudge, resolveSkills, skillPins } from '../harness.js'
-import { packageRoot } from '../install.js'
+import { packageRoot, payloadHomes } from '../install.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
@@ -267,14 +267,24 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       // whole suite stays green, because vitest reads from the repo root. installPayload
       // is where that condition refuses (`source-missing`); a diagnostic verb must not
       // crash on it, and must not report the repo as stale for it either.
-      const stale = installed.filter((p) => {
-        const src = join(packageRoot(), p.from)
-        if (!existsSync(src)) return false
-        return readFileSync(join(root, p.to), 'utf8') !== readFileSync(src, 'utf8')
-      })
+      //
+      // Row 118: per HOME, not per repository. A worktree is a branch checkout, so its
+      // payload is a different file that can be a different age — and that is exactly the
+      // state row 116's floor cannot see, because the floor binds only CLIs at or after
+      // the version that introduced it while the frozen homes were cut before it. The
+      // root keeps its bare relative path; a worktree is named, or four checkouts of one
+      // repository all report `.claude/commands/witness.md` and the human cannot tell
+      // which of them is the rotten one.
+      const stale = payloadHomes(root).flatMap((home) => installed
+        .filter((p) => {
+          const src = join(packageRoot(), p.from)
+          if (!existsSync(src) || !existsSync(join(home, p.to))) return false
+          return readFileSync(join(home, p.to), 'utf8') !== readFileSync(src, 'utf8')
+        })
+        .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
       if (stale.length > 0) {
         findings.push(f('warn', 'harness', `${name}: payload`, 'payload-stale',
-          `${stale.map((p) => p.to).join(' · ')} differ from what ${version()} ships — run ${NPX_LATEST} init --agent ${name}`))
+          `${stale.join(' · ')} differ from what ${version()} ships — run ${NPX_LATEST} init --agent ${name}`))
       }
     }
 
