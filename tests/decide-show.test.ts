@@ -68,9 +68,14 @@ describe('decide --show', () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
     const s = repo.effort
+    // The CURRENT sha, not a placeholder: "the normal exits" is a claim about unchanged
+    // content, and a fake sha makes the state stale, where the only honest exit is a
+    // re-gate. This passed on a placeholder because renderGateRun printed a second,
+    // hardcoded help line that ignored the journal — the row 110 defect, asserted.
+    const current = effortReviewedSha(repo.root, loadCanon(repo.root), s).sha
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: current, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',

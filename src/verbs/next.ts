@@ -15,7 +15,7 @@ import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
-import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
+import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -362,7 +362,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   for (const e of efforts) {
     if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose')) {
       return {
-        line: `witness decide decompose ${e.slug} --approve --override | --revise --upstream ${e.slug} | --stop`,
+        line: liveExits('decompose', e.slug, e.entries, false, e.slug),
         target: e.slug, note: 'round bound reached — human decision required',
       }
     }
@@ -374,7 +374,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
       if (boundReached(entries, gate) && !gateSettled(entries, gate)) {
         const up = gate === 'plan' ? String(plan.meta.parent) : id
         return {
-          line: `witness decide ${gate} ${id} --approve --override | --revise --upstream ${up} | --stop`,
+          line: liveExits(gate, id, entries, false, up),
           target: id, note: 'round bound reached — human decision required',
         }
       }
@@ -386,7 +386,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
       const eff = effortOf(root, id)
       return {
-        line: `witness decide design ${id} --approve --override | --revise --upstream ${eff ?? '<effort>'} | --stop`,
+        line: liveExits('design', id, entries, false, eff ?? '<effort>'),
         target: id, note: 'round bound reached — human decision required',
       }
     }

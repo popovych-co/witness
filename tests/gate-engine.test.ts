@@ -377,3 +377,51 @@ describe('a settled approve is never discarded in silence', () => {
     expect(err.join('\n')).toContain('discards the settled approve')
   })
 })
+
+// Rows 109/110. The round that SPENDS the budget renders like any other — the help line
+// recited the off-bound triple, so the natural next act (fix the finding, re-gate) was
+// advertised by the tool and then refused by it, twice: `changed-nothing` is not what
+// happens, the gate simply never runs again and `--approve` is forfeit.
+describe('the bound announces itself before it bites', () => {
+  async function atBound() {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, BLOCKING('auth-refresh'))
+    await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+    for (const round of [1, 2]) {
+      journalDecision(repo, 'auth-refresh', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh', round, decision: 'revise' })
+      await writeSpec(repo, 'auth-refresh', { ...SPEC_META, summary: `content ${round}` })
+      if (round === 2) break
+      await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+    }
+    const out: string[] = []
+    const ctxOut = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l: string) => out.push(l) })
+    await runGate(ctxOut, 'plan', 'auth-refresh', { fresh: false, manual: false })   // round 3
+    return { repo, scenario, ctx, out }
+  }
+
+  it('the budget-spending round warns that an edit now forfeits approve', async () => {
+    const { repo, out } = await atBound()
+    const text = out.join('\n')
+    expect(runs(repo).length).toBe(3)
+    expect(text).toContain('round: 3 of 3')
+    expect(text).toContain('last-round')
+    expect(text).toContain('--approve --override')
+    expect(text).toContain('--revise --repair')
+    expect(text).not.toContain('--revise --note')     // the off-bound exit is a lie here
+  })
+
+  it('a granted repair lets the gate run once more, and the budget line says 4', async () => {
+    const { repo, scenario } = await atBound()
+    journalDecision(repo, 'auth-refresh', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh', round: 3, decision: 'revise', repair: true })
+    await writeSpec(repo, 'auth-refresh', { ...SPEC_META, summary: 'the fix the finding asked for' })
+    const out: string[] = []
+    const ctx2 = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l: string) => out.push(l) })
+    expect(await runGate(ctx2, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(1)
+    expect(runs(repo).length).toBe(4)
+    expect(runs(repo)[3]!.round).toBe(4)
+    const text = out.join('\n')
+    expect(text).toContain('round: 4 of 4')
+    expect(text).toContain('last-round')
+    expect(text).not.toContain('--revise --repair')   // spent
+  })
+})

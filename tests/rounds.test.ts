@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, fellBack, keyOf, pendingDecision, roundsSinceApprove,
+  ROUND_BOUND, appendKind, boundReached, fellBack, keyOf, pendingDecision, repairGranted, roundBudget,
+  roundsSinceApprove,
   runsSinceReset, sameKey, type GateRunEntry,
 } from '../src/rounds.js'
 
@@ -225,5 +226,50 @@ describe('a fallback does not spend the budget (row 107)', () => {
   it('a plain revise does not close the window', () => {
     const entries = [fell('a', 1), revise(1), fell('b', 2)]
     expect(runsSinceReset(entries, 'plan').length).toBe(2)
+  })
+})
+
+// Row 109. The bound is the designed terminus, but the final round's blocking findings
+// can only be VERIFIED by another round — so fixing one at the bound forfeits `--approve`
+// (D75 staleness) with no proportionate way back. A repair grant buys exactly one more
+// round, is journaled, and refreshes only on a real reset, so the escape hatch can never
+// become the loop it exists to end.
+describe('the repair grant (row 109)', () => {
+  const repair = (round: number): Entry => ({
+    v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
+    decision: 'revise', repair: true,
+  } as Entry)
+  const three = [run('a', 'stopped', 1), run('b', 'stopped', 2), run('c', 'stopped', 3)]
+
+  it('lifts the bound by exactly one round', () => {
+    expect(boundReached(three, 'plan')).toBe(true)
+    expect(roundBudget(three, 'plan')).toBe(ROUND_BOUND)
+    const granted = [...three, repair(3)]
+    expect(repairGranted(granted, 'plan')).toBe(true)
+    expect(roundBudget(granted, 'plan')).toBe(ROUND_BOUND + 1)
+    expect(boundReached(granted, 'plan')).toBe(false)
+    expect(boundReached([...granted, run('d', 'stopped', 4)], 'plan')).toBe(true)
+  })
+
+  it('is spent once per window and refreshes only on a real reset', () => {
+    const spent = [...three, repair(3), run('d', 'stopped', 4)]
+    expect(repairGranted(spent, 'plan')).toBe(true)
+    expect(boundReached(spent, 'plan')).toBe(true)
+    // a second grant in the same window buys nothing — the budget is already lifted
+    expect(roundBudget([...spent, repair(4)], 'plan')).toBe(ROUND_BOUND + 1)
+    // an approve closes the window: the next game starts with its own grant available
+    expect(repairGranted([...spent, approve(4)], 'plan')).toBe(false)
+    expect(repairGranted([...spent, decide('revise-upstream', 4)], 'plan')).toBe(false)
+    expect(repairGranted([...spent, run('e', 'passed', 4)], 'plan')).toBe(false)
+  })
+
+  it('is per gate — a repair on ship does not lift the plan gate', () => {
+    const shipRepair = { ...repair(3), gate: 'ship' } as Entry
+    expect(repairGranted([...three, shipRepair], 'plan')).toBe(false)
+    expect(boundReached([...three, shipRepair], 'plan')).toBe(true)
+  })
+
+  it('a plain revise is not a grant', () => {
+    expect(repairGranted([...three, revise(3)], 'plan')).toBe(false)
   })
 })

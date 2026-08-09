@@ -37,3 +37,27 @@ describe('cli entry', () => {
     }
   })
 })
+
+// Row 113. Eight verbs parse argv with node's strict parseArgs, which THROWS on a
+// mistyped flag or a stray positional. bin.ts caught it as `unexpected-error … a bug —
+// re-run with the same arguments and report this line`, so the tool asked to be reported
+// for a typo it could have answered with its own usage line.
+describe('argument errors are refusals, not bug reports', () => {
+  it('a stray positional renders the verb usage', async () => {
+    const repo = tmpRepo()
+    const r = await repo.cli(['recap', 'customer-intelligence-report'])
+    expect(r.code).toBe(2)
+    const text = r.stdout + r.stderr
+    expect(text).toContain('bad-arguments')
+    expect(text).toContain('witness recap --file <recap.json>')
+    expect(text).not.toContain('unexpected-error')
+    expect(text).not.toContain('report this line')
+  })
+
+  it('an unknown flag renders the verb usage too', async () => {
+    const repo = tmpRepo()
+    const r = await repo.cli(['recap', '--fiel', 'x.json'])
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('bad-arguments')
+  })
+})

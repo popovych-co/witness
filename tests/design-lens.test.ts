@@ -163,7 +163,9 @@ describe('implement gate — design-reviewer wiring', () => {
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(0)
     const entry = readStream(repo.root, planId).filter((e) => e.t === 'gate-run').at(-1) as { skipped?: string[] }
-    expect(entry.skipped).toEqual(['design-reviewer'])
+    // Row 115: a skip states its cause — a reader cannot otherwise tell "not applicable"
+    // from "could not run", and only one of those is benign.
+    expect(entry.skipped).toEqual(['design-reviewer — no design-from pin: not UI work'])
     expect(() => readFileSync(join(scenario, 'claude-calls/call-5/stdin'), 'utf8')).toThrow()  // 4 lenses only
   })
 
