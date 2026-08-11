@@ -7,6 +7,7 @@ import { acquireLock } from './lock.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { loadCanon, findById, type Canon } from './scan.js'
+import { deferralsBlock, openDeferrals } from './deferral.js'
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
@@ -214,6 +215,11 @@ export async function runGate(
   const entries = readStream(root, target)
   const pins = policyPins(entries)
   const pinsText = pinsBlock(pins)
+  // D122. Open obligations join the prompt exactly as pins do, and join `prompts_sha` for
+  // the same reason: an obligation the battery did not see is an obligation nothing can
+  // discharge. Minting one therefore guarantees the next round re-invokes the battery,
+  // which is the intended cost of an override rather than an accident of the cache.
+  const deferralsText = deferralsBlock(openDeferrals(entries))
   const lenses: Lens[] = []
   for (const name of active) {
     const lensR = resolvePrompt(name)
@@ -254,7 +260,8 @@ export async function runGate(
   const pin = chain[0]!
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
-    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), pin, witness: version(),
+    prompts_sha: promptsSha(lenses, [pinsText, deferralsText].filter((t) => t !== '').join('') || undefined),
+    pin, witness: version(),
     harness: harness.name,
   }
   // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
@@ -375,7 +382,7 @@ export async function runGate(
       const reviewed = ov?.reviewed ?? input.reviewed
       const body = ov?.promptBody ?? input.promptBody
       const menu = anchorMenu(reviewed)
-      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
+      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
       for (let attempt = 0; ; attempt++) {
         let answered: string | undefined
         for (;;) {

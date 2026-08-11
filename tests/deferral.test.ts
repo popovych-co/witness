@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { deferralsBlock, newDeferralId, openDeferrals, type DeferralEntry } from '../src/deferral.js'
 import { readStream, type Entry } from '../src/journal.js'
@@ -107,5 +109,42 @@ describe('taking a deferral mints an obligation', () => {
     await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
     await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve'])
     expect(readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'deferral')).toHaveLength(0)
+  })
+})
+
+describe('open obligations reach the battery', () => {
+  it('a minted obligation changes prompts_sha, so the next round cannot be cached', async () => {
+    const repo = await atBound()
+    const shaOf = () => (readStream(repo.root, 'auth-refresh-plan-1')
+      .filter((e) => e.t === 'gate-run').at(-1) as unknown as { prompts_sha: string }).prompts_sha
+    const before = shaOf()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    // NOT `--fresh`: that flag is refused on a gate an approve just settled
+    // (`settled-approve`, gate.ts), so it invokes nothing and would prove nothing. The real
+    // path is an ordinary re-gate on edited content — the approve reset the budget window,
+    // so the bound no longer short-circuits either.
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS, '## Step: s1\nAfter override.\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    const g = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+    expect(g.stdout, g.stderr).toContain('round 1 of 3')
+    expect(shaOf()).not.toBe(before)
+  })
+
+  it('the block reaches the reviewer prompt itself, worded as a solicitation', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS, '## Step: s1\nAfter override.\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+    // the fake reviewer records each invocation's prompt as claude-calls/call-N/{argv,stdin}
+    const calls = readdirSync(join(scenario, 'claude-calls')).sort((a, b) =>
+      Number(a.replace('call-', '')) - Number(b.replace('call-', '')))
+    const last = join(scenario, 'claude-calls', calls.at(-1)!)
+    const prompt = ['argv', 'stdin'].map((f) => readFileSync(join(last, f), 'utf8')).join('\n')
+    expect(prompt).toContain('Open deferrals')
+    expect(prompt).toContain('auth-refresh-plan-1 > ## Step: s1')
+    expect(prompt).toMatch(/Silence is read as "still present"/)
   })
 })
