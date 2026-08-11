@@ -3,7 +3,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { deferralsBlock, newDeferralId, openDeferrals, type DeferralEntry } from '../src/deferral.js'
 import { readStream, type Entry } from '../src/journal.js'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import {
+  approve, fakeScenario, gateEnv, ghState, putVerdict, seededRepo, writePlan, writeSpec,
+} from './helpers.js'
 
 const mint = (id: string, over: Partial<DeferralEntry> = {}): Entry => ({
   v: 1, t: 'deferral', id, artifact: 'p1', gate: 'implement', round: 3,
@@ -146,5 +148,44 @@ describe('open obligations reach the battery', () => {
     expect(prompt).toContain('Open deferrals')
     expect(prompt).toContain('auth-refresh-plan-1 > ## Step: s1')
     expect(prompt).toMatch(/Silence is read as "still present"/)
+  })
+})
+
+describe('an obligation outlives its flow', () => {
+  it('re-books onto the parent spec when the plan reaches done', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    const id = (readStream(repo.root, 'auth-refresh-plan-1')
+      .find((e) => e.t === 'deferral') as unknown as DeferralEntry).id
+
+    // the merge stamp is what ends a flow: the plan carries a PR that github reports MERGED
+    repo.setMeta('auth-refresh-plan-1', { status: 'in-progress', pr: 7 })
+    const scenario = fakeScenario()
+    ghState(scenario, 7, 'MERGED')
+    await repo.cli(['status'], { env: gateEnv(scenario) })
+
+    const planStream = readStream(repo.root, 'auth-refresh-plan-1')
+    const specStream = readStream(repo.root, 'auth-refresh')
+    expect(planStream.some((e) => e.t === 'deferral-moved' && e.id === id)).toBe(true)
+    const moved = specStream.find((e) => e.t === 'deferral' && e.id === id) as unknown as DeferralEntry
+    expect(moved).toBeDefined()
+    expect(moved.moved_from).toBe('auth-refresh-plan-1')
+    expect(openDeferrals(planStream)).toHaveLength(0)
+    expect(openDeferrals(specStream).map((d) => d.id)).toEqual([id])
+  })
+
+  // The id is what makes age answerable across the move: a renumbered debt cannot be aged,
+  // and age is the only thing separating a fresh deferral from a chronic one.
+  it('preserves the id rather than minting a new one', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    const id = (readStream(repo.root, 'auth-refresh-plan-1')
+      .find((e) => e.t === 'deferral') as unknown as DeferralEntry).id
+    repo.setMeta('auth-refresh-plan-1', { status: 'in-progress', pr: 8 })
+    const scenario = fakeScenario()
+    ghState(scenario, 8, 'MERGED')
+    await repo.cli(['status'], { env: gateEnv(scenario) })
+    const minted = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'deferral')
+    expect(minted.map((e) => e.id)).toEqual([id])
   })
 })
