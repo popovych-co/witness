@@ -267,3 +267,47 @@ describe('the ledger', () => {
     if (n.stdout.includes('auth-refresh-plan-1')) expect(n.stdout).toContain('deferral')
   })
 })
+
+describe('discharge by evidence', () => {
+  it('a later run that no longer reports the anchor closes the obligation', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    expect(openDeferrals(readStream(repo.root, 'auth-refresh-plan-1'))).toHaveLength(1)
+
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS, '## Step: s1\nFixed.\n')
+    const clean = fakeScenario()
+    putVerdict(clean, {
+      coverage: [
+        { anchor: 'auth-refresh-plan-1 > ## Step: s1', note: 'read' },
+        { anchor: 'auth-refresh > ## Behavior', note: 'read' },
+      ],
+      findings: [],
+    })
+    const g = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(clean) })
+    expect(g.stdout).toContain('discharged')
+    expect(openDeferrals(readStream(repo.root, 'auth-refresh-plan-1'))).toHaveLength(0)
+  })
+
+  it('a run that still reports the anchor leaves it open', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS, '## Step: s1\nStill broken.\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+    expect(openDeferrals(readStream(repo.root, 'auth-refresh-plan-1'))).toHaveLength(1)
+  })
+
+  // A malformed round judged NOTHING, so its silence is not evidence — the same reason it
+  // does not spend the round budget (row 67).
+  it('a malformed round discharges nothing', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS, '## Step: s1\nUnjudged.\n')
+    const bad = fakeScenario()
+    putVerdict(bad, { coverage: [{ anchor: 'unscoped', note: 'read' }], findings: [] })
+    const g = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(bad) })
+    expect(g.stdout).toContain('outcome: malformed')
+    expect(openDeferrals(readStream(repo.root, 'auth-refresh-plan-1'))).toHaveLength(1)
+  })
+})

@@ -489,6 +489,17 @@ export async function runGate(
         })
       : []
 
+    // D122. The honest closure: a battery LOOKED and no longer found it. Only a run that
+    // actually judged this anchor's artifact can discharge — a malformed round judged nothing
+    // and must never close a debt, which is the same reason it does not spend the budget
+    // (row 67). Silence in a real verdict is the evidence; that is exactly what the injected
+    // block tells the reviewer, so the reviewer knows silence will be read that way.
+    const reported = new Set((entry.verdicts ?? []).flatMap((rv) => rv.findings
+      .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))))
+    const discharged = entry.outcome === 'malformed' ? []
+      : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor))
+        .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))
+
     const files = [
       journalRel(target), ...stamps.flatMap((s) => [s.rel, journalRel(s.stream)]),
       ...(input.repin ? [input.repin.rel] : []),
@@ -499,10 +510,12 @@ export async function runGate(
       journalMulti: [
         { stream: target, line: entryLine(entry as unknown as { t: 'gate-run'; [k: string]: unknown }) },
         ...stamps.map((s) => ({ stream: s.stream, line: s.line })),
+        ...discharged.map((d) => ({ stream: target, line: entryLine(d) })),
       ],
     }
     const txn = withTxn(root, marker, () => {
       appendEntry(root, target, entry as unknown as { t: 'gate-run'; [k: string]: unknown })
+      for (const d of discharged) appendEntry(root, target, d)
       for (const s of stamps) writeStamp(root, s)
       if (input.repin) {
         writeDoc(join(root, input.repin.rel),
@@ -516,6 +529,7 @@ export async function runGate(
 
     renderGateRun(ctx, entry, 'ran', { entries: [...entriesNow, entry as unknown as Entry], upstream: upstreamId })
     printDispatchArithmetic(ctx, root, spec.gate, target)
+    for (const d of discharged) ctx.out(kv('discharged', `${d.id} — no longer reported by this round`))
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   } finally {
