@@ -9,7 +9,8 @@ import { effortAbandoned, effortStreams, latestRecap, readStream } from '../jour
 import { modelFloorLines } from '../model.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
-import { pendingDecision, type DecisionEntry } from '../rounds.js'
+import { openDeferrals } from '../deferral.js'
+import { pendingDecision, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
@@ -38,6 +39,30 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
     for (const n of needs) {
       if (typeof n.env === 'string' && !ctx.env[n.env]) out.push({ doc: id, why: `needs: ${n.env} unset` })
       if (typeof n.manual === 'string' && n.satisfied !== true) out.push({ doc: id, why: `needs: ${n.manual} unsatisfied` })
+    }
+  }
+  return out
+}
+
+// D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
+// gate-run entry carries none — so "61 rounds" is derivable and "3 weeks" is not.
+export function deferralRows(
+  root: string, canon: Canon,
+): Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> {
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  const out: Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> = []
+  for (const id of streams) {
+    const entries = readStream(root, id)
+    for (const d of openDeferrals(entries)) {
+      // Rounds on THIS stream since the one that minted it. A re-booked debt starts over on
+      // the spec stream, which is honest: the parent has had no rounds of its own yet, and
+      // `moved from` is what carries the history a human needs.
+      const since = entries.filter((e) => e.t === 'gate-run' &&
+        (e as unknown as GateRunEntry).artifact === d.artifact).length - d.round
+      out.push({
+        id: d.id, artifact: d.artifact, gate: d.gate, anchor: d.anchor, kind: d.kind,
+        age: `${Math.max(0, since)} round(s)${d.moved_from ? ` · moved from ${d.moved_from}` : ''}`,
+      })
     }
   }
   return out
@@ -143,6 +168,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (parked.length > 0) {
     rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],
       parked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const debts = deferralRows(root, canon)
+  if (debts.length > 0) {
+    rows('deferrals', ['id', 'artifact', 'gate', 'anchor', 'kind', 'age'],
+      debts as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   const rec = recommenderRows(root, canon)
   if (rec.length > 0) {

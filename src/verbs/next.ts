@@ -15,6 +15,7 @@ import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
+import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
@@ -351,6 +352,27 @@ export function readyChoice(canon: Canon, ready: string[]): Decision {
             }),
       }
     }),
+  }
+}
+
+// D122. Orientation, never a ladder tier: routing the human to the dismissal verb would
+// teach closure-by-assertion at the one place the design means closure-by-evidence. The real
+// bite is the battery injection, which no round can skip. Applied once where the action is
+// finally produced rather than at each routing site — a per-branch copy would drift, and
+// there are eleven branches.
+export function withDeferralNote(root: string, canon: Canon, action: NextAction): NextAction {
+  if (action.target === undefined) return action
+  const doc = findById(canon, action.target)
+  const parentId = doc?.meta.parent === undefined ? undefined : String(doc.meta.parent)
+  const owed = [
+    ...openDeferrals(readStream(root, action.target)),
+    ...(parentId === undefined ? [] : openDeferrals(readStream(root, parentId))),
+  ]
+  if (owed.length === 0) return action
+  return {
+    ...action,
+    ...noteOf(action.note,
+      `${owed.length} open deferral(s) — ${owed.map((d) => d.id).join(' ')} · witness status`),
   }
 }
 
@@ -707,6 +729,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       : undefined
     action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
   }
+  action = withDeferralNote(root, canon, action)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))

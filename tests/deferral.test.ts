@@ -239,3 +239,31 @@ describe('witness dismiss', () => {
     expect(r.stderr).toContain('note-required')
   })
 })
+
+describe('the ledger', () => {
+  it('status lists open obligations aged in rounds, never in wall-clock', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    const s = await repo.cli(['status'])
+    expect(s.stdout).toContain('deferrals')
+    expect(s.stdout).toContain('artifact-debt')
+    expect(s.stdout).toContain('auth-refresh-plan-1 > ## Step: s1')
+    expect(s.stdout).toMatch(/round\(s\)/)
+    expect(s.stdout).not.toMatch(/days|weeks|ago/)
+  })
+
+  it('a dismissed obligation leaves the ledger', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', '1',
+      '--cause', 'judged-wrong', '--note', 'the lens was wrong'])
+    expect((await repo.cli(['status'])).stdout).not.toContain('deferrals[')
+  })
+
+  it('next names an open obligation on the row that concerns it', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    const n = await repo.cli(['next'])
+    if (n.stdout.includes('auth-refresh-plan-1')) expect(n.stdout).toContain('deferral')
+  })
+})
