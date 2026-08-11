@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { readStream, type Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
-import { anchorRecurrence, ladderSpent } from '../src/rounds.js'
+import { anchorRecurrence, ladderSpent, liveExits } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
@@ -334,5 +334,66 @@ describe('the new fields are inert', () => {
     const predicates = text.split('\n').filter((l) =>
       /keyOf|roundsSinceApprove|boundReached|repairGranted|appendKind|gateSettled/.test(l))
     expect(predicates.join('\n')).not.toMatch(/\.recommended|\.rule\b/)
+  })
+})
+
+describe('block properties', () => {
+  const states: Array<[string, Entry[]]> = [
+    ['blocking-here', [run(1, 'a', 'p1 > ## Step: s1')]],
+    ['blocking-parent', [run(1, 'a', 'auth-refresh > ## Behavior')]],
+    ['recurrence', [run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')]],
+    ['bound', [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')]],
+  ]
+
+  it('exactly one rule matches, and every recommendation is runnable', () => {
+    for (const [name, entries] of states) {
+      const d = recommend(ctxFor(entries))
+      expect(d, name).toBeDefined()
+      expect(d!.rule, name).toBeTruthy()
+      expect(d!.options[0]!.runnable, name).toBe(true)
+      expect(d!.options[0]!.command, name).not.toMatch(/<[^>]+>/)
+    }
+  })
+
+  it('every option appears once and every deferral names a discharge', () => {
+    for (const [name, entries] of states) {
+      const d = recommend(ctxFor(entries))!
+      const commands = d.options.map((o) => o.command)
+      expect(new Set(commands).size, name).toBe(commands.length)
+      for (const o of d.options) {
+        if (o.depth === 'deferral') expect(`${o.tradeoff ?? ''}${o.note ?? ''}`, `${name}/${o.command}`).toMatch(/discharge|obligation|until|grant/i)
+      }
+    }
+  })
+
+  it('the recommendation is always a member of the live set', () => {
+    for (const [name, entries] of states) {
+      const d = recommend(ctxFor(entries))!
+      const live = liveExits('plan', 'p1', entries, false, 'auth-refresh')
+      const flag = d.options[0]!.command.replace('witness decide plan p1 ', '').split(' "')[0]!
+      expect(live, name).toContain(flag.split(' ').slice(0, 2).join(' '))
+    }
+  })
+
+  // The CONVERSE, which the plan did not state and which three shipped omissions lived in:
+  // the block replaced the exits line on every surface, so an act liveExits offers and the
+  // block does not is an act that became undiscoverable. One deliberate exception, asserted
+  // as such rather than waived: below the bound liveExits offers a plain `--approve` and the
+  // block offers `--approve --override`, the same act with the D122 ledger switched on.
+  it('every act in the live set survives into the block', () => {
+    for (const [name, entries] of states) {
+      const d = recommend(ctxFor(entries))!
+      const rendered = d.options.map((o) => o.command)
+      // liveExits prefixes only its first option: `witness decide … --approve | --revise
+      // --note "…" | --stop`, so every later element arrives as bare flags.
+      for (const act of liveExits('plan', 'p1', entries, false, 'auth-refresh').split(' | ')) {
+        const full = act.startsWith('witness ') ? act : `witness decide plan p1 ${act}`
+        const bare = full.replace(/ --note ".*"$/, ' --note')
+        const found = rendered.some((c) => c.replace(/ --note ".*"$/, ' --note') === bare)
+        const accounted = bare === 'witness decide plan p1 --approve' &&
+          rendered.includes('witness decide plan p1 --approve --override')
+        expect(found || accounted, `${name}: ${act}`).toBe(true)
+      }
+    }
   })
 })
