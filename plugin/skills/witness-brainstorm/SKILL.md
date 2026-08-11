@@ -15,7 +15,7 @@ witness: ends in a confirmed scope recap, writes no document. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.10.1}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.11.0}"
 ```
 
 - **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
