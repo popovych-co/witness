@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SKILL_GROUND_RULES, SKILL_PIN_PREFIX } from './helpers';
 
-export const SKILLS = ['witness-brainstorm', 'witness-decompose', 'witness-plan', 'witness-implement', 'witness-ship'];
+// witness-design joins this list: it is a stage skill like the rest, and leaving it out
+// meant the shared-contract loop never checked it — the five-of-six skew rows 102 and 117
+// exist to close, invisible because the loop could not see the sixth file.
+export const SKILLS = ['witness-brainstorm', 'witness-decompose', 'witness-plan', 'witness-implement', 'witness-ship', 'witness-design'];
 const skillPath = (name: string) => join(__dirname, '..', 'plugin', 'skills', name, 'SKILL.md');
 
 describe('stage skills — shared contract', () => {
@@ -126,3 +129,71 @@ describe('design-critic prompt', () => {
     expect(critic()).toContain('Name every section that renders nothing');
   });
 });
+
+// D128. Nine copies of the exits set existed in this system; 0.10.1 removed the four in CLI
+// code, and these assertions are what stop the five in skill prose from coming back. Skill
+// prose is the most expensive surface to change — a payload release plus a version-floor bump
+// per tweak, for every downstream repo — so the block's SHAPE is CLI-owned and skills carry
+// one key-agnostic rule about rendering it.
+describe('the block is CLI-owned', () => {
+  it('no skill body carries an exit set', () => {
+    const offenders: string[] = []
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      for (const [i, line] of body.split('\n').entries()) {
+        const flags = (line.match(/--(approve|revise|stop|override|repair)/g) ?? []).length
+        if (flags >= 2 && line.includes(' | ')) offenders.push(`${name}:${i + 1}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('every skill states the render rule without naming a key', () => {
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      expect(body, name).toContain('verbatim and in full')
+      // sentence-initial in the prose, so the assertion carries the same capital
+      expect(body, name).toContain('Never print a command set you remember')
+    }
+  })
+})
+
+// D125. The interview is the one decision surface with no CLI screen, and it was asking with
+// three fields while the block asks with five. A human should meet ONE shape everywhere in
+// this pipeline. This pins the INSTRUCTION, not compliance: compliance is unverifiable here
+// by construction — the skill calibration suites measure the artifact a skill produces via a
+// headless runner, brainstorm has no seed directory, and a multi-turn interview with a human
+// answering has no headless form.
+describe('the interview asks the same way the CLI does', () => {
+  it('brainstorm states the five-field form', () => {
+    const body = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    for (const f of ['recommendation', 'why', 'alternative', 'when', 'tradeoff']) {
+      expect(body, f).toContain(f)
+    }
+    expect(body).toContain('One question per turn')
+  })
+
+  it('design convergence asks the same way', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    expect(body).toContain('the strongest alternative with when it wins and what it costs')
+  })
+})
+
+// D127. The block makes option 1 easy to run, and a bare "ok" is the state where that
+// convenience becomes the agent deciding. Reserved stops exist because a human must LOOK.
+describe('the execution protocol', () => {
+  it('every skill states that a named option may be run byte-for-byte', () => {
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      expect(body, name).toContain('names an option')
+      expect(body, name).toContain('byte-for-byte')
+      expect(body, name).toContain('is not a selection')
+    }
+  })
+
+  it('the loop states it once for the driven turn', () => {
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('byte-for-byte')
+    expect(cmd).toContain('naming the option is their judgment')
+  })
+})

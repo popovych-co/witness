@@ -416,4 +416,5 @@ export const SKILL_GROUND_RULES = [
   'mktemp',
   'never from conversation memory',
   'a stop, not a step to drop',
+  'verbatim and in full',
 ]

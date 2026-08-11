@@ -10,7 +10,7 @@ The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual`
 Resolve the CLI once:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.10.1}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.11.0}"
 ```
 
 If the repo has no `witness.config.yaml`, run `$WITNESS init` first (one bootstrap commit), then proceed. If init or any verb refuses on a dirty tree, the human commits or cleans it — **never `git commit` yourself, anywhere, at any stage**: the CLI makes its own state commits, and the ship phase makes the sole code commit.
@@ -25,8 +25,8 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 
 | Signal | Action |
 |---|---|
-| `note:` contains `multiple ready — choose` | Show the listed spec ids, ask the human which to plan. Then use the `witness-plan` skill with the chosen id. |
-| `next:` names `witness decide` | A gate is stopped and the decision is the human's. Run `$WITNESS decide <gate> <target> --show`, render the checks and findings verbatim, render the `exits:` line the CLI emitted verbatim — never a remembered set, which is wrong at the round bound and in the reopened and stale states — and **END YOUR TURN**. Never run `--approve`, `--revise`, or `--stop` on your own judgment. |
+| A `choose:` block is printed (`note:` says `N ready — ranked below`) | Several specs are ready and the CLI has ranked them. Render the whole block verbatim and in full — the recommendation, its why, each alternative's when and tradeoff, and the `judge-first:` line — then ask the human which to plan. Then use the `witness-plan` skill with the id they name. Never collapse the block to a bare list of ids: the ranking and its costs are the part they are deciding with. |
+| `next:` names `witness decide` | A gate is stopped and the decision is the human's. Run `$WITNESS decide <gate> <target> --show`, render everything it emits verbatim and in full — the checks, the findings, and its ranked options — and **END YOUR TURN**. Never substitute a command set you remember: it is wrong at the round bound, in the reopened and stale states, and wherever a repair grant is unspent. Never run `--approve`, `--revise` or `--stop` on your own judgment. |
 | `home:` present and ≠ your cwd | This stage belongs to a different session. Print the `run:` line verbatim for the human (if this session is `--manual`-armed, change the argument to `'/witness --manual'`), say that work continues in the fresh session, and **END YOUR TURN**. Never use a stage skill or run the `next:` command from the wrong `home:` — a fresh session is the execution model, and it is the only one. |
 | `stage: brainstorm` | Use the `witness-brainstorm` skill. |
 | `stage: decompose` | Use the `witness-decompose` skill with `target` (the effort slug). |
@@ -38,6 +38,7 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 
 ## Stop conditions (end your turn)
 
+- After a `decide` line surfaced and you rendered it, the turn ends. If the human then names an option, run that option's printed string byte-for-byte and resume the loop — naming the option is their judgment, typing it is not yours to substitute.
 - A `decide` line surfaced — the standing stops (ship always; feature scope; fix-created-spec) and every blocking finding land here by design.
 - The same `next:` line came back twice with nothing changed in between → report `no progress: <line>`, what you tried, and hand off.
 - An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human `witness satisfy <id> --need <text>`), `slug-reuse`, lock contention, calibration floor stops under `--manual`.
