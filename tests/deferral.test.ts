@@ -189,3 +189,53 @@ describe('an obligation outlives its flow', () => {
     expect(minted.map((e) => e.id)).toEqual([id])
   })
 })
+
+describe('witness dismiss', () => {
+  async function overridden() {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    const id = (readStream(repo.root, 'auth-refresh-plan-1')
+      .find((e) => e.t === 'deferral') as unknown as DeferralEntry).id
+    return { repo, id }
+  }
+
+  it('closes an obligation by id with an enumerated cause', async () => {
+    const { repo, id } = await overridden()
+    const r = await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', id,
+      '--cause', 'lens-retired', '--note', 'plan-critic left the battery'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(openDeferrals(readStream(repo.root, 'auth-refresh-plan-1'))).toHaveLength(0)
+  })
+
+  it('accepts the display index as well as the id', async () => {
+    const { repo } = await overridden()
+    const r = await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', '1',
+      '--cause', 'judged-wrong', '--note', 'the finding is wrong'])
+    expect(r.code, r.stderr).toBe(0)
+  })
+
+  it('refuses without a cause, with the enum in want', async () => {
+    const { repo } = await overridden()
+    const r = await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', '1', '--note', 'x'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('cause-required')
+    expect(r.stderr).toContain('superseded')
+  })
+
+  it('refuses an unknown id and an already-closed one by name', async () => {
+    const { repo, id } = await overridden()
+    const bad = await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', 'd-deadbeef',
+      '--cause', 'superseded', '--note', 'x'])
+    expect(bad.stderr).toContain('unknown-deferral')
+    await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', id, '--cause', 'superseded', '--note', 'x'])
+    const again = await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', id, '--cause', 'superseded', '--note', 'x'])
+    expect(again.stderr).toContain('already-dismissed')
+  })
+
+  it('refuses without a note', async () => {
+    const { repo } = await overridden()
+    const r = await repo.cli(['dismiss', 'auth-refresh-plan-1', '--deferral', '1', '--cause', 'superseded'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('note-required')
+  })
+})
