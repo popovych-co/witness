@@ -18,6 +18,7 @@ Resolve the CLI once per session:
 WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.10.1}"
 ```
 
+- **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
 - **Never invoke gate reviewers or relay verdicts.** `witness gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
 - **Refusal repair loop:** a `witness` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
@@ -88,6 +89,6 @@ $WITNESS gate plan <plan-id>    # append --manual when the run asked for it
 ```
 
 - **Auto-pass** → done; hand back to /witness.
-- **Stop** → render the gate output verbatim, print `witness decide plan <plan-id> --approve | --revise --note "…" | --stop`, END YOUR TURN.
+- **Stop** → render the gate output verbatim and in full, including its ranked options and `run:` line, and END YOUR TURN.
 - **Re-entered after `--revise`** → `decide --show` gives the verdict + note (findings anchor to `<plan-id> > ## Step: <id>`); rewrite via `witness write` with the same plan id; re-gate. A parent amended mid-flight fails `pin-fresh` — rewriting through `witness write` re-stamps the pin to current content; your body must then realize the *new* delta (`$WITNESS diff` again). `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **spec** (plan faithful, spec wrong)? Tell the human `--revise --upstream <spec-id>` reopens decompose for it.

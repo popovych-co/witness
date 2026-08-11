@@ -19,7 +19,8 @@ Resolve the CLI once per session:
 WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.10.1}"
 ```
 
-- **Never edit `specs/**`, `plans/**`, or `designs/**`** — the CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `witness design`. (The canon guard blocks direct edits; the trailer audit catches end-runs.)
+- **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
+- **Never edit `specs/**`, `plans/**`, or `designs/**`.** The CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `witness design`. (The canon guard blocks direct edits; the trailer audit catches end-runs.)
 - **Never invoke gate reviewers or relay verdicts.** `witness gate design` runs the design-critic itself and journals what it said.
 - **Refusal repair loop:** `witness design` exiting 2 prints structured violations (`field · rule · got · want`). Fix and retry — **3 total attempts**, then stop and show the human the list verbatim.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
@@ -77,7 +78,7 @@ $WITNESS design <spec-id> --open   # opens the artifact for the human — requir
 $WITNESS gate design <spec-id>    # append --manual when the run asked for it
 ```
 
-- The design gate **always stops** — the look is human judgment, same footing as ship. It refuses to run at all until `witness design <spec-id> --open` has shown the human the current artifact. Render the gate output verbatim and print the exits: `witness decide design <spec-id> --approve | --revise --note "…" | --stop`. **END YOUR TURN.** You never decide. The findings are *about* the design — they are never a substitute for the human being shown it.
+- The design gate **always stops** — the look is human judgment, same footing as ship. It refuses to run at all until `witness design <spec-id> --open` has shown the human the current artifact. Render the gate output verbatim and in full, including its ranked options and `run:` line. **END YOUR TURN.** You never decide. The findings are *about* the design — they are never a substitute for the human being shown it.
 - **Re-entered after `--revise`** → `witness decide design <spec-id> --show` reconstructs the verdict + note (findings anchor to `design#<id>` or `<spec-id> > ## Heading`). Re-author the HTML, re-run `witness design`, re-gate. The 3-round bound is the CLI's — surface it, never fight it. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **slicing** (the spec is wrong, not the look)? Tell the human `witness decide design <spec-id> --revise --upstream <effort>` reopens decompose (scope-level changes chain to `recap --amend`).
 - On approve the CLI stamps `design: {sha, spec}` on the spec; the plan stage then requires that pin. You are done — hand back to `/witness`.

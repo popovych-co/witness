@@ -18,6 +18,7 @@ Resolve the CLI once per session:
 WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.10.1}"
 ```
 
+- **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
 - **Never invoke gate reviewers or relay verdicts.** `witness gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
 - **Refusal repair loop:** a `witness` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
@@ -82,7 +83,7 @@ $WITNESS gate implement <plan-id>    # append --manual when the run asked for it
 Its deterministic checks are the exit bar: a diff exists, every diff-added/modified tagged test has its red→green pair (no vacuous reds), and the parent's whole deterministic lane runs green locally — so ship confirms rather than discovers. The reviewer battery is class-scaled by the CLI.
 
 - **Auto-pass** (green path — no standing stop here) → hand back to /witness.
-- **Stop** (blocking findings or `--manual`) → render verbatim, print `witness decide implement <plan-id> --approve | --revise --note "…" | --stop`, END YOUR TURN.
+- **Stop** (blocking findings or `--manual`) → render the gate output verbatim and in full, including its ranked options and `run:` line, and END YOUR TURN.
 - **Re-entered after `--revise`** → `decide --show` for the verdict + note (code findings anchor to `path#symbol`); fix in the worktree yourself under the same TDD protocol (new behavior = new red first); re-gate. Rounds are counted by the CLI; at the bound it forces the human. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **plan** (code faithful, plan wrong)? Tell the human `--revise --upstream <plan-id>` reopens the plan stage.
 - A **design-reviewer** stop anchors to a capture filename (e.g. `initial.png`) — the finding is about the rendered screen, not the code. Fix the UI in the worktree, re-run the browser test so `test-evidence` witnesses the new capture, then re-gate; the living `designs/<spec>.html` is the approved direction to fix toward.

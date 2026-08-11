@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SKILL_GROUND_RULES, SKILL_PIN_PREFIX } from './helpers';
 
-export const SKILLS = ['witness-brainstorm', 'witness-decompose', 'witness-plan', 'witness-implement', 'witness-ship'];
+// witness-design joins this list: it is a stage skill like the rest, and leaving it out
+// meant the shared-contract loop never checked it — the five-of-six skew rows 102 and 117
+// exist to close, invisible because the loop could not see the sixth file.
+export const SKILLS = ['witness-brainstorm', 'witness-decompose', 'witness-plan', 'witness-implement', 'witness-ship', 'witness-design'];
 const skillPath = (name: string) => join(__dirname, '..', 'plugin', 'skills', name, 'SKILL.md');
 
 describe('stage skills — shared contract', () => {
@@ -126,3 +129,31 @@ describe('design-critic prompt', () => {
     expect(critic()).toContain('Name every section that renders nothing');
   });
 });
+
+// D128. Nine copies of the exits set existed in this system; 0.10.1 removed the four in CLI
+// code, and these assertions are what stop the five in skill prose from coming back. Skill
+// prose is the most expensive surface to change — a payload release plus a version-floor bump
+// per tweak, for every downstream repo — so the block's SHAPE is CLI-owned and skills carry
+// one key-agnostic rule about rendering it.
+describe('the block is CLI-owned', () => {
+  it('no skill body carries an exit set', () => {
+    const offenders: string[] = []
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      for (const [i, line] of body.split('\n').entries()) {
+        const flags = (line.match(/--(approve|revise|stop|override|repair)/g) ?? []).length
+        if (flags >= 2 && line.includes(' | ')) offenders.push(`${name}:${i + 1}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('every skill states the render rule without naming a key', () => {
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      expect(body, name).toContain('verbatim and in full')
+      // sentence-initial in the prose, so the assertion carries the same capital
+      expect(body, name).toContain('Never print a command set you remember')
+    }
+  })
+})
