@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Entry } from '../src/journal.js'
+import { readStream, type Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
@@ -272,5 +272,26 @@ describe('next and recover rank their own choices', () => {
     expect(choice.options[0]!.command).toBe('looks-first')
     expect(choice.options[0]!.why).toContain('the dependency graph does not distinguish these')
     expect(choice.options[1]!.tradeoff).toBe('none material')
+  })
+})
+
+describe('the decision records what was recommended', () => {
+  it('journals recommended, rule and anchor', async () => {
+    const { repo } = await stopped()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--revise', '--note', 'ok'])
+    const d = readStream(repo.root, 'auth-refresh-plan-1')
+      .filter((e) => e.t === 'human-decision').at(-1)! as unknown as Record<string, unknown>
+    expect(d.recommended).toBe('revise')
+    expect(d.rule).toBe('blocking-here')
+    expect(d.anchor).toBe('auth-refresh-plan-1 > ## Step: s1')
+  })
+
+  it('records divergence when the human takes another option', async () => {
+    const { repo } = await stopped()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    const d = readStream(repo.root, 'auth-refresh-plan-1')
+      .filter((e) => e.t === 'human-decision').at(-1)! as unknown as Record<string, unknown>
+    expect(d.decision).toBe('stop')
+    expect(d.recommended).toBe('revise')
   })
 })

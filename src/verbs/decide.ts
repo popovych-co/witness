@@ -283,12 +283,23 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
   }
 
+  // D121. Recorded, never consumed: divergence between what the block recommended and what
+  // the human chose is the only feedback loop the recommender has, and without the record it
+  // is transcript archaeology. `recommended` is the VERB of option 1 — the shape of
+  // `decision` — so the two are directly comparable in a log query. The full command would
+  // carry a prefilled note that changes with the findings, which would make two identical
+  // recommendations look different.
+  const rec = recommend({ gate, target, entries, upstream: upstreamId, stale: false })
+  const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,
     ...(override ? { override: true } : {}),
     ...(repair ? { repair: true as const } : {}),
     ...(note ? { note } : {}),
+    ...(recommendedVerb ? { recommended: recommendedVerb } : {}),
+    ...(rec?.rule ? { rule: rec.rule } : {}),
+    ...(rec?.anchor ? { anchor: rec.anchor } : {}),
   }
   const priorPins = entries.filter((e) => e.t === 'policy-pin').length
   const pinEntries = pinTexts.map((text, i) => ({
