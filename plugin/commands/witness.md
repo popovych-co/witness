@@ -38,6 +38,7 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 
 ## Stop conditions (end your turn)
 
+- After a `decide` line surfaced and you rendered it, the turn ends. If the human then names an option, run that option's printed string byte-for-byte and resume the loop — naming the option is their judgment, typing it is not yours to substitute.
 - A `decide` line surfaced — the standing stops (ship always; feature scope; fix-created-spec) and every blocking finding land here by design.
 - The same `next:` line came back twice with nothing changed in between → report `no progress: <line>`, what you tried, and hand off.
 - An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human `witness satisfy <id> --need <text>`), `slug-reuse`, lock contention, calibration floor stops under `--manual`.

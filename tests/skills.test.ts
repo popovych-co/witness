@@ -178,3 +178,22 @@ describe('the interview asks the same way the CLI does', () => {
     expect(body).toContain('the strongest alternative with when it wins and what it costs')
   })
 })
+
+// D127. The block makes option 1 easy to run, and a bare "ok" is the state where that
+// convenience becomes the agent deciding. Reserved stops exist because a human must LOOK.
+describe('the execution protocol', () => {
+  it('every skill states that a named option may be run byte-for-byte', () => {
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      expect(body, name).toContain('names an option')
+      expect(body, name).toContain('byte-for-byte')
+      expect(body, name).toContain('is not a selection')
+    }
+  })
+
+  it('the loop states it once for the driven turn', () => {
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('byte-for-byte')
+    expect(cmd).toContain('naming the option is their judgment')
+  })
+})
