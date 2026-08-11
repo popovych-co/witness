@@ -15,7 +15,10 @@ import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
-import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
+import { openDeferrals } from '../deferral.js'
+import { renderDecision, type Decision } from '../recommend.js'
+import { recoverChoice } from './recover.js'
+import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -33,10 +36,31 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   // it is discharged, exactly as a moved sha does — one predicate, both staleness terms
   if (openReopen(entries, gate) !== undefined) return false
   if (last.outcome === 'passed') return true
-  const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-  return after.some((e) => e.t === 'human-decision' &&
-    (e as unknown as DecisionEntry).gate === gate &&
-    (e as unknown as DecisionEntry).decision === 'approve')
+  // Read by position, not by presence — the last disposition is the state (D94).
+  const after = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
+  return after !== undefined && after.decision === 'approve'
+}
+
+// D124, corrected while building it. The plan folded `stop` into `gateSettled` to stop
+// `next` re-offering a stopped flow, but that predicate answers a DIFFERENT question for
+// three other callers — `--fresh`'s refusal (gate.ts:249), ship's `implement-gate` check
+// (gates/ship.ts:68) and ship's watch/gate branch (ship.ts:31) all ask *may this flow
+// advance*. Teaching it `stop` made a human's park read as a green light: the ship gate
+// reported `implement-gate,true,last implement round 1: stopped`, and it also refused the
+// `--fresh` that `status` advertises as the way back, so parking became a one-way door.
+//
+// So the two questions get two predicates. Settled = judgment stands, the flow may
+// advance. Parked = a human took it off the board; `next` stops offering it, `status`
+// reports it, and a fresh run brings it back. No sha term on purpose: an approval is of
+// BYTES and lapses when they move (gateSettled above), while a park is a decision about
+// the flow — moving the tree underneath it does not cancel it.
+export function gateParked(entries: Entry[], gate: string): boolean {
+  const last = lastGateRun(entries, gate)
+  if (!last) return false
+  // a reopen from another gate's `--revise --upstream` un-parks exactly as it un-settles:
+  // the upstream instruction is live work, and it outranks the park it lands on
+  if (openReopen(entries, gate) !== undefined) return false
+  return lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))?.decision === 'stop'
 }
 
 // `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
@@ -53,10 +77,7 @@ export function authoringOwed(entries: Entry[], gate: string, currentSha: string
   // The LAST decision is the state (D94). `.some()` read by presence, so an approve
   // answering a revise left this still claiming authoring — the same read-by-position
   // defect as decide --show's disposition.
-  const recent = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-    .map((e) => e as unknown as DecisionEntry)
-    .at(-1)
+  const recent = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
   return recent !== undefined && ['revise', 'revise-upstream'].includes(recent.decision)
 }
 
@@ -128,6 +149,11 @@ export interface NextAction {
   stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
   target?: string
   note?: string
+  // D121. Ranked options for a choice the ROUTING row cannot express: `next` names one
+  // action, and where several are equally routable the human is choosing, not being told.
+  // Printed after the contiguous next:/stage:/target:/note: unit the stage skills read
+  // verbatim, so it adds a screen rather than changing one.
+  block?: string[]
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
@@ -224,8 +250,11 @@ function flowRank(a: NextAction): number {
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
 function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
+  // A parked gate blocks the flow the same way an owed decision does, and for the same
+  // reason: offering it loops the driving loop on an act the human already declined. It
+  // does not disappear — `status`'s parked table names it and the run that un-parks it.
   if (['plan', 'implement', 'ship'].some((gate) =>
-    pendingDecision(entries, gate) !== undefined ||
+    pendingDecision(entries, gate) !== undefined || gateParked(entries, gate) ||
     (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
   // Row 95's split: a reopen on the plan's own plan gate is NOT a block — flowAction routes
   // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
@@ -233,6 +262,118 @@ function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
   // where `decide --revise --upstream <spec>` books it.
   const effort = effortOf(root, String(plan.meta.parent))
   return effort !== undefined && openReopen(readStream(root, effort), 'decompose') !== undefined
+}
+
+// The upstream artifact a gate's `--revise --upstream` books its reopen against. The gate
+// registry answers this via `gateSpec().upstreamOf`, but `gate.ts` imports THIS module
+// (gate.ts:23), so importing the registry back would close the cycle the codebase keeps
+// one-way on purpose — the same edge that moved `liveExits` out of gate.ts into rounds.ts.
+// Tier 2 hand-resolved it inline in three places; this is that derivation named once, and
+// it agrees with the registry by test (exits-line.test.ts pins upstreamOf for all five).
+function upstreamFor(root: string, gate: string, id: string, parent?: string): string | undefined {
+  if (gate === 'decompose') return id
+  if (gate === 'design') return effortOf(root, id)
+  if (gate === 'plan') return parent
+  return id   // implement and ship judge the plan they run under
+}
+
+// The LAST disposition of a gate's most recent run, read by position — the same rule
+// gateSettled and authoringOwed both read by. `undefined` means the run is undisposed.
+function lastDisposition(entries: Entry[], gate: string, from: number): DecisionEntry | undefined {
+  return entries.slice(from + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry)
+    .at(-1)
+}
+
+// D124's reporting half. A parked flow that `next` silently skips is a disappearance, so
+// `status` names every one of them. The anchor comes from the run the stop disposed of —
+// the human parked something specific, and "parked" without "on what" is not a report.
+export function parkedGates(
+  root: string, canon: Canon,
+): Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> {
+  const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> = []
+  const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
+    ...effortStreams(root).map((slug) => ({ id: slug, gates: ['decompose'] as const })),
+    ...canon.docs.filter((d) => d.meta.type === 'plan')
+      .map((d) => ({ id: String(d.meta.id), parent: String(d.meta.parent), gates: ['plan', 'implement', 'ship'] as const })),
+    ...canon.docs.filter((d) => d.meta.type === 'spec')
+      .map((d) => ({ id: String(d.meta.id), gates: ['design'] as const })),
+  ]
+  for (const { id, parent, gates } of seen) {
+    const entries = readStream(root, id)
+    for (const gate of gates) {
+      const last = lastGateRun(entries, gate)
+      if (!last) continue
+      if (!gateParked(entries, gate)) continue
+      const anchors = (last.verdicts ?? [])
+        .flatMap((rv) => rv.findings.filter((f) => f.blocking))
+        .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))
+      out.push({
+        gate, target: id, round: last.round,
+        anchor: anchors[0] ?? last.standing ?? last.outcome,
+        reopen: reopenCommand(gate, id, entries, upstreamFor(root, gate, id, parent)),
+      })
+    }
+  }
+  return out
+}
+
+// D121. Ranked by DIRECT dependents descending — a count a human can check against the
+// frontmatter by eye, where a transitive closure would be a number nobody can verify.
+// `ui` first as tie-break: the design stage inserts a human-latency step ahead of its plan.
+// Spec id last, for determinism.
+export function readyChoice(canon: Canon, ready: string[]): Decision {
+  const dependents = (id: string) =>
+    canon.docs.filter((d) => (d.meta.depends as string[] | undefined)?.includes(id)).length
+  const ranked = [...ready].sort((a, b) =>
+    dependents(b) - dependents(a) ||
+    Number(Boolean(findById(canon, b)?.meta.ui)) - Number(Boolean(findById(canon, a)?.meta.ui)) ||
+    a.localeCompare(b))
+  const flat = ranked.every((id) => dependents(id) === dependents(ranked[0]!))
+  return {
+    key: 'choose', rule: 'multiple-ready',
+    options: ranked.map((id, i) => {
+      const n = dependents(id)
+      return {
+        command: id, depth: 'root' as const, runnable: true,
+        ...(i === 0
+          ? {
+              why: flat
+                ? 'the dependency graph does not distinguish these — ranked by ui flag, then by id'
+                : `${n} of the ${ready.length} ready specs depend on it directly; planning it later means re-planning them`,
+              judgeFirst: 'which slice matters this week. This ranks the dependency graph, which is all the CLI can see — product priority outranks it',
+            }
+          : {
+              when: findById(canon, id)?.meta.ui
+                ? 'you want the ui-flagged slice moving early — the design stage adds a human-latency step ahead of its plan'
+                : `it has ${n} direct dependent(s) and you would rather start there`,
+              tradeoff: n < dependents(ranked[0]!) ? 'its plan may need revision once the more-depended-on slice lands' : 'none material',
+            }),
+      }
+    }),
+  }
+}
+
+// D122. Orientation, never a ladder tier: routing the human to the dismissal verb would
+// teach closure-by-assertion at the one place the design means closure-by-evidence. The real
+// bite is the battery injection, which no round can skip. Applied once where the action is
+// finally produced rather than at each routing site — a per-branch copy would drift, and
+// there are eleven branches.
+export function withDeferralNote(root: string, canon: Canon, action: NextAction): NextAction {
+  if (action.target === undefined) return action
+  const doc = findById(canon, action.target)
+  const parentId = doc?.meta.parent === undefined ? undefined : String(doc.meta.parent)
+  const owed = [
+    ...openDeferrals(readStream(root, action.target)),
+    ...(parentId === undefined ? [] : openDeferrals(readStream(root, parentId))),
+  ]
+  if (owed.length === 0) return action
+  return {
+    ...action,
+    ...noteOf(action.note,
+      `${owed.length} open deferral(s) — ${owed.map((d) => d.id).join(' ')} · witness status`),
+  }
 }
 
 interface PendingDecisionRef { gate: string; target: string }
@@ -306,7 +447,14 @@ function planWriteAction(
 }
 
 export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): NextAction {
-  if (pendingTxn(root)) return { line: 'witness recover --complete | --rollback' }
+  // The recovery fork is a decision with a right answer the CLI can compute from the
+  // marker (recover.ts's `recoverChoice`), and `--complete | --rollback` stated neither it
+  // nor the cost of guessing wrong.
+  const txn = pendingTxn(root)
+  if (txn) {
+    const choice = recoverChoice(root, txn)
+    return { line: choice.options[0]!.command, block: renderDecision(choice) }
+  }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
     return { line: 'witness check' }
   }
@@ -358,11 +506,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
 
   // bound-stuck gates: no pending decision can ever be created (the gate
   // short-circuits), so the endgame decision itself is the next action —
-  // decisions outrank motion, jammed targets must not be silently skipped
+  // decisions outrank motion, jammed targets must not be silently skipped.
+  // A parked gate is excluded from all three: the human already made the endgame decision.
   for (const e of efforts) {
-    if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose')) {
+    if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose') &&
+      !gateParked(e.entries, 'decompose')) {
       return {
-        line: liveExits('decompose', e.slug, e.entries, false, e.slug),
+        line: liveExits('decompose', e.slug, e.entries, false, upstreamFor(root, 'decompose', e.slug)),
         target: e.slug, note: 'round bound reached — human decision required',
       }
     }
@@ -371,8 +521,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const id = String(plan.meta.id)
     const entries = readStream(root, id)
     for (const gate of ['plan', 'implement', 'ship'] as const) {
-      if (boundReached(entries, gate) && !gateSettled(entries, gate)) {
-        const up = gate === 'plan' ? String(plan.meta.parent) : id
+      if (boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)) {
+        const up = upstreamFor(root, gate, id, String(plan.meta.parent))
         return {
           line: liveExits(gate, id, entries, false, up),
           target: id, note: 'round bound reached — human decision required',
@@ -383,9 +533,10 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   for (const spec of specs) {
     const id = String(spec.meta.id)
     const entries = readStream(root, id)
-    if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
+    if (boundReached(entries, 'design') && !gateSettled(entries, 'design') &&
+      !gateParked(entries, 'design')) {
       return {
-        line: liveExits('design', id, entries, false, effortOf(root, id)),
+        line: liveExits('design', id, entries, false, upstreamFor(root, 'design', id)),
         target: id, note: 'round bound reached — human decision required',
       }
     }
@@ -426,7 +577,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const reopened = openReopen(e.entries, 'decompose') !== undefined
     const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft')
     const effortSha = effortReviewedSha(root, canon, e.slug).sha
-    if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha)) {
+    if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha) &&
+      !gateParked(e.entries, 'decompose')) {
       return authoringOwed(e.entries, 'decompose', effortSha)
         ? {
             line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
@@ -442,6 +594,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (String(spec.meta.status) !== 'approved') continue
     if (!designPending(root, spec)) continue
     const id = String(spec.meta.id)
+    // A parked design gate is off the board too — routing to `witness design` or its gate
+    // re-offers work the human stopped. `status`'s parked row is where it stays named.
+    if (gateParked(readStream(root, id), 'design')) continue
     // An artifact authored for the CURRENT spec content is awaiting its gate → gate it.
     // Otherwise (no artifact, or one authored before a later amendment) → the design
     // skill authors fresh or, in amend mode, decides re-design vs --reconfirm.
@@ -477,10 +632,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const spec = planless.find((s) => liveOwner(root, efforts, `${s}-plan-1`, s) !== undefined)
       ?? planless[0]!
     const act = planWriteAction(root, efforts, `${spec}-plan-1`, spec, spec)
-    return {
-      ...act,
-      ...noteOf(act.note, planless.length > 1 ? `multiple ready — choose: ${planless.join(' ')}` : undefined),
-    }
+    if (planless.length <= 1) return act
+    // The note said `multiple ready — choose: a b c`, which is a list, not a ranking: it
+    // named the alternatives without saying which one to take or what taking another costs.
+    const choice = readyChoice(canon, planless)
+    return { ...act, ...noteOf(act.note, `${planless.length} ready — ranked below`), block: renderDecision(choice) }
   }
 
   // plans-first: every written plan gates before any plan starts or advances —
@@ -491,7 +647,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const parent = findById(canon, String(plan.meta.parent))
     const planSha = parent ? planPairSha(plan, parent) : undefined
     const entries = readStream(root, id)
-    if (gateSettled(entries, 'plan', planSha)) continue
+    // Parked skips for the same reason settled does — the gate is off the board until a
+    // fresh run brings it back, and `status` is where it stays visible meanwhile.
+    if (gateSettled(entries, 'plan', planSha) || gateParked(entries, 'plan')) continue
     if (!authoringOwed(entries, 'plan', planSha)) {
       return { line: `witness gate plan ${id}`, target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
     }
@@ -571,10 +729,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       : undefined
     action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
   }
+  action = withDeferralNote(root, canon, action)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
   if (action.note) ctx.out(kv('note', action.note))
+  if (action.block) action.block.forEach((l) => ctx.out(l))
   if (action.home) {
     ctx.out(kv('home', action.home))
     ctx.out(kv('run', handoffLine(harness, action.home, action.model)))

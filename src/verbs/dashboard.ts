@@ -7,9 +7,10 @@ import { primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
-import { computeNext, flowAction } from './next.js'
+import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
-import { pendingDecision } from '../rounds.js'
+import { openDeferrals } from '../deferral.js'
+import { pendingDecision, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
@@ -41,6 +42,73 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
     }
   }
   return out
+}
+
+// D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
+// gate-run entry carries none — so "61 rounds" is derivable and "3 weeks" is not.
+export function deferralRows(
+  root: string, canon: Canon,
+): Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> {
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  const out: Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> = []
+  for (const id of streams) {
+    const entries = readStream(root, id)
+    for (const d of openDeferrals(entries)) {
+      // Rounds on THIS stream since the one that minted it. A re-booked debt starts over on
+      // the spec stream, which is honest: the parent has had no rounds of its own yet, and
+      // `moved from` is what carries the history a human needs.
+      const since = entries.filter((e) => e.t === 'gate-run' &&
+        (e as unknown as GateRunEntry).artifact === d.artifact).length - d.round
+      out.push({
+        id: d.id, artifact: d.artifact, gate: d.gate, anchor: d.anchor, kind: d.kind,
+        age: `${Math.max(0, since)} round(s)${d.moved_from ? ` · moved from ${d.moved_from}` : ''}`,
+      })
+    }
+  }
+  return out
+}
+
+const RECOMMENDER_MIN_SAMPLE = 5
+
+// D130. The subject is THE RULE, never the human: `reserved-stop-clean · fired 9 ·
+// overridden 7` says *this rule is wrong*. A per-human compliance figure would be the same
+// data with the opposite effect — conformity pressure at exactly the three stops where
+// independent judgment is the point. Suppressed below a minimum sample: a percentage over
+// three decisions measures nothing and reads as authority.
+//
+// Split from the stream walk so the tally is testable without seeding five real decisions.
+export function recommenderRowsFrom(
+  decisions: Array<{ rule?: string; recommended?: string; decision: string }>,
+): Array<{ rule: string; fired: number; overridden: number }> {
+  const tally = new Map<string, { fired: number; overridden: number }>()
+  for (const d of decisions) {
+    if (!d.rule || !d.recommended) continue
+    const row = tally.get(d.rule) ?? { fired: 0, overridden: 0 }
+    row.fired += 1
+    // `startsWith` so `revise-upstream` counts as following a `revise` recommendation. If
+    // that proves too loose in the field, tighten it to full verbs and record the change.
+    if (!d.decision.startsWith(d.recommended)) row.overridden += 1
+    tally.set(d.rule, row)
+  }
+  return [...tally.entries()]
+    .filter(([, r]) => r.fired >= RECOMMENDER_MIN_SAMPLE)
+    .map(([rule, r]) => ({ rule, ...r }))
+    .sort((a, b) => b.overridden - a.overridden || a.rule.localeCompare(b.rule))
+}
+
+export function recommenderRows(
+  root: string, canon: Canon,
+): Array<{ rule: string; fired: number; overridden: number }> {
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  const decisions: Array<{ rule?: string; recommended?: string; decision: string }> = []
+  for (const id of streams) {
+    for (const e of readStream(root, id)) {
+      if (e.t !== 'human-decision') continue
+      const d = e as unknown as DecisionEntry
+      decisions.push({ rule: d.rule, recommended: d.recommended, decision: d.decision })
+    }
+  }
+  return recommenderRowsFrom(decisions)
 }
 
 export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
@@ -92,6 +160,23 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   })
   if (effortRows.length) {
     rows('efforts', ['slug', 'class', 'specs', 'plans'], effortRows as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  // D124. `next` stops offering a gate a human stopped; this is the surface that keeps it
+  // from disappearing instead. High on the screen on purpose — a parked flow is orientation,
+  // not a footnote, and `reopen` is the act that brings it back.
+  const parked = parkedGates(root, canon)
+  if (parked.length > 0) {
+    rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],
+      parked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const debts = deferralRows(root, canon)
+  if (debts.length > 0) {
+    rows('deferrals', ['id', 'artifact', 'gate', 'anchor', 'kind', 'age'],
+      debts as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const rec = recommenderRows(root, canon)
+  if (rec.length > 0) {
+    rows('recommender', ['rule', 'fired', 'overridden'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))

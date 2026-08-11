@@ -7,6 +7,7 @@ import { acquireLock } from './lock.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { loadCanon, findById, type Canon } from './scan.js'
+import { deferralsBlock, openDeferrals } from './deferral.js'
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
@@ -22,6 +23,7 @@ import {
 export { liveExits } from './rounds.js'
 import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
+import { recommend, renderDecision } from './recommend.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
 export type ChangeClass = 'feature' | 'fix' | 'chore'
@@ -148,8 +150,23 @@ export function renderGateRun(
     }
     // Without `entries` this stays a pure formatter over the entry it was handed, and the
     // off-bound triple is the right answer; with them it tells the truth at the bound too.
-    if (opts.help !== false) ctx.out(cmd('help', liveExits(entry.gate, entry.artifact, entries, false, opts.upstream)))
+    if (opts.help !== false) renderChoices(ctx, entry.gate, entry.artifact, entries, opts.upstream)
   }
+}
+
+// D121: the exits line stated which commands would not refuse and never which to take, so
+// --approve read as the default at stops with a live blocking finding. The block ranks them.
+// One renderer for all four decision surfaces in this file — a per-site copy is how D119's
+// nine hand-copied exits sets happened, and three of these four sites were among them.
+// `undefined` from `recommend` means no decision exists at this state (stale below the
+// bound, where the only live act is a re-gate); the exits line still answers that.
+function renderChoices(
+  ctx: Ctx, gate: string, target: string, entries: Entry[], upstream: string | undefined,
+  stale = false,
+): void {
+  const d = recommend({ gate, target, entries, upstream, stale })
+  if (d) renderDecision(d).forEach((l) => ctx.out(l))
+  else ctx.out(cmd('help', liveExits(gate, target, entries, stale, upstream)))
 }
 
 // Row 79: the human approving a plan sees the run's shape before it starts.
@@ -198,6 +215,11 @@ export async function runGate(
   const entries = readStream(root, target)
   const pins = policyPins(entries)
   const pinsText = pinsBlock(pins)
+  // D122. Open obligations join the prompt exactly as pins do, and join `prompts_sha` for
+  // the same reason: an obligation the battery did not see is an obligation nothing can
+  // discharge. Minting one therefore guarantees the next round re-invokes the battery,
+  // which is the intended cost of an override rather than an accident of the cache.
+  const deferralsText = deferralsBlock(openDeferrals(entries))
   const lenses: Lens[] = []
   for (const name of active) {
     const lensR = resolvePrompt(name)
@@ -238,7 +260,8 @@ export async function runGate(
   const pin = chain[0]!
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
-    prompts_sha: promptsSha(lenses, pinsText === '' ? undefined : pinsText), pin, witness: version(),
+    prompts_sha: promptsSha(lenses, [pinsText, deferralsText].filter((t) => t !== '').join('') || undefined),
+    pin, witness: version(),
     harness: harness.name,
   }
   // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
@@ -289,13 +312,13 @@ export async function runGate(
     ctx.out(kv('outcome', 'revise changed nothing — reviewed content is identical to the last round'))
     // The owed work is an EDIT, so the exits are the decisions that remain legal without
     // one — the same set every other screen shows, rather than prose naming two of four.
-    ctx.out(cmd('help', liveExits(spec.gate, target, entries, false, upstreamId)))
+    renderChoices(ctx, spec.gate, target, entries, upstreamId)
     return EXIT.FINDINGS
   }
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    ctx.out(cmd('help', liveExits(spec.gate, target, entries, false, upstreamId)))
+    renderChoices(ctx, spec.gate, target, entries, upstreamId)
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -359,7 +382,7 @@ export async function runGate(
       const reviewed = ov?.reviewed ?? input.reviewed
       const body = ov?.promptBody ?? input.promptBody
       const menu = anchorMenu(reviewed)
-      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
+      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
       for (let attempt = 0; ; attempt++) {
         let answered: string | undefined
         for (;;) {
@@ -435,7 +458,7 @@ export async function runGate(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      ctx.out(cmd('help', liveExits(spec.gate, target, entriesNow, false, upstreamId)))
+      renderChoices(ctx, spec.gate, target, entriesNow, upstreamId)
       return EXIT.BLOCKED
     }
 
@@ -466,6 +489,17 @@ export async function runGate(
         })
       : []
 
+    // D122. The honest closure: a battery LOOKED and no longer found it. Only a run that
+    // actually judged this anchor's artifact can discharge — a malformed round judged nothing
+    // and must never close a debt, which is the same reason it does not spend the budget
+    // (row 67). Silence in a real verdict is the evidence; that is exactly what the injected
+    // block tells the reviewer, so the reviewer knows silence will be read that way.
+    const reported = new Set((entry.verdicts ?? []).flatMap((rv) => rv.findings
+      .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))))
+    const discharged = entry.outcome === 'malformed' ? []
+      : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor))
+        .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))
+
     const files = [
       journalRel(target), ...stamps.flatMap((s) => [s.rel, journalRel(s.stream)]),
       ...(input.repin ? [input.repin.rel] : []),
@@ -476,10 +510,12 @@ export async function runGate(
       journalMulti: [
         { stream: target, line: entryLine(entry as unknown as { t: 'gate-run'; [k: string]: unknown }) },
         ...stamps.map((s) => ({ stream: s.stream, line: s.line })),
+        ...discharged.map((d) => ({ stream: target, line: entryLine(d) })),
       ],
     }
     const txn = withTxn(root, marker, () => {
       appendEntry(root, target, entry as unknown as { t: 'gate-run'; [k: string]: unknown })
+      for (const d of discharged) appendEntry(root, target, d)
       for (const s of stamps) writeStamp(root, s)
       if (input.repin) {
         writeDoc(join(root, input.repin.rel),
@@ -493,6 +529,7 @@ export async function runGate(
 
     renderGateRun(ctx, entry, 'ran', { entries: [...entriesNow, entry as unknown as Entry], upstream: upstreamId })
     printDispatchArithmetic(ctx, root, spec.gate, target)
+    for (const d of discharged) ctx.out(kv('discharged', `${d.id} — no longer reported by this round`))
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   } finally {

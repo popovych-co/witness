@@ -61,6 +61,14 @@ export interface DecisionEntry {
   note?: string
   upstream?: { artifact: string; gate: string }
   caused_by?: { artifact: string; gate: string; round: number }
+  // D121/D123. The anchor the decision was PRESENTED against — what the block showed, not
+  // what the human was thinking about, consistent with `recommended` sitting beside
+  // `decision`. Read by ladderSpent; the only one of the three new fields with a consumer.
+  anchor?: string
+  // D121. What the block recommended and which rule produced it. Never read by any gate
+  // predicate — `status` aggregates them (D130) and nothing else touches them.
+  recommended?: string
+  rule?: string
 }
 
 export interface GateKey {
@@ -175,6 +183,40 @@ export function boundReached(entries: Entry[], gate: string): boolean {
   return roundsSinceApprove(entries, gate) >= roundBudget(entries, gate)
 }
 
+const anchorsOf = (r: GateRunEntry): string[] =>
+  (r.verdicts ?? []).flatMap((rv) => rv.findings
+    // D123: a pin contradiction is row 83's standing stop with its own handling. Counting
+    // it as recurrence would read row 82's r1↔r2 reviewer contradiction as a bad fix by
+    // the author, which is exactly backwards.
+    .filter((f) => f.blocking && f.contradicts_pin === undefined)
+    .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
+
+// D123, memory one: how many honest attempts have failed at this seam IN THE CURRENT GAME.
+// Distinct shas only — a resumed or unchanged round is not an attempt. Malformed and
+// fallen-back rounds are excluded for the same reason row 67 and row 107 exempt them from
+// the budget: witness failed to deliver a judgment, which is not evidence about the seam.
+export function anchorRecurrence(entries: Entry[], gate: string, anchor: string): number {
+  const seen = new Set<string>()
+  for (const r of runsSinceReset(entries, gate)) {
+    if (r.outcome === 'malformed' || fellBack(r)) continue
+    if (!anchorsOf(r).includes(anchor)) continue
+    seen.add(r.reviewed_sha)
+  }
+  return seen.size
+}
+
+// D123, memory two: was the depth ladder ALREADY tried for this anchor. Cross-window by
+// necessity — `revise-upstream` IS a window reset (lastResetIndex), so the window erases
+// the very fact this answers. Without it the once-per-anchor cap is underivable and the
+// recommender can point at upstream every window forever, resetting the budget each time:
+// incident c2692b93's shape.
+export function ladderSpent(entries: Entry[], gate: string, anchor: string): boolean {
+  return entries.some((e) =>
+    isDecision(e, gate) &&
+    (e as unknown as DecisionEntry).decision === 'revise-upstream' &&
+    (e as unknown as DecisionEntry).anchor === anchor)
+}
+
 const PREFILL_MAX = 120
 const PREFILL_ANCHORS = 3
 
@@ -242,12 +284,30 @@ export function liveExits(
   return `${d} ${['--approve', note, ...up, '--stop'].join(' | ')}`
 }
 
+// What un-parks a gate stopped under D124. Below the bound a fresh run is the act — the
+// content is unchanged, so a plain re-gate would answer `changed-nothing`. At the bound
+// the gate short-circuits before invoking anything, so `--fresh` is the D67 lie: the only
+// live acts there are the endgame set, which liveExits already knows.
+export function reopenCommand(
+  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+): string {
+  return boundReached(entries, gate)
+    ? liveExits(gate, target, entries, false, upstream)
+    : `witness gate ${gate} ${target} --fresh`
+}
+
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]
     if (isDecision(e, gate)) return undefined
     if (isRun(e, gate)) {
       const run = e as unknown as GateRunEntry
+      // D126. A malformed round parsed NO verdict, so there is nothing to dispose of:
+      // offering `--approve` there stamps the artifact on zero judgment and `--revise`
+      // sends the author to fix something no reviewer read. The remedy is a re-run (free —
+      // malformed rounds never spend the budget) or the config change `malformed-streak`
+      // names. Keep scanning: an older real verdict below it is still owed a decision.
+      if (run.outcome === 'malformed') continue
       return run.outcome === 'passed' ? undefined : run
     }
   }

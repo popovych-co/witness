@@ -137,9 +137,13 @@ describe('witness next — the ladder', () => {
         run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
         model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
       })
+      // Every round revises: under D124 a `stop` SETTLES its gate, so a stopped gate is
+      // parked and no longer surfaces as a bound endgame at all. This test is about the
+      // bound row, so the setup must leave the gate live — the stop here was a no-op that
+      // happened to work only while `--stop` was inert.
       appendEntry(repo.root, planId, {
         v: 1, t: 'human-decision', gate: 'implement', artifact: planId, round,
-        decision: round < 3 ? 'revise' : 'stop',
+        decision: 'revise',
       })
     }
     const out = await nextLine(repo)

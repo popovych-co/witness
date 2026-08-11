@@ -7,6 +7,10 @@ export type EntryType =
   | 'human-decision' | 'drift-check' | 'test-evidence' | 'adopt' | 'status'
   | 'design-write' | 'design-reconfirm' | 'design-stamp' | 'design-shown'
   | 'dispatch' | 'policy-pin'
+  // D122. An obligation's whole lifecycle, append-only: minted by a deferral, moved when
+  // its flow ends, retyped when the pattern turns out to be a lens problem, and closed by
+  // evidence (discharged) or by an explicit human cause (dismissed).
+  | 'deferral' | 'deferral-moved' | 'deferral-retyped' | 'deferral-discharged' | 'deferral-dismissed'
 
 export interface Entry {
   v: 1

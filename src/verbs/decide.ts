@@ -4,6 +4,8 @@ import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import '../gates/index.js'
 import { gateSpec, liveExits, renderGateRun } from '../gate.js'
+import { newDeferralId, type DeferralKind } from '../deferral.js'
+import { recommend, renderDecision } from '../recommend.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -16,7 +18,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, kv, rows } from '../toon.js'
 import {
-  ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
+  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
   roundsSinceApprove, type DecisionEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
@@ -48,7 +50,11 @@ function renderBound(
   ctx.err(kv('target', target))
   ctx.err(kv('state', `bound reached — ${roundsSinceApprove(entries, gate)} rounds; the gate will not run again`))
   if (note !== undefined) ctx.err(kv('note', note))
-  ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
+  // D121. The endgame is exactly where a bare list of legal flags is least useful: every
+  // remaining act carries a cost, and which cost is worth paying is the whole question.
+  const d = recommend({ gate, target, entries, upstream, stale })
+  if (d) renderDecision(d).forEach((l) => ctx.err(l))
+  else ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
   return EXIT.REFUSED
 }
 
@@ -123,7 +129,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('decision', disposition.decision))
       if (disposition.note) ctx.out(kv('note', disposition.note))
     }
-    ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
+    // The surface a human actually reads while deciding, so it is the one that most owes a
+    // ranking rather than a menu. `undefined` is stale below the bound, where no decision
+    // exists and the exits line's single re-gate act is the honest answer.
+    const shown = recommend({ gate, target, entries, upstream: upstreamId, stale })
+    if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
+    else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
     return EXIT.OK
   }
 
@@ -273,13 +284,54 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
   }
 
+  // D121. Recorded, never consumed: divergence between what the block recommended and what
+  // the human chose is the only feedback loop the recommender has, and without the record it
+  // is transcript archaeology. `recommended` is the VERB of option 1 — the shape of
+  // `decision` — so the two are directly comparable in a log query. The full command would
+  // carry a prefilled note that changes with the findings, which would make two identical
+  // recommendations look different.
+  const rec = recommend({ gate, target, entries, upstream: upstreamId, stale: false })
+  const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,
     ...(override ? { override: true } : {}),
     ...(repair ? { repair: true as const } : {}),
     ...(note ? { note } : {}),
+    ...(recommendedVerb ? { recommended: recommendedVerb } : {}),
+    ...(rec?.rule ? { rule: rec.rule } : {}),
+    ...(rec?.anchor ? { anchor: rec.anchor } : {}),
   }
+  // D122. A deferral is `--approve --override` (ships with the cause alive) or
+  // `--revise --repair` (buys a round without answering anything). One obligation per
+  // blocking anchor on the run being disposed of, pointing at the run rather than copying
+  // its findings — those already have a home. Kind is `lens-suspicion` when every
+  // occurrence of the anchor came from ONE lens across genuinely changed content: that
+  // pattern is a tool problem, and filing it as an artifact debt sends the human to fix
+  // code that was never wrong.
+  const deferring = (decision === 'approve' && override) || repair
+  const deferralEntries = deferring
+    ? [...new Set((anchor.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking)
+        .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))))]
+        .map((a) => {
+          const lenses = new Set((anchor.verdicts ?? [])
+            .filter((rv) => rv.findings.some((f) => f.blocking &&
+              (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`) === a))
+            .map((rv) => rv.reviewer))
+          // The battery SIZE is part of the discriminator, not just the reporting count:
+          // plan, decompose and design each run exactly one lens, so `lenses.size === 1`
+          // is trivially true there and every recurring finding at those gates would be
+          // filed as a tool problem. The signal is one lens out of SEVERAL disagreeing.
+          const battery = (anchor.verdicts ?? []).length
+          return {
+            v: 1 as const, t: 'deferral' as const, id: newDeferralId(), artifact: target,
+            gate, round: anchor.round, anchor: a,
+            kind: (lenses.size === 1 && battery > 1 && anchorRecurrence(entries, gate, a) >= 2
+              ? 'lens-suspicion' : 'artifact-debt') as DeferralKind,
+            caused_by_run: anchor.run_id,
+          }
+        })
+    : []
   const priorPins = entries.filter((e) => e.t === 'policy-pin').length
   const pinEntries = pinTexts.map((text, i) => ({
     v: 1 as const, t: 'policy-pin' as const, artifact: target, gate, round: anchor.round,
@@ -364,6 +416,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   journalMulti[0]!.line = entryLine(asEntry(entry))
   for (const p of pinEntries) journalMulti.push({ stream: target, line: entryLine(p) })
+  for (const d of deferralEntries) journalMulti.push({ stream: target, line: entryLine(d) })
   if (reopen) { journalMulti.push({ stream: reopen.stream, line: entryLine(asEntry(reopen.entry)) }); files.push(journalRel(reopen.stream)) }
   for (const s of prepared) { files.push(s.rel, journalRel(s.stream)); journalMulti.push({ stream: s.stream, line: s.line }) }
   for (const m of metaWrites) { files.push(m.rel, journalRel(m.stream)); journalMulti.push({ stream: m.stream, line: m.line }) }
@@ -374,6 +427,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const txn = withTxn(root, { op: `decide-${gate}`, files: [...new Set(files)], journalMulti }, () => {
       appendEntry(root, target, asEntry(entry))
       for (const p of pinEntries) appendEntry(root, target, p)
+      for (const d of deferralEntries) appendEntry(root, target, d)
       if (reopen) appendEntry(root, reopen.stream, asEntry(reopen.entry))
       for (const s of prepared) writeStamp(root, s)
       for (const m of metaWrites) {
@@ -390,6 +444,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}`))
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
+  for (const d of deferralEntries) {
+    ctx.out(kv('obligation', `${d.id} — ${d.anchor} · ${d.kind} · open until a later ${gate} run no longer reports it, or witness dismiss ${target} --deferral ${d.id} --cause <superseded|lens-retired|judged-wrong> --note "<why>"`))
+  }
   if (repair) {
     // What was bought, and that it does not come again — a grant the human forgets is
     // spent is a second walk into the same wall.

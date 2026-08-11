@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
+import { openDeferrals } from './deferral.js'
 import { writeDoc } from './fm.js'
 import { stateCommit } from './gitio.js'
-import { appendEntry, entryLine, journalRel, type StatusCause, type StatusEntry } from './journal.js'
+import { appendEntry, entryLine, journalRel, readStream, type StatusCause, type StatusEntry } from './journal.js'
 import { acquireLock } from './lock.js'
 import { canonicalSha } from './sha.js'
 import { findById, type Canon, type CanonDoc } from './scan.js'
@@ -74,8 +75,23 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
     const specStamp = parent && pinFresh && parent.meta.type === 'spec'
       ? prepareStamp(parent, 'live', 'merge', { pr }) : undefined
 
+    // D122. The flow that could discharge this obligation is about to disappear: the plan
+    // goes `done` and nothing will ever gate it again, so a ship-time override would be
+    // undischargeable by construction. The debt moves to the parent spec, which outlives it
+    // and which the next effort touching this area will meet. The id is PRESERVED — a debt
+    // renumbered when it changes homes cannot be aged across the move, and age is the only
+    // thing separating a fresh deferral from a chronic one.
+    //
+    // Keyed on `parent`, not on `specStamp`: a stale merge writes no spec stamp, and that is
+    // exactly the merge whose debts most need somewhere to live.
+    const parentId = parent ? String(parent.meta.id) : undefined
+    const moves = parentId === undefined ? [] : openDeferrals(readStream(root, planId)).flatMap((d) => [
+      { stream: planId, entry: { v: 1 as const, t: 'deferral-moved' as const, id: d.id, to: parentId } },
+      { stream: parentId, entry: { ...d, artifact: parentId, moved_from: planId } },
+    ])
     const files = [planStamp.rel, journalRel(planStamp.stream),
-      ...(specStamp ? [specStamp.rel, journalRel(specStamp.stream)] : [])]
+      ...(specStamp ? [specStamp.rel, journalRel(specStamp.stream)] : []),
+      ...moves.map((m) => journalRel(m.stream))]
     const lockR = acquireLock(root)
     if (!lockR.ok) { result.stale.push({ plan: planId, why: 'lock held' }); continue }
     try {
@@ -84,12 +100,14 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
         journalMulti: [
           { stream: planStamp.stream, line: planStamp.line },
           ...(specStamp ? [{ stream: specStamp.stream, line: specStamp.line }] : []),
+          ...moves.map((m) => ({ stream: m.stream, line: entryLine(m.entry) })),
         ],
       }, () => {
         writeStamp(root, planStamp)
         if (specStamp) writeStamp(root, specStamp)
+        for (const m of moves) appendEntry(root, m.stream, m.entry)
         crashPoint(ctx.env, 'merge-stamp')
-        return stateCommit(root, files, `merge(${planId}): pr #${pr}`)
+        return stateCommit(root, [...new Set(files)], `merge(${planId}): pr #${pr}`)
       })
       if (txn.ok) {
         removeWorktree(root, planId)
