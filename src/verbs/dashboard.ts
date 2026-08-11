@@ -7,7 +7,7 @@ import { primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
-import { computeNext, flowAction } from './next.js'
+import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
@@ -92,6 +92,14 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   })
   if (effortRows.length) {
     rows('efforts', ['slug', 'class', 'specs', 'plans'], effortRows as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  // D124. `next` stops offering a gate a human stopped; this is the surface that keeps it
+  // from disappearing instead. High on the screen on purpose — a parked flow is orientation,
+  // not a footnote, and `reopen` is the act that brings it back.
+  const parked = parkedGates(root, canon)
+  if (parked.length > 0) {
+    rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],
+      parked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))

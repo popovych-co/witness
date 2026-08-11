@@ -242,6 +242,18 @@ export function liveExits(
   return `${d} ${['--approve', note, ...up, '--stop'].join(' | ')}`
 }
 
+// What un-parks a gate stopped under D124. Below the bound a fresh run is the act — the
+// content is unchanged, so a plain re-gate would answer `changed-nothing`. At the bound
+// the gate short-circuits before invoking anything, so `--fresh` is the D67 lie: the only
+// live acts there are the endgame set, which liveExits already knows.
+export function reopenCommand(
+  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+): string {
+  return boundReached(entries, gate)
+    ? liveExits(gate, target, entries, false, upstream)
+    : `witness gate ${gate} ${target} --fresh`
+}
+
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]

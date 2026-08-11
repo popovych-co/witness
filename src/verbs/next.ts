@@ -15,7 +15,7 @@ import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
-import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, type DecisionEntry } from '../rounds.js'
+import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -38,10 +38,7 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   // only `approve`, so one verb said settled and this one re-offered the flow forever.
   // Two definitions of settled with `stop` on opposite sides; this is the unification.
   // Read by position, not by presence: a revise AFTER a stop un-parks by design.
-  const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-    .map((e) => e as unknown as DecisionEntry)
-    .at(-1)
+  const after = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
   return after !== undefined && (after.decision === 'approve' || after.decision === 'stop')
 }
 
@@ -59,10 +56,7 @@ export function authoringOwed(entries: Entry[], gate: string, currentSha: string
   // The LAST decision is the state (D94). `.some()` read by presence, so an approve
   // answering a revise left this still claiming authoring — the same read-by-position
   // defect as decide --show's disposition.
-  const recent = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-    .map((e) => e as unknown as DecisionEntry)
-    .at(-1)
+  const recent = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
   return recent !== undefined && ['revise', 'revise-upstream'].includes(recent.decision)
 }
 
@@ -241,6 +235,62 @@ function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
   return effort !== undefined && openReopen(readStream(root, effort), 'decompose') !== undefined
 }
 
+// The upstream artifact a gate's `--revise --upstream` books its reopen against. The gate
+// registry answers this via `gateSpec().upstreamOf`, but `gate.ts` imports THIS module
+// (gate.ts:23), so importing the registry back would close the cycle the codebase keeps
+// one-way on purpose — the same edge that moved `liveExits` out of gate.ts into rounds.ts.
+// Tier 2 hand-resolved it inline in three places; this is that derivation named once, and
+// it agrees with the registry by test (exits-line.test.ts pins upstreamOf for all five).
+function upstreamFor(root: string, gate: string, id: string, parent?: string): string | undefined {
+  if (gate === 'decompose') return id
+  if (gate === 'design') return effortOf(root, id)
+  if (gate === 'plan') return parent
+  return id   // implement and ship judge the plan they run under
+}
+
+// The LAST disposition of a gate's most recent run, read by position — the same rule
+// gateSettled and authoringOwed both read by. `undefined` means the run is undisposed.
+function lastDisposition(entries: Entry[], gate: string, from: number): DecisionEntry | undefined {
+  return entries.slice(from + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry)
+    .at(-1)
+}
+
+// D124's reporting half. A parked flow that `next` silently skips is a disappearance, so
+// `status` names every one of them. The anchor comes from the run the stop disposed of —
+// the human parked something specific, and "parked" without "on what" is not a report.
+export function parkedGates(
+  root: string, canon: Canon,
+): Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> {
+  const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> = []
+  const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
+    ...effortStreams(root).map((slug) => ({ id: slug, gates: ['decompose'] as const })),
+    ...canon.docs.filter((d) => d.meta.type === 'plan')
+      .map((d) => ({ id: String(d.meta.id), parent: String(d.meta.parent), gates: ['plan', 'implement', 'ship'] as const })),
+    ...canon.docs.filter((d) => d.meta.type === 'spec')
+      .map((d) => ({ id: String(d.meta.id), gates: ['design'] as const })),
+  ]
+  for (const { id, parent, gates } of seen) {
+    const entries = readStream(root, id)
+    for (const gate of gates) {
+      const last = lastGateRun(entries, gate)
+      if (!last) continue
+      const disposition = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
+      if (disposition?.decision !== 'stop') continue
+      const anchors = (last.verdicts ?? [])
+        .flatMap((rv) => rv.findings.filter((f) => f.blocking))
+        .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))
+      out.push({
+        gate, target: id, round: last.round,
+        anchor: anchors[0] ?? last.standing ?? last.outcome,
+        reopen: reopenCommand(gate, id, entries, upstreamFor(root, gate, id, parent)),
+      })
+    }
+  }
+  return out
+}
+
 interface PendingDecisionRef { gate: string; target: string }
 
 // Every human-owed decision in the repo, in the order tier 2 would surface them. One
@@ -368,7 +418,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   for (const e of efforts) {
     if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose')) {
       return {
-        line: liveExits('decompose', e.slug, e.entries, false, e.slug),
+        line: liveExits('decompose', e.slug, e.entries, false, upstreamFor(root, 'decompose', e.slug)),
         target: e.slug, note: 'round bound reached — human decision required',
       }
     }
@@ -378,7 +428,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const entries = readStream(root, id)
     for (const gate of ['plan', 'implement', 'ship'] as const) {
       if (boundReached(entries, gate) && !gateSettled(entries, gate)) {
-        const up = gate === 'plan' ? String(plan.meta.parent) : id
+        const up = upstreamFor(root, gate, id, String(plan.meta.parent))
         return {
           line: liveExits(gate, id, entries, false, up),
           target: id, note: 'round bound reached — human decision required',
@@ -391,7 +441,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const entries = readStream(root, id)
     if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
       return {
-        line: liveExits('design', id, entries, false, effortOf(root, id)),
+        line: liveExits('design', id, entries, false, upstreamFor(root, 'design', id)),
         target: id, note: 'round bound reached — human decision required',
       }
     }
