@@ -260,7 +260,13 @@ describe('a settled implement gate outranks the evidence hint', () => {
       "import { expect, it } from 'vitest'\n\nit('renders the report @spec:report-view', () => { expect(1).toBe(2) })\n")
 
     const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [] })
+    // D126: coverage must span the reviewed diff or every reviewer fails coverage-minimum
+    // and the round is `malformed` — which is no longer decidable, because no verdict parsed.
+    // The stop here comes from the red regression check, which is the point of the test.
+    const cfg = loadConfig(repo.root)
+    const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
+    const files = changedFiles(wt, base.ok ? base.value : '')
+    putVerdict(scenario, { coverage: files.map((f) => ({ anchor: f, note: 'read' })), findings: [] })
     const gate = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
     expect(gate).toBe(1)                                  // stopped: the regression check is red
 

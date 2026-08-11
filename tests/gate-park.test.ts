@@ -142,3 +142,35 @@ describe('a park is not an approval', () => {
     expect(check).toContain('implement-gate,false')
   })
 })
+
+const MALFORMED = { coverage: [{ anchor: 'unscoped', note: 'read' }], findings: [] }
+
+describe('a malformed round is not a disposition', () => {
+  it('next routes to the gate, not to decide --show', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    const scenario = fakeScenario()
+    putVerdict(scenario, MALFORMED)
+    const g = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+    expect(g.stdout).toContain('outcome: malformed')
+
+    const n = await repo.cli(['next'])
+    expect(n.stdout).toContain('witness gate plan auth-refresh-plan-1')
+    expect(n.stdout).not.toContain('decide plan auth-refresh-plan-1 --show')
+  })
+
+  it('decide --approve on a malformed-only stream refuses', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    const scenario = fakeScenario()
+    putVerdict(scenario, MALFORMED)
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+    const d = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve'])
+    expect(d.code).toBe(2)
+    expect(d.stderr).toContain('nothing-pending')
+  })
+})

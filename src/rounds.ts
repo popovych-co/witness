@@ -260,6 +260,12 @@ export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | 
     if (isDecision(e, gate)) return undefined
     if (isRun(e, gate)) {
       const run = e as unknown as GateRunEntry
+      // D126. A malformed round parsed NO verdict, so there is nothing to dispose of:
+      // offering `--approve` there stamps the artifact on zero judgment and `--revise`
+      // sends the author to fix something no reviewer read. The remedy is a re-run (free —
+      // malformed rounds never spend the budget) or the config change `malformed-streak`
+      // names. Keep scanning: an older real verdict below it is still owed a decision.
+      if (run.outcome === 'malformed') continue
       return run.outcome === 'passed' ? undefined : run
     }
   }

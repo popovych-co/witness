@@ -202,7 +202,20 @@ describe('a revised implement gate owes authoring', () => {
   async function revisedImplement() {
     const { repo, wt, planId } = await shippableRepo()
     const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [] })
+    // D126: a one-anchor coverage on the 4-file vitest-single diff fails coverage-minimum
+    // for every reviewer, which makes the whole round `malformed` — and a malformed round
+    // parsed no verdict, so it can no longer be decided at all. This fixture is about a
+    // REVISE on a real verdict, so the verdict has to be real: cover the diff and carry the
+    // blocking finding the revise is answering.
+    putVerdict(scenario, {
+      coverage: [
+        { anchor: '.gitignore', note: 'read' },
+        { anchor: 'package.json', note: 'read' },
+        { anchor: 'src/token.ts', note: 'read' },
+        { anchor: 'tests/token.test.ts', note: 'read' },
+      ],
+      findings: [{ blocking: true, anchor: 'src/token.ts', claim: 'the helper is inlined twice' }],
+    })
     await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
     await repo.cli(['decide', 'implement', planId, '--revise', '--note', 'extract the helper'])
     return { repo, wt, planId }
