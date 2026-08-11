@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent } from '../src/rounds.js'
+import { loadCanon } from '../src/scan.js'
+import { readyChoice } from '../src/verbs/next.js'
 import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const D: Decision = {
@@ -214,5 +216,61 @@ describe('every decision surface renders the block', () => {
       expect(out).toMatch(/^run: witness decide plan auth-refresh-plan-1 /m)
       expect(out).not.toContain('<id>')
     }
+  })
+})
+
+describe('next and recover rank their own choices', () => {
+  // Each spec carries a criterion tagged with its OWN id: SPEC_META's default is
+  // `@spec:auth-refresh`, which `write` refuses for any other id — and the write refusal is
+  // silent unless asserted, which is how this setup first appeared to work and then failed
+  // three lines later inside `approve`.
+  const spec = (repo: Awaited<ReturnType<typeof seededRepo>>, id: string, extra: Record<string, unknown> = {}) =>
+    writeSpec(repo, id, { criteria: [{ id: `ac-${id}`, test: `@spec:${id}` }], covers: ['g1'], ...extra })
+
+  it('multiple ready ranks by direct dependents and says what it cannot see', async () => {
+    const repo = await seededRepo()
+    // A spec is READY only when every dependency is already live, so a ready spec's own
+    // dependents are never ready themselves — which is exactly why the ranking counts
+    // dependents across all of canon rather than within the ready set. Three ready specs
+    // (no deps), and three more hanging off them to give the count something to rank.
+    for (const [id, extra] of [
+      ['token-store', {}],
+      ['session-index', {}],
+      ['audit-log', {}],
+      ['auth-refresh', { depends: ['token-store'] }],
+      ['device-list', { depends: ['token-store'] }],
+      ['rate-limit', { depends: ['session-index'] }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const w = await spec(repo, id, extra)
+      expect(w.code, `write ${id}: ${w.stderr}`).toBe(0)
+    }
+    // Every spec is approved: a single draft leaves the decompose gate unsettled, and that
+    // branch outranks planning entirely. Approved-but-not-live is what keeps the three
+    // dependents out of the ready set while still counting toward the ranking.
+    for (const id of ['token-store', 'session-index', 'audit-log', 'auth-refresh', 'device-list', 'rate-limit']) {
+      approve(repo, id)
+    }
+
+    const n = await repo.cli(['next'])
+    expect(n.stdout).toContain('choose: 3 options · 1 is recommended')
+    const ranked = n.stdout.split('\n').filter((l) => /^\d+ · /.test(l))
+    expect(ranked).toHaveLength(3)
+    // token-store is the one two others derive from, so planning it later re-plans them
+    expect(n.stdout).toMatch(/1 · recommended · root\n {3}token-store/)
+    expect(n.stdout).toContain('2 of the 3 ready specs depend on it directly')
+    expect(n.stdout).toContain('judge-first: which slice matters this week')
+  })
+
+  // The ui tie-break is asserted directly: an approved ui spec routes to the DESIGN stage
+  // before any planning, so it can never reach the multiple-ready branch through the CLI.
+  it('ranks a ui-flagged spec first when the graph cannot distinguish them', async () => {
+    const repo = await seededRepo()
+    for (const [id, extra] of [['plain-one', {}], ['looks-first', { ui: true }]] as Array<[string, Record<string, unknown>]>) {
+      expect((await spec(repo, id, extra)).code).toBe(0)
+    }
+    const choice = readyChoice(loadCanon(repo.root), ['plain-one', 'looks-first'])
+    expect(choice.options[0]!.command).toBe('looks-first')
+    expect(choice.options[0]!.why).toContain('the dependency graph does not distinguish these')
+    expect(choice.options[1]!.tradeoff).toBe('none material')
   })
 })

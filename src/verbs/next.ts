@@ -15,6 +15,8 @@ import { worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
+import { renderDecision, type Decision } from '../recommend.js'
+import { recoverChoice } from './recover.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
@@ -146,6 +148,11 @@ export interface NextAction {
   stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
   target?: string
   note?: string
+  // D121. Ranked options for a choice the ROUTING row cannot express: `next` names one
+  // action, and where several are equally routable the human is choosing, not being told.
+  // Printed after the contiguous next:/stage:/target:/note: unit the stage skills read
+  // verbatim, so it adds a screen rather than changing one.
+  block?: string[]
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
@@ -311,6 +318,42 @@ export function parkedGates(
   return out
 }
 
+// D121. Ranked by DIRECT dependents descending — a count a human can check against the
+// frontmatter by eye, where a transitive closure would be a number nobody can verify.
+// `ui` first as tie-break: the design stage inserts a human-latency step ahead of its plan.
+// Spec id last, for determinism.
+export function readyChoice(canon: Canon, ready: string[]): Decision {
+  const dependents = (id: string) =>
+    canon.docs.filter((d) => (d.meta.depends as string[] | undefined)?.includes(id)).length
+  const ranked = [...ready].sort((a, b) =>
+    dependents(b) - dependents(a) ||
+    Number(Boolean(findById(canon, b)?.meta.ui)) - Number(Boolean(findById(canon, a)?.meta.ui)) ||
+    a.localeCompare(b))
+  const flat = ranked.every((id) => dependents(id) === dependents(ranked[0]!))
+  return {
+    key: 'choose', rule: 'multiple-ready',
+    options: ranked.map((id, i) => {
+      const n = dependents(id)
+      return {
+        command: id, depth: 'root' as const, runnable: true,
+        ...(i === 0
+          ? {
+              why: flat
+                ? 'the dependency graph does not distinguish these — ranked by ui flag, then by id'
+                : `${n} of the ${ready.length} ready specs depend on it directly; planning it later means re-planning them`,
+              judgeFirst: 'which slice matters this week. This ranks the dependency graph, which is all the CLI can see — product priority outranks it',
+            }
+          : {
+              when: findById(canon, id)?.meta.ui
+                ? 'you want the ui-flagged slice moving early — the design stage adds a human-latency step ahead of its plan'
+                : `it has ${n} direct dependent(s) and you would rather start there`,
+              tradeoff: n < dependents(ranked[0]!) ? 'its plan may need revision once the more-depended-on slice lands' : 'none material',
+            }),
+      }
+    }),
+  }
+}
+
 interface PendingDecisionRef { gate: string; target: string }
 
 // Every human-owed decision in the repo, in the order tier 2 would surface them. One
@@ -382,7 +425,14 @@ function planWriteAction(
 }
 
 export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): NextAction {
-  if (pendingTxn(root)) return { line: 'witness recover --complete | --rollback' }
+  // The recovery fork is a decision with a right answer the CLI can compute from the
+  // marker (recover.ts's `recoverChoice`), and `--complete | --rollback` stated neither it
+  // nor the cost of guessing wrong.
+  const txn = pendingTxn(root)
+  if (txn) {
+    const choice = recoverChoice(root, txn)
+    return { line: choice.options[0]!.command, block: renderDecision(choice) }
+  }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
     return { line: 'witness check' }
   }
@@ -560,10 +610,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const spec = planless.find((s) => liveOwner(root, efforts, `${s}-plan-1`, s) !== undefined)
       ?? planless[0]!
     const act = planWriteAction(root, efforts, `${spec}-plan-1`, spec, spec)
-    return {
-      ...act,
-      ...noteOf(act.note, planless.length > 1 ? `multiple ready — choose: ${planless.join(' ')}` : undefined),
-    }
+    if (planless.length <= 1) return act
+    // The note said `multiple ready — choose: a b c`, which is a list, not a ranking: it
+    // named the alternatives without saying which one to take or what taking another costs.
+    const choice = readyChoice(canon, planless)
+    return { ...act, ...noteOf(act.note, `${planless.length} ready — ranked below`), block: renderDecision(choice) }
   }
 
   // plans-first: every written plan gates before any plan starts or advances —
@@ -660,6 +711,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
   if (action.note) ctx.out(kv('note', action.note))
+  if (action.block) action.block.forEach((l) => ctx.out(l))
   if (action.home) {
     ctx.out(kv('home', action.home))
     ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
