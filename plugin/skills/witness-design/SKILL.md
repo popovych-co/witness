@@ -47,7 +47,7 @@ cat designs/<spec-id>.html 2>/dev/null # the current look, in amend mode
 
 1. **Context.** Name the screen's one job and primary user (from the spec's Motivation + Behavior). If a design canon is configured, read it — it governs hierarchy, framing, action placement, and component vocabulary. Report what you found before proposing.
 2. **Diverge.** Produce **2–3 genuinely distinct** structural directions that serve the job (different hierarchies/groupings), each consistent with the canon. One idea is never enough — divergence is what surfaces a better structure than the obvious one.
-3. **Converge.** With the human, pick or synthesize the winner. Every behavior the spec promises must be visible and operable in it (the design-critic checks this as blocking coverage).
+3. **Converge.** With the human, pick or synthesize the winner — and ask for that choice the same way every other decision in this pipeline is asked: a recommendation, a one-line why, the strongest alternative with when it wins and what it costs. Every behavior the spec promises must be visible and operable in the winner (the design-critic checks this as blocking coverage).
 4. **Author the artifact.** One **self-contained** HTML file — inline all CSS/JS, embed assets as `data:` URIs, no external `src`/`href`. Give every section a stable, unique `id` (`id="essentials"`, `id="save-bar"`, …): these are the design-critic's anchors and must total **≥ 2**. Data-shape anchoring: when a section renders spec data, name the id after the data it shows, not its pixels.
 
 ```bash

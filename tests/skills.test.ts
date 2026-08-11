@@ -157,3 +157,24 @@ describe('the block is CLI-owned', () => {
     }
   })
 })
+
+// D125. The interview is the one decision surface with no CLI screen, and it was asking with
+// three fields while the block asks with five. A human should meet ONE shape everywhere in
+// this pipeline. This pins the INSTRUCTION, not compliance: compliance is unverifiable here
+// by construction — the skill calibration suites measure the artifact a skill produces via a
+// headless runner, brainstorm has no seed directory, and a multi-turn interview with a human
+// answering has no headless form.
+describe('the interview asks the same way the CLI does', () => {
+  it('brainstorm states the five-field form', () => {
+    const body = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    for (const f of ['recommendation', 'why', 'alternative', 'when', 'tradeoff']) {
+      expect(body, f).toContain(f)
+    }
+    expect(body).toContain('One question per turn')
+  })
+
+  it('design convergence asks the same way', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    expect(body).toContain('the strongest alternative with when it wins and what it costs')
+  })
+})

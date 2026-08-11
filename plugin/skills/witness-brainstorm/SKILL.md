@@ -31,7 +31,7 @@ No canon, only evidence: a **confirmed scope recap** persisted by `witness recap
 
 ## Interview protocol
 
-**One question per turn.** Every question carries a concrete recommendation, a one-line why, and the strongest rejected alternative. Lock each answer before the next; walk in dependency order:
+**One question per turn.** Every question carries the same five fields the CLI's decision block uses, so a human meets one shape everywhere in this pipeline: a concrete **recommendation**, a one-line **why**, the strongest **alternative**, **when** that alternative is the right call, and the **tradeoff** it carries against the recommendation. Add a short note to either option only when running with it has a caveat the option itself does not state. Lock each answer before the next; walk in dependency order:
 
 1. **Class** — `feature | fix | chore`. Recommend from the opening ask: `fix` restores promised behavior; `chore` is motion with no state change (deps, tooling); everything else is `feature`.
 2. **Problem & outcome goals** — what observably changes, for whom. Number them `g1, g2, …`. Each goal is an outcome someone can observe — "Guests can pay by card", never "Integrate Stripe".
