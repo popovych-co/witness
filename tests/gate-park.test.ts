@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import {
+  addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writePlan, writeSpec,
+} from './helpers.js'
 
 export const BLOCKING = {
   coverage: [
@@ -70,3 +72,73 @@ describe('status reports a parked flow', () => {
 })
 
 const BOUND_STEPS = { steps: [{ id: 's1', title: 'rotate', criteria: ['ac-rotate'] }] }
+
+describe('parking is reversible', () => {
+  it('a fresh run un-parks the gate and next offers it again', async () => {
+    const repo = await stoppedPlanGate()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    expect((await repo.cli(['next'])).stdout).not.toContain('auth-refresh-plan-1')
+
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    const g = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1', '--fresh'], { env: gateEnv(scenario) })
+    expect(g.code).toBe(1)
+
+    const after = await repo.cli(['next'])
+    expect(after.stdout).toContain('witness decide plan auth-refresh-plan-1 --show')
+  })
+
+  // The plan expected a plain `--revise` to be the second door. It cannot be: `decide`
+  // refuses `nothing-pending` once ANY disposition sits on the run, which is correct by its
+  // own contract — one run, one disposition. So the second door is the one that was already
+  // built: an upstream reopen from the parent, which un-parks exactly as it un-settles.
+  it('a plain revise on a parked gate refuses rather than silently re-deciding it', async () => {
+    const repo = await stoppedPlanGate()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    const d = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--revise', '--note', 'reconsidered'])
+    expect(d.code).toBe(2)
+    expect(d.stderr).toContain('nothing-pending')
+    expect((await repo.cli(['status'])).stdout).toContain('parked')
+  })
+
+  it('an upstream reopen un-parks the gate it lands on', async () => {
+    const repo = await stoppedPlanGate()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    expect((await repo.cli(['next'])).stdout).not.toContain('auth-refresh-plan-1')
+
+    // the implement gate sends the work back to the plan — a reopen, not a disposition
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1', '--fresh'], { env: gateEnv(scenario) })
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--revise', '--upstream', 'auth-refresh'])
+    const s = await repo.cli(['status'])
+    expect(s.stdout).not.toContain('parked')
+  })
+})
+
+// The park must not become a green light anywhere. `gateSettled` answers *may this flow
+// advance*, and three callers outside `next` depend on that reading: `--fresh`'s refusal,
+// ship's implement-gate check, and ship's watch/gate branch. Folding `stop` into it made
+// the ship gate report `implement-gate,true,last implement round 1: stopped`.
+describe('a park is not an approval', () => {
+  it('a stopped implement gate does not satisfy the ship gate', async () => {
+    const { repo, planId } = await shippableRepo()
+    addOrigin(repo)
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [
+        { anchor: '.gitignore', note: 'read' },
+        { anchor: 'package.json', note: 'read' },
+        { anchor: 'src/token.ts', note: 'read' },
+        { anchor: 'tests/token.test.ts', note: 'read' },
+      ],
+      findings: [{ blocking: true, anchor: 'src/token.ts', claim: 'rotation is unbounded' }],
+    })
+    await repo.cli(['gate', 'implement', planId], { env: gateEnv(scenario) })
+    await repo.cli(['decide', 'implement', planId, '--stop'])
+
+    const s = await repo.cli(['ship', planId], { env: gateEnv(scenario) })
+    const check = s.stdout.split('\n').find((l) => l.includes('implement-gate'))!
+    expect(check).toContain('implement-gate,false')
+  })
+})

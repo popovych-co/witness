@@ -33,13 +33,31 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   // it is discharged, exactly as a moved sha does — one predicate, both staleness terms
   if (openReopen(entries, gate) !== undefined) return false
   if (last.outcome === 'passed') return true
-  // D124. The LAST disposition is the state, and `stop` is one — `decide --show` has
-  // always reported `state: settled — stop` (decide.ts:105), while this predicate honored
-  // only `approve`, so one verb said settled and this one re-offered the flow forever.
-  // Two definitions of settled with `stop` on opposite sides; this is the unification.
-  // Read by position, not by presence: a revise AFTER a stop un-parks by design.
+  // Read by position, not by presence — the last disposition is the state (D94).
   const after = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
-  return after !== undefined && (after.decision === 'approve' || after.decision === 'stop')
+  return after !== undefined && after.decision === 'approve'
+}
+
+// D124, corrected while building it. The plan folded `stop` into `gateSettled` to stop
+// `next` re-offering a stopped flow, but that predicate answers a DIFFERENT question for
+// three other callers — `--fresh`'s refusal (gate.ts:249), ship's `implement-gate` check
+// (gates/ship.ts:68) and ship's watch/gate branch (ship.ts:31) all ask *may this flow
+// advance*. Teaching it `stop` made a human's park read as a green light: the ship gate
+// reported `implement-gate,true,last implement round 1: stopped`, and it also refused the
+// `--fresh` that `status` advertises as the way back, so parking became a one-way door.
+//
+// So the two questions get two predicates. Settled = judgment stands, the flow may
+// advance. Parked = a human took it off the board; `next` stops offering it, `status`
+// reports it, and a fresh run brings it back. No sha term on purpose: an approval is of
+// BYTES and lapses when they move (gateSettled above), while a park is a decision about
+// the flow — moving the tree underneath it does not cancel it.
+export function gateParked(entries: Entry[], gate: string): boolean {
+  const last = lastGateRun(entries, gate)
+  if (!last) return false
+  // a reopen from another gate's `--revise --upstream` un-parks exactly as it un-settles:
+  // the upstream instruction is live work, and it outranks the park it lands on
+  if (openReopen(entries, gate) !== undefined) return false
+  return lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))?.decision === 'stop'
 }
 
 // `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
@@ -224,8 +242,11 @@ function flowRank(a: NextAction): number {
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
 function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
+  // A parked gate blocks the flow the same way an owed decision does, and for the same
+  // reason: offering it loops the driving loop on an act the human already declined. It
+  // does not disappear — `status`'s parked table names it and the run that un-parks it.
   if (['plan', 'implement', 'ship'].some((gate) =>
-    pendingDecision(entries, gate) !== undefined ||
+    pendingDecision(entries, gate) !== undefined || gateParked(entries, gate) ||
     (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
   // Row 95's split: a reopen on the plan's own plan gate is NOT a block — flowAction routes
   // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
@@ -276,8 +297,7 @@ export function parkedGates(
     for (const gate of gates) {
       const last = lastGateRun(entries, gate)
       if (!last) continue
-      const disposition = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
-      if (disposition?.decision !== 'stop') continue
+      if (!gateParked(entries, gate)) continue
       const anchors = (last.verdicts ?? [])
         .flatMap((rv) => rv.findings.filter((f) => f.blocking))
         .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))
@@ -414,9 +434,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
 
   // bound-stuck gates: no pending decision can ever be created (the gate
   // short-circuits), so the endgame decision itself is the next action —
-  // decisions outrank motion, jammed targets must not be silently skipped
+  // decisions outrank motion, jammed targets must not be silently skipped.
+  // A parked gate is excluded from all three: the human already made the endgame decision.
   for (const e of efforts) {
-    if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose')) {
+    if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose') &&
+      !gateParked(e.entries, 'decompose')) {
       return {
         line: liveExits('decompose', e.slug, e.entries, false, upstreamFor(root, 'decompose', e.slug)),
         target: e.slug, note: 'round bound reached — human decision required',
@@ -427,7 +449,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const id = String(plan.meta.id)
     const entries = readStream(root, id)
     for (const gate of ['plan', 'implement', 'ship'] as const) {
-      if (boundReached(entries, gate) && !gateSettled(entries, gate)) {
+      if (boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)) {
         const up = upstreamFor(root, gate, id, String(plan.meta.parent))
         return {
           line: liveExits(gate, id, entries, false, up),
@@ -439,7 +461,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   for (const spec of specs) {
     const id = String(spec.meta.id)
     const entries = readStream(root, id)
-    if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
+    if (boundReached(entries, 'design') && !gateSettled(entries, 'design') &&
+      !gateParked(entries, 'design')) {
       return {
         line: liveExits('design', id, entries, false, upstreamFor(root, 'design', id)),
         target: id, note: 'round bound reached — human decision required',
@@ -482,7 +505,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const reopened = openReopen(e.entries, 'decompose') !== undefined
     const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft')
     const effortSha = effortReviewedSha(root, canon, e.slug).sha
-    if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha)) {
+    if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha) &&
+      !gateParked(e.entries, 'decompose')) {
       return authoringOwed(e.entries, 'decompose', effortSha)
         ? {
             line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
@@ -498,6 +522,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     if (String(spec.meta.status) !== 'approved') continue
     if (!designPending(root, spec)) continue
     const id = String(spec.meta.id)
+    // A parked design gate is off the board too — routing to `witness design` or its gate
+    // re-offers work the human stopped. `status`'s parked row is where it stays named.
+    if (gateParked(readStream(root, id), 'design')) continue
     // An artifact authored for the CURRENT spec content is awaiting its gate → gate it.
     // Otherwise (no artifact, or one authored before a later amendment) → the design
     // skill authors fresh or, in amend mode, decides re-design vs --reconfirm.
@@ -547,7 +574,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const parent = findById(canon, String(plan.meta.parent))
     const planSha = parent ? planPairSha(plan, parent) : undefined
     const entries = readStream(root, id)
-    if (gateSettled(entries, 'plan', planSha)) continue
+    // Parked skips for the same reason settled does — the gate is off the board until a
+    // fresh run brings it back, and `status` is where it stays visible meanwhile.
+    if (gateSettled(entries, 'plan', planSha) || gateParked(entries, 'plan')) continue
     if (!authoringOwed(entries, 'plan', planSha)) {
       return { line: `witness gate plan ${id}`, target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
     }
