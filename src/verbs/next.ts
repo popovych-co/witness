@@ -33,10 +33,16 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   // it is discharged, exactly as a moved sha does — one predicate, both staleness terms
   if (openReopen(entries, gate) !== undefined) return false
   if (last.outcome === 'passed') return true
+  // D124. The LAST disposition is the state, and `stop` is one — `decide --show` has
+  // always reported `state: settled — stop` (decide.ts:105), while this predicate honored
+  // only `approve`, so one verb said settled and this one re-offered the flow forever.
+  // Two definitions of settled with `stop` on opposite sides; this is the unification.
+  // Read by position, not by presence: a revise AFTER a stop un-parks by design.
   const after = entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-  return after.some((e) => e.t === 'human-decision' &&
-    (e as unknown as DecisionEntry).gate === gate &&
-    (e as unknown as DecisionEntry).decision === 'approve')
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry)
+    .at(-1)
+  return after !== undefined && (after.decision === 'approve' || after.decision === 'stop')
 }
 
 // `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
