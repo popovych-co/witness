@@ -88,13 +88,37 @@ export function recommend(ctx: GateContext): Decision | undefined {
   const spent = roundsSinceApprove(entries, gate)
   const rounds = `round ${spent} of ${budget}`
 
+  // The block REPLACED the exits line on every surface, so anything it omits becomes
+  // undiscoverable. `liveExits` below the bound offers approve, revise-note, revise-upstream
+  // and stop; a rule that lists a subset makes the two disagree, which is the D119 defect
+  // class in a new dress. Every rule therefore carries the whole live set and only the ORDER
+  // and the prose differ. Omitted rather than flagged when no upstream resolves — `decide`
+  // refuses that with `unknown-owner`, so it is an illegal act, not an unresolved one (D129).
+  const upAlt = (when: string, tradeoff: string): Option[] =>
+    upstream === undefined ? [] : [opt(up, 'root', { when, tradeoff })]
+
   const stopOpt = opt(`${d} --stop`, 'terminal', {
     when: 'this work should not continue as scoped',
     tradeoff: 'parks the flow — next stops offering it and reopening is an explicit act',
   })
+  // Offered BELOW the bound as well as at it, and this is the accounted spelling on purpose.
+  // Plain `--approve` over a live blocking finding is legal below the bound (`decide` only
+  // requires `--override` at the bound) and `liveExits` lists it — but it is the same act
+  // with the accounting switched off: it stamps the artifact over the finding and records
+  // nothing, which is the unaccounted band-aid D122 exists to prevent. Advertising it beside
+  // an accounted one would make the block the place a human learns to skip the ledger, so
+  // the block names one approve and it is the one that mints the obligation.
   const overrideOpt = opt(`${d} --approve --override`, 'deferral', {
     when: 'you have read the finding and judge it wrong',
     tradeoff: 'stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)',
+  })
+  // The bound's only discarding act, and it must appear at EVERY bound branch. liveExits
+  // carries it unconditionally for a reason it states: nothing else offers it, and under D124
+  // `--stop` parks rather than discards, so a bound screen without abandon offers no way to
+  // end the work. The bound-recurrence branch omitted it and two existing tests caught that.
+  const abandonOpt = opt(`witness abandon ${target}`, 'terminal', {
+    when: 'this work should be discarded, not parked',
+    tradeoff: 'irreversible — unlike --stop, nothing reopens it',
   })
   const repairOpt = opt(`${d} --revise --repair`, 'deferral', {
     when: 'the edit you just made is the fix and you want it verified rather than assumed',
@@ -147,6 +171,7 @@ export function recommend(ctx: GateContext): Decision | undefined {
         overrideOpt,
         ...(repairGranted(entries, gate) ? [] : [repairOpt]),
         stopOpt,
+        abandonOpt,
       ],
     }
   }
@@ -165,10 +190,7 @@ export function recommend(ctx: GateContext): Decision | undefined {
           : [opt(up, 'root', { when: 'the parent artifact is what is wrong', tradeoff: 'reopens the parent stage and resets this budget' })]),
         ...(repairGranted(entries, gate) ? [] : [repairOpt]),
         stopOpt,
-        opt(`witness abandon ${target}`, 'terminal', {
-          when: 'this work should be discarded, not parked',
-          tradeoff: 'irreversible — unlike --stop, nothing reopens it',
-        }),
+        abandonOpt,
       ],
     }
   }
@@ -180,6 +202,7 @@ export function recommend(ctx: GateContext): Decision | undefined {
       options: [
         opt(up, 'root', { why: `${primary} was found in ${recurrence} rounds across distinct reviewed shas — one honest fix already failed at this seam, so the likelier fault is above it` }),
         opt(note, 'root', { when: 'the previous fix was the wrong fix and you now know the right one', tradeoff: `spends ${rounds}; recurring again leaves only the endgame set` }),
+        overrideOpt,
         stopOpt,
       ],
     }
@@ -193,6 +216,8 @@ export function recommend(ctx: GateContext): Decision | undefined {
       options: [
         opt(note, 'root', { why: `a finding contradicts policy pin #${pinned.contradicts_pin} — the gate escalated the conflict rather than burning a round on it, and only you can settle which side holds` }),
         opt(`${d} --approve`, 'root', { when: 'the pin still holds and the finding is the thing that is wrong', tradeoff: 'the lens will raise it again on the next round unless the pin is restated' }),
+        ...upAlt('the pin itself is what should change, and it was set at the stage above',
+          'reopens the parent stage and resets this budget'),
         stopOpt,
       ],
     }
@@ -207,6 +232,7 @@ export function recommend(ctx: GateContext): Decision | undefined {
           options: [
             opt(up, 'root', { why: `${anchors.length} of ${anchors.length} blocking findings anchor to ${upstream}, not to this artifact — it is faithful to a parent that is wrong` }),
             opt(note, 'root', { when: 'this artifact can route around the parent gap without the parent changing', tradeoff: 'leaves the parent wrong for everything else that derives from it' }),
+            overrideOpt,
             stopOpt,
           ],
         }
@@ -214,7 +240,9 @@ export function recommend(ctx: GateContext): Decision | undefined {
           key: 'decide', rule: 'blocking-here', anchor: primary,
           options: [
             opt(note, 'root', { why: `${anchors.length} blocking finding${anchors.length === 1 ? '' : 's'} anchored inside this artifact (${anchors.slice(0, 2).join(', ')}); ${rounds}` }),
-            opt(up, 'root', { when: 'the finding is only true because the parent asks for something unbuildable here', tradeoff: 'reopens the parent stage and resets this budget; a wrong upstream spends a whole stage cycle' }),
+            ...upAlt('the finding is only true because the parent asks for something unbuildable here',
+              'reopens the parent stage and resets this budget; a wrong upstream spends a whole stage cycle'),
+            overrideOpt,
             stopOpt,
           ],
         }
@@ -230,6 +258,8 @@ export function recommend(ctx: GateContext): Decision | undefined {
       options: [
         opt(`${d} --approve`, 'root', { why: `${nonBlocking} finding${nonBlocking === 1 ? '' : 's'}, none blocking; all ${last.checks.length} checks green` }),
         opt(note, 'root', { when: 'a non-blocking finding is one you want fixed before it becomes load-bearing', tradeoff: `spends ${rounds} on findings the battery already judged non-blocking` }),
+        ...upAlt('the finding points at something the stage above got wrong',
+          'reopens the parent stage and resets this budget'),
         stopOpt,
       ],
     }
@@ -249,6 +279,8 @@ export function recommend(ctx: GateContext): Decision | undefined {
             : 'whether this cut is how you would ship it. Coverage is checked; the shape of the cut is not',
         }),
         opt(note, 'root', { when: 'the evidence is right and the thing itself is wrong', tradeoff: `costs ${rounds}; the gate re-runs on your edit` }),
+        ...upAlt('what is wrong is what this stage was ASKED to build, not how it was built',
+          'reopens the parent stage and resets this budget; the work here waits on that cycle'),
         stopOpt,
       ],
     }
@@ -262,6 +294,8 @@ export function recommend(ctx: GateContext): Decision | undefined {
         why: `${last.checks.length - checksFailed.length} of ${last.checks.length} checks green, 0 blocking findings — nothing in the evidence stopped this round; the stop is the --manual flag armed for this run`,
       }),
       opt(note, 'root', { when: 'you armed --manual because you expect the battery to miss something and you can name it', tradeoff: `spends ${rounds} on a round the evidence passed` }),
+      ...upAlt('what you armed --manual to catch is a fault in the stage above',
+        'reopens the parent stage and resets this budget'),
       stopOpt,
     ],
   }

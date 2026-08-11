@@ -288,7 +288,11 @@ describe('witness decide', () => {
     expect(all).not.toContain('rows are structured for self-repair')
     expect(all).not.toContain('refused[')
     expect(all).toContain('bound reached')
-    expect(all).toContain('exits: witness decide plan auth-refresh --approve --override')
+    // D121: the terminus renders the ranked block rather than a flat exits line, and the
+    // override is what it recommends there — the assertion is about the act being offered,
+    // so it moves onto the option row instead of the line that used to carry it.
+    expect(all).toMatch(/^decide: \d+ options · 1 is recommended$/m)
+    expect(all).toContain('   witness decide plan auth-refresh --approve --override')
   })
 
   it('at the bound, a plain revise names the exits without the self-repair trailer', async () => {

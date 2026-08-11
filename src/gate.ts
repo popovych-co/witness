@@ -22,6 +22,7 @@ import {
 export { liveExits } from './rounds.js'
 import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
+import { recommend, renderDecision } from './recommend.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
 export type ChangeClass = 'feature' | 'fix' | 'chore'
@@ -148,8 +149,23 @@ export function renderGateRun(
     }
     // Without `entries` this stays a pure formatter over the entry it was handed, and the
     // off-bound triple is the right answer; with them it tells the truth at the bound too.
-    if (opts.help !== false) ctx.out(cmd('help', liveExits(entry.gate, entry.artifact, entries, false, opts.upstream)))
+    if (opts.help !== false) renderChoices(ctx, entry.gate, entry.artifact, entries, opts.upstream)
   }
+}
+
+// D121: the exits line stated which commands would not refuse and never which to take, so
+// --approve read as the default at stops with a live blocking finding. The block ranks them.
+// One renderer for all four decision surfaces in this file — a per-site copy is how D119's
+// nine hand-copied exits sets happened, and three of these four sites were among them.
+// `undefined` from `recommend` means no decision exists at this state (stale below the
+// bound, where the only live act is a re-gate); the exits line still answers that.
+function renderChoices(
+  ctx: Ctx, gate: string, target: string, entries: Entry[], upstream: string | undefined,
+  stale = false,
+): void {
+  const d = recommend({ gate, target, entries, upstream, stale })
+  if (d) renderDecision(d).forEach((l) => ctx.out(l))
+  else ctx.out(cmd('help', liveExits(gate, target, entries, stale, upstream)))
 }
 
 // Row 79: the human approving a plan sees the run's shape before it starts.
@@ -289,13 +305,13 @@ export async function runGate(
     ctx.out(kv('outcome', 'revise changed nothing — reviewed content is identical to the last round'))
     // The owed work is an EDIT, so the exits are the decisions that remain legal without
     // one — the same set every other screen shows, rather than prose naming two of four.
-    ctx.out(cmd('help', liveExits(spec.gate, target, entries, false, upstreamId)))
+    renderChoices(ctx, spec.gate, target, entries, upstreamId)
     return EXIT.FINDINGS
   }
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    ctx.out(cmd('help', liveExits(spec.gate, target, entries, false, upstreamId)))
+    renderChoices(ctx, spec.gate, target, entries, upstreamId)
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -435,7 +451,7 @@ export async function runGate(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      ctx.out(cmd('help', liveExits(spec.gate, target, entriesNow, false, upstreamId)))
+      renderChoices(ctx, spec.gate, target, entriesNow, upstreamId)
       return EXIT.BLOCKED
     }
 

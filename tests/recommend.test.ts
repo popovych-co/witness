@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent } from '../src/rounds.js'
+import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const D: Decision = {
   key: 'decide',
@@ -179,6 +180,39 @@ describe('the rule table is ordered and total', () => {
       run(2, 'b', 'S'), run(3, 'c', 'S'), run(4, 'd', 'S')]
     for (const o of recommend(ctxFor(e))!.options) {
       if (o.depth === 'deferral') expect(o.note ?? o.tradeoff).toMatch(/discharge|obligation|until/i)
+    }
+  })
+})
+
+const BLOCKING_VERDICT = {
+  coverage: [
+    { anchor: 'auth-refresh-plan-1 > ## Step: s1', note: 'read' },
+    { anchor: 'auth-refresh > ## Behavior', note: 'read' },
+  ],
+  findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'step is untestable' }],
+}
+
+async function stopped() {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  const scenario = fakeScenario()
+  putVerdict(scenario, BLOCKING_VERDICT)
+  const g = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+  return { repo, gateOut: g.stdout }
+}
+
+describe('every decision surface renders the block', () => {
+  it('the gate stop and decide --show both carry ranked options and a run: line', async () => {
+    const { repo, gateOut } = await stopped()
+    const show = (await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--show'])).stdout
+    for (const out of [gateOut, show]) {
+      expect(out).toMatch(/decide: \d+ options · 1 is recommended/)
+      expect(out).toContain('1 · recommended · root')
+      expect(out).toContain('   why: ')
+      expect(out).toMatch(/^run: witness decide plan auth-refresh-plan-1 /m)
+      expect(out).not.toContain('<id>')
     }
   })
 })

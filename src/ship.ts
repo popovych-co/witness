@@ -10,6 +10,7 @@ import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
+import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
@@ -230,7 +231,13 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   }
   if (phase === 'awaiting-decision') {
     ctx.out(kv('ship', `${planId} awaits the ship decision`))
-    ctx.out(cmd('help', liveExits('ship', planId, entries, false, gateSpec('ship')?.upstreamOf?.(root, canon, planId))))
+    // D121. Ship is one of the three stops north star 3 reserves for human judgment, so the
+    // block's `judge-first:` line matters most here: the battery judged the code against the
+    // plan, and nothing judged the plan against the product.
+    const up = gateSpec('ship')?.upstreamOf?.(root, canon, planId)
+    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale: false })
+    if (d) renderDecision(d).forEach((l) => ctx.out(l))
+    else ctx.out(cmd('help', liveExits('ship', planId, entries, false, up)))
     return EXIT.FINDINGS
   }
   if (phase === 'pr') {

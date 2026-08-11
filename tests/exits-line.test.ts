@@ -48,14 +48,24 @@ describe('cmd emits commands raw', () => {
   })
 })
 
-describe('decide --show prints a pasteable exits line', () => {
-  it('does not wrap or double the quotes', async () => {
+// D120's property, carried onto the surface that replaced the exits line. Under D121
+// `decide --show` renders the option block instead, so the commands now arrive as option
+// rows and a `run:` line — all three must still be raw, because `esc` quoting any of them
+// pastes into a shell as an empty --note exactly as the exits line once did.
+describe('decide --show prints pasteable commands', () => {
+  it('does not wrap or double the quotes on any command it renders', async () => {
     const repo = await stoppedPlanGate()
     const s = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--show'])
-    const line = s.stdout.split('\n').find((l) => l.startsWith('exits:'))!
-    expect(line).not.toContain('""')
-    expect(line.startsWith('exits: "')).toBe(false)
-    expect(line).toContain('witness decide plan auth-refresh-plan-1 --approve')
+    const commands = s.stdout.split('\n')
+      .filter((l) => l.includes('witness decide plan auth-refresh-plan-1'))
+    expect(commands.length).toBeGreaterThan(1)
+    for (const line of commands) {
+      expect(line).not.toContain('""')
+      expect(line.trimStart().startsWith('"')).toBe(false)
+    }
+    const run = s.stdout.split('\n').find((l) => l.startsWith('run: '))!
+    expect(run).toBe('run: witness decide plan auth-refresh-plan-1 --revise --note "1 blocking finding: auth-refresh-plan-1 > ## Step: s1"')
+    expect(s.stdout).toContain('witness decide plan auth-refresh-plan-1 --approve --override')
   })
 })
 
@@ -161,7 +171,9 @@ const CLEAN = {
   findings: [],
 }
 
-describe('ship prints one exits set', () => {
+// D119's property — one answer to one question — re-expressed against the block. The old
+// shape counted `help:` lines; under D121 the same claim is "exactly one option block".
+describe('ship prints one decision set', () => {
   it('gate phase prints no second approve-only line; awaiting-decision names upstream', async () => {
     const seed = await shippableRepo()
     addOrigin(seed.repo)
@@ -173,15 +185,16 @@ describe('ship prints one exits set', () => {
 
     outs.length = 0
     await runShip(ctx, seed.planId)
-    const gateHelps = outs.filter((l) => l.startsWith('help:'))
-    expect(gateHelps).toHaveLength(1)
-    expect(gateHelps[0]).toContain('--revise --upstream')
+    const gateBlocks = outs.filter((l) => /^decide: \d+ options? · 1 is recommended$/.test(l))
+    expect(gateBlocks).toHaveLength(1)
+    expect(outs.filter((l) => l.startsWith('help:'))).toHaveLength(0)
+    expect(outs.some((l) => l.includes('--revise --upstream'))).toBe(true)
 
     outs.length = 0
     await runShip(ctx, seed.planId)
-    const awaiting = outs.filter((l) => l.startsWith('help:'))
+    const awaiting = outs.filter((l) => /^decide: \d+ options? · 1 is recommended$/.test(l))
     expect(awaiting).toHaveLength(1)
-    expect(awaiting[0]).toContain('--revise --upstream')
+    expect(outs.some((l) => l.includes('--revise --upstream'))).toBe(true)
   })
 })
 

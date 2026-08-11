@@ -4,6 +4,7 @@ import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import '../gates/index.js'
 import { gateSpec, liveExits, renderGateRun } from '../gate.js'
+import { recommend, renderDecision } from '../recommend.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -48,7 +49,11 @@ function renderBound(
   ctx.err(kv('target', target))
   ctx.err(kv('state', `bound reached — ${roundsSinceApprove(entries, gate)} rounds; the gate will not run again`))
   if (note !== undefined) ctx.err(kv('note', note))
-  ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
+  // D121. The endgame is exactly where a bare list of legal flags is least useful: every
+  // remaining act carries a cost, and which cost is worth paying is the whole question.
+  const d = recommend({ gate, target, entries, upstream, stale })
+  if (d) renderDecision(d).forEach((l) => ctx.err(l))
+  else ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
   return EXIT.REFUSED
 }
 
@@ -123,7 +128,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('decision', disposition.decision))
       if (disposition.note) ctx.out(kv('note', disposition.note))
     }
-    ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
+    // The surface a human actually reads while deciding, so it is the one that most owes a
+    // ranking rather than a menu. `undefined` is stale below the bound, where no decision
+    // exists and the exits line's single re-gate act is the honest answer.
+    const shown = recommend({ gate, target, entries, upstream: upstreamId, stale })
+    if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
+    else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
     return EXIT.OK
   }
 
