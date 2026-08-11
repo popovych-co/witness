@@ -175,6 +175,34 @@ export function boundReached(entries: Entry[], gate: string): boolean {
   return roundsSinceApprove(entries, gate) >= roundBudget(entries, gate)
 }
 
+const PREFILL_MAX = 120
+const PREFILL_ANCHORS = 3
+
+// What goes inside `--revise --note "…"`. An index of the anchoring run, never a judgment:
+// the author already receives the whole verdict in `decide`'s revise-context, so this
+// exists to make the command runnable (D129), not to tell them anything new. `<why>` is
+// the honest fallback when the run holds no facts — a clean standing stop, where the
+// reason is the human's and the CLI has none. That placeholder is removed in 0.11.0 by the
+// flagged-option rendering, which needs the option-row block to express it.
+export function notePrefill(entries: Entry[], gate: string): string {
+  const last = lastGateRun(entries, gate)
+  if (!last) return '<why>'
+  const anchors = (last.verdicts ?? [])
+    .flatMap((rv) => rv.findings.filter((f) => f.blocking))
+    .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))
+  const unique = [...new Set(anchors)]
+  if (unique.length === 0) {
+    const failed = last.checks.filter((c) => !c.ok).map((c) => c.name)
+    if (failed.length === 0) return '<why>'
+    return `failed checks: ${failed.join(', ')}`.slice(0, PREFILL_MAX)
+  }
+  const shown = unique.slice(0, PREFILL_ANCHORS)
+  const more = unique.length - shown.length
+  const text = `${unique.length} blocking finding${unique.length === 1 ? '' : 's'}: ` +
+    shown.join(', ') + (more > 0 ? ` +${more} more` : '')
+  return text.slice(0, PREFILL_MAX)
+}
+
 // Which decisions are legal RIGHT NOW is a pure function of journal state, so it lives
 // where the state is — it was in `gate.ts`, which `next.ts` cannot import back (gate.ts
 // already imports next.ts), and that one-way edge is precisely why `next` grew three
@@ -182,12 +210,16 @@ export function boundReached(entries: Entry[], gate: string): boolean {
 // (109), and a fixed set is what this function was written to abolish. Skills used to
 // recite the same triple, which is wrong at the bound (D67's endgame set) and now wrong
 // in three more states.
-// `upstream` is the id the caller already resolved (next knows the owning effort; the gate
-// and decide surfaces do not) — the placeholder is a fallback, never a downgrade of a line
-// that used to name the real target.
+// `upstream` is REQUIRED and has no default: it used to default to the literal `<id>`,
+// which shipped an unrunnable command on every screen (D129). `undefined` means no
+// upstream exists — `decide` refuses that with `unknown-owner`, so the option is not legal
+// and is omitted rather than printed as a placeholder.
 export function liveExits(
-  gate: string, target: string, entries: Entry[], stale: boolean, upstream = '<id>',
+  gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
 ): string {
+  const d = `witness decide ${gate} ${target}`
+  const up = upstream === undefined ? [] : [`--revise --upstream ${upstream}`]
+  const note = `--revise --note "${notePrefill(entries, gate)}"`
   // The bound outranks staleness: at the bound the gate short-circuits and will not run
   // again (gate.ts), so "re-gate" is the D67 lie whatever the sha says. Stale content only
   // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
@@ -197,13 +229,17 @@ export function liveExits(
     // the human standing at the bound with a fixed finding actually wants — naming it
     // beside `--upstream` is what stops "fix it and re-gate" from being a move the tool
     // advertises nowhere and refuses twice.
-    const repair = repairGranted(entries, gate) ? '' : ' | --revise --repair'
-    return stale
-      ? `witness decide ${gate} ${target} --revise --upstream ${upstream}${repair} | --stop`
-      : `witness decide ${gate} ${target} --approve --override | --revise --upstream ${upstream}${repair} | --stop`
+    // `witness abandon` joins the set here because the hardcoded branch this replaces
+    // printed it (`help: or discard the plan`) and nothing else offers it — and under D124
+    // `--stop` becomes *park*, which would otherwise leave the bound screen with no
+    // discarding act at all.
+    const repair = repairGranted(entries, gate) ? [] : ['--revise --repair']
+    const approve = stale ? [] : ['--approve --override']
+    return [`${d} ${[...approve, ...up, ...repair, '--stop'].join(' | ')}`,
+      `witness abandon ${target}`].join(' | ')
   }
   if (stale) return `witness gate ${gate} ${target}`
-  return `witness decide ${gate} ${target} --approve | --revise --note "<why>" | --revise --upstream ${upstream} | --stop`
+  return `${d} ${['--approve', note, ...up, '--stop'].join(' | ')}`
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {

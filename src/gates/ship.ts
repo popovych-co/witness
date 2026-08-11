@@ -115,4 +115,10 @@ registerGate({
     // undefined is "cannot compute", never "moved" — same doctrine as the implement gate.
     return baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
   },
+
+  // Same as the implement gate: what ships is a plan's code, so upstream is the plan.
+  upstreamOf(_root, canon, planId) {
+    const plan = findById(canon, planId)
+    return plan && plan.meta.type === 'plan' ? planId : undefined
+  },
 })

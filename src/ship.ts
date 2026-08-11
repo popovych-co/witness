@@ -7,9 +7,9 @@ import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { findById, loadCanon, type CanonDoc } from './scan.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { kv } from './toon.js'
-import { runGate } from './gate.js'
-import { lastGateRun, type DecisionEntry } from './rounds.js'
+import { cmd, kv } from './toon.js'
+import { gateSpec, runGate } from './gate.js'
+import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
@@ -223,12 +223,14 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     if (rebase.value === 'rebased') ctx.out(kv('rebase', `${shipBranch} moved — rebased before the battery`))
     const code = await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
     if (code !== EXIT.FINDINGS && code !== EXIT.OK) return code
-    ctx.out(`help: witness decide ship ${planId} --approve to send the PR — ship always stops`)
+    // No second exits line here: the gate's own render already printed the complete set
+    // through liveExits. An approve-only line directly beneath it is two answers to one
+    // question, and the narrower one is the one a reader acts on (D119).
     return EXIT.FINDINGS
   }
   if (phase === 'awaiting-decision') {
     ctx.out(kv('ship', `${planId} awaits the ship decision`))
-    ctx.out(`help: witness decide ship ${planId} --show | --approve | --revise --note "<why>" | --stop`)
+    ctx.out(cmd('help', liveExits('ship', planId, entries, false, gateSpec('ship')?.upstreamOf?.(root, canon, planId))))
     return EXIT.FINDINGS
   }
   if (phase === 'pr') {

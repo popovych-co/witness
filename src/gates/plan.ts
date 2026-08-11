@@ -91,6 +91,11 @@ registerGate({
     return plan && parent ? planPairSha(plan, parent) : undefined
   },
 
+  upstreamOf(_root, canon, planId) {
+    const plan = findById(canon, planId)
+    return plan && plan.meta.type === 'plan' ? String(plan.meta.parent) : undefined
+  },
+
   approveStamps(_root, canon, planId) {
     const doc = findById(canon, planId)
     return doc && String(doc.meta.status) === 'draft' ? [{ artifact: planId, to: 'approved' }] : []
