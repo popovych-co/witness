@@ -9,7 +9,7 @@ import { effortAbandoned, effortStreams, latestRecap, readStream } from '../jour
 import { modelFloorLines } from '../model.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
-import { pendingDecision } from '../rounds.js'
+import { pendingDecision, type DecisionEntry } from '../rounds.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
@@ -41,6 +41,49 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
     }
   }
   return out
+}
+
+const RECOMMENDER_MIN_SAMPLE = 5
+
+// D130. The subject is THE RULE, never the human: `reserved-stop-clean · fired 9 ·
+// overridden 7` says *this rule is wrong*. A per-human compliance figure would be the same
+// data with the opposite effect — conformity pressure at exactly the three stops where
+// independent judgment is the point. Suppressed below a minimum sample: a percentage over
+// three decisions measures nothing and reads as authority.
+//
+// Split from the stream walk so the tally is testable without seeding five real decisions.
+export function recommenderRowsFrom(
+  decisions: Array<{ rule?: string; recommended?: string; decision: string }>,
+): Array<{ rule: string; fired: number; overridden: number }> {
+  const tally = new Map<string, { fired: number; overridden: number }>()
+  for (const d of decisions) {
+    if (!d.rule || !d.recommended) continue
+    const row = tally.get(d.rule) ?? { fired: 0, overridden: 0 }
+    row.fired += 1
+    // `startsWith` so `revise-upstream` counts as following a `revise` recommendation. If
+    // that proves too loose in the field, tighten it to full verbs and record the change.
+    if (!d.decision.startsWith(d.recommended)) row.overridden += 1
+    tally.set(d.rule, row)
+  }
+  return [...tally.entries()]
+    .filter(([, r]) => r.fired >= RECOMMENDER_MIN_SAMPLE)
+    .map(([rule, r]) => ({ rule, ...r }))
+    .sort((a, b) => b.overridden - a.overridden || a.rule.localeCompare(b.rule))
+}
+
+export function recommenderRows(
+  root: string, canon: Canon,
+): Array<{ rule: string; fired: number; overridden: number }> {
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  const decisions: Array<{ rule?: string; recommended?: string; decision: string }> = []
+  for (const id of streams) {
+    for (const e of readStream(root, id)) {
+      if (e.t !== 'human-decision') continue
+      const d = e as unknown as DecisionEntry
+      decisions.push({ rule: d.rule, recommended: d.recommended, decision: d.decision })
+    }
+  }
+  return recommenderRowsFrom(decisions)
 }
 
 export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
@@ -100,6 +143,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (parked.length > 0) {
     rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],
       parked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const rec = recommenderRows(root, canon)
+  if (rec.length > 0) {
+    rows('recommender', ['rule', 'fired', 'overridden'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))

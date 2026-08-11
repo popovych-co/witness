@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { readStream, type Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent } from '../src/rounds.js'
+import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
 import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
@@ -293,5 +297,42 @@ describe('the decision records what was recommended', () => {
       .filter((e) => e.t === 'human-decision').at(-1)! as unknown as Record<string, unknown>
     expect(d.decision).toBe('stop')
     expect(d.recommended).toBe('revise')
+  })
+})
+
+describe('status reports the recommender by rule', () => {
+  it('counts firings and overrides, never per-human compliance', async () => {
+    const { repo } = await stopped()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    const s = await repo.cli(['status'])
+    // below the minimum sample the table is suppressed
+    expect(s.stdout).not.toContain('recommender')
+    expect(s.stdout).not.toMatch(/followed|compliance/i)
+  })
+
+  it('tallies by rule once the sample is reached, most-overridden first', async () => {
+    const rows = recommenderRowsFrom([
+      { rule: 'reserved-stop-clean', recommended: 'approve', decision: 'stop' },
+      { rule: 'reserved-stop-clean', recommended: 'approve', decision: 'stop' },
+      { rule: 'reserved-stop-clean', recommended: 'approve', decision: 'stop' },
+      { rule: 'reserved-stop-clean', recommended: 'approve', decision: 'approve' },
+      { rule: 'reserved-stop-clean', recommended: 'approve', decision: 'approve' },
+      { rule: 'blocking-here', recommended: 'revise', decision: 'revise' },
+    ])
+    expect(rows).toEqual([{ rule: 'reserved-stop-clean', fired: 5, overridden: 3 }])
+  })
+})
+
+// D121's hard constraint: these three fields are recorded and never consumed. A gate
+// predicate that read them would make a recommendation change an outcome, which is the one
+// thing the recommender must never do.
+describe('the new fields are inert', () => {
+  it('no gate predicate reads recommended or rule', () => {
+    const src = fileURLToPath(new URL('../src', import.meta.url))
+    const text = ['rounds.ts', 'gate.ts', 'verbs/next.ts', 'stamp.ts']
+      .map((f) => readFileSync(join(src, f), 'utf8')).join('\n')
+    const predicates = text.split('\n').filter((l) =>
+      /keyOf|roundsSinceApprove|boundReached|repairGranted|appendKind|gateSettled/.test(l))
+    expect(predicates.join('\n')).not.toMatch(/\.recommended|\.rule\b/)
   })
 })
