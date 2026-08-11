@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
-import { renderDecision, type Decision } from '../src/recommend.js'
+import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent } from '../src/rounds.js'
 
 const D: Decision = {
@@ -101,5 +101,84 @@ describe('ladderSpent', () => {
   it('is false when the upstream carried no anchor', () => {
     const e = [run(1, 'a', 'S'), decision('revise-upstream'), run(2, 'b', 'S')]
     expect(ladderSpent(e, 'plan', 'S')).toBe(false)
+  })
+})
+
+const ctxFor = (entries: Entry[], over: Partial<{ upstream: string; stale: boolean }> = {}) => ({
+  gate: 'plan', target: 'p1', entries, upstream: over.upstream ?? 'auth-refresh', stale: over.stale ?? false,
+})
+
+describe('the rule table is ordered and total', () => {
+  it('blocking-here: one blocking finding anchored in this artifact', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')]))!
+    expect(d.rule).toBe('blocking-here')
+    expect(d.options[0]!.command).toContain('--revise --note')
+    expect(d.options[0]!.depth).toBe('root')
+    expect(d.anchor).toBe('p1 > ## Step: s1')
+  })
+
+  it('blocking-parent: every blocking anchor names the parent', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'auth-refresh > ## Behavior')]))!
+    expect(d.rule).toBe('blocking-parent')
+    expect(d.options[0]!.command).toContain('--revise --upstream auth-refresh')
+  })
+
+  it('anchor-recurrence-2: escalates, and patch-again drops to alternative', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')]))!
+    expect(d.rule).toBe('anchor-recurrence-2')
+    expect(d.options[0]!.command).toContain('--revise --upstream auth-refresh')
+    expect(d.options[1]!.command).toContain('--revise --note')
+  })
+
+  it('ladder-spent: upstream already taken for this anchor', () => {
+    const e = [run(1, 'a', 'S'), decision('revise-upstream', { anchor: 'S' }),
+      run(2, 'b', 'S'), run(3, 'c', 'S'), run(4, 'd', 'S')]
+    const d = recommend(ctxFor(e))!
+    expect(d.rule).toBe('ladder-spent')
+    expect(d.options[0]!.command).toContain('--stop')
+    expect(d.options[0]!.depth).toBe('terminal')
+    expect(d.options[1]!.depth).toBe('deferral')
+    expect(d.options[1]!.tradeoff).toBeTruthy()
+  })
+
+  it('non-blocking-only: approve', () => {
+    const r = run(1, 'a', 'S')
+    ;(r as unknown as { verdicts: Array<{ findings: Array<Record<string, unknown>> }> })
+      .verdicts[0]!.findings[0]!.blocking = false
+    const d = recommend(ctxFor([r]))!
+    expect(d.rule).toBe('non-blocking-only')
+    expect(d.options[0]!.command).toBe('witness decide plan p1 --approve')
+  })
+
+  it('reserved-stop-clean: approve with judge-first', () => {
+    // the ENTRY's gate has to be the ship gate too — `recommend` reads the last run FOR THE
+    // GATE IT IS ASKED ABOUT, so a plan-gate run with a ship-gate context is no run at all
+    const r = run(1, 'a', 'S', { gate: 'ship' })
+    const raw = r as unknown as { verdicts: Array<{ findings: unknown[] }>; standing: string }
+    raw.verdicts[0]!.findings = []
+    raw.standing = 'ship always stops'
+    const d = recommend({ ...ctxFor([r]), gate: 'ship' })!
+    expect(d.rule).toBe('reserved-stop-clean')
+    expect(d.options[0]!.judgeFirst).toContain('whether this change should exist')
+  })
+
+  it('manual-stop: green, no standing stop, stopped anyway', () => {
+    const r = run(1, 'a', 'S')
+    const raw = r as unknown as { verdicts: Array<{ findings: unknown[] }>; manual: boolean }
+    raw.verdicts[0]!.findings = []
+    raw.manual = true
+    const d = recommend(ctxFor([r]))!
+    expect(d.rule).toBe('manual-stop')
+    expect(d.options[0]!.command).toBe('witness decide plan p1 --approve')
+    expect(d.options[0]!.judgeFirst).toBeUndefined()
+    expect(d.options[0]!.why).toContain('--manual')
+  })
+
+  it('every option carrying deferral depth names a discharge', () => {
+    const e = [run(1, 'a', 'S'), decision('revise-upstream', { anchor: 'S' }),
+      run(2, 'b', 'S'), run(3, 'c', 'S'), run(4, 'd', 'S')]
+    for (const o of recommend(ctxFor(e))!.options) {
+      if (o.depth === 'deferral') expect(o.note ?? o.tradeoff).toMatch(/discharge|obligation|until/i)
+    }
   })
 })
