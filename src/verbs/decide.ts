@@ -14,7 +14,7 @@ import { findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
 import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
-import { kv, rows } from '../toon.js'
+import { cmd, kv, rows } from '../toon.js'
 import {
   ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
   roundsSinceApprove, type DecisionEntry,
@@ -41,13 +41,14 @@ function flagValues(argv: string[], flag: string): string[] {
 // surface instead: state, then the exits that actually work. The exit code is unchanged;
 // the decision the human asked for still did not happen.
 function renderBound(
-  ctx: Ctx, gate: string, target: string, entries: Entry[], stale: boolean, note?: string,
+  ctx: Ctx, gate: string, target: string, entries: Entry[], stale: boolean,
+  upstream: string | undefined, note?: string,
 ): number {
   ctx.err(kv('gate', gate))
   ctx.err(kv('target', target))
   ctx.err(kv('state', `bound reached — ${roundsSinceApprove(entries, gate)} rounds; the gate will not run again`))
   if (note !== undefined) ctx.err(kv('note', note))
-  ctx.err(kv('exits', liveExits(gate, target, entries, stale)))
+  ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
   return EXIT.REFUSED
 }
 
@@ -73,6 +74,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const canon = loadCanon(root)
+  const upstreamId = spec.upstreamOf?.(root, canon, target)
 
   if (argv.includes('--show')) {
     if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
@@ -99,7 +101,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
       if (reopen.note) ctx.out(kv('note', reopen.note))
       ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · witness log ${target}`))
-      ctx.out(kv('exits', liveExits(gate, target, entries, stale)))
+      ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
       return EXIT.OK
     }
     if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
@@ -114,14 +116,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return EXIT.OK
     }
     // pending (no disposition) or revise (the author's input): the verdict is actionable
-    renderGateRun(ctx, last, 'ran', { entries, help: false })
+    renderGateRun(ctx, last, 'ran', { entries, help: false, upstream: upstreamId })
     const shownPins = policyPins(entries)
     if (shownPins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], shownPins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (disposition) {
       ctx.out(kv('decision', disposition.decision))
       if (disposition.note) ctx.out(kv('note', disposition.note))
     }
-    ctx.out(kv('exits', liveExits(gate, target, entries, stale)))
+    ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
     return EXIT.OK
   }
 
@@ -169,7 +171,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (repair && repairGranted(entries, gate)) {
     renderRefusal([v('repair', 'repair-spent', 'one repair round was already granted in this budget window',
-      liveExits(gate, target, entries, false))]).forEach((l) => ctx.err(l))
+      liveExits(gate, target, entries, false, upstreamId))]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
@@ -206,7 +208,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       // liveExits, not a hardcoded triple: it drops --approve --override when content
       // moved, which is the same set the stale-verdict refusal below names. A human
       // cannot honestly stamp bytes no battery read, at the bound or anywhere else.
-      return renderBound(ctx, gate, target, entries, nowSha !== undefined && nowSha !== last.reviewed_sha)
+      return renderBound(ctx, gate, target, entries, nowSha !== undefined && nowSha !== last.reviewed_sha, upstreamId)
     }
     renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
       `a stopped gate-run awaiting a decision — run: witness gate ${gate} ${target}`)])
@@ -218,7 +220,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (decision === 'revise' && atBound && upstream === undefined && !repair) {
     return renderBound(ctx, gate, target, entries,
-      last !== undefined && nowSha !== undefined && nowSha !== last.reviewed_sha,
+      last !== undefined && nowSha !== undefined && nowSha !== last.reviewed_sha, upstreamId,
       'upstream reopens the parent and resets the budget; --repair buys one more round here')
   }
 
@@ -262,7 +264,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       blockers.push(v('gate', 'stale-verdict',
         `verdict @${short(anchor.reviewed_sha)}, content @${short(now)}`,
         atBound
-          ? `${liveExits(gate, target, entries, true)} (bound reached — the gate will not re-run as it stands)`
+          ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
           : `a verdict describing current content — run: witness gate ${gate} ${target}`))
     }
     if (blockers.length > 0) {
@@ -396,7 +398,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
     ctx.out('revise-context: (reconstructed from the journal — survives session death)')
-    renderGateRun(ctx, anchor, 'ran', { entries, help: false })
+    renderGateRun(ctx, anchor, 'ran', { entries, help: false, upstream: upstreamId })
     const pins = policyPins(readStream(root, target))
     if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (note) ctx.out(kv('note', note))

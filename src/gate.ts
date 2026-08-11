@@ -10,7 +10,7 @@ import { loadCanon, findById, type Canon } from './scan.js'
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { kv, rows } from './toon.js'
+import { cmd, kv, rows } from './toon.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
 import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
@@ -63,6 +63,13 @@ export interface GateSpec {
   // computed (no worktree, missing parent); the caller then approves rather than
   // converting an unrelated condition into a misleading refusal.
   currentSha?(root: string, canon: Canon, cfg: Config, target: string): string | undefined
+  // The id `--revise --upstream` names for this gate. Resolved from canon the caller has
+  // already loaded — `liveExits` used to default this to the literal string `<id>`, and a
+  // default that produces an unrunnable command is how the placeholder reached every
+  // screen (D129). `undefined` means no upstream exists, which makes the option ILLEGAL
+  // rather than unresolved: `decide` refuses it with `unknown-owner`, so `liveExits` omits
+  // it instead of printing a command the CLI would decline.
+  upstreamOf?(root: string, canon: Canon, target: string): string | undefined
   approveStamps?(root: string, canon: Canon, target: string): Stamp[]
   approveMeta?(root: string, canon: Canon, cfg: Config, target: string): MetaStamp[]
 }
@@ -100,7 +107,7 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 // `help: false` is for callers that render their own `exits:` line (`decide --show`).
 export function renderGateRun(
   ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume',
-  opts: { entries?: Entry[]; help?: boolean } = {},
+  opts: { entries?: Entry[]; help?: boolean; upstream?: string } = {},
 ): void {
   const entries = opts.entries ?? []
   const budget = opts.entries ? roundBudget(entries, entry.gate) : ROUND_BOUND
@@ -141,7 +148,7 @@ export function renderGateRun(
     }
     // Without `entries` this stays a pure formatter over the entry it was handed, and the
     // off-bound triple is the right answer; with them it tells the truth at the bound too.
-    if (opts.help !== false) ctx.out(`help: ${liveExits(entry.gate, entry.artifact, entries, false)}`)
+    if (opts.help !== false) ctx.out(cmd('help', liveExits(entry.gate, entry.artifact, entries, false, opts.upstream)))
   }
 }
 
@@ -179,6 +186,9 @@ export async function runGate(
   const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const input = inputR.value
+  // Resolved once for every render this run performs — the entry renderers stay pure
+  // formatters (they take the id, they never look it up).
+  const upstreamId = spec.upstreamOf?.(root, canon, target)
 
   const batteryR = batteryFor(cfgR.value, spec.gate, input.class)
   if (!batteryR.ok) { renderRefusal(batteryR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -270,21 +280,22 @@ export async function runGate(
     ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
   }
   if (kind.kind === 'resume') {
-    renderGateRun(ctx, kind.entry, 'resume', { entries })
+    renderGateRun(ctx, kind.entry, 'resume', { entries, upstream: upstreamId })
     printDispatchArithmetic(ctx, root, spec.gate, target)
     return kind.entry.outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   }
   if (kind.kind === 'changed-nothing') {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', 'revise changed nothing — reviewed content is identical to the last round'))
-    ctx.out('help: edit the artifact (or code) before re-running, or decide --approve/--stop')
+    // The owed work is an EDIT, so the exits are the decisions that remain legal without
+    // one — the same set every other screen shows, rather than prose naming two of four.
+    ctx.out(cmd('help', liveExits(spec.gate, target, entries, false, upstreamId)))
     return EXIT.FINDINGS
   }
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    ctx.out(`help: witness decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
-    ctx.out(`help: or discard the plan: witness abandon ${target}`)
+    ctx.out(cmd('help', liveExits(spec.gate, target, entries, false, upstreamId)))
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -424,8 +435,7 @@ export async function runGate(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      ctx.out(`help: witness decide ${spec.gate} ${target} --approve --override | --revise --upstream <id> | --stop`)
-      ctx.out(`help: or discard the plan: witness abandon ${target}`)
+      ctx.out(cmd('help', liveExits(spec.gate, target, entriesNow, false, upstreamId)))
       return EXIT.BLOCKED
     }
 
@@ -481,7 +491,7 @@ export async function runGate(
     })
     if (!txn.ok) { renderRefusal(txn.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
 
-    renderGateRun(ctx, entry, 'ran', { entries: [...entriesNow, entry as unknown as Entry] })
+    renderGateRun(ctx, entry, 'ran', { entries: [...entriesNow, entry as unknown as Entry], upstream: upstreamId })
     printDispatchArithmetic(ctx, root, spec.gate, target)
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS

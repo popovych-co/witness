@@ -78,6 +78,13 @@ registerGate({
     return reviewedShaOf(existsSync(abs) ? readFileSync(abs, 'utf8') : undefined, spec)
   },
 
+  // Upstream from the design gate is the spec's SLICING, which reopens the owning
+  // effort's decompose (Decision 52) — so the id is the effort, not the spec.
+  upstreamOf(root, canon, specId) {
+    const spec = findById(canon, specId)
+    return spec && spec.meta.type === 'spec' ? effortOf(root, specId) : undefined
+  },
+
   approveMeta(root, canon, cfg, specId): MetaStamp[] {
     const spec = findById(canon, specId)
     if (!spec || spec.meta.type !== 'spec') return []

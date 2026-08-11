@@ -36,6 +36,14 @@ function synthetic() {
       const doc = findById(canon, target)
       return doc && doc.meta.status === 'draft' ? [{ artifact: target, to: 'approved' }] : []
     },
+    // D129: `liveExits` no longer defaults the upstream to `<id>`, so a gate that cannot
+    // name one legitimately omits the option. This fixture gates a SPEC through the plan
+    // gate, where the real spec's parent lookup has nothing to return — so the stand-in
+    // names the target, which is exactly the id these tests already pass to `--upstream`
+    // (decide books it on the owning effort's decompose).
+    upstreamOf(_root, _canon, target) {
+      return target
+    },
   })
 }
 

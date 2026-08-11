@@ -98,6 +98,12 @@ registerGate({
     return effortReviewedSha(root, canon, effort).sha
   },
 
+  // Upstream from decompose is the scope itself — `decide` routes it to `witness recap
+  // --amend` rather than a second stream, so the id it names is the effort.
+  upstreamOf(root, _canon, effort) {
+    return streamExists(root, effort) ? effort : undefined
+  },
+
   approveStamps(root, canon, effort) {
     return stampsFor(effortSpecs(root, canon, effort))
   },

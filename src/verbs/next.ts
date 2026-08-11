@@ -384,9 +384,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const id = String(spec.meta.id)
     const entries = readStream(root, id)
     if (boundReached(entries, 'design') && !gateSettled(entries, 'design')) {
-      const eff = effortOf(root, id)
       return {
-        line: liveExits('design', id, entries, false, eff ?? '<effort>'),
+        line: liveExits('design', id, entries, false, effortOf(root, id)),
         target: id, note: 'round bound reached — human decision required',
       }
     }

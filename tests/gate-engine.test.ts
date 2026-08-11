@@ -36,6 +36,12 @@ function registerSynthetic() {
         stamps: [{ artifact: target, to: 'approved' }],
       })
     },
+    // D129: the upstream is resolved by the gate and threaded into every render, so a
+    // stand-in gate must supply one or `liveExits` correctly omits the option. Asserting
+    // on `--revise --upstream` below therefore also proves runGate does the threading.
+    upstreamOf(_root, _canon, target) {
+      return target
+    },
   })
 }
 

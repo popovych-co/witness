@@ -182,4 +182,11 @@ registerGate({
     // un-settle a gate or invert `decide --show`'s staleness line.
     return baseR.ok ? implementReviewedSha(wt, baseR.value, plan) : undefined
   },
+
+  // The implement gate judges a plan's CODE, so upstream is the plan itself — reopening
+  // the plan stage, which is where an unimplementable step is answered.
+  upstreamOf(_root, canon, planId) {
+    const plan = findById(canon, planId)
+    return plan && plan.meta.type === 'plan' ? planId : undefined
+  },
 })
