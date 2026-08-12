@@ -384,16 +384,17 @@ describe('the new fields are inert', () => {
 })
 
 describe('block properties', () => {
-  const states: Array<[string, Entry[]]> = [
-    ['blocking-here', [run(1, 'a', 'p1 > ## Step: s1')]],
-    ['blocking-parent', [run(1, 'a', 'auth-refresh > ## Behavior')]],
-    ['recurrence', [run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')]],
-    ['bound', [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')]],
+  const states: Array<[string, Entry[], Partial<{ stale: boolean }>]> = [
+    ['blocking-here', [run(1, 'a', 'p1 > ## Step: s1')], {}],
+    ['blocking-parent', [run(1, 'a', 'auth-refresh > ## Behavior')], {}],
+    ['recurrence', [run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')], {}],
+    ['bound', [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')], {}],
+    ['stale-below-bound', [run(1, 'a', 'p1 > ## Step: s1')], { stale: true }],
   ]
 
   it('exactly one rule matches, and every recommendation is runnable', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))
       expect(d, name).toBeDefined()
       expect(d!.rule, name).toBeTruthy()
       expect(d!.options[0]!.runnable, name).toBe(true)
@@ -402,8 +403,8 @@ describe('block properties', () => {
   })
 
   it('every option appears once and every deferral names a discharge', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))!
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))!
       const commands = d.options.map((o) => o.command)
       expect(new Set(commands).size, name).toBe(commands.length)
       for (const o of d.options) {
@@ -413,9 +414,9 @@ describe('block properties', () => {
   })
 
   it('the recommendation is always a member of the live set', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))!
-      const live = liveExits('plan', 'p1', entries, false, 'auth-refresh')
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))!
+      const live = liveExits('plan', 'p1', entries, over.stale ?? false, 'auth-refresh')
       const flag = d.options[0]!.command.replace('witness decide plan p1 ', '').split(' "')[0]!
       expect(live, name).toContain(flag.split(' ').slice(0, 2).join(' '))
     }
@@ -427,12 +428,12 @@ describe('block properties', () => {
   // as such rather than waived: below the bound liveExits offers a plain `--approve` and the
   // block offers `--approve --override`, the same act with the D122 ledger switched on.
   it('every act in the live set survives into the block', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))!
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))!
       const rendered = d.options.map((o) => o.command)
       // liveExits prefixes only its first option: `witness decide … --approve | --revise
       // --note "…" | --stop`, so every later element arrives as bare flags.
-      for (const act of liveExits('plan', 'p1', entries, false, 'auth-refresh').split(' | ')) {
+      for (const act of liveExits('plan', 'p1', entries, over.stale ?? false, 'auth-refresh').split(' | ')) {
         const full = act.startsWith('witness ') ? act : `witness decide plan p1 ${act}`
         const bare = full.replace(/ --note ".*"$/, ' --note')
         const found = rendered.some((c) => c.replace(/ --note ".*"$/, ' --note') === bare)

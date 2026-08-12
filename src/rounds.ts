@@ -280,7 +280,14 @@ export function liveExits(
     return [`${d} ${[...approve, ...up, ...repair, '--stop'].join(' | ')}`,
       `witness abandon ${target}`].join(' | ')
   }
-  if (stale) return `witness gate ${gate} ${target}`
+  // Stale removes --approve and nothing else: `decide` refuses that one with `stale-verdict`
+  // because a stamp asserts about current content, while a stop or a revise judges the work.
+  // Both halves are measured (2026-08-12). The pending check is what separates this from the
+  // reopened and revised screens, where no anchor resolves and every decide verb refuses.
+  if (stale) {
+    if (pendingDecision(entries, gate) === undefined) return `witness gate ${gate} ${target}`
+    return [`witness gate ${gate} ${target}`, `${d} ${[note, ...up, '--stop'].join(' | ')}`].join(' | ')
+  }
   return `${d} ${['--approve', note, ...up, '--stop'].join(' | ')}`
 }
 
