@@ -216,7 +216,10 @@ pnpm install
 pnpm test           # vitest, in-process CLI against throwaway git repos
 pnpm run typecheck
 pnpm run build
+pnpm run release patch   # bump + stamp pins + commit + tag, in one act — see docs/RELEASING.md
 ```
+
+Releasing is `node scripts/release.mjs <major|minor|patch|x.y.z>` followed by two pushes; the tag push is what publishes. The order is fixed because CI checks the tagged tree, not the intent — [docs/RELEASING.md](docs/RELEASING.md) explains why and what to do if a tag was pushed early.
 
 ## Run economics (operator notes)
 
