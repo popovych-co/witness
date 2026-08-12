@@ -1,7 +1,7 @@
 import type { Entry } from './journal.js'
 import {
-  anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, repairGranted,
-  roundBudget, roundsSinceApprove, type GateRunEntry,
+  anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, pendingDecision,
+  repairGranted, roundBudget, roundsSinceApprove, type GateRunEntry,
 } from './rounds.js'
 
 // D121. The block: every set of live options renders ranked, with runnable commands.
@@ -143,8 +143,34 @@ export function recommend(ctx: GateContext): Decision | undefined {
     }
   }
 
-  // 2 — stale below the bound: no decision exists, the caller renders the re-gate act.
-  if (stale && !atBound) return undefined
+  // 2 — stale below the bound. Staleness blocks STAMPING, not judging: `--approve` asserts
+  // about current content and `decide` refuses it with `stale-verdict`, while a stop, a
+  // revise and an upstream judge the WORK and are all legal (probed 2026-08-12, all exit 0).
+  // Gated on a pending decision because that is what resolves an anchor: on the reopened
+  // and revised screens every decide verb refuses with `nothing-pending`, and there the
+  // caller's single re-gate act is the honest answer.
+  if (stale && !atBound) {
+    if (pendingDecision(entries, gate) === undefined) return undefined
+    const nextRound = spent + 1
+    return {
+      key: 'decide', rule: 'stale-below-bound',
+      // No anchor: the findings describe bytes that no longer exist, and pinning a decision
+      // to one of them would file recurrence against a verdict nothing can still reproduce.
+      options: [
+        opt(`witness gate ${gate} ${target}`, 'root', {
+          why: `the verdict judged @${last.reviewed_sha.slice(0, 7)} and the content has moved since — no battery has read the current bytes, so every finding above describes a tree that no longer exists`,
+          tradeoff: `spends round ${nextRound} of ${budget}${nextRound >= budget ? ' — the last before the bound' : ''}`,
+        }),
+        opt(note, 'root', {
+          when: 'you already know the next edit and want no verdict on this state',
+          tradeoff: 'spends no round now — the round is spent by the re-gate that follows it',
+        }),
+        ...upAlt('the parent artifact is what is wrong, whatever the current bytes say',
+          'reopens the parent stage and resets this budget'),
+        stopOpt,
+      ],
+    }
+  }
 
   const anchors = blockingAnchors(last)
   const primary = anchors[0]

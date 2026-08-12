@@ -130,8 +130,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       if (disposition.note) ctx.out(kv('note', disposition.note))
     }
     // The surface a human actually reads while deciding, so it is the one that most owes a
-    // ranking rather than a menu. `undefined` is stale below the bound, where no decision
-    // exists and the exits line's single re-gate act is the honest answer.
+    // ranking rather than a menu. `undefined` is stale with no decision pending, where no
+    // act but the re-gate is legal and the exits line already says exactly that (D131).
     const shown = recommend({ gate, target, entries, upstream: upstreamId, stale })
     if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
     else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
@@ -290,7 +290,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // `decision` — so the two are directly comparable in a log query. The full command would
   // carry a prefilled note that changes with the findings, which would make two identical
   // recommendations look different.
-  const rec = recommend({ gate, target, entries, upstream: upstreamId, stale: false })
+  const rec = recommend({
+    gate, target, entries, upstream: upstreamId,
+    // The truth, not `false`. The hardcode existed because a stale state produced no rule at
+    // all and the entry's fields would have been empty; with the stale rule in place it only
+    // misattributes — D130's audit was reporting rules that were never rendered.
+    stale: nowSha !== undefined && nowSha !== anchor.reviewed_sha,
+  })
   const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,

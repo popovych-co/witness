@@ -69,9 +69,10 @@ describe('decide --show', () => {
     await writeSpec(repo, 'auth-refresh')
     const s = repo.effort
     // The CURRENT sha, not a placeholder: "the normal exits" is a claim about unchanged
-    // content, and a fake sha makes the state stale, where the only honest exit is a
-    // re-gate. This passed on a placeholder because renderGateRun printed a second,
-    // hardcoded help line that ignored the journal — the row 110 defect, asserted.
+    // content. A fake sha makes the state stale, which is a different screen — it keeps
+    // --revise, --upstream and --stop and loses only --approve (D131). This passed on a
+    // placeholder because renderGateRun printed a second, hardcoded help line that ignored
+    // the journal — the row 110 defect, asserted.
     const current = effortReviewedSha(repo.root, loadCanon(repo.root), s).sha
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
@@ -87,6 +88,27 @@ describe('decide --show', () => {
     expect(r.stdout).toContain('expiry unbounded')
     expect(r.stdout).toContain('--approve')
     expect(r.stdout).toContain('--stop')
+  })
+
+  it('a stale pending verdict ranks the re-gate instead of printing a bare exits line', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const s = repo.effort
+    appendEntry(repo.root, s, {
+      v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
+      reviewed_sha: 'deadbee', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      checks: [], outcome: 'stopped',
+      verdicts: [{
+        reviewer: 'slicing-critic',
+        coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
+        findings: [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'expiry unbounded' }],
+      }],
+    })
+    const r = await repo.cli(['decide', 'decompose', s, '--show'])
+    expect(r.stdout).toMatch(/decide: \d+ options · 1 is recommended/)
+    expect(r.stdout).toContain(`run: witness gate decompose ${s}`)
+    expect(r.stdout).toContain('--stop')
+    expect(r.stdout).not.toMatch(/^exits: witness gate decompose \S+$/m)
   })
 
   it('renders full findings after a revise — this is the author revise input', async () => {

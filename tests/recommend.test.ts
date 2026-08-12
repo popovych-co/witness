@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { readStream, type Entry } from '../src/journal.js'
+import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent, liveExits } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
@@ -122,6 +122,52 @@ describe('the rule table is ordered and total', () => {
     expect(d.options[0]!.command).toContain('--revise --note')
     expect(d.options[0]!.depth).toBe('root')
     expect(d.anchor).toBe('p1 > ## Step: s1')
+  })
+
+  it('stale-below-bound: a pending decision on a verdict whose content moved', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')], { stale: true }))!
+    expect(d.rule).toBe('stale-below-bound')
+    expect(d.options[0]!.command).toBe('witness gate plan p1')
+    expect(d.options[0]!.why).toContain('no battery')
+    expect(d.options[0]!.tradeoff).toContain('round 2 of 3')
+    expect(d.options.map((o) => o.command)).toEqual([
+      'witness gate plan p1',
+      'witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1"',
+      'witness decide plan p1 --revise --upstream auth-refresh',
+      'witness decide plan p1 --stop',
+    ])
+  })
+
+  it('stale-below-bound: never offers approve, which the stale-verdict refusal blocks', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')], { stale: true }))!
+    expect(d.options.some((o) => o.command.includes('--approve'))).toBe(false)
+  })
+
+  it('stale-below-bound: a findings-free run still recommends a runnable command', () => {
+    // The checks must be GREEN: notePrefill only falls back to "<why>" with no blocking
+    // findings AND no failed checks (rounds.ts:236-239) — a failed check yields
+    // "failed checks: graph", which is runnable and would defeat the point of this case.
+    const d = recommend(ctxFor([{
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
+      reviewed_sha: 'a', prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm',
+      harness: 'claude-code', calibration: 'none',
+      checks: [{ name: 'graph', ok: true, detail: '' }], outcome: 'stopped', verdicts: [],
+    } as unknown as Entry], { stale: true }))!
+    expect(d.rule).toBe('stale-below-bound')
+    expect(d.options[0]!.runnable).toBe(true)
+    expect(d.options.find((o) => o.command.includes('--note'))!.runnable).toBe(false)
+  })
+
+  it('stale-below-bound: yields to the caller when no decision is pending', () => {
+    // a disposition after the run means no anchor resolves — every decide verb refuses
+    // with nothing-pending there, so the caller's single re-gate act is the honest answer
+    const entries = [run(1, 'a', 'p1 > ## Step: s1'), decision('approve')]
+    expect(recommend(ctxFor(entries, { stale: true }))).toBeUndefined()
+  })
+
+  it('stale-below-bound: the bound outranks it', () => {
+    const entries = [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')]
+    expect(recommend(ctxFor(entries, { stale: true }))!.rule).toBe('bound-stale')
   })
 
   it('blocking-parent: every blocking anchor names the parent', () => {
@@ -290,6 +336,31 @@ describe('the decision records what was recommended', () => {
     expect(d.anchor).toBe('auth-refresh-plan-1 > ## Step: s1')
   })
 
+  it('records the rule the human was actually shown when the verdict was stale', async () => {
+    const { repo } = await stopped()
+    // A second run whose reviewed sha nothing can reproduce: stale, and with no disposition
+    // after it, still pending. Round 2 of 3 keeps it below the bound.
+    appendEntry(repo.root, 'auth-refresh-plan-1', {
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round: 2, run_id: 'r-stale',
+      reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0.11.0', model: 'm', pin: 'm',
+      harness: 'claude-code', calibration: 'none', checks: [], outcome: 'stopped',
+      verdicts: [{
+        reviewer: 'plan-critic', coverage: [],
+        findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'x' }],
+      }],
+    } as never)
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    expect(r.code).toBe(0)
+    const d = readStream(repo.root, 'auth-refresh-plan-1')
+      .filter((e) => e.t === 'human-decision').at(-1)! as unknown as Record<string, unknown>
+    expect(d.rule).toBe('stale-below-bound')
+    // Option 1 is a gate verb, so `recommendedVerb` finds nothing. Deliberate: journaling
+    // `recommended: 'gate'` would count every such decision as overridden (dashboard.ts:90),
+    // reporting a working rule as 100% wrong. The cost is that dashboard.ts:85 drops the
+    // row — this rule is unauditable under D130, and the spec records that.
+    expect(d.recommended).toBeUndefined()
+  })
+
   it('records divergence when the human takes another option', async () => {
     const { repo } = await stopped()
     await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
@@ -338,16 +409,17 @@ describe('the new fields are inert', () => {
 })
 
 describe('block properties', () => {
-  const states: Array<[string, Entry[]]> = [
-    ['blocking-here', [run(1, 'a', 'p1 > ## Step: s1')]],
-    ['blocking-parent', [run(1, 'a', 'auth-refresh > ## Behavior')]],
-    ['recurrence', [run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')]],
-    ['bound', [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')]],
+  const states: Array<[string, Entry[], Partial<{ stale: boolean }>]> = [
+    ['blocking-here', [run(1, 'a', 'p1 > ## Step: s1')], {}],
+    ['blocking-parent', [run(1, 'a', 'auth-refresh > ## Behavior')], {}],
+    ['recurrence', [run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')], {}],
+    ['bound', [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')], {}],
+    ['stale-below-bound', [run(1, 'a', 'p1 > ## Step: s1')], { stale: true }],
   ]
 
   it('exactly one rule matches, and every recommendation is runnable', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))
       expect(d, name).toBeDefined()
       expect(d!.rule, name).toBeTruthy()
       expect(d!.options[0]!.runnable, name).toBe(true)
@@ -356,8 +428,8 @@ describe('block properties', () => {
   })
 
   it('every option appears once and every deferral names a discharge', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))!
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))!
       const commands = d.options.map((o) => o.command)
       expect(new Set(commands).size, name).toBe(commands.length)
       for (const o of d.options) {
@@ -367,9 +439,9 @@ describe('block properties', () => {
   })
 
   it('the recommendation is always a member of the live set', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))!
-      const live = liveExits('plan', 'p1', entries, false, 'auth-refresh')
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))!
+      const live = liveExits('plan', 'p1', entries, over.stale ?? false, 'auth-refresh')
       const flag = d.options[0]!.command.replace('witness decide plan p1 ', '').split(' "')[0]!
       expect(live, name).toContain(flag.split(' ').slice(0, 2).join(' '))
     }
@@ -381,12 +453,12 @@ describe('block properties', () => {
   // as such rather than waived: below the bound liveExits offers a plain `--approve` and the
   // block offers `--approve --override`, the same act with the D122 ledger switched on.
   it('every act in the live set survives into the block', () => {
-    for (const [name, entries] of states) {
-      const d = recommend(ctxFor(entries))!
+    for (const [name, entries, over] of states) {
+      const d = recommend(ctxFor(entries, over))!
       const rendered = d.options.map((o) => o.command)
       // liveExits prefixes only its first option: `witness decide … --approve | --revise
       // --note "…" | --stop`, so every later element arrives as bare flags.
-      for (const act of liveExits('plan', 'p1', entries, false, 'auth-refresh').split(' | ')) {
+      for (const act of liveExits('plan', 'p1', entries, over.stale ?? false, 'auth-refresh').split(' | ')) {
         const full = act.startsWith('witness ') ? act : `witness decide plan p1 ${act}`
         const bare = full.replace(/ --note ".*"$/, ' --note')
         const found = rendered.some((c) => c.replace(/ --note ".*"$/, ' --note') === bare)

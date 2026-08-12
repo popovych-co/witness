@@ -158,8 +158,9 @@ export function renderGateRun(
 // --approve read as the default at stops with a live blocking finding. The block ranks them.
 // One renderer for all four decision surfaces in this file — a per-site copy is how D119's
 // nine hand-copied exits sets happened, and three of these four sites were among them.
-// `undefined` from `recommend` means no decision exists at this state (stale below the
-// bound, where the only live act is a re-gate); the exits line still answers that.
+// `undefined` from `recommend` means no anchor resolves at this state — stale with no
+// decision pending (reopened, or already revised), where every decide verb refuses with
+// nothing-pending and the exits line's single re-gate act is the whole live set (D131).
 function renderChoices(
   ctx: Ctx, gate: string, target: string, entries: Entry[], upstream: string | undefined,
   stale = false,

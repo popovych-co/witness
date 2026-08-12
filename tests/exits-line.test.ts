@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { gateSpec, runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { readStream } from '../src/journal.js'
+import { readStream, type Entry } from '../src/journal.js'
 import { liveExits, notePrefill } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { runShip } from '../src/ship.js'
@@ -120,6 +120,32 @@ describe('liveExits', () => {
     const entries = readStream(repo.root, 'auth-refresh-plan-1')
     expect(notePrefill(entries, 'plan')).toContain('auth-refresh-plan-1 > ## Step: s1')
     expect(liveExits('plan', 'auth-refresh-plan-1', entries, false, 'auth-refresh')).not.toContain('<why>')
+  })
+
+  it('a stale verdict with a decision pending names every act that is legal there', () => {
+    const entries = [{
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
+      reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0', model: 'm', calibration: 'none',
+      checks: [], outcome: 'stopped',
+      verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor: 'p1 > ## Step: s1', claim: 'x' }] }],
+    }] as unknown as Entry[]
+    const acts = liveExits('plan', 'p1', entries, true, 'auth-refresh').split(' | ')
+    expect(acts[0]).toBe('witness gate plan p1')
+    expect(acts.join(' | ')).toContain('--stop')
+    expect(acts.join(' | ')).toContain('--revise --upstream auth-refresh')
+    expect(acts.join(' | ')).not.toContain('--approve')
+  })
+
+  it('a stale verdict with no decision pending still names only the re-gate', () => {
+    // measured: in the reopened and revised states --stop, --revise and --approve all
+    // refuse with nothing-pending, so widening here would advertise three refusing acts
+    const entries = [
+      { v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
+        reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0', model: 'm', calibration: 'none',
+        checks: [], outcome: 'stopped', verdicts: [] },
+      { v: 1, t: 'human-decision', gate: 'plan', artifact: 'p1', round: 1, decision: 'approve' },
+    ] as unknown as Entry[]
+    expect(liveExits('plan', 'p1', entries, true, 'auth-refresh')).toBe('witness gate plan p1')
   })
 
   it('falls back to <why> when the run offers no facts', () => {
