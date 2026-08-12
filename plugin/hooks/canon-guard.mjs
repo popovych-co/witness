@@ -48,13 +48,159 @@ function isStateRel(rel, dirs) {
   return dirs.some((d) => posix === d || posix.startsWith(`${d}/`));
 }
 
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// ── Bash: mutation targets, not mentions (Decision 133) ─────────────────────────────
+//
+// The old shape blocked when a state path and a writeish token co-occurred ANYWHERE in the
+// command string. That fails CLOSED on ambiguity, against this file's own contract — and it
+// blocked `grep "Do not touch" <plan>`, because \btouch\b matched inside the search string.
+//
+// The shape now: mask quoted regions and heredoc bodies OFFSET-PRESERVINGLY, read structure
+// only from unmasked text, resolve every candidate target from the ORIGINAL command at the
+// same offsets, and block a segment only when a resolved target is a state path. Resolving
+// from the original is what the offset preservation is FOR: matching against the masked text
+// instead would let `echo hi > "docs/plans/p1.md"` fall open, and a quoted path is how an
+// agent usually spells one.
+const CODE = 0;      // shell structure lives here, and only here
+const QUOTED = 1;    // inside '…' or "…" — part of a token, never structure
+const FILLER = 2;    // a heredoc body — neither structure nor token
 
-function statePathRe(dirs) {
-  return new RegExp(`(^|[\\s"'=;|&(])(\\./)?(${dirs.map(escapeRe).join('|')})/`);
+function maskOf(cmd) {
+  const mask = new Uint8Array(cmd.length);
+  let i = 0;
+  while (i < cmd.length) {
+    const c = cmd[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === '<' && cmd[i + 1] === '<') {
+      // <<TAG, <<-TAG, <<'TAG', <<"TAG" — the body is the reporter's own case: an issue
+      // written with `cat > /tmp/x.md <<'EOF'` quoting a plan path it must not be blocked for
+      const m = /^<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(cmd.slice(i));
+      if (m) {
+        const nl = cmd.indexOf('\n', i + m[0].length);
+        if (nl === -1) { i += m[0].length; continue; }
+        const term = new RegExp(`\\n[ \\t]*${m[2]}[ \\t]*(?=\\n|$)`).exec(cmd.slice(nl));
+        const end = term ? nl + term.index + term[0].length : cmd.length;
+        mask.fill(FILLER, nl + 1, end);
+        i = end;
+        continue;
+      }
+    }
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < cmd.length && cmd[j] !== c) j += c === '"' && cmd[j] === '\\' ? 2 : 1;
+      // unterminated: everything after it is unparseable, so mask it and fall open
+      const end = Math.min(j, cmd.length);
+      mask.fill(QUOTED, i + 1, end);
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  return mask;
 }
 
-const WRITEISH = /(>>?|\btee\b|\bsed\b[^\n]*\s-i\b|\bmv\b|\bcp\b|\brm\b|\btouch\b|\btruncate\b|\bdd\b)/;
+// Separators found in UNMASKED text only, so a quoted `;` or `|` cannot split a segment.
+const SEPARATORS = ';|&\n()';
+
+function segmentsOf(cmd, mask) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < cmd.length; i++) {
+    if (mask[i] === CODE && SEPARATORS.includes(cmd[i])) { out.push([start, i]); start = i + 1; }
+  }
+  out.push([start, cmd.length]);
+  return out.filter(([a, b]) => b > a);
+}
+
+// A masked FILLER char separates like whitespace; a QUOTED one joins, which is what keeps a
+// quoted path one token. Token text comes from the original command, quotes and all.
+const isBreak = (cmd, mask, i) => mask[i] === FILLER || (mask[i] === CODE && /\s/.test(cmd[i]));
+
+function tokensOf(cmd, mask, from, to) {
+  const out = [];
+  let i = from;
+  while (i < to) {
+    if (isBreak(cmd, mask, i)) { i++; continue; }
+    const start = i;
+    while (i < to && !isBreak(cmd, mask, i)) i++;
+    out.push(cmd.slice(start, i));
+  }
+  return out;
+}
+
+const unquote = (t) => t.replace(/['"]/g, '');
+
+// Redirect targets, located by the operator in unmasked text: `>`, `>>`, `2>`, `&>`. `>&2`
+// and `2>&1` duplicate a descriptor and have no path target at all.
+function redirectTargets(cmd, mask, from, to) {
+  const out = [];
+  for (let i = from; i < to; i++) {
+    if (mask[i] !== CODE || cmd[i] !== '>') continue;
+    let j = i + 1;
+    while (j < to && cmd[j] === '>') j++;
+    while (j < to && mask[j] === CODE && /[ \t]/.test(cmd[j])) j++;
+    if (j >= to || (mask[j] === CODE && cmd[j] === '&')) continue;
+    const start = j;
+    while (j < to && !isBreak(cmd, mask, j) && !(mask[j] === CODE && cmd[j] === '>')) j++;
+    if (j > start) out.push(cmd.slice(start, j));
+    i = j - 1;
+  }
+  return out;
+}
+
+// Command words that write their arguments. Same set the co-occurrence guard used — this row
+// narrows the JUDGMENT, not the vocabulary.
+const MUTATORS = new Set(['mv', 'cp', 'rm', 'tee', 'touch', 'truncate', 'dd']);
+// Words that stand in front of the real command word rather than being one.
+const PREFIXES = new Set(['sudo', 'command', 'env', 'time', 'nice', 'nohup', 'xargs']);
+
+function mutatorTargets(tokens) {
+  const none = { word: undefined, targets: [] };
+  let i = 0;
+  let word;
+  for (; i < tokens.length; i++) {
+    const w = unquote(tokens[i]);
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || w.startsWith('-')) continue;   // env assignment / a prefix's flag
+    const base = w.split('/').pop();
+    if (PREFIXES.has(base)) continue;
+    word = base;
+    break;
+  }
+  if (word === undefined) return none;
+  let args = tokens.slice(i + 1);
+  // `git rm` / `git mv` mutate canon under a command word that is not itself a mutator.
+  // `git checkout`/`restore` deliberately stay open: restoring canon is how a hand edit in a
+  // worktree is REVERTED, which is the remedy `check` names.
+  if (word === 'git') {
+    const sub = args.find((a) => !unquote(a).startsWith('-'));
+    if (sub === undefined || (unquote(sub) !== 'rm' && unquote(sub) !== 'mv')) return none;
+    word = `git ${unquote(sub)}`;
+    args = args.slice(args.indexOf(sub) + 1);
+  }
+  const files = args.filter((a) => !unquote(a).startsWith('-'));
+  if (word === 'sed') {
+    return { word, targets: args.some((a) => /^--?i/.test(unquote(a))) ? files : [] };
+  }
+  // cp writes only its destination — `cp <plan> /tmp/x` copies canon OUT, which is a read.
+  // mv has no such half: its source is destroyed, so every argument is a target.
+  if (word === 'mv' || word === 'git rm' || word === 'git mv') return { word, targets: files };
+  if (word === 'cp') return { word, targets: files.slice(-1) };
+  return MUTATORS.has(word) ? { word, targets: files } : none;
+}
+
+// A token is a state path when the FILESYSTEM says so, not when its spelling does — the same
+// resolve-then-relativise predicate the Write/Edit branch above uses, so one fact has one
+// home and an absolute or `../`-relative target lands where a regex over the raw string
+// never could. `key=value` forms (`dd of=…`, `--file=…`) are tested on both halves.
+function stateTargetRel(root, cwd, token, dirs) {
+  const raw = unquote(token);
+  const eq = /^[A-Za-z0-9_-]+=(.+)$/.exec(raw);
+  for (const cand of eq ? [raw, eq[1]] : [raw]) {
+    if (cand === '') continue;
+    const rel = relative(root, isAbsolute(cand) ? cand : resolve(cwd, cand)).split('\\').join('/');
+    if (rel !== '' && !rel.startsWith('..') && isStateRel(rel, dirs)) return rel;
+  }
+  return undefined;
+}
 
 function reasonFor(what) {
   return (
@@ -88,12 +234,24 @@ export function canonGuard(call) {
 
     if (BASH_TOOLS.has(tool)) {
       const cmd = args.command;
-      if (typeof cmd !== 'string') return undefined;
+      if (typeof cmd !== 'string' || cmd === '') return undefined;
       const root = configRoot(cwd);
       if (!root) return undefined;
       const dirs = canonDirs(root);
-      if (statePathRe(dirs).test(cmd) && WRITEISH.test(cmd)) {
-        return { block: true, reason: reasonFor(`a ${dirs.map((d) => `${d}/`).join(' or ')} path in that command`) };
+      const mask = maskOf(cmd);
+      for (const [from, to] of segmentsOf(cmd, mask)) {
+        const mut = mutatorTargets(tokensOf(cmd, mask, from, to));
+        const candidates = [
+          ...redirectTargets(cmd, mask, from, to).map((t) => [t, 'a redirect target']),
+          ...mut.targets.map((t) => [t, `a ${mut.word} target`]),
+        ];
+        for (const [token, how] of candidates) {
+          // Name the RESOLVED target and what writes it. The old message named a directory
+          // set and never the token that tripped it — which is why a block on a search string
+          // read as a bug in the guard rather than a fact about the command.
+          const rel = stateTargetRel(root, cwd, token, dirs);
+          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`) };
+        }
       }
       return undefined;
     }

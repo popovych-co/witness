@@ -23,6 +23,9 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   init: () => import('./verbs/init.js'),
   recap: () => import('./verbs/recap.js'),
   write: () => import('./verbs/write.js'),
+  // Row 132's read route. Canon lives at the primary root and nowhere else, so reading it
+  // is a verb rather than a path — which is also what lets a worktree carry no copy.
+  read: () => import('./verbs/read.js'),
   diff: () => import('./verbs/diff.js'),
   check: () => import('./verbs/check.js'),
   index: () => import('./verbs/index-verb.js'),
@@ -71,6 +74,7 @@ const VERB_USAGE: Record<string, string> = {
   init: 'witness init [--agent claude-code|pi|auto]',
   log: 'witness log <stream> [--all] [--lineage]',
   next: 'witness next',
+  read: 'witness read <id> [--design] [--outline] [--lines <a>-<b>]',
   recap: 'witness recap --file <recap.json> [--amend]',
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',

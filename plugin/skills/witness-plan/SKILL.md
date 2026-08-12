@@ -21,6 +21,7 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.11.1}"
 - **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
 - **The human decides; you may type it.** Run a `witness decide` verb only when the human **names an option** — its number or its verb — and then run the **printed string byte-for-byte**: never recomposed, never reformatted, never with a placeholder you resolved yourself. The moment you compose a `--note` or resolve an id, you are authoring their decision. A bare affirmation ("ok", "sounds good", "yes") **is not a selection** — ask which option, especially where option 1 is `--approve` at a stop that exists because a human must look. A selection does not survive session death: killed and re-run, render the block again and ask again.
 - **Never edit `specs/**` or `plans/**`** (the canon dirs — `paths:` in witness.config.yaml may relocate them) — not with an edit tool, not with a write tool, not with Bash redirection. The CLI is the sole writer of state; you author in scratch files under `$(mktemp -d)` and hand them to the CLI. (The canon guard blocks you; the trailer audit catches what it can't.)
+- **Read canon with `witness read <id>`, never by path.** Canon lives at the primary root; inside a worktree the files are **absent by design**, so a path read finds nothing and a stale copy cannot be mistaken for the contract. Fat artifacts: `witness read <spec-id> --design --outline`, then `--lines <a>-<b>`.
 - **Never invoke gate reviewers or relay verdicts.** `witness gate` runs reviewers itself and journals what they said; your summary of a verdict is not evidence.
 - **Refusal repair loop:** a `witness` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
@@ -28,13 +29,13 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.11.1}"
 
 ## Inputs (rebuild them, never remember them)
 
-Everything below is rebuilt from `witness diff` and current files — never from conversation memory.
+Everything below is rebuilt from `witness diff` and the CLI's read verbs — never from conversation memory, never by path.
 
 ```bash
 $WITNESS diff <spec-id>        # the delta this plan must realize (base: previous plan's pin → last live → empty)
-cat specs/<spec-id>.md          # the parent spec, current content (reading is fine — writing is not)
-ls plans/ && cat plans/<spec-id>-plan-*.md   # prior plans for this spec, if any
-# (default layout shown — a repo's `paths:` config may relocate specs/ and plans/)
+$WITNESS read <spec-id>        # the parent spec, current content (reading is fine — writing is not)
+$WITNESS index                 # the plans table names this spec's prior plans, if any
+$WITNESS read <plan-id>        # …then read the one you care about
 $WITNESS decide plan <plan-id> --show       # ONLY when re-entered after a revise
 ```
 
@@ -46,7 +47,7 @@ $WITNESS decide plan <plan-id> --show       # ONLY when re-entered after a revis
 
 Every criterion in the delta must be realized by ≥ 1 step; every step maps to ≥ 1 criterion **or** is honestly `scaffolding: true` (rigging only — fixtures, wiring, config; never behavior a criterion owns). `derives-from` is **stamped by the CLI** from the parent's current content — never put it in the manifest; a supplied stale pin refuses.
 
-If the parent spec is `ui`-flagged, its **design must already be approved** (the design stage runs between decompose and plan). Read `designs/<spec-id>.html` — your steps derive from that approved look, not a fresh invention — and put its approved artifact sha in the manifest as `"design-from"` (the CLI refuses a plan whose pin is missing, stale, or present on a non-ui parent; get it from the spec's `design.sha` stamp via `$WITNESS log <spec-id>`). A UI step names the design section (`design#<id>`) it realizes alongside its `@spec:` browser test.
+If the parent spec is `ui`-flagged, its **design must already be approved** (the design stage runs between decompose and plan). Read it with `$WITNESS read <spec-id> --design` (`--outline`, then `--lines <a>-<b>`, when it is fat) — your steps derive from that approved look, not a fresh invention — and put its approved artifact sha in the manifest as `"design-from"` (the CLI refuses a plan whose pin is missing, stale, or present on a non-ui parent; get it from the spec's `design.sha` stamp via `$WITNESS log <spec-id>`). A UI step names the design section (`design#<id>`) it realizes alongside its `@spec:` browser test.
 
 ```bash
 DIR=$(mktemp -d)

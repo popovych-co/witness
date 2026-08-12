@@ -103,6 +103,21 @@ export function approve(repo: TestRepo, id: string): void {
   repo.flipStatus(id, 'approved')
 }
 
+// Row 132's upgrade population, reproduced: a worktree created before the canon exclusion
+// existed — sparse off, canon checked out. Clearing `core.sparseCheckout` is NOT enough,
+// because the skip-worktree bits live in the INDEX: git leaves the files absent and
+// read-tree has nothing to restore. The bits are cleared per path, and `checkout -- .`
+// is what puts the content back on disk. Two suites need this state (start's re-attach,
+// check's finding), so it has one home.
+export function undoCanonExclusion(wt: string): void {
+  const gitIn = (...args: string[]) => execFileSync('git', args, { cwd: wt, encoding: 'utf8' }).trim()
+  gitIn('config', '--worktree', 'core.sparseCheckout', 'false')
+  const skipped = gitIn('ls-files', '-t').split('\n')
+    .filter((l) => l.startsWith('S ')).map((l) => l.slice(2))
+  if (skipped.length) gitIn('update-index', '--no-skip-worktree', '--', ...skipped)
+  gitIn('checkout', '--', '.')
+}
+
 export const RECAP = {
   effort: 'auth-hardening',
   class: 'feature',
@@ -417,4 +432,9 @@ export const SKILL_GROUND_RULES = [
   'never from conversation memory',
   'a stop, not a step to drop',
   'verbatim and in full',
+  // Row 132. The write half of this rule has been in every skill since 0.1.x; the read half
+  // is what makes a worktree carrying no canon a fact the session can act on instead of an
+  // empty directory it reads as a missing file.
+  'Read canon with',
+  'absent by design',
 ]

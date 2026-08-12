@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, fakeScenario, gateEnv, seededRepo, shippableRepo, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeScenario, gateEnv, seededRepo, shippableRepo, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -400,5 +400,69 @@ describe('witness check states the calibration fact', () => {
     const res = await repo.cli(['check'])
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('calibration matrix is empty')
+  })
+})
+
+// Row 132. `witness start` is what removes a pre-upgrade worktree's canon copy — so this
+// finding exists to make the state discoverable WITHOUT running the verb that fixes it.
+describe('witness check — canon in a worktree', () => {
+  async function startedRepo() {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    await repo.cli(['start', 'auth-refresh-plan-1'])
+    return { repo, wt: worktreePath(repo.root, 'auth-refresh-plan-1') }
+  }
+  const hits = (stdout: string) => stdout.split('\n').filter((l) => l.includes('canon-in-worktree'))
+
+  it('says nothing about a worktree the exclusion holds in', async () => {
+    const { repo } = await startedRepo()
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.code).toBe(0)
+    expect(hits(res.stdout)).toHaveLength(0)
+  })
+
+  it('warns ONCE per worktree that predates the exclusion, and never on the exit code', async () => {
+    const { repo, wt } = await startedRepo()
+    undoCanonExclusion(wt)
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.code).toBe(0)                     // warn: check's exit code is about canon validity
+    const rows = hits(res.stdout)
+    expect(rows).toHaveLength(1)                 // not one row per materialized doc
+    expect(rows[0]).toContain('warn')
+    expect(rows[0]).toContain('auth-refresh-plan-1')
+    expect(rows[0]).toContain('witness start auth-refresh-plan-1')
+  })
+
+  it('errors per path on a hand edit of canon inside a worktree, and drops the clean row', async () => {
+    const { repo, wt } = await startedRepo()
+    undoCanonExclusion(wt)
+    writeFileSync(join(wt, 'plans/auth-refresh-plan-1.md'),
+      `${repo.read('plans/auth-refresh-plan-1.md')}\nhand edit\n`)
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.code).toBe(1)
+    const rows = hits(res.stdout)
+    expect(rows).toHaveLength(1)                 // the dirty path is the whole story
+    expect(rows[0]).toContain('error')
+    expect(rows[0]).toContain('auth-refresh-plan-1: plans/auth-refresh-plan-1.md')
+  })
+
+  // Planting a file where the exclusion put none. Measured on git 2.50.1: an index refresh
+  // CLEARS skip-worktree for a path it finds present, so the forgery reads as `planted`
+  // before anything refreshes and as a modified ordinary entry after — which is why the
+  // classification asks both questions and errors either way.
+  it('errors on a canon file planted over the exclusion', async () => {
+    const { repo, wt } = await startedRepo()
+    mkdirSync(join(wt, 'plans'), { recursive: true })
+    writeFileSync(join(wt, 'plans/auth-refresh-plan-1.md'), 'forged\n')
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.code).toBe(1)
+    const rows = hits(res.stdout)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain('error')
+    expect(rows[0]).toContain('auth-refresh-plan-1: plans/auth-refresh-plan-1.md')
+    expect(rows[0]).toMatch(/planted|checked out/)
   })
 })

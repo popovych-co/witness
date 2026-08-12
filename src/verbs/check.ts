@@ -11,7 +11,7 @@ import { probe } from '../probe.js'
 import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { designPending } from '../design.js'
 import { runDrift } from '../drift.js'
-import { auditStateCommits, dirtyStatePaths, primaryRoot, tryGit } from '../gitio.js'
+import { auditStateCommits, dirtyStatePaths, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
@@ -25,7 +25,7 @@ import { canonicalSha } from '../sha.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
 import { pendingTxn } from '../txn.js'
-import { listWorktrees, worktreePath } from '../worktree.js'
+import { listWorktrees, materializedCanon, RESIDUE_GOT, worktreePath } from '../worktree.js'
 
 interface Finding {
   level: 'error' | 'warn'
@@ -146,6 +146,40 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (!doc || ['done', 'abandoned'].includes(String(doc.meta.status))) {
       findings.push(f('warn', 'motion', planId, 'stray-worktree', 'witness clean sweeps it'))
     }
+    // Row 132. A worktree cut before the canon exclusion existed still carries a copy, and
+    // `start` is what removes it — so this finding exists to make that state discoverable
+    // WITHOUT running the verb that fixes it. Indexed by worktree, like every finding in
+    // this loop; severity is what splits the causes apart, because they are different
+    // events with different remedies.
+    const wtPath = worktreePath(root, planId)
+    const residue = materializedCanon(root, wtPath)
+    if (residue.length === 0) continue
+    const st = tryGit(wtPath, 'status', '--porcelain', '--untracked-files=all', '--', ...stateDirs(root))
+    const edited = new Set(st.ok && st.out !== ''
+      ? st.out.split('\n').flatMap((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> '))
+      : [])
+    // A clean pre-upgrade copy is status-silent; a hand edit is not. `planted` and
+    // `untracked` are hand events by definition whatever status says — sparse never leaves
+    // an `S` file on disk and never invents an untracked one — so cause alone convicts them
+    // and the status query is only there to sort the `materialized` rows.
+    const handled = residue.filter((r) => r.how !== 'materialized' || edited.has(r.rel))
+    if (handled.length > 0) {
+      // The dirty paths are the whole story while they exist: read-tree declines them, so
+      // the clean rows' remedy (`witness start`) would refuse until these are resolved, and
+      // advertising it here would name a command that cannot run.
+      for (const r of handled) {
+        findings.push(f('error', 'motion', `${planId}: ${r.rel}`, 'canon-in-worktree',
+          `${RESIDUE_GOT[r.how]} — revert it in the worktree; canon changes belong at the primary root (witness write · witness adopt)`))
+      }
+      continue
+    }
+    // ONE row for the clean case, never one per path: a pre-upgrade worktree materializes
+    // EVERY canon doc, and a row each is dozens of identical warns for a single event. The
+    // sample names an ARTIFACT when the set has one: the finding is about a doc a session
+    // could read, while `.gitkeep` and journal rows sort first and name nothing at stake.
+    const sample = (residue.find((r) => /\.(md|html)$/.test(r.rel)) ?? residue[0]!).rel
+    findings.push(f('warn', 'motion', planId, 'canon-in-worktree',
+      `${residue.length} canon file(s) checked out here (e.g. ${sample}) — worktree predates the exclusion; witness start ${planId} removes them`))
   }
 
   for (const doc of canon.docs) {
