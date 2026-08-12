@@ -15,7 +15,7 @@ parent's criteria. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.11.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.11.1}"
 ```
 
 - **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
