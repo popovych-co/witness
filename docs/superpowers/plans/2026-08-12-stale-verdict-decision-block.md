@@ -12,7 +12,7 @@
 
 - `ROUND_BOUND = 3` (`src/rounds.ts:128`). "Below the bound" means `roundsSinceApprove < roundBudget`.
 - `recommend.ts` is a **pure** module: journal entries and ids in, data out. It must not load canon, read config, touch git, or call `spec.currentSha`. Staleness arrives as the `stale` boolean on `GateContext`.
-- `next.ts` must never import the gate registry — `gate.ts:23` imports `next.ts` and that edge stays one-way.
+- `next.ts` must never import the gate registry — `gate.ts:24` imports `gateSettled` from `./verbs/next.js` and that edge stays one-way. (Two comments in the source cite this as `gate.ts:23`, one line stale: `next.ts:269` and `rounds.ts:249`. Correcting them is optional and belongs in Task 4 if taken.)
 - The rule table in `recommend.ts` is an **ordered first-match list**. The new rule keeps position 2 (after `malformed`, before `ladder-spent`).
 - Commands are emitted raw, never quoted or escaped (D120).
 - An option whose command contains `<…>` must be flagged `runnable: false`, never recommended, never silently omitted (D129).
@@ -71,13 +71,16 @@ Add to `tests/recommend.test.ts` inside `describe('the rule table is ordered and
   })
 
   it('stale-below-bound: a findings-free run still recommends a runnable command', () => {
-    // notePrefill falls back to "<why>" with no findings to quote, so option 2 is flagged
-    // not runnable — the recommendation must never be the flagged one (D129)
+    // The checks must be GREEN: notePrefill only falls back to "<why>" when there are no
+    // blocking findings AND no failed checks (rounds.ts:236-239) — a failed check yields
+    // "failed checks: graph", which is runnable and would defeat the point of this case.
+    // With "<why>" option 2 is flagged not runnable, and the recommendation must never be
+    // the flagged one (D129).
     const d = recommend(ctxFor([{
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
       reviewed_sha: 'a', prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm',
       harness: 'claude-code', calibration: 'none',
-      checks: [{ name: 'graph', ok: false, detail: 'cycle' }], outcome: 'stopped', verdicts: [],
+      checks: [{ name: 'graph', ok: true, detail: '' }], outcome: 'stopped', verdicts: [],
     } as unknown as Entry], { stale: true }))!
     expect(d.rule).toBe('stale-below-bound')
     expect(d.options[0]!.runnable).toBe(true)
@@ -469,3 +472,5 @@ git commit -m "docs(design): a stale verdict keeps every act that judges the wor
 **Revised screen, measured not inferred.** The *revised* (non-reopened) stale screen refuses `--stop` and `--approve` with `nothing-pending` and prints the single re-gate act — probed 2026-08-12, same as the reopened screen, because `revisedAnchor` requires `unchanged` (`decide.ts:214`). Task 1's `yields to the caller when no decision is pending` case covers it: a disposition removes the anchor by the same mechanism a revise does.
 
 **Known risk.** `pendingDecision` is declared at `rounds.ts:299`, after `liveExits` at `:259`. Function declarations hoist, so this works — but if a future refactor converts either to a `const` arrow, Task 2's call breaks at runtime rather than at compile time. `npm test` catches it immediately.
+
+**Dry run, 2026-08-12.** The whole plan was executed once in a throwaway worktree off `c81adf9`: all three seams plus all nine new test cases. Result — `tsc --noEmit` clean, **987 tests pass in 119 files** (978 before, 9 added), no existing test broken. Two plan defects surfaced and are fixed above: the findings-free fixture needed green checks, and the import-cycle citation was one line off. The patch is at `scratchpad/d131-dryrun.patch` if a reviewer wants the diff; the worktree and its branch were discarded, so the plan is still unimplemented on `main`.
