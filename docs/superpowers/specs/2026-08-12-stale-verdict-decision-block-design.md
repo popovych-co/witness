@@ -53,7 +53,9 @@ The same probe, run against the **reopened** state (`decide.ts:103-112`, which r
   gate,nothing-pending,…,a stopped gate-run awaiting a decision — run: witness gate …
 ```
 
-So the single-act answer is correct there, and a blanket widening would put three refusing commands on the reopened screen — the D67 lie, introduced by the fix for D119.
+The **revised** screen (a `revise` disposition, no reopen) answers identically — `--stop` and `--approve` both refuse with `nothing-pending`, and `--show` prints the same single act.
+
+So the single-act answer is correct in both states, and a blanket widening would put three refusing commands on each — the D67 lie, introduced by the fix for D119.
 
 The discriminator is `pendingDecision(entries, gate)`, and it is exact rather than heuristic. `decide.ts:216` resolves the anchor every decide verb needs as `pending ?? ((boundEndgame || revisedAnchor) ? last : undefined)`. Below the bound `boundEndgame` is false, and `revisedAnchor` requires `unchanged` (`decide.ts:214`) which is the negation of stale. So under `stale && !atBound`, an anchor resolves **if and only if** a decision is pending — the same condition, derived from the verb rather than guessed at.
 
@@ -108,7 +110,7 @@ So routing the stale pending to the gate would hand the last round to the drivin
 - **The dashboard's `flows` row disagrees with its `next:` line.** `dashboard.ts:198` calls `flowAction` directly and never consults pending decisions, so a stale-pending flow shows `witness gate …` in the table while `next:` shows `decide … --show`. Both statements are true of different questions. Recorded in DESIGN.md's open list rather than grown into this change.
 - **`stale-below-bound` never appears in `status`'s recommender table.** Its recommendation is a gate act, so neither compliance nor divergence produces a countable row (see seam 3). Measuring it needs a different instrument — gate-runs whose immediately preceding state was stale-pending — which `status` does not compute today. Left open; the rule's correctness rests on the probes recorded here rather than on field data.
 - **`--revise` at a stale verdict defers a round rather than avoiding one.** The tradeoff line says so; nothing enforces it.
-- **The revised (non-reopened) stale screen is unprobed.** After a `revise`, `revisedAnchor` requires `unchanged` (`decide.ts:214`), so a stale revise should resolve no anchor and refuse like the reopened state — the pending discriminator therefore returns the single act, which is believed correct and is a plan step to confirm rather than an assumption to ship.
+- ~~**The revised (non-reopened) stale screen is unprobed.**~~ — **measured 2026-08-12**: it refuses `--stop` and `--approve` with `nothing-pending` exactly as the reopened screen does, because `revisedAnchor` requires `unchanged` (`decide.ts:214`) and a stale state is not unchanged. The pending discriminator returns the single act there, which is correct. No longer open.
 
 ## Verification
 

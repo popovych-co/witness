@@ -466,6 +466,6 @@ git commit -m "docs(design): a stale verdict keeps every act that judges the wor
 
 **Spec coverage.** Seam 1 → Task 1. Seam 2 → Task 2 (both states, plus the property extension). Seam 3 → Task 3. The four doctrine sites → Task 4 step 3. DESIGN row 131 + the dashboard residual → Task 4 step 4. The spec's verification list → Tasks 1, 2, 3 step 1 and Task 4 step 1.
 
-**Deliberately not covered.** The spec's third residual — the *revised* (non-reopened) stale screen — is asserted only indirectly, by Task 1's `yields to the caller when no decision is pending` case, which uses a disposition to remove the anchor. That is the same mechanism a revise uses (`decide.ts:214` requires `unchanged`, so a stale revise resolves no anchor), so the behavior is covered even though the fixture is not literally a revise.
+**Revised screen, measured not inferred.** The *revised* (non-reopened) stale screen refuses `--stop` and `--approve` with `nothing-pending` and prints the single re-gate act — probed 2026-08-12, same as the reopened screen, because `revisedAnchor` requires `unchanged` (`decide.ts:214`). Task 1's `yields to the caller when no decision is pending` case covers it: a disposition removes the anchor by the same mechanism a revise does.
 
 **Known risk.** `pendingDecision` is declared at `rounds.ts:299`, after `liveExits` at `:259`. Function declarations hoist, so this works — but if a future refactor converts either to a `const` arrow, Task 2's call breaks at runtime rather than at compile time. `npm test` catches it immediately.
