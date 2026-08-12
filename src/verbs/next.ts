@@ -266,7 +266,7 @@ function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
 
 // The upstream artifact a gate's `--revise --upstream` books its reopen against. The gate
 // registry answers this via `gateSpec().upstreamOf`, but `gate.ts` imports THIS module
-// (gate.ts:23), so importing the registry back would close the cycle the codebase keeps
+// (gate.ts:24), so importing the registry back would close the cycle the codebase keeps
 // one-way on purpose — the same edge that moved `liveExits` out of gate.ts into rounds.ts.
 // Tier 2 hand-resolved it inline in three places; this is that derivation named once, and
 // it agrees with the registry by test (exits-line.test.ts pins upstreamOf for all five).

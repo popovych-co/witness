@@ -130,8 +130,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       if (disposition.note) ctx.out(kv('note', disposition.note))
     }
     // The surface a human actually reads while deciding, so it is the one that most owes a
-    // ranking rather than a menu. `undefined` is stale below the bound, where no decision
-    // exists and the exits line's single re-gate act is the honest answer.
+    // ranking rather than a menu. `undefined` is stale with no decision pending, where no
+    // act but the re-gate is legal and the exits line already says exactly that (D131).
     const shown = recommend({ gate, target, entries, upstream: upstreamId, stale })
     if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
     else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
