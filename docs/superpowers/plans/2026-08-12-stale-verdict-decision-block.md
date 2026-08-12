@@ -70,6 +70,20 @@ Add to `tests/recommend.test.ts` inside `describe('the rule table is ordered and
     expect(d.options.some((o) => o.command.includes('--approve'))).toBe(false)
   })
 
+  it('stale-below-bound: a findings-free run still recommends a runnable command', () => {
+    // notePrefill falls back to "<why>" with no findings to quote, so option 2 is flagged
+    // not runnable — the recommendation must never be the flagged one (D129)
+    const d = recommend(ctxFor([{
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
+      reviewed_sha: 'a', prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm',
+      harness: 'claude-code', calibration: 'none',
+      checks: [{ name: 'graph', ok: false, detail: 'cycle' }], outcome: 'stopped', verdicts: [],
+    } as unknown as Entry], { stale: true }))!
+    expect(d.rule).toBe('stale-below-bound')
+    expect(d.options[0]!.runnable).toBe(true)
+    expect(d.options.find((o) => o.command.includes('--note'))!.runnable).toBe(false)
+  })
+
   it('stale-below-bound: yields to the caller when no decision is pending', () => {
     // a disposition after the run means no anchor resolves — every decide verb refuses
     // with nothing-pending there, so the caller's single re-gate act is the honest answer
@@ -301,7 +315,12 @@ And the case, inside `describe('the decision records what was recommended', …)
     const d = readStream(repo.root, 'auth-refresh-plan-1')
       .filter((e) => e.t === 'human-decision').at(-1)! as unknown as Record<string, unknown>
     expect(d.rule).toBe('stale-below-bound')
-    expect(d.recommended).toBeUndefined()   // option 1 is a gate verb, not a decide verb
+    // Option 1 is a gate verb, so `recommendedVerb` (a match on --approve|--revise|--stop)
+    // finds nothing. Deliberate: journaling `recommended: 'gate'` would make every such
+    // decision count as overridden in dashboard.ts:90, reporting a working rule as 100%
+    // wrong. The cost is that dashboard.ts:85 skips the row — this rule is unauditable
+    // under D130, and the spec records that rather than faking a countable value.
+    expect(d.recommended).toBeUndefined()
   })
 ```
 
@@ -415,7 +434,15 @@ Append row 131 to the decision table (immediately after row 130's row, before th
 | 131 ⊗ | A stale verdict keeps every act that judges the work | Rule 2 stops returning `undefined` and ranks the acts that are legal at a stale verdict *with a decision pending*: the re-gate first (the only act that produces knowledge — nothing on screen describes the current tree), then `--revise --note`, `--revise --upstream` and `--stop`. `--approve` is absent by construction, refused by `stale-verdict`. `liveExits`' stale branch widens under the same condition, and `decide` journals the staleness that actually held instead of a hardcoded `false` | Measured 2026-08-12 on the shipped CLI: at a stale pending gate `--stop`, `--revise` and `--revise --upstream` all exit 0 while `--approve` exits 2, so three legal acts were advertised on no surface — row 119's failure inside the module written to end it. The rule id was already reserved in `recommend.ts`'s ordered table while the code emitted nothing, so row 129's *every journalable rule id appears in the table* held in the wrong direction — a named rule no state could produce. Four comments (`recommend.ts`, `decide.ts`, `gate.ts`, `decide-show.test.ts`) stated *the only live act is a re-gate*, each true-looking beside its own code; that is how the over-generalisation survived. The pending gate is not decoration: the same probe against the **reopened** state refuses every decide verb with `nothing-pending`, so a blanket widening would have put three refusing commands on that screen. The hardcoded `stale: false` at the journaling call was a workaround for this same hole — with no stale rule the entry's `rule` field would have been empty — and it was recording `blocking-here` for decisions taken at a screen that recommended nothing, feeding row 130's audit rows it never produced. **Routing is deliberately unchanged**: `next` still names `decide --show`, because the agent contract ends the turn there (`plugin/commands/witness.md:29`) while a `witness gate` line is unattended motion, and the re-gate spends a round — measured, `[1, 2]` after one — which at round 3 of 3 is the last before the bound. Row 121's premise decides it: every remaining act carries a cost, and which cost is worth paying is the human's question |
 ```
 
+Extend row 131's body with the audit limit (it is the one thing a reader would otherwise assume seam 3 fixed):
+
+> …and the rule is unauditable under row 130 by construction: its recommendation is a gate act, so compliance writes no `human-decision` entry and divergence writes one `recommenderRowsFrom` skips for want of `recommended`. Journaling `recommended: 'gate'` was rejected — no `decision` value starts with it, so a working rule would report 100% overridden, row 130's own inversion. Seam 3 removes false rows; it adds no true ones.
+
 Add to `## Open / deferred`:
+
+```markdown
+- **`stale-below-bound` cannot be measured by the recommender audit.** Following it produces a gate-run, not a decision, and diverging from it produces a decision with no `recommended` verb — both invisible to `recommenderRowsFrom`. Measuring it needs a different instrument (gate-runs whose preceding state was stale-pending), which `status` does not compute. Until then the rule's correctness rests on the 2026-08-12 probes recorded in its spec.
+```
 
 ```markdown
 - **The dashboard's `flows` row and its `next:` line answer different questions.** `dashboard.ts:198` calls `flowAction` directly and never consults pending decisions, so a stale-pending flow shows `witness gate …` in the flows table while `next:` shows `decide … --show`. Both are true — one is *what motion exists*, the other is *who owes the next act* — and row 131 declined to collapse them. Revisit if a field report shows someone acting on the wrong one.
