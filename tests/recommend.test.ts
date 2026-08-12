@@ -124,6 +124,52 @@ describe('the rule table is ordered and total', () => {
     expect(d.anchor).toBe('p1 > ## Step: s1')
   })
 
+  it('stale-below-bound: a pending decision on a verdict whose content moved', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')], { stale: true }))!
+    expect(d.rule).toBe('stale-below-bound')
+    expect(d.options[0]!.command).toBe('witness gate plan p1')
+    expect(d.options[0]!.why).toContain('no battery')
+    expect(d.options[0]!.tradeoff).toContain('round 2 of 3')
+    expect(d.options.map((o) => o.command)).toEqual([
+      'witness gate plan p1',
+      'witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1"',
+      'witness decide plan p1 --revise --upstream auth-refresh',
+      'witness decide plan p1 --stop',
+    ])
+  })
+
+  it('stale-below-bound: never offers approve, which the stale-verdict refusal blocks', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')], { stale: true }))!
+    expect(d.options.some((o) => o.command.includes('--approve'))).toBe(false)
+  })
+
+  it('stale-below-bound: a findings-free run still recommends a runnable command', () => {
+    // The checks must be GREEN: notePrefill only falls back to "<why>" with no blocking
+    // findings AND no failed checks (rounds.ts:236-239) — a failed check yields
+    // "failed checks: graph", which is runnable and would defeat the point of this case.
+    const d = recommend(ctxFor([{
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
+      reviewed_sha: 'a', prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm',
+      harness: 'claude-code', calibration: 'none',
+      checks: [{ name: 'graph', ok: true, detail: '' }], outcome: 'stopped', verdicts: [],
+    } as unknown as Entry], { stale: true }))!
+    expect(d.rule).toBe('stale-below-bound')
+    expect(d.options[0]!.runnable).toBe(true)
+    expect(d.options.find((o) => o.command.includes('--note'))!.runnable).toBe(false)
+  })
+
+  it('stale-below-bound: yields to the caller when no decision is pending', () => {
+    // a disposition after the run means no anchor resolves — every decide verb refuses
+    // with nothing-pending there, so the caller's single re-gate act is the honest answer
+    const entries = [run(1, 'a', 'p1 > ## Step: s1'), decision('approve')]
+    expect(recommend(ctxFor(entries, { stale: true }))).toBeUndefined()
+  })
+
+  it('stale-below-bound: the bound outranks it', () => {
+    const entries = [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')]
+    expect(recommend(ctxFor(entries, { stale: true }))!.rule).toBe('bound-stale')
+  })
+
   it('blocking-parent: every blocking anchor names the parent', () => {
     const d = recommend(ctxFor([run(1, 'a', 'auth-refresh > ## Behavior')]))!
     expect(d.rule).toBe('blocking-parent')
