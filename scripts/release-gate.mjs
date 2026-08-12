@@ -19,7 +19,14 @@ export function releaseGate({ version, tag, models }) {
   const warnings = [];
 
   if (tag && tag !== `v${version}`) {
-    errors.push(row('tag', 'tag-version-mismatch', tag, `v${version}`));
+    // The `want` column names the act that actually works, and there are two — but they
+    // are not equally likely. A tag ahead of package.json is a release someone MEANT to
+    // cut and tagged before bumping; telling them to re-tag downward answers the rarer
+    // half and reads as "your tag is wrong" when the tree is what is behind. Naming the
+    // bump first, with the one command that performs it in the right order, is the same
+    // rule the decision block follows: a refusal carries the remedy, not just the delta.
+    errors.push(row('tag', 'tag-version-mismatch', tag,
+      `package.json at ${tag.replace(/^v/, '')} — cut it with \`node scripts/release.mjs ${tag.replace(/^v/, '')}\`, or re-tag this tree as v${version}`));
   }
 
   const major = Number.parseInt(version.split('.')[0], 10);
