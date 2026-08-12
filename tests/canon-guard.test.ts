@@ -61,6 +61,101 @@ describe('canonGuard — configured canon roots', () => {
   });
 });
 
+// Row 133. The old Bash branch blocked when a state path and a writeish token CO-OCCURRED
+// anywhere in the command string, which biased toward false positives — failing CLOSED on
+// ambiguity, against the file's own stated contract. Measured against the reporter's
+// commands: `grep "Do not touch" <plan>` blocked because \btouch\b matched inside the SEARCH
+// STRING, so the diagnosis was blocked by the words being searched FOR.
+describe('canonGuard — Bash blocks mutations, not mentions', () => {
+  const docsRepo = () =>
+    witnessRepo('schema: 1\npaths: { specs: docs/specs, plans: docs/plans, designs: docs/designs }\n');
+  const bash = (command: string, cwd: string) => canonGuard({ tool: 'Bash', input: { command }, cwd });
+
+  it('allows every measured false positive', () => {
+    const repo = docsRepo();
+    for (const cmd of [
+      'wc -l docs/plans/p1.md',
+      'grep "Do not touch" docs/plans/p1.md',
+      "cat > /tmp/issue.md <<'EOF'\nsee docs/plans/p1.md\nEOF",
+      'grep -n foo docs/plans/p1.md > /tmp/out.txt',
+      'git log --oneline -- docs/plans/p1.md',
+      'cat docs/plans/p1.md',
+      'diff docs/plans/p1.md docs/plans/p2.md',
+      'cp docs/plans/p1.md /tmp/x.md',            // copying canon OUT is a read
+      'npm test 2>&1 | grep docs/plans/p1.md',
+    ]) expect(bash(cmd, repo), cmd).toBeUndefined();
+  });
+
+  it('still blocks every mutation the co-occurrence guard caught', () => {
+    const repo = docsRepo();
+    for (const cmd of [
+      'echo hi > docs/plans/p1.md',
+      'echo hi >> docs/plans/p1.md',
+      "sed -i '' s/a/b/ docs/plans/p1.md",
+      'cp /tmp/x.md docs/plans/p1.md',
+      'rm docs/plans/p1.md',
+      'rm -rf docs/specs',
+      'mv docs/plans/p1.md /tmp/x',               // the source is destroyed
+      'touch docs/plans/p2.md',
+      'truncate -s 0 docs/plans/p1.md',
+      'dd of=docs/plans/p1.md',
+      'cat x | tee docs/plans/p1.md',
+      'git rm docs/plans/p1.md',
+      'git mv docs/plans/p1.md docs/plans/p2.md',
+      'npm test 2> docs/plans/p1.md',
+    ]) expect(bash(cmd, repo)?.block, cmd).toBe(true);
+  });
+
+  // The regression the blank-then-match shape invites: matching targets against the BLANKED
+  // text would let a quoted path fall open, and quoted paths are how agents usually spell
+  // them. Targets are resolved from the ORIGINAL command through preserved offsets.
+  it('blocks a quoted mutation target — quoting hides nothing', () => {
+    const repo = docsRepo();
+    for (const cmd of [
+      'echo hi > "docs/plans/p1.md"',
+      "sed -i '' 's/a/b/' \"docs/plans/p1.md\"",
+      "tee 'docs/plans/p1.md'",
+      'sed -i.bak s/a/b/ docs/plans/p1.md',
+      'sed --in-place s/a/b/ docs/plans/p1.md',
+    ]) expect(bash(cmd, repo)?.block, cmd).toBe(true);
+  });
+
+  it('resolves a target through the filesystem, not through its spelling', () => {
+    const repo = docsRepo();
+    expect(bash(`echo hi > ${join(repo, 'docs', 'plans', 'p1.md')}`, repo)?.block).toBe(true);
+    expect(bash('echo hi > ./docs/plans/p1.md', repo)?.block).toBe(true);
+    expect(bash('echo hi > ../docs/plans/p1.md', join(repo, 'src'))?.block).toBe(true);
+    // a look-alike outside the repo is not this repo's canon
+    expect(bash('echo hi > /tmp/docs/plans/p1.md', repo)).toBeUndefined();
+    expect(bash('echo hi > docs/plansy/p1.md', repo)).toBeUndefined();
+  });
+
+  it('names the resolved target and what mutates it', () => {
+    const repo = docsRepo();
+    const r = bash("sed -i '' s/a/b/ docs/plans/p1.md", repo);
+    expect(r?.reason).toContain('docs/plans/p1.md');
+    expect(r?.reason).toContain('sed');
+    expect(bash('echo hi > docs/plans/p1.md', repo)?.reason).toContain('redirect');
+  });
+
+  // Quote-stripping is not shell parsing, and the guard is friction rather than the
+  // guarantee (D31) — so these fall OPEN by construction, and the only contract is that
+  // nothing throws.
+  it('falls open on what it cannot parse, and never throws', () => {
+    const repo = docsRepo();
+    for (const cmd of [
+      "$(printf '>') docs/plans/p.md",
+      'eval "echo hi > docs/plans/p1.md"',
+      'echo hi > "docs/plans/p1.md',                    // unterminated quote
+      'P=docs/plans/p1.md; echo hi > "$P"',
+      "cat <<EOF\nnot a real heredoc terminator\n",
+      // a `cd` inside the command moves the base a relative target resolves against, and
+      // emulating shell state is what this guard refuses to do
+      'cd src && echo hi > ../docs/plans/p1.md',
+    ]) expect(() => bash(cmd, repo), cmd).not.toThrow();
+  });
+});
+
 describe('canonGuard — fail open', () => {
   it('returns undefined for unknown tools, missing input and garbage', () => {
     const repo = witnessRepo();
