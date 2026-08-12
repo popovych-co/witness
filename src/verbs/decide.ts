@@ -290,7 +290,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // `decision` — so the two are directly comparable in a log query. The full command would
   // carry a prefilled note that changes with the findings, which would make two identical
   // recommendations look different.
-  const rec = recommend({ gate, target, entries, upstream: upstreamId, stale: false })
+  const rec = recommend({
+    gate, target, entries, upstream: upstreamId,
+    // The truth, not `false`. The hardcode existed because a stale state produced no rule at
+    // all and the entry's fields would have been empty; with the stale rule in place it only
+    // misattributes — D130's audit was reporting rules that were never rendered.
+    stale: nowSha !== undefined && nowSha !== anchor.reviewed_sha,
+  })
   const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { readStream, type Entry } from '../src/journal.js'
+import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent, liveExits } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
@@ -334,6 +334,31 @@ describe('the decision records what was recommended', () => {
     expect(d.recommended).toBe('revise')
     expect(d.rule).toBe('blocking-here')
     expect(d.anchor).toBe('auth-refresh-plan-1 > ## Step: s1')
+  })
+
+  it('records the rule the human was actually shown when the verdict was stale', async () => {
+    const { repo } = await stopped()
+    // A second run whose reviewed sha nothing can reproduce: stale, and with no disposition
+    // after it, still pending. Round 2 of 3 keeps it below the bound.
+    appendEntry(repo.root, 'auth-refresh-plan-1', {
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round: 2, run_id: 'r-stale',
+      reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0.11.0', model: 'm', pin: 'm',
+      harness: 'claude-code', calibration: 'none', checks: [], outcome: 'stopped',
+      verdicts: [{
+        reviewer: 'plan-critic', coverage: [],
+        findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'x' }],
+      }],
+    } as never)
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
+    expect(r.code).toBe(0)
+    const d = readStream(repo.root, 'auth-refresh-plan-1')
+      .filter((e) => e.t === 'human-decision').at(-1)! as unknown as Record<string, unknown>
+    expect(d.rule).toBe('stale-below-bound')
+    // Option 1 is a gate verb, so `recommendedVerb` finds nothing. Deliberate: journaling
+    // `recommended: 'gate'` would count every such decision as overridden (dashboard.ts:90),
+    // reporting a working rule as 100% wrong. The cost is that dashboard.ts:85 drops the
+    // row — this rule is unauditable under D130, and the spec records that.
+    expect(d.recommended).toBeUndefined()
   })
 
   it('records divergence when the human takes another option', async () => {
