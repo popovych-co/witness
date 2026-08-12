@@ -175,14 +175,15 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `recap [--amend] --file <json>` | validate + persist a scope recap; births the effort journal |
 | `write <id> --effort <e> --meta <json> --body <md>` | validated manifest → spec/plan on disk + journal entry |
 | `diff <spec-id>` | delta since the last realized state (plan pin → empty) |
+| `read <id> [--design] [--outline] [--lines <a>-<b>]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts |
 | `check` | schema, graph, invariants, needs, trailer audit, probes |
-| `index` | id · summary · status · depends across the canon |
+| `index` | id · summary · status · depends across the canon, then each spec's plans |
 | `satisfy <id> --need <text\|n>` | flip a manual need via the write path |
 | `log <id>` | render a journal stream |
 | `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
 | `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |
 | `design <spec-id> --file <html>\|--open\|--reconfirm` | register/show a `ui` spec's approved look |
-| `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) |
+| `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
 | `ship <plan-id>` | lanes → ship gate → PR → CI watch |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |

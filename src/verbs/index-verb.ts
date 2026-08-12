@@ -26,6 +26,20 @@ export async function run(ctx: Ctx): Promise<number> {
       depends: Array.isArray(d.meta.depends) ? (d.meta.depends as string[]).join(' ') : '',
     }))).forEach(ctx.out)
   }
-  ctx.out('help: witness diff <id> · witness log <id>')
+  // Row 132. `witness read <id>` replaced the plan skill's `cat plans/…`; this replaced its
+  // `ls plans/`. One table keyed by parent, because the question a planner asks is "which
+  // plans has this spec already had" — a spec accumulates them over its life. Emitted only
+  // when plans exist: a repo mid-decompose owes no plans, and an empty table is a row
+  // every `index` run would pay for.
+  const plans = canon.docs.filter((d) => d.meta.type === 'plan')
+  if (plans.length > 0) {
+    const byParent = plans.sort((a, b) =>
+      String(a.meta.parent).localeCompare(String(b.meta.parent))
+      || String(a.meta.id).localeCompare(String(b.meta.id)))
+    rows('plans', ['id', 'parent', 'status'], byParent.map((d) => ({
+      id: d.meta.id, parent: d.meta.parent ?? '', status: d.meta.status,
+    }))).forEach(ctx.out)
+  }
+  ctx.out('help: witness read <id> · witness diff <id> · witness log <id>')
   return EXIT.OK
 }

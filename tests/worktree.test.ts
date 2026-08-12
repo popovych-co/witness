@@ -1,10 +1,11 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import { worktreePath } from '../src/worktree.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, seededRepo, writeSpec, writePlan, stampLive } from './helpers.js'
+import { approve, seededRepo, undoCanonExclusion, writeSpec, writePlan, stampLive } from './helpers.js'
 
 async function approvedPlanRepo() {
   const repo = await seededRepo()
@@ -104,6 +105,104 @@ describe('witness start — agent-model', () => {
     expect(r.code).toBe(2)
     expect(r.stdout + r.stderr).toContain('alias-refused')
     expect(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status).toBe('approved')
+  })
+})
+
+// TestRepo.git is root-bound; every assertion below asks a question of the WORKTREE
+// (its index, its status, its disk), so this suite needs a wt-cwd git of its own.
+const gitIn = (dir: string, ...args: string[]) =>
+  execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim()
+
+const PLAN_REL = 'plans/auth-refresh-plan-1.md'
+
+async function excludedRepo() {
+  const repo = await approvedPlanRepo()
+  await repo.cli(['start', 'auth-refresh-plan-1'])
+  return { repo, wt: worktreePath(repo.root, 'auth-refresh-plan-1') }
+}
+
+describe('witness start — canon has one home', () => {
+  it('excludes canon from a fresh worktree and marks it skip-worktree', async () => {
+    const { wt } = await excludedRepo()
+    expect(existsSync(join(wt, 'specs'))).toBe(false)
+    expect(existsSync(join(wt, 'plans'))).toBe(false)
+    // the branch still CARRIES it — only the checkout hides it, so the PR stays code-only
+    expect(gitIn(wt, 'ls-files', '-t', '--', 'plans')).toMatch(/^S /m)
+    expect(gitIn(wt, 'status', '--porcelain')).toBe('')
+  })
+
+  it('keeps non-canon siblings of a relocated canon dir', async () => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', 'schema: 1\npaths: { specs: docs/specs, plans: docs/plans }\n')
+    repo.write('docs/RELEASING.md', '# how to release\n')
+    repo.git('add', 'witness.config.yaml', 'docs/RELEASING.md')
+    repo.git('commit', '-m', 'relocate canon under docs/')       // source paths — no trailer
+    // approve/flipStatus resolve `specs/`+`plans/` by hand, so a relocated repo needs its
+    // own flip — the CLI's own paths: resolution is what the write path below exercises.
+    const flipAt = (rel: string, status: string) => {
+      repo.write(rel, repo.read(rel).replace(/status: \S+/, `status: ${status}`))
+      repo.git('add', rel)
+      repo.git('commit', '-m', `flip ${rel} -> ${status}`, '-m', 'Witness-State: 1')
+    }
+    await writeSpec(repo, 'auth-refresh')
+    flipAt('docs/specs/auth-refresh.md', 'approved')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    flipAt('docs/plans/auth-refresh-plan-1.md', 'approved')
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(0)
+    const wt = worktreePath(repo.root, 'auth-refresh-plan-1')
+    expect(existsSync(join(wt, 'docs', 'RELEASING.md'))).toBe(true)   // sibling kept
+    expect(existsSync(join(wt, 'docs', 'plans'))).toBe(false)         // canon gone
+    expect(existsSync(join(wt, 'docs', 'specs'))).toBe(false)
+  })
+
+  it('an amended plan reaches the branch tree without materializing a file', async () => {
+    const { repo, wt } = await excludedRepo()
+    // amend canon on main the way stateCommit does — content + trailer
+    repo.write(PLAN_REL, repo.read(PLAN_REL).replace('Implement rotation', 'Implement rotation AND REVOCATION'))
+    repo.git('add', PLAN_REL)
+    repo.git('commit', '-m', 'plan(auth-refresh-plan-1): amend', '-m', 'Witness-State: 1')
+    gitIn(wt, 'rebase', 'main')
+    expect(gitIn(wt, 'show', `HEAD:${PLAN_REL}`)).toContain('AND REVOCATION')  // tree is v2
+    expect(existsSync(join(wt, PLAN_REL))).toBe(false)                         // disk still empty
+  })
+
+  it('re-attach applies the exclusion to a worktree created before the exclusion existed', async () => {
+    const { repo, wt } = await excludedRepo()
+    undoCanonExclusion(wt)
+    expect(existsSync(join(wt, PLAN_REL))).toBe(true)   // the pre-upgrade state, reproduced
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(0)
+    expect(existsSync(join(wt, PLAN_REL))).toBe(false)
+  })
+
+  it('re-attaches a dirty worktree without disturbing the work in it', async () => {
+    const { repo, wt } = await excludedRepo()
+    writeFileSync(join(wt, 'src.ts'), 'export const x = 1\n')     // untracked, mid-slice
+    gitIn(wt, 'add', 'src.ts'); gitIn(wt, 'commit', '-m', 'wip')
+    writeFileSync(join(wt, 'src.ts'), 'export const x = 2\n')     // now dirty
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(0)
+    expect(readFileSync(join(wt, 'src.ts'), 'utf8')).toContain('x = 2')
+    expect(existsSync(join(wt, PLAN_REL))).toBe(false)
+  })
+
+  it('refuses when a DIRTY canon file blocks the exclusion', async () => {
+    const { repo, wt } = await excludedRepo()
+    undoCanonExclusion(wt)
+    writeFileSync(join(wt, PLAN_REL), `${repo.read(PLAN_REL)}\nhand edit\n`)
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('canon-in-worktree')
+    expect(r.stderr).toContain(PLAN_REL)
+  })
+
+  it('refuses to enable extensions.worktreeConfig when core.worktree is set', async () => {
+    const repo = await approvedPlanRepo()
+    repo.git('config', 'core.worktree', repo.root)   // harmless value, shared-config scope
+    const r = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('worktree-config-unsafe')
   })
 })
 

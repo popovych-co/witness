@@ -158,6 +158,30 @@ describe('the block is CLI-owned', () => {
   })
 })
 
+// D132. Canon has one home, so a skill that reads it by path is reading a file that is not
+// there. The positive half rides SKILL_GROUND_RULES; this is the negative half, in the style
+// of row 128's. The pattern is deliberately just the `cat` shape: `designs/` also appears
+// legitimately as a WRITE destination (the design skill's output contract), so a broader
+// path-mention ban would false-positive — prose references are closed by editing them.
+describe('canon is read through the CLI', () => {
+  it('no skill body reads a canon path with cat', () => {
+    const offenders: string[] = []
+    for (const name of SKILLS) {
+      const body = readFileSync(skillPath(name), 'utf8')
+      for (const [i, line] of body.split('\n').entries()) {
+        if (/\bcat\s+["']?(\.\/)?(specs|plans|designs)\//.test(line)) offenders.push(`${name}:${i + 1}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('every skill names the read verb it must use instead', () => {
+    for (const name of SKILLS) {
+      expect(readFileSync(skillPath(name), 'utf8'), name).toContain('witness read <id>')
+    }
+  })
+})
+
 // D125. The interview is the one decision surface with no CLI screen, and it was asking with
 // three fields while the block asks with five. A human should meet ONE shape everywhere in
 // this pipeline. This pins the INSTRUCTION, not compliance: compliance is unverifiable here
