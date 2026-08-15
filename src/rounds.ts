@@ -40,6 +40,16 @@ export interface GateRunEntry {
   skipped?: string[]
   standing?: string
   artifact_sha?: string
+  // The DIFF half of a code gate's composite reviewed identity (`diffReviewedSha`),
+  // journaled beside the composite so a later lapse can name WHICH term moved. At implement
+  // `reviewed_sha` is H(diff, planContent): with only the composite recorded, "the worktree
+  // moved" and "the plan was re-authored" are indistinguishable, and the lapse note blamed
+  // the worktree for both. Not derivable after the fact — the judged diff is gone.
+  //
+  // Optional because every entry written before row 135 lacks it; its reader
+  // (`next.ts`'s `lapseNote`) falls back to naming both shas, which is the honest answer
+  // for a record that cannot say.
+  diff_sha?: string
   checks: GateCheck[]
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>

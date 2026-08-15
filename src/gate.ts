@@ -41,6 +41,10 @@ export interface GateInput {
   class: ChangeClass
   reviewedSha: string
   artifactSha?: string
+  // The diff term of `reviewedSha` where that sha is composite, so a lapse can attribute
+  // itself (row 135). Supplied by the implement gate alone — the only gate whose identity
+  // has more than one term that can move independently.
+  diffSha?: string
   reviewed: Reviewed
   promptBody: string
   checks: GateCheck[]
@@ -476,6 +480,7 @@ export async function runGate(
       ...(dropped.length ? { skipped: dropped } : {}),
       ...(outcome === 'stopped' && standing ? { standing } : {}),
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
+      ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
       checks: input.checks,
       ...(verdicts.length ? { verdicts } : {}),
       ...(malformed.length ? { malformed } : {}),

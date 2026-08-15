@@ -11,7 +11,7 @@ import type { LensDoc } from '../reviewer.js'
 import { findById, type CanonDoc } from '../scan.js'
 import { changedFiles, changedTestSpecs, diffBase, evidenceForDiff, runRegression, screensDir } from '../evidence.js'
 import { runCriteria } from '../criteria.js'
-import { effortOf, implementReviewedSha } from '../reviewed.js'
+import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import type { GateCheck } from '../rounds.js'
@@ -162,6 +162,8 @@ registerGate({
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: implementReviewedSha(wt, base, plan),
+      // the diff term of the line above, so a lapse can attribute itself (row 135)
+      diffSha: diffReviewedSha(wt, base),
       artifactSha: canonicalSha(plan.meta, plan.body),
       reviewed: { kind: 'tree', root: wt, files },
       promptBody: codePromptBody(wt, base, files,
