@@ -93,7 +93,25 @@ export function authoringOwed(entries: Entry[], gate: string, currentSha: string
 // `worktree now @…` for both, which is false whenever a plan amend is what moved it.
 // `diff_sha` (row 135) is what makes the split exact; entries predating it fall back to
 // naming the shas, the honest answer for a record that cannot say.
-interface LapseCause { diffSha: string; whitespaceOnly: string[] }
+// Row 136, corrected by measurement while building it. The plan here was a `whitespace-only`
+// clause, because the reported incident's whole second file was a formatter unwrapping one
+// array literal. Measured against that worktree: it is NOT whitespace-only by any predicate
+// git or a byte-compare can express — collapsing the literal also drops its trailing comma,
+// so `git diff -w` reports 1 insertion / 8 deletions and a whitespace-stripped compare of
+// the two blobs still differs. A language-aware "formatting-only" test is the only thing
+// that would catch it, and witness is not going to tokenise TypeScript, YAML and Markdown.
+//
+// So the clause names the CHANGED PATHS instead: exact, language-agnostic, free (flowAction
+// already computed them for the evidence report), and it points at the same culprit — the
+// human reads a file they did not touch and goes looking for what wrote it. Shipping the
+// whitespace clause would have been worse than shipping nothing: it misses its own
+// motivating case, and a reader who learns it exists reads its ABSENCE as "something
+// substantive changed", which is false exactly when it matters.
+interface LapseCause { diffSha: string; changed: string[] }
+
+// A cap with its remainder counted, never a silent truncation: a note that lists six of
+// nineteen paths and says so is a report, one that lists six and stops is a wrong answer.
+const LAPSE_PATHS = 6
 
 function lapseNote(
   entries: Entry[], gate: string, currentSha: string | undefined,
@@ -113,7 +131,12 @@ function lapseNote(
   if (last.diff_sha === c.diffSha) {
     return `${gate} approval lapsed — the plan was re-authored, the worktree is unchanged (${shas}) — re-gate to judge the current plan`
   }
-  return `${gate} approval lapsed — the worktree moved (${shas}) — re-gate to judge the current tree`
+  const shown = c.changed.slice(0, LAPSE_PATHS).join(' ')
+  const rest = c.changed.length - LAPSE_PATHS
+  const paths = c.changed.length === 0
+    ? ''
+    : ` · changed vs base: ${shown}${rest > 0 ? ` (+${rest} more)` : ''}`
+  return `${gate} approval lapsed — the worktree moved (${shas})${paths} — re-gate to judge the current tree`
 }
 
 // Row 105. `appendKind` keys on harness, so a cross-harness run is `fresh` and re-invokes
@@ -253,7 +276,9 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
     ...noteOf(
       lapseNote(entries, 'implement', diffSha,
-        () => (baseR.ok ? { diffSha: diffReviewedSha(wt, baseR.value), whitespaceOnly: [] } : undefined)),
+        // `files` is the list flowAction already computed above — the cause costs one
+        // hash pass, not a second walk of the diff
+        () => (baseR.ok ? { diffSha: diffReviewedSha(wt, baseR.value), changed: files } : undefined)),
       judgeNote(entries, 'implement', judge)),
   }
 }

@@ -97,4 +97,49 @@ describe('the implement gate re-arms on plan content', () => {
 
     await repo.cli(['clean'])
   })
+
+  // The reported loop's ignition was a file entering the diff that the human never edited
+  // — a formatter, twenty-seven seconds after the gate passed. Re-arming is correct (row
+  // 96a: the identity IS the diff the battery read); leaving the human to guess WHICH file
+  // is not, when `flowAction` is already holding the list.
+  it('names the changed paths when the worktree moved', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await settleImplementGate(repo, wt, planId)
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+
+    writeFileSync(join(wt, 'src', 'sneaked-in.ts'), 'export const x = 1\n')
+
+    const out = await nextLine(repo)
+
+    expect(out).toContain('the worktree moved')
+    expect(out).toContain('changed vs base:')
+    expect(out).toContain('src/sneaked-in.ts')
+
+    await repo.cli(['clean'])
+  })
+
+  // No silent truncation: a note that lists six of many and says nothing about the rest
+  // reads as a complete answer, which is the one thing it must never do.
+  it('counts the paths it did not list', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await settleImplementGate(repo, wt, planId)
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+
+    for (let i = 0; i < 9; i++) {
+      writeFileSync(join(wt, 'src', `extra-${i}.ts`), `export const v${i} = ${i}\n`)
+    }
+
+    const out = await nextLine(repo)
+    const note = out.split('\n').find((l) => l.startsWith('note:')) ?? ''
+
+    // exactly six named, the remainder counted rather than dropped. The list is
+    // `changedFiles` sorted, so it interleaves the fixture's own paths with the nine added
+    // here — assert the CAP, not which paths won the sort.
+    const listed = /changed vs base: (.+?)(?: \(\+(\d+) more\))? — re-gate/.exec(note)
+    expect(listed, `no changed-paths clause in: ${note}`).not.toBeNull()
+    expect(listed![1]!.split(' ')).toHaveLength(6)
+    expect(Number(listed![2])).toBeGreaterThan(0)
+
+    await repo.cli(['clean'])
+  })
 })
