@@ -1,5 +1,7 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, sep } from 'node:path'
+import {
+  appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync,
+} from 'node:fs'
+import { isAbsolute, join, resolve, sep } from 'node:path'
 import { git, stateDirs, tryGit } from './gitio.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
@@ -24,6 +26,22 @@ export function worktreeFlow(cwd: string, root: string): string | undefined {
   // Round-tripping the last path segment back to a plan id is safe: worktreePath is a
   // bare join with no slugification, and doc ids are /^[a-z0-9-]+$/ (dsl.ts).
   return rest.length > 0 && !rest.includes(sep) ? rest : undefined
+}
+
+// Whether the session asking is already in `home`. A PATH comparison, not a string one:
+// `primaryRoot` answers with git's physical path (`rev-parse --show-toplevel` resolves
+// symlinks) while `ctx.cwd` is whatever the human typed, and on macOS every `/tmp` and
+// `/var` path is a symlink — so a raw `===` reports a session sitting in its own home as a
+// session that must be relocated, which is the handoff loop this predicate exists to close.
+//
+// realpathSync throws on a path that does not exist; `resolve` is the fallback because a
+// home that is not on disk is not one you are standing in, and the comparison must still
+// answer rather than throw inside `next`'s print block.
+export function atHome(cwd: string, home: string): boolean {
+  const real = (p: string): string => {
+    try { return realpathSync(p) } catch { return resolve(p) }
+  }
+  return real(cwd) === real(home)
 }
 
 export function branchName(planId: string): string {

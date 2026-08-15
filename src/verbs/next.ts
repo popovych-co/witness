@@ -7,11 +7,11 @@ import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
+import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
-import { worktreeFlow, worktreePath } from '../worktree.js'
+import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
@@ -87,12 +87,56 @@ export function authoringOwed(entries: Entry[], gate: string, currentSha: string
 // answer. A human who just watched that gate pass reads it as the latter, and
 // with a second session in the worktree answering `ship` the pair looks like a deadlock
 // with no error anywhere. The lapse is a fact the CLI already knows; say it.
-function lapseNote(entries: Entry[], gate: string, currentSha: string | undefined): string | undefined {
+//
+// Row 134: say WHICH fact. `reviewed_sha` at implement is H(diff, planContent), so two
+// different events with two different remedies produce one moved number — and the note said
+// `worktree now @…` for both, which is false whenever a plan amend is what moved it.
+// `diff_sha` (row 135) is what makes the split exact; entries predating it fall back to
+// naming the shas, the honest answer for a record that cannot say.
+// Row 136, corrected by measurement while building it. The plan here was a `whitespace-only`
+// clause, because the reported incident's whole second file was a formatter unwrapping one
+// array literal. Measured against that worktree: it is NOT whitespace-only by any predicate
+// git or a byte-compare can express — collapsing the literal also drops its trailing comma,
+// so `git diff -w` reports 1 insertion / 8 deletions and a whitespace-stripped compare of
+// the two blobs still differs. A language-aware "formatting-only" test is the only thing
+// that would catch it, and witness is not going to tokenise TypeScript, YAML and Markdown.
+//
+// So the clause names the CHANGED PATHS instead: exact, language-agnostic, free (flowAction
+// already computed them for the evidence report), and it points at the same culprit — the
+// human reads a file they did not touch and goes looking for what wrote it. Shipping the
+// whitespace clause would have been worse than shipping nothing: it misses its own
+// motivating case, and a reader who learns it exists reads its ABSENCE as "something
+// substantive changed", which is false exactly when it matters.
+interface LapseCause { diffSha: string; changed: string[] }
+
+// A cap with its remainder counted, never a silent truncation: a note that lists six of
+// nineteen paths and says so is a report, one that lists six and stops is a wrong answer.
+const LAPSE_PATHS = 6
+
+function lapseNote(
+  entries: Entry[], gate: string, currentSha: string | undefined,
+  // A THUNK: the cause costs extra git invocations, and `next` runs every turn while a
+  // lapse is rare. Nothing below the guards may be paid for on the settled path.
+  cause: () => LapseCause | undefined,
+): string | undefined {
   const last = lastGateRun(entries, gate)
   if (!last || currentSha === undefined || last.reviewed_sha === currentSha) return undefined
   // sha-free: asks "was it ever settled", which is the only thing that can lapse
   if (!gateSettled(entries, gate)) return undefined
-  return `${gate} approval lapsed — judged @${last.reviewed_sha.slice(0, 7)}, worktree now @${currentSha.slice(0, 7)} — re-gate to judge the current tree`
+  const shas = `judged @${last.reviewed_sha.slice(0, 7)}, now @${currentSha.slice(0, 7)}`
+  const c = cause()
+  if (c === undefined || last.diff_sha === undefined) {
+    return `${gate} approval lapsed — ${shas} — re-gate to judge the current tree`
+  }
+  if (last.diff_sha === c.diffSha) {
+    return `${gate} approval lapsed — the plan was re-authored, the worktree is unchanged (${shas}) — re-gate to judge the current plan`
+  }
+  const shown = c.changed.slice(0, LAPSE_PATHS).join(' ')
+  const rest = c.changed.length - LAPSE_PATHS
+  const paths = c.changed.length === 0
+    ? ''
+    : ` · changed vs base: ${shown}${rest > 0 ? ` (+${rest} more)` : ''}`
+  return `${gate} approval lapsed — the worktree moved (${shas})${paths} — re-gate to judge the current tree`
 }
 
 // Row 105. `appendKind` keys on harness, so a cross-harness run is `fresh` and re-invokes
@@ -230,7 +274,12 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   }
   return {
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
-    ...noteOf(lapseNote(entries, 'implement', diffSha), judgeNote(entries, 'implement', judge)),
+    ...noteOf(
+      lapseNote(entries, 'implement', diffSha,
+        // `files` is the list flowAction already computed above — the cause costs one
+        // hash pass, not a second walk of the diff
+        () => (baseR.ok ? { diffSha: diffReviewedSha(wt, baseR.value), changed: files } : undefined)),
+      judgeNote(entries, 'implement', judge)),
   }
 }
 
@@ -735,10 +784,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.target) ctx.out(kv('target', action.target))
   if (action.note) ctx.out(kv('note', action.note))
   if (action.block) action.block.forEach((l) => ctx.out(l))
+  // Whether this session is already in `home:` is a fact the CLI holds both halves of, so
+  // it answers it here rather than printing the handoff and leaving the comparison to the
+  // model. A `run:` line that cds to the directory it was printed in is row 129's defect —
+  // a rendered command that does not run — and it is what let the engine bounce a human
+  // between two checkouts with nothing changing in between.
+  //
+  // NOT rows 116-118's reverted band-aid. That fix made `next` REFUSE a handoff on a
+  // version-skew diagnosis owned by `check`. This withholds no knowledge and changes no
+  // routing answer: the stage, the target and the home are identical either way, and only
+  // the instruction to a session that is already there stops being printed.
   if (action.home) {
     ctx.out(kv('home', action.home))
-    ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
-    ctx.out(kv('relay', relayLine(harness)))
+    if (!atHome(ctx.cwd, action.home)) {
+      ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
+      ctx.out(kv('relay', relayLine(harness)))
+    }
   }
   return EXIT.OK
 }

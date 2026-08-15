@@ -216,14 +216,20 @@ describe('addressing one flow', () => {
     await repo.cli(['clean'])
   })
 
-  it('ship row hands off home: primary root with a model-free run line', async () => {
+  it('ship row hands off home: primary root, and omits the handoff when asked from it', async () => {
     const { repo, wt, planId } = await shippableRepo()
     await settleImplementGate(repo, wt, planId)   // flow advances to ship
-    const out = await nextLine(repo)
-    expect(out).toContain(`witness ship ${planId}`)
-    expect(out).toContain(`home: ${repo.root}`)
-    expect(out).toContain(`run: cd '${repo.root}' && claude '/witness'`)
-    expect(out).not.toContain('--model')   // session-default ship model → no flag
+    const fromWorktree = (await repo.cli(['next'], { cwd: wt })).stdout
+    expect(fromWorktree).toContain(`witness ship ${planId}`)
+    expect(fromWorktree).toContain(`home: ${repo.root}`)
+    expect(fromWorktree).toContain(`run: cd '${repo.root}' && claude '/witness'`)
+    expect(fromWorktree).not.toContain('--model')   // session-default ship model → no flag
+
+    // Row 134: asked from the root itself, the same row carries no handoff — there is
+    // nowhere to go, and a `cd` to your own cwd is a rendered command that does not run.
+    const fromRoot = await nextLine(repo)
+    expect(fromRoot).toContain(`home: ${repo.root}`)
+    expect(fromRoot.split('\n').find((l) => l.startsWith('run: '))).toBeUndefined()
 
     await repo.cli(['clean'])
   })
