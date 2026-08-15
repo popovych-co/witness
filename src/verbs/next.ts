@@ -11,7 +11,7 @@ import { effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReview
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
-import { worktreeFlow, worktreePath } from '../worktree.js'
+import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { kv, rows } from '../toon.js'
@@ -735,10 +735,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.target) ctx.out(kv('target', action.target))
   if (action.note) ctx.out(kv('note', action.note))
   if (action.block) action.block.forEach((l) => ctx.out(l))
+  // Whether this session is already in `home:` is a fact the CLI holds both halves of, so
+  // it answers it here rather than printing the handoff and leaving the comparison to the
+  // model. A `run:` line that cds to the directory it was printed in is row 129's defect —
+  // a rendered command that does not run — and it is what let the engine bounce a human
+  // between two checkouts with nothing changing in between.
+  //
+  // NOT rows 116-118's reverted band-aid. That fix made `next` REFUSE a handoff on a
+  // version-skew diagnosis owned by `check`. This withholds no knowledge and changes no
+  // routing answer: the stage, the target and the home are identical either way, and only
+  // the instruction to a session that is already there stops being printed.
   if (action.home) {
     ctx.out(kv('home', action.home))
-    ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
-    ctx.out(kv('relay', relayLine(harness)))
+    if (!atHome(ctx.cwd, action.home)) {
+      ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
+      ctx.out(kv('relay', relayLine(harness)))
+    }
   }
   return EXIT.OK
 }
