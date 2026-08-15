@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { loadConfig } from '../src/config.js'
@@ -56,6 +58,42 @@ describe('the implement gate re-arms on plan content', () => {
     await settleImplementGate(repo, wt, planId)
     repo.setMeta(planId, { 'derives-from': 'f'.repeat(64) })
     expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+
+    await repo.cli(['clean'])
+  })
+
+  it('names the plan, not the worktree, when the plan is what moved', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await settleImplementGate(repo, wt, planId)
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+
+    const rewritten = await writePlan(repo, planId, {
+      steps: [{ id: 's1', title: 'rotate tokens on refresh, bounded to 15m', criteria: ['ac-rotate'] }],
+    })
+    expect(rewritten.code).toBe(0)
+
+    const out = await nextLine(repo)
+
+    expect(out).toContain('approval lapsed')
+    expect(out).toContain('the plan was re-authored')
+    // the worktree is untouched, and the note must not say otherwise
+    expect(out).not.toContain('the worktree moved')
+
+    await repo.cli(['clean'])
+  })
+
+  it('names the worktree when the tree is what moved', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await settleImplementGate(repo, wt, planId)
+    expect(await nextLine(repo)).toContain(`witness ship ${planId}`)
+
+    writeFileSync(join(wt, 'src', 'sneaked-in.ts'), 'export const x = 1\n')
+
+    const out = await nextLine(repo)
+
+    expect(out).toContain('approval lapsed')
+    expect(out).toContain('the worktree moved')
+    expect(out).not.toContain('the plan was re-authored')
 
     await repo.cli(['clean'])
   })

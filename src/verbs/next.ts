@@ -7,7 +7,7 @@ import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
+import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
@@ -87,12 +87,33 @@ export function authoringOwed(entries: Entry[], gate: string, currentSha: string
 // answer. A human who just watched that gate pass reads it as the latter, and
 // with a second session in the worktree answering `ship` the pair looks like a deadlock
 // with no error anywhere. The lapse is a fact the CLI already knows; say it.
-function lapseNote(entries: Entry[], gate: string, currentSha: string | undefined): string | undefined {
+//
+// Row 134: say WHICH fact. `reviewed_sha` at implement is H(diff, planContent), so two
+// different events with two different remedies produce one moved number — and the note said
+// `worktree now @…` for both, which is false whenever a plan amend is what moved it.
+// `diff_sha` (row 135) is what makes the split exact; entries predating it fall back to
+// naming the shas, the honest answer for a record that cannot say.
+interface LapseCause { diffSha: string; whitespaceOnly: string[] }
+
+function lapseNote(
+  entries: Entry[], gate: string, currentSha: string | undefined,
+  // A THUNK: the cause costs extra git invocations, and `next` runs every turn while a
+  // lapse is rare. Nothing below the guards may be paid for on the settled path.
+  cause: () => LapseCause | undefined,
+): string | undefined {
   const last = lastGateRun(entries, gate)
   if (!last || currentSha === undefined || last.reviewed_sha === currentSha) return undefined
   // sha-free: asks "was it ever settled", which is the only thing that can lapse
   if (!gateSettled(entries, gate)) return undefined
-  return `${gate} approval lapsed — judged @${last.reviewed_sha.slice(0, 7)}, worktree now @${currentSha.slice(0, 7)} — re-gate to judge the current tree`
+  const shas = `judged @${last.reviewed_sha.slice(0, 7)}, now @${currentSha.slice(0, 7)}`
+  const c = cause()
+  if (c === undefined || last.diff_sha === undefined) {
+    return `${gate} approval lapsed — ${shas} — re-gate to judge the current tree`
+  }
+  if (last.diff_sha === c.diffSha) {
+    return `${gate} approval lapsed — the plan was re-authored, the worktree is unchanged (${shas}) — re-gate to judge the current plan`
+  }
+  return `${gate} approval lapsed — the worktree moved (${shas}) — re-gate to judge the current tree`
 }
 
 // Row 105. `appendKind` keys on harness, so a cross-harness run is `fresh` and re-invokes
@@ -230,7 +251,10 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   }
   return {
     line: `witness gate implement ${id}`, target: id, ...inWorktree,
-    ...noteOf(lapseNote(entries, 'implement', diffSha), judgeNote(entries, 'implement', judge)),
+    ...noteOf(
+      lapseNote(entries, 'implement', diffSha,
+        () => (baseR.ok ? { diffSha: diffReviewedSha(wt, baseR.value), whitespaceOnly: [] } : undefined)),
+      judgeNote(entries, 'implement', judge)),
   }
 }
 
