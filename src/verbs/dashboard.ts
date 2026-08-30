@@ -111,6 +111,26 @@ export function recommenderRows(
   return recommenderRowsFrom(decisions)
 }
 
+// D150. Row 64 promised this trend and never built it — the 2026-08-29 field report had to
+// count refusals by hand. Subject is the WRITE PATH, not the author (D130's framing): a low
+// first-try rate means the manifest contract is hard to hit, not that anyone erred. Per
+// artifact, "first-try" means its FIRST write-path entry is a `write`, so a refusal followed
+// by a successful write still counts against the path that refused it.
+export function writePathStats(root: string): { firstTry: number; artifacts: number; refused: number } {
+  const first = new Map<string, 'write' | 'write-refused'>()
+  let refused = 0
+  for (const slug of effortStreams(root)) {
+    for (const e of readStream(root, slug)) {
+      if (e.t !== 'write' && e.t !== 'write-refused') continue
+      if (e.t === 'write-refused') refused += 1
+      const artifact = String(e.artifact ?? '')
+      if (artifact !== '' && !first.has(artifact)) first.set(artifact, e.t)
+    }
+  }
+  const seen = [...first.values()]
+  return { artifacts: seen.length, firstTry: seen.filter((t) => t === 'write').length, refused }
+}
+
 export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
@@ -187,6 +207,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const rec = recommenderRows(root, canon)
   if (rec.length > 0) {
     rows('recommender', ['rule', 'fired', 'overridden'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const wp = writePathStats(root)
+  if (wp.artifacts > 0 || wp.refused > 0) {
+    ctx.out(kv('write-path', `${wp.firstTry}/${wp.artifacts} artifacts first-try · ${wp.refused} refusal(s)`))
   }
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))
