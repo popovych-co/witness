@@ -5,6 +5,15 @@ import { primaryRoot, tryGit } from '../gitio.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 
+// D140. Row 114 fixed one branch of this function and left the other: every non-upstream
+// failure rendered as "rebase conflict — resolve manually", which misnames both a real
+// conflict (it named no files) and a non-conflict fatal (it was not a conflict at all).
+export function classifyPullFailure(out: string): 'no-upstream' | 'conflict' | 'other' {
+  if (/no tracking information|no such ref|does not appear to be a git repository/i.test(out)) return 'no-upstream'
+  if (/CONFLICT|could not apply/i.test(out)) return 'conflict'
+  return 'other'
+}
+
 export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -34,14 +43,25 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   try {
     const pull = tryGit(root, 'pull', '--rebase')
     if (!pull.ok) {
-      if (/no tracking information|no such ref|does not appear to be a git repository/i.test(pull.out)) {
+      const kind = classifyPullFailure(pull.out)
+      if (kind === 'no-upstream') {
         renderRefusal([v('remote', 'no-upstream', pull.out.trim().slice(0, 120),
           'an upstream — git push -u origin main once, then witness sync')]).forEach((l) => ctx.err(l))
         return EXIT.REFUSED
       }
+      if (kind === 'conflict') {
+        // Read the unmerged paths BEFORE the abort — it is what erases the conflict state.
+        const conflicted = tryGit(root, 'diff', '--name-only', '--diff-filter=U')
+        tryGit(root, 'rebase', '--abort')
+        const where = conflicted.ok && conflicted.out !== ''
+          ? conflicted.out.split('\n').join(' · ')
+          : 'unknown files'
+        ctx.out(kv('sync', `rebase conflict in ${where} — resolve manually, then re-run witness sync`))
+        return EXIT.FINDINGS
+      }
+      // 'other': not a conflict — say what git said, never "rebase conflict".
       tryGit(root, 'rebase', '--abort')
-      ctx.out(kv('sync', 'rebase conflict — resolve manually, then re-run witness sync'))
-      ctx.out(kv('detail', pull.out.trim().slice(-200)))
+      ctx.out(kv('sync', `git pull --rebase failed — ${pull.out.trim().slice(-200)}`))
       return EXIT.FINDINGS
     }
     const push = tryGit(root, 'push')
