@@ -41,7 +41,7 @@ registerGate({
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {
-      return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc')])
+      return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc', 'witness index')])
     }
     const baseR = diffBase(wt, cfg)
     if (!baseR.ok) return baseR

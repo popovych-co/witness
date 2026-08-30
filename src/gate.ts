@@ -103,7 +103,7 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
   const picked = Array.isArray(raw) ? raw : (raw as Record<string, unknown>)[cls]
   if (!Array.isArray(picked) || picked.length === 0 || !picked.every((x) => typeof x === 'string')) {
     return refuse([v(`gates.${gate}.reviewers`, 'battery-shape', JSON.stringify(raw),
-      'a reviewer list or a per-class map of lists')])
+      'a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer]')])
   }
   return ok(picked as string[])
 }

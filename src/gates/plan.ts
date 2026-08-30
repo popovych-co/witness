@@ -27,7 +27,7 @@ registerGate({
     const recap = latestRecap(root, effort)
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {
-      return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc')])
+      return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc', 'witness index')])
     }
 
     const checks: GateCheck[] = []
