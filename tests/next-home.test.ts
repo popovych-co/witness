@@ -40,6 +40,26 @@ describe('next answers whether this session is already home', () => {
     await repo.cli(['clean'])
   })
 
+  // D153. The scoping was deliberate (ambient context, never a claim) but unprinted — the
+  // residual of the 2026-08-01 "wtf i was redirected" report. Behavior unchanged; the line
+  // sits ABOVE next: so the contiguous routing unit the stage skills read stays intact.
+  it('says when a worktree cwd scoped the answer', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+
+    const scoped = await repo.cli(['next'], { cwd: wt })
+    expect(row(scoped.stdout, `flow: ${planId} — inferred from cwd`)).toBeDefined()
+    expect(scoped.stdout.split('\n').indexOf(`flow: ${planId} — inferred from cwd`))
+      .toBeLessThan(scoped.stdout.split('\n').findIndex((l) => l.startsWith('next: ')))
+
+    const atRoot = await repo.cli(['next'])
+    expect(atRoot.stdout).not.toContain('inferred from cwd')
+
+    const explicit = await repo.cli(['next', '--flow', planId])
+    expect(explicit.stdout).not.toContain('inferred from cwd')
+
+    await repo.cli(['clean'])
+  })
+
   it('still prints run: and relay: when home: is another checkout', async () => {
     const { repo, planId } = await shippableRepo()
     const wt = worktreePath(repo.root, planId)
