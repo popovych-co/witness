@@ -172,3 +172,14 @@ export function auditStateCommits(root: string): CommitAudit[] {
     return { sha: sha ?? '', subject: subject ?? '', trailered: (trailer ?? '').trim() === '1' }
   })
 }
+
+// D139. One computation, two renderers (check's finding and the dashboard's line — the
+// D101 boundary). Best-effort and silent when the network or the remote is absent (D103):
+// an offline machine reports nothing rather than a complaint.
+export function divergence(root: string, branch: string): { ahead: number; behind: number } | undefined {
+  if (!tryGit(root, 'fetch', '--quiet', 'origin', branch).ok) return undefined
+  const counts = tryGit(root, 'rev-list', '--left-right', '--count', `origin/${branch}...${branch}`)
+  if (!counts.ok) return undefined
+  const [behind = '0', ahead = '0'] = counts.out.trim().split(/\s+/)
+  return { ahead: Number(ahead), behind: Number(behind) }
+}

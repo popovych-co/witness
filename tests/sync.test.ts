@@ -55,3 +55,23 @@ describe('witness sync', () => {
     expect(src).not.toMatch(/rebase conflict — resolve manually.*\n.*detail/)
   })
 })
+
+describe('divergence visibility (D139)', () => {
+  it('check warns when local is ahead, and is silent when clean or remoteless', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+
+    const before = await repo.cli(['check'])
+    expect(before.stdout).not.toContain('origin/main')          // no remote → silent
+
+    addOrigin(repo)
+    const clean = await repo.cli(['check'])
+    expect(clean.stdout).not.toContain('origin/main')           // in step → silent
+
+    repo.git('commit', '--allow-empty', '-m', 'local only')
+    const res = await repo.cli(['check'])
+
+    expect(res.code).toBe(0)                                    // warn, never error
+    expect(res.stdout).toMatch(/warn,git,main,ahead,1 ahead · 0 behind origin\/main — witness sync/)
+  })
+})

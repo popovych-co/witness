@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { rmSync } from 'node:fs'
 import {
-  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
+  SPEC_META, addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
 } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 
@@ -126,5 +126,18 @@ describe('witness status', () => {
     const check = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(status.stdout).toContain('judge: pi (declared in witness.config.yaml)')
     expect(check.stdout).toContain('judge: pi (declared in witness.config.yaml)')
+  })
+
+  // D139. The same computation `check` renders as a finding, rendered here as one line —
+  // the D101 boundary: one fact, two surfaces, never two derivations.
+  it('prints the divergence line when local main is ahead (D139)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    addOrigin(repo)
+    repo.git('commit', '--allow-empty', '-m', 'local only')
+
+    const res = await repo.cli([])
+
+    expect(res.stdout).toMatch(/^sync: local main 1 ahead · 0 behind origin\/main — witness sync$/m)
   })
 })

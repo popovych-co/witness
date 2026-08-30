@@ -3,7 +3,7 @@ import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
-import { primaryRoot } from '../gitio.js'
+import { divergence, primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
@@ -139,6 +139,16 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
 
   const txn = pendingTxn(root)
   if (txn) ctx.out(kv('pending-txn', txn.op))
+
+  // D139. `check`'s finding and this line are ONE computation (`divergence`) with two
+  // renderers — the D101 boundary. Re-deriving it here is how the two surfaces drift apart.
+  if (cfg.ok) {
+    const shipBranch = String(((cfg.value.raw.ship ?? {}) as Record<string, unknown>).branch ?? 'main')
+    const div = divergence(root, shipBranch)
+    if (div && (div.ahead > 0 || div.behind > 0)) {
+      ctx.out(kv('sync', `local ${shipBranch} ${div.ahead} ahead · ${div.behind} behind origin/${shipBranch} — witness sync`))
+    }
+  }
 
   const canon0 = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon0)
