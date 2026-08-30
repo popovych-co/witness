@@ -32,6 +32,8 @@
 - Consumes: `tryGit` from `src/gitio.ts` (existing).
 - Produces: exported pure `classifyPullFailure(out: string): 'no-upstream' | 'conflict' | 'other'` in `src/verbs/sync.ts` (tests import it).
 
+**Corrected while executing** (recorded not quietly fixed): the planned assertion `toContain('sync: rebase conflict')` cannot match. `kv()` TOON-escapes any value containing a comma (`toon.ts:3`) and `resolve manually, then re-run` has one, so the line renders **quoted** — as the old catch-all already did. The test asserts the real rendering: `/^sync: "rebase conflict in \.witness\/journal\/\S+ — resolve manually, then re-run witness sync"$/m`, plus the absence of the `detail:` line.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/sync.test.ts`:
@@ -552,6 +554,8 @@ git commit -m "feat(evidence): verify-red and start name the files they churned 
 - Consumes: `effortStreams`, `readStream` (already imported); `write` entries carry `artifact`, `write-refused` entries carry `artifact` (`src/verbs/write.ts:249-253`).
 - Produces: `writePathStats(root: string): { firstTry: number; artifacts: number; refused: number }` — per artifact, "first-try" means its first write-path entry is a `write`, not a `write-refused`.
 
+**Corrected while executing** (recorded not quietly fixed): the planned fixture forces its refusal with an invalid id, which refuses at `ID_RE` (`verbs/write.ts:90`) **before** `journalRefusal` runs — no `write-refused` entry exists to count, so `1/1 · 1 refusal` is unreachable that way. The test uses a schema-failing manifest (over-long `summary`, the `write-spec.test.ts` shape) across three artifacts — one clean, one refused-only, one refused-then-written — and asserts the honest `1/3 artifacts first-try · 2 refusal(s)`. A second trap the metric itself caught: `SPEC_META`'s criterion is tagged `@spec:auth-refresh`, so a spec written under any other id is refused; each manifest is now built per id.
+
 - [ ] **Step 1: Write the failing test**
 
 Append to `tests/dashboard.test.ts`:
@@ -696,7 +700,7 @@ git commit -m "fix(recommend): malformed-rerun names a lens calibrate accepts, c
 
 **Interfaces:**
 - Consumes: the existing `inferred`/`scoped` locals in `run()`.
-- Produces: a `flow: <plan-id> — inferred from cwd` line, printed after `target:`, only on the ambient-inference path (never for explicit `--flow`, never at the primary root).
+- Produces: a `flow: <plan-id> — inferred from cwd` line, printed **before `next:`** (beside the stale rows — the `next:/stage:/target:/note:/home:/run:/relay:` lines are a contiguous unit the stage skills read verbatim, per the comment above the stale-rows render; nothing may split it), only on the ambient-inference path (never for explicit `--flow`, never at the primary root). **Corrected while executing** (house practice, recorded not quietly fixed): the plan originally said "after `target:`", which would have split the unit — carry this correction into T10's row 153 as one sentence.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -729,11 +733,17 @@ In `src/verbs/next.ts` `run()`: hoist the inference result so the render block c
 
 and after the `target:` line (`if (action.target) ...`, ~line 784):
 
+and print it **with the pre-block context rows, immediately after the stale rows and before `next:`**:
+
 ```ts
   // D153. The scoping was deliberate (ambient context, not a claim) but unprinted —
   // the residual of the 2026-08-01 "wtf i was redirected" report. Behavior unchanged.
+  // Printed BEFORE next:, like the stale rows: the next:/stage:/target:/note:/home:/
+  // run:/relay: lines are a contiguous unit the stage skills read verbatim.
   if (ambientFlow) ctx.out(kv('flow', `${ambientFlow} — inferred from cwd`))
 ```
+
+(This requires computing the inference before the render section — hoist as described, and emit the line where the stale rows are emitted, not inside the action render block.)
 
 - [ ] **Step 4: Run tests to verify pass**
 
@@ -831,6 +841,8 @@ git commit -m "docs(skills): designs/** in every ground rule, read-before-edit, 
 - Modify: `DESIGN.md` (amendment block in the Status paragraph at line 5; twenty rows appended after row 136, ~line 448)
 
 **Interfaces:** none — documentation of decisions already approved in the spec.
+
+**Corrected while executing** (recorded not quietly fixed): the premise that `**2026-08-15 amendment (⊖)…**` is the previous Status block is false — rows 132–136 (⊘, ⊖) received **no** Status-paragraph block at all, only a sentence in the `## Decision log` legend paragraph (DESIGN.md:308). The last Status block is `2026-08-10 (⊗)`. Both were written: the block as planned (this triage is grill-#12/#13 scale), plus the legend sentence, without which `⟡` is undecodable.
 
 - [ ] **Step 1: Write the amendment block**
 
