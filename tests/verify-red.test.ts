@@ -44,6 +44,22 @@ describe('witness verify-red', () => {
     expect(repo.git('status', '--porcelain').trim()).toBe('')
   })
 
+  // D148. The stash/checkout cycle above rewrote every non-test file on disk, so the
+  // agent's prior reads are stale and witness is what made them stale. Say so.
+  it('names the files it churned so the agent re-reads them', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'implement rotation')
+
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1'], { env: fixtureEnv() })
+
+    expect(res.code).toBe(0)
+    expect(res.stdout).toMatch(/^stale-reads: .*src\/token\.ts/m)
+    expect(res.stdout).toContain('changed on disk during red verification — re-read before editing')
+  })
+
   it('restores uncommitted implementation work via stash', async () => {
     const repo = await tddRepo()
     repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)

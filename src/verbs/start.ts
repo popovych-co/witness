@@ -53,6 +53,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (!wt.ok) { renderRefusal(wt.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('start', `${planId} already in-progress — worktree ${had ? 'present' : 'recreated'}`))
     ctx.out(kv('worktree', wt.value.path))
+    // D148. Re-attach re-applies the canon exclusion and checks the tree back out, so a
+    // session that already read files in here is holding stale copies — and witness is
+    // what moved them. Only on re-attach: a fresh cut has nothing to invalidate.
+    if (had) ctx.out(kv('note', 'worktree re-attach refreshed canon exclusions — re-read files you read before this run'))
     ctx.out(kv('agent-model', agentModel))
     ctx.out(kv('dispatch-budget', String(budget)))
     ctx.out(kv('dispatches', dispatchLine))

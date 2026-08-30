@@ -11,6 +11,7 @@ import { ok, refuse, v, type Result } from './refusal.js'
 import { runFiltered, runFullSuite, runnerConfig } from './runner.js'
 import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
+import { kv } from './toon.js'
 import { withTxn } from './txn.js'
 
 export function isTestPath(rel: string): boolean {
@@ -184,6 +185,15 @@ export async function verifyRed(
       if (inCommit(runRoot, 'HEAD', rel)) git(runRoot, 'checkout', 'HEAD', '--', rel)
     }
     if (stashed) git(runRoot, 'stash', 'pop')
+  }
+  // D148. The stash/checkout cycle above rewrote every non-test file on disk — the agent's
+  // prior reads are stale, and witness is what made them stale. Announced rather than left
+  // to the harness's "file modified since read" refusal, which names witness nowhere.
+  if (nonTest.length) {
+    const shown = nonTest.slice(0, 12)
+    const more = nonTest.length > shown.length ? ` (+${nonTest.length - shown.length} more)` : ''
+    ctx.out(kv('stale-reads',
+      `${shown.join(' · ')}${more} — changed on disk during red verification — re-read before editing`))
   }
   if (!red.ok) return red
   const green = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', { reconstructed: true })
