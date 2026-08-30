@@ -766,6 +766,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // (This is why inference lives on `next` alone. Every mutating verb takes its id
   // explicitly, handed down from `target:` by the stage skills.)
   let action: NextAction
+  // D153. Set only on the ambient path — an explicit `--flow` is a claim the caller made,
+  // and the primary root scopes nothing.
+  let ambientFlow: string | undefined
   if (values.flow !== undefined) {
     const flowR = resolveFlow(canon, values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -776,9 +779,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const scoped = ambient && ambient.meta.type === 'plan'
       ? flowAction(root, cfgR.value, ambient, judge)
       : undefined
+    if (scoped) ambientFlow = inferred
     action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
   }
   action = withDeferralNote(root, canon, action)
+  // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
+  // redirect report. Printed HERE, above the routing block, for the same reason the stale
+  // rows are: it must not split the contiguous next:/stage:/target:/note:/home:/run:/relay:
+  // unit the stage skills read verbatim. Behavior unchanged; statement honesty.
+  if (ambientFlow) ctx.out(kv('flow', `${ambientFlow} — inferred from cwd`))
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))

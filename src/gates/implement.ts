@@ -87,7 +87,7 @@ registerGate({
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {
-      return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc')])
+      return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc', 'witness index')])
     }
     const baseR = diffBase(wt, cfg)
     if (!baseR.ok) return baseR
@@ -104,7 +104,8 @@ registerGate({
       const artAbs = join(root, artRel)
       if (!existsSync(artAbs) || !statSync(artAbs).isFile()) {
         return refuse([v('design', 'design-artifact-missing', artRel,
-          'the approved living design the plan pins — restore it or re-run the design stage')])
+          'the approved living design the plan pins — restore it or re-run the design stage',
+          `git checkout -- ${artRel}`)])
       }
       const living: LensDoc = { path: artRel, contents: readFileSync(artAbs, 'utf8') }
       lensOverrides['design-reviewer'] = {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { rmSync } from 'node:fs'
 import {
-  SPEC_META, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
+  SPEC_META, addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
 } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 
@@ -126,5 +126,38 @@ describe('witness status', () => {
     const check = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(status.stdout).toContain('judge: pi (declared in witness.config.yaml)')
     expect(check.stdout).toContain('judge: pi (declared in witness.config.yaml)')
+  })
+
+  // D139. The same computation `check` renders as a finding, rendered here as one line —
+  // the D101 boundary: one fact, two surfaces, never two derivations.
+  it('prints the divergence line when local main is ahead (D139)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    addOrigin(repo)
+    repo.git('commit', '--allow-empty', '-m', 'local only')
+
+    const res = await repo.cli([])
+
+    expect(res.stdout).toMatch(/^sync: local main 1 ahead · 0 behind origin\/main — witness sync$/m)
+  })
+
+  // D150. Row 64 promised this trend and never built it — this report had to count
+  // refusals by hand. The subject is the WRITE PATH, not the author (D130's framing):
+  // per artifact, "first-try" means its FIRST write-path entry is a write.
+  it('trends the write path — first-try rate and refusal count (D150)', async () => {
+    const repo = await seededRepo()
+    // A spec's criteria must be tagged with its OWN id, so each manifest is built per id;
+    // an over-long summary is what makes the refusing ones refuse.
+    const meta = (id: string) => ({ ...SPEC_META, criteria: [{ id: `ac-${id}`, test: `@spec:${id}` }] })
+    const bad = (id: string) => ({ ...meta(id), summary: 'x'.repeat(121) })
+
+    expect((await writeSpec(repo, 'clean-spec', meta('clean-spec'))).code).toBe(0)   // first-try
+    expect((await writeSpec(repo, 'bad-spec', bad('bad-spec'))).code).toBe(2)        // refused, never written
+    expect((await writeSpec(repo, 'retry-spec', bad('retry-spec'))).code).toBe(2)    // refused…
+    expect((await writeSpec(repo, 'retry-spec', meta('retry-spec'))).code).toBe(0)   // …then written: still not first-try
+
+    const res = await repo.cli([])
+
+    expect(res.stdout).toMatch(/^write-path: 1\/3 artifacts first-try · 2 refusal\(s\)$/m)
   })
 })

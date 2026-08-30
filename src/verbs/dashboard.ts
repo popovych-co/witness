@@ -3,7 +3,7 @@ import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
-import { primaryRoot } from '../gitio.js'
+import { divergence, primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
@@ -111,6 +111,26 @@ export function recommenderRows(
   return recommenderRowsFrom(decisions)
 }
 
+// D150. Row 64 promised this trend and never built it — the 2026-08-29 field report had to
+// count refusals by hand. Subject is the WRITE PATH, not the author (D130's framing): a low
+// first-try rate means the manifest contract is hard to hit, not that anyone erred. Per
+// artifact, "first-try" means its FIRST write-path entry is a `write`, so a refusal followed
+// by a successful write still counts against the path that refused it.
+export function writePathStats(root: string): { firstTry: number; artifacts: number; refused: number } {
+  const first = new Map<string, 'write' | 'write-refused'>()
+  let refused = 0
+  for (const slug of effortStreams(root)) {
+    for (const e of readStream(root, slug)) {
+      if (e.t !== 'write' && e.t !== 'write-refused') continue
+      if (e.t === 'write-refused') refused += 1
+      const artifact = String(e.artifact ?? '')
+      if (artifact !== '' && !first.has(artifact)) first.set(artifact, e.t)
+    }
+  }
+  const seen = [...first.values()]
+  return { artifacts: seen.length, firstTry: seen.filter((t) => t === 'write').length, refused }
+}
+
 export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
@@ -139,6 +159,16 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
 
   const txn = pendingTxn(root)
   if (txn) ctx.out(kv('pending-txn', txn.op))
+
+  // D139. `check`'s finding and this line are ONE computation (`divergence`) with two
+  // renderers — the D101 boundary. Re-deriving it here is how the two surfaces drift apart.
+  if (cfg.ok) {
+    const shipBranch = String(((cfg.value.raw.ship ?? {}) as Record<string, unknown>).branch ?? 'main')
+    const div = divergence(root, shipBranch)
+    if (div && (div.ahead > 0 || div.behind > 0)) {
+      ctx.out(kv('sync', `local ${shipBranch} ${div.ahead} ahead · ${div.behind} behind origin/${shipBranch} — witness sync`))
+    }
+  }
 
   const canon0 = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon0)
@@ -177,6 +207,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const rec = recommenderRows(root, canon)
   if (rec.length > 0) {
     rows('recommender', ['rule', 'fired', 'overridden'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const wp = writePathStats(root)
+  if (wp.artifacts > 0 || wp.refused > 0) {
+    ctx.out(kv('write-path', `${wp.firstTry}/${wp.artifacts} artifacts first-try · ${wp.refused} refusal(s)`))
   }
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))

@@ -38,6 +38,25 @@ describe('witness-brainstorm', () => {
   });
 });
 
+// D142 prose half. The CLI rebases on origin/<branch> (`ship.ts`), so a recipe that rebases
+// the LOCAL ref recreates the stale base the CLI just refused.
+describe('witness-ship', () => {
+  it('rebases the remote tip in the manual-conflict recipe', () => {
+    const body = readFileSync(skillPath('witness-ship'), 'utf8');
+    expect(body).toContain('git fetch origin <ship-branch>');
+    expect(body).toContain('git rebase origin/<ship-branch>');
+    expect(body).not.toMatch(/^git rebase <ship-branch>/m);
+  });
+});
+
+// D156. The five fields are a minimum to exceed, not a checklist to complete.
+describe('witness-brainstorm interview floor', () => {
+  it('names the floor as a floor', () => {
+    const body = readFileSync(skillPath('witness-brainstorm'), 'utf8');
+    expect(body).toContain('the floor, not the count');
+  });
+});
+
 describe('witness-decompose', () => {
   const body = () => readFileSync(skillPath('witness-decompose'), 'utf8');
   it('routes by class and consults the index', () => {

@@ -11,7 +11,7 @@ import { probe } from '../probe.js'
 import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { designPending } from '../design.js'
 import { runDrift } from '../drift.js'
-import { auditStateCommits, dirtyStatePaths, primaryRoot, stateDirs, tryGit } from '../gitio.js'
+import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
@@ -70,6 +70,19 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (existsSync(localConfigPath(root)) && !tryGit(root, 'check-ignore', '-q', '--', '.witness/config.local.yaml').ok) {
     findings.push(f('warn', 'local-config', '.witness/config.local.yaml', 'local-config-unignored',
       'machine-local file — add it to .gitignore'))
+  }
+
+  // D139. Invisible drift is what let a downstream repo reach 165 unpushed commits. `warn`
+  // on purpose: this is a fact about the repo's relationship to origin, not a broken state,
+  // and only `error` moves check's exit.
+  if (cfg.ok) {
+    const shipBranch = String(((cfg.value.raw.ship ?? {}) as Record<string, unknown>).branch ?? 'main')
+    const div = divergence(root, shipBranch)
+    if (div && (div.ahead > 0 || div.behind > 0)) {
+      const rule = div.ahead > 0 && div.behind > 0 ? 'diverged' : div.ahead > 0 ? 'ahead' : 'behind'
+      findings.push(f('warn', 'git', shipBranch, rule,
+        `${div.ahead} ahead · ${div.behind} behind origin/${shipBranch} — witness sync`))
+    }
   }
 
   const canon0 = loadCanon(root)
