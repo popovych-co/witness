@@ -437,4 +437,9 @@ export const SKILL_GROUND_RULES = [
   // empty directory it reads as a missing file.
   'Read canon with',
   'absent by design',
+  // D149. `designs/**` is guarded but was named in one of six ground rules, and nothing in
+  // the payload told a session to read a file before editing it — the two halves of the
+  // 103×/8× edit-friction clusters that are witness's to fix.
+  'designs/**',
+  'Read a file before your first edit',
 ]
