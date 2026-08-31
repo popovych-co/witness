@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { EXIT, type Ctx } from './cli.js'
+import { EXIT, main, type Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { resolveJudge } from './harness.js'
 import { renderRefusal } from './refusal.js'
@@ -212,13 +212,25 @@ const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: DriveFlags): Promise<number> {
   const maxSpawns = flags.maxSpawns ?? DEFAULT_MAX_SPAWNS
   let spawns = 0
+  let acted = false
   let prev: { line: string; journal: number } | undefined
   for (;;) {
     const canon = loadCanon(root)
     let action: NextAction
     if (flags.flow !== undefined) {
       const flowR = resolveFlow(canon, flags.flow)
-      if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+      // `--flow` is a claim, and a false claim refuses — but only as a claim, at the door.
+      // A flow that reached `done` UNDER drive is the loop succeeding: the merge stamp its
+      // own child wrote is what made resolveFlow refuse, and reporting that as
+      // `terminal-status` would end a completed run with a violations table.
+      if (!flowR.ok) {
+        if (acted && flowR.violations.some((x) => x.rule === 'terminal-status')) {
+          ctx.out(`drive: flow finished — ${flags.flow}`)
+          return EXIT.OK
+        }
+        renderRefusal(flowR.violations).forEach((l) => ctx.err(l))
+        return EXIT.REFUSED
+      }
       const judgeR = resolveJudge(ctx.env, cfg.raw)
       action = flowAction(root, cfg, flowR.value, judgeR.ok ? judgeR.value.harness.name : undefined)
         ?? { line: 'witness check', target: flags.flow }
@@ -233,16 +245,23 @@ export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: Driv
     }
     if (step.kind === 'merge') { ctx.out(`drive: merge — ${step.line}`); return EXIT.OK }
     if (step.kind === 'idle') { ctx.out(`drive: idle — ${action.line}`); return EXIT.OK }
-    if (step.kind === 'decision') { return await resolveDecision(step, root, cfg, ctx) }
-
     const journal = journalTotal(root)
     // The convergence check, and the reason a crashed drive is safe to re-run: the same
     // action twice with nothing journalled in between means the session could not do what
     // the CLI asked. Spawning a third is how a loop burns a human's tokens all night.
     if (prev?.line === action.line && prev.journal === journal) {
       ctx.out(`drive: no progress — ${action.line}`)
-      ctx.out('help: the last session left the repo where it found it — read the stream above, then act on that line yourself')
+      ctx.out('help: the last act left the repo where it found it — read the stream above, then act on that line yourself')
       return EXIT.FINDINGS
+    }
+    // A decision is an act too, and it gets the same convergence guard: a decision that
+    // executes and journals nothing would otherwise re-render its own block forever.
+    if (step.kind === 'decision') {
+      prev = { line: action.line, journal }
+      acted = true
+      const settled = await resolveDecision(step, action, ctx)
+      if (settled !== undefined) return settled
+      continue
     }
     if (spawns >= maxSpawns) {
       ctx.out(`drive: spawn ceiling reached (${maxSpawns}) — ${action.line}`)
@@ -251,6 +270,7 @@ export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: Driv
     }
     prev = { line: action.line, journal }
     spawns += 1
+    acted = true
     // The merge is announced by the SHIP SESSION's own output (ship.ts:277), not by a
     // routing row — a flow whose PR is open routes to `witness ship` forever, and only
     // the child knows it printed "merge PR". Sniffing the stream is what turns that into
@@ -269,11 +289,147 @@ export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: Driv
   }
 }
 
-// Task 5 replaces this with the decision block and the prompt.
+export interface BlockOption {
+  n: number
+  command: string
+  recommended: boolean
+  runnable: boolean
+}
+
+// Read back what `renderDecision` printed (recommend.ts:33): a `<n> · [recommended ·]
+// <depth>[ · not runnable]` tag line, then the command indented under it. Parsed rather
+// than recomputed on purpose — the human decides against the bytes on their screen, so
+// the option drive runs must be the option they read, not a second derivation of it.
+export function parseBlock(lines: string[]): BlockOption[] {
+  const out: BlockOption[] = []
+  lines.forEach((line, i) => {
+    const m = /^(\d+) · (.+)$/.exec(line)
+    if (!m) return
+    const command = (lines[i + 1] ?? '').trim()
+    if (!command.startsWith('witness ')) return
+    const tags = m[2]!.split(' · ')
+    out.push({
+      n: Number(m[1]), command,
+      recommended: tags.includes('recommended'), runnable: !tags.includes('not runnable'),
+    })
+  })
+  return out
+}
+
+// D143's exclusions, verbatim: an obligation-minting override (D122's ledger must not
+// open on an "ok"), terminal acts, and trust grants (D154). `decide` refuses these with
+// `nod-cannot` anyway — drive names the act instead of burning the round-trip.
+function nodExcluded(command: string): string | undefined {
+  if (command.startsWith('witness abandon ')) return 'witness abandon'
+  return ['--override', '--stop', '--trust-cmds'].find((f) => command.includes(f))
+}
+
+const AFFIRMATIONS = new Set(['y', 'yes', 'ok', 'okay', 'go'])
+
+// The option verbs a human can name instead of a number — `approve`, `revise`, `stop`,
+// `abandon`, `override`, `repair`. Ambiguity is reported, never guessed: two options can
+// share a verb (a plain approve beside an approve --trust-cmds), and picking one for the
+// human is authoring their decision.
+function byVerb(word: string, options: BlockOption[]): BlockOption[] {
+  return options.filter((o) => o.command.includes(`--${word}`) || o.command.startsWith(`witness ${word} `))
+}
+
+type Pick = { command: string } | { refuse: string }
+
+function selectOption(answer: string, options: BlockOption[]): Pick {
+  if (answer.startsWith('witness ')) return { command: answer }    // typed out, byte-for-byte
+  if (AFFIRMATIONS.has(answer.toLowerCase())) {
+    const rec = options.find((o) => o.recommended)
+    if (!rec) return { refuse: 'this block carries no recommendation — name the option (D143)' }
+    if (!rec.runnable) return { refuse: 'the recommended option needs an id you must fill in — type it out' }
+    const excluded = nodExcluded(rec.command)
+    if (excluded !== undefined) {
+      return { refuse: `nod-cannot: ${excluded} is never taken on an affirmation — name the option (D143)` }
+    }
+    return { command: `${rec.command} --via affirmation` }
+  }
+  if (/^\d+$/.test(answer)) {
+    const picked = options.find((o) => o.n === Number(answer))
+    if (!picked) return { refuse: `no option ${answer} in this block` }
+    if (!picked.runnable) return { refuse: `option ${answer} needs an id you must fill in — type it out` }
+    return { command: picked.command }
+  }
+  const matches = byVerb(answer.toLowerCase(), options)
+  if (matches.length === 1) return { command: matches[0]!.command }
+  if (matches.length > 1) {
+    return { refuse: `${answer} matches options ${matches.map((o) => o.n).join(', ')} — name the number` }
+  }
+  return { refuse: `not an option: ${answer} — answer with a number, an option verb, or the command itself` }
+}
+
+// Split a rendered command into argv, honoring the double quotes `--note "…"` arrives in.
+// The block emits commands raw for exactly this reason (recommend.ts:31).
+export function splitArgv(command: string): string[] {
+  const argv: string[] = []
+  let cur = ''
+  let quoted = false
+  let started = false
+  for (const ch of command) {
+    if (ch === '"') { quoted = !quoted; started = true; continue }
+    if (ch === ' ' && !quoted) {
+      if (started) { argv.push(cur); cur = ''; started = false }
+      continue
+    }
+    cur += ch
+    started = true
+  }
+  if (started) argv.push(cur)
+  return argv
+}
+
+// How many times drive re-asks before leaving the stop standing. A human who cannot name
+// an option in three tries is being asked the wrong question, and a prompt that never
+// gives up is a worse treadmill than the one drive exists to end.
+const ASK_LIMIT = 3
+
+// The judgment stop, in the driver's own terminal. Rendering goes through the decide
+// verb's `--show` so the block a human reads here is byte-identical to the one they would
+// read in a chat session — D143 is one rule across surfaces, not two implementations.
+//
+// Returns undefined when the loop should continue (the decision executed), or the exit
+// code drive should stop with.
 async function resolveDecision(
-  step: Extract<DriveStep, { kind: 'decision' }>, _root: string, _cfg: Config, ctx: Ctx,
-): Promise<number> {
-  if (step.block) step.block.forEach((l) => ctx.out(l))
-  else ctx.out(`drive: decision — witness decide ${step.gate} ${step.target} --show`)
+  step: Extract<DriveStep, { kind: 'decision' }>, action: NextAction, ctx: Ctx,
+): Promise<number | undefined> {
+  const rendered: string[] = []
+  const echo: Ctx = {
+    ...ctx,
+    out: (l) => { rendered.push(l); ctx.out(l) },
+    err: (l) => { rendered.push(l); ctx.err(l) },
+  }
+  if (step.block !== undefined) {
+    step.block.forEach((l) => echo.out(l))
+  } else if (step.gate !== undefined && step.target !== undefined) {
+    const code = await main(echo, ['decide', step.gate, step.target, '--show'])
+    if (code !== EXIT.OK) return EXIT.FINDINGS
+  } else {
+    ctx.out(`drive: decision — ${action.line}`)
+  }
+  const options = parseBlock(rendered)
+  for (let asked = 0; asked < ASK_LIMIT; asked++) {
+    const answer = (await ctx.ask('decide>')).trim()
+    // Empty is a human declining to decide now. One re-ask (the prompt may have scrolled
+    // past the block), then the stop stands — it is not drive's to resolve.
+    if (answer === '') {
+      if (asked > 0) break
+      ctx.out('help: answer with an option number, an option verb, or a bare y to take the recommendation — empty leaves the stop standing')
+      continue
+    }
+    const pick = selectOption(answer, options)
+    if ('refuse' in pick) { ctx.out(`help: ${pick.refuse}`); continue }
+    ctx.out(`drive: running — ${pick.command}`)
+    const code = await main(ctx, splitArgv(pick.command).slice(1))
+    if (code !== EXIT.OK) {
+      ctx.out(`drive: decision refused — ${pick.command}`)
+      return EXIT.FINDINGS
+    }
+    return undefined
+  }
+  ctx.out(`drive: decision stands — ${action.line}`)
   return EXIT.OK
 }

@@ -7,8 +7,13 @@ import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { worktreePath } from '../src/worktree.js'
+import { appendEntry, readStream } from '../src/journal.js'
+import { effortReviewedSha } from '../src/reviewed.js'
+import { loadCanon } from '../src/scan.js'
+import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  approve, fakeCtx, fakeScenario, fixtureEnv, seededRepo, writePlan, writeSpec, type TestRepo,
+  approve, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, seededRepo, writePlan, writeSpec,
+  type TestRepo,
 } from './helpers.js'
 
 describe('witness drive skeleton (D145)', () => {
@@ -263,4 +268,102 @@ describe('driveLoop (D145)', () => {
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('not-started')
   }, 20000)
+})
+
+// A real decompose gate-run against the fixture reviewer: the effort now carries a
+// pending decision, so `next` — and therefore drive — stops at a judgment stop.
+async function gatedEffort(): Promise<TestRepo> {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  const scenario = fakeScenario()
+  putVerdict(scenario, {
+    coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
+    findings: [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'no rotation window stated' }],
+  })
+  const g = await repo.cli(['gate', 'decompose', '--effort', repo.effort], { env: gateEnv(scenario) })
+  if (g.code > 1) throw new Error(`gate failed: ${g.stdout}\n${g.stderr}`)
+  return repo
+}
+
+describe('judgment stops in the driver terminal (D145, D143)', () => {
+  const cfgOf = (repo: TestRepo): Config => {
+    const r = loadConfig(repo.root)
+    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
+    return r.value
+  }
+  // A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
+  // harness: the assertion under test is the decision, not what follows it.
+  const idleAgent = (): string => {
+    const bin = join(fakeScenario(), 'idle-agent')
+    writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    return bin
+  }
+  const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
+    fakeCtx(repo.root, {
+      tty: true, answers, out: (l) => out.push(l),
+      env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent() }),
+    })
+
+  const lastDecision = (repo: TestRepo): Record<string, unknown> | undefined =>
+    readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1) as
+      Record<string, unknown> | undefined
+
+  it('renders the block, then a bare affirmation takes the recommendation --via affirmation', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['y'], out), { maxSpawns: 1 })
+
+    expect(out.join('\n')).toContain('1 is recommended')        // the block was rendered here
+    const d = lastDecision(repo)
+    expect(d?.decision).toBe('revise')                          // the rule's recommendation
+    expect(d?.selected).toBe('affirmation')
+  }, 30000)
+
+  it('a named option number runs that option, with no affirmation mark', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['1'], out), { maxSpawns: 1 })
+
+    const d = lastDecision(repo)
+    expect(d?.decision).toBe('revise')
+    expect(d?.selected).toBeUndefined()                         // naming is not nodding
+  }, 30000)
+
+  it('an empty answer leaves the stop standing and exits 0', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['', ''], out), { maxSpawns: 1 })
+
+    expect(code).toBe(0)
+    expect(lastDecision(repo)).toBeUndefined()                  // nothing decided
+    expect(out.join('\n')).toMatch(/drive: decision stands/)
+  }, 30000)
+
+  it('refuses to take an excluded act on a nod, and says which act (D143)', async () => {
+    const repo = await gatedEffort()
+    // Drive the gate to its bound. The appended rounds carry the effort's CURRENT sha —
+    // a stale verdict would take `--approve --override` off the block and recommend the
+    // upstream revise instead, which is not an excluded act and would not test the rule.
+    // Distinct anchors keep recurrence below the escalation rule for the same reason.
+    const sha = effortReviewedSha(repo.root, loadCanon(repo.root), repo.effort).sha
+    const anchors = ['auth-refresh > ## Motivation', 'auth-refresh > ## Constraints']
+    for (let round = 2; round <= ROUND_BOUND; round++) {
+      appendEntry(repo.root, repo.effort, {
+        v: 1, t: 'gate-run', gate: 'decompose', artifact: repo.effort, round, run_id: `r${round}`,
+        reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+        checks: [], outcome: 'stopped',
+        verdicts: [{
+          reviewer: 'slicing-critic',
+          coverage: [{ anchor: anchors[round - 2]!, note: 'read' }],
+          findings: [{ blocking: true, anchor: anchors[round - 2]!, claim: 'still unstated' }],
+        }],
+      })
+    }
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['y', ''], out), { maxSpawns: 1 })
+
+    expect(code).toBe(0)
+    expect(out.join('\n')).toMatch(/nod-cannot|name the option/)
+    expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
 })
