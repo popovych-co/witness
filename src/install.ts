@@ -202,8 +202,20 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
     start.push({ hooks: [{ type: 'command', command: DASHBOARD_CMD }] })
     changed = true
   }
+  // D144. Witness never allowlisted its own binary, so every distinct command shape raised
+  // a harness permission dialog — turns counted in the 2026-08-29 report's 989 that were
+  // never witness stops at all. Scope is the witness CLI ONLY, never a blanket Bash grant:
+  // the point is to stop asking about the tool the human already installed, not to hand it
+  // the shell. Append-what's-missing, exactly the hooks' discipline above — a user's own
+  // entries, and their `deny` list, are never touched.
+  const perms = (doc.permissions ?? {}) as Record<string, unknown>
+  const allow = Array.isArray(perms.allow) ? [...(perms.allow as string[])] : []
+  for (const entry of ['Bash(npx -y @popovych.co/witness*)', 'Bash(witness *)']) {
+    if (!allow.includes(entry)) { allow.push(entry); changed = true }
+  }
   if (!changed) return { text: existing ?? '', changed: false }
   doc.hooks = { ...hooks, PreToolUse: pre, SessionStart: start }
+  doc.permissions = { ...perms, allow }
   return { text: `${JSON.stringify(doc, null, 2)}\n`, changed: true }
 }
 
