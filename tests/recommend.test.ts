@@ -410,7 +410,19 @@ describe('status reports the recommender by rule', () => {
       { rule: 'reserved-stop-clean', recommended: 'approve', decision: 'approve' },
       { rule: 'blocking-here', recommended: 'revise', decision: 'revise' },
     ])
-    expect(rows).toEqual([{ rule: 'reserved-stop-clean', fired: 5, overridden: 3 }])
+    expect(rows).toEqual([{ rule: 'reserved-stop-clean', fired: 5, overridden: 3, nodded: 0 }])
+  })
+
+  // D143. `selected` exists so closure-by-nod is countable; this is the count.
+  it('counts what a nod closed, per rule', () => {
+    const rows = recommenderRowsFrom([
+      { rule: 'blocking-here', recommended: 'revise', decision: 'revise', selected: 'affirmation' },
+      { rule: 'blocking-here', recommended: 'revise', decision: 'revise', selected: 'affirmation' },
+      { rule: 'blocking-here', recommended: 'revise', decision: 'revise' },
+      { rule: 'blocking-here', recommended: 'revise', decision: 'stop' },
+      { rule: 'blocking-here', recommended: 'revise', decision: 'revise' },
+    ])
+    expect(rows).toEqual([{ rule: 'blocking-here', fired: 5, overridden: 1, nodded: 2 }])
   })
 })
 

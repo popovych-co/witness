@@ -230,7 +230,9 @@ describe('the execution protocol', () => {
       const body = readFileSync(skillPath(name), 'utf8')
       expect(body, name).toContain('names an option')
       expect(body, name).toContain('byte-for-byte')
-      expect(body, name).toContain('is not a selection')
+      // D143 amends D127 for exactly one case: a CLI-rendered block with a recommendation.
+      expect(body, name).toContain('selects the recommended option')
+      expect(body, name).toContain('--via affirmation')
     }
   })
 
@@ -238,5 +240,8 @@ describe('the execution protocol', () => {
     const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
     expect(cmd).toContain('byte-for-byte')
     expect(cmd).toContain('naming the option is their judgment')
+    // D143. The engine carries the same affirmation rule the skills do — one definition,
+    // surface-independent, applied by prose in chat today and by drive's prompt when D145 lands.
+    expect(cmd).toContain('--via affirmation')
   })
 })

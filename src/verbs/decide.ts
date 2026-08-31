@@ -63,7 +63,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
-    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]')
+    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
   const rootR = primaryRoot(ctx.cwd)
@@ -160,6 +160,27 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       'non-empty policy text ≤500 chars')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
+
+  // D143 (amends D127). A bare affirmation selects the RECOMMENDED option of a CLI-rendered
+  // block, and `--via affirmation` is how the agent reports that the selection came from a
+  // nod rather than from a named option. Journaled, so closure-by-nod stays measurable
+  // rather than arguable — D121's residual widens here and the ledger is what prices it.
+  const via = flagValue(argv, '--via')
+  if (via !== undefined && via !== 'affirmation') {
+    renderRefusal([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  // The exclusions, spec D143: an obligation-minting override (D122's ledger must not open
+  // on an "ok"), and terminal acts. `witness abandon` is excluded at its own verb; a trust
+  // grant joins this condition when D154 builds `--trust-cmds`.
+  if (via === 'affirmation' && (override || decision === 'stop')) {
+    renderRefusal([v('--via', 'nod-cannot', `affirmation with --${override ? 'override' : 'stop'}`,
+      'a named option — overrides, stops and trust grants are never taken on a nod (D143)')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   const atBound = boundReached(entries, gate)
 
   // Row 109. The grant is a REVISE — the human is sending the artifact back, they are just
@@ -307,6 +328,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ...(recommendedVerb ? { recommended: recommendedVerb } : {}),
     ...(rec?.rule ? { rule: rec.rule } : {}),
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
+    ...(via === 'affirmation' ? { selected: 'affirmation' as const } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per
