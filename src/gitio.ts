@@ -183,3 +183,23 @@ export function divergence(root: string, branch: string): { ahead: number; behin
   const [behind = '0', ahead = '0'] = counts.out.trim().split(/\s+/)
   return { ahead: Number(ahead), behind: Number(behind) }
 }
+
+// D137. The create path cuts new plan branches from the FETCHED remote tip, so a plan
+// branch can never inherit unpushed state commits — the shape that made squash-merge
+// unrecoverable (reproduced in the 2026-08-29 triage). No silent local fallback: that
+// would quietly reintroduce the root. A repo with no remote keeps the local cut, because
+// divergence needs a remote to exist.
+export function resolveStartBase(root: string, branch: string): Result<string> {
+  if (!tryGit(root, 'remote', 'get-url', 'origin').ok) return ok(branch)
+  const fetched = tryGit(root, 'fetch', '--quiet', 'origin', branch)
+  if (!fetched.ok) {
+    // A remedy only where one is true. A remote that simply lacks the branch is fixed by
+    // one push; an unreachable host is not fixed by anything witness can render, and a
+    // `run:` that fixes nothing is the D129 defect D147's placeholder test guards against.
+    const missingRef = /couldn't find remote ref|no such ref|not our ref/i.test(fetched.out)
+    return refuse([v('remote', 'fetch-failed', fetched.out.trim().slice(0, 160),
+      `origin/${branch} reachable — check the network, or push ${branch} once if the remote has no such branch`,
+      missingRef ? `git push -u origin ${branch}` : undefined)])
+  }
+  return ok(`origin/${branch}`)
+}

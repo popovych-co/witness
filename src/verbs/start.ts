@@ -4,7 +4,7 @@ import { loadConfig } from '../config.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { appendEntry, journalRel } from '../journal.js'
-import { primaryRoot, stateCommit } from '../gitio.js'
+import { primaryRoot, resolveStartBase, stateCommit } from '../gitio.js'
 import { findById, loadCanon } from '../scan.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal, v } from '../refusal.js'
@@ -34,6 +34,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const status = String(plan.meta.status)
   const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
   const base = ship.branch ?? 'main'
+  // D137. The cut point is the FETCHED remote tip, never the local ref: a plan branch cut
+  // from a local main carrying unpushed state commits inherits them, the PR carries them,
+  // and squash-merge collapses them onto origin/main — the shape that made the divergence
+  // unrecoverable. Resolved once here and used by BOTH createWorktree call sites.
+  const baseRefR = resolveStartBase(root, base)
+  if (!baseRefR.ok) { renderRefusal(baseRefR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const baseRef = baseRefR.value
 
   // the implement-stage pin drives the worker agent too — surfaced so the
   // orchestrator dispatches the implementer on the configured model
@@ -49,7 +56,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (status === 'in-progress') {
     const had = existsSync(worktreePath(root, planId))
-    const wt = createWorktree(root, planId, base)
+    const wt = createWorktree(root, planId, baseRef)
     if (!wt.ok) { renderRefusal(wt.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('start', `${planId} already in-progress — worktree ${had ? 'present' : 'recreated'}`))
     ctx.out(kv('worktree', wt.value.path))
@@ -89,7 +96,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
 
-  const wt = createWorktree(root, planId, base)
+  const wt = createWorktree(root, planId, baseRef)
   if (!wt.ok) { renderRefusal(wt.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const stamp = prepareStamp(plan, 'in-progress', 'start', {
     worktree: relative(root, wt.value.path), branch: branchName(planId),
