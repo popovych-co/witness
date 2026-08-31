@@ -21,6 +21,24 @@ async function singleRepo(extraCriteria: Array<Record<string, string>> = []): Pr
   return { repo, doc }
 }
 
+// D154. The headless block now names the verb that unblocks it — D147's runnability
+// contract, applied where the refusal is a detail string rather than a Violation.
+describe('an untrusted command names its remedy (D154)', () => {
+  it('points at witness trust <id>, keeping the env escape hatch', async () => {
+    const { repo, doc } = await singleRepo([{ id: 'ac-smoke', cmd: 'echo hi' }])
+    const env = { ...fixtureEnv(), WITNESS_TRUST_CMDS: '' }
+
+    const res = await runCriteria(repo.root, fakeCtx(repo.root, { env }), doc)
+
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    const smoke = res.value.criteria.find((c) => c.id === 'ac-smoke')!
+    expect(smoke.ok).toBe(false)
+    expect(smoke.detail).toContain('run: witness trust auth-refresh')
+    expect(smoke.detail).toContain('WITNESS_TRUST_CMDS=1')
+  })
+})
+
 describe('runCriteria — filtered mode', () => {
   it('passes a green tagged spec and counts source tags', async () => {
     const { repo, doc } = await singleRepo()

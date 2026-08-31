@@ -5,8 +5,9 @@ import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry } from './journal.js'
+import { untrustedCmdsFor } from './allowlist.js'
 import { primaryRoot, stateCommit } from './gitio.js'
-import { loadCanon, findById, type Canon } from './scan.js'
+import { criteriaOwner, loadCanon, findById, type Canon } from './scan.js'
 import { deferralsBlock, openDeferrals } from './deferral.js'
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
@@ -103,7 +104,7 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
   const picked = Array.isArray(raw) ? raw : (raw as Record<string, unknown>)[cls]
   if (!Array.isArray(picked) || picked.length === 0 || !picked.every((x) => typeof x === 'string')) {
     return refuse([v(`gates.${gate}.reviewers`, 'battery-shape', JSON.stringify(raw),
-      'a reviewer list or a per-class map of lists')])
+      'a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer]')])
   }
   return ok(picked as string[])
 }
@@ -169,7 +170,15 @@ function renderChoices(
   ctx: Ctx, gate: string, target: string, entries: Entry[], upstream: string | undefined,
   stale = false,
 ): void {
-  const d = recommend({ gate, target, entries, upstream, stale })
+  // D154. Resolved here rather than threaded through four call sites, on this file's own
+  // precedent (`printDispatchArithmetic` loads canon itself so the entry-renderers stay
+  // pure formatters). Best-effort: a root that will not resolve costs the trust variants,
+  // never the block.
+  const rootR = primaryRoot(ctx.cwd)
+  const untrustedCmds = rootR.ok
+    ? untrustedCmdsFor(rootR.value, criteriaOwner(loadCanon(rootR.value), target))
+    : []
+  const d = recommend({ gate, target, entries, upstream, stale, untrustedCmds })
   if (d) renderDecision(d).forEach((l) => ctx.out(l))
   else ctx.out(cmd('help', liveExits(gate, target, entries, stale, upstream)))
 }

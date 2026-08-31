@@ -172,3 +172,34 @@ export function auditStateCommits(root: string): CommitAudit[] {
     return { sha: sha ?? '', subject: subject ?? '', trailered: (trailer ?? '').trim() === '1' }
   })
 }
+
+// D139. One computation, two renderers (check's finding and the dashboard's line — the
+// D101 boundary). Best-effort and silent when the network or the remote is absent (D103):
+// an offline machine reports nothing rather than a complaint.
+export function divergence(root: string, branch: string): { ahead: number; behind: number } | undefined {
+  if (!tryGit(root, 'fetch', '--quiet', 'origin', branch).ok) return undefined
+  const counts = tryGit(root, 'rev-list', '--left-right', '--count', `origin/${branch}...${branch}`)
+  if (!counts.ok) return undefined
+  const [behind = '0', ahead = '0'] = counts.out.trim().split(/\s+/)
+  return { ahead: Number(ahead), behind: Number(behind) }
+}
+
+// D137. The create path cuts new plan branches from the FETCHED remote tip, so a plan
+// branch can never inherit unpushed state commits — the shape that made squash-merge
+// unrecoverable (reproduced in the 2026-08-29 triage). No silent local fallback: that
+// would quietly reintroduce the root. A repo with no remote keeps the local cut, because
+// divergence needs a remote to exist.
+export function resolveStartBase(root: string, branch: string): Result<string> {
+  if (!tryGit(root, 'remote', 'get-url', 'origin').ok) return ok(branch)
+  const fetched = tryGit(root, 'fetch', '--quiet', 'origin', branch)
+  if (!fetched.ok) {
+    // A remedy only where one is true. A remote that simply lacks the branch is fixed by
+    // one push; an unreachable host is not fixed by anything witness can render, and a
+    // `run:` that fixes nothing is the D129 defect D147's placeholder test guards against.
+    const missingRef = /couldn't find remote ref|no such ref|not our ref/i.test(fetched.out)
+    return refuse([v('remote', 'fetch-failed', fetched.out.trim().slice(0, 160),
+      `origin/${branch} reachable — check the network, or push ${branch} once if the remote has no such branch`,
+      missingRef ? `git push -u origin ${branch}` : undefined)])
+  }
+  return ok(`origin/${branch}`)
+}

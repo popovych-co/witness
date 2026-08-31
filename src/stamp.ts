@@ -10,6 +10,7 @@ import { acquireLock } from './lock.js'
 import { canonicalSha } from './sha.js'
 import { findById, type Canon, type CanonDoc } from './scan.js'
 import { crashPoint, withTxn } from './txn.js'
+import { autoSync } from './verbs/sync.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 
 export interface PreparedStamp {
@@ -39,6 +40,9 @@ export function writeStamp(root: string, s: PreparedStamp): void {
 export interface LazyResult {
   stamped: Array<{ plan: string; spec?: string; pr: number }>
   stale: Array<{ plan: string; why: string }>
+  // D141. Worktrees this run declined to remove because the caller was standing in one.
+  // Reported by the renderers, never a failure: it re-runs from any other cwd.
+  kept: string[]
 }
 
 function prState(ctx: Ctx, root: string, pr: number): string | undefined {
@@ -53,7 +57,7 @@ function prState(ctx: Ctx, root: string, pr: number): string | undefined {
 }
 
 export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
-  const result: LazyResult = { stamped: [], stale: [] }
+  const result: LazyResult = { stamped: [], stale: [], kept: [] }
   if (ctx.env.CI) return result                                     // CI never writes state
   const candidates = canon.docs.filter((d) =>
     d.meta.type === 'plan' && String(d.meta.status) === 'in-progress' && d.meta.pr !== undefined)
@@ -110,7 +114,9 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
         return stateCommit(root, [...new Set(files)], `merge(${planId}): pr #${pr}`)
       })
       if (txn.ok) {
-        removeWorktree(root, planId)
+        // D141. `next`/`check`/`dashboard` all reach here, including the SessionStart
+        // hook — so this is the removal that used to delete the caller's own directory.
+        if (!removeWorktree(root, planId, ctx.cwd)) result.kept.push(worktreePath(root, planId))
         result.stamped.push({ plan: planId, ...(specStamp ? { spec: specStamp.stream } : {}), pr })
       } else {
         result.stale.push({ plan: planId, why: txn.violations.map((x) => x.rule).join(' ') })
@@ -125,7 +131,16 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
   // independently of whichever call actually performed the stamp.
   for (const plan of canon.docs.filter((d) => d.meta.type === 'plan' && String(d.meta.status) === 'done')) {
     const planId = String(plan.meta.id)
-    if (existsSync(worktreePath(root, planId))) removeWorktree(root, planId)
+    if (existsSync(worktreePath(root, planId)) && !removeWorktree(root, planId, ctx.cwd)) {
+      result.kept.push(worktreePath(root, planId))
+    }
   }
+  // D138. A merge is the moment origin is KNOWN to have moved, and the stamp has just
+  // written one more local-only commit on top of it — the exact instant the 165-commit
+  // divergence was manufactured. Sync here, outside the lock and after every txn is
+  // durable (the sequencing clause: sync takes the lock itself, and a rebase must never
+  // run over an incomplete transaction). Failure prints and returns; it never blocks.
+  const firstStamped = result.stamped[0]
+  if (firstStamped) autoSync(root, ctx, firstStamped.plan, 'merge-stamp')
   return result
 }

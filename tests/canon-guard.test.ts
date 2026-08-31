@@ -165,3 +165,45 @@ describe('canonGuard — fail open', () => {
     expect(canonGuard({ tool: '', input: {}, cwd: '' })).toBeUndefined();
   });
 });
+
+// D146. D133 made the reason name the path and what writes it; this completes it to the
+// remedy contract gate stops already honor (D121) — a shape where no id is resolvable, a
+// fully runnable `adopt` for an edit already made.
+describe('canonGuard — the refusal names the way back in', () => {
+  it('a blocked spec edit names the write shape and a runnable adopt', () => {
+    const repo = witnessRepo();
+    const r = canonGuard({ tool: 'Edit', input: { file_path: join(repo, 'specs', 'auth-refresh.md') }, cwd: repo });
+    expect(r?.block).toBe(true);
+    expect(r?.reason).toContain('witness write auth-refresh --effort');
+    expect(r?.reason).toContain('witness adopt specs/auth-refresh.md');
+  });
+
+  it('a blocked plan edit names the plans dir it must not author in', () => {
+    const repo = witnessRepo();
+    const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'plans', 'auth-refresh-plan-1.md') }, cwd: repo });
+    expect(r?.reason).toContain('witness write auth-refresh-plan-1 --effort');
+    expect(r?.reason).toContain('never in plans/');
+  });
+
+  it('a blocked design edit names the design verb, never write', () => {
+    const repo = witnessRepo();
+    const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'designs', 'report-view.html') }, cwd: repo });
+    expect(r?.reason).toContain('witness design report-view');
+    expect(r?.reason).not.toContain('witness write');
+  });
+
+  // The remedy resolves the canon roots the same way the block does, so a relocated
+  // designs/ still gets the design verb rather than the write shape.
+  it('follows relocated canon roots', () => {
+    const repo = witnessRepo('schema: 1\npaths: { designs: docs/designs }\n');
+    const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'docs', 'designs', 'x.html') }, cwd: repo });
+    expect(r?.reason).toContain('witness design x');
+  });
+
+  it('names the resolved target for a blocked bash mutation too', () => {
+    const repo = witnessRepo();
+    const r = canonGuard({ tool: 'Bash', input: { command: 'echo hi > specs/a.md' }, cwd: repo });
+    expect(r?.reason).toContain('specs/a.md (a redirect target)');
+    expect(r?.reason).toContain('witness adopt specs/a.md');
+  });
+});

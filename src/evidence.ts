@@ -11,6 +11,7 @@ import { ok, refuse, v, type Result } from './refusal.js'
 import { runFiltered, runFullSuite, runnerConfig } from './runner.js'
 import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
+import { kv } from './toon.js'
 import { withTxn } from './txn.js'
 
 export function isTestPath(rel: string): boolean {
@@ -141,9 +142,24 @@ export function diffBase(runRoot: string, cfg: Config, override?: string): Resul
   }
   const ship = (cfg.raw.ship ?? {}) as Record<string, unknown>
   const branch = typeof ship.branch === 'string' ? ship.branch : 'main'
-  const res = tryGit(runRoot, 'merge-base', 'HEAD', branch)
-  if (!res.ok) return refuse([v('ship.branch', 'no-base', branch, 'an existing base branch, or pass --base <ref>')])
-  return ok(res.out.trim())
+  // D142. The true cut point is the DESCENDANT of the two merge-bases. Exact in all three
+  // shapes: a legacy branch cut from a state-carrying local main (local is later — origin
+  // alone would put its inherited .witness/journal/* into the reviewed diff, reproduced by
+  // experiment in the triage), a post-D137 clean cut (origin equal or later), and a behind
+  // local. Incomparable ancestries → origin, the post-D137 invariant. No remote → local
+  // alone, which is D137's no-remote legality. One home for all seven callers.
+  const local = tryGit(runRoot, 'merge-base', 'HEAD', branch)
+  const remote = tryGit(runRoot, 'merge-base', 'HEAD', `origin/${branch}`)
+  if (!local.ok && !remote.ok) {
+    return refuse([v('ship.branch', 'no-base', branch, 'an existing base branch, or pass --base <ref>')])
+  }
+  if (local.ok !== remote.ok) return ok((local.ok ? local : remote).out.trim())
+  const a = local.out.trim()
+  const b = remote.out.trim()
+  if (a === b) return ok(a)
+  if (tryGit(runRoot, 'merge-base', '--is-ancestor', a, b).ok) return ok(b)
+  if (tryGit(runRoot, 'merge-base', '--is-ancestor', b, a).ok) return ok(a)
+  return ok(b)
 }
 
 export function changedFiles(runRoot: string, base: string): string[] {
@@ -184,6 +200,15 @@ export async function verifyRed(
       if (inCommit(runRoot, 'HEAD', rel)) git(runRoot, 'checkout', 'HEAD', '--', rel)
     }
     if (stashed) git(runRoot, 'stash', 'pop')
+  }
+  // D148. The stash/checkout cycle above rewrote every non-test file on disk — the agent's
+  // prior reads are stale, and witness is what made them stale. Announced rather than left
+  // to the harness's "file modified since read" refusal, which names witness nowhere.
+  if (nonTest.length) {
+    const shown = nonTest.slice(0, 12)
+    const more = nonTest.length > shown.length ? ` (+${nonTest.length - shown.length} more)` : ''
+    ctx.out(kv('stale-reads',
+      `${shown.join(' · ')}${more} — changed on disk during red verification — re-read before editing`))
   }
   if (!red.ok) return red
   const green = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', { reconstructed: true })

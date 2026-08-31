@@ -24,6 +24,7 @@ export interface Config {
   docs: DocsRegistry
   implement: ImplementConfig
   gates: GatesConfig
+  drive: DriveConfig
   warning?: string
 }
 
@@ -123,6 +124,31 @@ export function resolveImplement(raw: Record<string, unknown>): Result<Implement
       'an integer >= 1 — steps handed to each fresh implement agent')])
   }
   return ok({ stepsPerDispatch: val })
+}
+
+// D145. One hour. An implement slice is ~25 minutes at the default budget of 3 steps,
+// and the cost of the two errors is not symmetric: a generous ceiling wastes an hour
+// once, a starved one kills a working e2e run and hands the human a false `spawn-timeout`
+// to debug. The ceiling exists to break a hung child, not to pace a healthy one.
+export const DEFAULT_SESSION_TIMEOUT_MS = 3_600_000
+
+export interface DriveConfig {
+  sessionTimeoutMs: number
+}
+
+export function resolveDrive(raw: Record<string, unknown>): Result<DriveConfig> {
+  const conf = raw.drive
+  if (conf === undefined) return ok({ sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS })
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) {
+    return refuse([v('drive', 'invalid', String(conf), 'a map of drive settings')])
+  }
+  const val = (conf as Record<string, unknown>).sessionTimeoutMs
+  if (val === undefined) return ok({ sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS })
+  if (typeof val !== 'number' || !Number.isInteger(val) || val < 1) {
+    return refuse([v('drive.sessionTimeoutMs', 'invalid', String(val),
+      'an integer >= 1 — milliseconds each spawned session may take before SIGTERM')])
+  }
+  return ok({ sessionTimeoutMs: val })
 }
 
 export const DEFAULT_REVIEWER_TIMEOUT_MS = 600_000
@@ -250,6 +276,8 @@ export function loadConfig(root: string): Result<Config> {
   if (!implement.ok) return refuse(implement.violations)
   const gates = resolveGates(obj)
   if (!gates.ok) return refuse(gates.violations)
+  const drive = resolveDrive(obj)
+  if (!drive.ok) return refuse(drive.violations)
   return ok({
     schema,
     raw: obj,
@@ -257,6 +285,7 @@ export function loadConfig(root: string): Result<Config> {
     docs: docs.value,
     implement: implement.value,
     gates: gates.value,
+    drive: drive.value,
     warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)` : undefined,
   })
 }

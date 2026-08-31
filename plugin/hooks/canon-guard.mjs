@@ -202,10 +202,31 @@ function stateTargetRel(root, cwd, token, dirs) {
   return undefined;
 }
 
-function reasonFor(what) {
+// Decision 146. D133 made the reason name the path and what writes it; this completes it to
+// the remedy contract gate stops already honor (D121): a shape for authoring, and a fully
+// runnable `adopt` for an edit already made. No effort slug is knowable inside a hook that
+// reads only the tool call, so the write line stays a LABELLED SHAPE and never a `run:` —
+// a rendered command that needs editing before it runs is D129's defect in a new dress.
+function remedyFor(rel, root) {
+  const [specs, plans, designs] = canonDirs(root);
+  const base = rel.split('/').pop() ?? rel;
+  if (isStateRel(rel, [designs])) {
+    const id = base.replace(/\.html$/, '');
+    return `remedy: witness design ${id} --file <your.html> (author in $(mktemp -d); --open shows the current one)`;
+  }
+  const id = base.replace(/\.md$/, '');
+  const kind = isStateRel(rel, [plans]) ? plans : specs;
+  return (
+    `remedy: witness write ${id} --effort <effort> --meta <m.json> --body <b.md> ` +
+    `(author in $(mktemp -d), never in ${kind}/) · already hand-edited? run: witness adopt ${rel}`
+  );
+}
+
+function reasonFor(what, rel, root) {
   return (
     `witness: ${what} is CLI-written state — use the witness CLI (write / design / adopt), ` +
-    'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs.'
+    'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs. ' +
+    remedyFor(rel, root)
   );
 }
 
@@ -229,7 +250,8 @@ export function canonGuard(call) {
       const rel = relative(root, abs);
       if (rel.startsWith('..')) return undefined;
       if (!isStateRel(rel, canonDirs(root))) return undefined;
-      return { block: true, reason: reasonFor(rel.split('\\').join('/')) };
+      const posix = rel.split('\\').join('/');
+      return { block: true, reason: reasonFor(posix, posix, root) };
     }
 
     if (BASH_TOOLS.has(tool)) {
@@ -250,7 +272,7 @@ export function canonGuard(call) {
           // set and never the token that tripped it — which is why a block on a search string
           // read as a bug in the guard rather than a fact about the command.
           const rel = stateTargetRel(root, cwd, token, dirs);
-          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`) };
+          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`, rel, root) };
         }
       }
       return undefined;

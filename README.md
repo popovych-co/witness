@@ -148,6 +148,7 @@ either.
 |---|---|
 | `harness: claude-code \| pi` | **the judge** — which harness runs this repo's gate reviewers, is measured by `calibrate`, and is probed by `check`. Judgment resolves `harness:` → `PI_CODING_AGENT` → `CLAUDECODE` → `claude-code`; session lines (`next`'s handoff, `dispatch`'s relay, `init --agent auto`) resolve detection first, because those name the CLI you are about to type at. Committed, so it binds every teammate's gates; `witness init --agent` writes it once and never re-points it. Undeclared repos are judged by whichever agent's session is open — `witness check` and `witness status` say so |
 | `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
+| `drive.sessionTimeoutMs` | milliseconds a `drive`-spawned session may run before SIGTERM (default 3600000) |
 
 There is no `provider:` key. `witness gate` spawns the DECLARED harness's headless
 mode for every reviewer (Decisions 88, 105): claude-code renders bare Anthropic ids, pi
@@ -185,6 +186,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `design <spec-id> --file <html>\|--open\|--reconfirm` | register/show a `ui` spec's approved look |
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
+| `drive [--flow <plan-id>] [--max-spawns <n>]` | schedule green-path work through headless sessions; you appear only at judgment stops. TTY-only — agents are what drive spawns, never what spawns drive |
 | `ship <plan-id>` | lanes → ship gate → PR → CI watch |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
 | `adopt <path>` | absolve a finished hand-edit into the journal |

@@ -203,6 +203,35 @@ describe('witness init --agent', () => {
     expect(commands.some((c: string) => c.includes('guard-state.mjs'))).toBe(true)
   })
 
+  // D144. Witness never allowlisted itself, so every distinct command shape raised a
+  // harness permission dialog — "1" turns that were not witness stops at all.
+  it('writes the witness allowlist and stays idempotent (D144)', async () => {
+    const repo = tmpRepo()
+
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
+    const first = JSON.parse(repo.read('.claude/settings.json'))
+    expect(first.permissions.allow).toContain('Bash(npx -y @popovych.co/witness*)')
+    expect(first.permissions.allow).toContain('Bash(witness *)')
+
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
+    const second = JSON.parse(repo.read('.claude/settings.json'))
+    expect(second.permissions.allow.filter((x: string) => x.includes('witness'))).toHaveLength(2)
+  })
+
+  it('never widens an existing allow list, and never grants blanket Bash (D144)', async () => {
+    const repo = tmpRepo()
+    repo.write('.claude/settings.json', JSON.stringify({
+      permissions: { allow: ['Bash(ls *)'], deny: ['Bash(rm -rf *)'] },
+    }, null, 2))
+
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
+
+    const settings = JSON.parse(repo.read('.claude/settings.json'))
+    expect(settings.permissions.allow).toContain('Bash(ls *)')          // the user's entry survives
+    expect(settings.permissions.deny).toEqual(['Bash(rm -rf *)'])       // untouched
+    expect(settings.permissions.allow).not.toContain('Bash(*)')         // scope is the CLI, never Bash
+  })
+
   it('resolves --agent auto from the detection rungs', async () => {
     const repo = tmpRepo()
     const res = await repo.cli(['init', '--agent', 'auto'], { env: { PI_CODING_AGENT: 'true' } })
