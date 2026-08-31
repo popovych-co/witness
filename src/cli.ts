@@ -47,6 +47,9 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   clean: () => import('./verbs/clean.js'),
   ship: () => import('./verbs/ship.js'),
   next: () => import('./verbs/next.js'),
+  // D145. The scheduler. `next` names the action; `drive` runs the sessions that perform
+  // it, stopping only where a human's judgment is the input.
+  drive: () => import('./verbs/drive.js'),
   abandon: () => import('./verbs/abandon.js'),
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
@@ -69,6 +72,7 @@ const VERB_USAGE: Record<string, string> = {
   floor: 'witness floor --show | --set <triple> --note <why>',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'witness diff <spec-id>',
+  drive: 'witness drive [--flow <plan-id>] [--max-spawns <n>] — schedule green-path work through headless sessions; you appear at judgment stops',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
   gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
   index: 'witness index',
