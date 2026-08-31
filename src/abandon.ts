@@ -11,7 +11,8 @@ import { findById, type Canon, type CanonDoc } from './scan.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
-import { removeWorktree } from './worktree.js'
+import { kv } from './toon.js'
+import { removeWorktree, worktreePath } from './worktree.js'
 
 export function pinCommit(root: string, rel: string, pin: string): string | undefined {
   const log = tryGit(root, 'log', '--format=%H', '--', rel)
@@ -127,7 +128,15 @@ export function executeAbandon(
       }
       crashPoint(ctx.env, 'abandon-commit')
       const r = stateCommit(root, [...files], subject)
-      if (r.ok) for (const item of items) if (item.planId) removeWorktree(root, item.planId)
+      // D141. `abandon` runs from wherever the human typed it, which may be the very
+      // worktree it is discarding; the removal re-runs harmlessly from anywhere else.
+      if (r.ok) {
+        for (const item of items) {
+          if (item.planId && !removeWorktree(root, item.planId, ctx.cwd)) {
+            ctx.out(kv('note', `worktree ${worktreePath(root, item.planId)} kept — this session stands in it; leave the directory and re-run witness clean`))
+          }
+        }
+      }
       return r
     })
   } finally {
