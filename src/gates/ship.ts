@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { stateDirs } from '../gitio.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { canonicalSha } from '../sha.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
@@ -98,7 +99,8 @@ registerGate({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: diffReviewedSha(wt, base),
       artifactSha: canonicalSha(plan.meta, plan.body),
-      reviewed: { kind: 'tree', root: wt, files },
+      // D151. The primary root is where canon lives; a reviewer may cite the plan it judges.
+      reviewed: { kind: 'tree', root: wt, files, canonRoot: root, canonDirs: stateDirs(root) },
       promptBody: codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
       checks,

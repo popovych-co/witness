@@ -5,7 +5,7 @@ import { ok, refuse, v, type Result } from '../refusal.js'
 import { serializeDoc } from '../fm.js'
 import { canonicalSha } from '../sha.js'
 import { designRel } from '../design.js'
-import { git } from '../gitio.js'
+import { git, stateDirs } from '../gitio.js'
 import { latestRecap, readStream } from '../journal.js'
 import type { LensDoc } from '../reviewer.js'
 import { findById, type CanonDoc } from '../scan.js'
@@ -166,7 +166,8 @@ registerGate({
       // the diff term of the line above, so a lapse can attribute itself (row 135)
       diffSha: diffReviewedSha(wt, base),
       artifactSha: canonicalSha(plan.meta, plan.body),
-      reviewed: { kind: 'tree', root: wt, files },
+      // D151. The primary root is where canon lives; a reviewer may cite the plan it judges.
+      reviewed: { kind: 'tree', root: wt, files, canonRoot: root, canonDirs: stateDirs(root) },
       promptBody: codePromptBody(wt, base, files,
         `### Plan under implementation: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
       checks,

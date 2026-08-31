@@ -9,7 +9,14 @@ export interface Verdict { coverage: CoverageItem[]; findings: Finding[] }
 
 export type Reviewed =
   | { kind: 'docs'; docs: Array<{ id: string; body: string }> }
-  | { kind: 'tree'; root: string; files: string[] }
+  | {
+      kind: 'tree'; root: string; files: string[]
+      // D151 (issue #18). Canon has ONE home (D132) and the reviewed worktree is not it —
+      // canon is sparse-excluded there. A reviewer citing the spec or plan it judges must
+      // resolve against the primary root, or one legitimate citation malforms the whole
+      // round. Optional: a caller that supplies neither keeps the pre-D151 behavior.
+      canonRoot?: string; canonDirs?: string[]
+    }
   | { kind: 'design'; artifact: { ids: string[] }; spec: { id: string; body: string } }
   | { kind: 'screens'; captures: Array<{ name: string; path: string }> }
 
@@ -115,11 +122,17 @@ function safeRel(rel: string): boolean {
   return !isAbsolute(rel) && !normalize(rel).split(/[\\/]/).includes('..')
 }
 
-function resolveCodeAnchor(anchor: string, root: string): string | undefined {
+function resolveCodeAnchor(
+  anchor: string, root: string, canon?: { root: string; dirs: string[] },
+): string | undefined {
   if (/[:#]L?\d+$/.test(anchor)) return 'line numbers refused — they drift across revisions; use file#symbol'
   const [file = '', symbol] = anchor.split('#', 2)
   if (!safeRel(file)) return `path escapes the reviewed tree: ${file}`
-  const abs = join(root, file)
+  // D151. Canon paths resolve at the primary root — the read route D132 itself established
+  // — and existence and symbol grep both follow the same home, or the check would answer
+  // from two trees. Code paths keep the reviewed tree, which is the thing under judgment.
+  const isCanon = canon !== undefined && canon.dirs.some((d) => file === d || file.startsWith(`${d}/`))
+  const abs = join(isCanon ? canon.root : root, file)
   if (!existsSync(abs) || !statSync(abs).isFile()) return `no file ${file} in the reviewed tree`
   if (symbol !== undefined) {
     const re = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
@@ -177,7 +190,12 @@ export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string |
       ? undefined
       : `omission scope "${scope}" is no file or directory in the reviewed tree`
   }
-  if (reviewed.kind === 'tree') return resolveCodeAnchor(anchor, reviewed.root)
+  if (reviewed.kind === 'tree') {
+    const canon = reviewed.canonRoot !== undefined && reviewed.canonDirs !== undefined
+      ? { root: reviewed.canonRoot, dirs: reviewed.canonDirs }
+      : undefined
+    return resolveCodeAnchor(anchor, reviewed.root, canon)
+  }
   const segments = anchor.split(' > ')
   if (!segments[0]!.startsWith('#')) {
     const doc = reviewed.docs.find((d) => d.id === segments[0])
