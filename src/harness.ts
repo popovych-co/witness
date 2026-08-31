@@ -45,9 +45,13 @@ export interface Harness {
   }
   // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
   // worktree rather than emitting a verdict. Used by the implement skill-calibration
-  // seed. The prompt rides in argv (both CLIs accept a positional message), not stdin.
+  // seed and by `drive`, which is the same act (D145): one home for "how do we run this
+  // harness headless", so the two lanes cannot drift apart on a flag. The prompt rides in
+  // argv (both CLIs accept a positional message), not stdin. `model` is the stage pin as
+  // written in config — parsed HERE, through the same renderer the reviewer and the
+  // handoff line use, because a second parse is a second answer.
   worker: {
-    spawn(prompt: string): HarnessSpawn
+    spawn(prompt: string, model?: string): HarnessSpawn
   }
 }
 
@@ -140,8 +144,14 @@ const REGISTRY: Record<HarnessName, Harness> = {
     worker: {
       // claude gates every tool behind an approval prompt, which no headless run can
       // answer — the bypass flag is what makes print mode able to edit at all.
-      spawn: (prompt: string): HarnessSpawn =>
-        ({ cmd: 'claude', args: ['-p', prompt, '--dangerously-skip-permissions'], env: {} }),
+      // The REGISTRY self-reference resolves at CALL time (the const is initialized long
+      // before any spawn), and it is what keeps the model flag rendered by the one
+      // renderer instead of re-derived per entry.
+      spawn: (prompt: string, model?: string): HarnessSpawn => ({
+        cmd: 'claude',
+        args: ['-p', prompt, '--dangerously-skip-permissions', ...modelFlags(REGISTRY['claude-code'], model)],
+        env: thinkingEnv(REGISTRY['claude-code'], model),
+      }),
     },
   },
   pi: {
@@ -187,8 +197,8 @@ const REGISTRY: Record<HarnessName, Harness> = {
       // project-local files). --no-session keeps a calibration run out of the user's
       // session store; the worker otherwise keeps its skills and context files, which
       // are exactly what the implement seed is measuring.
-      spawn: (prompt: string): HarnessSpawn =>
-        ({ cmd: 'pi', args: ['-p', prompt, '--no-session'], env: {} }),
+      spawn: (prompt: string, model?: string): HarnessSpawn =>
+        ({ cmd: 'pi', args: ['-p', prompt, '--no-session', ...modelFlags(REGISTRY.pi, model)], env: {} }),
     },
   },
 }
@@ -289,25 +299,40 @@ export function judgeLine(r: Result<{ harness: Harness; source: HarnessSource }>
 // for a provider-qualified pin — pastes cleanly, resolves to nothing: bug B2's shape.
 // Pi renders the provider and its native `:thinking` suffix; claude-code renders the
 // bare id and carries non-off thinking as a MAX_THINKING_TOKENS prefix on the line.
-function modelArg(harness: Harness, model: string | undefined): string {
-  if (model === undefined || model === '') return ''
+// The model flag as ARGV, which is what a spawn takes; `modelArg` below is this same
+// answer joined for a pasteable line. Decision 88's renderer-over-a-parsed-pin, in the
+// shape both consumers can use without either re-deriving it.
+export function modelFlags(harness: Harness, model: string | undefined): string[] {
+  if (model === undefined || model === '') return []
   const parsed = parsePin('gates.model', model)
-  if (!parsed.ok) return ''  // stagePin refused upstream; render nothing rather than garbage
+  if (!parsed.ok) return []  // stagePin refused upstream; render nothing rather than garbage
   const pin = parsed.value
   if (harness.name === 'pi') {
     const suffix = pin.thinking === 'off' ? '' : `:${pin.thinking}`
-    return ` --model ${pin.provider ?? harness.defaultProvider ?? ''}/${pin.model}${suffix}`
+    return ['--model', `${pin.provider ?? harness.defaultProvider ?? ''}/${pin.model}${suffix}`]
   }
-  return ` --model ${pin.model}`
+  return ['--model', pin.model]
+}
+
+// claude carries its thinking budget in the ENVIRONMENT, not in argv (there is no flag),
+// so every claude spawn and every pasteable claude line needs this same prefix — named
+// once here rather than recomputed at each site.
+export function thinkingEnv(harness: Harness, model: string | undefined): Record<string, string> {
+  if (harness.name !== 'claude-code' || model === undefined || model === '') return {}
+  const parsed = parsePin('gates.model', model)
+  if (!parsed.ok || parsed.value.thinking === 'off') return {}
+  return { MAX_THINKING_TOKENS: String(CLAUDE_THINKING_BUDGET[parsed.value.thinking]) }
+}
+
+function modelArg(harness: Harness, model: string | undefined): string {
+  const flags = modelFlags(harness, model)
+  return flags.length === 0 ? '' : ` ${flags.join(' ')}`
 }
 
 // Single quotes: a double-quoted form trips toon esc() quoting and emits an
 // unpasteable line (see the note this replaces at verbs/next.ts:69).
 export function handoffLine(harness: Harness, home: string, model: string | undefined): string {
-  const parsed = model !== undefined && model !== '' ? parsePin('gates.model', model) : undefined
-  const budget = harness.name === 'claude-code' && parsed?.ok === true && parsed.value.thinking !== 'off'
-    ? `MAX_THINKING_TOKENS=${CLAUDE_THINKING_BUDGET[parsed.value.thinking]} `
-    : ''
+  const budget = Object.entries(thinkingEnv(harness, model)).map(([k, val]) => `${k}=${val} `).join('')
   return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/witness'`
 }
 

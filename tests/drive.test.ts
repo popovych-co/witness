@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { classifyAction } from '../src/drive.js'
-import { seededRepo } from './helpers.js'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { loadConfig, type Config } from '../src/config.js'
+import { classifyAction, spawnSession } from '../src/drive.js'
+import { loadHarness } from '../src/harness.js'
+import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
+import { fakeCtx, fakeScenario, seededRepo, type TestRepo } from './helpers.js'
 
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
@@ -71,5 +76,70 @@ describe('classifyAction (D145 addendum §6)', () => {
       home: '/repo/wt', model: 'claude-opus-4-6',
     }, root))
       .toEqual({ kind: 'spawn', home: '/repo/wt', stage: 'implement', target: 'p1', model: 'claude-opus-4-6' })
+  })
+})
+
+describe('spawnSession (D145 addendum §3-5)', () => {
+  const cfgOf = (repo: TestRepo): Config => {
+    const r = loadConfig(repo.root)
+    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
+    return r.value
+  }
+  // Fakes are written into a mkdtemp scenario dir, never fakeBinDir() — that one is a
+  // COMMITTED fixture directory and a test that writes there dirties the repo.
+  const fakeAgent = (body: string): string => {
+    const bin = join(fakeScenario(), 'fake-agent')
+    writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return bin
+  }
+
+  it('streams both pipes prefixed, from the action home', async () => {
+    const repo = await seededRepo()
+    const bin = fakeAgent('echo one\necho two >&2\npwd')
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin }, out: (l) => lines.push(l),
+    })
+    const res = await spawnSession(
+      { kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(res).toBe('exited')
+    expect(lines).toContain('[1 implement/p1] one')
+    expect(lines).toContain('[1 implement/p1] two')
+    expect(lines).toContain(`[1 implement/p1] ${repo.root}`)
+  }, 20000)
+
+  it('SIGTERMs a hung child at the configured timeout', async () => {
+    const repo = await seededRepo()
+    const bin = fakeAgent('sleep 60')
+    const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin } })
+    const cfg = { ...cfgOf(repo), drive: { sessionTimeoutMs: 100 } }
+    expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).toBe('timeout')
+  }, 20000)
+
+  it('reports spawn-failed when the binary is not there', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, {
+      tty: true, env: { WITNESS_DRIVE_AGENT_BIN: join(repo.root, 'no-such-agent') },
+    })
+    expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).toBe('spawn-failed')
+  }, 20000)
+
+  it('builds the headless session command per harness, carrying the stage pin', async () => {
+    const claude = loadHarness('claude-code')
+    const pi = loadHarness('pi')
+    expect(claude.ok && claude.value.worker.spawn('/witness'))
+      .toEqual({ cmd: 'claude', args: ['-p', '/witness', '--dangerously-skip-permissions'], env: {} })
+    expect(claude.ok && claude.value.worker.spawn('/witness', 'claude-opus-4-6:high'))
+      .toEqual({
+        cmd: 'claude',
+        args: ['-p', '/witness', '--dangerously-skip-permissions', '--model', 'claude-opus-4-6'],
+        env: { MAX_THINKING_TOKENS: String(CLAUDE_THINKING_BUDGET.high) },
+      })
+    expect(pi.ok && pi.value.worker.spawn('/witness', 'claude-opus-4-6:high'))
+      .toEqual({
+        cmd: 'pi',
+        args: ['-p', '/witness', '--no-session', '--model', 'anthropic/claude-opus-4-6:high'],
+        env: {},
+      })
   })
 })
