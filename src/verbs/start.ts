@@ -5,6 +5,7 @@ import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { appendEntry, journalRel } from '../journal.js'
 import { primaryRoot, resolveStartBase, stateCommit } from '../gitio.js'
+import { autoSync } from './sync.js'
 import { findById, loadCanon } from '../scan.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal, v } from '../refusal.js'
@@ -34,6 +35,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const status = String(plan.meta.status)
   const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
   const base = ship.branch ?? 'main'
+  // D138. The second natural moment: about to cut a branch, so local main had better be
+  // level with origin first. Its failure NEVER blocks the cut — D137's decoupling clause
+  // is what makes that row a root fix rather than one more discipline, so a dirty tree or
+  // a conflict prints a finding here and the origin-based cut proceeds regardless.
+  autoSync(root, ctx, planId, 'start')
   // D137. The cut point is the FETCHED remote tip, never the local ref: a plan branch cut
   // from a local main carrying unpushed state commits inherits them, the PR carries them,
   // and squash-merge collapses them onto origin/main — the shape that made the divergence

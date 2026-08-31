@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { addOrigin, approve, seededRepo, writePlan, writeSpec } from './helpers.js'
@@ -103,6 +103,25 @@ describe('start cuts from the fetched remote tip (D137)', () => {
     expect(res.code).toBe(0)
     const wt = worktreePath(repo.root, 'auth-refresh-plan-1')
     expect(execFileSync('git', ['-C', wt, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toBe(cutPoint)
+    await repo.cli(['clean'])
+  })
+})
+
+// D138. `start` preflights sync, and D137's decoupling clause says its failure never
+// blocks the cut: an origin-based branch is correct regardless of local main's health.
+describe('start preflights sync without gating the cut (D138/D137)', () => {
+  it('reports a dirty tree and still creates the worktree', async () => {
+    const repo = await planReady()
+    addOrigin(repo)
+    repo.write('README.md', 'seed\n')
+    repo.git('add', 'README.md'); repo.git('commit', '-m', 'readme')
+    repo.write('README.md', 'hand-edited, uncommitted\n')        // tracked + dirty: a rebase cannot run
+
+    const res = await repo.cli(['start', 'auth-refresh-plan-1'])
+
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('sync-auto: dirty')
+    expect(existsSync(worktreePath(repo.root, 'auth-refresh-plan-1'))).toBe(true)
     await repo.cli(['clean'])
   })
 })

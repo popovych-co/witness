@@ -10,6 +10,7 @@ import { acquireLock } from './lock.js'
 import { canonicalSha } from './sha.js'
 import { findById, type Canon, type CanonDoc } from './scan.js'
 import { crashPoint, withTxn } from './txn.js'
+import { autoSync } from './verbs/sync.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 
 export interface PreparedStamp {
@@ -127,5 +128,12 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
     const planId = String(plan.meta.id)
     if (existsSync(worktreePath(root, planId))) removeWorktree(root, planId)
   }
+  // D138. A merge is the moment origin is KNOWN to have moved, and the stamp has just
+  // written one more local-only commit on top of it — the exact instant the 165-commit
+  // divergence was manufactured. Sync here, outside the lock and after every txn is
+  // durable (the sequencing clause: sync takes the lock itself, and a rebase must never
+  // run over an incomplete transaction). Failure prints and returns; it never blocks.
+  const firstStamped = result.stamped[0]
+  if (firstStamped) autoSync(root, ctx, firstStamped.plan, 'merge-stamp')
   return result
 }
