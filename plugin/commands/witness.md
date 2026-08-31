@@ -10,7 +10,7 @@ The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual`
 Resolve the CLI once:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.13.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.14.0}"
 ```
 
 If the repo has no `witness.config.yaml`, run `$WITNESS init` first (one bootstrap commit), then proceed. If init or any verb refuses on a dirty tree, the human commits or cleans it — **never `git commit` yourself, anywhere, at any stage**: the CLI makes its own state commits, and the ship phase makes the sole code commit.
