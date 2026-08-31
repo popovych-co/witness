@@ -50,6 +50,7 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   abandon: () => import('./verbs/abandon.js'),
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
+  trust: () => import('./verbs/trust.js'),
   calibrate: () => import('./verbs/calibrate.js'),
   // Row 116's valve. Exempt from the floor gate in `main`, because a repository that
   // refuses every verb must still be able to run the one that unrefuses it.
@@ -64,7 +65,7 @@ const VERB_USAGE: Record<string, string> = {
   calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
   check: 'witness check',
   clean: 'witness clean',
-  decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--show]',
+  decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]',
   floor: 'witness floor --show | --set <triple> --note <why>',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'witness diff <spec-id>',
@@ -84,6 +85,7 @@ const VERB_USAGE: Record<string, string> = {
   start: 'witness start <plan-id>',
   status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
   sync: 'witness sync',
+  trust: 'witness trust <artifact-id> [--yes]',
   'test-evidence': 'witness test-evidence <plan-id> --phase red|green',
   'verify-red': 'witness verify-red <plan-id> [--base <ref>]',
 }

@@ -1,7 +1,7 @@
 import {
   appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync,
 } from 'node:fs'
-import { isAbsolute, join, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { git, stateDirs, tryGit } from './gitio.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
@@ -189,10 +189,27 @@ export function createWorktree(
   return ok({ path, branch })
 }
 
-export function removeWorktree(root: string, planId: string): void {
+// D141. The lazy stamp fires from `next`, `check` and `dashboard` — including the
+// SessionStart hook's bare `witness` — so removal used to delete the directory the invoking
+// process was standing in (the ×3 `Working directory does not exist` in the 2026-08-29
+// report). Returns false, and removes nothing, when `cwd` is inside the worktree; the
+// skipped removal re-runs harmlessly from any other cwd, which the done-sweep already
+// re-checks. A DIFFERENT session's cwd stays unknowable — no cross-session registry exists
+// — and that residual is accepted in the spec; every reported case was a self-deletion.
+export function removeWorktree(root: string, planId: string, cwd?: string): boolean {
   const path = worktreePath(root, planId)
+  if (cwd !== undefined) {
+    // Compared as PATHS, never as strings: realpath both sides (macOS /tmp and /var are
+    // symlinks — the same trap D134 hit), and a `..` or absolute relative result means
+    // outside. `${path}-sibling` must not read as inside, which a prefix test would.
+    const here = existsSync(cwd) ? realpathSync(cwd) : resolve(cwd)
+    const there = existsSync(path) ? realpathSync(path) : resolve(path)
+    const rel = relative(there, here)
+    if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))) return false
+  }
   if (existsSync(path)) tryGit(root, 'worktree', 'remove', '--force', path)
   tryGit(root, 'worktree', 'prune')
+  return true
 }
 
 export function listWorktrees(root: string): string[] {

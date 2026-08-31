@@ -44,6 +44,17 @@ export function loadCanon(root: string): Canon {
   return { docs, errors, paths }
 }
 
+// D154. Which doc owns the `cmd:` criteria a gate is about to leave blocked. A plan gate
+// judges a PLAN, but criteria live on the spec it derives from — so a trust surface keyed
+// on the gate's target alone would list nothing at exactly the gates that need it.
+export function criteriaOwner(canon: Canon, id: string): CanonDoc | undefined {
+  const doc = findById(canon, id)
+  if (!doc) return undefined
+  if (doc.meta.type !== 'plan') return doc
+  const parent = typeof doc.meta.parent === 'string' ? findById(canon, doc.meta.parent) : undefined
+  return parent ?? doc
+}
+
 export function findById(canon: Canon, id: string): CanonDoc | undefined {
   return canon.docs.find((d) => d.meta.id === id)
 }

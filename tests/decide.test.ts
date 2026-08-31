@@ -7,7 +7,7 @@ import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const BLOCKING = {
   coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
@@ -108,6 +108,91 @@ async function stoppedImplement() {
 }
 
 describe('witness decide', () => {
+  // D143 (amends D127). A nod selects the recommended option of a CLI-rendered block, and
+  // the journal keeps closure-by-nod distinguishable from a named selection. D127's actual
+  // guard survives: the agent still types the printed string byte-for-byte — only the
+  // SELECTION SOURCE changes, and it binds to a CLI-computed, journaled recommendation.
+  it('records an affirmation selection distinguishably (D143)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x', '--via', 'affirmation'])
+
+    expect(res.code).toBe(0)
+    expect(decisions(repo).at(-1)!.selected).toBe('affirmation')
+  })
+
+  it('a named selection is still recorded as one — the default is unchanged (D143)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x'])
+
+    expect(res.code).toBe(0)
+    expect(decisions(repo).at(-1)!.selected).toBeUndefined()
+  })
+
+  it('a nod cannot take an obligation-minting override (D143)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve', '--override', '--via', 'affirmation'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('nod-cannot')
+  })
+
+  it('a nod cannot take a terminal stop (D143)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--stop', '--via', 'affirmation'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('nod-cannot')
+  })
+
+  it('refuses a --via word it does not define (D143)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x', '--via', 'vibes'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('unknown-via')
+  })
+
+  // D154. Trust is granted where a human decides. The grant runs only after the decision
+  // is durable — a refused decide must not leave one behind.
+  it('--approve --trust-cmds grants and journals (D154)', async () => {
+    const { repo } = await stoppedGate()
+    await writeSpec(repo, 'auth-refresh', {
+      ...SPEC_META, criteria: [{ id: 'ac-smoke', cmd: 'echo ok' }],
+    })
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve', '--trust-cmds'])
+
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('trusted: echo ok')
+    const allow = JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }
+    expect(allow.commands).toContain('echo ok')
+    const entry = readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')
+    expect(entry?.via).toBe('decide')
+  })
+
+  it('a grant rides an approval and nothing else (D154)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x', '--trust-cmds'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('trust-scope')
+  })
+
+  it('a nod never grants trust (D143 exclusion, D154)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve', '--trust-cmds', '--via', 'affirmation'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('nod-cannot')
+  })
+
   it('refuses when nothing is pending', async () => {
     synthetic()
     const repo = await seededRepo()

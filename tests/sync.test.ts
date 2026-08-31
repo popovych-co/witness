@@ -3,8 +3,12 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { classifyPullFailure } from '../src/verbs/sync.js'
-import { addOrigin, seededRepo, writeSpec } from './helpers.js'
+import { classifyPullFailure, classifyPushFailure } from '../src/verbs/sync.js'
+import { lazyStamp } from '../src/stamp.js'
+import { loadCanon } from '../src/scan.js'
+import {
+  addOrigin, fakeCtx, fakeScenario, gateEnv, ghState, seededRepo, shippableRepo, writeSpec,
+} from './helpers.js'
 
 describe('classifyPullFailure', () => {
   it('names the three shapes', () => {
@@ -73,5 +77,63 @@ describe('divergence visibility (D139)', () => {
 
     expect(res.code).toBe(0)                                    // warn, never error
     expect(res.stdout).toMatch(/warn,git,main,ahead,1 ahead · 0 behind origin\/main — witness sync/)
+  })
+})
+
+// D138. Local main converges without the human knowing `sync` exists: the merge stamp is
+// the moment origin is known to have moved, so the sync sequence runs right after it.
+describe('auto-sync (D138)', () => {
+  it('classifies a protected-branch push rejection instead of a bare push failure', () => {
+    expect(classifyPushFailure('remote: error: GH006: Protected branch update failed')).toBe('push-rejected')
+    expect(classifyPushFailure('! [remote rejected] main -> main (protected branch hook declined)')).toBe('push-rejected')
+    expect(classifyPushFailure('fatal: unable to access: Could not resolve host')).toBe('other')
+  })
+
+  it('the merge stamp heals local main against origin, and says nothing when it works', async () => {
+    const seed = await shippableRepo()
+    seed.repo.setMeta(seed.planId, { pr: 1 })
+    addOrigin(seed.repo)                                   // local main == origin/main here
+    const scenario = fakeScenario()
+    ghState(scenario, 1, 'MERGED')
+    const out: string[] = []
+    const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario), out: (l) => out.push(l) })
+
+    const result = lazyStamp(seed.repo.root, ctx, loadCanon(seed.repo.root))
+
+    expect(result.stamped).toHaveLength(1)                 // the stamp itself still happened
+    expect(seed.repo.git('rev-list', '--count', 'origin/main..main')).toBe('0')
+    expect(out.join('\n')).not.toContain('sync-auto:')      // success is silent
+  })
+
+  it('records the sync in the journal so an automatic act is auditable', async () => {
+    const seed = await shippableRepo()
+    seed.repo.setMeta(seed.planId, { pr: 1 })
+    addOrigin(seed.repo)
+    const scenario = fakeScenario()
+    ghState(scenario, 1, 'MERGED')
+    const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario) })
+
+    lazyStamp(seed.repo.root, ctx, loadCanon(seed.repo.root))
+
+    const { readStream } = await import('../src/journal.js')
+    const entry = readStream(seed.repo.root, seed.planId).findLast((e) => e.t === 'sync')
+    expect(entry).toBeDefined()
+    expect(entry?.trigger).toBe('merge-stamp')
+    expect(entry?.result).toBe('ok')
+  })
+
+  it('a failing auto-sync is a printed finding, never a crash', async () => {
+    const seed = await shippableRepo()
+    seed.repo.setMeta(seed.planId, { pr: 1 })
+    seed.repo.git('remote', 'add', 'origin', '/nonexistent/origin.git')
+    const scenario = fakeScenario()
+    ghState(scenario, 1, 'MERGED')
+    const out: string[] = []
+    const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario), out: (l) => out.push(l) })
+
+    const result = lazyStamp(seed.repo.root, ctx, loadCanon(seed.repo.root))
+
+    expect(result.stamped).toHaveLength(1)                 // the stamp is not held hostage
+    expect(out.join('\n')).toContain('sync-auto:')
   })
 })

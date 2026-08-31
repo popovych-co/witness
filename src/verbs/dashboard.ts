@@ -78,13 +78,17 @@ const RECOMMENDER_MIN_SAMPLE = 5
 //
 // Split from the stream walk so the tally is testable without seeding five real decisions.
 export function recommenderRowsFrom(
-  decisions: Array<{ rule?: string; recommended?: string; decision: string }>,
-): Array<{ rule: string; fired: number; overridden: number }> {
-  const tally = new Map<string, { fired: number; overridden: number }>()
+  decisions: Array<{ rule?: string; recommended?: string; decision: string; selected?: string }>,
+): Array<{ rule: string; fired: number; overridden: number; nodded: number }> {
+  const tally = new Map<string, { fired: number; overridden: number; nodded: number }>()
   for (const d of decisions) {
     if (!d.rule || !d.recommended) continue
-    const row = tally.get(d.rule) ?? { fired: 0, overridden: 0 }
+    const row = tally.get(d.rule) ?? { fired: 0, overridden: 0, nodded: 0 }
     row.fired += 1
+    // D143. What a nod closed, per rule — the reader that makes closure-by-nod a measured
+    // cost rather than an argued one, on the same subject D130 set: the RULE, never the
+    // human. A rule that is almost always nodded through is a rule nobody is looking at.
+    if (d.selected === 'affirmation') row.nodded += 1
     // `startsWith` so `revise-upstream` counts as following a `revise` recommendation. If
     // that proves too loose in the field, tighten it to full verbs and record the change.
     if (!d.decision.startsWith(d.recommended)) row.overridden += 1
@@ -98,14 +102,14 @@ export function recommenderRowsFrom(
 
 export function recommenderRows(
   root: string, canon: Canon,
-): Array<{ rule: string; fired: number; overridden: number }> {
+): Array<{ rule: string; fired: number; overridden: number; nodded: number }> {
   const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
-  const decisions: Array<{ rule?: string; recommended?: string; decision: string }> = []
+  const decisions: Array<{ rule?: string; recommended?: string; decision: string; selected?: string }> = []
   for (const id of streams) {
     for (const e of readStream(root, id)) {
       if (e.t !== 'human-decision') continue
       const d = e as unknown as DecisionEntry
-      decisions.push({ rule: d.rule, recommended: d.recommended, decision: d.decision })
+      decisions.push({ rule: d.rule, recommended: d.recommended, decision: d.decision, selected: d.selected })
     }
   }
   return recommenderRowsFrom(decisions)
@@ -206,7 +210,7 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   }
   const rec = recommenderRows(root, canon)
   if (rec.length > 0) {
-    rows('recommender', ['rule', 'fired', 'overridden'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+    rows('recommender', ['rule', 'fired', 'overridden', 'nodded'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   const wp = writePathStats(root)
   if (wp.artifacts > 0 || wp.refused > 0) {
@@ -257,6 +261,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   }
   if (lazy.stale.length) {
     rows('stale', ['plan', 'why'], lazy.stale as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  // D141. A worktree the sweep declined to remove because this session stands in it.
+  // Printed with the stale rows, above the routing block, for the same reason.
+  for (const path of lazy.kept) {
+    ctx.out(kv('note', `worktree ${path} kept — this session stands in it; leave the directory and re-run`))
   }
   const pendingGates: Array<{ gate: string; target: string; round: number; outcome: string }> = []
   for (const plan of canon.docs.filter((d) => d.meta.type === 'plan')) {

@@ -79,6 +79,11 @@ export interface DecisionEntry {
   // predicate — `status` aggregates them (D130) and nothing else touches them.
   recommended?: string
   rule?: string
+  // D143. Where the selection came from. Absent means the human named the option;
+  // 'affirmation' means they nodded at a CLI-rendered recommendation. Never read by a gate
+  // predicate — it exists so closure-by-nod is countable, which is what makes D121's
+  // widened residual a measured cost rather than an argued one.
+  selected?: 'affirmation'
 }
 
 export interface GateKey {

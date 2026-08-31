@@ -759,6 +759,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (lazy.stale.length > 0) {
     rows('stale', ['plan', 'why'], lazy.stale as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
+  // D141. A worktree the sweep declined to remove because this session stands in it.
+  // Printed with the stale rows, above the routing block, for the same reason.
+  for (const path of lazy.kept) {
+    ctx.out(kv('note', `worktree ${path} kept — this session stands in it; leave the directory and re-run`))
+  }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
   // Precedence: an explicit --flow is a CLAIM about a flow and refuses when false.
   // A worktree cwd is AMBIENT context — it may scope a read-only question, never select

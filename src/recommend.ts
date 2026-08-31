@@ -58,6 +58,10 @@ export interface GateContext {
   entries: Entry[]
   upstream: string | undefined
   stale: boolean
+  // D154. The artifact's `cmd:` criteria this repo does not trust yet, computed by the
+  // CALLER — this module stays pure and never reads allow.json. When non-empty, every
+  // plain approve gains a trusting twin so the human can see both prices.
+  untrustedCmds?: string[]
 }
 
 const RESERVED = new Set(['ship', 'design'])
@@ -75,7 +79,40 @@ const opt = (command: string, depth: Depth, rest: Partial<Option> = {}): Option 
 // Order: malformed · stale-below-bound · ladder-spent · bound+recurrence · bound ·
 //        recurrence · pin-contradiction · blocking-parent · blocking-here ·
 //        non-blocking-only · reserved-stop-clean · manual-stop
+// D154. Trust must never be the toll for approval. Where a plain `--approve` is offered
+// and the artifact carries untrusted `cmd:` criteria, the block renders BOTH forms — plain
+// first, so approving without granting stays the easy path — and names the commands
+// verbatim, because a grant the human cannot read is not one they made. Applied once, over
+// the finished option list, rather than at each of the five rules that offer an approve.
+function withTrustVariants(d: Decision, untrusted: string[]): Decision {
+  if (untrusted.length === 0) return d
+  const listed = untrusted.join(' · ')
+  const options: Option[] = []
+  for (const o of d.options) {
+    options.push(o)
+    // The obligation-minting `--approve --override` is deliberately excluded: D143 keeps
+    // trust off nods, and stacking a grant onto the ledger act would bury it twice over.
+    if (!/ --approve$/.test(o.command)) continue
+    options[options.length - 1] = {
+      ...o,
+      tradeoff: [o.tradeoff, `the listed commands stay blocked at headless gates: ${listed}`]
+        .filter(Boolean).join(' · '),
+    }
+    options.push(opt(`${o.command} --trust-cmds`, 'root', {
+      when: 'you have read these commands and accept them running unattended at every later gate',
+      tradeoff: `grants them repo-wide in .witness/allow.json (machine-local): ${listed}`,
+      note: 'a bare affirmation never grants trust — this form must be named (D143)',
+    }))
+  }
+  return { ...d, options }
+}
+
 export function recommend(ctx: GateContext): Decision | undefined {
+  const d = recommendCore(ctx)
+  return d === undefined ? undefined : withTrustVariants(d, ctx.untrustedCmds ?? [])
+}
+
+function recommendCore(ctx: GateContext): Decision | undefined {
   const { gate, target, entries, upstream, stale } = ctx
   const last = lastGateRun(entries, gate)
   if (!last) return undefined

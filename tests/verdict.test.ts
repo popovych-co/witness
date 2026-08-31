@@ -168,3 +168,44 @@ describe('screens reviewed-kind', () => {
     expect(verdictViolations(full.ok ? full.value : (undefined as never), SCREENS)).toEqual([])
   })
 })
+
+// D151 (issue #18). D132 sparse-excludes canon from worktrees, so a reviewer citing the
+// very spec or plan it judges pointed at a file that is absent by design — and one
+// unresolvable anchor malforms the WHOLE round. Canon resolves where canon lives.
+describe('canon anchors resolve at the primary root (D151)', () => {
+  function contaminatedPair(): { reviewed: Reviewed; primaryRoot: string } {
+    const primary = mkdtempSync(join(tmpdir(), 'verdict-primary-'))
+    mkdirSync(join(primary, 'plans'), { recursive: true })
+    writeFileSync(join(primary, 'plans/p1.md'), '## Step: s1\nexport function rotateToken() {}\n')
+    // the reviewed tree is a worktree with canon sparse-excluded: plans/ simply is not here
+    const wt = mkdtempSync(join(tmpdir(), 'verdict-wt-'))
+    mkdirSync(join(wt, 'src'), { recursive: true })
+    writeFileSync(join(wt, 'src/token.ts'), 'export function rotateToken() {}\n')
+    return {
+      reviewed: {
+        kind: 'tree', root: wt, files: ['src/token.ts'],
+        canonRoot: primary, canonDirs: ['specs', 'plans', 'designs', '.witness'],
+      },
+      primaryRoot: primary,
+    }
+  }
+
+  it('a reviewer citing the plan under judgment resolves, instead of malforming the round', () => {
+    const { reviewed } = contaminatedPair()
+    expect(resolveAnchor('plans/p1.md', reviewed)).toBeUndefined()
+    expect(resolveAnchor('plans/p1.md#rotateToken', reviewed)).toBeUndefined()
+  })
+
+  it('a genuinely missing canon file still refuses, and code paths keep the reviewed tree', () => {
+    const { reviewed } = contaminatedPair()
+    expect(resolveAnchor('plans/ghost.md', reviewed)).toContain('no file')
+    expect(resolveAnchor('src/token.ts#rotateToken', reviewed)).toBeUndefined()
+    expect(resolveAnchor('src/ghost.ts', reviewed)).toContain('no file')
+  })
+
+  it('without the canon context nothing changes — the old behavior is the default', () => {
+    const { reviewed } = contaminatedPair()
+    const bare: Reviewed = { kind: 'tree', root: reviewed.kind === 'tree' ? reviewed.root : '', files: [] }
+    expect(resolveAnchor('plans/p1.md', bare)).toContain('no file')
+  })
+})

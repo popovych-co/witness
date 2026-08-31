@@ -28,7 +28,11 @@ export async function runCriteria(
   runRoot: string, ctx: Ctx, doc: CanonDoc, opts: { trustRoot?: string; suite?: TestOutcome[] } = {},
 ): Promise<Result<CriteriaResult>> {
   const trustRoot = opts.trustRoot ?? runRoot
-  const cfg = loadConfig(runRoot)
+  // D154 root unification. The trust list and the runner config are two halves of one
+  // question — "what may this repository run" — and answering them from two checkouts is
+  // the asymmetry behind the Aug 1 false negative. Both resolve at the primary root now
+  // (D132's doctrine: a branch checkout cannot re-point what the repo trusts or runs).
+  const cfg = loadConfig(trustRoot)
   if (!cfg.ok) return cfg
   const rcRes = runnerConfig(cfg.value)
   if (!rcRes.ok) return rcRes
@@ -80,7 +84,13 @@ export async function runCriteria(
     } else if (typeof c.cmd === 'string') {
       const trust = await ensureTrusted(trustRoot, ctx, c.cmd)
       if (trust !== 'trusted') {
-        criteria.push({ id: cid, kind: 'cmd', ok: false, detail: `untrusted-${trust} — allow interactively or set WITNESS_TRUST_CMDS=1` })
+        // D154. The block now names the verb that unblocks it. `witness trust <id>` is
+        // fully resolved — D147's runnability test, applied where the refusal is a detail
+        // string rather than a Violation.
+        criteria.push({
+          id: cid, kind: 'cmd', ok: false,
+          detail: `untrusted-${trust} — run: witness trust ${id} (or set WITNESS_TRUST_CMDS=1)`,
+        })
         continue
       }
       const run = execCommand(runRoot, ctx, c.cmd)
