@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
-import { classifyAction, spawnSession } from '../src/drive.js'
+import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
-import { fakeCtx, fakeScenario, seededRepo, type TestRepo } from './helpers.js'
+import { worktreePath } from '../src/worktree.js'
+import {
+  approve, fakeCtx, fakeScenario, fixtureEnv, seededRepo, writePlan, writeSpec, type TestRepo,
+} from './helpers.js'
 
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
@@ -116,6 +120,22 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).toBe('timeout')
   }, 20000)
 
+  it('returns when the session exits even if a grandchild still holds the pipe', async () => {
+    const repo = await seededRepo()
+    // The shape a real agent session leaves behind: a background child that inherited
+    // stdout and outlives its parent. Waiting for `close` alone would hang 30s here.
+    const bin = fakeAgent('sleep 30 &\necho started')
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin }, out: (l) => lines.push(l),
+    })
+    const started = Date.now()
+    const res = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 9)
+    expect(res).toBe('exited')
+    expect(lines.join('\n')).toContain('started')
+    expect(Date.now() - started).toBeLessThan(10000)
+  }, 20000)
+
   it('reports spawn-failed when the binary is not there', async () => {
     const repo = await seededRepo()
     const ctx = fakeCtx(repo.root, {
@@ -142,4 +162,105 @@ describe('spawnSession (D145 addendum §3-5)', () => {
         env: {},
       })
   })
+})
+
+// The fixture every loop case needs: an approved plan, so computeNext's first answer is
+// `witness start <plan-id>` — a real act a fake agent can perform through the real CLI.
+async function planReady(): Promise<TestRepo> {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  approve(repo, 'auth-refresh-plan-1')
+  return repo
+}
+
+// This repo's CLI, as a command a /bin/sh fake can exec. The suite never spawns the CLI
+// otherwise — every other test calls main() in-process — but drive's whole subject IS a
+// child process, and a fake that cannot perform a real act could only prove the loop
+// spawns, never that it observes what the spawn did.
+function witnessCli(): string {
+  const repo = resolve(import.meta.dirname, '..')
+  return `${join(repo, 'node_modules', '.bin', 'tsx')} ${join(repo, 'src', 'bin.ts')}`
+}
+
+// A fake agent that performs ONE real act (the first time it runs) and then does nothing —
+// which is exactly the shape the no-progress guard must catch.
+function actsOnceAgent(scenario: string, act: string): string {
+  const bin = join(scenario, 'fake-driver')
+  writeFileSync(bin, [
+    '#!/bin/sh',
+    'echo tick',
+    `flag="${join(scenario, 'acted')}"`,
+    '[ -f "$flag" ] && exit 0',
+    'touch "$flag"',
+    `exec ${witnessCli()} ${act}`,
+  ].join('\n'), { mode: 0o755 })
+  return bin
+}
+
+describe('driveLoop (D145)', () => {
+  const cfgOf = (repo: TestRepo): Config => {
+    const r = loadConfig(repo.root)
+    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
+    return r.value
+  }
+  const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
+    fakeCtx(repo.root, { tty: true, env: fixtureEnv(env), out: (l) => out.push(l) })
+
+  it('spawns, sees the journal grow, and stops when the action stops moving', async () => {
+    const repo = await planReady()
+    const bin = actsOnceAgent(fakeScenario(), 'start auth-refresh-plan-1')
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), { maxSpawns: 5 })
+
+    expect(code).toBe(1)
+    expect(out.join('\n')).toMatch(/drive: no progress — witness /)
+    // the child really acted: the worktree exists and the loop moved past `start`
+    expect(existsSync(worktreePath(repo.root, 'auth-refresh-plan-1'))).toBe(true)
+    // spawn 2 ran in the WORKTREE, under the implement stage the act moved the flow to
+    expect(out.join('\n')).toContain('[2 implement/auth-refresh-plan-1] tick')
+    await repo.cli(['clean'])
+  }, 60000)
+
+  it('stops at the spawn ceiling, in memory, per invocation', async () => {
+    const repo = await planReady()
+    const bin = actsOnceAgent(fakeScenario(), 'start auth-refresh-plan-1')
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), { maxSpawns: 1 })
+
+    expect(code).toBe(1)
+    expect(out.join('\n')).toMatch(/drive: spawn ceiling reached \(1\)/)
+    expect(out.join('\n')).not.toContain('[2 implement/auth-refresh-plan-1] tick')
+    await repo.cli(['clean'])
+  }, 60000)
+
+  it('hands a conversation stage back to a chat session and exits 0', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, {}, out), {})
+
+    expect(code).toBe(0)
+    expect(out.join('\n')).toMatch(/drive: conversation — witness recap/)
+  }, 20000)
+
+  it('reports a timed-out child as findings, not as done', async () => {
+    const repo = await planReady()
+    const bin = join(fakeScenario(), 'hang')
+    writeFileSync(bin, '#!/bin/sh\nsleep 60\n', { mode: 0o755 })
+    const out: string[] = []
+    const cfg = { ...cfgOf(repo), drive: { sessionTimeoutMs: 200 } }
+    const code = await driveLoop(repo.root, cfg, ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), {})
+
+    expect(code).toBe(1)
+    expect(out.join('\n')).toMatch(/drive: spawn-timeout/)
+  }, 30000)
+
+  it('--flow refuses a plan that is not a flow', async () => {
+    const repo = await planReady()
+    const res = await repo.cli(['drive', '--flow', 'auth-refresh-plan-1'], { tty: true })
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('not-started')
+  }, 20000)
 })

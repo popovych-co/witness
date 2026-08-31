@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Ctx } from './cli.js'
+import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { resolveJudge } from './harness.js'
 import { renderRefusal } from './refusal.js'
-import type { NextAction } from './verbs/next.js'
+import { loadCanon } from './scan.js'
+import { computeNext, flowAction, resolveFlow, type NextAction } from './verbs/next.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -73,6 +75,11 @@ export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed'
 // moment ago. That is what makes a killed drive costless to re-run (north star 6).
 const SESSION_PROMPT = '/witness'
 
+// How long a SIGTERMed session gets before SIGKILL, and how long a dead session's pipes
+// get to drain before drive stops waiting on the grandchildren that inherited them.
+const TERM_GRACE_MS = 5_000
+const EXIT_GRACE_MS = 2_000
+
 // This CLI, for the child. A spawned session shells out to `witness` through
 // ${WITNESS_BIN:-npx …} in every stage skill, and an unset value means the child resolves
 // the PUBLISHED version while its parent runs an unpublished one — which the state floor
@@ -129,24 +136,144 @@ export async function spawnSession(
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let outcome: SpawnOutcome = 'exited'
+    let settled = false
+    let killTimer: NodeJS.Timeout | undefined
+    let grace: NodeJS.Timeout | undefined
+    const settle = (o: SpawnOutcome) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(killTimer)
+      clearTimeout(grace)
+      out.flush()
+      err.flush()
+      child.stdout.destroy()
+      child.stderr.destroy()
+      resolve(o)
+    }
     const timer = setTimeout(() => {
       outcome = 'timeout'
       child.kill('SIGTERM')
+      // A session that ignores SIGTERM is exactly the session the ceiling exists for.
+      killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
     }, cfg.drive.sessionTimeoutMs)
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (c: string) => out.push(c))
     child.stderr.on('data', (c: string) => err.push(c))
     child.on('error', (e) => {
-      clearTimeout(timer)
       ctx.err(`${prefix}spawn-failed: ${e.message}`)
-      resolve('spawn-failed')
+      settle('spawn-failed')
     })
-    child.on('close', () => {
-      clearTimeout(timer)
-      out.flush()
-      err.flush()
-      resolve(outcome)
+    // `close` (stdio drained) is the clean end and the one that keeps every last line.
+    // `exit` (the process itself is gone) is the BOUND on it: an agent session spawns its
+    // own children — tools, git, node — and they inherit these pipes, so a killed parent
+    // whose grandchild survives holds stdout open forever. Waiting for `close` alone is
+    // therefore a hang with no timeout above it, which is the one failure a timeout must
+    // not have. Measured here: SIGTERM to a shell whose `sleep` survived it.
+    child.on('exit', () => {
+      clearTimeout(killTimer)
+      grace = setTimeout(() => settle(outcome), EXIT_GRACE_MS)
     })
+    child.on('close', () => settle(outcome))
   })
+}
+
+export interface DriveFlags { flow?: string; maxSpawns?: number }
+
+// Twenty sessions per invocation, held in MEMORY and nowhere else (north star 2): a
+// ceiling that persisted would be state drive must clean up, and re-running is how a
+// human says "keep going". It is a runaway guard, not a budget — the no-progress check
+// below is what catches the common case long before this does.
+export const DEFAULT_MAX_SPAWNS = 20
+
+// Did anything happen? Every act a session performs appends to a journal stream, so the
+// total line count is the cheapest honest answer — derived, never stored, and blind to
+// which stream grew, which is right: any growth anywhere means the repo moved.
+function journalTotal(root: string): number {
+  const dir = join(root, '.witness', 'journal')
+  if (!existsSync(dir)) return 0
+  let total = 0
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith('.jsonl')) continue
+    total += readFileSync(join(dir, f), 'utf8').split('\n').filter((l) => l !== '').length
+  }
+  return total
+}
+
+const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
+
+// The loop. Derive, classify, spawn, re-derive — and every turn reads the repo from disk,
+// so nothing drive believed a moment ago can outlive a child that changed it.
+//
+// Deliberately no lazy merge-stamp here (`next` does one): drive journals nothing (§9).
+// The spawned session runs `witness next` in its own home and stamps there, so a merged
+// PR is observed on the very next derivation — by the CLI that owns that act.
+export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: DriveFlags): Promise<number> {
+  const maxSpawns = flags.maxSpawns ?? DEFAULT_MAX_SPAWNS
+  let spawns = 0
+  let prev: { line: string; journal: number } | undefined
+  for (;;) {
+    const canon = loadCanon(root)
+    let action: NextAction
+    if (flags.flow !== undefined) {
+      const flowR = resolveFlow(canon, flags.flow)
+      if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+      const judgeR = resolveJudge(ctx.env, cfg.raw)
+      action = flowAction(root, cfg, flowR.value, judgeR.ok ? judgeR.value.harness.name : undefined)
+        ?? { line: 'witness check', target: flags.flow }
+    } else {
+      action = computeNext(root, ctx, canon, cfg)
+    }
+    const step = classifyAction(action, root)
+    if (step.kind === 'conversation') {
+      ctx.out(`drive: conversation — ${step.line}`)
+      ctx.out('help: this stage is an exchange with a human — run it in a chat session, then re-run witness drive')
+      return EXIT.OK
+    }
+    if (step.kind === 'merge') { ctx.out(`drive: merge — ${step.line}`); return EXIT.OK }
+    if (step.kind === 'idle') { ctx.out(`drive: idle — ${action.line}`); return EXIT.OK }
+    if (step.kind === 'decision') { return await resolveDecision(step, root, cfg, ctx) }
+
+    const journal = journalTotal(root)
+    // The convergence check, and the reason a crashed drive is safe to re-run: the same
+    // action twice with nothing journalled in between means the session could not do what
+    // the CLI asked. Spawning a third is how a loop burns a human's tokens all night.
+    if (prev?.line === action.line && prev.journal === journal) {
+      ctx.out(`drive: no progress — ${action.line}`)
+      ctx.out('help: the last session left the repo where it found it — read the stream above, then act on that line yourself')
+      return EXIT.FINDINGS
+    }
+    if (spawns >= maxSpawns) {
+      ctx.out(`drive: spawn ceiling reached (${maxSpawns}) — ${action.line}`)
+      ctx.out('help: re-run witness drive to continue, or raise --max-spawns')
+      return EXIT.FINDINGS
+    }
+    prev = { line: action.line, journal }
+    spawns += 1
+    // The merge is announced by the SHIP SESSION's own output (ship.ts:277), not by a
+    // routing row — a flow whose PR is open routes to `witness ship` forever, and only
+    // the child knows it printed "merge PR". Sniffing the stream is what turns that into
+    // a clean exit instead of a no-progress stop.
+    let merged: string | undefined
+    const childCtx: Ctx = {
+      ...ctx,
+      out: (l) => { if (l.includes('merge PR')) merged = l.replace(STREAM_PREFIX, ''); ctx.out(l) },
+    }
+    const outcome = await spawnSession(step, cfg, childCtx, spawns)
+    if (outcome !== 'exited') {
+      ctx.out(`drive: spawn-${outcome === 'timeout' ? 'timeout' : 'failed'} — ${action.line}`)
+      return EXIT.FINDINGS
+    }
+    if (merged !== undefined) { ctx.out(`drive: merge — ${merged}`); return EXIT.OK }
+  }
+}
+
+// Task 5 replaces this with the decision block and the prompt.
+async function resolveDecision(
+  step: Extract<DriveStep, { kind: 'decision' }>, _root: string, _cfg: Config, ctx: Ctx,
+): Promise<number> {
+  if (step.block) step.block.forEach((l) => ctx.out(l))
+  else ctx.out(`drive: decision — witness decide ${step.gate} ${step.target} --show`)
+  return EXIT.OK
 }

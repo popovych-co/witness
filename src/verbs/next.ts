@@ -716,7 +716,10 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   return { line: 'witness check' }
 }
 
-function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
+// Exported for `drive`, which claims a flow with the same `--flow` semantics `next` has:
+// a claim that refuses when false. A second copy of these three refusals would be a
+// second answer to "is this a flow", and the two would part company on the first change.
+export function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
   const doc = findById(canon, id)
   if (!doc || doc.meta.type !== 'plan') {
     return refuse([v('--flow', 'unknown-flow', id, 'a plans/ doc id')])

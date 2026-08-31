@@ -1,4 +1,7 @@
+import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
+import { loadConfig } from '../config.js'
+import { DEFAULT_MAX_SPAWNS, driveLoop } from '../drive.js'
 import { primaryRoot } from '../gitio.js'
 import { renderRefusal, v } from '../refusal.js'
 
@@ -16,7 +19,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  void argv
-  ctx.out('drive: nothing to do')   // replaced by the loop in Task 4
-  return EXIT.OK
+  const root = rootR.value
+  const cfgR = loadConfig(root)
+  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+
+  const { values } = parseArgs({
+    args: argv, options: { flow: { type: 'string' }, 'max-spawns': { type: 'string' } }, allowPositionals: true,
+  })
+  let maxSpawns = DEFAULT_MAX_SPAWNS
+  if (values['max-spawns'] !== undefined) {
+    const n = Number(values['max-spawns'])
+    if (!Number.isInteger(n) || n < 1) {
+      renderRefusal([v('--max-spawns', 'invalid', String(values['max-spawns']),
+        'an integer >= 1 — sessions this invocation may spawn')]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    maxSpawns = n
+  }
+  return await driveLoop(root, cfgR.value, ctx, { flow: values.flow, maxSpawns })
 }
