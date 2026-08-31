@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { diffTags, evidenceForDiff } from '../src/evidence.js'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { diffBase, diffTags, evidenceForDiff } from '../src/evidence.js'
+import { loadConfig } from '../src/config.js'
 import { findById, loadCanon } from '../src/scan.js'
 import type { TestRepo } from './helpers.js'
 import {
   TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
-  copyFixture, fixtureEnv, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
+  addOrigin, copyFixture, fixtureEnv, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
 } from './helpers.js'
 
 async function tddRepo(): Promise<{ repo: TestRepo; base: string }> {
@@ -157,5 +162,82 @@ describe('evidenceForDiff', () => {
     const report = evidenceForDiff(repo.root, repo.root, plan(repo), base)
     expect(report.required).toEqual([])
     expect(report.satisfied).toBe(true)
+  })
+})
+
+// D142. The true cut point is the DESCENDANT of merge-base(HEAD, <branch>) and
+// merge-base(HEAD, origin/<branch>) — one rule for all seven callers. Origin alone was
+// refuted by experiment in the triage: a legacy branch cut from a state-carrying local
+// main would diff its inherited .witness/journal/* against the origin merge-base, so
+// reviewers would judge state files as the plan's change.
+describe('diffBase resolves the true cut point (D142)', () => {
+  const cfgOf = (root: string) => {
+    const c = loadConfig(root)
+    if (!c.ok) throw new Error('config unreadable')
+    return c.value
+  }
+
+  it('a legacy contaminated branch keeps the LOCAL cut point, so state files stay out of the diff', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    addOrigin(repo)
+    repo.git('commit', '--allow-empty', '-m', 'state-ahead')       // local main ahead of origin
+    repo.git('branch', 'witness/legacy-plan', 'main')              // legacy cut, carries the state commit
+
+    // origin advances independently (stand-in for the squash-merge of the same content)
+    const clone = mkdtempSync(join(tmpdir(), 'd142-'))
+    execFileSync('git', ['clone', `${repo.root}-origin.git`, clone], { stdio: 'ignore' })
+    for (const [k, v] of [['user.name', 'test'], ['user.email', 't@e.c'], ['commit.gpgsign', 'false']]) {
+      execFileSync('git', ['-C', clone, 'config', k!, v!])
+    }
+    execFileSync('git', ['-C', clone, 'commit', '--allow-empty', '-m', 'squash-stand-in'], { stdio: 'ignore' })
+    execFileSync('git', ['-C', clone, 'push', 'origin', 'main'], { stdio: 'ignore' })
+    repo.git('fetch', 'origin', 'main')
+
+    const wt = join(mkdtempSync(join(tmpdir(), 'd142-wt-')), 'legacy')
+    repo.git('worktree', 'add', wt, 'witness/legacy-plan')
+
+    const b = diffBase(wt, cfgOf(repo.root))
+
+    expect(b.ok).toBe(true)
+    if (!b.ok) throw new Error('no base')
+    expect(b.value).toBe(repo.git('merge-base', 'witness/legacy-plan', 'main'))
+    expect(b.value).not.toBe(repo.git('merge-base', 'witness/legacy-plan', 'origin/main'))
+    repo.git('worktree', 'remove', '--force', wt)
+  })
+
+  it('a post-D137 clean cut takes the origin base, which is the later of the two', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    addOrigin(repo)
+    const clone = mkdtempSync(join(tmpdir(), 'd142b-'))
+    execFileSync('git', ['clone', `${repo.root}-origin.git`, clone], { stdio: 'ignore' })
+    for (const [k, v] of [['user.name', 'test'], ['user.email', 't@e.c'], ['commit.gpgsign', 'false']]) {
+      execFileSync('git', ['-C', clone, 'config', k!, v!])
+    }
+    execFileSync('git', ['-C', clone, 'commit', '--allow-empty', '-m', 'origin-ahead'], { stdio: 'ignore' })
+    execFileSync('git', ['-C', clone, 'push', 'origin', 'main'], { stdio: 'ignore' })
+    repo.git('fetch', 'origin', 'main')
+    repo.git('branch', 'witness/clean-plan', 'origin/main')        // D137's cut
+
+    const wt = join(mkdtempSync(join(tmpdir(), 'd142b-wt-')), 'clean')
+    repo.git('worktree', 'add', wt, 'witness/clean-plan')
+
+    const b = diffBase(wt, cfgOf(repo.root))
+
+    expect(b.ok).toBe(true)
+    if (!b.ok) throw new Error('no base')
+    expect(b.value).toBe(repo.git('rev-parse', 'origin/main'))
+    repo.git('worktree', 'remove', '--force', wt)
+  })
+
+  it('falls back to the local half alone when no remote exists', async () => {
+    const { repo } = await tddRepo()
+
+    const b = diffBase(repo.root, cfgOf(repo.root))
+
+    expect(b.ok).toBe(true)
+    if (!b.ok) throw new Error('no base')
+    expect(b.value).toBe(repo.git('merge-base', 'HEAD', 'main'))
   })
 })
