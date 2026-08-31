@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
+import { grantCommands, untrustedCmdsFor } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import '../gates/index.js'
@@ -12,8 +13,9 @@ import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, streamExists, type Entry } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { effortOf } from '../reviewed.js'
-import { findById, loadCanon } from '../scan.js'
+import { criteriaOwner, findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
+import { journalTrust } from './trust.js'
 import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, kv, rows } from '../toon.js'
@@ -22,6 +24,16 @@ import {
   roundsSinceApprove, type DecisionEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
+
+
+// D154. The untrusted `cmd:` list for a block, resolved from the ctx alone — `renderBound`
+// and `--show` both render without a `root` in scope, and gate.ts's renderChoices took the
+// same route for the same reason. Best-effort: a root that will not resolve costs the trust
+// variants, never the block.
+function trustFor(ctx: Ctx, target: string): string[] {
+  const r = primaryRoot(ctx.cwd)
+  return r.ok ? untrustedCmdsFor(r.value, criteriaOwner(loadCanon(r.value), target)) : []
+}
 
 const asEntry = (e: DecisionEntry) => e as unknown as { t: 'human-decision'; [k: string]: unknown }
 
@@ -52,7 +64,7 @@ function renderBound(
   if (note !== undefined) ctx.err(kv('note', note))
   // D121. The endgame is exactly where a bare list of legal flags is least useful: every
   // remaining act carries a cost, and which cost is worth paying is the whole question.
-  const d = recommend({ gate, target, entries, upstream, stale })
+  const d = recommend({ gate, target, entries, upstream, stale, untrustedCmds: trustFor(ctx, target) })
   if (d) renderDecision(d).forEach((l) => ctx.err(l))
   else ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
   return EXIT.REFUSED
@@ -132,7 +144,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // The surface a human actually reads while deciding, so it is the one that most owes a
     // ranking rather than a menu. `undefined` is stale with no decision pending, where no
     // act but the re-gate is legal and the exits line already says exactly that (D131).
-    const shown = recommend({ gate, target, entries, upstream: upstreamId, stale })
+    const shown = recommend({ gate, target, entries, upstream: upstreamId, stale, untrustedCmds: trustFor(ctx, target) })
     if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
     else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
     return EXIT.OK
@@ -165,6 +177,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // block, and `--via affirmation` is how the agent reports that the selection came from a
   // nod rather than from a named option. Journaled, so closure-by-nod stays measurable
   // rather than arguable — D121's residual widens here and the ledger is what prices it.
+  // D154. The trusting approve form. Executed after the decision lands, so a refused
+  // decision never leaves a grant behind.
+  const trustCmds = argv.includes('--trust-cmds')
+  if (trustCmds && decision !== 'approve') {
+    renderRefusal([v('--trust-cmds', 'trust-scope', `--${decision}`,
+      'witness decide … --approve --trust-cmds — a grant rides an approval, nothing else')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   const via = flagValue(argv, '--via')
   if (via !== undefined && via !== 'affirmation') {
     renderRefusal([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
@@ -174,8 +195,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // The exclusions, spec D143: an obligation-minting override (D122's ledger must not open
   // on an "ok"), and terminal acts. `witness abandon` is excluded at its own verb; a trust
   // grant joins this condition when D154 builds `--trust-cmds`.
-  if (via === 'affirmation' && (override || decision === 'stop')) {
-    renderRefusal([v('--via', 'nod-cannot', `affirmation with --${override ? 'override' : 'stop'}`,
+  if (via === 'affirmation' && (override || decision === 'stop' || trustCmds)) {
+    const which = override ? 'override' : decision === 'stop' ? 'stop' : 'trust-cmds'
+    renderRefusal([v('--via', 'nod-cannot', `affirmation with --${which}`,
       'a named option — overrides, stops and trust grants are never taken on a nod (D143)')])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
@@ -470,6 +492,18 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     lockR.value()
   }
 
+  // D154. After the decision is durable, never before: a refused or crashed decide must
+  // not leave a grant behind that nobody chose.
+  if (trustCmds) {
+    const granted = untrustedCmdsFor(root, criteriaOwner(canon, target))
+    if (granted.length > 0) {
+      grantCommands(root, granted)
+      journalTrust(ctx, root, target, granted, 'decide')
+      ctx.out(kv('trusted', granted.join(' · ')))
+    } else {
+      ctx.out(kv('trusted', 'nothing to grant — every cmd: criterion was already trusted'))
+    }
+  }
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}`))
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   for (const d of deferralEntries) {

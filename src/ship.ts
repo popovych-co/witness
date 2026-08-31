@@ -5,7 +5,8 @@ import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
-import { findById, loadCanon, type CanonDoc } from './scan.js'
+import { untrustedCmdsFor } from './allowlist.js'
+import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
@@ -235,7 +236,9 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     // block's `judge-first:` line matters most here: the battery judged the code against the
     // plan, and nothing judged the plan against the product.
     const up = gateSpec('ship')?.upstreamOf?.(root, canon, planId)
-    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale: false })
+    // D154. The ship gate runs criteria too, so its approve carries the same two prices.
+    const untrustedCmds = untrustedCmdsFor(root, criteriaOwner(canon, planId))
+    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale: false, untrustedCmds })
     if (d) renderDecision(d).forEach((l) => ctx.out(l))
     else ctx.out(cmd('help', liveExits('ship', planId, entries, false, up)))
     return EXIT.FINDINGS
