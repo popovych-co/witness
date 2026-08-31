@@ -33,6 +33,8 @@
 - Produces: `resolveStartBase(root: string, branch: string): Result<string>` in `src/gitio.ts` — returns `origin/<branch>` after a successful `git fetch origin <branch>`; returns the local `branch` when no remote is configured; **refuses** `fetch-failed` when a remote exists and the fetch fails (no silent local fallback — spec D137).
 - Consumes: `tryGit`, `refuse`, `v`.
 
+**Corrected while executing** (recorded not quietly fixed): the `fetch-failed` refusal carries a runnable remedy only when the fetch output says the ref is missing (`couldn't find remote ref` / `no such ref`). An unreachable host gets the `want` text and **no** `run:` line — `git push` fixes nothing there, and a rendered command that fixes nothing is the D129 defect D147's placeholder test exists to prevent. Also: the no-remote test must capture `main`'s tip **before** `start`, because `start`'s own status flip is a state commit and local main is one ahead of the cut point by the time the verb returns.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `tests/start.test.ts`:
@@ -210,6 +212,8 @@ Replace `diffBase`'s non-override body:
 **Interfaces:**
 - Produces: `syncCore(root: string, ctx: Ctx): { result: 'ok' | 'dirty' | 'no-upstream' | 'conflict' | 'push-rejected' | 'other'; detail?: string }` exported from `src/verbs/sync.ts` — runs pre-check + lock + pull --rebase + push, classifying with wave 1's `classifyPullFailure`; push rejection whose output matches `/protected/i` becomes `push-rejected` with the protected-branch cause named. `autoSync(root, ctx, stream, trigger)` wrapper: calls `syncCore`, prints `sync-auto: <result> …` on non-ok (a finding line, never a throw), and best-effort appends `{t:'sync', trigger, result}` to `stream`'s journal (skip silently if the txn is blocked — `journalRefusal`'s precedent, `src/verbs/write.ts:249`).
 - Consumes: wave 1 `classifyPullFailure`; `withTxn`/`appendEntry`.
+**Corrected while executing** (recorded not quietly fixed), three things. (1) `syncCore(root)` takes no `ctx` — it renders nothing, which is the whole point of the extraction; the verb is the renderer. (2) The outcome union gained `'locked'` and `'no-remote'` so the verb keeps its exact pre-existing exit codes (`EXIT.BLOCKED` on a held lock) instead of folding them into `'other'`. (3) **A repo with no remote short-circuits before the pull.** Without it, every `start` in a remoteless repo journaled a `no-upstream` "failure" and made a state commit for it — the same silence rule D139 already uses, since divergence needs a remote to exist; the explicit verb still refuses, because someone typed it. And the sync journal entry is pushed on its own after being written, so an automatic sync does not leave the commit it just made unpushed and trip D139's own ahead/behind finding on witness's bookkeeping.
+
 - Sequencing (spec D138): `autoSync` runs **outside** any held lock — in `stamp.ts` after the whole candidates loop and sweep, gated on `result.stamped.length > 0`; in `start.ts` as the first act of `run()` after config load, before `resolveStartBase` (its failure never blocks the cut — D137's decoupling clause).
 
 - [ ] **Step 1: Failing tests**
@@ -264,6 +268,8 @@ with `push-rejected` detail: `` `origin/${branch} rejects direct pushes (branch 
 **Files:**
 - Modify: `src/worktree.ts:192-196` (`removeWorktree`), callers: `src/stamp.ts:113,128`, `src/verbs/clean.ts:17-19`, `src/abandon.ts:130`
 - Test: `tests/start.test.ts` or a new `tests/worktree-remove.test.ts` (unit-level)
+
+**Corrected while executing:** the cwd test compares PATHS through `realpath`, not the plan's `relative()`-on-raw-strings — macOS `/tmp` and `/var` are symlinks (D134's trap), and `<worktree>-sibling` must not read as inside. `LazyResult` gained a `kept: string[]` so `next` and the dashboard can report what the sweep declined, beside the stale rows.
 
 **Interfaces:**
 - Produces: `removeWorktree(root: string, planId: string, cwd?: string): boolean` — returns `false` (and removes nothing) when `cwd` resolves inside the worktree path; callers pass `ctx.cwd` and print on `false`: `` ctx.out(kv('note', `worktree ${path} kept — this session stands in it; leave the directory and re-run`)) ``.
@@ -375,6 +381,8 @@ At the `:180` call site pass `{ primaryRoot, canonDirs }` from the gate's contex
 - Modify: `src/verbs/decide.ts` (accept `--via affirmation`, journal `selected: 'affirmation'`, refuse the exclusions), `plugin/commands/witness.md:41`, all six `plugin/skills/*/SKILL.md` ground rules, `tests/helpers.ts` (`SKILL_GROUND_RULES`)
 - Test: `tests/decide.test.ts`, `tests/skills.test.ts`, `tests/command.test.ts`
 
+**Corrected while executing**, caught by two repo invariants the plan did not anticipate. `tests/dead-fields.test.ts` requires every field on a `*Entry` interface to have a production reader: `selected` had none, and a field nothing reads cannot make anything "measurable rather than arguable" as D143 claims — it now feeds D130's recommender audit as a `nodded` column, subject still the rule and never the human. `tests/verb-usage.test.ts` requires `--help` and the verb's own usage string to agree, so `cli.ts`'s decide entry needed the same `[--via affirmation]`.
+
 **Interfaces:**
 - Produces: `witness decide <gate> <target> <exit> --via affirmation` → the `human-decision` entry gains `selected: 'affirmation'`. CLI-enforced exclusions (spec D143): `--via affirmation` combined with `--override`, `--stop`, `--trust-cmds` (T8), or on `witness abandon`, refuses `nod-cannot` — "this act requires naming the option".
 - Prose rule (all six skills + engine — **authorship split**, spec D143): a bare affirmation selects the **recommended option of a CLI-rendered decision block** and the agent appends `--via affirmation` to the printed command; for **agent-authored** questions (the brainstorm interview, the design converge step) an affirmation is plain conversational acceptance — no selection semantics, no flag; blocks without a recommendation, and the excluded acts, still require naming.
@@ -435,6 +443,8 @@ Engine `witness.md:41` gains the same affirmation clause (keep END-YOUR-TURN sen
 
 **Interfaces:**
 - Produces: `init --agent claude-code` merges into `.claude/settings.json`: `permissions.allow` gains `"Bash(npx -y @popovych.co/witness*)"` and `"Bash(witness *)"` — append-what's-missing, exactly the hooks' merge discipline; user-held entries untouched; idempotent.
+**Resolved while executing:** the pi half is **skipped with cause**. `settings` is declared only on the claude-code harness (`harness.ts` REGISTRY), so pi exposes no allowlist surface in witness's model; recorded in the DESIGN.md row rather than invented.
+
 - Pi half: **investigate first** — read `src/harness.ts`'s pi install block and pi's docs for a permission/allowlist surface. If pi has one, mirror the two entries; if not, add one sentence to the DESIGN.md row-144 annotation ("pi exposes no allowlist surface as of pi 0.83.0 — claude-code only") and skip. Do not invent a pi config shape.
 
 - [ ] **Step 1: Failing test**
@@ -484,6 +494,8 @@ Engine `witness.md:41` gains the same affirmation clause (keep END-YOUR-TURN sen
   - `witness trust <id> [--yes]`: lists the artifact's `cmd:` criteria with trust status; TTY prompts per command (`ctx.ask`, allowlist.ts's own idiom); non-TTY without `--yes` lists only (exit 1 findings); `--yes` grants all listed, journals `{t:'trust', cmds, via:'verb'}`.
   - `src/criteria.ts`: the `untrusted-blocked` refusal gains remedy `` `witness trust ${docId}` `` (runnable — D147 field), keeps `WITNESS_TRUST_CMDS=1` in the want text; and `loadConfig(runRoot)` becomes `loadConfig(opts.trustRoot ?? runRoot)` — **root unification** (trust list and runner config both read the primary root; D132 doctrine).
 
+**Corrected while executing:** the two approve forms are applied **once over the finished option list** (`withTrustVariants`, wrapping a renamed `recommendCore`) rather than at each of the five rules that offer an approve. `recommend` stays pure — the caller computes `untrustedCmds`. Two helpers were needed that the plan did not name: `criteriaOwner(canon, id)` in `scan.ts` (a plan gate judges a plan, but criteria live on its parent spec, so a trust surface keyed on the gate target alone lists nothing at exactly the gates that need it), and a `trustFor(ctx, target)` in `decide.ts` mirroring gate.ts's `renderChoices` — both render without a `root` in scope.
+
 - [ ] **Step 1: Failing tests** — three files:
 
 `tests/trust.test.ts`:
@@ -523,6 +535,8 @@ describe('witness trust (D154)', () => {
 ### Task 9: DESIGN.md — annotate the built rows
 
 **Files:** Modify `DESIGN.md` (rows 137, 138, 141, 142, 143, 144, 151, 154 from wave 1's T10).
+
+**Corrected while executing:** the annotation reads **Built on `d137-triage-wave-2`, not yet released** — 0.14.0 was never released and this branch is not merged, so "shipped as 0.15.0" would be a false statement in the design record, in a triage whose whole subject is statement honesty. The version lands with the release commit, which is the convention the wave-1 rows already follow.
 
 - [ ] **Step 1:** Update each row's trailing sentence from **decided here, ships in the behavior wave (not yet built)** to **Built and shipped as 0.15.0** plus one sentence per row for anything a probe corrected while building (the house convention — "recorded here rather than quietly fixed"). If nothing was corrected, say nothing extra.
 - [ ] **Step 2:** `pnpm vitest run` (guard against file damage).
