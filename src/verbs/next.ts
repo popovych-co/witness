@@ -741,7 +741,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
       return { line: `witness start ${String(plan.meta.id)}`, target: String(plan.meta.id) }
     }
   }
-  return { line: 'witness check' }
+  // Rule B — the ladder is exhausted. Same line as rule A (canon errors, the early
+  // return above) but a different state; the note is what tells them apart on screen
+  // (D157 — the missing note is what turned issue #21 from a one-command diagnosis
+  // into a filed bug).
+  return { line: 'witness check', ...noteOf('nothing is owed — no effort, spec or plan has a next step; a clean check confirms it') }
 }
 
 // Exported for `drive`, which claims a flow with the same `--flow` semantics `next` has:

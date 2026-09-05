@@ -52,4 +52,16 @@ describe('next — live specs re-enter the plan queue when an effort owes them',
     expect(r.stdout).not.toContain('witness write auth-refresh-plan-')
     expect(r.stdout).toMatch(/next: witness check/)
   })
+
+  it('the terminal check line says the queue is empty — distinguishable from canon errors', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const r = await repo.cli(['next'])
+    expect(r.stdout).toContain('next: witness check')
+    expect(r.stdout).toContain('nothing is owed')   // rule B carries a note; rule A stays bare
+  })
 })
