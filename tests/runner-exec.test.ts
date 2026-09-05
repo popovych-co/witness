@@ -1,8 +1,20 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { runFiltered } from '../src/runner.js'
+import { execCommand, runFiltered } from '../src/runner.js'
 import { breakSingleFixture, copyFixture, fakeCtx, fixtureEnv, tmpRepo, vitestBin } from './helpers.js'
+
+// D158 (#20). execSync at Node's 1 MiB default threw ENOBUFS into the catch, so a
+// chatty-but-GREEN suite was reported as a failed lane and blocked ship with a false red.
+describe('execCommand — output larger than Node default maxBuffer', () => {
+  it('reports exitZero for a green command whose stdout exceeds 1 MiB', () => {
+    const repo = tmpRepo()
+    const ctx = fakeCtx(repo.root, { env: fixtureEnv() })
+    const out = execCommand(repo.root, ctx, `node -e "process.stdout.write('x'.repeat(2*1024*1024))"`)
+    expect(out.exitZero).toBe(true)
+    expect(out.output.length).toBeLessThanOrEqual(4000)
+  })
+})
 
 const TEMPLATE = `node "${vitestBin()}" run -t "@spec:{id}" --passWithNoTests`
 
