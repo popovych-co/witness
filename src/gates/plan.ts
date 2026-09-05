@@ -3,7 +3,7 @@ import { serializeDoc } from '../fm.js'
 import { canonicalSha, short } from '../sha.js'
 import { latestRecap } from '../journal.js'
 import { baseForSpec } from '../history.js'
-import { findById } from '../scan.js'
+import { findById, plannableParent } from '../scan.js'
 import { effortOf, planPairSha } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput } from '../gate.js'
@@ -35,9 +35,7 @@ registerGate({
     checks.push({ name: 'schema', ok: schemaProblems.length === 0, detail: schemaProblems.slice(0, 5).join(' · ') })
 
     const parentStatus = String(parent.meta.status)
-    const parentOk = parent.meta.type === 'principles'
-      ? parentStatus === 'approved'
-      : parentStatus === 'approved' || parentStatus === 'live'
+    const parentOk = plannableParent(parent)
     checks.push({ name: 'parent-approved', ok: parentOk,
       detail: `${String(parent.meta.id)} is ${parentStatus}` })
 

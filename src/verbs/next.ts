@@ -4,7 +4,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
-import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
+import { findById, loadCanon, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
@@ -478,6 +478,22 @@ function liveOwner(
     .find((slug) => slug !== undefined)
 }
 
+// D157. The queue offered `<spec>-plan-1` unconditionally, which amends a DONE plan the
+// moment a spec earns a second slice. An abandoned id is re-authorable — `write` returns
+// it to draft — so the lowest abandoned suffix is offered back; otherwise the first
+// unused one. When this runs, the spec's plans are all done or abandoned by filter B.
+function nextPlanId(plans: CanonDoc[], spec: string): string {
+  const suffixed = plans
+    .map((p) => ({ id: String(p.meta.id), status: String(p.meta.status) }))
+    .filter((p) => p.id.startsWith(`${spec}-plan-`))
+    .map((p) => ({ n: Number(p.id.slice(`${spec}-plan-`.length)), status: p.status }))
+    .filter((p) => Number.isInteger(p.n) && p.n > 0)
+  const abandoned = suffixed.filter((p) => p.status === 'abandoned').map((p) => p.n)
+  if (abandoned.length > 0) return `${spec}-plan-${Math.min(...abandoned)}`
+  const taken = suffixed.map((p) => p.n)
+  return `${spec}-plan-${taken.length > 0 ? Math.max(...taken) + 1 : 1}`
+}
+
 // The stage rides with the line: routing to a recap is BRAINSTORM work, and a caller that
 // kept its own `stage: 'plan'` would hand the plan skill a recap command to run.
 function planWriteAction(
@@ -668,8 +684,20 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const s = String(doc.meta.status)
     return doc.meta.type === 'plan' ? s === 'done' : s === 'live' || doc.meta.type === 'principles'
   }
+  // D157. A spec is queued when the plan gate would accept it as a parent AND someone owes
+  // it a plan. `approved` is owed by definition (decompose just passed). `live` is owed
+  // only while a live effort that wrote it owns zero non-abandoned plans — efforts never
+  // auto-terminate, so without that clause every finished spec would queue forever.
+  // Reaching this rung proves decompose is settled: rung 6 returns first otherwise.
+  const owedByEffort = (id: string): boolean =>
+    efforts.some((e) => {
+      const w = effortWrites(root, e.slug)
+      if (!w.has(id)) return false
+      return !plans.some((p) => w.has(String(p.meta.id)) && String(p.meta.status) !== 'abandoned')
+    })
   const planless = canon.docs
-    .filter((d) => d.meta.type === 'spec' && String(d.meta.status) === 'approved')
+    .filter((d) => d.meta.type === 'spec' && plannableParent(d))
+    .filter((d) => String(d.meta.status) === 'approved' || owedByEffort(String(d.meta.id)))
     .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) &&
       !['done', 'abandoned'].includes(String(p.meta.status))))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
@@ -678,9 +706,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     // A spec whose plan write can actually be booked outranks one that needs a new effort
     // opened first — stalling the whole pipeline on a recap while runnable work sits behind
     // it is a worse answer, and alphabetical order alone does not know the difference.
-    const spec = planless.find((s) => liveOwner(root, efforts, `${s}-plan-1`, s) !== undefined)
+    const spec = planless.find((s) => liveOwner(root, efforts, nextPlanId(plans, s), s) !== undefined)
       ?? planless[0]!
-    const act = planWriteAction(root, efforts, `${spec}-plan-1`, spec, spec)
+    const act = planWriteAction(root, efforts, nextPlanId(plans, spec), spec, spec)
     if (planless.length <= 1) return act
     // The note said `multiple ready — choose: a b c`, which is a list, not a ranking: it
     // named the alternatives without saying which one to take or what taking another costs.

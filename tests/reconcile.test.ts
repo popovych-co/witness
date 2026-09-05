@@ -20,9 +20,10 @@ describe('dashboard reconcile section', () => {
     await repo.cli(['check', '--drift'], { env: fixtureEnv() })
     const one = await repo.cli([], { env: fixtureEnv() })
     expect(one.stdout).toContain('unconfirmed')
-    // computeNext's shared ladder (Task 17) has no reconcile-specific rung — it falls
-    // through to the generic catch-all here, replacing the old dashboard-only ladder.
-    expect(one.stdout).toContain('next: witness check')
+    // computeNext's shared ladder (Task 17) has no reconcile-specific rung. This fixture
+    // is a live spec a live effort wrote with zero plans — the owed shape D157 queues —
+    // so the generic answer is the plan write, not the old `witness check` catch-all.
+    expect(one.stdout).toContain('next: witness write auth-refresh-plan-1')
     await repo.cli(['check', '--drift'], { env: fixtureEnv() })
     const two = await repo.cli([], { env: fixtureEnv() })
     expect(two.stdout).toContain('reconcile[')
