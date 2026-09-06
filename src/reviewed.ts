@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { canonicalJson, canonicalSha, planContentSha } from './sha.js'
 import { changedFiles } from './evidence.js'
-import { git } from './gitio.js'
+import { git, tryGit } from './gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from './journal.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { findById } from './scan.js'
@@ -23,11 +23,36 @@ import { findById } from './scan.js'
 // dropping the path silently would make "this file is gone" invisible to the identity.
 const DELETED_BLOB = '(deleted)'
 
+// D161 (#27, corrected by the audit's F1/F4). A changed path can be a symlink, a gitlink
+// (submodule) or another non-file — entries `hash-object` fatals on or mis-hashes. Each
+// gets the value git itself would store, so every reviewable change moves the identity
+// and nothing else does:
+//  - symlink: the target STRING is git's blob — hash-object would FOLLOW the link and a
+//    retarget between byte-identical (or dangling) targets would vanish (F4);
+//  - inner repo: its HEAD — but only when the path IS its own repo. A cwd-based rev-parse
+//    walks upward and answers with the OUTER head for a plain directory, moving the
+//    identity on every commit and re-arming settled gates over identical diffs (F1);
+//  - staged gitlink with an uninitialized dir: the staged pointer itself;
+//  - anything else: a constant marker, like DELETED_BLOB, so presence still counts.
+function blobOf(runRoot: string, rel: string): string {
+  const abs = join(runRoot, rel)
+  const st = lstatSync(abs, { throwIfNoEntry: false })
+  if (!st) return DELETED_BLOB
+  if (st.isSymbolicLink()) return `(link)${readlinkSync(abs)}`
+  if (st.isFile()) return git(runRoot, 'hash-object', '--', rel)
+  if (existsSync(join(abs, '.git'))) {
+    const inner = tryGit(abs, 'rev-parse', 'HEAD')
+    if (inner.ok) return `(gitlink)${inner.out}`
+  }
+  const staged = tryGit(runRoot, 'ls-files', '--stage', '--', rel)
+  if (staged.ok && staged.out.startsWith('160000 ')) {
+    return `(gitlink)${staged.out.split(/\s+/)[1]}`
+  }
+  return '(non-file)'
+}
+
 export function diffReviewedSha(runRoot: string, base: string): string {
-  const pairs = changedFiles(runRoot, base).map((rel) =>
-    existsSync(join(runRoot, rel))
-      ? `${rel}\0${git(runRoot, 'hash-object', '--', rel)}`
-      : `${rel}\0${DELETED_BLOB}`)
+  const pairs = changedFiles(runRoot, base).map((rel) => `${rel}\0${blobOf(runRoot, rel)}`)
   return sha256([base, '\n', pairs.sort().join('\n')])
 }
 

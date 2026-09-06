@@ -22,6 +22,12 @@ export interface BaseResolution {
   planId?: string
 }
 
+// D160 audit note: a batched `git log --name-only` replacement for the per-plan
+// `git log -1` below was written and REVERTED — merge commits print no name list and
+// multi-path pathspecs change history simplification, so the batch disagreed with the
+// per-file shape in both directions (a different pin than `witness diff` resolves — the
+// exact second derivation this row exists to forbid). The per-plan spawn cost on idle
+// `next`/`status` turns is accepted and recorded in Open / deferred.
 export function baseForSpec(root: string, canon: Canon, specId: string, excludePlanId?: string): BaseResolution {
   const candidates = canon.docs.filter(
     (d) =>

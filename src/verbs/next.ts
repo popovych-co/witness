@@ -701,10 +701,12 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   }
   const planless = canon.docs
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
-    .filter(unrealizedDelta)
     .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) &&
       !['done', 'abandoned'].includes(String(p.meta.status))))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
+    // last on purpose: the only filter that costs a subprocess — the in-memory ones above
+    // discard for free, and all four are pure predicates over an intersection
+    .filter(unrealizedDelta)
     .map((d) => String(d.meta.id)).sort()
   if (planless.length > 0) {
     // A spec whose plan write can actually be booked outranks one that needs a new effort
