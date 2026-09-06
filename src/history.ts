@@ -28,6 +28,10 @@ export function baseForSpec(root: string, canon: Canon, specId: string, excludeP
       d.meta.type === 'plan' &&
       d.meta.parent === specId &&
       typeof d.meta['derives-from'] === 'string' &&
+      // D160. A withdrawn plan is not a realization: counting an abandoned plan's pin as
+      // the base would report `delta: none` for content nothing ever implemented, and
+      // would hide the spec from the plan queue that keys on this same derivation.
+      String(d.meta.status) !== 'abandoned' &&
       d.meta.id !== excludePlanId,
   )
   if (candidates.length === 0) return { kind: 'empty' }
