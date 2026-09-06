@@ -8,6 +8,8 @@ import { findById, loadCanon, plannableParent, type Canon, type CanonDoc } from 
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
+import { baseForSpec } from '../history.js'
+import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
@@ -390,7 +392,10 @@ export function readyChoice(canon: Canon, ready: string[]): Decision {
           ? {
               why: flat
                 ? 'the dependency graph does not distinguish these — ranked by ui flag, then by id'
-                : `${n} of the ${ready.length} ready specs depend on it directly; planning it later means re-planning them`,
+                // D160 (#25, cosmetic): the count is direct dependents across all of canon
+                // (human-checkable in frontmatter, D121) — not a subset of the ready list,
+                // so the sentence must not claim one.
+                : `${n} canon doc(s) depend on it directly; planning it later means re-planning them`,
               judgeFirst: 'which slice matters this week. This ranks the dependency graph, which is all the CLI can see — product priority outranks it',
             }
           : {
@@ -684,20 +689,19 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     const s = String(doc.meta.status)
     return doc.meta.type === 'plan' ? s === 'done' : s === 'live' || doc.meta.type === 'principles'
   }
-  // D157. A spec is queued when the plan gate would accept it as a parent AND someone owes
-  // it a plan. `approved` is owed by definition (decompose just passed). `live` is owed
-  // only while a live effort that wrote it owns zero non-abandoned plans — efforts never
-  // auto-terminate, so without that clause every finished spec would queue forever.
+  // D157/D160. A spec is queued when the plan gate would accept it as a parent AND its
+  // content has moved past the last plan's pin — the same base derivation `witness diff`
+  // prints, because the effort ledger is not a readiness signal: an amendment can be
+  // realized by a plan booked under a different effort (issue #25), and a plan count of
+  // zero proves nothing either way. No pin at all means never realized, which is owed.
   // Reaching this rung proves decompose is settled: rung 6 returns first otherwise.
-  const owedByEffort = (id: string): boolean =>
-    efforts.some((e) => {
-      const w = effortWrites(root, e.slug)
-      if (!w.has(id)) return false
-      return !plans.some((p) => w.has(String(p.meta.id)) && String(p.meta.status) !== 'abandoned')
-    })
+  const unrealizedDelta = (d: CanonDoc): boolean => {
+    const base = baseForSpec(root, canon, String(d.meta.id))
+    return base.kind === 'empty' || base.sha !== canonicalSha(d.meta, d.body)
+  }
   const planless = canon.docs
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
-    .filter((d) => String(d.meta.status) === 'approved' || owedByEffort(String(d.meta.id)))
+    .filter(unrealizedDelta)
     .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) &&
       !['done', 'abandoned'].includes(String(p.meta.status))))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))

@@ -327,7 +327,7 @@ describe('next and recover rank their own choices', () => {
     expect(ranked).toHaveLength(3)
     // token-store is the one two others derive from, so planning it later re-plans them
     expect(n.stdout).toMatch(/1 · recommended · root\n {3}token-store/)
-    expect(n.stdout).toContain('2 of the 3 ready specs depend on it directly')
+    expect(n.stdout).toContain('2 canon doc(s) depend on it directly')
     expect(n.stdout).toContain('judge-first: which slice matters this week')
   })
 

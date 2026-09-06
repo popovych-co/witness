@@ -58,6 +58,18 @@ describe('witness diff', () => {
     expect(res.stdout).toContain('no delta')
   })
 
+  // D160. A withdrawn plan is not a realization: with only an abandoned plan on record,
+  // the base is empty — the same answer the plan queue keys on.
+  it('ignores an abandoned plan when resolving the base', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    seedPlanPinnedAt(repo, currentSha(repo, 'specs/auth-refresh.md'))
+    repo.flipStatus('auth-refresh-plan-1', 'abandoned')
+    const res = await repo.cli(['diff', 'auth-refresh'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('base: empty')
+  })
+
   it('fails loud on an unresolvable pin', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
