@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs'
+import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { sourceTags } from '../src/matcher.js'
@@ -30,6 +30,32 @@ describe('sourceTags', () => {
     repo.write('fixtures/deep/x.test.ts', 'it("x @spec:auth-refresh")\n')
     const out = sourceTags(repo.root, ['specs/**', 'fixtures/**'])
     expect(out.counts.get('auth-refresh')).toBeUndefined()
+  })
+
+  // D159 (#23). The listing is paths, not files: `--others` includes a symlink to a
+  // directory (how `skills add` wires .pi/skills → .agents/skills), and `--cached`
+  // includes a gitlink (submodule, mode 160000) that exists on disk as a directory.
+  // statSync follows the link, a directory's size clears the cap, and readFileSync
+  // threw EISDIR — surfacing as unexpected-error and taking check and the implement
+  // gate with it.
+  it('skips a symlink to a directory instead of crashing', () => {
+    const repo = tmpRepo()
+    repo.write('.agents/skills/witness-plan/SKILL.md', 'run @spec:auth-refresh\n')
+    symlinkSync('.agents/skills/witness-plan', join(repo.root, 'skills-link'))
+    const out = sourceTags(repo.root, [])
+    expect(out.counts.get('auth-refresh')).toBe(1)   // counted once, via the real path
+    expect(out.files.get('auth-refresh')).toEqual(['.agents/skills/witness-plan/SKILL.md'])
+  })
+
+  it('skips a gitlink (submodule directory) in the cached listing', () => {
+    const repo = tmpRepo()
+    repo.write('seed.ts', 'it("x @spec:quota")\n')
+    repo.git('add', 'seed.ts')
+    repo.git('commit', '-m', 'seed')
+    repo.git('update-index', '--add', '--cacheinfo', `160000,${repo.git('rev-parse', 'HEAD')},vendor`)
+    mkdirSync(join(repo.root, 'vendor'))
+    const out = sourceTags(repo.root, [])
+    expect(out.counts.get('quota')).toBe(1)
   })
 
   it('skips binary files and files deleted from disk but still tracked', () => {

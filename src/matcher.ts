@@ -44,7 +44,14 @@ export function sourceTags(root: string, excludes: string[]): SourceTags {
   for (const rel of new Set(listed)) {
     if (skip.some((re) => re.test(rel))) continue
     const abs = join(root, rel)
-    if (!existsSync(abs) || statSync(abs).size > MAX_SCAN_BYTES) continue
+    if (!existsSync(abs)) continue
+    // D159 (#23). The listing is paths, not files: `--cached` includes a gitlink
+    // (submodule, mode 160000) and `--others` a symlink to a directory (skills-add
+    // wiring) — both stat as directories whose size clears the cap, and readFileSync
+    // threw EISDIR. Same isFile() guard codePromptBody applies to untracked paths;
+    // first shipped as a hand patch in a consumer's npx cache, upstreamed here.
+    const st = statSync(abs)
+    if (!st.isFile() || st.size > MAX_SCAN_BYTES) continue
     const content = readFileSync(abs, 'utf8')
     if (content.includes('\0')) continue
     for (const tag of extractCanonicalTags(content)) {
