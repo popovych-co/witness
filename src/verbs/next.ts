@@ -8,7 +8,7 @@ import { findById, loadCanon, plannableParent, type Canon, type CanonDoc } from 
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
-import { baseForSpec, planStamps } from '../history.js'
+import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
@@ -695,13 +695,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // realized by a plan booked under a different effort (issue #25), and a plan count of
   // zero proves nothing either way. No pin at all means never realized, which is owed.
   // Reaching this rung proves decompose is settled: rung 6 returns first otherwise.
-  // One spawn for the whole rung (D160 amendment): the base resolution needs each plan's
-  // last-commit epoch, and per-plan `git log -1` here is one spawn per shipped plan on
-  // every idle turn, forever. Built lazily — only when a spec survives the free filters.
-  let stamps: Map<string, number> | undefined
   const unrealizedDelta = (d: CanonDoc): boolean => {
-    stamps ??= planStamps(root, plans.map((p) => p.rel))
-    const base = baseForSpec(root, canon, String(d.meta.id), undefined, stamps)
+    const base = baseForSpec(root, canon, String(d.meta.id))
     return base.kind === 'empty' || base.sha !== canonicalSha(d.meta, d.body)
   }
   const planless = canon.docs

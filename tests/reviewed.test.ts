@@ -74,6 +74,45 @@ describe('diffReviewedSha', () => {
     expect(diffReviewedSha(repo.root, base)).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  // Audit F1. A plain directory (or symlinked dir) has no repo of its own — resolving it
+  // through a cwd-based rev-parse answers with the OUTER head, so the identity moved on
+  // every commit and a settled gate re-armed over a byte-identical diff (row 96a's hole).
+  it('keeps the identity stable across an outer commit when a non-repo dir is listed', async () => {
+    const { repo, base } = await diffRepo()
+    mkdirSync(join(repo.root, '.agents', 'skills', 'witness-plan'), { recursive: true })
+    symlinkSync('.agents/skills/witness-plan', join(repo.root, 'skills-link'))
+    repo.write('src/token.ts', 'export const ttl = 2\n')
+    const settled = diffReviewedSha(repo.root, base)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'feat: the reviewed work, committed')   // same files, same blobs
+    expect(diffReviewedSha(repo.root, base)).toBe(settled)
+  })
+
+  // Audit F4. git stores a symlink as a blob of its target STRING; hash-object follows it
+  // and hashes the target's bytes, so a retarget between byte-identical targets would
+  // vanish from the identity — a reviewable change the completeness contract must count.
+  it('moves the identity when a symlink is retargeted between byte-identical targets', async () => {
+    const { repo, base } = await diffRepo()
+    repo.write('conf/prod.env', 'PORT=3000\n')
+    repo.write('conf/dev.env', 'PORT=3000\n')                        // byte-identical
+    symlinkSync('conf/prod.env', join(repo.root, 'active.env'))
+    const before = diffReviewedSha(repo.root, base)
+    rmSync(join(repo.root, 'active.env'))
+    symlinkSync('conf/dev.env', join(repo.root, 'active.env'))
+    expect(diffReviewedSha(repo.root, base)).not.toBe(before)
+  })
+
+  it('counts a staged gitlink whose submodule dir is uninitialized', async () => {
+    const { repo, base } = await diffRepo()
+    mkdirSync(join(repo.root, 'vendor'))                             // no inner .git
+    repo.git('update-index', '--add', '--cacheinfo',
+      `160000,${repo.git('rev-parse', 'HEAD')},vendor`)
+    const one = diffReviewedSha(repo.root, base)
+    expect(one).toMatch(/^[0-9a-f]{64}$/)
+    repo.git('commit', '--allow-empty', '-m', 'outer advance')       // stability half
+    expect(diffReviewedSha(repo.root, base)).toBe(one)
+  })
+
   it('counts an untracked file — it is part of what the reviewers were shown', async () => {
     const { repo, base } = await diffRepo()
     const before = diffReviewedSha(repo.root, base)
