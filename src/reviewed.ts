@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { canonicalJson, canonicalSha, planContentSha } from './sha.js'
 import { changedFiles } from './evidence.js'
-import { git } from './gitio.js'
+import { git, tryGit } from './gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from './journal.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { findById } from './scan.js'
@@ -23,11 +23,20 @@ import { findById } from './scan.js'
 // dropping the path silently would make "this file is gone" invisible to the identity.
 const DELETED_BLOB = '(deleted)'
 
+// D161 (#27). A changed path can be a gitlink (submodule) or a symlink to a directory —
+// entries `hash-object` fatals on. A submodule bump is reviewable change, so the identity
+// proxies it through the inner HEAD (exactly the pointer under review); any other
+// non-file gets a marker, like DELETED_BLOB, so its presence still counts.
+function blobOf(runRoot: string, rel: string): string {
+  const abs = join(runRoot, rel)
+  if (!existsSync(abs)) return DELETED_BLOB
+  if (statSync(abs).isFile()) return git(runRoot, 'hash-object', '--', rel)
+  const inner = tryGit(abs, 'rev-parse', 'HEAD')
+  return inner.ok ? `(gitlink)${inner.out}` : '(non-file)'
+}
+
 export function diffReviewedSha(runRoot: string, base: string): string {
-  const pairs = changedFiles(runRoot, base).map((rel) =>
-    existsSync(join(runRoot, rel))
-      ? `${rel}\0${git(runRoot, 'hash-object', '--', rel)}`
-      : `${rel}\0${DELETED_BLOB}`)
+  const pairs = changedFiles(runRoot, base).map((rel) => `${rel}\0${blobOf(runRoot, rel)}`)
   return sha256([base, '\n', pairs.sort().join('\n')])
 }
 

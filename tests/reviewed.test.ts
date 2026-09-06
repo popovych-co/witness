@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { changedFiles } from '../src/evidence.js'
 import { diffReviewedSha, effortReviewedSha, effortSpecs, planPairSha } from '../src/reviewed.js'
@@ -43,6 +44,34 @@ describe('diffReviewedSha', () => {
     const present = diffReviewedSha(repo.root, base)
     rmSync(join(repo.root, 'src', 'token.ts'))
     expect(diffReviewedSha(repo.root, base)).not.toBe(present)
+  })
+
+  // D161 (#27). A changed path can be a gitlink — a directory on disk that hash-object
+  // fatals on. A submodule bump is reviewable change, so it must MOVE the identity, not
+  // crash it and not vanish from it.
+  it('proxies a changed gitlink through the inner HEAD instead of throwing', async () => {
+    const { repo, base } = await diffRepo()
+    const vendor = join(repo.root, 'vendor')
+    mkdirSync(vendor)
+    const gitIn = (...args: string[]) => execFileSync('git', args, { cwd: vendor, encoding: 'utf8' }).trim()
+    gitIn('init', '-b', 'main')
+    gitIn('config', 'user.name', 'test')
+    gitIn('config', 'user.email', 'test@example.com')
+    gitIn('config', 'commit.gpgsign', 'false')
+    gitIn('commit', '--allow-empty', '-m', 'inner v1')
+    repo.git('update-index', '--add', '--cacheinfo', `160000,${gitIn('rev-parse', 'HEAD')},vendor`)
+    const one = diffReviewedSha(repo.root, base)         // crashed `fatal: Unable to hash vendor`
+    expect(one).toMatch(/^[0-9a-f]{64}$/)
+    gitIn('commit', '--allow-empty', '-m', 'inner v2')   // the pointer bump under review
+    repo.git('update-index', '--add', '--cacheinfo', `160000,${gitIn('rev-parse', 'HEAD')},vendor`)
+    expect(diffReviewedSha(repo.root, base)).not.toBe(one)
+  })
+
+  it('marks a symlink to a directory instead of throwing on it', async () => {
+    const { repo, base } = await diffRepo()
+    mkdirSync(join(repo.root, '.agents', 'skills', 'witness-plan'), { recursive: true })
+    symlinkSync('.agents/skills/witness-plan', join(repo.root, 'skills-link'))
+    expect(diffReviewedSha(repo.root, base)).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('counts an untracked file — it is part of what the reviewers were shown', async () => {
