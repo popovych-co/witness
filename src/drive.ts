@@ -57,11 +57,12 @@ export function classifyAction(action: NextAction, root: string): DriveStep {
   if (line.includes('merge PR') || (action.note?.includes('merge PR') ?? false)) {
     return { kind: 'merge', line: action.note?.includes('merge PR') ? action.note : line }
   }
-  // `witness check` is computeNext's terminal answer. It carries two states that the
-  // action alone cannot tell apart — nothing to route, and canon errors that stopped
-  // routing early — so idle PRINTS the line rather than swallowing it: a human who sees
-  // `drive: idle — witness check` runs the verb that distinguishes them. Spawning a
-  // session to guess would burn a context on a diagnosis one command answers.
+  // `witness check` is computeNext's terminal answer in two states: canon errors that
+  // stopped routing early (bare line), and an exhausted ladder (line + a "nothing is
+  // owed" note, D157). Idle PRINTS the line rather than swallowing it: a human who sees
+  // `drive: idle — witness check` runs the verb, and the note has already told the
+  // routed session which state it is in. Spawning a session to guess would burn a
+  // context on a diagnosis one command answers.
   if (line === 'witness check' && action.stage === undefined) return { kind: 'idle' }
   return { kind: 'spawn', home: action.home ?? root, stage: action.stage, target: action.target, model: action.model }
 }

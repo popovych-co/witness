@@ -2,9 +2,33 @@ import { describe, expect, it } from 'vitest'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  auditStateCommits, dirtyStatePaths, primaryRoot, stateCommit, stateDirs, TRAILER,
+  auditStateCommits, dirtyStatePaths, git, primaryRoot, stateCommit, stateDirs, TRAILER, tryGit,
 } from '../src/gitio.js'
 import { tmpRepo } from './helpers.js'
+
+// D158 (#20). Node's spawnSync default maxBuffer is 1 MiB; a reviewer-bound diff is
+// legitimately larger. git() must return big payloads intact, and tryGit must not
+// launder the overflow into a silent { ok: false }.
+describe('git — output larger than Node default maxBuffer', () => {
+  it('returns a >1 MiB payload intact instead of throwing ENOBUFS', () => {
+    const repo = tmpRepo()
+    repo.write('big.txt', 'x'.repeat(2 * 1024 * 1024))
+    repo.git('add', 'big.txt')
+    repo.git('commit', '-m', 'big blob')
+    const out = git(repo.root, 'show', 'HEAD:big.txt')
+    expect(out.length).toBe(2 * 1024 * 1024)
+  })
+
+  it('tryGit succeeds on the same payload', () => {
+    const repo = tmpRepo()
+    repo.write('big.txt', 'y'.repeat(2 * 1024 * 1024))
+    repo.git('add', 'big.txt')
+    repo.git('commit', '-m', 'big blob')
+    const r = tryGit(repo.root, 'show', 'HEAD:big.txt')
+    expect(r.ok).toBe(true)
+    expect(r.out.length).toBe(2 * 1024 * 1024)
+  })
+})
 
 describe('primaryRoot', () => {
   it('resolves the repo root and refuses outside a repo', () => {

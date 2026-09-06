@@ -3,11 +3,18 @@ import { dirname } from 'node:path'
 import { canonPaths } from './config.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
+// D158 (#20). A reviewer-bound diff is legitimately multi-megabyte and Node's spawnSync
+// default is 1 MiB, which crashed ship/gate as `spawnSync git ENOBUFS` — and, worse,
+// silently truncated every tryGit consumer into a wrong answer. Sized like reviewer.ts's
+// 64 MiB and ship.ts's 16 MiB; V8's string ceiling bounds any sync read regardless.
+const GIT_MAX_BUFFER = 256 * 1024 * 1024
+
 export function git(root: string, ...args: string[]): string {
   return execFileSync('git', args, {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: GIT_MAX_BUFFER,
   }).replace(/\n$/, '')
 }
 

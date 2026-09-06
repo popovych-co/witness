@@ -57,7 +57,10 @@ export interface RunOutcome {
 
 export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
   try {
-    const out = execSync(cmd, { cwd: runRoot, env: ctx.env as NodeJS.ProcessEnv, stdio: 'pipe' })
+    // D158. Suite stdout is unbounded and only the last 4000 chars are kept — but at
+    // Node's 1 MiB default a chatty GREEN suite threw ENOBUFS into the catch and read
+    // as a failed lane. 64 MiB: the same bound the reviewer spawn uses.
+    const out = execSync(cmd, { cwd: runRoot, env: ctx.env as NodeJS.ProcessEnv, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 })
     return { exitZero: true, output: String(out).slice(-4000) }
   } catch (e) {
     const err = e as { stdout?: unknown; stderr?: unknown }

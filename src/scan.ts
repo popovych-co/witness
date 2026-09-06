@@ -59,6 +59,14 @@ export function findById(canon: Canon, id: string): CanonDoc | undefined {
   return canon.docs.find((d) => d.meta.id === id)
 }
 
+// D157. The one derivation of "this doc can parent a plan today". `verbs/next.ts`'s
+// queue and `gates/plan.ts`'s parent check both consume it; a second derivation is the
+// drift that left `next` refusing to emit the exact command the gate accepts (issue #21).
+export function plannableParent(doc: CanonDoc): boolean {
+  const s = String(doc.meta.status)
+  return doc.meta.type === 'principles' ? s === 'approved' : s === 'approved' || s === 'live'
+}
+
 export function findCycle(canon: Canon, extra?: { id: string; depends: string[] }): string[] | undefined {
   const deps = new Map<string, string[]>()
   for (const d of canon.docs) {

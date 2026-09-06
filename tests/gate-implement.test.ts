@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -86,5 +86,25 @@ describe('implement gate', () => {
     const { repo } = await shippableRepo()
     const r = await repo.cli(['gate', 'implement', 'no-such-plan'])
     expect(r.code).toBe(2)
+  })
+
+  it('a >1 MiB diff reaches the reviewer instead of crashing the gate (D158, #20)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    // 1.5 MB of committed change — over Node's 1 MiB spawnSync default, the shape that
+    // returned `spawnSync git ENOBUFS` as an unexpected-error refusal (exit 2).
+    writeFileSync(join(wt, 'src', 'generated.ts'), `export const BLOB = '${'z'.repeat(1_500_000)}'\n`)
+    execFileSync('git', ['add', '-A'], { cwd: wt })
+    execFileSync('git', ['commit', '-m', 'big change'], { cwd: wt })
+    const cfg = loadConfig(repo.root)
+    const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
+    const files = changedFiles(wt, base.ok ? base.value : '')
+    const scenario = fakeScenario()
+    putVerdict(scenario, treeClean(files))
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const code = await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    expect(code).not.toBe(2)                       // never the unexpected-error refusal
+    const stdin = readFileSync(join(scenario, 'claude-calls', 'call-1', 'stdin'), 'utf8')
+    expect(stdin.length).toBeGreaterThan(1_048_576)  // the full diff actually arrived
+    expect(stdin).toContain('### Diff vs base')
   })
 })
