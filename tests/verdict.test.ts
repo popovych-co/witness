@@ -50,6 +50,72 @@ describe('code anchors', () => {
     expect(resolveAnchor('src/token.ts:42', t)).toContain('line numbers')
     expect(resolveAnchor('../etc/passwd', t)).toContain('escapes')
   })
+
+  // D162 (issue #29). The coverage floor counts every path the diff lists, but the resolver
+  // accepted only regular files on disk — so a submodule pointer (a directory), a deleted
+  // file (nothing on disk) or a symlink to a directory sat inside the floor and outside the
+  // resolver, and no verdict could satisfy both. A changed path IS reviewed content: its
+  // diff hunk is in the prompt. Bare path resolves; a symbol still needs a file body.
+  it('resolves a changed path by bare path whatever is on disk — gitlink, deleted, directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'verdict-changed-'))
+    mkdirSync(join(root, 'src'), { recursive: true })
+    mkdirSync(join(root, 'vendor'))                                   // a submodule checkout: a directory
+    writeFileSync(join(root, 'src/token.ts'), 'export function rotateToken() {}\n')
+    const t: Reviewed = { kind: 'tree', root, files: ['src/gone.ts', 'src/token.ts', 'vendor'] }
+    expect(resolveAnchor('vendor', t)).toBeUndefined()
+    expect(resolveAnchor('src/gone.ts', t)).toBeUndefined()            // deleted: absent on disk, present in the diff
+    expect(resolveAnchor('vendor#rotateToken', t)).toContain('bare path')
+    expect(resolveAnchor('src/gone.ts#rotateToken', t)).toContain('bare path')
+    expect(resolveAnchor('src/other.ts', t)).toContain('no file')     // unchanged AND absent: still a stranger
+    expect(resolveAnchor({ kind: 'omission', scope: 'src/gone.ts' }, t)).toBeUndefined()
+    const full = { coverage: t.files.map((f) => ({ anchor: f, note: 'read' })), findings: [] }
+    expect(verdictViolations(full, t)).toEqual([])
+  })
+})
+
+// The invariant the D162 fix restores, stated against real git output rather than a
+// hand-listed `files`: every path `changedFiles` counts toward the floor must resolve as a
+// bare coverage anchor, or the floor is unsatisfiable by construction and the round
+// malforms forever (the reporter re-ran four times, added a file, calibrated, forced
+// --fresh: the shortfall was invariantly one).
+describe('every changed path is coverable (D162)', () => {
+  it('a submodule pointer move, a deletion and a symlinked directory all anchor', async () => {
+    const { changedFiles } = await import('../src/evidence.js')
+    const { execFileSync } = await import('node:child_process')
+    const { rmSync, symlinkSync } = await import('node:fs')
+    const root = mkdtempSync(join(tmpdir(), 'verdict-git-'))
+    const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+    const init = (cwd: string) => {
+      g(cwd, 'init', '-b', 'main')
+      g(cwd, 'config', 'user.name', 'test'); g(cwd, 'config', 'user.email', 'test@example.com')
+      g(cwd, 'config', 'commit.gpgsign', 'false')
+    }
+    init(root)
+    mkdirSync(join(root, 'src'))
+    writeFileSync(join(root, 'src/token.ts'), 'export const ttl = 1\n')
+    writeFileSync(join(root, 'src/gone.ts'), 'export const gone = 1\n')
+    const vendor = join(root, 'vendor')
+    mkdirSync(vendor)
+    init(vendor)
+    g(vendor, 'commit', '--allow-empty', '-m', 'inner v1')
+    g(root, 'update-index', '--add', '--cacheinfo', `160000,${g(vendor, 'rev-parse', 'HEAD')},vendor`)
+    g(root, 'add', 'src')
+    g(root, 'commit', '-m', 'base')
+    const base = g(root, 'rev-parse', 'HEAD')
+
+    g(vendor, 'commit', '--allow-empty', '-m', 'inner v2')          // the pin move under review
+    g(root, 'update-index', '--add', '--cacheinfo', `160000,${g(vendor, 'rev-parse', 'HEAD')},vendor`)
+    rmSync(join(root, 'src/gone.ts'))
+    symlinkSync('src', join(root, 'src-link'))                       // untracked symlink to a directory
+    writeFileSync(join(root, 'src/token.ts'), 'export const ttl = 2\n')
+
+    const files = changedFiles(root, base)
+    expect(files).toEqual(['src-link', 'src/gone.ts', 'src/token.ts', 'vendor'])
+    const reviewed: Reviewed = { kind: 'tree', root, files }
+    for (const f of files) expect(resolveAnchor(f, reviewed), f).toBeUndefined()
+    const full = { coverage: files.map((f) => ({ anchor: f, note: 'read' })), findings: [] }
+    expect(verdictViolations(full, reviewed)).toEqual([])
+  })
 })
 
 describe('verdictViolations — fail-closed', () => {

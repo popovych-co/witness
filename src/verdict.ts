@@ -123,7 +123,7 @@ function safeRel(rel: string): boolean {
 }
 
 function resolveCodeAnchor(
-  anchor: string, root: string, canon?: { root: string; dirs: string[] },
+  anchor: string, root: string, files: string[], canon?: { root: string; dirs: string[] },
 ): string | undefined {
   if (/[:#]L?\d+$/.test(anchor)) return 'line numbers refused — they drift across revisions; use file#symbol'
   const [file = '', symbol] = anchor.split('#', 2)
@@ -133,7 +133,16 @@ function resolveCodeAnchor(
   // from two trees. Code paths keep the reviewed tree, which is the thing under judgment.
   const isCanon = canon !== undefined && canon.dirs.some((d) => file === d || file.startsWith(`${d}/`))
   const abs = join(isCanon ? canon.root : root, file)
-  if (!existsSync(abs) || !statSync(abs).isFile()) return `no file ${file} in the reviewed tree`
+  if (!existsSync(abs) || !statSync(abs).isFile()) {
+    // D162 (issue #29). The coverage floor counts every path the diff lists, so every one
+    // of them must be anchorable or the floor is unsatisfiable by construction: a submodule
+    // pointer is a directory, a deleted file is nothing, a symlink can point at a directory
+    // — and each is reviewed content, its hunk in the prompt. The bare path resolves; a
+    // symbol still needs a file body to be found in.
+    if (!files.includes(file)) return `no file ${file} in the reviewed tree`
+    if (symbol === undefined) return undefined
+    return `${file} is a changed path with no file body in the reviewed tree (a submodule pointer, a deleted file, or a directory) — anchor it by bare path`
+  }
   if (symbol !== undefined) {
     const re = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
     if (!re.test(readFileSync(abs, 'utf8'))) return `symbol "${symbol}" not found in ${file}`
@@ -186,6 +195,9 @@ export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string |
     }
     if (scope === '.') return undefined
     if (!safeRel(scope)) return `omission scope escapes the reviewed tree: ${scope}`
+    // D162: a changed path is reviewed content even when nothing is left on disk (a deleted
+    // file's un-migrated export is an omission scoped exactly there).
+    if (reviewed.kind === 'tree' && reviewed.files.includes(scope)) return undefined
     return existsSync(join(reviewed.root, scope))
       ? undefined
       : `omission scope "${scope}" is no file or directory in the reviewed tree`
@@ -194,7 +206,7 @@ export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string |
     const canon = reviewed.canonRoot !== undefined && reviewed.canonDirs !== undefined
       ? { root: reviewed.canonRoot, dirs: reviewed.canonDirs }
       : undefined
-    return resolveCodeAnchor(anchor, reviewed.root, canon)
+    return resolveCodeAnchor(anchor, reviewed.root, reviewed.files, canon)
   }
   const segments = anchor.split(' > ')
   if (!segments[0]!.startsWith('#')) {

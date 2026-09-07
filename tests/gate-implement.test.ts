@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -34,6 +34,30 @@ describe('implement gate', () => {
     expect(entry!.reviewed_sha).toMatch(/^[0-9a-f]{64}$/)          // row 96: sha256 over base + the diff's blobs
     expect(entry!.checks.find((c) => c.name === 'evidence')!.ok).toBe(true)
     expect(entry!.checks.find((c) => c.name === 'drift-lane')!.ok).toBe(true)
+  })
+
+  // D162 (issue #29), the field shape: a plan whose diff carries a submodule pointer. The
+  // gitlink is a changed path (the floor counts it, D161's identity hashes it) that no
+  // reviewer could anchor, so the battery was short by exactly one anchor on every round
+  // and the round malformed for free, forever — re-run, calibrate and --fresh all stayed
+  // byte-identical. A pin move is reviewable as what it is: the path, with the diff's
+  // `Subproject commit` hunk as the evidence.
+  it('a diff carrying a submodule pointer passes when the verdict anchors the gitlink by path', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    mkdirSync(join(wt, 'vendor'))
+    execFileSync('git', ['update-index', '--add', '--cacheinfo',
+      `160000,${execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()},vendor`], { cwd: wt })
+    const cfg = loadConfig(repo.root)
+    const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
+    const files = changedFiles(wt, base.ok ? base.value : '')
+    expect(files).toContain('vendor')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: files.map((f) => ({ anchor: f, note: 'read' })), findings: [] })
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(0)
+    const [entry] = runs(repo, planId)
+    expect(entry!.outcome).toBe('passed')
+    expect(entry!.malformed).toBeUndefined()
   })
 
   it('a code-only revise changes the reviewed sha — the stale-verdict bug stays dead', async () => {
