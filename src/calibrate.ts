@@ -10,10 +10,11 @@ import { changedFiles, diffBase, evidenceForDiff } from './evidence.js'
 import { readDoc, splitDoc, writeDoc } from './fm.js'
 import { git, stateCommit } from './gitio.js'
 import type { Harness, HarnessName } from './harness.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { PROMPT_NAMES, invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
 import type { InvokeExtras } from './reviewer.js'
 import { findById, loadCanon } from './scan.js'
+import { resolveSpawn } from './spawn.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import { createWorktree } from './worktree.js'
 
@@ -512,11 +513,18 @@ export type AgentRunner = (ctx: Ctx, harness: Harness, worktree: string, prompt:
 // a pure-pi user, the residual the routing decision exists to kill.
 export async function defaultAgent(ctx: Ctx, harness: Harness, worktree: string, prompt: string): Promise<void> {
   const { cmd, args, env } = harness.worker.spawn(prompt)
-  spawnSync(cmd, args, {
+  // Row 164. The prompt rides argv, and the implement seed's is a whole SKILL.md: on
+  // Windows no `.cmd` shim can receive its line breaks. Say so — a worker that never
+  // started otherwise reads, one step later, as an agent that made no diff.
+  const run = resolveSpawn(cmd, args,
+    { ...ctx.env, ...env, WITNESS_BIN: `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}` })
+  if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return }
+  spawnSync(run.value.file, run.value.args, {
     cwd: worktree,
-    env: { ...ctx.env, ...env, WITNESS_BIN: `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}` },
+    env: run.value.env,
     timeout: 900_000,
     stdio: 'ignore',
+    windowsVerbatimArguments: run.value.windowsVerbatimArguments,
   })
 }
 
