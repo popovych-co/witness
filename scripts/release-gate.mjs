@@ -11,6 +11,8 @@
 //
 // Exported pure so the rules are unit-tested rather than string-matched in YAML.
 
+import { isMain } from './is-main.mjs';
+
 const row = (field, rule, got, want) => ({ field, rule, got, want });
 
 /** @param {{version: string, tag?: string, models?: unknown[] | null}} input */
@@ -44,7 +46,7 @@ export function releaseGate({ version, tag, models }) {
 }
 
 // CLI: reads the repo it runs in, exits 2 on refusal (the CLI's own convention).
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
   const { readFileSync } = await import('node:fs');
   const { parse } = await import('yaml');
 
