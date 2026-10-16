@@ -8,6 +8,7 @@ import { validatePin, type Harness } from './harness.js'
 import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { resolveSpawn } from './spawn.js'
 
 export const PROMPT_NAMES = [
   'slicing-critic', 'plan-critic', 'code-reviewer', 'silent-failure-hunter',
@@ -123,15 +124,22 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
     pin = pinR.value
   }
   const { cmd, args, env } = harness.reviewer.spawn(pin, opts.extensions)
+  // Row 164: on Windows the CLI may be a `.cmd` shim, which only cmd.exe can start. The
+  // prompt rides stdin, so the shim's second parse of the command line never sees it. A
+  // reviewer that cannot be started is an invocation failure on every platform: the
+  // resolution's own got/want, under the rule a missing binary has always reported.
+  const run = resolveSpawn(cmd, args, { ...ctx.env, ...env })
+  if (!run.ok) return refuse(run.violations.map((x) => ({ ...x, rule: 'reviewer-invocation' })))
   const timeout = opts.timeoutMs ?? REVIEWER_TIMEOUT_MS
   for (let attempt = 0; ; attempt += 1) {
-    const r = spawnSync(cmd, args, {
+    const r = spawnSync(run.value.file, run.value.args, {
       cwd: opts.cwd,
-      env: { ...ctx.env, ...env } as NodeJS.ProcessEnv,
+      env: run.value.env as NodeJS.ProcessEnv,
       input: opts.prompt,
       encoding: 'utf8',
       timeout,
       maxBuffer: 64 * 1024 * 1024,
+      windowsVerbatimArguments: run.value.windowsVerbatimArguments,
     })
     if (r.error) {
       // A stall is NOT the missing-binary case. Reporting it as one sent the last

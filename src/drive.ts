@@ -7,6 +7,7 @@ import type { Config } from './config.js'
 import { resolveJudge } from './harness.js'
 import { renderRefusal } from './refusal.js'
 import { loadCanon } from './scan.js'
+import { resolveSpawn } from './spawn.js'
 import { computeNext, flowAction, resolveFlow, type NextAction } from './verbs/next.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
@@ -84,7 +85,7 @@ const EXIT_GRACE_MS = 2_000
 // This CLI, for the child. A spawned session shells out to `witness` through
 // ${WITNESS_BIN:-npx …} in every stage skill, and an unset value means the child resolves
 // the PUBLISHED version while its parent runs an unpublished one — which the state floor
-// then refuses (cli-behind-state). calibrate.ts:517 sets it for its worker for exactly
+// then refuses (cli-behind-state). calibrate.ts:520 sets it for its worker for exactly
 // this reason. An explicitly set value wins: a session that already knows its bin is
 // stating a fact drive has no better answer for.
 function localBin(ctx: Ctx): string {
@@ -127,14 +128,18 @@ export async function spawnSession(
   // a scripted fake that performs real CLI acts. Never documented for users — a spawn
   // binary chosen by ambient env is exactly the identity confusion row 90 removed.
   const bin = ctx.env.WITNESS_DRIVE_AGENT_BIN ?? cmd
+  // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
+  const run = resolveSpawn(bin, args, { ...ctx.env, ...env, WITNESS_BIN: localBin(ctx) })
+  if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return 'spawn-failed' }
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `
   const out = lineSink(prefix, (l) => ctx.out(l))
   const err = lineSink(prefix, (l) => ctx.out(l))
   return await new Promise<SpawnOutcome>((resolve) => {
-    const child = spawn(bin, args, {
+    const child = spawn(run.value.file, run.value.args, {
       cwd: step.home,
-      env: { ...ctx.env, ...env, WITNESS_BIN: localBin(ctx) },
+      env: run.value.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsVerbatimArguments: run.value.windowsVerbatimArguments,
     })
     let outcome: SpawnOutcome = 'exited'
     let settled = false
