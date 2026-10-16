@@ -15,6 +15,8 @@
 //
 // Usage: node scripts/release.mjs <major|minor|patch|x.y.z>
 
+import { isMain } from './is-main.mjs';
+
 const row = (field, rule, got, want) => ({ field, rule, got, want });
 
 /**
@@ -67,7 +69,7 @@ export function releasePreflight({ current, spec, branch, dirty, tags }) {
 }
 
 // CLI: performs the bump, the stamp, the commit and the tag — then stops.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
   const { readFileSync, writeFileSync } = await import('node:fs');
   const { execFileSync } = await import('node:child_process');
   const { join, dirname } = await import('node:path');
