@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // The one home for "which version of witness is which". install.ts parsed the pin to
 // decide whether a payload was only a pin apart (row 102 killed that rule) and check.ts
@@ -49,9 +49,13 @@ export const NPX_LATEST = 'npx -y @popovych.co/witness@latest'
 // reader itself lived in the shell — the same split rows 93, 95 and 96 keep naming. The
 // single readFileSync is the exception to this file's no-I/O rule and the only one it
 // may ever have.
+//
+// Row 163. The path goes through fileURLToPath, never `URL.pathname`: a pathname is URL
+// syntax — `/C:/…` on Windows, which readFileSync resolved to `C:\C:\…`, and `%20` for a
+// space on every platform — so the read threw ENOENT and every journal stamp died with it.
 export function version(): string {
   const pkg = JSON.parse(
-    readFileSync(join(new URL('.', import.meta.url).pathname, '..', 'package.json'), 'utf8'),
+    readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
   ) as { version: string }
   return pkg.version
 }
