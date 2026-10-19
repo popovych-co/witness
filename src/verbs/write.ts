@@ -10,9 +10,9 @@ import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry } from '../journal.js'
 import { acquireLock } from '../lock.js'
-import { renderRefusal, v, type Violation } from '../refusal.js'
+import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { baseForSpec, contentAtSha } from '../history.js'
-import { findById, findCycle, loadCanon, type Canon, type CanonDoc } from '../scan.js'
+import { findById, findCycle, loadCanon, planFinished, plansOn, type Canon, type CanonDoc } from '../scan.js'
 import { canonicalJson, canonicalSha, short } from '../sha.js'
 import { kv } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -168,14 +168,34 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
             'an existing spec (or one that already left canon)')])
         }
       } else {
+        // D166. Re-slicing re-cuts specs (row 5). Deleting a plan here stranded a live flow, and
+        // deleting the principles removed every chore's only parent, with nothing to bring
+        // either back.
+        if (target.meta.type !== 'spec') {
+          return refuseWrite([v('supersedes', 'not-a-spec', `${supersedes} is a ${String(target.meta.type)}`,
+            'a spec — a plan is withdrawn with witness abandon and principles are amended in place')])
+        }
         const dependents = canon.docs
           .filter((d) => String(d.meta.id) !== id)
           .filter((d) => ((d.meta.depends ?? []) as string[]).includes(supersedes))
           .map((d) => String(d.meta.id))
-        if (dependents.length > 0) {
-          return refuseWrite([v('supersedes', 'dangling-depends', dependents.join(' '),
-            'dependents rewritten first — the re-slice rewrites them before deleting')])
-        }
+        // D166. A plan's `parent` is the other edge into the spec this deletes, and row 62
+        // guarded only `depends`: every gate reads the parent, so a plan still moving was left
+        // unable to move and impossible to clear (issue #34). A finished plan holds nothing — the
+        // successor carries the content forward, and `check` resolves the plan's parent in the
+        // departed stream. Whether a moving plan ships first or is withdrawn is a human's call,
+        // so the row says so and names no command an agent could run for them.
+        const moving = plansOn(canon, supersedes).filter((p) => !planFinished(p)).map((p) => String(p.meta.id))
+        // Both edges in ONE refusal: every refusal counts against the first-try rate the
+        // dashboard trends, and learning of the second edge only after repairing the first
+        // would cost a refusal for nothing.
+        const dangling = [
+          ...(dependents.length > 0 ? [v('supersedes', 'dangling-depends', dependents.join(' '),
+            'dependents rewritten first — the re-slice rewrites them before deleting')] : []),
+          ...(moving.length > 0 ? [humanCall(v('supersedes', 'dangling-parent', moving.join(' '),
+            'those plans finished or withdrawn first — the re-slice deletes their parent and which way each goes is a human\'s call'))] : []),
+        ]
+        if (dangling.length > 0) return refuseWrite(dangling)
         reslice = prepareDeparture(root, cfg.value.paths, target, {
           v: 1, t: 'status', artifact: supersedes, from: String(target.meta.status),
           to: 'superseded', cause: 'supersede', by: id!,

@@ -78,6 +78,11 @@ describe('witness-decompose', () => {
   it('does not claim the chore path always runs', () => {
     expect(body()).not.toContain('it never skips');
   });
+
+  it('hands a dangling-parent re-slice to the human (D166)', () => {
+    expect(body()).toContain('dangling-parent');
+    expect(body()).toContain('never abandon it yourself');
+  });
 });
 
 describe('witness-plan', () => {

@@ -44,7 +44,7 @@ The class comes from the recap. Never ask for it again.
 - Thin **vertical** slices: each spec independently shippable, observable end-to-end. Never layers ("the schema", "the client").
 - Each spec answers exactly one question; no two overlap; **one fact, one home**. A fact needed by two slices gets extracted into its own spec, and both `depends` on it.
 - Amending a living spec is the same write with the existing id — its status resets to `draft` (re-approval owed). If the CLI warns the spec has an in-flight child plan, surface that warning at the gate stop.
-- Boundary changes (split, merge, extraction out of a live spec) → the new spec's manifest carries `supersedes: <old-id>`; rewrite every dependent's `depends` in the same effort — the CLI refuses dangling edges.
+- Boundary changes (split, merge, extraction out of a live spec) → the new spec's manifest carries `supersedes: <old-id>`; rewrite every dependent's `depends` in the same effort — the CLI refuses dangling edges. It also refuses `dangling-parent` while a plan of the old spec is still in motion: whether that plan ships first or is abandoned is the human's call, so stop and surface it — never abandon it yourself.
 - Cross-cutting changes → sequenced per-slice amendments ordered via `depends`, expand-contract style (accept both → switch → drop old), each step independently shippable.
 - Self-check totality before gating: every goal covered by ≥ 1 spec, every spec covers ≥ 1 goal.
 
