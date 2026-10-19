@@ -9,6 +9,7 @@ import {
   approve, fakeCtx, fakeScenario, gateEnv, ghState, nextLine, putVerdict, seededRepo, shippableRepo,
   stampLive, writePlan, writeSpec,
 } from './helpers.js'
+import { findById, loadCanon } from '../src/scan.js'
 import { worktreePath } from '../src/worktree.js'
 import type { TestRepo } from './helpers.js'
 
@@ -330,6 +331,22 @@ describe('a reopen on a started plan routes', () => {
     expect(out).not.toContain(`witness gate implement ${planId}`)
     expect(out).toContain(`witness gate decompose --effort ${repo.effort}`)
 
+    await repo.cli(['clean'])
+  })
+
+  // D167. Row 95's own route: the re-author keeps `in-progress`, and the passing re-gate that
+  // closes the reopen must not stamp it back to approved — `next` would then say `start` to a
+  // plan with a worktree full of work.
+  it('a passing plan gate leaves a reopened in-flight plan in flight', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    await stopImplementGate(repo, wt, planId)
+    expect((await repo.cli(['decide', 'implement', planId, '--revise', '--upstream', planId, '--note', 'step s1 prescribes the wrong seam'])).code).toBe(0)
+    expect((await writePlan(repo, planId, {}, '## Step: s1\nImplement rotation at the refresh seam with TDD.\n')).code).toBe(0)
+    const clean = fakeScenario()
+    putVerdict(clean, { coverage: [{ anchor: `${planId} > ## Step: s1`, note: 'read' }, { anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
+    expect((await repo.cli(['gate', 'plan', planId], { env: gateEnv(clean) })).code).toBe(0)
+    expect(String(findById(loadCanon(repo.root), planId)!.meta.status)).toBe('in-progress')
+    expect(await nextLine(repo)).not.toContain('witness start')
     await repo.cli(['clean'])
   })
 })

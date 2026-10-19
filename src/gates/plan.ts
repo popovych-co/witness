@@ -3,12 +3,18 @@ import { serializeDoc } from '../fm.js'
 import { canonicalSha, short } from '../sha.js'
 import { latestRecap } from '../journal.js'
 import { baseForSpec } from '../history.js'
-import { findById, plannableParent } from '../scan.js'
+import { findById, plannableParent, type CanonDoc } from '../scan.js'
 import { effortOf, planPairSha } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput } from '../gate.js'
 import { designPending, designStamp } from '../design.js'
 import type { GateCheck } from '../rounds.js'
+
+// D167. One derivation for the gate's stamp and `decide`'s: a pass approves a draft and nothing
+// else. Row 95 keeps an in-flight status through a re-author, and a passing re-gate must not
+// take it back — nor stamp a finished plan approved again.
+const draftApproval = (plan: CanonDoc): Array<{ artifact: string; to: string }> =>
+  String(plan.meta.status) === 'draft' ? [{ artifact: String(plan.meta.id), to: 'approved' }] : []
 
 registerGate({
   gate: 'plan',
@@ -79,7 +85,7 @@ registerGate({
       },
       promptBody,
       checks,
-      stamps: [{ artifact: planId, to: 'approved' }],
+      stamps: draftApproval(plan),
     })
   },
 
@@ -96,6 +102,6 @@ registerGate({
 
   approveStamps(_root, canon, planId) {
     const doc = findById(canon, planId)
-    return doc && String(doc.meta.status) === 'draft' ? [{ artifact: planId, to: 'approved' }] : []
+    return doc ? draftApproval(doc) : []
   },
 })
