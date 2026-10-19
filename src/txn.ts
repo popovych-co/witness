@@ -51,14 +51,32 @@ export function rollbackTxn(root: string, marker: TxnMarker): void {
   rmSync(markerPath(root), { force: true })
 }
 
-export function completeTxn(root: string, marker: TxnMarker): Result<{ sha: string }> {
-  const items = [...(marker.journal ? [marker.journal] : []), ...(marker.journalMulti ?? [])]
-  if (items.length) mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
-  for (const { stream, line } of items) {
+// D166. What a crash left of a transaction's journal, per stream: the marker's pending lines
+// for that stream, in order, and how many of them the stream already ends with. One
+// transaction may append SEVERAL lines to one stream — the merge stamp's status and its
+// deferral moves, a re-slice's departure and its moves — and the crash can land after any
+// prefix of them. `completeTxn` appends the rest; `recover` ranks --complete over --rollback
+// when nothing is missing. One derivation for both: comparing each line with the stream's
+// last line re-appended every earlier line, and counted it as missing.
+export function landedJournal(root: string, marker: TxnMarker): Array<{ stream: string; lines: string[]; landed: number }> {
+  const pending = new Map<string, string[]>()
+  for (const { stream, line } of [...(marker.journal ? [marker.journal] : []), ...(marker.journalMulti ?? [])]) {
+    pending.set(stream, [...(pending.get(stream) ?? []), line])
+  }
+  return [...pending].map(([stream, lines]) => {
     const p = join(root, journalRel(stream))
-    const current = existsSync(p) ? readFileSync(p, 'utf8') : ''
-    const lastLine = current.split('\n').filter(Boolean).at(-1)
-    if (lastLine !== line) appendFileSync(p, line + '\n')
+    const current = (existsSync(p) ? readFileSync(p, 'utf8') : '').split('\n').filter(Boolean)
+    let landed = Math.min(lines.length, current.length)
+    while (landed > 0 && current.slice(-landed).join('\n') !== lines.slice(0, landed).join('\n')) landed--
+    return { stream, lines, landed }
+  })
+}
+
+export function completeTxn(root: string, marker: TxnMarker): Result<{ sha: string }> {
+  const streams = landedJournal(root, marker)
+  if (streams.length) mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
+  for (const { stream, lines, landed } of streams) {
+    for (const line of lines.slice(landed)) appendFileSync(join(root, journalRel(stream)), line + '\n')
   }
   const res = stateCommit(root, marker.files, `${marker.op} (recovered)`)
   if (res.ok) rmSync(markerPath(root), { force: true })

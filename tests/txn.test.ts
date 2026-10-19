@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireLock } from '../src/lock.js'
 import { completeTxn, guardTxn, pendingTxn, rollbackTxn, withTxn } from '../src/txn.js'
+import { recoverChoice } from '../src/verbs/recover.js'
 import { stateCommit } from '../src/gitio.js'
 import { ok } from '../src/refusal.js'
 import { fakeCtx, tmpRepo, type TestRepo } from './helpers.js'
@@ -92,6 +93,36 @@ describe('recovery', () => {
     const res = completeTxn(repo.root, pendingTxn(repo.root)!)
     expect(res.ok).toBe(true)
     expect(readFileSync(join(repo.root, '.witness/journal/e.jsonl'), 'utf8')).toBe('{"v":1,"t":"write","artifact":"a"}\n')
+  })
+
+  it('complete appends only the missing tail when one stream takes several lines (D166)', () => {
+    const a = '{"v":1,"t":"status","artifact":"p","to":"done"}'
+    const b = '{"v":1,"t":"deferral-moved","id":"d-1","to":"s"}'
+    // the crash can land before either append, between them, or after both
+    for (const landed of [[], [a], [a, b]]) {
+      const repo = seeded()
+      repo.write('.witness/journal/p.jsonl', ['{"seed":1}', ...landed].join('\n') + '\n')
+      repo.write('.witness/txn.json', JSON.stringify({
+        op: 'merge-stamp', files: ['.witness/journal/p.jsonl'],
+        journalMulti: [{ stream: 'p', line: a }, { stream: 'p', line: b }],
+      }))
+      expect(completeTxn(repo.root, pendingTxn(repo.root)!).ok).toBe(true)
+      expect(readFileSync(join(repo.root, '.witness/journal/p.jsonl'), 'utf8')).toBe(`{"seed":1}\n${a}\n${b}\n`)
+    }
+  })
+
+  it('recover reads several lines on one stream the way complete does (D166)', () => {
+    const a = '{"v":1,"t":"status","artifact":"p","to":"done"}'
+    const b = '{"v":1,"t":"deferral-moved","id":"d-1","to":"s"}'
+    const marker = {
+      op: 'merge-stamp', files: ['.witness/journal/p.jsonl'],
+      journalMulti: [{ stream: 'p', line: a }, { stream: 'p', line: b }],
+    }
+    const repo = seeded()
+    repo.write('.witness/journal/p.jsonl', `{"seed":1}\n${a}\n${b}\n`)
+    expect(recoverChoice(repo.root, marker).rule).toBe('txn-write-landed')   // finished: complete it
+    repo.write('.witness/journal/p.jsonl', `{"seed":1}\n${a}\n`)
+    expect(recoverChoice(repo.root, marker).rule).toBe('txn-write-partial')  // interrupted mid-write
   })
 
   it('complete resolves id streams into the journal dir, never the repo root', () => {
