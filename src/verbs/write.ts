@@ -1,14 +1,14 @@
-import { existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
-import { canonExit } from '../departure.js'
-import { designPending, designRel, designStamp } from '../design.js'
+import { canonExit, prepareDeparture, type Departure } from '../departure.js'
+import { designPending, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
 import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
-import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry, type StatusEntry } from '../journal.js'
+import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { baseForSpec, contentAtSha } from '../history.js'
@@ -149,7 +149,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // refusal here never touches disk. Applies only to specs — buildPlanMeta never sets
     // meta.supersedes, so this is a no-op for plan writes.
     const supersedes = built.meta.supersedes === undefined ? undefined : String(built.meta.supersedes)
-    let reslice: { doc: CanonDoc; entry: StatusEntry; line: string } | undefined
+    let reslice: Departure | undefined
     if (supersedes !== undefined) {
       if (supersedes === id) {
         return refuseWrite([v('supersedes', 'self-supersede', id!, 'a different spec')])
@@ -176,11 +176,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
           return refuseWrite([v('supersedes', 'dangling-depends', dependents.join(' '),
             'dependents rewritten first — the re-slice rewrites them before deleting')])
         }
-        const entry: StatusEntry = {
+        reslice = prepareDeparture(root, cfg.value.paths, target, {
           v: 1, t: 'status', artifact: supersedes, from: String(target.meta.status),
           to: 'superseded', cause: 'supersede', by: id!,
-        }
-        reslice = { doc: target, entry, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) }
+        })
       }
     }
 
@@ -212,23 +211,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // entry. Row 116's `w` stamp is what caught it; the shape is the one rows 93, 95 and
     // 96 all name, and every other txn writer already calls entryLine.
     const line = entryLine(entry)
-    const supersededDesignRel = reslice ? designRel(cfg.value.paths, reslice.entry.artifact) : undefined
-    const files = [rel, stream,
-      ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : []),
-      ...(supersededDesignRel && existsSync(join(root, supersededDesignRel)) ? [supersededDesignRel] : []),
-    ]
+    const files = [rel, stream, ...(reslice?.files ?? [])]
     const res = withTxn(root, {
       op: `write(${id})`, files, journal: { stream: effort, line },
-      ...(reslice ? { journalMulti: [{ stream: reslice.entry.artifact, line: reslice.line }] } : {}),
+      ...(reslice ? { journalMulti: [{ stream: reslice.entry.artifact, line: entryLine(reslice.entry as unknown as { t: 'status'; [k: string]: unknown }) }] } : {}),
     }, () => {
       writeDoc(join(root, rel), { meta: built.meta, body })
       crashPoint(ctx.env, 'artifact-write')
       if (reslice) {
-        unlinkSync(join(root, reslice.doc.rel))
-        const supersededDesign = designRel(cfg.value.paths, reslice.entry.artifact)
-        if (existsSync(join(root, supersededDesign))) {
-          unlinkSync(join(root, supersededDesign))
-        }
+        reslice.remove()
         appendEntry(root, reslice.entry.artifact, reslice.entry as unknown as { t: 'status'; [k: string]: unknown })
         crashPoint(ctx.env, 'reslice-commit')
       }

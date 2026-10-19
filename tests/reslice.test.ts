@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, streamExists } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { approve, seededRepo, writeDesign, writePlan, writeSpec } from './helpers.js'
 
 const TOKENS_CRITERIA = { criteria: [{ id: 'ac-tokens', test: '@spec:auth-tokens' }] }
 const ROTATION_CRITERIA = { criteria: [{ id: 'ac-rotation', test: '@spec:token-rotation' }] }
@@ -75,5 +75,20 @@ describe('reading a departure (D166)', () => {
     await writePlan(repo, 'auth-refresh-plan-1')
     expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)   // unwinds the spec: removed
     expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+  })
+})
+
+// D166. A spec leaves canon through one door, so the re-slice and the unwind take the same
+// things out with it. This pins the re-slice's half, which predates the shared door.
+describe('one departure, both verbs (D166)', () => {
+  it('a re-slice takes the superseded spec\'s design out of canon with it', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-tokens', { ui: true, ...TOKENS_CRITERIA })
+    expect((await writeDesign(repo, 'auth-tokens')).code).toBe(0)
+    approve(repo, 'auth-tokens')
+    expect((await writeSpec(repo, 'token-rotation', { supersedes: 'auth-tokens', ...ROTATION_CRITERIA })).code).toBe(0)
+    expect(existsSync(join(repo.root, 'designs/auth-tokens.html'))).toBe(false)
+    const files = repo.git('show', '--no-renames', '--name-only', '--format=', 'HEAD').trim().split('\n')
+    expect(files).toContain('designs/auth-tokens.html')
   })
 })

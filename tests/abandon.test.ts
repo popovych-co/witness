@@ -1,9 +1,10 @@
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { worktreePath } from '../src/worktree.js'
-import { approve, seededRepo, writeSpec, writePlan, PLAN_BODY } from './helpers.js'
+import { approve, DESIGN_HTML, seededRepo, stampLive, writeDesign, writeSpec, writePlan, PLAN_BODY, type TestRepo } from './helpers.js'
 
 describe('witness abandon <plan>', () => {
   it('reverts the paired amendment, restores the prior live stamp, keeps the journal', async () => {
@@ -103,5 +104,45 @@ describe('witness abandon <plan>', () => {
     const terminal = readStream(repo.root, 'auth-hardening').at(-1)
     expect(terminal).toMatchObject({ t: 'human-decision', decision: 'abandon-effort' })
     // dashboard no longer lists it as active — effortAbandoned() flips
+  })
+})
+
+// A second effort, so a test can put plans or amendments under a different owner.
+async function recapEffort(repo: TestRepo, slug: string): Promise<void> {
+  repo.write(`recap-${slug}.json`, JSON.stringify({
+    effort: slug, class: 'feature', goals: [{ id: 'g1', text: `${slug} goal` }],
+    non_goals: [], constraints: [], slices: [],
+  }))
+  const r = await repo.cli(['recap', '--file', `recap-${slug}.json`])
+  rmSync(join(repo.root, `recap-${slug}.json`), { force: true })
+  if (r.code !== 0) throw new Error(`recap ${slug}: ${r.stderr}`)
+}
+
+// D166. The unwind departs a spec through the same door the re-slice uses, and a restore takes
+// the look back with the content it was drawn for.
+describe('one departure, both verbs (D166)', () => {
+  it('an unwound ui spec takes its design out of canon with it', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ui: true })
+    expect((await writeDesign(repo, 'auth-refresh')).code).toBe(0)
+    expect(existsSync(join(repo.root, 'designs/auth-refresh.html'))).toBe(true)
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)   // unwinds the spec it created
+    expect(existsSync(join(repo.root, 'designs/auth-refresh.html'))).toBe(false)
+    expect(repo.git('show', '--name-only', '--format=', 'HEAD').split('\n')).toContain('designs/auth-refresh.html')
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('an unwound amendment puts its spec\'s design back, byte for byte', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'booking', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:booking' }] })
+    const v1 = DESIGN_HTML.replace('New service', 'Look one')
+    expect((await writeDesign(repo, 'booking', v1)).code).toBe(0)
+    approve(repo, 'booking')
+    stampLive(repo, 'booking')
+    await recapEffort(repo, 'redesign')
+    expect((await writeSpec(repo, 'booking', { ui: true, summary: 'Bookings · amended', criteria: [{ id: 'ac-b', test: '@spec:booking' }] }, undefined, 'redesign')).code).toBe(0)
+    expect((await writeDesign(repo, 'booking', DESIGN_HTML.replace('New service', 'Look two'))).code).toBe(0)
+    expect((await repo.cli(['abandon', 'redesign'])).code).toBe(0)
+    expect(repo.read('designs/booking.html')).toBe(v1)
   })
 })

@@ -1,7 +1,9 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { readStream, type Entry, type StatusEntry } from './journal.js'
-import { findById, type Canon } from './scan.js'
+import type { CanonPaths } from './config.js'
+import { designRel } from './design.js'
+import { journalRel, readStream, type Entry, type StatusEntry } from './journal.js'
+import { findById, type Canon, type CanonDoc } from './scan.js'
 
 // D166. A spec leaves canon through exactly two verbs — the re-slice (row 62), which
 // journals `superseded` and names the successor, and abandon's unwind of a spec its own
@@ -26,4 +28,24 @@ export function departedStreams(root: string, canon: Canon): string[] {
   if (!existsSync(dir)) return []
   return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => f.slice(0, -'.jsonl'.length))
     .filter((id) => !findById(canon, id) && canonExit(readStream(root, id)) !== undefined)
+}
+
+export interface Departure {
+  entry: StatusEntry      // journaled on the spec's own stream; it stays the stream's last status entry
+  files: string[]         // every state path the departure touches: the spec, its design, its stream
+  remove: () => void      // unlinks what leaves canon with the spec
+}
+
+// What leaves canon WITH a spec. Its design is spec-scoped (row 69) and goes with it: the
+// re-slice always deleted it, while the unwind left a ui spec's look behind in canon after the
+// spec it described was gone. A design is listed only when present, because a state commit
+// cannot stage a path that never existed.
+export function prepareDeparture(root: string, paths: CanonPaths, spec: CanonDoc, entry: StatusEntry): Departure {
+  const design = designRel(paths, String(spec.meta.id))
+  const leaving = [spec.rel, ...(existsSync(join(root, design)) ? [design] : [])]
+  return {
+    entry,
+    files: [...leaving, journalRel(String(spec.meta.id))],
+    remove: () => { for (const rel of leaving) unlinkSync(join(root, rel)) },
+  }
 }

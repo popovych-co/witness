@@ -1,9 +1,11 @@
-import { unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
+import { prepareDeparture, type Departure } from './departure.js'
+import { designRel } from './design.js'
 import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
-import { tryGit, stateCommit } from './gitio.js'
+import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, withTxn } from './txn.js'
 import { appendEntry, entryLine, journalRel, type StatusEntry } from './journal.js'
@@ -34,8 +36,8 @@ export function pinCommit(root: string, rel: string, pin: string): string | unde
 }
 
 export type SpecRevert =
-  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string }
-  | { doc: CanonDoc; action: 'delete' }
+  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined } }
+  | { doc: CanonDoc; action: 'delete'; departure: Departure }
 
 export function specRevertFor(
   root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>,
@@ -59,11 +61,23 @@ export function specRevertFor(
       return refuse([v('spec', 'waiting-dependents', dependents.join(' '),
         'no docs outside the abandon set may depend on a spec being deleted')])
     }
-    return ok({ doc: spec, action: 'delete' })
+    // D166. The unwind departs the spec through the same door the re-slice uses, so
+    // everything that leaves canon with a spec — its design included — leaves here too.
+    return ok({
+      doc: spec, action: 'delete',
+      departure: prepareDeparture(root, canon.paths, spec, {
+        v: 1, t: 'status', artifact: String(spec.meta.id), from: String(spec.meta.status), to: 'removed', cause: 'abandon',
+      }),
+    })
   }
   const parsed = splitDoc(prior.out)
   const toStatus = parsed.ok ? String(parsed.value.meta.status) : 'draft'
-  return ok({ doc: spec, action: 'restore', content: prior.out, toStatus })
+  // D166. The look goes back with the content it was drawn for: the design as it stood before
+  // the commit being taken back, byte for byte — or none, if there was none then.
+  const designR = designRel(canon.paths, String(spec.meta.id))
+  const priorDesign = gitBlob(root, `${commit}^`, designR)
+  const design = priorDesign !== undefined || existsSync(join(root, designR)) ? { rel: designR, prior: priorDesign } : undefined
+  return ok({ doc: spec, action: 'restore', content: prior.out, toStatus, design })
 }
 
 export interface AbandonItem {
@@ -89,13 +103,14 @@ export function executeAbandon(
     if (item.revert) {
       const spec = item.revert.doc
       const id = String(spec.meta.id)
-      const entry: StatusEntry = {
-        v: 1, t: 'status', artifact: id, from: String(spec.meta.status),
-        to: item.revert.action === 'restore' ? item.revert.toStatus : 'removed',
-        cause: 'abandon',
+      const entry: StatusEntry = item.revert.action === 'delete' ? item.revert.departure.entry : {
+        v: 1, t: 'status', artifact: id, from: String(spec.meta.status), to: item.revert.toStatus, cause: 'abandon',
       }
       specEntries.push({ stream: id, entry })
-      files.add(spec.rel); files.add(journalRel(id))
+      const touched = item.revert.action === 'delete'
+        ? item.revert.departure.files
+        : [spec.rel, journalRel(id), ...(item.revert.design ? [item.revert.design.rel] : [])]
+      for (const f of touched) files.add(f)
       journalMulti.push({ stream: id, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) })
     }
   }
@@ -116,9 +131,14 @@ export function executeAbandon(
     return withTxn(root, { op: 'abandon', files: [...files], journalMulti }, () => {
       for (const item of items) {
         if (item.revert) {
-          const abs = join(root, item.revert.doc.rel)
-          if (item.revert.action === 'restore') writeFileSync(abs, item.revert.content)
-          else unlinkSync(abs) // stateCommit's `git add` below correctly stages a tracked-but-missing file as a deletion
+          // stateCommit's `git add` below stages a tracked-but-missing file as a deletion
+          if (item.revert.action === 'delete') item.revert.departure.remove()
+          else {
+            writeFileSync(join(root, item.revert.doc.rel), item.revert.content)
+            const d = item.revert.design
+            if (d?.prior !== undefined) writeFileSync(join(root, d.rel), d.prior)
+            else if (d !== undefined && existsSync(join(root, d.rel))) unlinkSync(join(root, d.rel))
+          }
         }
       }
       for (const s of stamps) writeStamp(root, s)
