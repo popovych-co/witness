@@ -128,6 +128,8 @@ describe('re-slice over plans (D166)', () => {
     expect(r.code).toBe(2)
     expect(r.stdout + r.stderr).toContain('dangling-depends')
     expect(r.stdout + r.stderr).toContain('dangling-parent')
+    expect(r.stderr).toContain("a human's decision: dangling-parent")
+    expect(r.stderr).toContain('the other rows are structured for self-repair once it is settled')
   })
 
   it('a plan merged but not yet stamped holds the re-slice until one check stamps it done', async () => {

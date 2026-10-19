@@ -34,14 +34,19 @@ export function renderRefusal(violations: Violation[]): string[] {
   const runnable = [...new Set(
     violations.map((x) => x.remedy).filter((r): r is string => r !== undefined && !/<[^>]+>/.test(r)),
   )]
+  // D167. Row 108's principle cuts both ways: the stop is true for the human's rows and false for
+  // the reader's own, so the trailer names the human's rules and leaves the rest self-repairable.
+  const human = [...new Set(violations.filter((x) => x.human).map((x) => x.rule))]
+  const mixed = violations.some((x) => !x.human)
   return [
     // The destructure keeps `remedy` out of the row objects: the column list already
     // governs what prints, but a remedy is not a column and must not become one.
     ...rows('refused', ['field', 'rule', 'got', 'want'],
       violations.map(({ remedy: _remedy, ...rest }) => rest) as unknown as Array<Record<string, unknown>>),
     ...runnable.map((r) => `run: ${r}`),
-    violations.some((x) => x.human)
-      ? 'help: a row here is a human\'s decision — stop and surface the list; re-running cannot clear it'
+    human.length
+      ? `help: a human's decision: ${human.join(' · ')} — stop and surface the list; re-running cannot clear it`
+        + (mixed ? ' · the other rows are structured for self-repair once it is settled' : '')
       : 'help: fix each row and re-run — rows are structured for self-repair',
   ]
 }
