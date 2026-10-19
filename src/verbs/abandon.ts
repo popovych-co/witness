@@ -7,7 +7,7 @@ import { effortWrites } from '../reviewed.js'
 import { canonicalSha } from '../sha.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
-import { executeAbandon, planItems, specRevertFor, type AbandonItem } from '../abandon.js'
+import { executeAbandon, keptLine, planItems, specRevertFor, type AbandonItem, type SpecKeep } from '../abandon.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const target = argv.find((a) => !a.startsWith('--'))
@@ -30,6 +30,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (itemR.value.revert) {
       ctx.out(kv('reverted', `${String(itemR.value.revert.doc.meta.id)} (${itemR.value.revert.action}) — journal untouched`))
     }
+    if (itemR.value.kept) ctx.out(kv('kept', keptLine(itemR.value.kept)))
     return EXIT.OK
   }
 
@@ -40,6 +41,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const abandonSet = new Set(writes.keys())
     const items: AbandonItem[] = []
     const problems: Violation[] = []
+    const kept: SpecKeep[] = []
     for (const id of writes.keys()) {
       const artifact = findById(canon, id)
       if (!artifact) continue                               // already gone (re-slice, earlier abandon)
@@ -60,12 +62,25 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       }
       const revertR = specRevertFor(root, canon, artifact, w.sha, abandonSet)
       if (!revertR.ok) { problems.push(...revertR.violations); continue }
-      if (revertR.value) items.push({ revert: revertR.value })
+      const outcome = revertR.value
+      if (outcome?.action === 'keep') {
+        // D166. This abandon is the effort's last act, so a keep here must be one nothing has
+        // to take back later: a shipped plan makes it so — canon describes built behavior. A
+        // plan of another effort still building on the spec would leave it owned by no one and
+        // removable by no verb, so that case refuses until the plan finishes or goes.
+        if (!outcome.shipped) {
+          problems.push(v('spec', 'still-standing', `${id}: ${outcome.standing.join(' ')}`,
+            'those finished or withdrawn first — this abandon is the last act that could take the spec back'))
+          continue
+        }
+        kept.push(outcome)
+      } else if (outcome) items.push({ revert: outcome })
     }
     if (problems.length > 0) { renderRefusal(problems).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const done = executeAbandon(root, ctx, items, { effort: target }, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('abandoned', `effort ${target} — ${items.length} artifacts walked, journal remembers the attempt`))
+    for (const k of kept) ctx.out(kv('kept', keptLine(k)))
     return EXIT.OK
   }
 

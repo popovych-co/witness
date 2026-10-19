@@ -146,3 +146,105 @@ describe('one departure, both verbs (D166)', () => {
     expect(repo.read('designs/booking.html')).toBe(v1)
   })
 })
+
+// D166. Abandoning a plan takes back the spec content it was paired with (row 29) — but a
+// sibling derived from the same version either shipped it or is still building it. The
+// content stays while any other plan stands on it. An effort's own abandon is its last act,
+// so it keeps only what nothing will ever need to take back.
+describe('abandon keeps content another plan stands on (D166)', () => {
+  it('abandoning the second plan of a shipped spec keeps the spec', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')                  // created by this effort
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    await writePlan(repo, 'auth-refresh-plan-2')           // same pin: the spec was never amended
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const r = await repo.cli(['abandon', 'auth-refresh-plan-2'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('kept: auth-refresh — not unwound · still standing on it: auth-refresh-plan-1')
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'auth-refresh')!.meta.status).toBe('live')   // canon still describes what shipped
+    expect(findById(canon, 'auth-refresh-plan-2')!.meta.status).toBe('abandoned')
+    expect(readStream(repo.root, 'auth-refresh').some((e) =>
+      e.t === 'status' && (e as unknown as StatusEntry).to === 'removed')).toBe(false)
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('keeps it for a sibling still moving, and the last plan off takes it back', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    await writePlan(repo, 'auth-refresh-plan-2')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-2'])).code).toBe(0)
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeDefined()
+    expect((await repo.cli(['check'])).code).toBe(0)
+    const last = await repo.cli(['abandon', 'auth-refresh-plan-1'])
+    expect(last.code).toBe(0)
+    expect(last.stdout).toContain('reverted: auth-refresh (delete)')
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeUndefined()
+    expect((await repo.cli(['check'])).code).toBe(0)       // both plans finished: their parent lives in the journal
+  })
+
+  it('a kept spec dangles no depends edge, so dependents do not refuse the abandon', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }], depends: ['auth-refresh'] })
+    await writePlan(repo, 'auth-refresh-plan-1')
+    await writePlan(repo, 'auth-refresh-plan-2')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const r = await repo.cli(['abandon', 'auth-refresh-plan-2'])
+    expect(r.code).toBe(0)
+    expect(r.stdout + r.stderr).not.toContain('waiting-dependents')
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeDefined()
+  })
+
+  it('abandon <effort> refuses while another effort\'s plan still builds on its spec, then takes it back', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')                  // created by auth-hardening
+    approve(repo, 'auth-refresh')
+    await recapEffort(repo, 'auth-followup')
+    expect((await writePlan(repo, 'auth-refresh-plan-1', {}, PLAN_BODY, 'auth-followup')).code).toBe(0)
+    const held = await repo.cli(['abandon', 'auth-hardening'])
+    expect(held.code).toBe(2)
+    expect(held.stdout + held.stderr).toContain('still-standing')
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeDefined()
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)   // its effort never wrote the spec: nothing unwinds
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeUndefined()      // nothing stands now: the unwind runs
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('abandon <effort> keeps for good a spec another effort\'s plan shipped', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await recapEffort(repo, 'auth-followup')
+    expect((await writePlan(repo, 'auth-refresh-plan-1', {}, PLAN_BODY, 'auth-followup')).code).toBe(0)
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const r = await repo.cli(['abandon', 'auth-hardening'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('kept: auth-refresh — not unwound · still standing on it: auth-refresh-plan-1')
+    expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('live')
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('the restore keeps an amendment a sibling already shipped', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })   // live v1, shipped before this effort
+    await writeSpec(repo, 'auth-refresh', { summary: 'amended by this effort' })   // v2
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    await writePlan(repo, 'auth-refresh-plan-2')           // both derived from v2
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')                        // v2 shipped by plan-1
+    const r = await repo.cli(['abandon', 'auth-refresh-plan-2'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('kept: auth-refresh — not unwound · still standing on it: auth-refresh-plan-1')
+    expect(String(findById(loadCanon(repo.root), 'auth-refresh')!.meta.summary)).toBe('amended by this effort')
+  })
+})

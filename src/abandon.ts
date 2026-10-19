@@ -9,7 +9,7 @@ import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, withTxn } from './txn.js'
 import { appendEntry, entryLine, journalRel, type StatusEntry } from './journal.js'
-import { findById, type Canon, type CanonDoc } from './scan.js'
+import { findById, plansOn, type Canon, type CanonDoc } from './scan.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
@@ -39,13 +39,37 @@ export type SpecRevert =
   | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined } }
   | { doc: CanonDoc; action: 'delete'; departure: Departure }
 
+// D166. The unwind that does not happen. Abandoning a plan takes back the spec content it was
+// paired with — the whole spec when its effort created it (row 29), else the amendment. But a
+// sibling derived from the same version either shipped it (taking it back makes canon forget
+// built behavior) or is still building it (taking it back strands that plan — issue #34's
+// shape). So the content stays while anything stands on it, and the caller says why.
+// `shipped` is what makes a keep permanent; without it, the writing effort's next abandon is
+// what takes the content back. A separate result rather than a third SpecRevert arm, so
+// executeAbandon can never take a keep for a delete.
+export interface SpecKeep { doc: CanonDoc; action: 'keep'; standing: string[]; shipped: boolean }
+
+export const keptLine = (k: SpecKeep): string =>
+  `${String(k.doc.meta.id)} — not unwound · still standing on it: ${k.standing.join(' ')}`
+
 export function specRevertFor(
   root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>,
-): Result<SpecRevert | undefined> {
+): Result<SpecRevert | SpecKeep | undefined> {
   const current = canonicalSha(spec.meta, spec.body)
   if (current !== pin) {
     return refuse([v('spec', 'stacked-amendment', `${String(spec.meta.id)} is at ${current.slice(0, 7)}, pin is ${pin.slice(0, 7)}`,
       'abandon newest-first: a later amendment touched this spec')])
+  }
+  // D166. After "newest-first" (row 84 stands) and ahead of every precondition of the unwind
+  // itself — a resolvable pin, no waiting dependents — because a kept spec unwinds nothing and
+  // dangles nothing. Same pin in both branches: the siblings a delete would orphan were all
+  // derived from the content it removes, and a restore moves toward older pins.
+  const standing = plansOn(canon, String(spec.meta.id), { exclude: abandonSet, pin })
+  if (standing.length > 0) {
+    return ok({
+      doc: spec, action: 'keep', standing: standing.map((p) => String(p.meta.id)),
+      shipped: standing.some((p) => String(p.meta.status) === 'done'),
+    })
   }
   const commit = pinCommit(root, spec.rel, pin)
   if (!commit) {
@@ -84,6 +108,7 @@ export interface AbandonItem {
   planStamp?: PreparedStamp
   planId?: string
   revert?: SpecRevert
+  kept?: SpecKeep
 }
 
 export function executeAbandon(
@@ -200,7 +225,9 @@ export function planItems(
     if (parent) {
       const revertR = specRevertFor(root, canon, parent, String(plan.meta['derives-from']), abandonSet)
       if (!revertR.ok) return revertR
-      item.revert = revertR.value
+      const outcome = revertR.value
+      if (outcome?.action === 'keep') item.kept = outcome
+      else item.revert = outcome
     }
   }
   return ok(item)
