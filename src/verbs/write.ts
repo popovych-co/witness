@@ -225,9 +225,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         ? `a new id — ${rel} holds ${String(holder.meta.id)}`
         : `a new id — ${rel} holds a doc canon cannot read (fix or revert it first)`)])
     }
-    // D167. Nor on a path another id was last witnessed at: a departed spec comes back there.
+    // D167. Nor on the path a superseded spec comes back to (`pathRetired`).
     if (existing === undefined) {
-      const retired = pathRetired(root, rel, id!)
+      const retired = pathRetired(root, canon, rel, id!)
       if (retired) return refuseWrite([retired])
     }
     const stream = journalRel(effort)

@@ -17,9 +17,11 @@ const hasTrailer = (root: string, sha: string): boolean =>
 const commitsTouching = (root: string, rel: string): string[] =>
   git(root, 'log', '--format=%H', '--', rel).split('\n').filter(Boolean)
 
-export function lastWitnessed(root: string, rel: string): Witnessed | undefined {
+// `absolved`: commits an `adopt` entry took in (`adoptedCommits`), which count as witnessed too —
+// a hand commit that `adopt` absolved is the doc's witnessed state from then on.
+export function lastWitnessed(root: string, rel: string, absolved: Set<string> = new Set()): Witnessed | undefined {
   for (const sha of commitsTouching(root, rel)) {
-    if (!hasTrailer(root, sha)) continue
+    if (!hasTrailer(root, sha) && !absolved.has(sha)) continue
     const raw = tryGit(root, 'show', `${sha}:${rel}`)
     if (!raw.ok) continue
     const doc = splitDoc(raw.out)

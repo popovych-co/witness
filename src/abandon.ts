@@ -164,18 +164,27 @@ export interface AbandonItem {
 }
 
 // D167. A return lands on the path its spec left from, and `rename` moves an id but leaves its
-// file, so another doc may hold that path. Written over, that doc left canon with nothing to say
-// so. Only a doc this same abandon departs may stand there; any other holder is a human's call.
+// file, so another doc may hold that path — or another spec this abandon brings back may have
+// left from it too. Written over, either left canon with nothing to say so. Only a doc this same
+// abandon departs may stand there; any other holder, or a second return, is a human's call.
 export function returnCollisions(root: string, canon: Canon, items: AbandonItem[]): Violation[] {
   const departing = new Set(items.flatMap((i) => (i.revert?.action === 'delete' ? [i.revert.doc.rel] : [])))
-  return items.flatMap((i) => i.revert?.returns ?? [])
-    .filter((r) => !departing.has(r.rel) && existsSync(join(root, r.rel)))
-    .map((r) => {
+  const returns = items.flatMap((i) => (i.revert?.returns ?? []).map((r) => ({ r, going: String(i.revert!.doc.meta.id) })))
+  const landing = new Map<string, string[]>()
+  for (const { r } of returns) {
+    const ids = landing.get(r.rel) ?? []
+    if (!ids.includes(r.entry.artifact)) landing.set(r.rel, [...ids, r.entry.artifact])
+  }
+  return [
+    ...returns.filter(({ r }) => !departing.has(r.rel) && existsSync(join(root, r.rel))).map(({ r, going }) => {
       const held = canon.docs.find((d) => d.rel === r.rel)
       const holder = held ? String(held.meta.id) : 'a doc canon cannot read'
       return humanCall(v('spec', 'path-taken', `${r.rel} holds ${holder}`,
-        `that path free first — ${r.entry.artifact} comes back to it when ${r.by} goes · what becomes of ${holder} is a human's call`))
-    })
+        `that path free first — ${r.entry.artifact} comes back to it when ${going} goes · what becomes of ${holder} is a human's call`))
+    }),
+    ...[...landing].filter(([, ids]) => ids.length > 1).map(([rel, ids]) => humanCall(v('spec', 'path-taken',
+      `${rel} takes ${ids.join(' and ')}`, `one return per path — each left from it · which one comes back is a human's call`))),
+  ]
 }
 
 export function executeAbandon(

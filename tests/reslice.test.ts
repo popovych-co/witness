@@ -318,6 +318,25 @@ describe('identity (D166)', () => {
     expect(findById(loadCanon(repo.root), 'token-refresh')).toBeDefined()
   })
 
+  // D167 (review). A path is held only for what can still land on it: an id that left it by hand
+  // and now lives elsewhere, or is gone from canon altogether, holds nothing.
+  it('a create takes a path the renamed doc was moved off — nothing comes back to it', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh'); approve(repo, 'auth-refresh')
+    expect((await repo.cli(['rename', 'auth-refresh', 'token-refresh'])).code).toBe(0)
+    repo.git('mv', 'specs/auth-refresh.md', 'specs/token-refresh.md'); repo.git('commit', '-q', '-m', 'move the file with its id')
+    expect((await repo.cli(['adopt', 'specs/token-refresh.md'])).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'a fresh spec' })).code).toBe(0)
+  })
+
+  it('a create takes a path whose last doc was deleted by hand', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh'); approve(repo, 'auth-refresh')
+    expect((await repo.cli(['rename', 'auth-refresh', 'token-refresh'])).code).toBe(0)
+    repo.git('rm', '-q', 'specs/auth-refresh.md'); repo.git('commit', '-q', '-m', 'hand delete')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'a fresh spec' })).code).toBe(0)
+  })
+
   // D167. The path half of the same rule: a superseded spec comes back to the path it left from.
   it('a create never takes the path a superseded spec comes back to — rename left it there', async () => {
     const { repo, shipped } = await renamedAndResliced()
@@ -496,5 +515,20 @@ describe('the way back takes no doc\'s place (D167)', () => {
     expect(r.stderr).toContain('path-taken')
     expect(repo.read('specs/auth-refresh.md')).toBe(planted)
     expect(String(findById(loadCanon(repo.root), 'setup-card-plan-1')!.meta.status)).toBe('draft')
+  })
+
+  it('two returns onto one path refuse — which one comes back is a human\'s call', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    await recapEffort(repo, 'other')
+    plantHolder(repo, shipped, 'other')                                      // a pre-167 doc on token-refresh's path…
+    expect((await repo.cli(['rename', 'auth-refresh', 'auth-second'])).code).toBe(0)
+    expect((await writeSpec(repo, 'setup-second', { supersedes: 'auth-second', criteria: [{ id: 'ac-second', test: '@spec:setup-second' }] })).code).toBe(0)
+    const r = await repo.cli(['abandon', 'auth-hardening'])                 // …renamed and re-sliced in turn
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('path-taken')
+    expect(r.stderr).toContain('specs/auth-refresh.md takes token-refresh and auth-second')
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'setup-card')).toBeDefined()                      // nothing unwound
+    expect(findById(canon, 'setup-second')).toBeDefined()
   })
 })
