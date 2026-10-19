@@ -311,3 +311,30 @@ describe('discharge by evidence', () => {
     expect(openDeferrals(readStream(repo.root, 'auth-refresh-plan-1'))).toHaveLength(1)
   })
 })
+
+// D166. D122 moved a debt to the parent spec "which outlives it" — and a re-slice is the one
+// event that ends the spec instead. The debt follows the content to the successor.
+describe('an obligation follows its spec to the successor (D166)', () => {
+  it('re-books onto the successor when its spec is re-sliced', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+    const id = (readStream(repo.root, 'auth-refresh-plan-1')
+      .find((e) => e.t === 'deferral') as unknown as DeferralEntry).id
+    repo.setMeta('auth-refresh-plan-1', { status: 'in-progress', pr: 9 })
+    const scenario = fakeScenario()
+    ghState(scenario, 9, 'MERGED')
+    await repo.cli(['status'], { env: gateEnv(scenario) })            // merge: plan done, debt → auth-refresh
+    expect((await writeSpec(repo, 'setup-card', {
+      supersedes: 'auth-refresh', criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }],
+    })).code).toBe(0)
+    const old = readStream(repo.root, 'auth-refresh')
+    expect(old.some((e) => e.t === 'deferral-moved' && e.id === id && e.to === 'setup-card')).toBe(true)
+    expect(openDeferrals(old)).toHaveLength(0)
+    const moved = readStream(repo.root, 'setup-card').find((e) => e.t === 'deferral' && e.id === id)
+    expect(moved).toMatchObject({ artifact: 'setup-card', moved_from: 'auth-refresh' })
+    const s = await repo.cli(['status'])
+    expect(s.stdout).toContain(id)
+    expect(s.stdout).toContain('moved from auth-refresh')
+    expect((await repo.cli(['check'])).stdout).not.toContain('stranded-deferral')
+  })
+})

@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { deferralMoves } from '../deferral.js'
 import { canonExit, prepareDeparture, type Departure } from '../departure.js'
 import { designPending, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
@@ -150,6 +151,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // meta.supersedes, so this is a no-op for plan writes.
     const supersedes = built.meta.supersedes === undefined ? undefined : String(built.meta.supersedes)
     let reslice: Departure | undefined
+    let moves: ReturnType<typeof deferralMoves> = []
     if (supersedes !== undefined) {
       if (supersedes === id) {
         return refuseWrite([v('supersedes', 'self-supersede', id!, 'a different spec')])
@@ -200,6 +202,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
           v: 1, t: 'status', artifact: supersedes, from: String(target.meta.status),
           to: 'superseded', cause: 'supersede', by: id!,
         })
+        // D166. The superseded spec's open obligations follow its content to the successor —
+        // D122's rule, whose premise ("the parent spec, which outlives it") the re-slice ends.
+        // A split's later slices find the stream already settled, so its debts go to the first.
+        moves = deferralMoves(readStream(root, supersedes), supersedes, id!)
       }
     }
 
@@ -231,16 +237,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // entry. Row 116's `w` stamp is what caught it; the shape is the one rows 93, 95 and
     // 96 all name, and every other txn writer already calls entryLine.
     const line = entryLine(entry)
-    const files = [rel, stream, ...(reslice?.files ?? [])]
+    const files = [rel, stream, ...(reslice?.files ?? []), ...(moves.length > 0 ? [journalRel(id!)] : [])]
     const res = withTxn(root, {
       op: `write(${id})`, files, journal: { stream: effort, line },
-      ...(reslice ? { journalMulti: [{ stream: reslice.entry.artifact, line: entryLine(reslice.entry as unknown as { t: 'status'; [k: string]: unknown }) }] } : {}),
+      ...(reslice ? { journalMulti: [
+        { stream: reslice.entry.artifact, line: entryLine(reslice.entry as unknown as { t: 'status'; [k: string]: unknown }) },
+        ...moves.map((m) => ({ stream: m.stream, line: entryLine(m.entry) })),
+      ] } : {}),
     }, () => {
       writeDoc(join(root, rel), { meta: built.meta, body })
       crashPoint(ctx.env, 'artifact-write')
       if (reslice) {
         reslice.remove()
         appendEntry(root, reslice.entry.artifact, reslice.entry as unknown as { t: 'status'; [k: string]: unknown })
+        for (const m of moves) appendEntry(root, m.stream, m.entry)
         crashPoint(ctx.env, 'reslice-commit')
       }
       appendEntry(root, effort, entry)
