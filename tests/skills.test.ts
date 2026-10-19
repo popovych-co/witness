@@ -83,6 +83,11 @@ describe('witness-decompose', () => {
     expect(body()).toContain('dangling-parent');
     expect(body()).toContain('never abandon it yourself');
   });
+
+  it('names the ids and paths a new spec cannot take (D166)', () => {
+    expect(body()).toContain('id-taken');
+    expect(body()).toContain('path-taken');
+  });
 });
 
 describe('witness-plan', () => {

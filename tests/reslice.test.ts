@@ -230,3 +230,82 @@ describe('the way back (D166)', () => {
     expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('live')
   })
 })
+
+// D166. An id names one artifact for the life of the repo, because its stream IS that
+// artifact's history; and a create never lands on a file another doc holds.
+describe('identity (D166)', () => {
+  it('a superseded id is never written again', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-tokens', TOKENS_CRITERIA)
+    approve(repo, 'auth-tokens')
+    await writeSpec(repo, 'token-rotation', { supersedes: 'auth-tokens', ...ROTATION_CRITERIA })
+    const again = await writeSpec(repo, 'auth-tokens', TOKENS_CRITERIA)
+    expect(again.code).toBe(2)
+    expect(again.stdout + again.stderr).toContain('id-taken')
+    expect(again.stdout + again.stderr).toContain('superseded by token-rotation')
+    expect(findById(loadCanon(repo.root), 'auth-tokens')).toBeUndefined()
+  })
+
+  it('adopt cannot bring a superseded id back either', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-tokens', TOKENS_CRITERIA)
+    approve(repo, 'auth-tokens')
+    await writeSpec(repo, 'token-rotation', { supersedes: 'auth-tokens', ...ROTATION_CRITERIA })
+    repo.write('specs/auth-tokens.md', repo.git('show', 'HEAD~1:specs/auth-tokens.md') + '\n')
+    repo.git('add', 'specs/auth-tokens.md')
+    repo.git('commit', '-q', '-m', 'hand re-create')
+    const r = await repo.cli(['adopt', 'specs/auth-tokens.md'])
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('id-taken')
+  })
+
+  it('a spec its own abandon unwound may be written again as a spec', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)   // unwound: `removed`
+    expect((await writeSpec(repo, 'auth-refresh')).code).toBe(0)
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeDefined()
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('an effort\'s slug is not a free artifact id, and the refusal says whose it is', async () => {
+    const repo = await seededRepo()
+    const r = await writeSpec(repo, repo.effort, { criteria: [{ id: 'ac-x', test: `@spec:${repo.effort}` }] })
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('id-taken')
+    expect(r.stdout + r.stderr).toContain('is an effort\'s slug')
+  })
+
+  it('witness\'s own floor stream is not a free artifact id', async () => {
+    const repo = await seededRepo()
+    const r = await writeSpec(repo, 'floor', { criteria: [{ id: 'ac-f', test: '@spec:floor' }] })
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('id-taken')
+  })
+
+  it('a stray stream does not hold its id — next and write cannot disagree', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    appendEntry(repo.root, 'auth-refresh-plan-1', { t: 'status', artifact: 'auth-refresh-plan-1', from: 'draft', to: 'approved', cause: 'gate-approve' })
+    repo.git('rm', '-q', 'plans/auth-refresh-plan-1.md')
+    repo.git('add', '-A')
+    repo.git('commit', '-q', '-m', 'hand delete', '-m', 'Witness-State: 1')
+    expect((await writePlan(repo, 'auth-refresh-plan-1')).code).toBe(0)
+  })
+
+  it('a create never lands on another doc\'s file — rename leaves the old path to the renamed doc', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    expect((await repo.cli(['rename', 'auth-refresh', 'token-refresh'])).code).toBe(0)
+    const r = await writeSpec(repo, 'auth-refresh', { summary: 'a different spec' })
+    expect(r.code).toBe(2)
+    expect(r.stdout + r.stderr).toContain('path-taken')
+    expect(r.stdout + r.stderr).toContain('holds token-refresh')
+    expect(findById(loadCanon(repo.root), 'token-refresh')).toBeDefined()
+  })
+})

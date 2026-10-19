@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { deferralMoves } from '../deferral.js'
-import { canonExit, prepareDeparture, type Departure } from '../departure.js'
+import { canonExit, idRetired, prepareDeparture, type Departure } from '../departure.js'
 import { designPending, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
 import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
@@ -136,6 +136,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal(viol).forEach(ctx.err)
       return EXIT.REFUSED
     }
+    // D166. A create may not take an id that already names something (`idRetired` — the rule
+    // `rename` applies to its target, with the one re-use of a spec its abandon unwound).
+    if (existing === undefined) {
+      const taken = idRetired(root, id!, String(manifest.type))
+      if (taken) return refuseWrite([taken])
+    }
     const built =
       manifest.type === 'plan'
         ? buildPlanMeta(root, id!, manifest, recap, canon, existing, body)
@@ -210,6 +216,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
 
     const rel = existing ? existing.rel : `${manifest.type === 'plan' ? cfg.value.paths.plans : cfg.value.paths.specs}/${id}.md`
+    // D166. Nor land on another doc's file: `rename` moves the id and the journal but leaves the
+    // path, so `specs/<old>.md` can hold the renamed doc, and a create under the old id overwrote it.
+    if (existing === undefined && existsSync(join(root, rel))) {
+      const holder = canon.docs.find((d) => d.rel === rel)
+      return refuseWrite([v('id', 'path-taken', rel, holder
+        ? `a new id — ${rel} holds ${String(holder.meta.id)}`
+        : `a new id — ${rel} holds a doc canon cannot read (fix or revert it first)`)])
+    }
     const stream = journalRel(effort)
     const unrelated = dirtyStatePaths(root).filter((p) => p !== rel && p !== stream)
     if (unrelated.length) {

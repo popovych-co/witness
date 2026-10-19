@@ -3,9 +3,11 @@ import { join } from 'node:path'
 import type { CanonPaths } from './config.js'
 import { deferralMoves } from './deferral.js'
 import { designRel } from './design.js'
+import { FLOOR_STREAM } from './floor.js'
 import { splitDoc } from './fm.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
+import { v, type Violation } from './refusal.js'
 import { findById, type Canon, type CanonDoc } from './scan.js'
 
 // D166. A spec leaves canon through exactly two verbs — the re-slice (row 62), which
@@ -92,4 +94,23 @@ export function prepareReturns(root: string, paths: CanonPaths, commit: string, 
       moves: deferralMoves(readStream(root, successor), successor, id, (d) => d.moved_from === id),
     }]
   })
+}
+
+// Whether a NEW artifact may take this id. An id names one artifact for the life of the repo,
+// because its stream IS that artifact's history. Three streams already belong to something
+// else: a superseded spec's (a successor owns its content, and its finished plans resolve their
+// parent there), an effort's, and witness's own floor pins. The one re-use is the same artifact
+// again: a spec its own abandon unwound may be written again as a spec. A stream that records
+// none of these — a stray, or a doc canon cannot parse — does not hold its id; the findings
+// that already name it (`orphan-journal`, the parse error) are its remedy.
+export function idRetired(root: string, id: string, type: string): Violation | undefined {
+  if (id === FLOOR_STREAM) return v('id', 'id-taken', id, `a new id — ${id} is witness's own floor stream`)
+  const entries = readStream(root, id)
+  if (entries[0]?.t === 'recap') return v('id', 'id-taken', id, `a new id — ${id} is an effort's slug`)
+  const exit = canonExit(entries)
+  if (exit?.to === 'superseded') {
+    return v('id', 'id-taken', id, `a new id — ${id} was superseded by ${exit.by ?? 'a successor'} and its stream is that spec's lineage`)
+  }
+  if (exit?.to === 'removed' && type !== 'spec') return v('id', 'id-taken', id, `a new id — ${id} was a spec its abandon unwound`)
+  return undefined
 }

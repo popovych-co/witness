@@ -9,6 +9,7 @@ import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v } from '../refusal.js'
+import { idRetired } from '../departure.js'
 import { findById, findCycle, loadCanon } from '../scan.js'
 import { validateDoc } from '../schemas.js'
 import { canonicalSha, short } from '../sha.js'
@@ -37,6 +38,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (canon.docs.filter((d) => String(d.meta.id) === id).length > 1) {
     violations.push(v('id', 'duplicate-id', id, 'one doc per id'))
   }
+  // D166. Adopt runs the checks write runs: a hand-made doc may not take a retired id either.
+  const taken = idRetired(root, id, String(meta.type))
+  if (taken) violations.push(taken)
   for (const dep of Array.isArray(meta.depends) ? (meta.depends as string[]) : []) {
     if (!findById(canon, dep)) violations.push(v('depends', 'unknown-dep', dep, 'an existing doc id'))
   }

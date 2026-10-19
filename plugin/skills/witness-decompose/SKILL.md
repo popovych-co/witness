@@ -87,7 +87,7 @@ Get these right the first time — the dashboard trends your first-try valid rat
 - `criteria`: ≥ 1 entry, unique ids, each exactly one of `test` (value must be `@spec:<this-spec-id>`) or `cmd`. A criterion that cannot fail is not a criterion.
 - `covers`: the recap goal ids this spec honestly advances — the critic judges the mapping's quality.
 - Body: exactly the `## Motivation` and `## Behavior` headings; behavior-only — internal interfaces never appear in a spec.
-- `id`: `[a-z0-9-]+`; new ids land at `specs/<id>.md` (or the repo's configured specs dir).
+- `id`: `[a-z0-9-]+`; new ids land at `specs/<id>.md` (or the repo's configured specs dir). An id that already names something is refused `id-taken` — a superseded spec, an effort's slug, witness's `floor` — and so is a path another doc holds (`path-taken`): choose a new id.
 - `needs`: external prerequisites only, machine-checkable (`env:` / `cmd:` / `manual:` + `satisfied`).
 - `ui`: set `ui: true` in the manifest **iff** the slice changes browser-rendered or interactive behavior (a screen, a form, client-side interaction). A browser-behavior slice **without** the flag, or a flag on a non-UI slice, is a slicing-critic finding. A `ui` spec earns a **design stage** before its plan — the look is approved before code (Decision 69).
 
