@@ -5,6 +5,7 @@ import { deferralMoves } from './deferral.js'
 import { designRel } from './design.js'
 import { FLOOR_STREAM } from './floor.js'
 import { splitDoc } from './fm.js'
+import { lastWitnessed } from './adopt.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
 import { v, type Violation } from './refusal.js'
@@ -161,4 +162,19 @@ export function idRetired(root: string, id: string, type: string): Violation | u
   }
   if (exit?.to === 'removed' && type !== 'spec') return v('id', 'id-taken', id, `a new id — ${id} was a spec its abandon unwound`)
   return undefined
+}
+
+// D167. Whether a NEW artifact may take this path. A superseded spec comes back to the path it
+// left from, so its departure holds that path as it holds the id. Any other id left a path only
+// by hand, since `rename` keeps the file; the one release is a removal, the same re-use
+// `idRetired` allows. The two rules part only after a `rename`: otherwise the path is
+// `<specs>/<id>.md`, and `idRetired` already answers.
+export function pathRetired(root: string, rel: string, id: string): Violation | undefined {
+  const prior = lastWitnessed(root, rel)?.id
+  if (prior === undefined || prior === id) return undefined
+  const exit = canonExit(readStream(root, prior))
+  if (exit?.to === 'removed') return undefined
+  return v('id', 'path-taken', rel, exit?.to === 'superseded'
+    ? `a new id — ${rel} is where ${prior} comes back if the re-slice that superseded it is taken back`
+    : `a new id — ${rel} held ${prior} · witness rename is how an id changes`)
 }

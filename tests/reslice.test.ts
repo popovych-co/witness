@@ -5,7 +5,7 @@ import { canonExit } from '../src/departure.js'
 import { openDeferrals } from '../src/deferral.js'
 import { appendEntry, readStream, streamExists } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, fakeScenario, gateEnv, ghState, PLAN_BODY, plantHolder, recapEffort, renamedAndResliced, seededRepo, shippableRepo, stampLive, writeDesign, writePlan, writeSpec } from './helpers.js'
+import { approve, fakeScenario, gateEnv, ghState, PLAN_BODY, plantHolder, recapEffort, renamedAndResliced, seededRepo, shippableRepo, SPEC_BODY, stampLive, writeDesign, writePlan, writeSpec } from './helpers.js'
 
 const TOKENS_CRITERIA = { criteria: [{ id: 'ac-tokens', test: '@spec:auth-tokens' }] }
 const ROTATION_CRITERIA = { criteria: [{ id: 'ac-rotation', test: '@spec:token-rotation' }] }
@@ -310,6 +310,18 @@ describe('identity (D166)', () => {
     expect(r.stdout + r.stderr).toContain('path-taken')
     expect(r.stdout + r.stderr).toContain('holds token-refresh')
     expect(findById(loadCanon(repo.root), 'token-refresh')).toBeDefined()
+  })
+
+  // D167. The path half of the same rule: a superseded spec comes back to the path it left from.
+  it('a create never takes the path a superseded spec comes back to — rename left it there', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    await recapEffort(repo, 'other')
+    const r = await writeSpec(repo, 'auth-refresh', { summary: 'a different spec' }, SPEC_BODY, 'other')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('path-taken')
+    expect(r.stderr).toContain('is where token-refresh comes back')
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)     // the path stayed free for the way back
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
   })
 })
 

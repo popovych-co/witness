@@ -8,6 +8,7 @@ import { canonicalSha } from './sha.js'
 export interface Witnessed {
   sha: string
   criteria: unknown
+  id: string
 }
 
 const hasTrailer = (root: string, sha: string): boolean =>
@@ -23,7 +24,7 @@ export function lastWitnessed(root: string, rel: string): Witnessed | undefined 
     if (!raw.ok) continue
     const doc = splitDoc(raw.out)
     if (!doc.ok) continue
-    return { sha: canonicalSha(doc.value.meta, doc.value.body), criteria: doc.value.meta.criteria ?? null }
+    return { sha: canonicalSha(doc.value.meta, doc.value.body), criteria: doc.value.meta.criteria ?? null, id: String(doc.value.meta.id) }
   }
   return undefined
 }

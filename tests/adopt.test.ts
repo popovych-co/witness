@@ -3,7 +3,7 @@ import { serializeDoc, splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import type { TestRepo } from './helpers.js'
 import {
-  copyFixture, fixtureEnv, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
+  approve, copyFixture, fixtureEnv, plantHolder, recapEffort, renamedAndResliced, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
 } from './helpers.js'
 
 async function liveRepo(): Promise<TestRepo> {
@@ -103,5 +103,36 @@ describe('witness adopt', () => {
     const res = await repo.cli(['adopt', SPEC], { env: fixtureEnv() })
     expect(res.code).toBe(0)
     expect(repo.git('rev-parse', 'HEAD').trim()).toBe(before)
+  })
+})
+
+// D167. Only a new artifact is held off a path another id was last witnessed at: a doc already
+// witnessed stays adoptable wherever it sits.
+describe('a new artifact keeps off a held path (D167)', () => {
+  it('refuses a hand-made doc on the path a superseded spec comes back to', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    repo.write('specs/auth-refresh.md', shipped.replace('id: token-refresh', 'id: auth-new').replace('@spec:token-refresh', '@spec:auth-new'))
+    const r = await repo.cli(['adopt', 'specs/auth-refresh.md'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('is where token-refresh comes back')
+  })
+
+  it('refuses an in-place id change — witness rename is how an id changes', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh'); approve(repo, 'auth-refresh')
+    repo.write(SPEC, repo.read(SPEC).replace('id: auth-refresh', 'id: auth-other').replace('@spec:auth-refresh', '@spec:auth-other'))
+    const r = await repo.cli(['adopt', SPEC])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('path-taken')
+    expect(r.stderr).toContain('held auth-refresh')
+    expect(r.stderr).toContain(`git checkout HEAD -- ${SPEC}`)               // the existing revert help is the way back
+  })
+
+  it('still adopts an amendment of a doc a pre-167 write left on such a path', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    await recapEffort(repo, 'other')
+    const planted = plantHolder(repo, shipped, 'other')
+    repo.write('specs/auth-refresh.md', planted.replace('Rotate before expiry.', 'Rotate well before expiry.'))
+    expect((await repo.cli(['adopt', 'specs/auth-refresh.md'])).code).toBe(0)
   })
 })
