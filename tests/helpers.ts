@@ -443,3 +443,14 @@ export const SKILL_GROUND_RULES = [
   'designs/**',
   'Read a file before your first edit',
 ]
+
+// A second effort, so a test can put plans or amendments under a different owner.
+export async function recapEffort(repo: TestRepo, slug: string): Promise<void> {
+  repo.write(`recap-${slug}.json`, JSON.stringify({
+    effort: slug, class: 'feature', goals: [{ id: 'g1', text: `${slug} goal` }],
+    non_goals: [], constraints: [], slices: [],
+  }))
+  const r = await repo.cli(['recap', '--file', `recap-${slug}.json`])
+  rmSync(join(repo.root, `recap-${slug}.json`), { force: true })
+  if (r.code !== 0) throw new Error(`recap ${slug}: ${r.stderr}`)
+}

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { Entry } from './journal.js'
+import type { Entry, EntryType } from './journal.js'
 
 export type DeferralKind = 'artifact-debt' | 'lens-suspicion'
 export type DismissCause = 'superseded' | 'lens-retired' | 'judged-wrong'
@@ -55,4 +55,19 @@ export function deferralsBlock(open: DeferralEntry[]): string {
     'finding and anchor it exactly as listed. If it is gone, say so in your coverage. Silence ' +
     'is read as "still present".\n\n' +
     open.map((d, i) => `${i + 1}. ${d.anchor} — ${d.gate} round ${d.round} (${d.id})`).join('\n') + '\n\n'
+}
+
+// D122 + D166. A debt changes homes when the artifact holding it stops being the one the next
+// effort will meet: a plan's merge hands its open obligations to the parent spec (stamp.ts), a
+// re-slice hands the superseded spec's to its successor (write.ts), and taking a re-slice back
+// hands them home again (departure.ts, `which` picking the ones that came from there). One
+// rule for all three: the id is preserved, because age is measured across the move, and the
+// old stream records where each debt went.
+export function deferralMoves(
+  entries: Entry[], from: string, to: string, which: (d: DeferralEntry) => boolean = () => true,
+): Array<{ stream: string; entry: { t: EntryType; [k: string]: unknown } }> {
+  return openDeferrals(entries).filter(which).flatMap((d) => [
+    { stream: from, entry: { v: 1 as const, t: 'deferral-moved' as const, id: d.id, to } },
+    { stream: to, entry: { ...d, artifact: to, moved_from: from } },
+  ])
 }

@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { git, primaryRoot, tryGit } from '../gitio.js'
-import { journalRel, readStream, streamExists, type Entry, type StatusEntry } from '../journal.js'
+import { canonExit } from '../departure.js'
+import { journalRel, readStream, streamExists, type Entry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { rows } from '../toon.js'
@@ -52,10 +53,11 @@ const streamIds = (root: string): string[] => {
     .sort()
 }
 
+// D166. Read through `canonExit`, the one reading of a departure: a re-slice that was taken
+// back is no longer a lineage step.
 function successorOf(root: string, id: string): string | undefined {
-  const terminal = readStream(root, id).find(
-    (e) => e.t === 'status' && (e as unknown as StatusEntry).to === 'superseded') as unknown as StatusEntry | undefined
-  return terminal?.by
+  const exit = canonExit(readStream(root, id))
+  return exit?.to === 'superseded' ? exit.by : undefined
 }
 
 function predecessorsOf(root: string, id: string): string[] {

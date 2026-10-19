@@ -1,39 +1,37 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { dirtyStatePaths, primaryRoot } from '../gitio.js'
-import { journalRel } from '../journal.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { kv } from '../toon.js'
 import { renderRefusal } from '../refusal.js'
-import { completeTxn, pendingTxn, rollbackTxn, type TxnMarker } from '../txn.js'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { completeTxn, landedJournal, pendingTxn, rollbackTxn, type TxnMarker } from '../txn.js'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-// D121. The interrupted transaction's own state ranks this: `completeTxn` is idempotent
-// about the journal append (it compares the last line), so if the line already landed the
-// write finished and only the commit is missing. `--complete | --rollback` named the two
-// flags and neither the right answer nor the cost of guessing wrong — at the one prompt a
-// human meets while looking at a crash.
+// D121. The interrupted transaction's own state ranks this: `completeTxn` appends only the
+// journal lines that have not landed, so if every one already landed the write finished and
+// only the commit is missing. `--complete | --rollback` named the two flags and neither the
+// right answer nor the cost of guessing wrong — at the one prompt a human meets while
+// looking at a crash. D166: the count is `landedJournal`'s, the derivation `completeTxn`
+// uses, so a stream that takes several lines reads the same to both.
 export function recoverChoice(root: string, marker: TxnMarker): Decision {
-  const items = [...(marker.journal ? [marker.journal] : []), ...(marker.journalMulti ?? [])]
-  const landed = items.filter(({ stream, line }) => {
-    const p = join(root, journalRel(stream))
-    return existsSync(p) && readFileSync(p, 'utf8').split('\n').filter(Boolean).at(-1) === line
-  }).length
-  const complete = landed === items.length && items.length > 0
+  const streams = landedJournal(root, marker)
+  const total = streams.reduce((n, s) => n + s.lines.length, 0)
+  const landed = streams.reduce((n, s) => n + s.landed, 0)
+  const complete = landed === total && total > 0
   return {
     key: 'recover', rule: complete ? 'txn-write-landed' : 'txn-write-partial',
     options: complete
       ? [
           { command: 'witness recover --complete', depth: 'root', runnable: true,
-            why: `${landed} of ${items.length} journal line(s) are already on disk and ${marker.files.length} file(s) are written — the transaction finished and only the state commit is missing; completing makes git match what the journal already records` },
+            why: `${landed} of ${total} journal line(s) are already on disk and ${marker.files.length} file(s) are written — the transaction finished and only the state commit is missing; completing makes git match what the journal already records` },
           { command: 'witness recover --rollback', depth: 'root', runnable: true,
             when: 'you no longer want the operation that was interrupted',
             tradeoff: `reverts ${marker.files.length} file(s) and drops the journal append — the operation must be retaken` },
         ]
       : [
           { command: 'witness recover --rollback', depth: 'root', runnable: true,
-            why: `only ${landed} of ${items.length} journal line(s) landed — the transaction was interrupted mid-write, and rolling back to a known state is safer than committing a partial one` },
+            why: `only ${landed} of ${total} journal line(s) landed — the transaction was interrupted mid-write, and rolling back to a known state is safer than committing a partial one` },
           { command: 'witness recover --complete', depth: 'root', runnable: true,
             when: 'you have inspected the files and the partial state is what you want',
             tradeoff: 'commits a transaction that never finished writing; the journal and the tree may disagree' },

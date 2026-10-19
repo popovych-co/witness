@@ -1,21 +1,24 @@
-import { unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
+import { prepareDeparture, prepareReturns, type Departure, type Return, type TakenBack } from './departure.js'
+import { designRel } from './design.js'
 import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
-import { tryGit, stateCommit } from './gitio.js'
+import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, withTxn } from './txn.js'
-import { appendEntry, entryLine, journalRel, type StatusEntry } from './journal.js'
-import { findById, type Canon, type CanonDoc } from './scan.js'
+import { appendEntry, effortAbandoned, effortStreams, entryLine, journalRel, readStream, type EntryType, type StatusEntry } from './journal.js'
+import { findById, plansOn, type Canon, type CanonDoc } from './scan.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { kv } from './toon.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 
-export function pinCommit(root: string, rel: string, pin: string): string | undefined {
-  const log = tryGit(root, 'log', '--format=%H', '--', rel)
+export function pinCommit(root: string, rel: string, pin: string, from?: string): string | undefined {
+  // `from`: walk history from that revision instead of HEAD — for a file a later commit deleted
+  const log = tryGit(root, 'log', '--format=%H', ...(from === undefined ? [] : [from]), '--', rel)
   if (!log.ok) return undefined
   // Status-only touch-ups (approve, stampLive, a gate's writeStamp) commit the same
   // canonical sha under a new commit, since status is a volatile field excluded from
@@ -34,20 +37,79 @@ export function pinCommit(root: string, rel: string, pin: string): string | unde
 }
 
 export type SpecRevert =
-  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string }
-  | { doc: CanonDoc; action: 'delete' }
+  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined }; returns: Return[] }
+  | { doc: CanonDoc; action: 'delete'; departure: Departure; returns: Return[] }
+
+// D166. The unwind that does not happen. Abandoning a plan takes back the spec content it was
+// paired with — the whole spec when its effort created it (row 29), else the amendment. But a
+// sibling derived from the same version either shipped it (taking it back makes canon forget
+// built behavior) or is still building it (taking it back strands that plan — issue #34's
+// shape). So the content stays while anything stands on it, and the caller says why.
+// `shipped` is what makes a keep permanent; without it, the writing effort's next abandon is
+// what takes the content back. A separate result rather than a third SpecRevert arm, so
+// executeAbandon can never take a keep for a delete.
+export interface SpecKeep { doc: CanonDoc; action: 'keep'; standing: string[]; shipped: boolean }
+
+export const keptLine = (k: SpecKeep): string =>
+  `${String(k.doc.meta.id)} — not unwound · still standing on it: ${k.standing.join(' ')}`
+
+// D166 (review). The writes the way back takes back besides this abandon's own targets: every
+// write of an effort already abandoned — whose abandon skipped a spec a later re-slice had
+// departed — and every write of the effort being abandoned now (`effort`, absent on the plan
+// path). Content one of them wrote never comes back into canon on its own — unless a plan
+// outside the abandon set stands on it: the keep rule, which never takes shipped content back.
+function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort: string | undefined): TakenBack {
+  const gone = effortStreams(root).filter((e) => e === effort || effortAbandoned(readStream(root, e)))
+  return (id, sha, rel, at) =>
+    plansOn(canon, id, { exclude: abandonSet, pin: sha }).length === 0 &&
+    gone.some((e) => readStream(root, e).some((x) => x.t === 'write' && x.artifact === id && x.sha === sha))
+      ? pinCommit(root, rel, sha, at)
+      : undefined
+}
 
 export function specRevertFor(
-  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>,
-): Result<SpecRevert | undefined> {
+  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, effort?: string,
+): Result<SpecRevert | SpecKeep | undefined> {
   const current = canonicalSha(spec.meta, spec.body)
   if (current !== pin) {
     return refuse([v('spec', 'stacked-amendment', `${String(spec.meta.id)} is at ${current.slice(0, 7)}, pin is ${pin.slice(0, 7)}`,
       'abandon newest-first: a later amendment touched this spec')])
   }
+  // D166. After "newest-first" (row 84 stands) and ahead of every precondition of the unwind
+  // itself — a resolvable pin, no waiting dependents — because a kept spec unwinds nothing and
+  // dangles nothing. Same pin in both branches: the siblings a delete would orphan were all
+  // derived from the content it removes, and a restore moves toward older pins.
+  const standing = plansOn(canon, String(spec.meta.id), { exclude: abandonSet, pin })
+  if (standing.length > 0) {
+    return ok({
+      doc: spec, action: 'keep', standing: standing.map((p) => String(p.meta.id)),
+      shipped: standing.some((p) => String(p.meta.status) === 'done'),
+    })
+  }
   const commit = pinCommit(root, spec.rel, pin)
   if (!commit) {
     return refuse([v('spec', 'pin-unresolvable', pin.slice(0, 7), 'a committed version matching the pin')])
+  }
+  // D166. The way back: the write being taken back may have departed a predecessor (a
+  // re-slice), which then returns with it. A re-slice can cut one spec into several slices, and
+  // taking back one while another still stands would leave the predecessor half-described, so
+  // that write is kept until its siblings go too — together, through the effort that made them.
+  const returns = prepareReturns(root, canon.paths, commit, String(spec.meta.id), takenBackBy(root, canon, abandonSet, effort))
+  // D166 (review). A sibling slice stands when this abandon leaves it in canon: it is outside the
+  // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
+  // good when a plan shipped it — and then so does this keep, since nothing can take the
+  // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
+  const cut = new Set(returns.flatMap((r) => [r.entry.artifact, ...r.unwound.map((u) => u.artifact)]))
+  const slices = canon.docs
+    .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
+    .flatMap((d) => {
+      const id = String(d.meta.id)
+      const leaving = abandonSet.has(id)
+      const on = plansOn(canon, id, leaving ? { exclude: abandonSet, pin: canonicalSha(d.meta, d.body) } : { exclude: abandonSet })
+      return leaving && on.length === 0 ? [] : [{ id, shipped: on.some((p) => String(p.meta.status) === 'done') }]
+    })
+  if (slices.length > 0) {
+    return ok({ doc: spec, action: 'keep', standing: slices.map((s) => s.id), shipped: slices.some((s) => s.shipped) })
   }
   const prior = tryGit(root, 'show', `${commit}^:${spec.rel}`)
   if (!prior.ok) {
@@ -59,17 +121,30 @@ export function specRevertFor(
       return refuse([v('spec', 'waiting-dependents', dependents.join(' '),
         'no docs outside the abandon set may depend on a spec being deleted')])
     }
-    return ok({ doc: spec, action: 'delete' })
+    // D166. The unwind departs the spec through the same door the re-slice uses, so
+    // everything that leaves canon with a spec — its design included — leaves here too.
+    return ok({
+      doc: spec, action: 'delete', returns,
+      departure: prepareDeparture(root, canon.paths, spec, {
+        v: 1, t: 'status', artifact: String(spec.meta.id), from: String(spec.meta.status), to: 'removed', cause: 'abandon',
+      }),
+    })
   }
   const parsed = splitDoc(prior.out)
   const toStatus = parsed.ok ? String(parsed.value.meta.status) : 'draft'
-  return ok({ doc: spec, action: 'restore', content: prior.out, toStatus })
+  // D166. The look goes back with the content it was drawn for: the design as it stood before
+  // the commit being taken back, byte for byte — or none, if there was none then.
+  const designR = designRel(canon.paths, String(spec.meta.id))
+  const priorDesign = gitBlob(root, `${commit}^`, designR)
+  const design = priorDesign !== undefined || existsSync(join(root, designR)) ? { rel: designR, prior: priorDesign } : undefined
+  return ok({ doc: spec, action: 'restore', content: prior.out, toStatus, design, returns })
 }
 
 export interface AbandonItem {
   planStamp?: PreparedStamp
   planId?: string
   revert?: SpecRevert
+  kept?: SpecKeep
 }
 
 export function executeAbandon(
@@ -79,6 +154,7 @@ export function executeAbandon(
   const journalMulti: Array<{ stream: string; line: string }> = []
   const stamps: PreparedStamp[] = []
   const specEntries: Array<{ stream: string; entry: StatusEntry }> = []
+  const returnEntries: Array<{ stream: string; entry: { t: EntryType; [k: string]: unknown } }> = []
 
   for (const item of items) {
     if (item.planStamp) {
@@ -89,14 +165,28 @@ export function executeAbandon(
     if (item.revert) {
       const spec = item.revert.doc
       const id = String(spec.meta.id)
-      const entry: StatusEntry = {
-        v: 1, t: 'status', artifact: id, from: String(spec.meta.status),
-        to: item.revert.action === 'restore' ? item.revert.toStatus : 'removed',
-        cause: 'abandon',
+      const entry: StatusEntry = item.revert.action === 'delete' ? item.revert.departure.entry : {
+        v: 1, t: 'status', artifact: id, from: String(spec.meta.status), to: item.revert.toStatus, cause: 'abandon',
       }
       specEntries.push({ stream: id, entry })
-      files.add(spec.rel); files.add(journalRel(id))
+      const touched = item.revert.action === 'delete'
+        ? item.revert.departure.files
+        : [spec.rel, journalRel(id), ...(item.revert.design ? [item.revert.design.rel] : [])]
+      for (const f of touched) files.add(f)
       journalMulti.push({ stream: id, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) })
+      // D166. A spec this write had departed comes back in the same state commit.
+      for (const r of item.revert.returns) {
+        const lines = [
+          ...[r.entry, ...r.unwound].map((e) => ({ stream: e.artifact, entry: e as unknown as { t: EntryType; [k: string]: unknown } })),
+          ...r.moves,
+        ]
+        for (const f of r.files) files.add(f)
+        for (const l of lines) {
+          files.add(journalRel(l.stream))
+          journalMulti.push({ stream: l.stream, line: entryLine(l.entry) })
+        }
+        returnEntries.push(...lines)
+      }
     }
   }
   let effortLine: { stream: string; line: string } | undefined
@@ -116,13 +206,20 @@ export function executeAbandon(
     return withTxn(root, { op: 'abandon', files: [...files], journalMulti }, () => {
       for (const item of items) {
         if (item.revert) {
-          const abs = join(root, item.revert.doc.rel)
-          if (item.revert.action === 'restore') writeFileSync(abs, item.revert.content)
-          else unlinkSync(abs) // stateCommit's `git add` below correctly stages a tracked-but-missing file as a deletion
+          // stateCommit's `git add` below stages a tracked-but-missing file as a deletion
+          if (item.revert.action === 'delete') item.revert.departure.remove()
+          else {
+            writeFileSync(join(root, item.revert.doc.rel), item.revert.content)
+            const d = item.revert.design
+            if (d?.prior !== undefined) writeFileSync(join(root, d.rel), d.prior)
+            else if (d !== undefined && existsSync(join(root, d.rel))) unlinkSync(join(root, d.rel))
+          }
+          for (const r of item.revert.returns) r.restore()
         }
       }
       for (const s of stamps) writeStamp(root, s)
       for (const se of specEntries) appendEntry(root, se.stream, se.entry as unknown as { t: 'status'; [k: string]: unknown })
+      for (const re of returnEntries) appendEntry(root, re.stream, re.entry)
       if (effortLine) {
         appendEntry(root, effortLine.stream, JSON.parse(effortLine.line))
       }
@@ -180,7 +277,9 @@ export function planItems(
     if (parent) {
       const revertR = specRevertFor(root, canon, parent, String(plan.meta['derives-from']), abandonSet)
       if (!revertR.ok) return revertR
-      item.revert = revertR.value
+      const outcome = revertR.value
+      if (outcome?.action === 'keep') item.kept = outcome
+      else item.revert = outcome
     }
   }
   return ok(item)

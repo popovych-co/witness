@@ -1,17 +1,19 @@
-import { existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
-import { designPending, designRel, designStamp } from '../design.js'
+import { deferralMoves } from '../deferral.js'
+import { canonExit, idRetired, prepareDeparture, type Departure } from '../departure.js'
+import { designPending, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
 import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
-import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry, type StatusEntry } from '../journal.js'
+import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry } from '../journal.js'
 import { acquireLock } from '../lock.js'
-import { renderRefusal, v, type Violation } from '../refusal.js'
+import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { baseForSpec, contentAtSha } from '../history.js'
-import { findById, findCycle, loadCanon, type Canon, type CanonDoc } from '../scan.js'
+import { findById, findCycle, loadCanon, planFinished, plansOn, type Canon, type CanonDoc } from '../scan.js'
 import { canonicalJson, canonicalSha, short } from '../sha.js'
 import { kv } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -134,6 +136,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal(viol).forEach(ctx.err)
       return EXIT.REFUSED
     }
+    // D166. A create may not take an id that already names something (`idRetired` — the rule
+    // `rename` applies to its target, with the one re-use of a spec its abandon unwound).
+    if (existing === undefined) {
+      const taken = idRetired(root, id!, String(manifest.type))
+      if (taken) return refuseWrite([taken])
+    }
     const built =
       manifest.type === 'plan'
         ? buildPlanMeta(root, id!, manifest, recap, canon, existing, body)
@@ -148,7 +156,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // refusal here never touches disk. Applies only to specs — buildPlanMeta never sets
     // meta.supersedes, so this is a no-op for plan writes.
     const supersedes = built.meta.supersedes === undefined ? undefined : String(built.meta.supersedes)
-    let reslice: { doc: CanonDoc; entry: StatusEntry; line: string } | undefined
+    let reslice: Departure | undefined
+    let moves: ReturnType<typeof deferralMoves> = []
     if (supersedes !== undefined) {
       if (supersedes === id) {
         return refuseWrite([v('supersedes', 'self-supersede', id!, 'a different spec')])
@@ -159,30 +168,62 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       }
       const target = findById(canon, supersedes)
       if (!target) {
-        const alreadyTerminal = readStream(root, supersedes)
-          .some((e) => e.t === 'status' && (e as unknown as StatusEntry).to === 'superseded')
-        if (!alreadyTerminal) {
+        // D166. Any departure is terminal here — a spec its abandon unwound as well as one
+        // already superseded: either way there is nothing left to delete. Abandoning the plan
+        // a `dangling-parent` refusal names can unwind the very spec this write re-slices.
+        if (canonExit(readStream(root, supersedes)) === undefined) {
           return refuseWrite([v('supersedes', 'unknown-supersedes', supersedes,
-            'an existing spec (or one already journal-terminal)')])
+            'an existing spec (or one that already left canon)')])
         }
       } else {
+        // D166. Re-slicing re-cuts specs (row 5). Deleting a plan here stranded a live flow, and
+        // deleting the principles removed every chore's only parent, with nothing to bring
+        // either back.
+        if (target.meta.type !== 'spec') {
+          return refuseWrite([v('supersedes', 'not-a-spec', `${supersedes} is a ${String(target.meta.type)}`,
+            'a spec — a plan is withdrawn with witness abandon and principles are amended in place')])
+        }
         const dependents = canon.docs
           .filter((d) => String(d.meta.id) !== id)
           .filter((d) => ((d.meta.depends ?? []) as string[]).includes(supersedes))
           .map((d) => String(d.meta.id))
-        if (dependents.length > 0) {
-          return refuseWrite([v('supersedes', 'dangling-depends', dependents.join(' '),
-            'dependents rewritten first — the re-slice rewrites them before deleting')])
-        }
-        const entry: StatusEntry = {
+        // D166. A plan's `parent` is the other edge into the spec this deletes, and row 62
+        // guarded only `depends`: every gate reads the parent, so a plan still moving was left
+        // unable to move and impossible to clear (issue #34). A finished plan holds nothing — the
+        // successor carries the content forward, and `check` resolves the plan's parent in the
+        // departed stream. Whether a moving plan ships first or is withdrawn is a human's call,
+        // so the row says so and names no command an agent could run for them.
+        const moving = plansOn(canon, supersedes).filter((p) => !planFinished(p)).map((p) => String(p.meta.id))
+        // Both edges in ONE refusal: every refusal counts against the first-try rate the
+        // dashboard trends, and learning of the second edge only after repairing the first
+        // would cost a refusal for nothing.
+        const dangling = [
+          ...(dependents.length > 0 ? [v('supersedes', 'dangling-depends', dependents.join(' '),
+            'dependents rewritten first — the re-slice rewrites them before deleting')] : []),
+          ...(moving.length > 0 ? [humanCall(v('supersedes', 'dangling-parent', moving.join(' '),
+            'those plans finished or withdrawn first — the re-slice deletes their parent and which way each goes is a human\'s call'))] : []),
+        ]
+        if (dangling.length > 0) return refuseWrite(dangling)
+        reslice = prepareDeparture(root, cfg.value.paths, target, {
           v: 1, t: 'status', artifact: supersedes, from: String(target.meta.status),
           to: 'superseded', cause: 'supersede', by: id!,
-        }
-        reslice = { doc: target, entry, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) }
+        })
+        // D166. The superseded spec's open obligations follow its content to the successor —
+        // D122's rule, whose premise ("the parent spec, which outlives it") the re-slice ends.
+        // A split's later slices find the stream already settled, so its debts go to the first.
+        moves = deferralMoves(readStream(root, supersedes), supersedes, id!)
       }
     }
 
     const rel = existing ? existing.rel : `${manifest.type === 'plan' ? cfg.value.paths.plans : cfg.value.paths.specs}/${id}.md`
+    // D166. Nor land on another doc's file: `rename` moves the id and the journal but leaves the
+    // path, so `specs/<old>.md` can hold the renamed doc, and a create under the old id overwrote it.
+    if (existing === undefined && existsSync(join(root, rel))) {
+      const holder = canon.docs.find((d) => d.rel === rel)
+      return refuseWrite([v('id', 'path-taken', rel, holder
+        ? `a new id — ${rel} holds ${String(holder.meta.id)}`
+        : `a new id — ${rel} holds a doc canon cannot read (fix or revert it first)`)])
+    }
     const stream = journalRel(effort)
     const unrelated = dirtyStatePaths(root).filter((p) => p !== rel && p !== stream)
     if (unrelated.length) {
@@ -210,24 +251,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // entry. Row 116's `w` stamp is what caught it; the shape is the one rows 93, 95 and
     // 96 all name, and every other txn writer already calls entryLine.
     const line = entryLine(entry)
-    const supersededDesignRel = reslice ? designRel(cfg.value.paths, reslice.entry.artifact) : undefined
-    const files = [rel, stream,
-      ...(reslice ? [reslice.doc.rel, journalRel(reslice.entry.artifact)] : []),
-      ...(supersededDesignRel && existsSync(join(root, supersededDesignRel)) ? [supersededDesignRel] : []),
-    ]
+    const files = [rel, stream, ...(reslice?.files ?? []), ...(moves.length > 0 ? [journalRel(id!)] : [])]
     const res = withTxn(root, {
       op: `write(${id})`, files, journal: { stream: effort, line },
-      ...(reslice ? { journalMulti: [{ stream: reslice.entry.artifact, line: reslice.line }] } : {}),
+      ...(reslice ? { journalMulti: [
+        { stream: reslice.entry.artifact, line: entryLine(reslice.entry as unknown as { t: 'status'; [k: string]: unknown }) },
+        ...moves.map((m) => ({ stream: m.stream, line: entryLine(m.entry) })),
+      ] } : {}),
     }, () => {
       writeDoc(join(root, rel), { meta: built.meta, body })
       crashPoint(ctx.env, 'artifact-write')
       if (reslice) {
-        unlinkSync(join(root, reslice.doc.rel))
-        const supersededDesign = designRel(cfg.value.paths, reslice.entry.artifact)
-        if (existsSync(join(root, supersededDesign))) {
-          unlinkSync(join(root, supersededDesign))
-        }
+        reslice.remove()
         appendEntry(root, reslice.entry.artifact, reslice.entry as unknown as { t: 'status'; [k: string]: unknown })
+        for (const m of moves) appendEntry(root, m.stream, m.entry)
         crashPoint(ctx.env, 'reslice-commit')
       }
       appendEntry(root, effort, entry)

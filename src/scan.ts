@@ -67,6 +67,26 @@ export function plannableParent(doc: CanonDoc): boolean {
   return doc.meta.type === 'principles' ? s === 'approved' : s === 'approved' || s === 'live'
 }
 
+// D166. The one derivation of "this plan no longer moves": `done` merged and `abandoned` was
+// withdrawn. check's stray-worktree rule, next's plan queue and the re-slice's guard all ask
+// exactly this.
+export function planFinished(doc: CanonDoc): boolean {
+  const s = String(doc.meta.status)
+  return s === 'done' || s === 'abandoned'
+}
+
+// D166. The plans that stand on a spec: its children that have not been withdrawn, outside
+// the set of plans the asking operation is itself retiring. A `done` plan stands — it shipped
+// this spec — and so does one still moving; only `abandoned` has stepped off. `pin` narrows to
+// the children derived from one version of the spec, which is what an unwind would take away.
+export function plansOn(canon: Canon, specId: string, opts: { exclude?: Set<string>; pin?: string } = {}): CanonDoc[] {
+  return canon.docs.filter((d) =>
+    d.meta.type === 'plan' && d.meta.parent === specId &&
+    String(d.meta.status) !== 'abandoned' &&
+    !(opts.exclude?.has(String(d.meta.id)) ?? false) &&
+    (opts.pin === undefined || d.meta['derives-from'] === opts.pin))
+}
+
 export function findCycle(canon: Canon, extra?: { id: string; depends: string[] }): string[] | undefined {
   const deps = new Map<string, string[]>()
   for (const d of canon.docs) {

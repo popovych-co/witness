@@ -4,7 +4,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
-import { findById, loadCanon, plannableParent, type Canon, type CanonDoc } from '../scan.js'
+import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
@@ -701,8 +701,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   }
   const planless = canon.docs
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
-    .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) &&
-      !['done', 'abandoned'].includes(String(p.meta.status))))
+    .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) && !planFinished(p)))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
     // last on purpose: the only filter that costs a subprocess — the in-memory ones above
     // discard for free, and all four are pure predicates over an intersection

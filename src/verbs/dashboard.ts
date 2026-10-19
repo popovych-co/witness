@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { departedStreams } from '../departure.js'
 import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
 import { divergence, primaryRoot } from '../gitio.js'
@@ -49,7 +50,9 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
 export function deferralRows(
   root: string, canon: Canon,
 ): Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> {
-  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  // D166. A departed spec's stream is the third source: an obligation recorded there is still
+  // open until it is dismissed, and `status` is where every open obligation is listed (D122).
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id)), ...departedStreams(root, canon)])
   const out: Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> = []
   for (const id of streams) {
     const entries = readStream(root, id)

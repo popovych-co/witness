@@ -30,6 +30,17 @@ export function tryGit(root: string, ...args: string[]): { ok: boolean; out: str
   }
 }
 
+// D166. The bytes git stores for a path at a revision, untouched. `git()` strips one trailing
+// newline, which is right for command output and wrong for a file put back from history: a
+// design is hashed as bytes, so a restored look must be the look that was stored.
+export function gitBlob(root: string, rev: string, rel: string): Buffer | undefined {
+  try {
+    return execFileSync('git', ['show', `${rev}:${rel}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER })
+  } catch {
+    return undefined
+  }
+}
+
 export function primaryRoot(cwd: string): Result<string> {
   const top = tryGit(cwd, 'rev-parse', '--show-toplevel')
   if (!top.ok) {

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
-import { openDeferrals } from './deferral.js'
+import { deferralMoves } from './deferral.js'
 import { writeDoc } from './fm.js'
 import { stateCommit } from './gitio.js'
 import { appendEntry, entryLine, journalRel, readStream, type StatusCause, type StatusEntry } from './journal.js'
@@ -89,10 +89,7 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
     // Keyed on `parent`, not on `specStamp`: a stale merge writes no spec stamp, and that is
     // exactly the merge whose debts most need somewhere to live.
     const parentId = parent ? String(parent.meta.id) : undefined
-    const moves = parentId === undefined ? [] : openDeferrals(readStream(root, planId)).flatMap((d) => [
-      { stream: planId, entry: { v: 1 as const, t: 'deferral-moved' as const, id: d.id, to: parentId } },
-      { stream: parentId, entry: { ...d, artifact: parentId, moved_from: planId } },
-    ])
+    const moves = parentId === undefined ? [] : deferralMoves(readStream(root, planId), planId, parentId)
     const files = [planStamp.rel, journalRel(planStamp.stream),
       ...(specStamp ? [specStamp.rel, journalRel(specStamp.stream)] : []),
       ...moves.map((m) => journalRel(m.stream))]
