@@ -9,7 +9,10 @@ import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
 import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
+import { openDeferrals } from '../deferral.js'
+import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
+import { FLOOR_STREAM } from '../floor.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
@@ -20,7 +23,7 @@ import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
-import { findById, findCycle, loadCanon } from '../scan.js'
+import { findById, findCycle, loadCanon, planFinished } from '../scan.js'
 import { canonicalSha } from '../sha.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
@@ -110,7 +113,21 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   for (const plan of canon.docs.filter((d) => d.meta.type === 'plan')) {
     const parent = typeof plan.meta.parent === 'string' ? findById(canon, plan.meta.parent) : undefined
     if (!parent) {
-      findings.push(f('error', 'invariants', `${plan.rel}: parent`, 'unknown-parent', String(plan.meta.parent)))
+      // D166. A plan that no longer moves keeps its parent in the departed spec's stream — the
+      // rule row 62 already applies to `supersedes:` and `--lineage`. Its pin is not
+      // re-verified: nothing reads a finished plan's pin once its parent is history, and the
+      // departure never journaled the path it would resolve against. Two cases stay errors: a
+      // plan still moving (every gate reads its parent), and a `done` plan under `removed` —
+      // only a re-slice may take shipped content out of canon, so that is a pre-D166 unwind
+      // that deleted built behavior. No departure entry at all is a stray, as before.
+      const exit = typeof plan.meta.parent === 'string' ? canonExit(readStream(root, plan.meta.parent)) : undefined
+      const status = String(plan.meta.status)
+      if (exit !== undefined && (status === 'abandoned' || (status === 'done' && exit.to === 'superseded'))) continue
+      findings.push(f('error', 'invariants', `${plan.rel}: parent`, 'unknown-parent', exit === undefined
+        ? String(plan.meta.parent)
+        : status === 'done'
+          ? `${String(plan.meta.parent)} removed by abandon after this plan shipped it — canon lost built behavior; write that spec again under this id`
+          : `${String(plan.meta.parent)} ${exit.to} by ${exit.by ?? exit.cause} while this plan is ${status} — witness abandon ${String(plan.meta.id)} · or re-author it under a live parent`))
       continue
     }
     if (plan.meta.status !== 'draft' && plan.meta.status !== 'abandoned' && parent.meta.status === 'draft') {
@@ -156,7 +173,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   }
   for (const planId of listWorktrees(root)) {
     const doc = findById(canon, planId)
-    if (!doc || ['done', 'abandoned'].includes(String(doc.meta.status))) {
+    if (!doc || planFinished(doc)) {
       findings.push(f('warn', 'motion', planId, 'stray-worktree', 'witness clean sweeps it'))
     }
     // Row 132. A worktree cut before the canon exclusion existed still carries a copy, and
@@ -223,8 +240,24 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (!file.endsWith('.jsonl')) continue
       const id = file.slice(0, -'.jsonl'.length)
       const entries = readStream(root, id)
-      if (entries[0]?.t === 'recap') continue
-      if (!findById(canon, id)) findings.push(f('warn', 'journal', file, 'orphan-journal', 'stream matches no doc (frozen lineage or stray)'))
+      if (entries[0]?.t === 'recap' || id === FLOOR_STREAM) continue
+      if (findById(canon, id)) continue
+      // D166. A departed spec's stream is not an orphan — it is lineage by construction, what a
+      // finished plan's parent and `log --lineage` resolve against. It speaks only while it
+      // still holds open obligations: a re-slice moves them to the successor, but an unwind has
+      // no successor, and a departure from before D166 moved nothing. `superseded` is the
+      // dismissal cause that fits either: the thing the obligation was about no longer exists.
+      // A stream with no departure entry is what this rule was always for: a stray.
+      const exit = canonExit(entries)
+      if (exit === undefined) {
+        findings.push(f('warn', 'journal', file, 'orphan-journal', 'stream matches no doc and records no departure — a stray'))
+        continue
+      }
+      const owed = openDeferrals(entries)
+      if (owed.length > 0) {
+        findings.push(f('warn', 'journal', id, 'stranded-deferral',
+          `${owed.length} open deferral(s) on a spec that left canon (${exit.to} by ${exit.by ?? exit.cause}): ${owed.map((d) => d.id).join(' ')} — witness dismiss ${id} --deferral <id> --cause superseded --note <why>`))
+      }
     }
   }
 

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, streamExists } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, seededRepo, writeSpec } from './helpers.js'
+import { approve, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const TOKENS_CRITERIA = { criteria: [{ id: 'ac-tokens', test: '@spec:auth-tokens' }] }
 const ROTATION_CRITERIA = { criteria: [{ id: 'ac-rotation', test: '@spec:token-rotation' }] }
@@ -60,5 +60,20 @@ describe('log --lineage and --all', () => {
     const supersededAt = all.stdout.indexOf('superseded')
     expect(recapAt).toBeGreaterThanOrEqual(0)
     expect(recapAt).toBeLessThan(supersededAt)               // commit order, oldest first
+  })
+})
+
+const SETUP_CARD = { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] }
+
+// D166. A re-slice names its predecessor; any departure of that predecessor is terminal here,
+// because there is nothing left to delete either way.
+describe('reading a departure (D166)', () => {
+  it('a re-slice may name a spec its own abandon already unwound', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')                  // created by this effort
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)   // unwinds the spec: removed
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
   })
 })

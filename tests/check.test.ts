@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, approve, fakeScenario, gateEnv, seededRepo, shippableRepo, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeScenario, gateEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -464,5 +464,147 @@ describe('witness check — canon in a worktree', () => {
     expect(rows[0]).toContain('error')
     expect(rows[0]).toContain('auth-refresh-plan-1: plans/auth-refresh-plan-1.md')
     expect(rows[0]).toMatch(/planted|checked out/)
+  })
+})
+
+// D166 / issue #34. A spec leaves canon through two verbs, and its stream records the
+// departure. A plan that no longer moves keeps its parent there; a stream that departed is
+// lineage, not an orphan. These drive the real verbs, except where a test must build a state
+// the fixed verbs can no longer reach — then by hand, and said.
+describe('check — a departure is lineage (D166)', () => {
+  const SETUP_CARD = { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] }
+
+  it('accepts a done plan whose parent a re-slice superseded, and reads its stream as lineage', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')                        // shipped: the documented re-slice target
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    const res = await repo.cli(['check'])
+    expect(res.stdout).not.toContain('unknown-parent')
+    expect(res.stdout).not.toContain('pin-unresolvable')
+    expect(res.stdout).not.toContain('orphan-journal')
+    expect(res.code).toBe(0)
+  })
+
+  it('accepts an abandoned plan whose parent a re-slice superseded — the issue #34 end state', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })   // live before this effort: abandon unwinds nothing
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    expect((await repo.cli(['start', 'auth-refresh-plan-1'])).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    const res = await repo.cli(['check'])
+    expect(res.stdout).not.toContain('unknown-parent')
+    expect(res.code).toBe(0)
+  })
+
+  it('accepts an abandoned plan whose parent the abandon itself unwound — the plainest abandon', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')                  // created by this effort
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)   // unwinds the spec: `removed`
+    const res = await repo.cli(['check'])
+    expect(res.stdout).not.toContain('unknown-parent')
+    expect(res.stdout).not.toContain('orphan-journal')
+    expect(res.code).toBe(0)
+  })
+
+  it('a plan still moving under a departed parent is an error that names the way out', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    // A re-slice from before D166, built by hand: the fixed `write` refuses to make this state.
+    repo.git('rm', '-q', 'specs/auth-refresh.md')
+    appendEntry(repo.root, 'auth-refresh', {
+      t: 'status', artifact: 'auth-refresh', from: 'approved', to: 'superseded', cause: 'supersede', by: 'setup-card',
+    })
+    repo.git('add', '.witness/journal/auth-refresh.jsonl')
+    repo.git('commit', '-q', '-m', 'write(setup-card): create spec', '-m', 'Witness-State: 1')
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(1)
+    expect(res.stdout).toContain('unknown-parent')
+    expect(res.stdout).toContain('superseded by setup-card while this plan is approved')
+    expect(res.stdout).toContain('witness abandon auth-refresh-plan-1')
+    // the way out it names works: abandoning finishes the plan, and a finished plan reads the journal
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)
+    const after = await repo.cli(['check'])
+    expect(after.stdout).not.toContain('unknown-parent')
+    expect(after.code).toBe(0)
+  })
+
+  it('a parent deleted by hand stays a bare unknown-parent, and its stream a stray', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    // the stream exists and its last word is `live` — existence is not a departure
+    appendEntry(repo.root, 'auth-refresh', { t: 'status', artifact: 'auth-refresh', from: 'approved', to: 'live', cause: 'merge' })
+    repo.git('rm', '-q', 'specs/auth-refresh.md')
+    repo.git('add', '.witness/journal/auth-refresh.jsonl')
+    repo.git('commit', '-q', '-m', 'hand delete', '-m', 'Witness-State: 1')
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(1)
+    expect(res.stdout).toMatch(/unknown-parent,auth-refresh$/m)
+    expect(res.stdout).toContain('orphan-journal')
+    expect(res.stdout).toContain('records no departure — a stray')
+  })
+
+  it('a departed stream that still holds an open obligation is listed and warned until dismissed', async () => {
+    const repo = await seededRepo()
+    // a departure from before D166 moved nothing: the obligation stayed on the departed stream
+    appendEntry(repo.root, 'old-spec', {
+      t: 'deferral', id: 'd-0000beef', artifact: 'old-spec', gate: 'design', round: 1,
+      anchor: 'old-spec > ## Behavior', kind: 'artifact-debt', caused_by_run: 'r-1',
+    })
+    appendEntry(repo.root, 'old-spec', { t: 'status', artifact: 'old-spec', from: 'live', to: 'superseded', cause: 'supersede', by: 'new-spec' })
+    repo.git('add', '.witness/journal/old-spec.jsonl')
+    repo.git('commit', '-q', '-m', 'legacy departure', '-m', 'Witness-State: 1')
+    const res = await repo.cli(['check'])
+    expect(res.stdout).toContain('stranded-deferral')
+    expect(res.stdout).toContain('d-0000beef')
+    expect(res.stdout).toContain('--cause superseded')
+    expect(res.stdout).not.toContain('orphan-journal')
+    expect((await repo.cli(['status'])).stdout).toContain('d-0000beef')   // the ledger lists it too
+    expect((await repo.cli(['dismiss', 'old-spec', '--deferral', 'd-0000beef', '--cause', 'superseded', '--note', 'pre-D166 re-slice'])).code).toBe(0)
+    const after = await repo.cli(['check'])
+    expect(after.stdout).not.toContain('stranded-deferral')
+    expect(after.stdout).not.toContain('orphan-journal')
+    expect((await repo.cli(['status'])).stdout).not.toContain('d-0000beef')
+  })
+
+  it('witness\'s own floor stream is not an orphan', async () => {
+    const repo = await seededRepo()
+    appendEntry(repo.root, 'floor', { t: 'policy-pin', key: 'floor', pin: '0.14.0', note: 'probe' })
+    repo.git('add', '.witness/journal/floor.jsonl')
+    repo.git('commit', '-q', '-m', 'floor pin', '-m', 'Witness-State: 1')
+    expect((await repo.cli(['check'])).stdout).not.toContain('orphan-journal')
+  })
+
+  it('a done plan under a removed parent stays an error: that unwind deleted shipped behavior', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    // An unwind from before D166, built by hand: the fixed abandon keeps a spec a done plan stands on.
+    repo.git('rm', '-q', 'specs/auth-refresh.md')
+    appendEntry(repo.root, 'auth-refresh', { t: 'status', artifact: 'auth-refresh', from: 'live', to: 'removed', cause: 'abandon' })
+    repo.git('add', '.witness/journal/auth-refresh.jsonl')
+    repo.git('commit', '-q', '-m', 'abandon(auth-refresh-plan-2)', '-m', 'Witness-State: 1')
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(1)
+    expect(res.stdout).toContain('removed by abandon after this plan shipped it')
+    // the way out it names: the same spec written again under its own id, then approved
+    expect((await writeSpec(repo, 'auth-refresh')).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    expect((await repo.cli(['check'])).code).toBe(0)
   })
 })

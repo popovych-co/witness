@@ -67,6 +67,14 @@ export function plannableParent(doc: CanonDoc): boolean {
   return doc.meta.type === 'principles' ? s === 'approved' : s === 'approved' || s === 'live'
 }
 
+// D166. The one derivation of "this plan no longer moves": `done` merged and `abandoned` was
+// withdrawn. check's stray-worktree rule, next's plan queue and the re-slice's guard all ask
+// exactly this.
+export function planFinished(doc: CanonDoc): boolean {
+  const s = String(doc.meta.status)
+  return s === 'done' || s === 'abandoned'
+}
+
 export function findCycle(canon: Canon, extra?: { id: string; depends: string[] }): string[] | undefined {
   const deps = new Map<string, string[]>()
   for (const d of canon.docs) {

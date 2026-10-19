@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { canonExit } from '../departure.js'
 import { designPending, designRel, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
 import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
@@ -159,11 +160,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       }
       const target = findById(canon, supersedes)
       if (!target) {
-        const alreadyTerminal = readStream(root, supersedes)
-          .some((e) => e.t === 'status' && (e as unknown as StatusEntry).to === 'superseded')
-        if (!alreadyTerminal) {
+        // D166. Any departure is terminal here — a spec its abandon unwound as well as one
+        // already superseded: either way there is nothing left to delete. Abandoning the plan
+        // a `dangling-parent` refusal names can unwind the very spec this write re-slices.
+        if (canonExit(readStream(root, supersedes)) === undefined) {
           return refuseWrite([v('supersedes', 'unknown-supersedes', supersedes,
-            'an existing spec (or one already journal-terminal)')])
+            'an existing spec (or one that already left canon)')])
         }
       } else {
         const dependents = canon.docs
