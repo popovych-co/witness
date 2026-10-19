@@ -60,7 +60,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         problems.push(v('spec', 'stacked-amendment', id, 'the effort\'s write is no longer the newest'))
         continue
       }
-      const revertR = specRevertFor(root, canon, artifact, w.sha, abandonSet)
+      const revertR = specRevertFor(root, canon, artifact, w.sha, abandonSet, target)
       if (!revertR.ok) { problems.push(...revertR.violations); continue }
       const outcome = revertR.value
       if (outcome?.action === 'keep') {

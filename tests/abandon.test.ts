@@ -1,10 +1,10 @@
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { worktreePath } from '../src/worktree.js'
-import { approve, DESIGN_HTML, seededRepo, stampLive, writeDesign, writeSpec, writePlan, PLAN_BODY, type TestRepo } from './helpers.js'
+import { approve, DESIGN_HTML, recapEffort, seededRepo, stampLive, writeDesign, writeSpec, writePlan, PLAN_BODY } from './helpers.js'
 
 describe('witness abandon <plan>', () => {
   it('reverts the paired amendment, restores the prior live stamp, keeps the journal', async () => {
@@ -106,17 +106,6 @@ describe('witness abandon <plan>', () => {
     // dashboard no longer lists it as active — effortAbandoned() flips
   })
 })
-
-// A second effort, so a test can put plans or amendments under a different owner.
-async function recapEffort(repo: TestRepo, slug: string): Promise<void> {
-  repo.write(`recap-${slug}.json`, JSON.stringify({
-    effort: slug, class: 'feature', goals: [{ id: 'g1', text: `${slug} goal` }],
-    non_goals: [], constraints: [], slices: [],
-  }))
-  const r = await repo.cli(['recap', '--file', `recap-${slug}.json`])
-  rmSync(join(repo.root, `recap-${slug}.json`), { force: true })
-  if (r.code !== 0) throw new Error(`recap ${slug}: ${r.stderr}`)
-}
 
 // D166. The unwind departs a spec through the same door the re-slice uses, and a restore takes
 // the look back with the content it was drawn for.

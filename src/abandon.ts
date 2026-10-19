@@ -1,14 +1,14 @@
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
-import { prepareDeparture, prepareReturns, type Departure, type Return } from './departure.js'
+import { prepareDeparture, prepareReturns, type Departure, type Return, type TakenBack } from './departure.js'
 import { designRel } from './design.js'
 import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
 import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, withTxn } from './txn.js'
-import { appendEntry, entryLine, journalRel, type EntryType, type StatusEntry } from './journal.js'
+import { appendEntry, effortAbandoned, effortStreams, entryLine, journalRel, readStream, type EntryType, type StatusEntry } from './journal.js'
 import { findById, plansOn, type Canon, type CanonDoc } from './scan.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import { ok, refuse, v, type Result } from './refusal.js'
@@ -16,8 +16,9 @@ import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { kv } from './toon.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 
-export function pinCommit(root: string, rel: string, pin: string): string | undefined {
-  const log = tryGit(root, 'log', '--format=%H', '--', rel)
+export function pinCommit(root: string, rel: string, pin: string, from?: string): string | undefined {
+  // `from`: walk history from that revision instead of HEAD — for a file a later commit deleted
+  const log = tryGit(root, 'log', '--format=%H', ...(from === undefined ? [] : [from]), '--', rel)
   if (!log.ok) return undefined
   // Status-only touch-ups (approve, stampLive, a gate's writeStamp) commit the same
   // canonical sha under a new commit, since status is a volatile field excluded from
@@ -52,8 +53,22 @@ export interface SpecKeep { doc: CanonDoc; action: 'keep'; standing: string[]; s
 export const keptLine = (k: SpecKeep): string =>
   `${String(k.doc.meta.id)} — not unwound · still standing on it: ${k.standing.join(' ')}`
 
+// D166 (review). The writes the way back takes back besides this abandon's own targets: every
+// write of an effort already abandoned — whose abandon skipped a spec a later re-slice had
+// departed — and every write of the effort being abandoned now (`effort`, absent on the plan
+// path). Content one of them wrote never comes back into canon on its own — unless a plan
+// outside the abandon set stands on it: the keep rule, which never takes shipped content back.
+function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort: string | undefined): TakenBack {
+  const gone = effortStreams(root).filter((e) => e === effort || effortAbandoned(readStream(root, e)))
+  return (id, sha, rel, at) =>
+    plansOn(canon, id, { exclude: abandonSet, pin: sha }).length === 0 &&
+    gone.some((e) => readStream(root, e).some((x) => x.t === 'write' && x.artifact === id && x.sha === sha))
+      ? pinCommit(root, rel, sha, at)
+      : undefined
+}
+
 export function specRevertFor(
-  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>,
+  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, effort?: string,
 ): Result<SpecRevert | SpecKeep | undefined> {
   const current = canonicalSha(spec.meta, spec.body)
   if (current !== pin) {
@@ -79,12 +94,23 @@ export function specRevertFor(
   // re-slice), which then returns with it. A re-slice can cut one spec into several slices, and
   // taking back one while another still stands would leave the predecessor half-described, so
   // that write is kept until its siblings go too — together, through the effort that made them.
-  const returns = prepareReturns(root, canon.paths, commit, String(spec.meta.id))
-  const slices = returns.flatMap((r) => canon.docs
-    .filter((d) => d.meta.type === 'spec' && d.meta.supersedes === r.entry.artifact && String(d.meta.id) !== String(spec.meta.id))
-    .filter((d) => !abandonSet.has(String(d.meta.id)))
-    .map((d) => String(d.meta.id)))
-  if (slices.length > 0) return ok({ doc: spec, action: 'keep', standing: slices, shipped: false })
+  const returns = prepareReturns(root, canon.paths, commit, String(spec.meta.id), takenBackBy(root, canon, abandonSet, effort))
+  // D166 (review). A sibling slice stands when this abandon leaves it in canon: it is outside the
+  // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
+  // good when a plan shipped it — and then so does this keep, since nothing can take the
+  // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
+  const cut = new Set(returns.flatMap((r) => [r.entry.artifact, ...r.unwound.map((u) => u.artifact)]))
+  const slices = canon.docs
+    .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
+    .flatMap((d) => {
+      const id = String(d.meta.id)
+      const leaving = abandonSet.has(id)
+      const on = plansOn(canon, id, leaving ? { exclude: abandonSet, pin: canonicalSha(d.meta, d.body) } : { exclude: abandonSet })
+      return leaving && on.length === 0 ? [] : [{ id, shipped: on.some((p) => String(p.meta.status) === 'done') }]
+    })
+  if (slices.length > 0) {
+    return ok({ doc: spec, action: 'keep', standing: slices.map((s) => s.id), shipped: slices.some((s) => s.shipped) })
+  }
   const prior = tryGit(root, 'show', `${commit}^:${spec.rel}`)
   if (!prior.ok) {
     const dependents = canon.docs
@@ -150,7 +176,10 @@ export function executeAbandon(
       journalMulti.push({ stream: id, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) })
       // D166. A spec this write had departed comes back in the same state commit.
       for (const r of item.revert.returns) {
-        const lines = [{ stream: r.entry.artifact, entry: r.entry as unknown as { t: EntryType; [k: string]: unknown } }, ...r.moves]
+        const lines = [
+          ...[r.entry, ...r.unwound].map((e) => ({ stream: e.artifact, entry: e as unknown as { t: EntryType; [k: string]: unknown } })),
+          ...r.moves,
+        ]
         for (const f of r.files) files.add(f)
         for (const l of lines) {
           files.add(journalRel(l.stream))
