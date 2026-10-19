@@ -9,6 +9,9 @@ import {
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
 import { readStream } from '../../src/journal.js'
+import { findById, loadCanon } from '../../src/scan.js'
+import { pendingTxn } from '../../src/txn.js'
+import { recoverChoice } from '../../src/verbs/recover.js'
 
 const pkgRoot = fileURLToPath(new URL('../..', import.meta.url))
 const bin = join(pkgRoot, 'dist', 'bin.js')
@@ -73,6 +76,42 @@ describe('kill/resume protocol', () => {
     repo.write('b.md', '## Motivation\nx\n\n## Behavior\ny\n')
     const res = spawnCli(repo.root, ['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm.json', '--body', 'b.md'])
     expect(res.code).toBe(0)
+  })
+
+  // D167. A plan abandoned with an open debt and revived to draft re-gates to approved and
+  // discharges in one transaction — two kinds of line on one stream, so the marker's order is
+  // the order recover reads the crash by.
+  it('crash after gate-journal on a revived plan that discharges a debt: recover reads it landed and completing appends nothing', async () => {
+    const PLAN = 'auth-refresh-plan-1'
+    const STEPS = { steps: [{ id: 's1', title: 'rotate', criteria: ['ac-rotate'] }] }
+    const blocking = fakeScenario()
+    putVerdict(blocking, {
+      coverage: [{ anchor: `${PLAN} > ## Step: s1`, note: 'read' }, { anchor: 'auth-refresh > ## Behavior', note: 'read' }],
+      findings: [{ blocking: true, anchor: `${PLAN} > ## Step: s1`, claim: 'untestable' }],
+    })
+    const clean = fakeScenario()
+    putVerdict(clean, {
+      coverage: [{ anchor: `${PLAN} > ## Step: s1`, note: 'read' }, { anchor: 'auth-refresh > ## Behavior', note: 'read' }],
+      findings: [],
+    })
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    for (let i = 1; i <= 3; i++) {
+      await writePlan(repo, PLAN, STEPS, `## Step: s1\nAttempt ${i}.\n`)
+      await repo.cli(['gate', 'plan', PLAN], { env: gateEnv(blocking) })
+    }
+    expect((await repo.cli(['decide', 'plan', PLAN, '--approve', '--override'])).code).toBe(0)
+    expect((await repo.cli(['abandon', PLAN])).code).toBe(0)
+    expect((await writePlan(repo, PLAN, STEPS, '## Step: s1\nFixed.\n')).code).toBe(0)
+
+    const crashed = spawnCli(repo.root, ['gate', 'plan', PLAN], { ...gateEnv(clean), WITNESS_CRASH_AFTER: 'gate-journal' })
+    expect(crashed.code).toBe(9)
+    const marker = pendingTxn(repo.root)!
+    expect(marker.journalMulti!.map((l) => JSON.parse(l.line).t)).toEqual(['gate-run', 'deferral-discharged', 'status'])
+    expect(recoverChoice(repo.root, marker).rule).toBe('txn-write-landed')
+    const lines = readStream(repo.root, PLAN).length
+    expect((await repo.cli(['recover', '--complete'])).code).toBe(0)
+    expect(readStream(repo.root, PLAN)).toHaveLength(lines)
+    expect(String(findById(loadCanon(repo.root), PLAN)!.meta.status)).toBe('approved')
   })
 })
 

@@ -5,6 +5,7 @@ import { deferralMoves } from './deferral.js'
 import { designRel } from './design.js'
 import { FLOOR_STREAM } from './floor.js'
 import { splitDoc } from './fm.js'
+import { adoptedCommits, lastWitnessed } from './adopt.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
 import { v, type Violation } from './refusal.js'
@@ -62,6 +63,8 @@ export interface Return {
   restore: () => void     // writes the departed bytes back
   moves: Array<{ stream: string; entry: { t: EntryType; [k: string]: unknown } }>   // its debts, home again
   unwound: StatusEntry[]  // specs taken back on the way, because an abandoned effort created them
+  rel: string             // the spec path it lands on: the path it left from
+  by: string              // the successor its departure named: the re-slice this return takes back
 }
 
 // Whether an abandoned effort — or the one being abandoned — wrote this content of a spec (as it
@@ -136,6 +139,8 @@ function returnsThrough(
       // Each link of the chain hands home the debts that came to it from the next one down.
       moves: chain.flatMap((s, k) => deferralMoves(readStream(root, s), s, id, (d) => d.moved_from === (chain[k + 1] ?? id))),
       unwound,
+      rel,
+      by: successor,
     }]
   })
 }
@@ -157,4 +162,22 @@ export function idRetired(root: string, id: string, type: string): Violation | u
   }
   if (exit?.to === 'removed' && type !== 'spec') return v('id', 'id-taken', id, `a new id — ${id} was a spec its abandon unwound`)
   return undefined
+}
+
+// D167. Whether a doc under this id may land on this path, which was last witnessed (by a
+// trailer, or by an `adopt` that absolved the commit) under `prior`. A superseded spec comes back
+// to the path it left from, so its departure holds that path as it holds the id. Any other id
+// left a path only by hand, since `rename` keeps the file: the path is held only while the doc
+// on it is what `prior` became — an in-place id change, which is `rename` done by hand. A
+// removal, a `prior` living at another path, or a path left empty holds nothing: nothing lands back.
+export function pathRetired(root: string, canon: Canon, rel: string, id: string): Violation | undefined {
+  const prior = lastWitnessed(root, rel, adoptedCommits(root))?.id
+  if (prior === undefined || prior === id) return undefined
+  const exit = canonExit(readStream(root, prior))
+  if (exit?.to === 'superseded') {
+    return v('id', 'path-taken', rel, `a new id — ${rel} is where ${prior} comes back if the re-slice that superseded it is taken back`)
+  }
+  const elsewhere = findById(canon, prior)
+  if (exit !== undefined || (elsewhere !== undefined && elsewhere.rel !== rel) || !existsSync(join(root, rel))) return undefined
+  return v('id', 'path-taken', rel, `the id it was witnessed under — ${rel} held ${prior} · witness rename is how an id changes`)
 }

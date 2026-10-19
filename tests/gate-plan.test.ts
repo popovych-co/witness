@@ -28,6 +28,17 @@ async function planRepo() {
 }
 
 describe('plan gate', () => {
+  // D167. One derivation with `decide`: row 95 keeps an in-flight status through a re-author,
+  // and a passing re-gate must not take it back — nor bring a finished plan back to approved.
+  it('a passing plan gate approves a draft and nothing else', async () => {
+    for (const status of ['in-progress', 'done', 'abandoned']) {
+      const { repo, ctx } = await planRepo()
+      repo.flipStatus('auth-refresh-plan-1', status)
+      expect(await runGate(ctx, 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })).toBe(0)
+      expect(String(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status)).toBe(status)
+    }
+  })
+
   it('green path: pair-covering clean verdict auto-passes and stamps approved', async () => {
     const { repo, ctx } = await planRepo()
     expect(await runGate(ctx, 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })).toBe(0)

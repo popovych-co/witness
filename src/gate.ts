@@ -522,10 +522,12 @@ export async function runGate(
     const marker = {
       op: `gate-${spec.gate}`,
       files: [...new Set(files)],
+      // D167. Per stream, the marker lists lines in the order the body appends them, because
+      // `landedJournal` reads a crash by that order — and the plan gate stamps its own target.
       journalMulti: [
         { stream: target, line: entryLine(entry as unknown as { t: 'gate-run'; [k: string]: unknown }) },
-        ...stamps.map((s) => ({ stream: s.stream, line: s.line })),
         ...discharged.map((d) => ({ stream: target, line: entryLine(d) })),
+        ...stamps.map((s) => ({ stream: s.stream, line: s.line })),
       ],
     }
     const txn = withTxn(root, marker, () => {

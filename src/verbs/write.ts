@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { deferralMoves } from '../deferral.js'
-import { canonExit, idRetired, prepareDeparture, type Departure } from '../departure.js'
+import { canonExit, idRetired, pathRetired, prepareDeparture, type Departure } from '../departure.js'
 import { designPending, designStamp } from '../design.js'
 import { ID_RE } from '../dsl.js'
 import { serializeDoc, splitDoc, writeDoc } from '../fm.js'
@@ -136,8 +136,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal(viol).forEach(ctx.err)
       return EXIT.REFUSED
     }
-    // D166. A create may not take an id that already names something (`idRetired` — the rule
-    // `rename` applies to its target, with the one re-use of a spec its abandon unwound).
+    // D166. A create may not take an id that already names something (`idRetired`), with the one
+    // re-use of a spec its abandon unwound; a stray stream holds no id. `rename` is stricter on its
+    // target — no stream at all — because it moves its own stream onto that id.
     if (existing === undefined) {
       const taken = idRetired(root, id!, String(manifest.type))
       if (taken) return refuseWrite([taken])
@@ -223,6 +224,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return refuseWrite([v('id', 'path-taken', rel, holder
         ? `a new id — ${rel} holds ${String(holder.meta.id)}`
         : `a new id — ${rel} holds a doc canon cannot read (fix or revert it first)`)])
+    }
+    // D167. Nor on the path a superseded spec comes back to (`pathRetired`).
+    if (existing === undefined) {
+      const retired = pathRetired(root, canon, rel, id!)
+      if (retired) return refuseWrite([retired])
     }
     const stream = journalRel(effort)
     const unrelated = dirtyStatePaths(root).filter((p) => p !== rel && p !== stream)
