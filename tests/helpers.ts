@@ -7,6 +7,9 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, type Ctx } from '../src/cli.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
+import { appendEntry, journalRel } from '../src/journal.js'
+import { findById, loadCanon } from '../src/scan.js'
+import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
@@ -453,4 +456,30 @@ export async function recapEffort(repo: TestRepo, slug: string): Promise<void> {
   const r = await repo.cli(['recap', '--file', `recap-${slug}.json`])
   rmSync(join(repo.root, `recap-${slug}.json`), { force: true })
   if (r.code !== 0) throw new Error(`recap ${slug}: ${r.stderr}`)
+}
+
+// D167. `rename` moves an id and its journal but not its file, so the re-slice departs
+// `token-refresh` from `specs/auth-refresh.md` — the path its way back lands on.
+export async function renamedAndResliced(): Promise<{ repo: TestRepo; shipped: string }> {
+  const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+  expect((await repo.cli(['rename', 'auth-refresh', 'token-refresh'])).code).toBe(0)
+  const shipped = repo.read('specs/auth-refresh.md')
+  expect((await writeSpec(repo, 'setup-card', { supersedes: 'token-refresh', criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] })).code).toBe(0)
+  return { repo, shipped }
+}
+
+// D167. The doc a pre-167 `write` (or a hand edit) could leave on a departed spec's path;
+// `write` and `adopt` refuse to make one now.
+export function plantHolder(repo: TestRepo, shipped: string, writer?: string): string {
+  const rel = 'specs/auth-refresh.md'
+  const planted = shipped.replace('id: token-refresh', 'id: auth-refresh').replace('@spec:token-refresh', '@spec:auth-refresh')
+    .replace('status: live', 'status: approved').replace(/^summary: .*$/m, 'summary: a different spec')
+  repo.write(rel, planted)
+  if (writer !== undefined) {
+    const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+    appendEntry(repo.root, writer, { t: 'write', effort: writer, artifact: 'auth-refresh', sha: canonicalSha(doc.meta, doc.body), created: true })
+  }
+  repo.git('add', rel, ...(writer === undefined ? [] : [journalRel(writer)]))
+  repo.git('commit', '-m', 'a doc a pre-167 write left on the old path', '-m', 'Witness-State: 1')
+  return planted
 }

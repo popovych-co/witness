@@ -11,7 +11,7 @@ import { crashPoint, withTxn } from './txn.js'
 import { appendEntry, effortAbandoned, effortStreams, entryLine, journalRel, readStream, type EntryType, type StatusEntry } from './journal.js'
 import { findById, plansOn, type Canon, type CanonDoc } from './scan.js'
 import { effortOf, effortWrites } from './reviewed.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { humanCall, ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { kv } from './toon.js'
 import { removeWorktree, worktreePath } from './worktree.js'
@@ -147,6 +147,21 @@ export interface AbandonItem {
   kept?: SpecKeep
 }
 
+// D167. A return lands on the path its spec left from, and `rename` moves an id but leaves its
+// file, so another doc may hold that path. Written over, that doc left canon with nothing to say
+// so. Only a doc this same abandon departs may stand there; any other holder is a human's call.
+export function returnCollisions(root: string, canon: Canon, items: AbandonItem[]): Violation[] {
+  const departing = new Set(items.flatMap((i) => (i.revert?.action === 'delete' ? [i.revert.doc.rel] : [])))
+  return items.flatMap((i) => i.revert?.returns ?? [])
+    .filter((r) => !departing.has(r.rel) && existsSync(join(root, r.rel)))
+    .map((r) => {
+      const held = canon.docs.find((d) => d.rel === r.rel)
+      const holder = held ? String(held.meta.id) : 'a doc canon cannot read'
+      return humanCall(v('spec', 'path-taken', `${r.rel} holds ${holder}`,
+        `that path free first — ${r.entry.artifact} comes back to it when ${r.by} goes · what becomes of ${holder} is a human's call`))
+    })
+}
+
 export function executeAbandon(
   root: string, ctx: Ctx, items: AbandonItem[], effortEntry: { effort: string } | undefined, subject: string,
 ): Result<{ sha: string }> {
@@ -214,9 +229,11 @@ export function executeAbandon(
             if (d?.prior !== undefined) writeFileSync(join(root, d.rel), d.prior)
             else if (d !== undefined && existsSync(join(root, d.rel))) unlinkSync(join(root, d.rel))
           }
-          for (const r of item.revert.returns) r.restore()
         }
       }
+      // D167. Every departure lands before any return (P9b): restored per item, a later item's
+      // departure unlinked the spec an earlier item's return had just brought back to its path.
+      for (const item of items) for (const r of item.revert?.returns ?? []) r.restore()
       for (const s of stamps) writeStamp(root, s)
       for (const se of specEntries) appendEntry(root, se.stream, se.entry as unknown as { t: 'status'; [k: string]: unknown })
       for (const re of returnEntries) appendEntry(root, re.stream, re.entry)

@@ -62,6 +62,8 @@ export interface Return {
   restore: () => void     // writes the departed bytes back
   moves: Array<{ stream: string; entry: { t: EntryType; [k: string]: unknown } }>   // its debts, home again
   unwound: StatusEntry[]  // specs taken back on the way, because an abandoned effort created them
+  rel: string             // the spec path it lands on: the path it left from
+  by: string              // the successor whose departure named it, whose going takes the re-slice back
 }
 
 // Whether an abandoned effort — or the one being abandoned — wrote this content of a spec (as it
@@ -136,6 +138,8 @@ function returnsThrough(
       // Each link of the chain hands home the debts that came to it from the next one down.
       moves: chain.flatMap((s, k) => deferralMoves(readStream(root, s), s, id, (d) => d.moved_from === (chain[k + 1] ?? id))),
       unwound,
+      rel,
+      by: successor,
     }]
   })
 }

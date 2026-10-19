@@ -7,7 +7,7 @@ import { effortWrites } from '../reviewed.js'
 import { canonicalSha } from '../sha.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
-import { executeAbandon, keptLine, planItems, specRevertFor, type AbandonItem, type SpecKeep } from '../abandon.js'
+import { executeAbandon, keptLine, planItems, returnCollisions, specRevertFor, type AbandonItem, type SpecKeep } from '../abandon.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const target = argv.find((a) => !a.startsWith('--'))
@@ -24,6 +24,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (String(doc.meta.status) === 'abandoned') { ctx.out(kv('abandon', `${target} already abandoned`)); return EXIT.OK }
     const itemR = planItems(root, canon, doc, new Set([target]), 'pair-parent')
     if (!itemR.ok) { renderRefusal(itemR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    const taken = returnCollisions(root, canon, [itemR.value])
+    if (taken.length > 0) { renderRefusal(taken).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const done = executeAbandon(root, ctx, [itemR.value], undefined, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('abandoned', target))
@@ -76,6 +78,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         kept.push(outcome)
       } else if (outcome) items.push({ revert: outcome })
     }
+    problems.push(...returnCollisions(root, canon, items))
     if (problems.length > 0) { renderRefusal(problems).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const done = executeAbandon(root, ctx, items, { effort: target }, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }

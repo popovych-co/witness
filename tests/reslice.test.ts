@@ -1,10 +1,11 @@
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { canonExit } from '../src/departure.js'
 import { openDeferrals } from '../src/deferral.js'
 import { appendEntry, readStream, streamExists } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, fakeScenario, gateEnv, ghState, PLAN_BODY, recapEffort, seededRepo, shippableRepo, stampLive, writeDesign, writePlan, writeSpec } from './helpers.js'
+import { approve, fakeScenario, gateEnv, ghState, PLAN_BODY, plantHolder, recapEffort, renamedAndResliced, seededRepo, shippableRepo, stampLive, writeDesign, writePlan, writeSpec } from './helpers.js'
 
 const TOKENS_CRITERIA = { criteria: [{ id: 'ac-tokens', test: '@spec:auth-tokens' }] }
 const ROTATION_CRITERIA = { criteria: [{ id: 'ac-rotation', test: '@spec:token-rotation' }] }
@@ -428,5 +429,50 @@ describe('the way back, whole (D166 review)', () => {
     rmSync(join(repo.root, 'designs'), { recursive: true, force: true })   // git keeps no empty directory
     expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
     expect(repo.read('designs/auth-tokens.html')).toBe(look)
+  })
+})
+
+// D167. A return lands on the path its spec left from, and `rename` moves an id but leaves its
+// file, so another doc may hold that path. Only a doc this same abandon departs may stand there.
+describe('the way back takes no doc\'s place (D167)', () => {
+  it('refuses a return onto a doc that stays — a human names who keeps the path', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    await recapEffort(repo, 'other')
+    const planted = plantHolder(repo, shipped, 'other')
+    const r = await repo.cli(['abandon', 'auth-hardening'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('path-taken')
+    expect(r.stderr).toContain('specs/auth-refresh.md holds auth-refresh')
+    expect(r.stderr).toContain("a human's decision: path-taken")
+    expect(repo.read('specs/auth-refresh.md')).toBe(planted)                 // nothing written over
+    expect(findById(loadCanon(repo.root), 'setup-card')).toBeDefined()        // nothing unwound
+    expect((await repo.cli(['abandon', 'other'])).code).toBe(0)              // the holder leaves with its effort
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)                 // and the way back is whole
+  })
+
+  it('the abandoning effort\'s own doc on the path leaves first and the spec comes back whole', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    plantHolder(repo, shipped, 'auth-hardening')                             // P9b: same effort, later write
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'token-refresh')!.rel).toBe('specs/auth-refresh.md')
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+    expect(findById(canon, 'auth-refresh')).toBeUndefined()
+    expect(canonExit(readStream(repo.root, 'auth-refresh'))?.to).toBe('removed')
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('the plan path refuses the same way', async () => {
+    const { repo, shipped } = await renamedAndResliced()
+    approve(repo, 'setup-card')
+    expect((await writePlan(repo, 'setup-card-plan-1', { parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }] })).code).toBe(0)
+    await recapEffort(repo, 'other')
+    const planted = plantHolder(repo, shipped, 'other')
+    const r = await repo.cli(['abandon', 'setup-card-plan-1'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('path-taken')
+    expect(repo.read('specs/auth-refresh.md')).toBe(planted)
+    expect(String(findById(loadCanon(repo.root), 'setup-card-plan-1')!.meta.status)).toBe('draft')
   })
 })
