@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readStream, streamExists } from '../src/journal.js'
+import { openDeferrals } from '../src/deferral.js'
+import { appendEntry, readStream, streamExists } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { approve, fakeScenario, gateEnv, ghState, seededRepo, shippableRepo, writeDesign, writePlan, writeSpec } from './helpers.js'
 
@@ -152,5 +153,80 @@ describe('re-slice over plans (D166)', () => {
     expect(r.code).toBe(2)
     expect(r.stdout + r.stderr).toContain('not-a-spec')
     expect(findById(loadCanon(repo.root), 'principles')).toBeDefined()
+  })
+})
+
+// D166. Row 29 unwinds a write by selectively reverting its state commit, and a re-slice's
+// commit also deleted the predecessor. Taking that write back brings the predecessor back —
+// whole, or not at all while another slice of the same re-slice still stands.
+describe('the way back (D166)', () => {
+  it('abandoning the effort that re-sliced a shipped spec brings the spec back, debts and all', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })   // live
+    repo.effort = 'bootstrap'
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')                     // shipped
+    repo.effort = 'auth-hardening'
+    appendEntry(repo.root, 'auth-refresh', {
+      t: 'deferral', id: 'd-0000cafe', artifact: 'auth-refresh', gate: 'ship', round: 1,
+      anchor: 'auth-refresh > ## Behavior', kind: 'artifact-debt', caused_by_run: 'r-1',
+    })
+    repo.git('add', '.witness/journal/auth-refresh.jsonl')
+    repo.git('commit', '-q', '-m', 'an open obligation on the shipped spec', '-m', 'Witness-State: 1')
+    const before = repo.read('specs/auth-refresh.md')
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'setup-card')).toBeUndefined()
+    expect(findById(canon, 'auth-refresh')!.meta.status).toBe('live')          // shipped content is described again
+    expect(repo.read('specs/auth-refresh.md')).toBe(before)                    // byte for byte
+    expect(openDeferrals(readStream(repo.root, 'auth-refresh')).map((d) => d.id)).toEqual(['d-0000cafe'])
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('abandoning the only plan of the only successor brings the spec back too', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    approve(repo, 'setup-card')
+    expect((await writePlan(repo, 'setup-card-plan-1', {
+      parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }],
+    })).code).toBe(0)
+    expect((await repo.cli(['abandon', 'setup-card-plan-1'])).code).toBe(0)
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'setup-card')).toBeUndefined()
+    expect(findById(canon, 'auth-refresh')!.meta.status).toBe('live')
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('taking back a split brings the spec back once, with every slice gone', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    expect((await writeSpec(repo, 'setup-email', {
+      supersedes: 'auth-refresh', criteria: [{ id: 'ac-email', test: '@spec:setup-email' }],
+    })).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
+    const canon = loadCanon(repo.root)
+    expect(findById(canon, 'setup-card')).toBeUndefined()
+    expect(findById(canon, 'setup-email')).toBeUndefined()
+    expect(findById(canon, 'auth-refresh')!.meta.status).toBe('live')
+    expect(readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'status' && e.from === 'superseded')).toHaveLength(1)
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('one slice of a split is kept while another still stands — the split goes back whole', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    expect((await writeSpec(repo, 'setup-email', {
+      supersedes: 'auth-refresh', criteria: [{ id: 'ac-email', test: '@spec:setup-email' }],
+    })).code).toBe(0)
+    approve(repo, 'setup-card')
+    expect((await writePlan(repo, 'setup-card-plan-1', {
+      parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }],
+    })).code).toBe(0)
+    const r = await repo.cli(['abandon', 'setup-card-plan-1'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('kept: setup-card — not unwound · still standing on it: setup-email')
+    expect(findById(loadCanon(repo.root), 'auth-refresh')).toBeUndefined()      // half a split is not taken back
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)        // the effort takes it back whole
+    expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('live')
   })
 })
