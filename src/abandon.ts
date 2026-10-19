@@ -53,6 +53,22 @@ export interface SpecKeep { doc: CanonDoc; action: 'keep'; standing: string[]; s
 export const keptLine = (k: SpecKeep): string =>
   `${String(k.doc.meta.id)} — not unwound · still standing on it: ${k.standing.join(' ')}`
 
+// D167. The abandon says everything it did to canon, on both paths, as `kept:` already did: what
+// it reverted, what came back with it, and what the walk took back on the way.
+export function abandonLines(items: AbandonItem[], kept: SpecKeep[]): string[] {
+  return [
+    ...items.flatMap((item) => [
+      ...(item.revert ? [kv('reverted', `${String(item.revert.doc.meta.id)} (${item.revert.action}) — journal untouched`)] : []),
+      ...(item.revert?.returns ?? []).flatMap((r) => [
+        kv('returned', `${r.entry.artifact} — back in canon as ${r.entry.to} · the re-slice into ${r.by} is taken back`),
+        ...r.unwound.map((u) => kv('unwound', `${u.artifact} — stays out of canon · an abandoned effort created it`)),
+      ]),
+      ...(item.kept ? [kv('kept', keptLine(item.kept))] : []),
+    ]),
+    ...kept.map((k) => kv('kept', keptLine(k))),
+  ]
+}
+
 // D166 (review). The writes the way back takes back besides this abandon's own targets: every
 // write of an effort already abandoned — whose abandon skipped a spec a later re-slice had
 // departed — and every write of the effort being abandoned now (`effort`, absent on the plan
