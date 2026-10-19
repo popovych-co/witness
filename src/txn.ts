@@ -11,7 +11,9 @@ export interface TxnMarker {
   files: string[]
   // stream is a journal stream id (artifact/effort id), never a path — completeTxn
   // resolves it through journalRel; markers persist to txn.json, so both writers
-  // and the recovery reader must agree on this
+  // and the recovery reader must agree on this. `journal`/`journalMulti` list each stream's
+  // lines in the order the body appends them, which is the order `landedJournal`, and so
+  // `recover`, reads a crash by (D167)
   journal?: { stream: string; line: string }
   journalMulti?: Array<{ stream: string; line: string }>
 }
