@@ -136,3 +136,42 @@ describe('per-harness overlay', () => {
     expect(loadMatrix(repo.root, 'claude-code').local).toEqual(['claude-fable-5']);
   });
 });
+
+const TREE2 = [{ anchor: 'src/cart.mjs', note: 'read' }, { anchor: 'tests/cart.test.mjs', note: 'read' }]
+const TREE3 = [...TREE2, { anchor: 'src/receipt.mjs', note: 'read' }]
+const at = (coverage: unknown[], anchor?: string) =>
+  ({ coverage, findings: anchor ? [{ blocking: true, anchor, claim: 'x' }] : [] })
+// --samples 2: seeds s1 s2 (calls 1-2) · inject i1 ×2 (3-4) · clean ×2 (5-6) · d1 (7) · d2 delta (8) · d2 full twin (9)
+function scriptCodeReviewer(scenario: string, over: Record<number, unknown> = {}) {
+  const calls: Record<number, unknown> = {
+    1: at(TREE2, 'src/cart.mjs'), 2: at(TREE2, 'src/cart.mjs'), 3: at(TREE2, 'src/cart.mjs'), 4: at(TREE2, 'src/cart.mjs'),
+    5: at(TREE2), 6: at(TREE2), 7: at(TREE3, 'src/receipt.mjs'), 8: at(TREE3, 'src/cart.mjs'), 9: at(TREE3, 'src/cart.mjs'), ...over,
+  }
+  for (const [n, verdict] of Object.entries(calls)) putVerdict(scenario, verdict, Number(n))
+}
+
+describe('delta-mode calibration (C3)', () => {
+  it('PASS: a changed-code defect blocks, an unchanged-code one is demoted, and the full twin still catches it', async () => {
+    const repo = tmpRepo(); const scenario = fakeScenario(); scriptCodeReviewer(scenario)
+    const r = await runCalibrate(repo, scenario, ['claude-fable-5', '--only', 'code-reviewer', '--samples', '2'])
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('reviewers[1]{reviewer,catch,clean,inject,delta,pass}:')
+    expect(r.out).toContain('code-reviewer,2/2,2/2,2/2,3/3,yes')
+    const delta = readFileSync(join(scenario, 'claude-calls', 'call-8', 'stdin'), 'utf8')
+    expect(delta).toContain('## Delta review — round 1 to now')
+    expect(delta).toContain('+export function formatLine')
+    expect(readFileSync(join(scenario, 'claude-calls', 'call-9', 'stdin'), 'utf8')).not.toContain('## Delta review')
+  })
+  it('FAIL: a defect in changed code that the lens anchors in unchanged code is demoted out — a miss', async () => {
+    const repo = tmpRepo(); const scenario = fakeScenario(); scriptCodeReviewer(scenario, { 7: at(TREE3, 'src/cart.mjs') })
+    const r = await runCalibrate(repo, scenario, ['claude-fable-5', '--only', 'code-reviewer', '--samples', '2'])
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('code-reviewer,2/2,2/2,2/2,2/3,NO')
+  })
+  it('FAIL: the full twin must catch what the delta round demoted', async () => {
+    const repo = tmpRepo(); const scenario = fakeScenario(); scriptCodeReviewer(scenario, { 9: at(TREE3) })
+    const r = await runCalibrate(repo, scenario, ['claude-fable-5', '--only', 'code-reviewer', '--samples', '2'])
+    expect(r.code).toBe(1)
+    expect(r.out).toContain('code-reviewer,2/2,2/2,2/2,2/3,NO')
+  })
+})

@@ -105,11 +105,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const report: CalReport = { model, reviewers: reviewers?.value ?? [], skills: skills?.value ?? [] }
   ctx.out(kv('calibrate', model))
   if (report.reviewers.length > 0) {
-    for (const line of rows('reviewers', ['reviewer', 'catch', 'clean', 'inject', 'pass'], report.reviewers.map((s) => ({
+    for (const line of rows('reviewers', ['reviewer', 'catch', 'clean', 'inject', 'delta', 'pass'], report.reviewers.map((s) => ({
       reviewer: s.reviewer,
       catch: `${s.catches.ok}/${s.catches.total}`,
       clean: `${s.clean.ok}/${s.clean.total}`,
       inject: s.inject.total === 0 ? '-' : `${s.inject.ok}/${s.inject.total}`,
+      delta: s.delta.total === 0 ? '-' : `${s.delta.ok}/${s.delta.total}`,
       pass: s.pass ? 'yes' : 'NO',
     })))) ctx.out(line)
   }
