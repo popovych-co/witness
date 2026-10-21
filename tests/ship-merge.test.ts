@@ -186,3 +186,18 @@ it('a human who turns autonomy off while CI runs gets the merge back (F10)', asy
   expect(s.out()).toContain('merge PR #1 on GitHub when ready')
   expect(s.calls()).not.toContain('pr merge')
 })
+it('merges only when the shipped branch itself says autonomy: on — a local commit grants no merge (security)', async () => {
+  const seed = await shippableRepo()
+  addOrigin(seed.repo)                                                          // origin/main: no autonomy
+  seed.repo.write('witness.config.yaml', shipConfig())
+  seed.repo.git('add', 'witness.config.yaml'); seed.repo.git('commit', '-m', 'autonomy: on — local only')
+  const scenario = fakeScenario()
+  putVerdict(scenario, CLEAN)
+  putVerdict(scenario, { choice: 1, reason: 'the change serves g1' }, 'arbiter')
+  const outs: string[] = []
+  const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario), out: (l) => outs.push(l) })
+  expect(await runGate(ctx, 'implement', seed.planId, { fresh: false, manual: false })).toBe(0)
+  expect(await runShip(ctx, seed.planId)).toBe(0)
+  expect(outs.join('\n')).toContain('merge PR #1 on GitHub when ready')
+  expect(readFileSync(join(scenario, 'gh-calls'), 'utf8')).not.toContain('pr merge')
+})

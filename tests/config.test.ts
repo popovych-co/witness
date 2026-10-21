@@ -269,3 +269,16 @@ describe('ship.merge (A7)', () => {
     expect(!r.ok && r.violations[0]).toMatchObject({ field: 'ship.merge', rule: 'invalid', want: 'merge | squash | rebase' })
   })
 })
+
+describe('ship.ciSettleMs (row 174)', () => {
+  it('refuses a settle window outside 0 and the 30-minute watch', () => {
+    const repo = tmpRepo()
+    for (const bad of ['-1', '1800001', '2147483648', '1.5']) {
+      repo.write('witness.config.yaml', `schema: 1\nship:\n  ciSettleMs: ${bad}\n`)
+      const r = loadConfig(repo.root)
+      expect(!r.ok && r.violations[0]).toMatchObject({ field: 'ship.ciSettleMs', rule: 'invalid' })
+    }
+    repo.write('witness.config.yaml', 'schema: 1\nship:\n  ciSettleMs: 1800000\n')
+    expect(loadConfig(repo.root).ok).toBe(true)
+  })
+})

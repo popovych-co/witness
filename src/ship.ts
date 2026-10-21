@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { EXIT, type Ctx } from './cli.js'
-import { loadConfig, type Config } from './config.js'
+import { autonomyAt, loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
@@ -199,6 +199,13 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   if (!tryGit(wt, 'fetch', 'origin', shipBranch).ok) {
     ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
     return EXIT.FINDINGS
+  }
+  // The merge is the one irreversible outward act, so its authority comes from the shipped
+  // branch as the remote holds it — pushed and, on most repos, branch-protected — never from
+  // HEAD alone, which the coding agent can commit to. Without it the merge is the human's.
+  if (!autonomyAt(root, `origin/${shipBranch}`)) {
+    ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
+    return EXIT.OK
   }
   const base = diffBase(wt, cfg)
   const lapsed = baseMoved(wt, root, shipBranch) ? `${shipBranch} moved`

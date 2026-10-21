@@ -199,6 +199,7 @@ export type MergeStyle = 'merge' | 'squash' | 'rebase'
 export interface ShipConfig { merge: MergeStyle; ciSettleMs: number }
 const MERGE_STYLES: readonly MergeStyle[] = ['merge', 'squash', 'rebase']
 export const DEFAULT_CI_SETTLE_MS = 60_000
+export const MAX_CI_SETTLE_MS = 1_800_000
 
 // The rest of `ship.*` (test, lint, branch) is still read loosely at its consumers; only
 // the key with a closed value set is resolved here, and only when `ship` is a map.
@@ -210,25 +211,30 @@ export function resolveShip(raw: Record<string, unknown>): Result<ShipConfig> {
     return refuse([v('ship.merge', 'invalid', String(val), 'merge | squash | rebase')])
   }
   const settle = (conf as Record<string, unknown>).ciSettleMs
-  if (settle !== undefined && (typeof settle !== 'number' || !Number.isInteger(settle) || settle < 0)) {
+  // Bounded by the watch window (30 minutes): a longer settle can never be met, and past
+  // 2^31-1 ms a Node timer fires at once — the window would silently become zero.
+  if (settle !== undefined && (typeof settle !== 'number' || !Number.isInteger(settle) || settle < 0 || settle > MAX_CI_SETTLE_MS)) {
     return refuse([v('ship.ciSettleMs', 'invalid', String(settle),
-      'an integer >= 0 — milliseconds a green check set must hold before witness merges')])
+      `an integer from 0 to ${MAX_CI_SETTLE_MS} — milliseconds a green check set must hold before witness merges`)])
   }
   return ok({ merge: (val ?? 'merge') as MergeStyle, ciSettleMs: (settle as number | undefined) ?? DEFAULT_CI_SETTLE_MS })
 }
 
 // Row 171 (F11). Autonomy is a COMMITTED repo fact: on only when HEAD's witness.config.yaml
 // says so as well. A working-copy edit — the coding agent's, say — grants nothing, because
-// the setting it would grant is merge authority over that agent's own work.
-function committedAutonomy(root: string): boolean {
+// the setting it would grant is merge authority over that agent's own work. `autonomyAt` reads
+// any revision: the merge asks the shipped branch's remote copy (row 174), a fact the agent
+// cannot make true with a local commit.
+export function autonomyAt(root: string, rev: string): boolean {
   try {
-    const text = execFileSync('git', ['show', 'HEAD:witness.config.yaml'],
+    const text = execFileSync('git', ['show', `${rev}:witness.config.yaml`],
       { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
     return ((parseYaml(text) ?? {}) as Record<string, unknown>).autonomy === 'on'
   } catch {
     return false
   }
 }
+const committedAutonomy = (root: string): boolean => autonomyAt(root, 'HEAD')
 
 // Machine facts live in ONE gitignored file with a closed key set (row 90): a key in
 // the wrong home refuses, so no repo↔local precedence rule can exist. Deliberately
