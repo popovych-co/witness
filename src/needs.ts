@@ -69,3 +69,14 @@ export function heldCriteria(doc: CanonDoc): Map<string, string[]> {
   }
   return out
 }
+
+// Row 179. One row per (criterion · unmet need holding it), in criteria order: what a gate's
+// lane check, its `held:` lines and a PR body name as not verified.
+export interface HeldRow { criterion: string; need: string; satisfy: string }
+
+export function heldRows(doc: CanonDoc): HeldRow[] {
+  const held = heldCriteria(doc)
+  const criteria = Array.isArray(doc.meta.criteria) ? (doc.meta.criteria as Array<Record<string, unknown>>) : []
+  return criteria.flatMap((c) => (held.get(String(c.id)) ?? []).map((need) =>
+    ({ criterion: String(c.id), need, satisfy: satisfyCommand(String(doc.meta.id), need) })))
+}

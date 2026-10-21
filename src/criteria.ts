@@ -3,7 +3,7 @@ import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
 import type { TestOutcome } from './junit.js'
 import { matchesTag, sourceTags, type SourceTags } from './matcher.js'
-import { heldCriteria, satisfyCommand } from './needs.js'
+import { heldCriteria, satisfyCommand, type HeldRow } from './needs.js'
 import { ok, type Result } from './refusal.js'
 import type { GateCheck } from './rounds.js'
 import { criteriaExcludes, execCommand, runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
@@ -148,12 +148,19 @@ export function laneCheck(lane: Result<CriteriaResult>): GateCheck {
   const untrusted = lane.ok
     ? [...new Set(lane.value.criteria.flatMap((c) => (c.untrusted !== undefined ? [c.untrusted] : [])))]
     : []
+  // Row 179: a lane that passed with held criteria says so in its own record, so no reader
+  // of the gate-run can take the green for a verification of what was not run.
+  const held: HeldRow[] = lane.ok
+    ? lane.value.criteria.flatMap((c) => (c.held ?? []).map((need) =>
+        ({ criterion: c.id, need, satisfy: satisfyCommand(lane.value.spec, need) })))
+    : []
   return {
     name: 'drift-lane',
     ok: lane.ok && lane.value.ok,
     detail: lane.ok
-      ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ')
+      ? lane.value.criteria.map((c) => `${c.id}:${criterionMark(c)}`).join(' · ')
       : lane.violations.map((x) => `${x.field}:${x.rule}`).join(' · '),
     ...(untrusted.length > 0 ? { untrusted } : {}),
+    ...(held.length > 0 ? { held } : {}),
   }
 }

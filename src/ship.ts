@@ -6,6 +6,7 @@ import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
+import { heldRows, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
@@ -73,7 +74,16 @@ export function existingPr(ctx: Ctx, root: string, branch: string): number | und
   }
 }
 
-export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string): Result<number> {
+// Row 179. A PR shipped while a need held criteria says what was not verified, so the human
+// reading the PR is not told the spec was proven where it was not.
+function prBody(plan: CanonDoc, held: HeldRow[]): string {
+  const head = `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`
+  if (held.length === 0) return head
+  return [head, '', 'Held — not verified while a need is unmet:',
+    ...held.map((h) => `- ${h.criterion}: ${h.need} unmet — ${h.satisfy}`)].join('\n')
+}
+
+export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string, held: HeldRow[] = []): Result<number> {
   const branch = branchName(String(plan.meta.id))
   if (!tryGit(root, 'remote', 'get-url', 'origin').ok) {
     return refuse([v('origin', 'no-remote', '(none)', 'an origin remote — gh pr create needs one')])
@@ -90,7 +100,7 @@ export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, par
   if (found !== undefined) return ok(found)
   const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
     '--title', `${String(plan.meta.id)}: ${parentSummary}`,
-    '--body', `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`])
+    '--body', prBody(plan, held)])
   if (!created.ok) {
     return refuse([v('gh', 'pr-create-failed', created.out.slice(0, 200),
       'gh authenticated with push access — witness check probes gh auth status')])
@@ -438,7 +448,7 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
       }
       ctx.out(kv('commit', `${planId}: ${parentSummary}`))
     }
-    const created = createPr(ctx, wt, root, plan!, parentSummary)
+    const created = createPr(ctx, wt, root, plan!, parentSummary, parent ? heldRows(parent) : [])
     if (!created.ok) { renderRefusal(created.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const stamped = stampPr(ctx, root, planId, created.value)
     if (!stamped.ok) { renderRefusal(stamped.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
