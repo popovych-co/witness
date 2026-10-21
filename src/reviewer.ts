@@ -188,6 +188,11 @@ function classifyAttempt(harness: Harness, p: Prepared, attempt: number, r: Atte
       `a runnable ${p.cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
   }
   if (r.status !== 0) {
+    // Final review F12: claude exits 1 on an is_error envelope, so a provider failure (a usage
+    // limit included) sits on stdout under a non-zero exit. The envelope's own refusal names
+    // it; anything else is the bare exit it always was.
+    const envelope = harness.reviewer.parseEnvelope(r.stdout)
+    if (!envelope.ok && envelope.violations[0]?.rule === 'reviewer-invocation') return envelope
     return refuse([v(p.cmd, 'reviewer-invocation',
       `exit ${String(r.status)}: ${r.stderr.slice(0, 200)}`, `${p.cmd} print mode exiting 0`)])
   }

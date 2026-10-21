@@ -357,3 +357,32 @@ describe('usage limits at the reviewer (B4)', () => {
     expect(clock.slept).toEqual([])
   })
 })
+
+// Final review F12. claude exits 1 on an is_error envelope, so its limit text sits on stdout
+// under a non-zero exit — the exit code alone read it as a bare invocation failure.
+describe('usage limits on the claude harness (B4)', () => {
+  const LIMIT = "You've hit your session limit · resets 2pm (America/Los_Angeles)"
+  const START = Date.parse('2026-10-19T19:30:00Z')
+  const claude = (() => { const r = loadHarness('claude-code'); if (!r.ok) throw new Error('registry'); return r.value })()
+  const setup = async (env: Record<string, string> = {}) => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    writeFileSync(join(scenario, 'claude-error'), LIMIT)
+    writeFileSync(join(scenario, 'claude-error-calls'), '1')
+    const ctx = fakeCtx(repo.root, { env: { ...gateEnv(scenario), ...env } })
+    return { repo, scenario, ctx, clock: fakeClock(START) }
+  }
+  it('inside drive a limited claude call waits for the reset and retries', async () => {
+    const { repo, scenario, ctx, clock } = await setup({ WITNESS_DRIVE: 'p1' })
+    const r = await invokeReviewerAsync(ctx, claude, { cwd: repo.root, prompt: 'x', clock })
+    expect(r.ok).toBe(true)
+    expect(clock.slept).toEqual([5_460_000])
+    expect(existsSync(join(scenario, 'claude-calls/call-2'))).toBe(true)
+  })
+  it('outside drive it refuses usage-limit naming the reset', async () => {
+    const { repo, ctx, clock } = await setup()
+    const r = await invokeReviewerAsync(ctx, claude, { cwd: repo.root, prompt: 'x', clock })
+    expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['usage-limit', LIMIT])
+  })
+})
