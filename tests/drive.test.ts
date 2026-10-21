@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
@@ -901,5 +901,34 @@ esac`)
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 8 })
     expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
     expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)   // its refused write is no progress
+  }, 120_000)
+})
+
+// Final review F6. The settle pass's arbiter met a usage limit and waited inside the reviewer:
+// silently (the pass's ctx is quiet), outside drive's 12 h total, deaf to a signal, and even
+// while drive itself was paused. The pass now never waits: a limit there is drive's own pause.
+describe('a limit in the settle pass is drive\'s pause (B4)', () => {
+  it('prints and counts the wait · then the arbiter is asked again', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
+    await repo.cli(['gate', 'decompose', '--effort', repo.effort], { env: gateEnv(scenario) })   // autonomy off: the stop waits
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    putVerdict(scenario, { choice: 1, reason: 'one slice covers the recap' }, 'arbiter')
+    const used = existsSync(join(scenario, 'claude-calls')) ? readdirSync(join(scenario, 'claude-calls')).length : 0
+    writeFileSync(join(scenario, 'claude-error'), "You've hit your session limit · resets in 0m")
+    writeFileSync(join(scenario, 'claude-error-calls'), String(used + 2))   // the pinned rung and its fallback (row 169)
+    const clock = fakeClock(Date.parse('2026-10-19T19:30:00Z'))
+    const out: string[] = []
+    const t0 = Date.now()
+    await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, {
+      env: gateEnv(scenario, { WITNESS_DRIVE_AGENT_BIN: script('echo tick'), WITNESS_KEEP_AWAKE_BIN: noopOpener() }), out: (l) => out.push(l),
+    }), { maxSpawns: 1 }, clock)
+    expect(out.join('\n')).toContain("drive: usage limit — waiting 1m · You've hit your session limit · resets in 0m")
+    expect(clock.slept).toContain(60_000)
+    expect(Date.now() - t0).toBeLessThan(30_000)                                  // nothing slept for real
+    expect(readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1)).toMatchObject({ selected: 'arbiter' })
   }, 120_000)
 })

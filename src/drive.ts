@@ -18,7 +18,7 @@ import { effortStreams, readStream } from './journal.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import {
-  duration, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock,
+  duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
 } from './usage.js'
 import { keepAwake } from './awake.js'
 import { driveReport, runStart } from './drive-report.js'
@@ -404,31 +404,36 @@ export async function driveLoop(
     return lane
   }
 
-  // A session that ended on a limit counts toward no cap, and its target's next
-  // consideration is not judged for progress: the session never got to act.
-  const limited = (key: string, end: SessionEnd): boolean => {
-    if (end.outcome !== 'exited' && end.outcome !== 'timeout') return false
+  // Every wait drive takes goes through here: printed, bounded and counted toward the total.
+  const pauseFor = (limit: Limit): void => {
     const now = clock.now()
-    const limit = sessionLimit(end, now)
-    if (!limit) { streak = 0; return false }
-    progress.delete(key)
     const wait = waitFor(limit, streak, now)
     streak += 1
     if (wait > SINGLE_WAIT_MAX_MS) {
       ctx.out(`drive: usage limit — resets in ${duration(wait)} — beyond drive's 6h wait · ${limit.text}`)
       stop ??= 'usage'
-      return true
+      return
     }
     // Only the time a wait adds beyond a pause already running counts toward the total.
     const added = Math.max(0, now + wait - Math.max(pausedUntil, now))
     if (waited + added > TOTAL_WAIT_MAX_MS) {
       ctx.out(`drive: usage limit — waited ${duration(waited)} — the next wait passes drive's 12h bound · ${limit.text}`)
       stop ??= 'usage'
-      return true
+      return
     }
     ctx.out(`drive: usage limit — waiting ${duration(wait)} · ${limit.text}`)
     waited += added
     pausedUntil = Math.max(pausedUntil, now + wait)
+  }
+
+  // A session that ended on a limit counts toward no cap, and its target's next
+  // consideration is not judged for progress: the session never got to act.
+  const limited = (key: string, end: SessionEnd): boolean => {
+    if (end.outcome !== 'exited' && end.outcome !== 'timeout') return false
+    const limit = sessionLimit(end, clock.now())
+    if (!limit) { streak = 0; return false }
+    progress.delete(key)
+    pauseFor(limit)
     return true
   }
 
@@ -456,16 +461,20 @@ export async function driveLoop(
   // Row 180. Under autonomy each round starts with one settle pass over every target no
   // session holds and nothing has set aside — a running session settles its own target
   // through its gate and its scoped `next`, so each stop has exactly one settler. Whatever
-  // the pass leaves for a human, drive sets aside. The pass's ctx carries the targetless
-  // marker, so an arbiter call in it waits out a usage limit as a drive session's would.
+  // the pass leaves for a human, drive sets aside. The pass never waits inside a reviewer
+  // (F6: that wait was silent, uncounted and deaf to a signal): an arbiter refused by a usage
+  // limit becomes drive's own pause, and the stop is judged again after it.
   const routed = new Set<string>()
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
-    const passCtx: Ctx = { ...ctx, env: { ...ctx.env, [DRIVE_ENV]: TARGETLESS } }
-    for (const r of await settleOwed(passCtx, root, cfg, { scope: admits })) {
+    for (const r of await settleOwed(ctx, root, cfg, { scope: admits })) {
+      const s = r.settled
+      if (s.kind === 'left' && s.limit !== undefined) {
+        pauseFor(limitIn(s.limit, clock.now()) ?? { kind: 'usage', text: s.limit })
+        continue
+      }
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)
-      const s = r.settled
       if (s.kind === 'kept') {
         ctx.out(`drive: waits on you — ${r.target} · ${KEPT_STOP_NAMES[s.stop]}`)
         setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop })
@@ -521,7 +530,7 @@ export async function driveLoop(
   try {
     for (;;) {
       canonNow = loadCanon(root)
-      if (autonomous && !stop && !signalled) await settlePass()
+      if (autonomous && !stop && !signalled && clock.now() >= pausedUntil) await settlePass()
       while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
         canonNow = loadCanon(root)
         const action = computeNext(root, ctx, canonNow, cfg, { scope: admits })

@@ -26,7 +26,7 @@ export type Settled =
   | { kind: 'decided'; by: 'policy' | 'arbiter'; decision: DecisionEntry['decision']; rule: string }
   | { kind: 'routed'; line: string }                                       // a re-run the CLI names and never executes
   | { kind: 'kept'; stop: KeptStop; line: string }
-  | { kind: 'left'; why: string; code: number }
+  | { kind: 'left'; why: string; code: number; limit?: string }            // limit: the usage limit that refused the arbiter
 
 // The commands a failed check of `run` names that the repo STILL does not trust. A grant
 // made since the stop moves a command out of this list, which is what turns the kept trust
@@ -140,7 +140,9 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     renderDecision(block).forEach((l) => ctx.out(l))
     const why = `the arbiter could not be invoked (${rule})`
     ctx.out(leftLine(gate, target, why))
-    return { kind: 'left', why, code: EXIT.REFUSED }
+    // Final review F6: a usage limit is named, so drive can wait it out as its own pause.
+    const limited = ruling.violations.find((x) => x.rule === 'usage-limit')
+    return { kind: 'left', why, code: EXIT.REFUSED, ...(limited ? { limit: limited.got } : {}) }
   }
   const chosen = menu[ruling.value.choice - 1]!
   const actR = actOfCommand(chosen.command)
