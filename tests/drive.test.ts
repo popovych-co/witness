@@ -948,3 +948,26 @@ describe('a limit in the settle pass is drive\'s pause (B4)', () => {
     expect(readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1)).toMatchObject({ selected: 'arbiter' })
   }, 120_000)
 })
+
+// Final review F9. drive read the config once: a human who committed autonomy: off mid-run
+// still had their stops settled by the policy until the run ended.
+describe('autonomy turned off mid-run (B2)', () => {
+  it('drive stops deciding and starts nothing more', async () => {
+    const repo = await plannedRepo()                                     // A1 · autonomy on
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const agent = script(`cd "${repo.root}"
+perl -pi -e 's/^autonomy: on$/autonomy: off/' witness.config.yaml && git add witness.config.yaml && git commit -qm 'autonomy: off'
+${witnessCli()} gate plan auth-refresh-plan-1 >/dev/null 2>&1
+echo gated`)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, {
+      env: gateEnv(scenario, { WITNESS_KEEP_AWAKE_BIN: noopOpener(), WITNESS_DRIVE_AGENT_BIN: agent }), out: (l) => out.push(l),
+    }), { maxSpawns: 3 })
+    expect(readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'human-decision')).toEqual([])
+    expect(out).toContain('drive: autonomy is off now — no new session starts')
+    expect(out.filter((l) => l.endsWith('] gated'))).toHaveLength(1)
+    expect(code).toBe(1)
+  }, 120_000)
+})

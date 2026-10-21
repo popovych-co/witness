@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, mkdirSync, openSync, writeSync } from 
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
-import { loadLocalConfig, type Config } from './config.js'
+import { loadConfig, loadLocalConfig, type Config } from './config.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
@@ -309,7 +309,7 @@ export async function driveLoop(
   const progress = new Map<string, string>()
   const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
   let spawns = 0
-  let stop: 'ceiling' | 'spawn-failed' | 'usage' | undefined
+  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | undefined
   let idle: string | undefined
   // Row 182. A usage limit pauses every lane: nothing new starts until the reset, and the
   // running sessions finish, because they meet the same account. Every wait is printed, one
@@ -526,10 +526,23 @@ export async function driveLoop(
   ctx.out(awake.command !== undefined
     ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
+  // Final review F9. Autonomy is re-read from the committed config before every round, on
+  // A1's precedent (ship re-reads it at merge time): a human who turns it off mid-run takes
+  // the wheel at once — no stop of theirs is settled, and no new session starts.
+  const stillAutonomous = (): boolean => {
+    if (!autonomous || stop !== undefined) return true
+    const now = loadConfig(root)
+    if (now.ok && now.value.autonomy) return true
+    ctx.out('drive: autonomy is off now — no new session starts')
+    stop = 'autonomy-off'
+    return false
+  }
+
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
   try {
     for (;;) {
+      stillAutonomous()
       canonNow = loadCanon(root)
       if (autonomous && !stop && !signalled && clock.now() >= pausedUntil) await settlePass()
       while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
