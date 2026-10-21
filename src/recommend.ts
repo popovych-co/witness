@@ -78,7 +78,7 @@ const opt = (command: string, depth: Depth, rest: Partial<Option> = {}): Option 
 // rather than to a weighting — and each rule is testable from one journal state.
 // Order: malformed · stale-below-bound · ladder-spent · bound+recurrence · bound ·
 //        recurrence · pin-contradiction · blocking-parent · blocking-here ·
-//        non-blocking-only · reserved-stop-clean · manual-stop
+//        checks-failed · non-blocking-only · reserved-stop-clean · manual-stop
 // D154. Trust must never be the toll for approval. Where a plain `--approve` is offered
 // and the artifact carries untrusted `cmd:` criteria, the block renders BOTH forms — plain
 // first, so approving without granting stays the easy path — and names the commands
@@ -323,6 +323,27 @@ function recommendCore(ctx: GateContext): Decision | undefined {
 
   const checksFailed = last.checks.filter((c) => !c.ok)
   const nonBlocking = (last.verdicts ?? []).flatMap((rv) => rv.findings).length
+
+  // 9b — a deterministic check failed and no finding blocks (row 170). Before this rule such a
+  // run fell to manual-stop, which recommended approve and blamed a --manual flag nobody set:
+  // 31 of 31 manual-stop recommendations in fewhats were exactly this. A failed check is not a
+  // reviewer's opinion, so the fix comes first and approving over it is the deferral.
+  if (checksFailed.length > 0) {
+    const names = checksFailed.map((c) => c.name)
+    return {
+      key: 'decide', rule: 'checks-failed',
+      options: [
+        opt(note, 'root', { why: `${names.length} deterministic check${names.length === 1 ? '' : 's'} failed: ${names.join(' · ')} — no finding blocks · fix what the check names; ${rounds}` }),
+        ...upAlt('the check fails because of what the stage above asked for',
+          'reopens the parent stage and resets this budget'),
+        opt(`${d} --approve`, 'deferral', {
+          when: 'the failing check is wrong or cannot pass for a reason outside this artifact',
+          tradeoff: 'stamps the artifact over a failed deterministic check · no obligation is minted — the failure stays visible only until a later gate run passes the check',
+        }),
+        stopOpt,
+      ],
+    }
+  }
 
   // 10 — non-blocking findings only.
   if (checksFailed.length === 0 && nonBlocking > 0) {
