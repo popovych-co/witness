@@ -19,6 +19,14 @@ const isCapPark = (e: Entry): boolean => {
   return d.selected === 'policy' && typeof d.rule === 'string' && d.rule.startsWith('cap-')
 }
 
+// The gates still open on a target — run, and neither settled nor approved — most recent
+// last. A cap parks only on one of these (F7): a flow whose gates converged is moving, and a
+// stop journaled on a settled gate would hide it behind a reopen that refuses.
+function openGates(entries: Entry[]): string[] {
+  const order = entries.filter((e) => e.t === 'gate-run').map((e) => String((e as unknown as GateRunEntry).gate))
+  return [...new Set(order.reverse())].reverse().filter((g) => !gateSettled(entries, g))
+}
+
 // First hit wins, in this order: rounds · upstream · spawns · wall clock.
 export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHit | undefined {
   let lastPark = -1
@@ -36,7 +44,7 @@ export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHi
   }
   const upstream = since.filter((e) => e.t === 'human-decision' &&
     (e as unknown as DecisionEntry).decision === 'revise-upstream').length
-  if (upstream >= caps.upstream) {
+  if (upstream >= caps.upstream && openGates(entries).length > 0) {
     return { cap: 'upstream', note: `drive cap: ${upstream} upstream resets · drive.caps.upstream ${caps.upstream}` }
   }
   if (use.spawns >= caps.spawns) {
@@ -53,18 +61,25 @@ export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHi
 
 // The park goes through A1's one door with `selected: 'policy'` and the cap as its rule.
 // `park` anchors it on the gate's last run even after the author moved the tree. A target
-// with no gate run has nothing to park on.
-export async function parkAtCap(ctx: Ctx, root: string, target: string, hit: CapHit): Promise<'parked' | 'unparkable'> {
+// with no open gate has nothing to park on; a refusal from the door is named, not guessed.
+export async function parkAtCap(
+  ctx: Ctx, root: string, target: string, hit: CapHit,
+): Promise<{ parked: true } | { parked: false; why: string }> {
   const { readStream } = await import('./journal.js')
   const entries = readStream(root, target)
-  const anyLast = [...entries].reverse().find((e) => e.t === 'gate-run') as unknown as GateRunEntry | undefined
-  const gate = hit.gate ?? anyLast?.gate
+  if (!entries.some((e) => e.t === 'gate-run')) return { parked: false, why: 'no gate run to park it on' }
+  const open = openGates(entries)
+  const gate = hit.gate !== undefined && open.includes(hit.gate) ? hit.gate : open.at(-1)
   const last = gate !== undefined ? lastGateRun(entries, gate) : undefined
-  if (gate === undefined || last === undefined) return 'unparkable'
+  if (gate === undefined || last === undefined) return { parked: false, why: 'no open gate to park it on' }
   // Loaded on A1's precedent for settle.ts: decide.ts reaches the gate registry.
   const { applyDecision } = await import('./verbs/decide.js')
-  const code = await applyDecision({ ...ctx, cwd: root }, {
+  const errs: string[] = []
+  const code = await applyDecision({ ...ctx, cwd: root, err: (l) => { errs.push(l); ctx.err(l) } }, {
     gate, target, decision: 'stop', note: hit.note, selected: 'policy', rule: `cap-${hit.cap}`, park: true, runId: last.run_id,
   })
-  return code === EXIT.OK ? 'parked' : 'unparkable'
+  if (code === EXIT.OK) return { parked: true }
+  // the refusal's rows are indented under its header; the rule is each row's second field
+  const rule = errs.map((l) => /^\s+[^,]+,([a-z-]+),/.exec(l)?.[1]).find((r) => r !== undefined)
+  return { parked: false, why: `the policy could not park it (${rule ?? `exit ${code}`})` }
 }

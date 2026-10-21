@@ -647,6 +647,22 @@ describe('caps (B5)', () => {
     expect(code).toBe(1)
   }, 60000)
 
+  it('a cap never parks a flow on a gate that settled (F7)', async () => {
+    const repo = await startedFlows(['a'])
+    appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round: 1,
+      run_id: 'ri1', reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
+      calibration: 'none', checks: [], outcome: 'passed' })
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+    const agent = script(`exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(readStream(repo.root, 'a-plan-1').filter((e) => e.t === 'human-decision')).toEqual([])
+    expect(gateParked(readStream(repo.root, 'a-plan-1'), 'implement')).toBe(false)
+    expect(out.join('\n')).toContain('drive: capped — a-plan-1 · drive cap: 1 session(s) this run · drive.caps.spawns 1 · no open gate to park it on')
+  }, 60000)
+
   it('a target with no gate run to park on is set aside and named', async () => {
     const repo = await startedFlows(['a'])
     repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)

@@ -41,3 +41,11 @@ describe('capHit (B5)', () => {
     expect(hit([1, 2, 3, 4].map((r) => run('implement', r)), { spawns: 9, ms: 9_000 })?.cap).toBe('rounds')
   })
 })
+
+// Final review F7. A cap parks a flow that will not converge — never one whose gates settled.
+describe('caps spare a converged flow (B5)', () => {
+  it('upstream resets behind a gate that since converged trip nothing', () => {
+    const resets = [1, 2, 3, 4, 5, 6].flatMap(() => [run('implement', 1), decide('implement', 'revise-upstream')])
+    expect(hit([...resets, run('implement', 1, { outcome: 'passed' })])).toBeUndefined()
+  })
+})

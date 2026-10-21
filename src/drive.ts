@@ -508,12 +508,13 @@ export async function driveLoop(
     if (hit === undefined) return false
     // A parked cap carries its gate and the report reads it from the journal; an
     // unparkable one carries none and is reported with what it is, beside the stuck.
-    if (await parkAtCap(ctx, root, action.target, hit) === 'parked') {
+    const parked = await parkAtCap(ctx, root, action.target, hit)
+    if (parked.parked) {
       ctx.out(`drive: parked — ${action.target} · ${hit.note}`)
       const gate = hit.gate ?? lastRunGate(readStream(root, action.target))
       setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}) })
     } else {
-      const why = `${hit.note} · no gate run to park it on`
+      const why = `${hit.note} · ${parked.why}`
       ctx.out(`drive: capped — ${action.target} · ${why}`)
       setAside(key, { kind: 'capped', line: action.line, why })
     }
