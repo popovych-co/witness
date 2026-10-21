@@ -34,9 +34,17 @@ case "$sub" in
     [ -z "$state" ] && { echo "no pull requests found for $3" >&2; exit 1; }
     printf '{"state":"%s"}\n' "$state"; exit 0 ;;
   "pr checks")
+    # a test may act on the world while CI "runs" — e.g. another flow merging to main
+    if [ -f "$dir/gh-checks-hook" ]; then sh "$dir/gh-checks-hook" >/dev/null 2>&1; fi
     status=$(cat "$dir/pr-$3-checks" 2>/dev/null || echo pass)
     if [ "$status" = "pass" ]; then echo "All checks were successful"; exit 0; fi
+    # gh's own words for a PR whose repo runs no CI at all
+    if [ "$status" = "none" ]; then echo "no checks reported on the 'witness/$3' branch" >&2; exit 1; fi
     echo "Some checks were not successful"; exit 1 ;;
+  "pr merge")
+    if [ -f "$dir/pr-$3-merge-refuse" ]; then cat "$dir/pr-$3-merge-refuse" >&2; exit 1; fi
+    echo "MERGED" > "$dir/pr-$3-state"
+    echo "Merged pull request #$3"; exit 0 ;;
 esac
 echo "fake gh: unhandled: $*" >&2
 exit 64

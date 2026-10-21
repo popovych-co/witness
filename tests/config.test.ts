@@ -239,3 +239,23 @@ describe('autonomy (A1)', () => {
     }
   })
 })
+
+describe('ship.merge (A7)', () => {
+  it('defaults to merge and loads squash and rebase', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\n')
+    const d = loadConfig(repo.root)
+    expect(d.ok && d.value.ship.merge).toBe('merge')
+    for (const style of ['squash', 'rebase']) {
+      repo.write('witness.config.yaml', `schema: 1\nship:\n  merge: ${style}\n`)
+      const r = loadConfig(repo.root)
+      expect(r.ok && r.value.ship.merge).toBe(style)
+    }
+  })
+  it('refuses any other style', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\nship:\n  merge: fast-forward\n')
+    const r = loadConfig(repo.root)
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'ship.merge', rule: 'invalid', want: 'merge | squash | rebase' })
+  })
+})

@@ -150,6 +150,7 @@ either.
 | `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
 | `drive.sessionTimeoutMs` | milliseconds a `drive`-spawned session may run before SIGTERM (default 3600000) |
 | `autonomy: on \| off` | whether the CLI settles its own stops — through its recommendation or the arbiter it launches — and merges its own PRs once CI is green (default off). A committed repo fact. `--manual` on a gate run keeps that run's stop for a human, and three stops always reach one: the look of a new screen, an unmet plan need and a trust grant |
+| `ship.merge: merge \| squash \| rebase` | how `witness ship` merges its own PR under `autonomy: on` (default merge) — only once the ship gate is approved and CI is green, and never when the approval lapsed or GitHub refuses |
 
 There is no `provider:` key. `witness gate` spawns the DECLARED harness's headless
 mode for every reviewer (Decisions 88, 105): claude-code renders bare Anthropic ids, pi
@@ -188,7 +189,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
 | `drive [--flow <plan-id>] [--max-spawns <n>]` | schedule green-path work through headless sessions; you appear only at judgment stops. TTY-only — agents are what drive spawns, never what spawns drive |
-| `ship <plan-id>` | lanes → ship gate → PR → CI watch |
+| `ship <plan-id>` | lanes → ship gate → PR → CI watch → under autonomy: merge on green |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
 | `adopt <path>` | absolve a finished hand-edit into the journal |
 | `abandon <plan-id \| effort-slug>` | wind a plan/effort down; reverts only specs that effort itself wrote |

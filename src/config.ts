@@ -26,6 +26,7 @@ export interface Config {
   gates: GatesConfig
   drive: DriveConfig
   autonomy: boolean
+  ship: ShipConfig
   warning?: string
 }
 
@@ -188,6 +189,25 @@ export function resolveAutonomy(raw: Record<string, unknown>): Result<boolean> {
   return refuse([v('autonomy', 'invalid', String(val), 'on | off')])
 }
 
+// Row 174. How `witness ship` merges its own PR under autonomy. Configured, never detected:
+// a style inferred from history would change the day someone merged one PR by hand.
+export type MergeStyle = 'merge' | 'squash' | 'rebase'
+export interface ShipConfig { merge: MergeStyle }
+const MERGE_STYLES: readonly MergeStyle[] = ['merge', 'squash', 'rebase']
+
+// The rest of `ship.*` (test, lint, branch) is still read loosely at its consumers; only
+// the key with a closed value set is resolved here, and only when `ship` is a map.
+export function resolveShip(raw: Record<string, unknown>): Result<ShipConfig> {
+  const conf = raw.ship
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) return ok({ merge: 'merge' })
+  const val = (conf as Record<string, unknown>).merge
+  if (val === undefined) return ok({ merge: 'merge' })
+  if (typeof val !== 'string' || !(MERGE_STYLES as readonly string[]).includes(val)) {
+    return refuse([v('ship.merge', 'invalid', String(val), 'merge | squash | rebase')])
+  }
+  return ok({ merge: val as MergeStyle })
+}
+
 // Machine facts live in ONE gitignored file with a closed key set (row 90): a key in
 // the wrong home refuses, so no repo↔local precedence rule can exist. Deliberately
 // NOT wired into loadConfig — same doctrine as harness resolution (row 87): an
@@ -293,6 +313,8 @@ export function loadConfig(root: string): Result<Config> {
   if (!drive.ok) return refuse(drive.violations)
   const autonomy = resolveAutonomy(obj)
   if (!autonomy.ok) return refuse(autonomy.violations)
+  const shipCfg = resolveShip(obj)
+  if (!shipCfg.ok) return refuse(shipCfg.violations)
   return ok({
     schema,
     raw: obj,
@@ -302,6 +324,7 @@ export function loadConfig(root: string): Result<Config> {
     gates: gates.value,
     drive: drive.value,
     autonomy: autonomy.value,
+    ship: shipCfg.value,
     warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)` : undefined,
   })
 }

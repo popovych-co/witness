@@ -1,13 +1,13 @@
 import { execFileSync } from 'node:child_process'
 import { EXIT, type Ctx } from './cli.js'
-import { loadConfig } from './config.js'
+import { loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
-import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
+import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
@@ -17,6 +17,9 @@ import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
+// Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
+// so reaching decide.ts from here closes no registration cycle.
+import { settleStop, settledCode } from './settle.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
 
@@ -174,6 +177,34 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   return ok('rebased')
 }
 
+// Row 174. Witness merges what it was allowed to ship — and only that. CI can run for half an
+// hour, so the approval is re-checked against the world as it is AFTER the watch: a base
+// another flow moved, or a tree that changed, means the merge would land bytes no battery
+// read, and it is held for `witness ship` to rebase and re-gate. Never `merge PR`: that is
+// drive's human-merge stop (drive.ts), and this is not one.
+export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, pr: number): number {
+  const entries = readStream(root, planId)
+  const wt = worktreePath(root, planId)
+  const shipBranch = ((cfg.raw.ship ?? {}) as { branch?: string }).branch ?? 'main'
+  const base = diffBase(wt, cfg)
+  const lapsed = baseMoved(wt, root, shipBranch) ? `${shipBranch} moved`
+    : !base.ok || !gateSettled(entries, 'ship', diffReviewedSha(wt, base.value)) ? 'the tree moved'
+    : undefined
+  if (lapsed !== undefined) {
+    ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · witness ship ${planId} re-gates`))
+    return EXIT.FINDINGS
+  }
+  const merged = gh(ctx, root, ['pr', 'merge', String(pr), `--${cfg.ship.merge}`])
+  if (!merged.ok) {
+    renderRefusal([humanCall(v('gh', 'merge-refused', merged.out.trim().slice(-200),
+      "a PR GitHub will merge — branch protection and required reviews are the repo owner's to settle"))])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  ctx.out(kv('merged', `#${pr} · ${cfg.ship.merge} — the lazy stamp finishes the lifecycle on the next scan`))
+  return EXIT.OK
+}
+
 export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -182,24 +213,36 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   if (blocked !== undefined) return blocked
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const canon = loadCanon(root)
-  const plan = findById(canon, planId)
+  let canon = loadCanon(root)
+  let plan = findById(canon, planId)
   if (!plan || plan.meta.type !== 'plan') {
     renderRefusal([v('plan', 'unknown-plan', planId, 'a plans/ doc id')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const wt = worktreePath(root, planId)
-  const entries = readStream(root, planId)
+  let entries = readStream(root, planId)
   const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
   const shipBranch = ship.branch ?? 'main'
+  const autonomy = cfgR.value.autonomy
   // One read-only fetch decides the whole routing. A failed fetch (no remote, offline)
   // leaves baseMoved false and the phases behave as they did — the gate phase's own
   // rebaseIfMoved is where that condition turns into a structured refusal.
   const moved = baseMoved(wt, root, shipBranch)
   const baseR = diffBase(wt, cfgR.value)
-  const reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
+  let reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
   let phase = shipPhase(plan, entries, reviewedSha, moved)
   if (moved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
+  // Row 174. Under autonomy an approval settled in this run carries straight on to the PR,
+  // so the phase is derived again from the world as it now stands — the gate phase may
+  // just have rebased, which moves both the tree and the base terms.
+  const rederive = (): ShipPhase => {
+    canon = loadCanon(root)
+    plan = findById(canon, planId)!
+    entries = readStream(root, planId)
+    const b = diffBase(wt, cfgR.value)
+    reviewedSha = b.ok ? diffReviewedSha(wt, b.value) : undefined
+    return shipPhase(plan, entries, reviewedSha, baseMoved(wt, root, shipBranch))
+  }
 
   if (phase === 'gate') {
     // D94: the gate cannot judge unchanged content twice — it answers changed-nothing
@@ -228,7 +271,17 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     // No second exits line here: the gate's own render already printed the complete set
     // through liveExits. An approve-only line directly beneath it is two answers to one
     // question, and the narrower one is the one a reader acts on (D119).
-    return EXIT.FINDINGS
+    if (!(autonomy && code === EXIT.OK)) return EXIT.FINDINGS
+    phase = rederive()
+    if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
+  }
+  if (phase === 'awaiting-decision' && autonomy) {
+    // A stop the gate's tail left owed (a crash, or one waiting when autonomy was turned on)
+    // settles here by the same policy; anything but an approve hands back as before.
+    const s = await settleStop(ctx, root, cfgR.value, 'ship', planId)
+    if (!(s.kind === 'decided' && s.decision === 'approve')) return settledCode(EXIT.FINDINGS, s)
+    phase = rederive()
+    if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
   }
   if (phase === 'awaiting-decision') {
     ctx.out(kv('ship', `${planId} awaits the ship decision`))
@@ -244,7 +297,7 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     return EXIT.FINDINGS
   }
   if (phase === 'pr') {
-    const parent = findById(canon, String(plan.meta.parent))
+    const parent = findById(canon, String(plan!.meta.parent))
     const parentSummary = String(parent?.meta.summary ?? 'witness change')
     // implement leaves the worktree uncommitted — ship owns the sole code commit
     if (tryGit(wt, 'status', '--porcelain').out !== '') {
@@ -257,7 +310,7 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
       }
       ctx.out(kv('commit', `${planId}: ${parentSummary}`))
     }
-    const created = createPr(ctx, wt, root, plan, parentSummary)
+    const created = createPr(ctx, wt, root, plan!, parentSummary)
     if (!created.ok) { renderRefusal(created.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const stamped = stampPr(ctx, root, planId, created.value)
     if (!stamped.ok) { renderRefusal(stamped.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -270,10 +323,17 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   // established that both the reviewed tree and the base are the ones the battery judged.
   const green = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], 1_800_000)
   if (!green.ok) {
+    // Row 174 / §11 call 18. A repo with no CI never auto-merges: green is the only licence
+    // the merge has, and "no checks" is not green. The human's call — never a CI to "fix".
+    if (autonomy && /no checks reported/.test(green.out)) {
+      ctx.out(kv('merge', 'held — no CI checks reported · witness merges only on green CI'))
+      return EXIT.FINDINGS
+    }
     ctx.out(kv('ci', `red — ${green.out.trim().slice(-200)}`))
     return EXIT.FINDINGS
   }
   ctx.out(kv('ci', 'green'))
+  if (autonomy) return mergeOwnPr(ctx, root, cfgR.value, planId, pr)
   ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
   return EXIT.OK
 }

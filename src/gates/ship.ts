@@ -97,7 +97,10 @@ registerGate({
       promptBody: codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
       checks,
-      standingStop: 'ship always stops — a human sends every PR',
+      // Row 174: under autonomy the stop still stands — the arbiter is who answers it.
+      standingStop: cfg.autonomy
+        ? 'ship always stops — the arbiter judges every PR against the recap'
+        : 'ship always stops — a human sends every PR',
       stamps: [],
       repin,
     })
