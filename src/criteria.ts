@@ -3,6 +3,7 @@ import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
 import type { TestOutcome } from './junit.js'
 import { matchesTag, sourceTags, type SourceTags } from './matcher.js'
+import { heldCriteria, satisfyCommand } from './needs.js'
 import { ok, type Result } from './refusal.js'
 import type { GateCheck } from './rounds.js'
 import { criteriaExcludes, execCommand, runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
@@ -16,6 +17,14 @@ export interface CriterionOutcome {
   detail: string
   // Row 171: the command trust kept from running, when that is why this criterion failed.
   untrusted?: string
+  // Row 179: the unmet manual needs holding this criterion. A held criterion is never run and
+  // never `ok`; the lane's aggregate alone treats it as not failing.
+  held?: string[]
+}
+
+export function criterionMark(c: CriterionOutcome): string {
+  if (c.held !== undefined) return `held by ${c.held.join(' · ')}`
+  return c.ok ? 'ok' : 'fail'
 }
 
 export interface CriteriaResult {
@@ -58,9 +67,16 @@ export async function runCriteria(
     ? sourceTags(runRoot, criteriaExcludes(cfg.value))
     : undefined
 
+  const held = heldCriteria(doc)
   const criteria: CriterionOutcome[] = []
   for (const c of list) {
     const cid = String(c.id)
+    const holders = held.get(cid)
+    if (holders !== undefined) {
+      criteria.push({ id: cid, kind: typeof c.test === 'string' ? 'test' : 'cmd', ok: false, held: holders,
+        detail: `held by ${holders.join(' · ')} — ${satisfyCommand(id, holders[0]!)}` })
+      continue
+    }
     if (typeof c.test === 'string') {
       if (rc.mode === 'full-suite') {
         if (!suite) {
@@ -116,7 +132,9 @@ export async function runCriteria(
   return ok({
     spec: id,
     sha: canonicalSha(doc.meta, doc.body),
-    ok: criteria.length > 0 && criteria.every((c) => c.ok),
+    // A lane passes only when something actually passed and nothing failed: a held criterion
+    // is not a failure, and it is never a pass either.
+    ok: criteria.some((c) => c.ok) && criteria.every((c) => c.ok || c.held !== undefined),
     mode: rc.mode,
     tagCount,
     criteria,

@@ -175,3 +175,20 @@ describe('a new artifact keeps off a held path (D167)', () => {
     expect((await repo.cli(['adopt', rel])).code).toBe(0)
   })
 })
+
+describe('witness adopt — held criteria (A10)', () => {
+  it('a green re-verify counts what it held (A10)', async () => {
+    const repo = await seededRepo()
+    copyFixture(repo, 'vitest-single')
+    repo.write('witness.config.yaml', singleConfig('filtered'))
+    await writeSpec(repo, 'auth-refresh', {
+      needs: [{ id: 'prod', manual: 'production access granted', satisfied: false, holds: ['ac-prod'] }],
+      criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd: 'false' }],
+    })
+    stampLive(repo, 'auth-refresh')
+    editDoc(repo, SPEC, (meta, body) => ({ meta, body: body.replace('Tokens leak.', 'Tokens leak. Polished.') }))
+    const res = await repo.cli(['adopt', SPEC], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('reverify: lane green · 1 held — stays live')
+  })
+})

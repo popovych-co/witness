@@ -1,5 +1,8 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { runCriteria } from '../src/criteria.js'
+import { untrustedCmdsFor } from '../src/allowlist.js'
+import { criterionMark, runCriteria } from '../src/criteria.js'
 import { findById, loadCanon } from '../src/scan.js'
 import type { TestRepo } from './helpers.js'
 import {
@@ -139,5 +142,69 @@ describe('runCriteria — full-suite mode', () => {
     if (!doc) throw new Error('spec missing')
     const res = await runCriteria(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), doc)
     expect(res.ok).toBe(false)
+  })
+})
+
+describe('held criteria (A10)', () => {
+  const HELD = [{ id: 'prod', manual: 'production access granted', satisfied: false, holds: ['ac-prod'] }]
+  async function heldRepo(cmd = 'touch held.marker && false') {
+    const repo = await seededRepo()
+    copyFixture(repo, 'vitest-single')
+    repo.write('witness.config.yaml', singleConfig('filtered'))
+    await writeSpec(repo, 'auth-refresh', {
+      ...SPEC_META, needs: HELD, criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd }],
+    })
+    stampLive(repo, 'auth-refresh')
+    return repo
+  }
+  const lane = async (repo: TestRepo) => {
+    const r = await runCriteria(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), findById(loadCanon(repo.root), 'auth-refresh')!)
+    if (!r.ok) throw new Error('lane refused')
+    return r.value
+  }
+
+  it('a held criterion is not run and does not fail the lane', async () => {
+    const repo = await heldRepo()
+    const res = await lane(repo)
+    expect(res.ok).toBe(true)
+    expect(res.criteria.find((c) => c.id === 'ac-prod')).toEqual({
+      id: 'ac-prod', kind: 'cmd', ok: false, held: ['prod'],
+      detail: 'held by prod — witness satisfy auth-refresh --need prod',
+    })
+    expect(existsSync(join(repo.root, 'held.marker'))).toBe(false)
+  })
+
+  it('once its need is satisfied it runs and its failure fails the lane', async () => {
+    const repo = await heldRepo()
+    expect((await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])).code).toBe(0)
+    const res = await lane(repo)
+    expect(res.ok).toBe(false)
+    const prod = res.criteria.find((c) => c.id === 'ac-prod')!
+    expect(prod).toMatchObject({ ok: false, detail: 'nonzero exit' })
+    expect(prod.held).toBeUndefined()
+    expect(existsSync(join(repo.root, 'held.marker'))).toBe(true)
+  })
+
+  it('a lane where nothing passed is not ok even when nothing failed', async () => {
+    const repo = await heldRepo()
+    const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+    // hand-built: Task 6 refuses this shape at write and check · the aggregate must refuse it too
+    const allHeld = { ...doc, meta: { ...doc.meta, criteria: [{ id: 'ac-prod', cmd: 'true' }] } }
+    const r = await runCriteria(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), allHeld)
+    expect(r.ok && r.value.ok).toBe(false)
+  })
+
+  it('criterionMark names ok · fail · every holder', () => {
+    expect(criterionMark({ id: 'a', kind: 'cmd', ok: true, detail: '' })).toBe('ok')
+    expect(criterionMark({ id: 'a', kind: 'cmd', ok: false, detail: '' })).toBe('fail')
+    expect(criterionMark({ id: 'a', kind: 'cmd', ok: false, held: ['prod', 'stripe'], detail: '' })).toBe('held by prod · stripe')
+  })
+
+  it('a held command needs no trust until its need is met', async () => {
+    const repo = await heldRepo('pnpm verify:prod')
+    const doc = () => findById(loadCanon(repo.root), 'auth-refresh')
+    expect(untrustedCmdsFor(repo.root, doc())).toEqual([])
+    await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])
+    expect(untrustedCmdsFor(repo.root, doc())).toEqual(['pnpm verify:prod'])
   })
 })

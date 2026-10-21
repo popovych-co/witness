@@ -108,3 +108,34 @@ describe('trailingFails', () => {
     expect(trailingFails([d(false), other, d(false)])).toBe(2)
   })
 })
+
+describe('check --drift with a held criterion (A10)', () => {
+  async function heldLiveRepo(): Promise<TestRepo> {
+    const repo = await seededRepo()
+    copyFixture(repo, 'vitest-single')
+    repo.write('witness.config.yaml', singleConfig('filtered'))
+    await writeSpec(repo, 'auth-refresh', {
+      needs: [{ id: 'prod', manual: 'production access granted', satisfied: false, holds: ['ac-prod'] }],
+      criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd: 'false' }],
+    })
+    stampLive(repo, 'auth-refresh')
+    return repo
+  }
+  it('passes the spec · names the hold in its row · counts it in the summary', async () => {
+    const repo = await heldLiveRepo()
+    const res = await repo.cli(['check', '--drift'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('ac-prod: held by prod — witness satisfy auth-refresh --need prod')
+    expect(res.stdout).toContain('drift-summary: 0/1 failing · 1 held · mode local')
+    const entry = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'drift-check').at(-1)!
+    expect(entry.ok).toBe(true)
+    expect((entry.criteria as Array<Record<string, unknown>>)[1]).toMatchObject({ id: 'ac-prod', ok: false, held: ['prod'] })
+  })
+  it('after the need is satisfied the criterion fails as ordinary drift', async () => {
+    const repo = await heldLiveRepo()
+    await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])
+    const res = await repo.cli(['check', '--drift'], { env: fixtureEnv() })
+    expect(res.code).toBe(1)
+    expect(readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'drift-check').at(-1)!.ok).toBe(false)
+  })
+})

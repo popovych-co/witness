@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
+import { heldCriteria } from './needs.js'
+import type { CanonDoc } from './scan.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
@@ -36,10 +38,14 @@ export function grantCommands(root: string, cmds: string[]): void {
 // artifact is the SPEC that owns the criteria: a plan gate judges a plan, but criteria live
 // on the spec it derives from, and a block that listed nothing there would hide the very
 // commands its approve is about to leave blocked.
-export function untrustedCmdsFor(root: string, doc: { meta: Record<string, unknown> } | undefined): string[] {
+//
+// Row 179: a criterion an unmet need holds is not run, so it needs no trust until the need is
+// met. `witness trust <id>` still lists every command, so a human may trust one ahead of time.
+export function untrustedCmdsFor(root: string, doc: CanonDoc | undefined): string[] {
   if (!doc) return []
+  const held = heldCriteria(doc)
   const list = Array.isArray(doc.meta.criteria) ? (doc.meta.criteria as Array<Record<string, unknown>>) : []
-  const cmds = list.map((c) => c.cmd).filter((c): c is string => typeof c === 'string')
+  const cmds = list.filter((c) => !held.has(String(c.id))).map((c) => c.cmd).filter((c): c is string => typeof c === 'string')
   const trusted = new Set(load(root))
   return [...new Set(cmds.filter((c) => !trusted.has(c)))]
 }
