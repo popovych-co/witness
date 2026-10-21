@@ -217,3 +217,12 @@ it('reads the merge authority from what the remote holds, never a local tracking
   expect(await runShip(s.ctx, s.planId)).toBe(0)
   expect(s.calls()).toContain('pr merge 1 --merge')
 })
+it('merges only the commit it pushed — a commit slipped under a restored working tree is held (security)', async () => {
+  const s = await autonomousShip()
+  const keep = join(s.scenario, 'approved-token.ts')
+  writeFileSync(join(s.scenario, 'gh-checks-hook'),
+    `[ -f "${keep}" ] && exit 0\ncd "${s.wt}" && cp src/token.ts "${keep}" && echo '// unreviewed' >> src/token.ts && git add -A && git -c user.name=t -c user.email=t@e commit -m slip && cp "${keep}" src/token.ts\n`)
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain('merge: held — the ship approval lapsed')
+  expect(s.calls()).not.toContain('pr merge')
+})
