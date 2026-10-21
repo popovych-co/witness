@@ -16,7 +16,7 @@ import { cmd, kv, rows } from './toon.js'
 import { loadMatrix, resolveModel } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
-import { anchorKey, anchorMenu, type Reviewed } from './verdict.js'
+import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
 import { basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta } from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
@@ -571,8 +571,12 @@ async function judge(
     // block tells the reviewer, so the reviewer knows silence will be read that way.
     const reported = new Set((entry.verdicts ?? []).flatMap((rv) => rv.findings
       .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))))
+    // Row 187. A delta round was asked about the change, never to re-read what it left alone, so
+    // its silence discharges only an obligation whose unit the change touched. Silence on an
+    // unchanged unit, or on context, is not evidence that anything was fixed.
+    const silenceCounts = (anchor: string) => delta === undefined || delta.view.state(anchorFromKey(anchor)) === 'changed'
     const discharged = entry.outcome === 'malformed' ? []
-      : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor))
+      : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor) && silenceCounts(d.anchor))
         .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))
 
     const files = [

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { recommend, renderDecision, type Decision } from '../src/recommend.js'
-import { anchorRecurrence, ladderSpent, liveExits } from '../src/rounds.js'
+import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
@@ -535,5 +535,22 @@ describe('block properties', () => {
         expect(found || accounted, `${name}: ${act}`).toBe(true)
       }
     }
+  })
+})
+
+const demoted = (round: number, sha: string, anchor: string) => run(round, sha, anchor, {
+  verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: false, anchor, claim: 'x', demoted: round - 1 }] }] })
+
+describe('a demoted finding is non-blocking everywhere (C3)', () => {
+  it('does not count toward anchor recurrence', () => {
+    expect(anchorRecurrence([run(1, 'a', 'S'), demoted(2, 'b', 'S')], 'plan', 'S')).toBe(1)
+  })
+  it('stays out of the prefilled note', () => {
+    expect(notePrefill([demoted(2, 'b', 'S')], 'plan')).toBe('<why>')
+  })
+  it('a round whose only findings were demoted reads non-blocking-only', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'T'), demoted(2, 'b', 'S')]))!
+    expect(d.rule).toBe('non-blocking-only')
+    expect(d.options[0]!.command).toBe('witness decide plan p1 --approve')
   })
 })

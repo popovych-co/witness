@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
-import { readStream } from '../src/journal.js'
+import { appendEntry, readStream } from '../src/journal.js'
+import { openDeferrals, type DeferralEntry } from '../src/deferral.js'
 import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import type { GateCheck, GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
@@ -121,5 +122,41 @@ describe('the demotion rule at a demoting gate (C3)', () => {
   it('an omission scoped to an unchanged section is demoted', async () => {
     const { found } = await demoting(at({ kind: 'omission', scope: DOC }))
     expect(found[0]).toMatchObject({ blocking: false, demoted: 1 })
+  })
+})
+
+// Row 187: a demoted finding is still a finding — its anchor counts as reported — and it is not
+// blocking, so an override mints nothing for it.
+describe('what a demotion counts for (C3)', () => {
+  const open = (root: string) => openDeferrals(readStream(root, 'auth-refresh'))
+  const both = (a: string, ab: boolean, b: string, bb: boolean) => ({ coverage: [{ anchor: DOC, note: 'read' }],
+    findings: [{ blocking: ab, anchor: a, claim: 'x' }, { blocking: bb, anchor: b, claim: 'x' }] })
+
+  it('guard: a demoted finding at an obligation anchor keeps it open', async () => {
+    const { repo, scenario, ctx } = await spec()
+    appendEntry(repo.root, 'auth-refresh', { v: 1, t: 'deferral', id: 'd-0000c3c3', artifact: 'auth-refresh', gate: 'ship',
+      round: 3, anchor: DOC, kind: 'artifact-debt', caused_by_run: 'r-0' } as never)
+    putVerdict(scenario, SCREEN(false), 'code-reviewer')
+    putVerdict(scenario, both(M, true, DOC, false), 'drift-reviewer'); await runGate(ctx, 'ship', 'auth-refresh', F)
+    await amend(repo)
+    putVerdict(scenario, at(DOC), 'drift-reviewer'); await runGate(ctx, 'ship', 'auth-refresh', F)
+    expect(runs(repo.root)[1]!.verdicts!.find((v) => v.reviewer === 'drift-reviewer')!.findings[0])
+      .toMatchObject({ anchor: DOC, blocking: false, demoted: 1 })
+    expect(open(repo.root).map((d) => d.id)).toEqual(['d-0000c3c3'])
+  })
+
+  it('guard: an override mints no obligation for a demoted finding', async () => {
+    const { repo, scenario, ctx } = await spec()
+    putVerdict(scenario, SCREEN(false), 'code-reviewer')
+    putVerdict(scenario, at(M), 'drift-reviewer'); await runGate(ctx, 'ship', 'auth-refresh', F)
+    await amend(repo); await runGate(ctx, 'ship', 'auth-refresh', F)
+    await writeSpec(repo, 'auth-refresh', {}, `${SPEC_BODY}\n## Notes\nEven more.\n`)
+    putVerdict(scenario, both(M, true, DOC, true), 'drift-reviewer'); await runGate(ctx, 'ship', 'auth-refresh', F)
+    const r3 = runs(repo.root)[2]!.verdicts!.find((v) => v.reviewer === 'drift-reviewer')!.findings
+    expect(r3).toEqual([{ blocking: true, anchor: M, claim: 'x' }, { blocking: false, anchor: DOC, claim: 'x', demoted: 2 }])
+    const d = await repo.cli(['decide', 'ship', 'auth-refresh', '--approve', '--override'])
+    expect(d.code).toBe(0)
+    const minted = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'deferral') as unknown as DeferralEntry[]
+    expect(minted.map((x) => x.anchor)).toEqual([M])
   })
 })
