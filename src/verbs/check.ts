@@ -12,7 +12,7 @@ import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
-import { FLOOR_STREAM } from '../floor.js'
+import { reservedId } from '../ask.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
@@ -240,7 +240,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (!file.endsWith('.jsonl')) continue
       const id = file.slice(0, -'.jsonl'.length)
       const entries = readStream(root, id)
-      if (entries[0]?.t === 'recap' || id === FLOOR_STREAM) continue
+      if (entries[0]?.t === 'recap' || reservedId(id) !== undefined) continue
       if (findById(canon, id)) continue
       // D166. A departed spec's stream is not an orphan — it is lineage by construction, what a
       // finished plan's parent and `log --lineage` resolve against. It speaks only while it

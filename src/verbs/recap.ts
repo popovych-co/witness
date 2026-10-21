@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
+import { reservedId } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -93,6 +94,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   recap.constraints ??= []
   recap.slices ??= []
 
+  // Row 176. Before slug-reuse and for --amend too: a reserved stream is refused whether or not
+  // it exists yet, and an amend would append a recap to witness's own history.
+  const reserved = reservedId(recap.effort)
+  if (reserved !== undefined) {
+    renderRefusal([v('effort', 'id-taken', recap.effort, `a new id — ${recap.effort} is ${reserved}`)]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
   const exists = streamExists(root, recap.effort)
   if (!values.amend && exists) {
     renderRefusal([v('effort', 'slug-reuse', `journal stream '${recap.effort}' exists (active or terminal)`, 'a new slug — histories never merge')]).forEach(ctx.err)

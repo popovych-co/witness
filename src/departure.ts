@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import type { CanonPaths } from './config.js'
 import { deferralMoves } from './deferral.js'
 import { designRel } from './design.js'
-import { FLOOR_STREAM } from './floor.js'
+import { reservedId } from './ask.js'
 import { splitDoc } from './fm.js'
 import { adoptedCommits, lastWitnessed } from './adopt.js'
 import { gitBlob, tryGit } from './gitio.js'
@@ -148,12 +148,13 @@ function returnsThrough(
 // Whether a NEW artifact may take this id. An id names one artifact for the life of the repo,
 // because its stream IS that artifact's history. Three streams already belong to something
 // else: a superseded spec's (a successor owns its content, and its finished plans resolve their
-// parent there), an effort's, and witness's own floor pins. The one re-use is the same artifact
+// parent there), an effort's, and witness's own (`reservedId`: the floor pins and the ask queue). The one re-use is the same artifact
 // again: a spec its own abandon unwound may be written again as a spec. A stream that records
 // none of these — a stray, or a doc canon cannot parse — does not hold its id; the findings
 // that already name it (`orphan-journal`, the parse error) are its remedy.
 export function idRetired(root: string, id: string, type: string): Violation | undefined {
-  if (id === FLOOR_STREAM) return v('id', 'id-taken', id, `a new id — ${id} is witness's own floor stream`)
+  const reserved = reservedId(id)
+  if (reserved !== undefined) return v('id', 'id-taken', id, `a new id — ${id} is ${reserved}`)
   const entries = readStream(root, id)
   if (entries[0]?.t === 'recap') return v('id', 'id-taken', id, `a new id — ${id} is an effort's slug`)
   const exit = canonExit(entries)

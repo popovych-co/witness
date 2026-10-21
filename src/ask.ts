@@ -1,0 +1,97 @@
+import type { Ctx } from './cli.js'
+import { FLOOR_STREAM } from './floor.js'
+import { stateCommit } from './gitio.js'
+import { appendEntry, entryLine, journalRel, readStream } from './journal.js'
+import { acquireLock } from './lock.js'
+import { ok, refuse, v, type Result } from './refusal.js'
+import { crashPoint, pendingTxn, withTxn } from './txn.js'
+
+// Row 176. The human's ask is journaled state, on a stream witness owns the way it owns
+// `floor`. This module is its one home: the entries, the queue derived from them, and the
+// one write path the verb, `/witness <text>` and `drive --ask` share — so a crashed session
+// loses nothing, because the brainstorm that answers an ask reads it from here, never from
+// its prompt.
+export const ASK_STREAM = 'asks'
+
+export interface AskEntry { v: 1; t: 'ask'; id: string; text: string }   // id: a1 · a2 · … in queue order
+
+export interface AskStatus {
+  id: string
+  text: string
+  state: 'unanswered' | 'answered' | 'parked' | 'withdrawn'
+  effort?: string   // answered: the effort whose recap names it
+  checks: number    // recap checks journaled for it
+  reason?: string   // the last rejected check's reason
+  note?: string     // the last rejected check's note
+}
+
+// Display only: the stored text is the human's, trimmed and otherwise as given.
+export function askText(text: string): string {
+  return text.trim().replace(/\s+/g, ' ')
+}
+
+export function askQueue(root: string): AskStatus[] {
+  const out: AskStatus[] = []
+  for (const e of readStream(root, ASK_STREAM)) {
+    if (e.t === 'ask') out.push({ id: String(e.id), text: String(e.text), state: 'unanswered', checks: 0 })
+    else if (e.t === 'ask-withdrawn') {
+      const a = out.find((x) => x.id === e.ask)
+      if (a) a.state = 'withdrawn'
+    }
+  }
+  return out
+}
+
+// The one list of stream ids witness owns. A stream id is an artifact's whole history, so an
+// effort, spec, plan or rename that took one of these would merge two histories into one.
+export function reservedId(id: string): string | undefined {
+  if (id === ASK_STREAM) return "witness's own ask queue"
+  if (id === FLOOR_STREAM) return "witness's own floor stream"
+  return undefined
+}
+
+const TEXT_REQUIRED = v('text', 'required', 'absent', 'what to build in words — witness ask <text>')
+
+export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: string; unanswered: number }> {
+  const pending = pendingTxn(root)
+  if (pending) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
+  if (askText(text) === '') return refuse([TEXT_REQUIRED])
+  const lock = acquireLock(root)
+  if (!lock.ok) return lock
+  try {
+    // numbered under the lock: two queuers racing must not both take the next id
+    const id = `a${askQueue(root).length + 1}`
+    const entry = { t: 'ask' as const, id, text: text.trim() }
+    const stream = journalRel(ASK_STREAM)
+    const res = withTxn(root, { op: `ask(${id})`, files: [stream], journal: { stream: ASK_STREAM, line: entryLine(entry) } }, () => {
+      appendEntry(root, ASK_STREAM, entry)
+      crashPoint(ctx.env, 'journal-append')
+      return stateCommit(root, [stream], `ask(${id}): ${askText(text).slice(0, 60)}`)
+    })
+    if (!res.ok) return res
+    return ok({ id, unanswered: askQueue(root).filter((a) => a.state === 'unanswered').length })
+  } finally {
+    lock.value()
+  }
+}
+
+export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): Result<{ already: boolean }> {
+  const lock = acquireLock(root)
+  if (!lock.ok) return lock
+  try {
+    const ask = askQueue(root).find((a) => a.id === id)
+    if (!ask) return refuse([v('--withdraw', 'unknown-ask', id, 'an ask id — witness status lists the queue')])
+    if (ask.state === 'withdrawn') return ok({ already: true })
+    const entry = { t: 'ask-withdrawn' as const, ask: id, ...(note !== undefined ? { note } : {}) }
+    const stream = journalRel(ASK_STREAM)
+    const res = withTxn(root, { op: `ask(${id})`, files: [stream], journal: { stream: ASK_STREAM, line: entryLine(entry) } }, () => {
+      appendEntry(root, ASK_STREAM, entry)
+      crashPoint(ctx.env, 'journal-append')
+      return stateCommit(root, [stream], `ask(${id}): withdrawn`)
+    })
+    if (!res.ok) return res
+    return ok({ already: false })
+  } finally {
+    lock.value()
+  }
+}

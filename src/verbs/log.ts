@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
+import { askText } from '../ask.js'
 import { git, primaryRoot, tryGit } from '../gitio.js'
 import { canonExit } from '../departure.js'
 import { journalRel, readStream, streamExists, type Entry } from '../journal.js'
@@ -37,6 +38,8 @@ function detail(e: Entry): string {
       const by = d.selected !== undefined ? ` · ${decidedBy(d)}` : ''
       return `${d.gate}: ${d.decision}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
     }
+    case 'ask':
+      return `${String(e.id)} — ${askText(String(e.text))}`
     case 'status': {
       const s = e as unknown as { from: string; to: string; cause: string }
       return `${s.from} → ${s.to} (${s.cause})`

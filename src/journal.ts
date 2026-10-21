@@ -17,6 +17,8 @@ export type EntryType =
   // its flow ends, retyped when the pattern turns out to be a lens problem, and closed by
   // evidence (discharged) or by an explicit human cause (dismissed).
   | 'deferral' | 'deferral-moved' | 'deferral-retyped' | 'deferral-discharged' | 'deferral-dismissed'
+  // Row 176. The human's ask, queued on witness's own `asks` stream, and its withdrawal.
+  | 'ask' | 'ask-withdrawn'
 
 export interface Entry {
   v: 1

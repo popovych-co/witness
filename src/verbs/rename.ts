@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
+import { reservedId } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
 import { writeDoc } from '../fm.js'
@@ -37,6 +38,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (!ID_RE.test(newId)) {
     renderRefusal([v('id', 'id-charset', newId, 'ids match ^[a-z0-9-]+$')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  const reserved = reservedId(newId)
+  if (reserved !== undefined) {
+    renderRefusal([v('id', 'id-taken', newId, `a new id — ${newId} is ${reserved}`)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   if (findById(canon, newId) || streamExists(root, newId)) {
