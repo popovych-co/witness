@@ -118,6 +118,38 @@ function resolveDocPath(segments: string[], body: string): string | undefined {
   return undefined
 }
 
+// The journal's spelling of an anchor: a string as is, an omission as `omission:<scope>` — the
+// form deferrals store and every reported-anchor set compares.
+export function anchorKey(a: AnchorInput): string {
+  return typeof a === 'string' ? a : `omission:${a.scope}`
+}
+
+// The inverse, for journaled deferral anchors.
+export function anchorFromKey(key: string): AnchorInput {
+  return key.startsWith('omission:') ? { kind: 'omission', scope: key.slice('omission:'.length) } : key
+}
+
+// The section an ordered heading path names: from its heading line through the line before the
+// next heading at its level or above, trailing whitespace trimmed. [] names the whole body.
+// Headings match as resolveDocPath matches them, so a section exists exactly when its anchor resolves.
+export function sectionText(body: string, segments: string[]): string | undefined {
+  const lines = body.split('\n')
+  if (segments.length === 0) return body.replace(/\s+$/, '')
+  let cursor = -1
+  for (const seg of segments) {
+    const want = collapse(seg)
+    const idx = lines.findIndex((l, i) => i > cursor && HEADING_RE.test(l) && collapse(l) === want)
+    if (idx === -1) return undefined
+    cursor = idx
+  }
+  const level = /^#+/.exec(lines[cursor]!)![0].length
+  let end = lines.length
+  for (let i = cursor + 1; i < lines.length; i++) {
+    if (HEADING_RE.test(lines[i]!) && /^#+/.exec(lines[i]!)![0].length <= level) { end = i; break }
+  }
+  return lines.slice(cursor, end).join('\n').replace(/\s+$/, '')
+}
+
 function safeRel(rel: string): boolean {
   return !isAbsolute(rel) && !normalize(rel).split(/[\\/]/).includes('..')
 }
