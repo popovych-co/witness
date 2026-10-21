@@ -79,3 +79,34 @@ describe('witness ask (A9)', () => {
     expect((await repo.cli(['log', ASK_STREAM])).stdout).toContain('a1 — first')
   })
 })
+
+// Final review F7. The reservation guards new artifacts; these are the ones that already exist —
+// a hand-added doc, or a stream an older witness wrote under the name — which would otherwise
+// share the queue's history silently.
+describe('a reserved id an existing artifact holds (final review F7)', () => {
+  it('a doc named asks is a canon error and rename never moves the queue', async () => {
+    const repo = await seededRepo()
+    await repo.cli(['ask', 'first'])
+    await writeSpec(repo, 'auth-refresh')
+    repo.write('specs/asks.md', repo.read('specs/auth-refresh.md').replace('id: auth-refresh', 'id: asks'))
+    repo.git('add', 'specs/asks.md')
+    repo.git('commit', '-m', 'hand-added', '-m', 'Witness-State: 1')
+    const check = await repo.cli(['check'])
+    expect(check.stdout).toMatch(/error,schema,specs\/asks\.md[^\n]*reserved/)
+    const rn = await repo.cli(['rename', 'asks', 'questions'])
+    expect(rn.code).toBe(2)
+    expect(rn.stderr).toContain('reserved')
+    expect(readStream(repo.root, ASK_STREAM)[0]).toMatchObject({ t: 'ask', id: 'a1' })
+  })
+  it('an asks stream another artifact wrote is refused to the queue and flagged by check', async () => {
+    const repo = await initialized()
+    repo.write('.witness/journal/asks.jsonl', `${JSON.stringify({ v: 1, t: 'recap', effort: 'asks', class: 'feature', goals: [{ id: 'g1', text: 'x' }], non_goals: [], constraints: [], slices: [] })}\n`)
+    repo.git('add', '.witness/journal/asks.jsonl')
+    repo.git('commit', '-m', 'recap(asks): feature', '-m', 'Witness-State: 1')
+    const r = await repo.cli(['ask', 'first'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('stream-taken')
+    expect(readStream(repo.root, ASK_STREAM)).toHaveLength(1)
+    expect((await repo.cli(['check'])).stdout).toContain('reserved-stream-taken')
+  })
+})

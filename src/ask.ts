@@ -109,6 +109,12 @@ export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: str
     // Under the lock: a writer that crashed before this one took it left its marker here.
     const pending = pendingTxn(root)
     if (pending) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
+    // Final review F7: a stream an older witness wrote under this name is another artifact's
+    // history, and asks appended to it would be read as part of that artifact.
+    const first = readStream(root, ASK_STREAM)[0]
+    if (first !== undefined && first.t !== 'ask') {
+      return refuse([v(ASK_STREAM, 'stream-taken', `the stream starts with ${first.t}`, 'a stream for asks alone — witness check names the artifact that holds it')])
+    }
     // numbered under the lock: two queuers racing must not both take the next id
     const id = `a${askQueue(root).length + 1}`
     const entry = { t: 'ask' as const, id, text: text.trim() }

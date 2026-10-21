@@ -1,9 +1,10 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { canonPaths, type CanonPaths } from './config.js'
+import { reservedId } from './ask.js'
 import { readDoc } from './fm.js'
 import { readStream } from './journal.js'
-import { type Violation } from './refusal.js'
+import { v, type Violation } from './refusal.js'
 import { validateDoc } from './schemas.js'
 
 export interface CanonDoc {
@@ -32,6 +33,15 @@ function satisfiedNeeds(root: string, meta: Record<string, unknown>): string[] {
   return readStream(root, meta.id).filter((e) => e.t === 'need-satisfied').map((e) => String(e.need))
 }
 
+// Final review F7. `write`, `rename` and `recap` refuse a reserved id for a new artifact; a doc
+// that already holds one — hand-added, or older than the reservation — would share witness's
+// own stream, so canon itself calls it an error.
+function reservedDoc(meta: Record<string, unknown>): Violation[] {
+  const reserved = typeof meta.id === 'string' ? reservedId(meta.id) : undefined
+  return reserved === undefined ? []
+    : [v('id', 'reserved', String(meta.id), `a new id — ${String(meta.id)} is ${reserved} · edit the doc's id by hand then witness adopt it`)]
+}
+
 export function loadCanon(root: string): Canon {
   const docs: CanonDoc[] = []
   const errors: Violation[] = []
@@ -51,7 +61,7 @@ export function loadCanon(root: string): Canon {
         rel,
         meta: parsed.value.meta,
         body: parsed.value.body,
-        violations: validateDoc(parsed.value.meta, parsed.value.body),
+        violations: [...validateDoc(parsed.value.meta, parsed.value.body), ...reservedDoc(parsed.value.meta)],
         satisfiedNeeds: satisfiedNeeds(root, parsed.value.meta),
       })
     }

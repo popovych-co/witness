@@ -12,7 +12,7 @@ import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
-import { reservedId } from '../ask.js'
+import { ASK_STREAM, reservedId } from '../ask.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
@@ -240,6 +240,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (!file.endsWith('.jsonl')) continue
       const id = file.slice(0, -'.jsonl'.length)
       const entries = readStream(root, id)
+      if (id === ASK_STREAM && entries[0] !== undefined && entries[0].t !== 'ask') {
+        findings.push(f('error', 'journal', file, 'reserved-stream-taken', `witness's ask queue is held by a ${entries[0].t} history — witness ask refuses until it moves`))
+        continue
+      }
       if (entries[0]?.t === 'recap' || reservedId(id) !== undefined) continue
       if (findById(canon, id)) continue
       // D166. A departed spec's stream is not an orphan — it is lineage by construction, what a

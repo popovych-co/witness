@@ -36,6 +36,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('id', 'unknown-id', oldId, 'an existing canon doc')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
+  // Final review F7: a doc squatting a reserved id shares witness's stream, and a rename moves
+  // the stream — so it would carry the ask queue (or the floor pins) away with the doc.
+  const squatted = reservedId(oldId)
+  if (squatted !== undefined) {
+    renderRefusal([v('id', 'reserved', oldId, `${oldId} is ${squatted} — renaming would move it · edit the doc's id by hand then witness adopt it`)]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   if (!ID_RE.test(newId)) {
     renderRefusal([v('id', 'id-charset', newId, 'ids match ^[a-z0-9-]+$')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
