@@ -1,7 +1,7 @@
 import type { Ctx } from './cli.js'
 import { FLOOR_STREAM } from './floor.js'
 import { stateCommit } from './gitio.js'
-import { appendEntry, effortStreams, entryLine, journalRel, latestRecap, readStream } from './journal.js'
+import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { ROUND_BOUND, type DecisionEntry } from './rounds.js'
@@ -159,10 +159,11 @@ export function nextAsk(root: string, autonomous: boolean): AskStatus | undefine
   return askQueue(root).find((a) => a.state === 'unanswered' || (a.state === 'parked' && !autonomous))
 }
 
-// The ask an effort answers, named by its latest recap: what the decompose arbiter judges
-// a slicing against beside the recap itself (row 177).
+// The ask an effort answers: what the decompose arbiter judges a slicing against beside the
+// recap itself (row 177). Named by the recap that birthed the effort — an amend carries no
+// ask, and it is exactly a re-scoped slicing that must still be judged against the ask.
 export function askOf(root: string, effort: string): AskEntry | undefined {
-  const id = latestRecap(root, effort)?.ask
+  const id = readStream(root, effort).find((e) => e.t === 'recap' && typeof e.ask === 'string')?.ask
   if (id === undefined) return undefined
   return (readStream(root, ASK_STREAM) as unknown as AskEntry[]).find((e) => e.t === 'ask' && e.id === id)
 }

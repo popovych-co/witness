@@ -60,13 +60,20 @@ export function satisfyCommand(doc: string, need: string): string {
 
 // Row 179. What a spec's unmet manual needs hold: criterion id → the ids of the needs holding
 // it, in needs order. A satisfied need holds nothing, so its criteria run and must pass.
+//
+// Only a spec's own `cmd:` criteria can be held, as validateHolds requires: the lane reads a
+// hand-edited doc before `check` flags it, and honouring a hold on a test criterion there let
+// an edit skip the spec's tests and clear its drift stamp.
 export function heldCriteria(doc: CanonDoc): Map<string, string[]> {
   const out = new Map<string, string[]>()
+  if (doc.meta.type !== 'spec') return out
+  const criteria = Array.isArray(doc.meta.criteria) ? (doc.meta.criteria as Array<Record<string, unknown>>) : []
+  const cmds = new Set(criteria.filter((c) => typeof c.cmd === 'string').map((c) => String(c.id)))
   const needs = Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : []
   for (const n of needs) {
     if (typeof n.manual !== 'string' || typeof n.id !== 'string' || !Array.isArray(n.holds)) continue
     if (needMet(doc, n as { id: string; manual: string; satisfied?: boolean })) continue
-    for (const c of n.holds) if (typeof c === 'string') out.set(c, [...(out.get(c) ?? []), n.id])
+    for (const c of n.holds) if (typeof c === 'string' && cmds.has(c)) out.set(c, [...(out.get(c) ?? []), n.id])
   }
   return out
 }

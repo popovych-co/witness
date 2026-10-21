@@ -194,6 +194,16 @@ describe('held criteria (A10)', () => {
     expect(r.ok && r.value.ok).toBe(false)
   })
 
+  it('a hold on a test criterion is never honoured, even in a hand-built doc (final review F5)', async () => {
+    const repo = await heldRepo('true')
+    const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+    // validateHolds refuses this shape · the lane must not honour it either, or a hand edit clears drift
+    const forged = { ...doc, meta: { ...doc.meta, needs: [{ ...HELD[0], holds: ['ac-rotate'] }] } }
+    const r = await runCriteria(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), forged)
+    if (!r.ok) throw new Error('lane refused')
+    expect(r.value.criteria.find((c) => c.id === 'ac-rotate')!.held).toBeUndefined()
+  })
+
   it('criterionMark names ok · fail · every holder', () => {
     expect(criterionMark({ id: 'a', kind: 'cmd', ok: true, detail: '' })).toBe('ok')
     expect(criterionMark({ id: 'a', kind: 'cmd', ok: false, detail: '' })).toBe('fail')

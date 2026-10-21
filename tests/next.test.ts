@@ -316,3 +316,26 @@ describe('next — a plan that waits on a need (A10)', () => {
       .toContain('kept-stop: unmet need — a test device on the desk · witness satisfy auth-refresh-plan-1 --need device')
   })
 })
+
+describe('next — a plan that waits on an env need (final review F4)', () => {
+  it('starts the approved plan whose env need is met', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-mfa')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', needs: [{ env: 'WITNESS_TEST_UNSET_VAR' }], steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-mfa-plan-1', 'approved')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    expect(await nextLine(repo)).toContain('next: witness start auth-refresh-plan-1')
+  })
+  it('names the unset variable when every approved plan waits', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ env: 'WITNESS_TEST_UNSET_VAR' }] })
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    expect(await nextLine(repo)).toContain('auth-refresh-plan-1 waits on an unmet need — WITNESS_TEST_UNSET_VAR unset')
+  })
+})
