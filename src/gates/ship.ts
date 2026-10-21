@@ -32,6 +32,7 @@ registerGate({
   gate: 'ship',
   targetKind: 'plan',
   demotes: true,
+  backstops: 'implement',
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)

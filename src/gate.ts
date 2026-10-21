@@ -17,7 +17,7 @@ import { loadMatrix, resolveModel } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { anchorKey, anchorMenu, type Reviewed } from './verdict.js'
-import { basisSha, deltaBlock, demote, planDelta } from './delta.js'
+import { basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta } from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -93,6 +93,9 @@ export interface GateSpec {
   // Only the code gates set it: ship's first round is a later full review of their artifact.
   // The doc gates get the delta block, but nothing re-reads a plan or a slicing in full later.
   demotes?: boolean
+  // Plan decision 16. The demoting gate this one is the full review for: every round here lists
+  // that gate's outstanding demotions by name, and a re-reported one blocks here. Ship → implement.
+  backstops?: GateName
 }
 
 const GATES = new Map<string, GateSpec>()
@@ -324,7 +327,8 @@ async function judge(
   // below spent three releases never firing.
   const pin = chain[0]!
   const basis = basisSha(lenses, input.snapshot?.context ?? '', pin, harness.name)
-  const setupText = [pinsText, deferralsText].filter((t) => t !== '').join('')
+  const backstopText = spec.backstops ? demotionsBlock(spec.backstops, outstandingDemotions(entries, spec.backstops)) : ''
+  const setupText = [pinsText, deferralsText, backstopText].filter((t) => t !== '').join('')
   const setupSha = promptsSha(lenses, setupText || undefined)          // the full-review prompts_sha
   const fullKey: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate, prompts_sha: setupSha, pin, witness: version(),
@@ -473,7 +477,7 @@ async function judge(
       const menu = anchorMenu(reviewed)
       return {
         name: lens.name, reviewed,
-        prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${delta && inDelta(lens.name) ? block : ''}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
+        prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${backstopText}${delta && inDelta(lens.name) ? block : ''}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
       }
     })
     const ranR = await runBattery(ctx, harness, chain, composed, { cwd: root, ...extras })

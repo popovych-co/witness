@@ -3,7 +3,7 @@ import { posix } from 'node:path'
 import { splitDoc } from './fm.js'
 import type { Entry } from './journal.js'
 import { promptsSha, type Lens } from './reviewer.js'
-import { deltaBase, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
+import { deltaBase, fellBack, gateRuns, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
 import { canonicalSha } from './sha.js'
 import { blobText, changedPaths, treeDiff, treeReadable } from './snapshot.js'
 import { anchorKey, headingLines, sectionText, type AnchorInput, type Reviewed } from './verdict.js'
@@ -171,4 +171,46 @@ export function demote(
         ? { ...f, blocking: false, demoted: d.baseRound }
         : f),
   })
+}
+
+export interface OutstandingDemotion { reviewer: string; anchor: AnchorInput; claim: string; round: number; since: number }
+
+// Plan decision 16. What a demotion let through at `gate` that no full review has judged since:
+// the demoted findings on its runs after the last real full review (no delta mark, not
+// malformed, not fallen back, carrying verdicts), one per lens and anchor, the latest kept.
+export function outstandingDemotions(entries: Entry[], gate: string): OutstandingDemotion[] {
+  const runs = gateRuns(entries, gate)
+  let start = 0
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const r = runs[i]!
+    if (!r.delta && r.outcome !== 'malformed' && !fellBack(r) && (r.verdicts?.length ?? 0) > 0) { start = i + 1; break }
+  }
+  const out = new Map<string, OutstandingDemotion>()
+  for (const r of runs.slice(start)) {
+    if (r.outcome === 'malformed') continue
+    for (const rv of r.verdicts ?? []) {
+      for (const f of rv.findings) {
+        if (f.demoted === undefined) continue
+        out.set(`${rv.reviewer}\0${anchorKey(f.anchor)}`, { reviewer: rv.reviewer, anchor: f.anchor, claim: f.claim, round: r.round, since: f.demoted })
+      }
+    }
+  }
+  return [...out.values()]
+}
+
+// Spec §7 C3: ship's first round is the backstop for what a demotion let through, and ship runs
+// fewer lenses than implement — so every ship review is told, by name, what implement demoted.
+// Solicited the way open deferrals are (deferralsBlock), and joined to the setup the same way.
+export function demotionsBlock(gate: string, list: readonly OutstandingDemotion[]): string {
+  if (list.length === 0) return ''
+  const line = (d: OutstandingDemotion, i: number): string => {
+    const where = `${d.reviewer} · ${gate} round ${d.round}`
+    if (typeof d.anchor === 'string') return `${i + 1}. ${d.anchor} — ${d.claim} — ${where}`
+    const scope = d.anchor.scope
+    return `${i + 1}. omission · scope ${scope} — ${d.claim} — ${where} — report it with "anchor": { "kind": "omission", "scope": ${JSON.stringify(scope)} }`
+  }
+  return `## Demoted at ${gate} (never re-judged in full — report these if they still hold)\n\n` +
+    `The ${gate} gate recorded the findings below as non-blocking: they were new in a round that reviewed a change, and the content they name had not changed. No full review has judged them since. ` +
+    'Judge each against the current content. If a defect is still present, report it as a finding anchored exactly as listed: it then blocks here.\n\n' +
+    list.map(line).join('\n') + '\n\n'
 }

@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
@@ -7,7 +7,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
 const F = { fresh: false, manual: false }
 const of = (root: string, id: string, gate: string) =>
@@ -43,6 +43,11 @@ describe('delta review at the code gates (C3)', () => {
     const [ship] = of(repo.root, planId, 'ship')
     expect(ship!.delta).toBeUndefined()
     expect(all(ship!).every((f) => f.blocking === true && f.demoted === undefined)).toBe(true)
+    // decision 16: ship's lenses are named the demotions they must re-judge — anchor, lens and round
+    const shipPrompt = readFileSync(join(callFor(scenario, 'code-reviewer')!, 'stdin'), 'utf8')
+    expect(shipPrompt).toContain('## Demoted at implement')
+    expect(shipPrompt).toContain('1. tests/token.test.ts — x — code-reviewer · implement round 2')
+    expect(shipPrompt).toContain('pr-test · implement round 2')
   }, 120_000)
 
   it('a finding anchored in canon is context and never demoted', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
-import { deltaBlock, demote, planDelta } from '../src/delta.js'
+import { deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta } from '../src/delta.js'
 import { snapshotFiles } from '../src/snapshot.js'
 import { tmpRepo } from './helpers.js'
 
@@ -99,5 +99,48 @@ describe('demote', () => {
       { reviewer: 'design-reviewer', coverage: [], findings: [f('initial.png')] },
     ]
     expect(demote(verdicts as never, d(changed, ['rep']), inDelta)).toEqual(verdicts)
+  })
+})
+
+// Plan decision 16 · spec §7 C3: ship receives implement's outstanding demotions by name.
+describe('outstandingDemotions and demotionsBlock (ship backstops implement)', () => {
+  const run = (round: number, findings: unknown[], extra: Record<string, unknown> = {}) => ({
+    v: 1, t: 'gate-run', gate: 'implement', artifact: 'p', round, run_id: `r-${round}`, reviewed_sha: `s${round}`,
+    prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+    verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings }], ...extra,
+  }) as unknown as Entry
+  const dem = (anchor: unknown, since: number, claim = 'x') => ({ blocking: false, anchor, claim, demoted: since })
+  const delta = (round: number) => ({ delta: { round, run: `r-${round}` } })
+  const OM = { kind: 'omission', scope: 'tests/' }
+
+  it('lists the demotions since the last full review, one per lens and anchor, the latest kept', () => {
+    const e = [
+      run(1, [{ blocking: true, anchor: 'a.ts', claim: 'full' }]),
+      run(2, [dem('a.ts', 1, 'first')], delta(1)),
+      run(3, [dem('a.ts', 2, 'second'), dem(OM, 2)], delta(2)),
+      run(4, [dem('b.ts', 3)], { ...delta(3), outcome: 'malformed' }),
+      { ...(run(5, [dem('c.ts', 1)], delta(1)) as object), gate: 'ship' } as unknown as Entry,
+    ]
+    expect(outstandingDemotions(e, 'implement')).toEqual([
+      { reviewer: 'code-reviewer', anchor: 'a.ts', claim: 'second', round: 3, since: 2 },
+      { reviewer: 'code-reviewer', anchor: OM, claim: 'x', round: 3, since: 2 },
+    ])
+  })
+
+  it('a later full review re-judged them all', () => {
+    const e = [run(1, []), run(2, [dem('a.ts', 1)], delta(1)), run(3, [])]
+    expect(outstandingDemotions(e, 'implement')).toEqual([])
+  })
+
+  it('renders each with its anchor, lens and round, and nothing when there are none', () => {
+    const b = demotionsBlock('implement', [
+      { reviewer: 'code-reviewer', anchor: 'a.ts#f', claim: 'leaks', round: 3, since: 2 },
+      { reviewer: 'pr-test', anchor: OM as never, claim: 'no test', round: 2, since: 1 }])
+    expect(b.startsWith('## Demoted at implement')).toBe(true)
+    expect(b).toContain('1. a.ts#f — leaks — code-reviewer · implement round 3')
+    expect(b).toContain('2. omission · scope tests/ — no test — pr-test · implement round 2 — report it with "anchor": { "kind": "omission", "scope": "tests/" }')
+    expect(b).toContain('it then blocks here')
+    expect(b.endsWith('\n\n')).toBe(true)
+    expect(demotionsBlock('implement', [])).toBe('')
   })
 })
