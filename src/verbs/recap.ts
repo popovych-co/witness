@@ -68,6 +68,19 @@ export function validateRecap(raw: unknown): Violation[] {
   return out
 }
 
+// Whether this slug may take this recap: a new effort needs a fresh stream, an amend a live
+// one. Row 176: a reserved stream is refused before slug-reuse and for --amend too, whether
+// or not it exists yet — an amend would append a recap to witness's own history.
+function effortRefusal(root: string, effort: string, amend: boolean): Violation | undefined {
+  const reserved = reservedId(effort)
+  if (reserved !== undefined) return v('effort', 'id-taken', effort, `a new id — ${effort} is ${reserved}`)
+  const exists = streamExists(root, effort)
+  if (!amend && exists) return v('effort', 'slug-reuse', `journal stream '${effort}' exists (active or terminal)`, 'a new slug — histories never merge')
+  if (amend && !exists) return v('effort', 'unknown-effort', effort, 'an existing effort stream to amend')
+  if (amend && effortAbandoned(readStream(root, effort))) return v('effort', 'terminal', 'effort was abandoned', 'amend only live efforts')
+  return undefined
+}
+
 // Whether this ask may be answered by a new effort, read from one queue derivation.
 function askRefusal(root: string, id: string): Violation | undefined {
   const ask = askQueue(root).find((a) => a.id === id)
@@ -110,26 +123,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   delete recap.ask
   if (values.ask !== undefined) recap.ask = values.ask
 
-  // Row 176. Before slug-reuse and for --amend too: a reserved stream is refused whether or not
-  // it exists yet, and an amend would append a recap to witness's own history.
-  const reserved = reservedId(recap.effort)
-  if (reserved !== undefined) {
-    renderRefusal([v('effort', 'id-taken', recap.effort, `a new id — ${recap.effort} is ${reserved}`)]).forEach(ctx.err)
-    return EXIT.REFUSED
-  }
-  const exists = streamExists(root, recap.effort)
-  if (!values.amend && exists) {
-    renderRefusal([v('effort', 'slug-reuse', `journal stream '${recap.effort}' exists (active or terminal)`, 'a new slug — histories never merge')]).forEach(ctx.err)
-    return EXIT.REFUSED
-  }
-  if (values.amend && !exists) {
-    renderRefusal([v('effort', 'unknown-effort', recap.effort, 'an existing effort stream to amend')]).forEach(ctx.err)
-    return EXIT.REFUSED
-  }
-  if (values.amend && effortAbandoned(readStream(root, recap.effort))) {
-    renderRefusal([v('effort', 'terminal', 'effort was abandoned', 'amend only live efforts')]).forEach(ctx.err)
-    return EXIT.REFUSED
-  }
+  const slug = effortRefusal(root, recap.effort, values.amend === true)
+  if (slug) { renderRefusal([slug]).forEach(ctx.err); return EXIT.REFUSED }
   // Row 176. One ask births one effort: an amend re-scopes an effort an ask already birthed.
   if (recap.ask !== undefined) {
     if (values.amend) {
@@ -161,12 +156,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const lock = acquireLock(root)
   if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
   try {
-    // Read again under the lock: a concurrent recap may have answered (or checked) the ask
-    // while this one was judged.
-    if (recap.ask !== undefined) {
-      const refusal = askRefusal(root, recap.ask) ?? (autonomous ? autonomyRefusal(root, recap, false) : undefined)
-      if (refusal) { renderRefusal([refusal]).forEach(ctx.err); return EXIT.REFUSED }
-    }
+    // Read again under the lock: the check was a model call, and while it ran another writer
+    // may have crashed mid-transaction, born this slug, or answered (or checked) the ask.
+    const crashed = guardTxn(ctx, root)
+    if (crashed !== undefined) return crashed
+    const raced = effortRefusal(root, recap.effort, values.amend === true)
+      ?? (recap.ask !== undefined ? askRefusal(root, recap.ask) : undefined)
+      ?? (autonomous ? autonomyRefusal(root, recap, values.amend === true) : undefined)
+    if (raced) { renderRefusal([raced]).forEach(ctx.err); return EXIT.REFUSED }
     const round = (askQueue(root).find((a) => a.id === recap.ask)?.checks ?? 0) + 1
     const check = verdict !== undefined ? recapCheckEntry(recap.ask!, round, recap, verdict) : undefined
     if (verdict !== undefined && !(verdict.kind === 'judged' && verdict.accepted)) {

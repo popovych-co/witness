@@ -102,12 +102,13 @@ export function reservedId(id: string): string | undefined {
 const TEXT_REQUIRED = v('text', 'required', 'absent', 'what to build in words — witness ask <text>')
 
 export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: string; unanswered: number }> {
-  const pending = pendingTxn(root)
-  if (pending) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
   if (askText(text) === '') return refuse([TEXT_REQUIRED])
   const lock = acquireLock(root)
   if (!lock.ok) return lock
   try {
+    // Under the lock: a writer that crashed before this one took it left its marker here.
+    const pending = pendingTxn(root)
+    if (pending) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
     // numbered under the lock: two queuers racing must not both take the next id
     const id = `a${askQueue(root).length + 1}`
     const entry = { t: 'ask' as const, id, text: text.trim() }
@@ -128,6 +129,8 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
   const lock = acquireLock(root)
   if (!lock.ok) return lock
   try {
+    const pending = pendingTxn(root)
+    if (pending) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
     const ask = askQueue(root).find((a) => a.id === id)
     if (!ask) return refuse([v('--withdraw', 'unknown-ask', id, 'an ask id — witness status lists the queue')])
     if (ask.state === 'withdrawn') return ok({ already: true })

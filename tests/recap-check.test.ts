@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ASK_STREAM, askQueue } from '../src/ask.js'
@@ -134,5 +134,42 @@ describe('the recap check (A9 · autonomy)', () => {
     expect(askQueue(repo.root)[0]!.state).toBe('parked')
     expect(await nextLine(repo, { env })).not.toContain('--ask a1')
     expect(callCount(scenario)).toBe(2)                         // one ruling and its reroll · next asked nothing
+  })
+})
+
+// Final review F2 · F3. The check is a model call outside the lock (D76), so everything the
+// pre-lock checks read can change while it runs: the effort's stream, and a crashed writer's
+// pending transaction. Both are read again under the lock.
+describe('the recap check races (final review)', () => {
+  it('two asks recapped onto one slug at once birth one effort (F2)', async () => {
+    const { repo, scenario, env } = await autonomous()
+    await repo.cli(['ask', 'Admins can export orders'])
+    putVerdict(scenario, { choice: 1, reason: 'class feature — new behavior' }, 'arbiter')
+    writeFileSync(join(scenario, 'claude-delay-arbiter'), '1')
+    repo.write('r2.json', JSON.stringify(RECAP))
+    const [a, b] = await Promise.all([
+      repo.cli(['recap', '--file', recapFile(repo), '--ask', 'a1'], { env }),
+      repo.cli(['recap', '--file', 'r2.json', '--ask', 'a2'], { env }),
+    ])
+    expect([a.code, b.code].sort()).toEqual([0, 2])
+    expect([a.stderr, b.stderr].join('\n')).toContain('slug-reuse')
+    expect(readStream(repo.root, 'auth-hardening').filter((e) => e.t === 'recap')).toHaveLength(1)
+    expect(askQueue(repo.root).filter((x) => x.state === 'answered')).toHaveLength(1)
+  })
+
+  it('a transaction another writer left pending during the check refuses the write (F3)', async () => {
+    const { repo, scenario, env } = await autonomous()
+    putVerdict(scenario, { choice: 1, reason: 'class feature — new behavior' }, 'arbiter')
+    writeFileSync(join(scenario, 'claude-delay-arbiter'), '1')
+    const marker = join(repo.root, '.witness', 'txn.json')
+    const crash = new Promise<void>((done) => setTimeout(() => {
+      writeFileSync(marker, JSON.stringify({ op: 'ask(a2)', files: ['.witness/journal/asks.jsonl'] }))
+      done()
+    }, 300))
+    const [r] = await Promise.all([repo.cli(['recap', '--file', recapFile(repo), '--ask', 'a1'], { env }), crash])
+    expect(r.code).toBe(3)
+    expect(r.stderr).toContain('pending transaction from a crashed invocation: ask(a2)')
+    expect(existsSync(marker)).toBe(true)
+    expect(streamExists(repo.root, 'auth-hardening')).toBe(false)
   })
 })
