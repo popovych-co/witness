@@ -28,7 +28,8 @@ function input(root: string, doc: { meta: Record<string, unknown>; body: string 
 }
 registerGate({ gate: 'plan', targetKind: 'plan',
   async resolve(root, _c, canon, _cfg, target) { return ok(input(root, findById(canon, target)!, target)) } })
-registerGate({ gate: 'ship', targetKind: 'plan',
+// Demotes as the real code gates do, over docs: the section-level cases of the rule reach gate.ts here.
+registerGate({ gate: 'ship', targetKind: 'plan', demotes: true,
   async resolve(root, _c, canon, _cfg, target) {
     return ok(input(root, findById(canon, target)!, target, { checks: [{ name: 'synthetic', ok: true }],
       lensOverrides: { 'code-reviewer': { reviewed: { kind: 'screens', captures: [{ name: 'home.png', path: '/w/home.png' }] }, promptBody: 'READ /w/home.png' } } }))
@@ -70,5 +71,55 @@ describe('delta review on synthetic gates (C3)', () => {
     expect(prompt('drift-reviewer')).not.toContain('off-look')                 // no screens finding in the block
     expect(prompt('code-reviewer')).not.toContain('## Delta review')
     expect(runs(repo.root)[1]!.delta).toEqual({ round: 1, run: runs(repo.root)[0]!.run_id })
+  })
+})
+
+const M = 'auth-refresh > ## Motivation'
+const NOTES = 'auth-refresh > ## Notes'
+const at = (anchor: unknown, extra: Record<string, unknown> = {}) =>
+  ({ coverage: [{ anchor: DOC, note: 'read' }], findings: [{ blocking: true, anchor, claim: 'x', ...extra }] })
+// round 1 blocks at `first` · the spec gains a Notes section · round 2 answers `second`
+async function demoting(second: unknown, first: unknown = at(M)) {
+  const { repo, scenario } = await spec()
+  const out: string[] = []
+  const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => out.push(l) })
+  putVerdict(scenario, SCREEN(false), 'code-reviewer')
+  putVerdict(scenario, first, 'drift-reviewer'); await runGate(ctx, 'ship', 'auth-refresh', F)
+  await amend(repo)
+  putVerdict(scenario, second, 'drift-reviewer')
+  const code = await runGate(ctx, 'ship', 'auth-refresh', F)
+  const found = runs(repo.root)[1]!.verdicts!.find((v) => v.reviewer === 'drift-reviewer')!.findings
+  return { out, code, found }
+}
+
+describe('the demotion rule at a demoting gate (C3)', () => {
+  it('a new blocking finding in an unchanged section is demoted and the round passes', async () => {
+    const { out, code, found } = await demoting(at(DOC))
+    expect(code).toBe(0)
+    expect(found).toEqual([{ blocking: false, anchor: DOC, claim: 'x', demoted: 1 }])
+    expect(out.join('\n')).toContain(`demoted: ${DOC} — unchanged since round 1`)
+  })
+
+  it('an anchor round 1 reported keeps blocking though its section is unchanged', async () => {
+    const { code, found } = await demoting(at(DOC), { coverage: [{ anchor: DOC, note: 'read' }],
+      findings: [{ blocking: true, anchor: M, claim: 'x' }, { blocking: true, anchor: DOC, claim: 'x' }] })
+    expect(code).toBe(1)
+    expect(found[0]).toEqual({ blocking: true, anchor: DOC, claim: 'x' })
+  })
+
+  it('a new blocking finding in the changed section blocks', async () => {
+    const { code, found } = await demoting(at(NOTES))
+    expect(code).toBe(1)
+    expect(found[0]).toMatchObject({ anchor: NOTES, blocking: true })
+  })
+
+  it('a pin contradiction is never demoted', async () => {
+    const { found } = await demoting(at(DOC, { contradicts_pin: 1 }))
+    expect(found[0]).toEqual({ blocking: true, anchor: DOC, claim: 'x', contradicts_pin: 1 })
+  })
+
+  it('an omission scoped to an unchanged section is demoted', async () => {
+    const { found } = await demoting(at({ kind: 'omission', scope: DOC }))
+    expect(found[0]).toMatchObject({ blocking: false, demoted: 1 })
   })
 })

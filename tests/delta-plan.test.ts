@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
-import { deltaBlock, planDelta } from '../src/delta.js'
+import { deltaBlock, demote, planDelta } from '../src/delta.js'
 import { snapshotFiles } from '../src/snapshot.js'
 import { tmpRepo } from './helpers.js'
 
@@ -78,5 +78,26 @@ describe('deltaBlock', () => {
   it('names the touched sections before the diff when there are any', () => {
     const b = deltaBlock({ baseRound: 1, diff: 'DIFF', prior: [], sections: ['p > ## Step: s1', 'p > ### Detail'] })
     expect(b).toContain('### Sections changed since round 1\n\n- p > ## Step: s1\n- p > ### Detail\n\n### Change since round 1')
+  })
+})
+
+describe('demote', () => {
+  const unchanged = { state: () => 'unchanged' as const }
+  const f = (anchor: unknown, extra: Record<string, unknown> = {}) => ({ blocking: true, anchor, claim: 'x', ...extra })
+  const d = (view = unchanged, reported: string[] = []) => ({ baseRound: 1, reported: new Set(reported), view })
+  const inDelta = (lens: string) => lens !== 'design-reviewer'
+
+  it('demotes a blocking finding in an unchanged unit that the base did not report', () => {
+    const [v] = demote([{ reviewer: 'code-reviewer', coverage: [], findings: [f('src/a.ts')] }] as never, d(), inDelta)
+    expect(v!.findings).toEqual([{ blocking: false, anchor: 'src/a.ts', claim: 'x', demoted: 1 }])
+  })
+
+  it('leaves reported, changed, context, pin-contradicting, non-blocking and override-lens findings alone', () => {
+    const changed = { state: (a: unknown) => (a === 'c' ? 'changed' as const : a === 'ctx' ? 'context' as const : 'unchanged' as const) }
+    const verdicts = [
+      { reviewer: 'code-reviewer', coverage: [], findings: [f('rep'), f('c'), f('ctx'), f('pin', { contradicts_pin: 1 }), f('nb', { blocking: false })] },
+      { reviewer: 'design-reviewer', coverage: [], findings: [f('initial.png')] },
+    ]
+    expect(demote(verdicts as never, d(changed, ['rep']), inDelta)).toEqual(verdicts)
   })
 })

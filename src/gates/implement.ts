@@ -76,6 +76,7 @@ function screensPromptBody(caps: Array<{ name: string; path: string }>): string 
 registerGate({
   gate: 'implement',
   targetKind: 'plan',
+  demotes: true,
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)

@@ -3,7 +3,12 @@ import { isAbsolute, join, normalize } from 'node:path'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export type AnchorInput = string | { kind: 'omission'; scope: string }
-export interface Finding { blocking: boolean; anchor: AnchorInput; claim: string; contradicts_pin?: number }
+export interface Finding {
+  blocking: boolean; anchor: AnchorInput; claim: string; contradicts_pin?: number
+  // Row 187. CLI-written only: the base round this finding's unit is unchanged since. A finding
+  // carrying it is non-blocking. parseVerdict drops a model's, with every other unknown field.
+  demoted?: number
+}
 export interface CoverageItem { anchor: AnchorInput; note: string }
 export interface Verdict { coverage: CoverageItem[]; findings: Finding[] }
 
@@ -58,7 +63,13 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
     })
   }
   if (violations.length > 0) return refuse(violations)
-  return ok({ coverage: obj.coverage as CoverageItem[], findings: obj.findings as Finding[] })
+  // Only the schema's fields survive: `demoted` is the CLI's to write, and a field a model
+  // invents must never reach a reader that trusts the journal.
+  const findings = (obj.findings as Finding[]).map((f) => ({
+    blocking: f.blocking, anchor: f.anchor, claim: f.claim,
+    ...(f.contradicts_pin !== undefined ? { contradicts_pin: f.contradicts_pin } : {}),
+  }))
+  return ok({ coverage: obj.coverage as CoverageItem[], findings })
 }
 
 const HEADING_RE = /^#{1,6}\s+.*$/

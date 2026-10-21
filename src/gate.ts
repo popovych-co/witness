@@ -16,8 +16,8 @@ import { cmd, kv, rows } from './toon.js'
 import { loadMatrix, resolveModel } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
-import { anchorMenu, type Reviewed } from './verdict.js'
-import { basisSha, deltaBlock, planDelta } from './delta.js'
+import { anchorKey, anchorMenu, type Reviewed } from './verdict.js'
+import { basisSha, deltaBlock, demote, planDelta } from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -89,6 +89,10 @@ export interface GateSpec {
   upstreamOf?(root: string, canon: Canon, target: string): string | undefined
   approveStamps?(root: string, canon: Canon, target: string): Stamp[]
   approveMeta?(root: string, canon: Canon, cfg: Config, target: string): MetaStamp[]
+  // Row 187. Whether a delta round here demotes a new blocking finding in unchanged content.
+  // Only the code gates set it: ship's first round is a later full review of their artifact.
+  // The doc gates get the delta block, but nothing re-reads a plan or a slicing in full later.
+  demotes?: boolean
 }
 
 const GATES = new Map<string, GateSpec>()
@@ -149,6 +153,9 @@ export function renderGateRun(
       anchor: typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`, claim: f.claim,
     })))
   if (findings.length) ctx.out(rows('findings', ['reviewer', 'blocking', 'pin', 'anchor', 'claim'], findings).join('\n'))
+  for (const f of (entry.verdicts ?? []).flatMap((rv) => rv.findings)) {
+    if (f.demoted !== undefined) ctx.out(kv('demoted', `${anchorKey(f.anchor)} — unchanged since round ${f.demoted}`))
+  }
   if (entry.malformed?.length) {
     ctx.out(rows('malformed', ['reviewer', 'field', 'rule'],
       entry.malformed.flatMap((m) => m.violations.map((x) => ({ reviewer: m.reviewer, field: x.field, rule: x.rule })))).join('\n'))
@@ -472,6 +479,8 @@ async function judge(
     const ranR = await runBattery(ctx, harness, chain, composed, { cwd: root, ...extras })
     if (!ranR.ok) { renderRefusal(ranR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ;({ verdicts, malformed, fallback, rerolled, model } = ranR.value)
+    // A malformed round judged nothing, so it demotes nothing.
+    if (delta && spec.demotes && malformed.length === 0) verdicts = demote(verdicts, delta, inDelta)
   }
 
   const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length

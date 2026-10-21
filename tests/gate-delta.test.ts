@@ -134,3 +134,17 @@ describe('round 2 reviews the change (C3)', () => {
     expect(runs(t.repo.root)[1]!.delta).toBeUndefined()
   })
 })
+
+// Review Focus 5. Plan decision 15: only the code gates demote. The doc gates get the delta
+// block — the machinery is shared — but no later full review re-reads their artifact.
+describe('the doc gates never demote (C3)', () => {
+  it('guard: a new blocking finding in an unchanged plan section still blocks though the round reviewed the change', async () => {
+    const { repo, out, code } = await twoRounds(verdict({ anchor: S2 }))
+    expect(code).toBe(1)
+    const [r1, r2] = runs(repo.root)
+    expect(r2!.delta).toEqual({ round: 1, run: r1!.run_id })
+    expect(r2!.verdicts![0]!.findings).toEqual([{ blocking: true, anchor: S2, claim: 'x' }])
+    expect(out.join('\n')).not.toContain('demoted:')
+    expect(findById(loadCanon(repo.root), PLAN)!.meta.status).not.toBe('approved')
+  })
+})

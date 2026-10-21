@@ -3,7 +3,7 @@ import { posix } from 'node:path'
 import { splitDoc } from './fm.js'
 import type { Entry } from './journal.js'
 import { promptsSha, type Lens } from './reviewer.js'
-import { deltaBase, type GateRunEntry } from './rounds.js'
+import { deltaBase, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
 import { canonicalSha } from './sha.js'
 import { blobText, changedPaths, treeDiff, treeReadable } from './snapshot.js'
 import { anchorKey, headingLines, sectionText, type AnchorInput, type Reviewed } from './verdict.js'
@@ -151,4 +151,24 @@ export function contextDigest(...parts: string[]): string {
 // against another frame, so its findings are no base for this one.
 export function basisSha(lenses: readonly Lens[], context: string, pin: string, harness: string): string {
   return contextDigest(promptsSha([...lenses]), context, pin, harness)
+}
+
+// Row 187, the rule. At a demoting gate (the code gates — ship's first round re-reads their
+// artifact), a blocking finding is recorded non-blocking when its lens reviewed the change, it
+// disputes no pin, the base did not report its anchor as blocking, and its unit is unchanged
+// since the base. Everything else is returned untouched, in battery order. Every reader that
+// counts — recurrence, the ladder, the prefilled note, the recommender, obligation minting —
+// reads `blocking`, so a demotion counts for none of them.
+export function demote(
+  verdicts: ReviewerVerdict[], d: { baseRound: number; reported: ReadonlySet<string>; view: DeltaView },
+  inDelta: (lens: string) => boolean,
+): ReviewerVerdict[] {
+  return verdicts.map((rv) => !inDelta(rv.reviewer) ? rv : {
+    ...rv,
+    findings: rv.findings.map((f) =>
+      f.blocking && f.contradicts_pin === undefined && !d.reported.has(anchorKey(f.anchor)) &&
+      d.view.state(f.anchor) === 'unchanged'
+        ? { ...f, blocking: false, demoted: d.baseRound }
+        : f),
+  })
 }

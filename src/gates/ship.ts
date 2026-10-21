@@ -31,6 +31,7 @@ async function commandLane(
 registerGate({
   gate: 'ship',
   targetKind: 'plan',
+  demotes: true,
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)
