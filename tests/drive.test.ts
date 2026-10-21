@@ -16,7 +16,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  PLAN_BODY, PLAN_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -843,4 +843,30 @@ describe('a wedged transaction (B3)', () => {
     expect(out.some((l) => l.startsWith('  run: witness recover'))).toBe(true)
     expect(code).toBe(1)
   }, 60_000)
+})
+
+// Final review F2. The plan queue's lane is keyed by the SPEC, and its session writes the plan
+// and keeps working on it (witness-plan gates it in the same session): the plan's own id must
+// not read as a free target meanwhile.
+describe('one session per flow (Review Focus 2)', () => {
+  it('a plan-writing lane and its new plan never run at once', async () => {
+    const repo = await startedFlows(['a'])
+    await writeSpec(repo, 'x', { criteria: [{ id: 'ac-x', test: '@spec:x' }] })
+    approve(repo, 'x')
+    const dir = fakeScenario()
+    writeFileSync(join(dir, 'm.json'), JSON.stringify({ ...PLAN_META, parent: 'x', steps: [{ id: 's1', title: 'x', criteria: ['ac-x'] }] }))
+    writeFileSync(join(dir, 'b.md'), PLAN_BODY)
+    const log = join(dir, 'log')
+    const agent = script(`echo "start $WITNESS_DRIVE" >> "${log}"
+case "$WITNESS_DRIVE" in
+  x) cd "${repo.root}" && ${witnessCli()} write x-plan-1 --effort ${repo.effort} --meta "${dir}/m.json" --body "${dir}/b.md" >/dev/null 2>&1; sleep 6 ;;
+  *) sleep 0.5 ;;
+esac
+echo "end $WITNESS_DRIVE" >> "${log}"`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
+    const lines = readFileSync(log, 'utf8').trim().split('\n')
+    const planStart = lines.indexOf('start x-plan-1')
+    expect(planStart === -1 || planStart > lines.indexOf('end x')).toBe(true)
+  }, 120_000)
 })

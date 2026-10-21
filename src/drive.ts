@@ -6,7 +6,7 @@ import { EXIT, main, type Ctx } from './cli.js'
 import { loadLocalConfig, type Config } from './config.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { loadCanon } from './scan.js'
+import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
 import { computeNext, type NextAction } from './verbs/next.js'
 import { DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
@@ -317,9 +317,26 @@ export async function driveLoop(
   }
   const aborted = new Promise<void>((done) => abort.signal.addEventListener('abort', () => done(), { once: true }))
 
+  // Final review F2. A lane holds its whole flow: a spec and the plans written for it. The
+  // plan queue's lane is keyed by the spec, and its session writes the plan and keeps working
+  // on it (witness-plan gates it in the same session), so the new plan's id must not read as
+  // a free target meanwhile — nor a spec while one of its plans runs. Read from the canon of
+  // this fill, so a plan written a moment ago belongs to its spec's lane at once.
+  let canonNow = loadCanon(root)
+  const family = (t: string): string[] => {
+    const doc = findById(canonNow, t)
+    if (doc?.meta.type === 'plan') return [t, String(doc.meta.parent)]
+    if (doc?.meta.type === 'spec') {
+      return [t, ...canonNow.docs.filter((d) => d.meta.type === 'plan' && String(d.meta.parent) === t).map((d) => String(d.meta.id))]
+    }
+    return [t]
+  }
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
-    return !lanes.has(k) && !aside.has(k) && (flags.flow === undefined || t === flags.flow)
+    if (lanes.has(k) || aside.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
+    if (t === undefined) return true
+    const mine = family(t)
+    return ![...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))
   }
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
   const stuck = (key: string, action: NextAction) => {
@@ -492,9 +509,11 @@ export async function driveLoop(
   process.on('SIGTERM', onSignal)
   try {
     for (;;) {
+      canonNow = loadCanon(root)
       if (autonomous && !stop && !signalled) await settlePass()
       while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
-        const action = computeNext(root, ctx, loadCanon(root), cfg, { scope: admits })
+        canonNow = loadCanon(root)
+        const action = computeNext(root, ctx, canonNow, cfg, { scope: admits })
         const key = action.target ?? TARGETLESS
         if (lanes.has(key) || aside.has(key)) break         // a global rung, already in hand
         let step = classifyAction(action, root, { autonomy: autonomous })
