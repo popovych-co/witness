@@ -42,6 +42,7 @@ ship: { test: "npm test", lint: "npm run lint", branch: main }
 
 const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/lock
+.witness/runner.lock
 .witness/txn.json
 .witness/allow.json
 .witness/calibration.local.yaml

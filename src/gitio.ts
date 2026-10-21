@@ -94,6 +94,8 @@ export function stateOnlyAdvance(wt: string, root: string, from: string, to: str
 
 const LOCAL_STATE_FILES = new Set([
   '.witness/lock',
+  // Row 181: held across a whole suite in one worktree while another flow writes state.
+  '.witness/runner.lock',
   '.witness/txn.json',
   '.witness/allow.json',
   '.witness/calibration.local.yaml',
