@@ -242,3 +242,30 @@ describe('guardTxn message', () => {
     expect(errs.join('\n')).toContain('specs/a.md')
   })
 })
+
+// Final review F3. Under parallel lanes another process's write is routinely in flight: its
+// marker is not a crash while that writer lives and holds the repo lock, and no write may
+// overwrite the marker a real crash left.
+describe('a live write is not a crash (B3)', () => {
+  it('reads a marker as pending only when its writer is gone or lost the lock', async () => {
+    const repo = seeded()
+    const holder = await holdLock(repo.root, 5_000)
+    const marker = (pid?: number) => repo.write('.witness/txn.json', JSON.stringify({ op: 'write(a)', files: ['specs/a.md'], ...(pid ? { pid } : {}) }))
+    marker(holder.pid)
+    expect(pendingTxn(repo.root)).toBeUndefined()
+    marker(999_999)
+    expect(pendingTxn(repo.root)?.op).toBe('write(a)')
+    marker()
+    expect(pendingTxn(repo.root)?.op).toBe('write(a)')                 // a legacy marker names no writer
+    holder.kill()
+  }, 15_000)
+
+  it('withTxn never overwrites a crashed marker', () => {
+    const repo = seeded()
+    const crashed = JSON.stringify({ op: 'gate-plan(a)', files: ['specs/a.md'], pid: 999_999 })
+    repo.write('.witness/txn.json', crashed)
+    const res = withTxn(repo.root, { op: 'write(a)', files: ['specs/a.md'] }, () => ok({ sha: 'x' }))
+    expect(!res.ok && res.violations[0]!.rule).toBe('txn-pending')
+    expect(readFileSync(join(repo.root, '.witness', 'txn.json'), 'utf8')).toBe(crashed)
+  })
+})

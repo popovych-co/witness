@@ -94,6 +94,13 @@ export function takeStale(p: string, stale: (text: string | undefined) => boolea
   }
 }
 
+// The live pid holding the repo lock, if any (F3: a transaction marker is in flight, not a
+// crash, while its writer holds this).
+export function lockHolder(root: string): number | undefined {
+  const pid = pidOf(readText(lockPath(root)))
+  return pid !== undefined && isAlive(pid) ? pid : undefined
+}
+
 // A lock is released by its owner only: one taken over by another process stays theirs.
 export function releaseIfMine(p: string, pid: number): void {
   const text = readText(p)
