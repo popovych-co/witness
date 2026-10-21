@@ -101,3 +101,16 @@ it('without autonomy the human merges, as before', async () => {
   expect(outs.join('\n')).toContain('merge PR #1 on GitHub when ready')
   expect(readFileSync(join(scenario, 'gh-calls'), 'utf8')).not.toContain('pr merge')
 })
+it('pins the merge to the commit it reviewed, so a PR head pushed since is never merged', async () => {
+  const s = await autonomousShip()
+  expect(await runShip(s.ctx, s.planId)).toBe(0)
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: s.wt, encoding: 'utf8' }).trim()
+  expect(s.calls()).toContain(`pr merge 1 --merge --match-head-commit ${head}`)
+})
+it('a PR head that moved after review is refused by GitHub and left for a human', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'pr-1-head-sha'), 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')
+  expect(await runShip(s.ctx, s.planId)).toBe(2)
+  expect(s.err()).toContain('merge-refused')
+  expect(readFileSync(join(s.scenario, 'pr-1-state'), 'utf8').trim()).toBe('OPEN')
+})

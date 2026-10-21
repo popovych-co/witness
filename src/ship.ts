@@ -194,7 +194,16 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · witness ship ${planId} re-gates`))
     return EXIT.FINDINGS
   }
-  const merged = gh(ctx, root, ['pr', 'merge', String(pr), `--${cfg.ship.merge}`])
+  // The local checks above prove the WORKTREE is what was judged; `gh pr merge` merges the
+  // REMOTE head. Pinning the merge to the reviewed commit makes GitHub refuse a head anyone
+  // pushed since — another session, a collaborator, a force-push — so the merge can only
+  // ever land the commit CI and the battery saw. A refusal there is a human's call.
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  if (!head.ok) {
+    ctx.out(kv('merge', `held — the reviewed commit cannot be read in ${wt} · witness ship ${planId} re-gates`))
+    return EXIT.FINDINGS
+  }
+  const merged = gh(ctx, root, ['pr', 'merge', String(pr), `--${cfg.ship.merge}`, '--match-head-commit', head.out.trim()])
   if (!merged.ok) {
     renderRefusal([humanCall(v('gh', 'merge-refused', merged.out.trim().slice(-200),
       "a PR GitHub will merge — branch protection and required reviews are the repo owner's to settle"))])

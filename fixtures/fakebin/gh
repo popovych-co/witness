@@ -43,6 +43,12 @@ case "$sub" in
     echo "Some checks were not successful"; exit 1 ;;
   "pr merge")
     if [ -f "$dir/pr-$3-merge-refuse" ]; then cat "$dir/pr-$3-merge-refuse" >&2; exit 1; fi
+    # GitHub refuses --match-head-commit when the PR head is another commit
+    match=""; prev=""
+    for a in "$@"; do [ "$prev" = "--match-head-commit" ] && match="$a"; prev="$a"; done
+    if [ -n "$match" ] && [ -f "$dir/pr-$3-head-sha" ] && [ "$(cat "$dir/pr-$3-head-sha")" != "$match" ]; then
+      echo "GraphQL: Head branch was modified. Review and try the merge again." >&2; exit 1
+    fi
     echo "MERGED" > "$dir/pr-$3-state"
     echo "Merged pull request #$3"; exit 0 ;;
 esac
