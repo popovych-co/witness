@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
@@ -706,5 +706,36 @@ describe('surviving unattended (B4)', () => {
     expect(out.join('\n')).toContain(`keep-awake: ${awake} -ims -w ${process.pid} — a closed lid on battery still sleeps`)
     const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'))
     await expect.poll(() => { try { process.kill(pid, 0); return 'alive' } catch { return 'gone' } }, { timeout: 5_000 }).toBe('gone')
+  }, 60000)
+})
+
+describe('coming back (B6)', () => {
+  const recorder = () => {
+    const dir = fakeScenario()
+    const bin = join(dir, 'notify')
+    writeFileSync(bin, `#!/bin/sh\necho "$1" >> "${dir}/got"\n`, { mode: 0o755 })
+    return { bin, got: join(dir, 'got') }
+  }
+
+  it('an autonomous run ends with the report and one notification', async () => {
+    const repo = await startedFlows(['a'])
+    const n = recorder()
+    writeLocalConfig(repo.root, { notify: n.bin })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0') }, out), {})
+    expect(out).toContain('drive: done — 0 merged · 0 wait on you · 0 parked · 1 stuck')
+    expect(readFileSync(n.got, 'utf8').trim().split('\n'))
+      .toEqual([`witness drive — ${basename(repo.root)} · 0 merged · 0 wait on you · 0 parked · 1 stuck`])
+    expect(out).toContain(`notify: sent via ${n.bin}`)
+  }, 60000)
+
+  it('a run with autonomy off reports and sends nothing', async () => {
+    const repo = await planReady()
+    const n = recorder()
+    writeLocalConfig(repo.root, { notify: n.bin })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0'), WITNESS_KEEP_AWAKE_BIN: noopOpener() }, out), { maxSpawns: 1 })
+    expect(out.some((l) => l.startsWith('drive: done — ') || l.startsWith('drive: stopped — '))).toBe(true)
+    expect(existsSync(n.got)).toBe(false)
   }, 60000)
 })

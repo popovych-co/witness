@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
-import type { Config } from './config.js'
+import { loadLocalConfig, type Config } from './config.js'
 import { resolveJudge } from './harness.js'
 import { renderRefusal } from './refusal.js'
 import { loadCanon } from './scan.js'
@@ -20,6 +20,8 @@ import {
   duration, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock,
 } from './usage.js'
 import { keepAwake } from './awake.js'
+import { driveReport, runStart } from './drive-report.js'
+import { notify } from './notify.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -464,6 +466,7 @@ export async function driveLoop(
     return true
   }
 
+  const start = runStart(root)
   const awake = keepAwake(ctx.env, process.platform, process.pid)
   ctx.out(awake.command !== undefined
     ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
@@ -507,6 +510,17 @@ export async function driveLoop(
     }
 
     if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
+    // Row 184. One report when nothing else can move, and for an autonomous run one
+    // notification — a human at a TTY prompt is already watching.
+    const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stop ? { stopped: stop } : {}) })
+    report.lines.forEach((l) => ctx.out(l))
+    if (autonomous) {
+      const local = loadLocalConfig(root)
+      const n = notify(local.ok ? local.value.notify : undefined, 'witness drive', report.summary)
+      ctx.out(n.outcome === 'sent' ? `notify: sent via ${n.command}`
+        : n.outcome === 'failed' ? `notify: ${n.command} not found — set notify: in .witness/config.local.yaml`
+          : `notify: none on ${process.platform} — set notify: in .witness/config.local.yaml`)
+    }
     const failed = [...aside.values()].some((a) => a.kind === 'stuck' || a.kind === 'capped')
     return failed || stop !== undefined ? EXIT.FINDINGS : EXIT.OK
   } finally {
