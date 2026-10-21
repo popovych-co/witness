@@ -13,7 +13,8 @@ import { unmetNeeds } from '../needs.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { openDeferrals } from '../deferral.js'
-import { pendingDecision, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import { lastGateRun, pendingDecision, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
@@ -63,6 +64,34 @@ function askState(a: AskStatus): string {
   if (a.parked === 'malformed') return 'parked — the arbiter answered malformed twice'
   if (a.parked === 'bound') return `parked — ${a.checks} of ${RECAP_CHECK_BOUND} recap checks rejected`
   return a.reason !== undefined ? `queued — recap check ${a.checks} of ${RECAP_CHECK_BOUND} rejected` : 'queued'
+}
+
+// Row 187. What a demotion let through, while its target is live: the demoted findings on the
+// last run of each gate — plans not done or abandoned (plan · implement · ship), specs not live
+// (design), efforts not abandoned (decompose). The doc gates never demote today; they are walked
+// anyway so the table answers for every gate the way the pending-gates block does.
+export function demotedRows(
+  root: string, canon: Canon,
+): Array<{ gate: string; target: string; round: number; anchor: string; since: string }> {
+  const targets: Array<{ id: string; gates: string[] }> = [
+    ...canon.docs.filter((d) => d.meta.type === 'plan' && !['done', 'abandoned'].includes(String(d.meta.status)))
+      .map((d) => ({ id: String(d.meta.id), gates: ['plan', 'implement', 'ship'] })),
+    ...canon.docs.filter((d) => d.meta.type === 'spec' && String(d.meta.status) !== 'live')
+      .map((d) => ({ id: String(d.meta.id), gates: ['design'] })),
+    ...effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
+      .map((slug) => ({ id: slug, gates: ['decompose'] })),
+  ]
+  const out: Array<{ gate: string; target: string; round: number; anchor: string; since: string }> = []
+  for (const t of targets) {
+    const entries = readStream(root, t.id)
+    for (const gate of t.gates) {
+      const last = lastGateRun(entries, gate)
+      for (const f of (last?.verdicts ?? []).flatMap((rv) => rv.findings)) {
+        if (f.demoted !== undefined) out.push({ gate, target: t.id, round: last!.round, anchor: anchorKey(f.anchor), since: `round ${f.demoted}` })
+      }
+    }
+  }
+  return out
 }
 
 // D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
@@ -266,6 +295,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (debts.length > 0) {
     rows('deferrals', ['id', 'artifact', 'gate', 'anchor', 'kind', 'age'],
       debts as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const demoted = demotedRows(root, canon)
+  if (demoted.length > 0) {
+    rows('demoted', ['gate', 'target', 'round', 'anchor', 'since'],
+      demoted as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   const rec = recommenderRows(root, canon)
   if (rec.length > 0) {

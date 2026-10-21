@@ -10,7 +10,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
-import type { DecisionEntry } from '../rounds.js'
+import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
 function detail(e: Entry): string {
   switch (e.t) {
@@ -29,8 +29,11 @@ function detail(e: Entry): string {
       return `artifact=${String(e.artifact)} rules=${pairs}`
     }
     case 'gate-run': {
-      const g = e as unknown as { gate: string; round: number; outcome: string; reviewed_sha: string }
-      return `gate ${g.gate} r${g.round} ${g.outcome} @${g.reviewed_sha.slice(0, 7)}`
+      const g = e as unknown as GateRunEntry
+      // Row 187: a round judged against an earlier one says so, and counts what it demoted.
+      const demoted = (g.verdicts ?? []).flatMap((rv) => rv.findings).filter((f) => f.demoted !== undefined).length
+      return `gate ${g.gate} r${g.round} ${g.outcome} @${g.reviewed_sha.slice(0, 7)}` +
+        `${g.delta ? ` · delta since r${g.delta.round}` : ''}${demoted > 0 ? ` · ${demoted} demoted` : ''}`
     }
     case 'human-decision': {
       const d = e as unknown as DecisionEntry

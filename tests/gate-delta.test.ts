@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { readStream } from '../src/journal.js'
+import { appendEntry, readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
@@ -146,5 +146,29 @@ describe('the doc gates never demote (C3)', () => {
     expect(r2!.verdicts![0]!.findings).toEqual([{ blocking: true, anchor: S2, claim: 'x' }])
     expect(out.join('\n')).not.toContain('demoted:')
     expect(findById(loadCanon(repo.root), PLAN)!.meta.status).not.toBe('approved')
+  })
+})
+
+// Plan decision 13. Only the code gates demote (decision 15), so the run is journaled as an
+// implement delta round would write it rather than produced by the plan gate.
+describe('a demotion is shown (C3)', () => {
+  it('status lists it while the plan is live, and log counts it', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh'); approve(repo, 'auth-refresh'); await writePlan(repo, PLAN)
+    appendEntry(repo.root, PLAN, {
+      v: 1, t: 'gate-run', gate: 'implement', artifact: PLAN, round: 2, run_id: 'r-2', reviewed_sha: 'abcdef1234',
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'passed',
+      delta: { round: 1, run: 'r-1' },
+      verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings: [
+        { blocking: false, anchor: 'tests/token.test.ts', claim: 'x', demoted: 1 },
+        { blocking: false, anchor: 'src/a.ts', claim: 'nit' }] }],
+    } as never)
+    repo.git('add', '-A'); repo.git('commit', '-m', 'implement r2', '-m', 'Witness-State: 1')
+    const s = await repo.cli(['status'])
+    expect(s.stdout).toContain('demoted[1]{gate,target,round,anchor,since}:')
+    expect(s.stdout).toContain(`  implement,${PLAN},2,tests/token.test.ts,round 1`)
+    expect((await repo.cli(['log', PLAN])).stdout).toMatch(/gate implement r2 passed @abcdef1 · delta since r1 · 1 demoted/)
+    repo.flipStatus(PLAN, 'done')
+    expect((await repo.cli(['status'])).stdout).not.toContain('demoted[')
   })
 })
