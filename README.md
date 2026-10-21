@@ -149,6 +149,12 @@ either.
 | `harness: claude-code \| pi` | **the judge** — which harness runs this repo's gate reviewers, is measured by `calibrate`, and is probed by `check`. Judgment resolves `harness:` → `PI_CODING_AGENT` → `CLAUDECODE` → `claude-code`; session lines (`next`'s handoff, `dispatch`'s relay, `init --agent auto`) resolve detection first, because those name the CLI you are about to type at. Committed, so it binds every teammate's gates; `witness init --agent` writes it once and never re-points it. Undeclared repos are judged by whichever agent's session is open — `witness check` and `witness status` say so |
 | `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
 | `drive.sessionTimeoutMs` | milliseconds a `drive`-spawned session may run before SIGTERM (default 3600000) |
+| `drive.parallel` | sessions `witness drive` runs at once under autonomy, one per target (default 2) |
+| `drive.parallelSuites` | `true` lets test runs in two worktrees overlap (default false: they take turns, because suites that boot servers or browsers collide) |
+| `drive.caps.rounds` | gate rounds one target may run across budget resets (default 16) — the run parks a target that reaches it |
+| `drive.caps.upstream` | upstream resets one target may take (default 6) — the run parks a target that reaches it |
+| `drive.caps.spawns` | sessions one target may take in one drive run (default 24) — the run parks a target that reaches it |
+| `drive.caps.wallClockMs` | milliseconds of session time one target may take in one drive run (default 57600000 · 16 h) — the run parks a target that reaches it |
 | `autonomy: on \| off` | whether the CLI settles its own stops — through its recommendation or the arbiter it launches — and merges its own PRs once CI is green (default off). A committed repo fact: it counts only once HEAD says it, and the merge also needs the ship branch on origin to say it. `--manual` on a gate run keeps that run's stop for a human, and three stops always reach one: the look of a new screen, an unmet plan need and a trust grant |
 | `ship.merge: merge \| squash \| rebase` | how `witness ship` merges its own PR under `autonomy: on` (default merge) — only once the ship gate is approved and CI is green, and never when the approval lapsed or GitHub refuses |
 | `ship.ciSettleMs` | milliseconds a green check set must hold still before `witness ship` merges under autonomy (default 60000, at most 1800000) — gh's watch ends the moment nothing is pending, so a check that registers late would otherwise be missed. Green means at least one check passed and none failed, was cancelled or is pending |
@@ -165,6 +171,7 @@ are declared in machine config, not env:
 reviewerExtensions:
   - /Users/you/.pi/agent/npm/node_modules/pi-claude-oauth-adapter
 opener: xdg-open   # optional; nonstandard desktops only
+notify: /usr/local/bin/ping-me   # optional; the run summary is its one argument · default: the platform notifier
 ```
 
 Repo facts live in `witness.config.yaml` (committed); machine facts live in

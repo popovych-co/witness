@@ -135,23 +135,85 @@ export function resolveImplement(raw: Record<string, unknown>): Result<Implement
 // to debug. The ceiling exists to break a hung child, not to pace a healthy one.
 export const DEFAULT_SESSION_TIMEOUT_MS = 3_600_000
 
-export interface DriveConfig {
-  sessionTimeoutMs: number
-}
+// Rows 181 and 183. Drive runs up to `parallel` sessions at once, one per target (design
+// §11 call 5). The caps park a target that will not converge; their defaults are fewhats's
+// 2026-10-19 calibration (B5): rounds = the largest normal merged plan's 13 implement rounds
+// plus one budget window · upstream = where the human abandoned thread-mirror-plan-1 ·
+// spawns = half again over the busiest normal merged plan's 16 sessions · wall clock = 16 h,
+// over the slowest normal merged plan's ~14 h in worktree sessions.
+export const DEFAULT_PARALLEL = 2
+export interface DriveCaps { rounds: number; upstream: number; spawns: number; wallClockMs: number }
+export const DEFAULT_CAPS: DriveCaps = { rounds: 16, upstream: 6, spawns: 24, wallClockMs: 57_600_000 }
 
+// `parallelSuites` (row 181): test runs take turns across worktrees unless this is true.
+export interface DriveConfig { sessionTimeoutMs: number; parallel: number; parallelSuites: boolean; caps: DriveCaps }
+
+const DRIVE_WANTS: Record<string, string> = {
+  sessionTimeoutMs: 'an integer >= 1 — milliseconds each spawned session may take before SIGTERM',
+  parallel: 'an integer >= 1 — sessions drive runs at once · one per target',
+}
+const CAP_WANTS: Record<keyof DriveCaps, string> = {
+  rounds: 'an integer >= 1 — gate rounds one target may run across budget resets before drive parks it',
+  upstream: 'an integer >= 1 — upstream resets one target may take before drive parks it',
+  spawns: 'an integer >= 1 — sessions one target may take in one drive run',
+  wallClockMs: 'an integer >= 1 — milliseconds of session time one target may take in one drive run',
+}
+const DRIVE_KEYS = ['sessionTimeoutMs', 'parallel', 'parallelSuites', 'caps'] as const
+
+const isCount = (val: unknown): val is number => typeof val === 'number' && Number.isInteger(val) && val >= 1
+const isMap = (val: unknown): val is Record<string, unknown> =>
+  typeof val === 'object' && val !== null && !Array.isArray(val)
+
+// Strict: no consumer sets `drive:` today, so a typo'd key refusing costs nobody, while a
+// typo'd cap silently defaulting would let a flow run past the bound its author meant.
 export function resolveDrive(raw: Record<string, unknown>): Result<DriveConfig> {
   const conf = raw.drive
-  if (conf === undefined) return ok({ sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS })
-  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) {
-    return refuse([v('drive', 'invalid', String(conf), 'a map of drive settings')])
+  const defaults: DriveConfig = {
+    sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS, parallel: DEFAULT_PARALLEL, parallelSuites: false, caps: { ...DEFAULT_CAPS },
   }
-  const val = (conf as Record<string, unknown>).sessionTimeoutMs
-  if (val === undefined) return ok({ sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS })
-  if (typeof val !== 'number' || !Number.isInteger(val) || val < 1) {
-    return refuse([v('drive.sessionTimeoutMs', 'invalid', String(val),
-      'an integer >= 1 — milliseconds each spawned session may take before SIGTERM')])
+  if (conf === undefined) return ok(defaults)
+  if (!isMap(conf)) return refuse([v('drive', 'invalid', String(conf), 'a map of drive settings')])
+  const violations: Violation[] = []
+  for (const key of Object.keys(conf)) {
+    if (!(DRIVE_KEYS as readonly string[]).includes(key)) {
+      violations.push(v(`drive.${key}`, 'unknown-drive-key', key, `a drive setting (${DRIVE_KEYS.join(' | ')})`))
+    }
   }
-  return ok({ sessionTimeoutMs: val })
+  const out = defaults
+  for (const key of ['sessionTimeoutMs', 'parallel'] as const) {
+    const val = conf[key]
+    if (val === undefined) continue
+    if (!isCount(val)) violations.push(v(`drive.${key}`, 'invalid', String(val), DRIVE_WANTS[key]!))
+    else out[key] = val
+  }
+  if (conf.parallelSuites !== undefined) {
+    if (typeof conf.parallelSuites !== 'boolean') {
+      violations.push(v('drive.parallelSuites', 'invalid', String(conf.parallelSuites),
+        'true | false — whether test runs in two worktrees may overlap'))
+    } else {
+      out.parallelSuites = conf.parallelSuites
+    }
+  }
+  const caps = conf.caps
+  if (caps !== undefined) {
+    if (!isMap(caps)) {
+      violations.push(v('drive.caps', 'invalid', String(caps), 'a map of cap settings'))
+    } else {
+      for (const key of Object.keys(caps)) {
+        if (!(key in CAP_WANTS)) {
+          violations.push(v(`drive.caps.${key}`, 'unknown-drive-key', key, `a cap (${Object.keys(CAP_WANTS).join(' | ')})`))
+        }
+      }
+      for (const key of Object.keys(CAP_WANTS) as Array<keyof DriveCaps>) {
+        const val = caps[key]
+        if (val === undefined) continue
+        if (!isCount(val)) violations.push(v(`drive.caps.${key}`, 'invalid', String(val), CAP_WANTS[key]))
+        else out.caps[key] = val
+      }
+    }
+  }
+  if (violations.length) return refuse(violations)
+  return ok(out)
 }
 
 export const DEFAULT_REVIEWER_TIMEOUT_MS = 600_000
@@ -244,9 +306,10 @@ const committedAutonomy = (root: string): boolean => autonomyAt(root, 'HEAD')
 export interface LocalConfig {
   reviewerExtensions: string[]
   opener?: string
+  notify?: string                  // row 184: drive's run summary is its one argument
 }
 
-const LOCAL_KEYS = ['reviewerExtensions', 'opener'] as const
+const LOCAL_KEYS = ['reviewerExtensions', 'opener', 'notify'] as const
 
 export const localConfigPath = (root: string) => join(root, '.witness', 'config.local.yaml')
 
@@ -289,8 +352,17 @@ export function loadLocalConfig(root: string): Result<LocalConfig> {
       opener = obj.opener
     }
   }
+  let notify: string | undefined
+  if (obj.notify !== undefined) {
+    if (typeof obj.notify !== 'string' || obj.notify === '') {
+      violations.push(v('notify', 'invalid', String(obj.notify),
+        'a command name or path — it receives the run summary as its one argument'))
+    } else {
+      notify = obj.notify
+    }
+  }
   if (violations.length) return refuse(violations)
-  return ok({ reviewerExtensions, ...(opener !== undefined ? { opener } : {}) })
+  return ok({ reviewerExtensions, ...(opener !== undefined ? { opener } : {}), ...(notify !== undefined ? { notify } : {}) })
 }
 
 // Lenient path resolution for callers without a loaded Config (canon scan, git

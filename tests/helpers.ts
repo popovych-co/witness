@@ -255,10 +255,11 @@ export function noopOpener(): string {
   return join(fakeBinDir(), 'noop-open')
 }
 
-export function writeLocalConfig(root: string, opts: { opener?: string; reviewerExtensions?: string[] } = {}): void {
+export function writeLocalConfig(root: string, opts: { opener?: string; reviewerExtensions?: string[]; notify?: string } = {}): void {
   mkdirSync(join(root, '.witness'), { recursive: true })
   const lines: string[] = []
   if (opts.opener !== undefined) lines.push(`opener: '${opts.opener}'`)
+  if (opts.notify !== undefined) lines.push(`notify: '${opts.notify}'`)
   if (opts.reviewerExtensions !== undefined) {
     lines.push(`reviewerExtensions: [${opts.reviewerExtensions.map((x) => `'${x}'`).join(', ')}]`)
   }

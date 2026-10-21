@@ -121,7 +121,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const repo = await seededRepo()
     const bin = fakeAgent('sleep 60')
     const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin } })
-    const cfg = { ...cfgOf(repo), drive: { sessionTimeoutMs: 100 } }
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 100 } }
     expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).toBe('timeout')
   }, 20000)
 
@@ -254,7 +254,7 @@ describe('driveLoop (D145)', () => {
     const bin = join(fakeScenario(), 'hang')
     writeFileSync(bin, '#!/bin/sh\nsleep 60\n', { mode: 0o755 })
     const out: string[] = []
-    const cfg = { ...cfgOf(repo), drive: { sessionTimeoutMs: 200 } }
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 200 } }
     const code = await driveLoop(repo.root, cfg, ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), {})
 
     expect(code).toBe(1)

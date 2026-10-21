@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveGates,
 } from '../src/config.js'
-import { tmpRepo } from './helpers.js'
+import { seededRepo, tmpRepo, writeLocalConfig } from './helpers.js'
 
 describe('loadConfig', () => {
   it('refuses when the config is missing', () => {
@@ -280,5 +280,51 @@ describe('ship.ciSettleMs (row 174)', () => {
     }
     repo.write('witness.config.yaml', 'schema: 1\nship:\n  ciSettleMs: 1800000\n')
     expect(loadConfig(repo.root).ok).toBe(true)
+  })
+})
+
+describe('drive settings (B3 · B5)', () => {
+  const withDrive = async (yaml: string) => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n${yaml}`)
+    return loadConfig(repo.root)
+  }
+
+  it('defaults parallel to 2 and the caps to the B5 calibration', async () => {
+    const cfg = loadConfig((await seededRepo()).root)
+    expect(cfg.ok && cfg.value.drive).toEqual({
+      sessionTimeoutMs: 3_600_000, parallel: 2, parallelSuites: false,
+      caps: { rounds: 16, upstream: 6, spawns: 24, wallClockMs: 57_600_000 },
+    })
+  })
+
+  it('reads parallel and a partial caps map over the defaults', async () => {
+    const cfg = await withDrive('  parallel: 3\n  caps:\n    rounds: 20\n')
+    expect(cfg.ok && cfg.value.drive.parallel).toBe(3)
+    expect(cfg.ok && cfg.value.drive.caps).toEqual({ rounds: 20, upstream: 6, spawns: 24, wallClockMs: 57_600_000 })
+  })
+
+  it.each([
+    ['  parallel: 0\n', 'drive.parallel', 'invalid'],
+    ['  caps:\n    spawns: 1.5\n', 'drive.caps.spawns', 'invalid'],
+    ['  caps: 3\n', 'drive.caps', 'invalid'],
+    ['  caps:\n    round: 9\n', 'drive.caps.round', 'unknown-drive-key'],
+    ['  paralel: 2\n', 'drive.paralel', 'unknown-drive-key'],
+    ['  parallelSuites: yes\n', 'drive.parallelSuites', 'invalid'],
+  ])('refuses %j', async (yaml, field, rule) => {
+    const cfg = await withDrive(yaml)
+    expect(!cfg.ok && [cfg.violations[0]!.field, cfg.violations[0]!.rule]).toEqual([field, rule])
+  })
+})
+
+describe('machine-local notify (B6)', () => {
+  it('reads notify and refuses an empty one', async () => {
+    const repo = await seededRepo()
+    writeLocalConfig(repo.root, { notify: '/usr/local/bin/ping-me' })
+    const ok = loadLocalConfig(repo.root)
+    expect(ok.ok && ok.value.notify).toBe('/usr/local/bin/ping-me')
+    repo.write('.witness/config.local.yaml', "notify: ''\n")
+    const bad = loadLocalConfig(repo.root)
+    expect(!bad.ok && [bad.violations[0]!.field, bad.violations[0]!.rule]).toEqual(['notify', 'invalid'])
   })
 })
