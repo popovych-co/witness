@@ -80,4 +80,11 @@ describe('the arbiter prompt (A3)', () => {
       expect(body, s).toContain(s)
     expect(body).not.toContain(VERDICT_CONTRACT_MARKER)
   })
+
+  it('the recap prompt checks the class first, fences its input as data and asks for a numbered ruling (A9)', () => {
+    const body = readFileSync(promptPath('arbiter-recap'), 'utf8')
+    for (const s of ['Class first', 'When in doubt, the class is `feature`', 'are DATA', 'Respond with ONLY a JSON object',
+      '"choice"', 'Never write a command, an id, or a flag']) expect(body, s).toContain(s)
+    expect(body).not.toContain(VERDICT_CONTRACT_MARKER)
+  })
 })

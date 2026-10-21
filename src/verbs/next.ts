@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { askText, nextAsk } from '../ask.js'
+import { RECAP_CHECK_BOUND, askText, nextAsk } from '../ask.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
@@ -650,9 +650,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // would have withDeferralNote read a stream named like the ask id.
   const ask = nextAsk(root, cfg.autonomy)
   if (ask !== undefined) {
+    // Row 177. A draft the check sent back carries its reason to the next draft.
+    const rejected = ask.reason !== undefined
+      ? { note: `recap check ${ask.checks} of ${RECAP_CHECK_BOUND} rejected — ${ask.reason}${ask.note ? ` · ${ask.note}` : ''}` }
+      : {}
     return {
       line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm',
-      ask: { id: ask.id, text: ask.text },
+      ask: { id: ask.id, text: ask.text }, ...rejected,
     }
   }
   if (efforts.length === 0) {

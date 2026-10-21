@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { EXIT, version, type Ctx } from '../cli.js'
-import { askQueue, askText } from '../ask.js'
+import { ASK_STREAM, RECAP_CHECK_BOUND, askQueue, askText, type AskStatus } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { departedStreams } from '../departure.js'
 import { designArtifactCurrent, designPending } from '../design.js'
@@ -54,8 +54,14 @@ export function askRows(root: string): Array<{ id: string; state: string; text: 
     .filter((a) => a.state === 'unanswered' || a.state === 'parked')
     .map((a) => {
       const text = askText(a.text)
-      return { id: a.id, state: 'queued', text: text.length > 80 ? `${text.slice(0, 80)}…` : text }
+      return { id: a.id, state: askState(a), text: text.length > 80 ? `${text.slice(0, 80)}…` : text }
     })
+}
+
+function askState(a: AskStatus): string {
+  if (a.parked === 'malformed') return 'parked — the arbiter answered malformed twice'
+  if (a.parked === 'bound') return `parked — ${a.checks} of ${RECAP_CHECK_BOUND} recap checks rejected`
+  return a.reason !== undefined ? `queued — recap check ${a.checks} of ${RECAP_CHECK_BOUND} rejected` : 'queued'
 }
 
 // D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
@@ -146,7 +152,8 @@ export function autonomousRows(root: string, canon: Canon): {
   counts: { policy: number; arbiter: number }
   recent: Array<{ target: string; gate: string; round: number; decision: string; by: string; rule: string }>
 } {
-  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  // Row 177: a recap check is an arbiter decision too, journaled on the ask queue (A5).
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id)), ASK_STREAM])
   const counts = { policy: 0, arbiter: 0 }
   const latest = new Map<string, DecisionEntry>()
   for (const id of streams) {

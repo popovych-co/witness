@@ -21,14 +21,15 @@ import { canonicalJson } from './sha.js'
 // composed. It runs on the chain with no per-gate pin, so one arbiter identity is
 // comparable across every gate it judges.
 
-export type ArbiterMode = 'decision'
+// Row 177: `recap` checks a drafted recap against the ask it answers (recap-check.ts).
+export type ArbiterMode = 'decision' | 'recap'
 export interface ArbiterSection { title: string; body: string }
 export interface ArbiterRequest { mode: ArbiterMode; menu: readonly Option[]; evidence: readonly ArbiterSection[] }
 // `choice` is 1-based, the number the prompt showed.
 export interface ArbiterRuling { choice: number; reason: string; note?: string; model: string; prompts_sha: string }
 
 // How a later mode (plan A2's recap check) adds its own prompt without a second invoker.
-export const PROMPT_OF: Record<ArbiterMode, string> = { decision: 'arbiter' }
+export const PROMPT_OF: Record<ArbiterMode, string> = { decision: 'arbiter', recap: 'arbiter-recap' }
 
 const TEXT_MAX = 600
 
@@ -99,7 +100,7 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
     }
     const ruling = readRuling(text, req.menu.length)
     if (ruling.ok) {
-      return ok({ ...ruling.value, model: chain[rung]!, prompts_sha: promptsSha([{ name: 'arbiter', contents: lens.contents }]) })
+      return ok({ ...ruling.value, model: chain[rung]!, prompts_sha: promptsSha([{ name: PROMPT_OF[req.mode], contents: lens.contents }]) })
     }
     if (attempt === 0) {
       // One self-repair reroll on the same rung, in the shape runBattery gives a lens.
