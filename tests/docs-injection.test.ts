@@ -9,7 +9,7 @@ import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById } from '../src/scan.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec } from './helpers.js'
+import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec } from './helpers.js'
 
 describe('lens docs (pure)', () => {
   it('promptsSha diverges when injected doc contents change', () => {
@@ -97,9 +97,9 @@ describe('conventions injection at the gate', () => {
     const { scenario, ctx } = await shipRepo()
     putVerdict(scenario, CLEAN)
     expect(await runGate(ctx, 'ship', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
-    // default ship battery order: drift-reviewer (call-1), code-reviewer (call-2)
-    const drift = readFileSync(join(scenario, 'claude-calls/call-1/stdin'), 'utf8')
-    const code = readFileSync(join(scenario, 'claude-calls/call-2/stdin'), 'utf8')
+    // the ship battery's two lenses run at once, so each is found by name, not call order
+    const drift = readFileSync(join(callFor(scenario, 'drift-reviewer')!, 'stdin'), 'utf8')
+    const code = readFileSync(join(callFor(scenario, 'code-reviewer')!, 'stdin'), 'utf8')
     expect(code).toContain('## Repo conventions')
     expect(code).toContain('### docs/conventions.md')
     expect(code).toContain('Every module exposes one public entry.')
@@ -114,16 +114,16 @@ describe('conventions injection at the gate', () => {
     // unchanged docs + unchanged content → resume: nothing appends, claude idle
     await runGate(ctx, 'ship', 'auth-refresh', { fresh: false, manual: false })
     expect(runs(repo).length).toBe(1)
-    expect(() => readFileSync(join(scenario, 'claude-calls/call-3/stdin'), 'utf8')).toThrow()
+    expect(callCount(scenario)).toBe(2)
     // edited doc → new prompts_sha → live re-roll on identical reviewed content
     repo.write('docs/conventions.md', 'Every module exposes one public entry. No barrels.')
     repo.git('add', 'docs/conventions.md')
     repo.git('commit', '-m', 'tighten conventions')
     expect(await runGate(ctx, 'ship', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
     expect(runs(repo).length).toBe(2)
-    // battery order per round is [drift-reviewer, code-reviewer]; round 3's
-    // fresh re-roll re-invokes both, so call-3 = drift, call-4 = code (docs)
-    const rerolled = readFileSync(join(scenario, 'claude-calls/call-4/stdin'), 'utf8')
+    // the re-roll re-invokes both lenses; code-reviewer's latest call carries the edited doc
+    expect(callCount(scenario)).toBe(4)
+    const rerolled = readFileSync(join(callFor(scenario, 'code-reviewer')!, 'stdin'), 'utf8')
     expect(rerolled).toContain('No barrels.')
   })
 

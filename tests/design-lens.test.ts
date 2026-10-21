@@ -7,7 +7,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { screensDir } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
-import { fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { callCount, callFor, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
 // A vitest test that, when WITNESS_SCREENS_DIR is set, writes a PNG there — the
 // stand-in for a Puppeteer capture. Tagged so the criteria runner reaches it.
@@ -130,11 +130,11 @@ describe('implement gate — design-reviewer wiring', () => {
     const { diffBase, changedFiles } = await import('../src/evidence.js')
     const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
     const files = changedFiles(wt, base.ok ? base.value : '')
-    putVerdict(scenario, treeClean(files))                                    // calls 1–4 (tree lenses)
-    putVerdict(scenario, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 5)  // design-reviewer
+    putVerdict(scenario, treeClean(files))                                    // the 4 tree lenses
+    putVerdict(scenario, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 'design-reviewer')
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(0)
-    const design = readFileSync(join(scenario, 'claude-calls/call-5/stdin'), 'utf8')
+    const design = readFileSync(join(callFor(scenario, 'design-reviewer')!, 'stdin'), 'utf8')
     expect(design).toContain('initial.png')                                   // capture anchor menu
     expect(design).toContain(join(screensDir(wt, planId), 'initial.png'))     // Read-by-path
     expect(design).toContain('Bookings eyebrow')                              // docs.design canon injected
@@ -148,7 +148,7 @@ describe('implement gate — design-reviewer wiring', () => {
     const { diffBase, changedFiles } = await import('../src/evidence.js')
     const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
     putVerdict(scenario, treeClean(changedFiles(wt, base.ok ? base.value : '')))
-    putVerdict(scenario, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [{ blocking: true, anchor: 'initial.png', claim: 'primary action below the fold' }] }, 5)
+    putVerdict(scenario, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [{ blocking: true, anchor: 'initial.png', claim: 'primary action below the fold' }] }, 'design-reviewer')
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(1)  // FINDINGS
   })
@@ -166,7 +166,7 @@ describe('implement gate — design-reviewer wiring', () => {
     // Row 115: a skip states its cause — a reader cannot otherwise tell "not applicable"
     // from "could not run", and only one of those is benign.
     expect(entry.skipped).toEqual(['design-reviewer — no design-from pin: not UI work'])
-    expect(() => readFileSync(join(scenario, 'claude-calls/call-5/stdin'), 'utf8')).toThrow()  // 4 lenses only
+    expect(callCount(scenario)).toBe(4)  // 4 lenses only
   })
 
   it('a pinned plan whose living design is gone refuses design-artifact-missing', async () => {
@@ -186,17 +186,16 @@ describe('implement gate — design-reviewer wiring', () => {
     const files = changedFiles(wt, base.ok ? base.value : '')
     const scenario1 = fakeScenario()
     putVerdict(scenario1, treeClean(files))
-    putVerdict(scenario1, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 5)
+    putVerdict(scenario1, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 'design-reviewer')
     await runGate(fakeCtx(repo.root, { env: gateEnv(scenario1) }), 'implement', planId, { fresh: false, manual: false })
     const before = readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length
     // amend the approved look — code (and tree-sha) unchanged
     repo.write('designs/auth-refresh.html', '<section id="hero"><h1>New service</h1><nav id="save">Save</nav></section>')
     repo.git('add', 'designs/auth-refresh.html'); repo.git('commit', '-m', 'amend design')
-    // fresh scenario: the fake-claude call counter is global per WITNESS_FAKE_DIR, so
-    // reusing scenario1 here would push design-reviewer's call past its numbered verdict
+    // fresh scenario: the re-rolled round's calls start from a clean slate
     const scenario2 = fakeScenario()
     putVerdict(scenario2, treeClean(files))
-    putVerdict(scenario2, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 5)
+    putVerdict(scenario2, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 'design-reviewer')
     expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario2) }), 'implement', planId, { fresh: false, manual: false })).toBe(0)
     expect(readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length).toBe(before + 1)  // re-rolled, not resumed
   })
