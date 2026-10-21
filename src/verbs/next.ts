@@ -24,6 +24,7 @@ import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, policyFor } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import { driveChild } from '../drive-presence.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -562,7 +563,8 @@ function planWriteAction(
   const owner = liveOwner(root, efforts, planId, parentId)
   return owner === undefined
     ? {
-        line: 'witness recap --file <recap.json>', stage: 'brainstorm',
+        // Row 181: the target rides along, so a session scoped to it finds this work again.
+        line: 'witness recap --file <recap.json>', stage: 'brainstorm', target,
         note: `${planId} is owed, but no live effort can carry the write — open one`,
       }
     : {
@@ -571,7 +573,18 @@ function planWriteAction(
       }
 }
 
-export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): NextAction {
+// Rule B's note: the ladder is exhausted. Exported because drive tells a scoped session's
+// "nothing more for this target" from every other `witness check` by it.
+export const NOTHING_OWED = 'nothing is owed — no effort, spec or plan has a next step; a clean check confirms it'
+
+// Row 181. `scope` keeps the ladder to the targets it admits: every rung that names a target
+// passes it through `scope` before it may answer, and a rung with no target passes
+// undefined. The recovery fork and canon errors are global and never filtered. The default
+// admits everything, so every caller without a scope gets today's ladder.
+export interface NextOpts { scope?: (target: string | undefined) => boolean }
+
+export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, opts: NextOpts = {}): NextAction {
+  const admits = opts.scope ?? (() => true)
   // The recovery fork is a decision with a right answer the CLI can compute from the
   // marker (recover.ts's `recoverChoice`), and `--complete | --rollback` stated neither it
   // nor the cost of guessing wrong.
@@ -614,12 +627,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // on a human decision belonging to a DIFFERENT flow: ship always stops (gates/ship.ts),
   // so a global decision-halt freezes every other flow at the first ship gate.
   const flows = plans
+    .filter((plan) => admits(String(plan.meta.id)))
     .filter((plan) => !flowBlocked(root, plan, readStream(root, String(plan.meta.id))))
     .map((plan) => flowAction(root, cfg, plan, judge))
     .filter((a): a is NextAction => a !== undefined)
     .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))
   if (flows.length > 0) {
-    const waiting = pendingDecisionsAll(root, efforts, specs, plans)
+    const waiting = pendingDecisionsAll(root, efforts, specs, plans).filter((w) => admits(w.target))
     // noteOf, not an overwrite: a lapse note explains WHY this row is the gate rather
     // than the ship it was a moment ago, and must not be evicted by the waiting list.
     return waiting.length > 0
@@ -636,7 +650,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // the endgame decision itself is the next action — decisions outrank motion, jammed
   // targets must not be silently skipped. A parked gate is excluded: the human already made
   // the endgame decision.
-  const owed = owedFrom(root, efforts, specs, plans)[0]
+  const owed = owedFrom(root, efforts, specs, plans).find((o) => admits(o.target))
   if (owed !== undefined) {
     if (!owed.bound) return { line: `witness decide ${owed.gate} ${owed.target} --show`, target: owed.target }
     const parent = owed.gate === 'plan' ? String(findById(canon, owed.target)?.meta.parent) : undefined
@@ -649,7 +663,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
   // never waits for other efforts' decompose, design, plan and start rungs. No `target`: it
   // would have withDeferralNote read a stream named like the ask id.
-  const ask = nextAsk(root, cfg.autonomy)
+  const ask = admits(undefined) ? nextAsk(root, cfg.autonomy) : undefined
   if (ask !== undefined) {
     // Row 177. A draft the check sent back carries its reason to the next draft.
     const rejected = ask.reason !== undefined
@@ -660,7 +674,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
       ask: { id: ask.id, text: ask.text }, ...rejected,
     }
   }
-  if (efforts.length === 0) {
+  if (efforts.length === 0 && admits(undefined)) {
     // Under autonomy nobody is there to interview, so with no ask there is nothing to build —
     // unless an ask waits for a human, which must be named rather than called absent.
     if (cfg.autonomy) {
@@ -672,6 +686,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   }
   for (const e of efforts) {
+    if (!admits(e.slug)) continue
     const writes = effortWrites(root, e.slug)
     // A chore is plan-level motion by definition, so the decompose stage is unsatisfiable
     // in BOTH directions and must not be routed to at all: `write` refuses spec content
@@ -718,6 +733,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
 
   for (const spec of specs) {
     if (String(spec.meta.status) !== 'approved') continue
+    if (!admits(String(spec.meta.id))) continue
     if (!designPending(root, spec)) continue
     const id = String(spec.meta.id)
     // A parked design gate is off the board too — routing to `witness design` or its gate
@@ -759,6 +775,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   }
   const planless = canon.docs
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
+    .filter((d) => admits(String(d.meta.id)))
     .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) && !planFinished(p)))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
     // last on purpose: the only filter that costs a subprocess — the in-memory ones above
@@ -793,6 +810,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   for (const plan of plans) {
     const id = String(plan.meta.id)
     if (String(plan.meta.status) !== 'draft') continue
+    if (!admits(id)) continue
     const parent = findById(canon, String(plan.meta.parent))
     const planSha = parent ? planPairSha(plan, parent) : undefined
     const entries = readStream(root, id)
@@ -813,7 +831,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // manual or env need blocks. Only when every approved plan waits does the rung route to a
   // blocked start, whose refusal is the human's stop. Cmd needs are start's to judge — `next`
   // never executes a command (a recorded residual); an env need is a read of the environment.
-  const approved = plans.filter((p) => String(p.meta.status) === 'approved')
+  const approved = plans.filter((p) => String(p.meta.status) === 'approved' && admits(String(p.meta.id)))
   if (approved.length > 0) {
     const manual = unmetNeeds(canon).filter((u) => u.blocks === 'start')
     const waitsOn = (p: CanonDoc): string[] => {
@@ -834,7 +852,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   // return above) but a different state; the note is what tells them apart on screen
   // (D157 — the missing note is what turned issue #21 from a one-command diagnosis
   // into a filed bug).
-  return { line: 'witness check', ...noteOf('nothing is owed — no effort, spec or plan has a next step; a clean check confirms it') }
+  return { line: 'witness check', note: NOTHING_OWED }
 }
 
 // Exported for `drive`, which claims a flow with the same `--flow` semantics `next` has:
@@ -892,10 +910,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 173. Under autonomy `next` settles what is owed before it routes, so the line it
   // prints is the work that follows the decision rather than the decision itself. A dynamic
   // import for the reason gate.ts gives: settle.ts reaches decide.ts and its gate registry.
+  // Row 181. A session drive spawned answers for its own target alone, and settles only its
+  // own stops: two drive sessions settling repo-wide would both judge one stop.
+  const marked = driveChild(ctx.env)
+  const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   let routed: { command: string; target: string } | undefined
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
-    const reports = await settleOwed(ctx, root, cfgR.value)
+    const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
     if (reports.some((r) => r.settled.kind === 'decided')) canon = loadCanon(root)
     for (const r of reports) {
       const line = settledLine(r)
@@ -919,6 +941,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const flowR = resolveFlow(canon, values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     action = flowAction(root, cfgR.value, flowR.value, judge) ?? { line: 'witness check', target: values.flow }
+  } else if (scope) {
+    // The drive marker outranks the worktree's ambient flow: drive assigned this session
+    // its target, and a worktree cwd only infers one.
+    action = computeNext(root, ctx, canon, cfgR.value, { scope })
   } else {
     const inferred = worktreeFlow(ctx.cwd, root)
     const ambient = inferred !== undefined ? findById(canon, inferred) : undefined
@@ -939,6 +965,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // rows are: it must not split the contiguous next:/stage:/target:/note:/home:/run:/relay:
   // unit the stage skills read verbatim. Behavior unchanged; statement honesty.
   if (ambientFlow) ctx.out(kv('flow', `${ambientFlow} — inferred from cwd`))
+  const assigned = marked ? (marked.target ?? 'untargeted work') : undefined
+  if (assigned !== undefined && values.flow === undefined) ctx.out(kv('drive', `${assigned} — assigned by witness drive`))
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
@@ -961,6 +989,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
       ctx.out(kv('relay', relayLine(harness)))
     }
+  }
+  if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
+    ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
   }
   return EXIT.OK
 }

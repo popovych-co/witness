@@ -177,12 +177,18 @@ export interface SettleReport { gate: string; target: string; settled: Settled }
 // must never spend a model call or journal a decision) and while a transaction is pending
 // (recovery outranks everything). Each stop's own output is silenced: `next` prints one
 // line per report, above its routing block.
-export async function settleOwed(ctx: Ctx, root: string, cfg: Config): Promise<SettleReport[]> {
+// Row 181: `scope` keeps the pass to the targets it admits, before any stop is judged. A
+// drive session passes its own target, and drive passes the targets no session holds, so
+// each stop has exactly one settler. The default admits everything (A1's repo-wide pass).
+export async function settleOwed(
+  ctx: Ctx, root: string, cfg: Config, opts: { scope?: (target: string) => boolean } = {},
+): Promise<SettleReport[]> {
   if (ctx.env.CI) return []
   if (pendingTxn(root) !== undefined) return []
   const quiet: Ctx = { ...ctx, out: () => {}, err: () => {} }
+  const admits = opts.scope ?? (() => true)
   const out: SettleReport[] = []
-  for (const o of owedDecisions(root, loadCanon(root))) {
+  for (const o of owedDecisions(root, loadCanon(root)).filter((d) => admits(d.target))) {
     out.push({ gate: o.gate, target: o.target, settled: await settleStop(quiet, root, cfg, o.gate, o.target) })
   }
   return out
