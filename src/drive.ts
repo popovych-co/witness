@@ -12,6 +12,7 @@ import { DRIVE_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
+import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, readStream } from './journal.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
@@ -259,6 +260,11 @@ function progressKey(root: string, action: NextAction): string {
 
 interface Lane { action: NextAction; end: Promise<SessionEnd>; merged?: string }
 
+const lastRunGate = (entries: ReturnType<typeof readStream>): string | undefined => {
+  const run = [...entries].reverse().find((e) => e.t === 'gate-run') as { gate?: unknown } | undefined
+  return typeof run?.gate === 'string' ? run.gate : undefined
+}
+
 // The loop. Derive, classify, spawn, re-derive — and every turn reads the repo from disk,
 // so nothing drive believed a moment ago can outlive a child that changed it.
 //
@@ -279,6 +285,7 @@ export async function driveLoop(
   const lanes = new Map<string, Lane>()
   const aside = new Map<string, Aside>()
   const progress = new Map<string, string>()
+  const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
   let spawns = 0
   let stop: 'ceiling' | 'spawn-failed' | undefined
   let idle: string | undefined
@@ -344,6 +351,8 @@ export async function driveLoop(
   }
 
   const settle = (key: string, lane: Lane, end: SessionEnd) => {
+    const u = use.get(key) ?? { spawns: 0, ms: 0 }
+    use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
     if (end.outcome === 'timeout') {
       ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
       setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}` })
@@ -398,6 +407,26 @@ export async function driveLoop(
     return true
   }
 
+  // Row 183. Checked before every spawn for a target, the first included. Target-less work
+  // has no stream to count or park on; the ceiling bounds it.
+  const capped = async (action: NextAction, key: string): Promise<boolean> => {
+    if (action.target === undefined) return false
+    const hit = capHit(readStream(root, action.target), use.get(key) ?? { spawns: 0, ms: 0 }, cfg.drive.caps)
+    if (hit === undefined) return false
+    // A parked cap carries its gate and the report reads it from the journal; an
+    // unparkable one carries none and is reported with what it is, beside the stuck.
+    if (await parkAtCap(ctx, root, action.target, hit) === 'parked') {
+      ctx.out(`drive: parked — ${action.target} · ${hit.note}`)
+      const gate = hit.gate ?? lastRunGate(readStream(root, action.target))
+      setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}) })
+    } else {
+      const why = `${hit.note} · no gate run to park it on`
+      ctx.out(`drive: capped — ${action.target} · ${why}`)
+      setAside(key, { kind: 'capped', line: action.line, why })
+    }
+    return true
+  }
+
   for (;;) {
     if (autonomous && !stop) await settlePass()
     while (!stop && lanes.size < parallel && clock.now() >= pausedUntil) {
@@ -420,7 +449,8 @@ export async function driveLoop(
         break
       }
       if (waitingNeed(action, key)) continue
-      // Task 10's caps go here: a cap outranks a stall in the report
+      // A cap outranks a stall in the report, and no session is spent past it.
+      if (await capped(action, key)) continue
       if (unmoved(key, action)) continue
       spawns += 1
       lanes.set(key, launch(step, action, spawns))

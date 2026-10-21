@@ -8,6 +8,7 @@ import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { worktreePath } from '../src/worktree.js'
+import { gateParked } from '../src/verbs/next.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { effortReviewedSha } from '../src/reviewed.js'
 import { findById, loadCanon } from '../src/scan.js'
@@ -608,4 +609,39 @@ describe('one decision per stop (B3)', () => {
     expect(decided).toHaveLength(1)
     expect([x, y].filter((r) => r.stdout.includes('decided:'))).toHaveLength(1)
   }, 60_000)
+})
+
+describe('caps (B5)', () => {
+  it('parks a capped flow through the policy even after the author moved the tree (Review Focus 4)', async () => {
+    const repo = await startedFlows(['a'])
+    for (const round of [1, 2]) {
+      appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round,
+        run_id: `ri${round}`, reviewed_sha: `s${round}`, prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
+        calibration: 'none', checks: [], outcome: 'stopped' })
+      appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'human-decision', gate: 'implement', artifact: 'a-plan-1', round, decision: 'revise' })
+    }
+    writeFileSync(join(worktreePath(repo.root, 'a-plan-1'), 'moved.txt'), 'the author kept working\n')
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    rounds: 2\n`)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo tick') }, out), {})
+    const entries = readStream(repo.root, 'a-plan-1')
+    expect(gateParked(entries, 'implement')).toBe(true)
+    expect(entries.at(-1)).toMatchObject({ t: 'human-decision', decision: 'stop', selected: 'policy', rule: 'cap-rounds' })
+    expect(out.join('\n')).toContain('drive: parked — a-plan-1 · drive cap: implement ran 2 rounds across budget resets · drive.caps.rounds 2')
+    expect(out.join('\n')).not.toContain('] tick')       // no session past the cap
+    expect(code).toBe(1)
+  }, 60000)
+
+  it('a target with no gate run to park on is set aside and named', async () => {
+    const repo = await startedFlows(['a'])
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+    const agent = script(`exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(out.join('\n')).toContain('drive: capped — a-plan-1 · drive cap: 1 session(s) this run · drive.caps.spawns 1 · no gate run to park it on')
+  }, 60000)
 })

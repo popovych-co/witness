@@ -490,6 +490,17 @@ describe('applyDecision — the one door (A4)', () => {
     expect(h.err()).toMatch(/nothing-pending|anchor-moved/)
     expect(decisions(repo)).toHaveLength(1)
   })
+  it('only a policy act may park past the anchor rule or name its own rule (B5)', async () => {
+    const { repo } = await stoppedGate()
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { err: (l) => errs.push(l) })
+    const arbiter = { reason: 'r', arbiter: { model: 'm', prompts_sha: 'p' } }
+    expect(await applyDecision(ctx, { gate: 'plan', target: 'auth-refresh', decision: 'stop', selected: 'arbiter', ...arbiter, park: true })).toBe(2)
+    expect(await applyDecision(ctx, { gate: 'plan', target: 'auth-refresh', decision: 'stop', rule: 'cap-rounds' })).toBe(2)
+    expect(errs.join('\n').match(/autonomy-cannot/g)).toHaveLength(2)
+    expect(decisions(repo)).toEqual([])
+  })
+
   it('reads a rendered command into the same act the verb parses', () => {
     expect(actOfCommand('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1 "quoted""'))
       .toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: '1 blocking finding: p1 > ## Step: s1 "quoted"' }))
