@@ -4,11 +4,11 @@ set -e
 if [ "$1" = "--version" ]; then echo "claude fake 0.0.0"; exit 0; fi
 dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
 mkdir -p "$dir/claude-calls"
-n=0
-for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
-n=$((n + 1))
+# claim the next number atomically: mkdir without -p fails when the dir exists, so
+# lenses the gate launches together can never share a number
+n=1
+while ! mkdir "$dir/claude-calls/call-$n" 2>/dev/null; do n=$((n + 1)); done
 call="$dir/claude-calls/call-$n"
-mkdir -p "$call"
 # lock probe: records whether witness held its global lock while this reviewer ran.
 # Sound because acquireLock refuses exactly when this file exists with a live pid
 # (src/lock.ts:16-37) — "absent" therefore proves another flow's acquire would succeed.
@@ -18,6 +18,29 @@ mkdir -p "$call"
 if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"
+# the lens this call reviews for — witness exports WITNESS_LENS to every reviewer
+lens="${WITNESS_LENS:-}"
+if [ -n "$lens" ]; then printf '%s\n' "$lens" > "$call/lens"; fi
+# barrier: hold until N calls exist — only a concurrent battery fills it
+if [ -f "$dir/claude-barrier" ]; then
+  want=$(cat "$dir/claude-barrier"); i=0
+  while :; do
+    have=0
+    for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && have=$((have + 1)); done
+    [ "$have" -ge "$want" ] && break
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then echo "fake claude: barrier of $want not reached ($have in flight)" >&2; exit 1; fi
+    sleep 0.1
+  done
+fi
+if [ -n "$lens" ] && [ -f "$dir/claude-delay-$lens" ]; then sleep "$(cat "$dir/claude-delay-$lens")"; fi
+if [ -n "$lens" ] && [ -f "$dir/claude-fail-$lens" ]; then
+  only=$(cat "$dir/claude-fail-$lens")
+  if [ -z "$only" ] || grep -qF -- "$only" "$call/argv"; then
+    echo "fake claude: injected failure for lens $lens" >&2
+    exit 1
+  fi
+fi
 # hang the first N calls past the caller's timeout — exercises transient-stall retry.
 # The call is already recorded above, so the retry lands in call-$((n+1)).
 if [ -f "$dir/claude-hang" ] && [ "$n" -le "$(cat "$dir/claude-hang")" ]; then
@@ -28,6 +51,7 @@ if [ -f "$dir/claude-fail" ] && [ "$n" -le "$(cat "$dir/claude-fail")" ]; then
   exit 1
 fi
 body="$dir/verdict.json"
+if [ -n "$lens" ] && [ -f "$dir/verdict-$lens.json" ]; then body="$dir/verdict-$lens.json"; fi
 [ -f "$dir/verdict-$n.json" ] && body="$dir/verdict-$n.json"
 node -e '
   const fs = require("fs")

@@ -13,9 +13,10 @@ import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv, rows } from './toon.js'
-import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
-import { docKeysFor, docsBlock, invokeReviewer, loadLensDocs, parseVerdictText, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
-import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
+import { loadMatrix, resolveModel } from './model.js'
+import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
+import { runBattery, type BatteryLens } from './battery.js'
+import { anchorMenu, type Reviewed } from './verdict.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -379,10 +380,9 @@ export async function runGate(
   // write in every other flow for its full duration, on a lock whose real job is a ~100ms
   // commit. The guarded window opens below, immediately before the journal append.
   let verdicts: ReviewerVerdict[] = []
-  const malformed: NonNullable<GateRunEntry['malformed']> = []
-  const fallback: string[] = []
-  const rerolled: string[] = []
-  let rung = 0
+  let malformed: NonNullable<GateRunEntry['malformed']> = []
+  let fallback: string[] = []
+  let rerolled: string[] = []
   let model = pin
   let cached = false
 
@@ -391,46 +391,20 @@ export async function runGate(
     model = kind.from.model
     cached = true
   } else {
-    for (const lens of lenses) {
+    // Row 169: every lens at once — a round's wall clock is its slowest lens, not their sum.
+    const composed: BatteryLens[] = lenses.map((lens) => {
       const ov = input.lensOverrides?.[lens.name]
       const reviewed = ov?.reviewed ?? input.reviewed
       const body = ov?.promptBody ?? input.promptBody
       const menu = anchorMenu(reviewed)
-      let prompt = `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
-      for (let attempt = 0; ; attempt++) {
-        let answered: string | undefined
-        for (;;) {
-          const id = chain[rung]!
-          const r = invokeReviewer(ctx, harness, { cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id, ...extras })
-          if (r.ok) { answered = r.value.text; model = id; break }
-          if (rung >= chain.length - 1) {
-            renderRefusal(r.violations).forEach((l) => ctx.err(l))
-            return EXIT.REFUSED
-          }
-          fallback.push(id)
-          rung += 1
-        }
-        const rawR = parseVerdictText(answered)
-        const parsedR = rawR.ok ? parseVerdict(rawR.value) : rawR
-        const violations = parsedR.ok ? verdictViolations(parsedR.value, reviewed) : parsedR.violations
-        if (parsedR.ok && violations.length === 0) {
-          verdicts.push({ reviewer: lens.name, coverage: parsedR.value.coverage, findings: parsedR.value.findings })
-          break
-        }
-        if (attempt === 0) {
-          // one self-repair reroll per reviewer — a single flaky verdict would
-          // otherwise poison the whole round as 'malformed'; the reroll is not
-          // part of the gate key, so cached rounds replay the settled result
-          rerolled.push(lens.name)
-          prompt += `\n## Previous attempt rejected\n\n${
-            violations.map((x) => `- ${x.field}: ${x.rule} — got ${x.got}; want ${x.want}`).join('\n')
-          }\n\nRe-emit the complete corrected verdict JSON.\n`
-          continue
-        }
-        malformed.push({ reviewer: lens.name, violations })
-        break
+      return {
+        name: lens.name, reviewed,
+        prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
       }
-    }
+    })
+    const ranR = await runBattery(ctx, harness, chain, composed, { cwd: root, ...extras })
+    if (!ranR.ok) { renderRefusal(ranR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    ;({ verdicts, malformed, fallback, rerolled, model } = ranR.value)
   }
 
   const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length

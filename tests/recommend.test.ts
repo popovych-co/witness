@@ -111,6 +111,13 @@ describe('ladderSpent', () => {
   })
 })
 
+// Row 170: a run whose deterministic check failed and whose battery blocked nothing.
+const failedRun = (extra: Record<string, unknown> = {}) => {
+  const r = run(1, 'a', 'S', { checks: [{ name: 'drift-lane', ok: false, detail: 'ac-baseline:fail' }], ...extra })
+  ;(r as unknown as { verdicts: Array<{ findings: unknown[] }> }).verdicts[0]!.findings = []
+  return r
+}
+
 const ctxFor = (entries: Entry[], over: Partial<{ upstream: string; stale: boolean }> = {}) => ({
   gate: 'plan', target: 'p1', entries, upstream: over.upstream ?? 'auth-refresh', stale: over.stale ?? false,
 })
@@ -233,6 +240,54 @@ describe('the rule table is ordered and total', () => {
     const d = recommend({ ...ctxFor([r]), gate: 'ship' })!
     expect(d.rule).toBe('reserved-stop-clean')
     expect(d.options[0]!.judgeFirst).toContain('whether this change should exist')
+  })
+
+  it('checks-failed: a failed check with no blocking finding recommends revise', () => {
+    const d = recommend(ctxFor([failedRun()]))!
+    expect(d.rule).toBe('checks-failed')
+    expect(d.options[0]!.command).toBe('witness decide plan p1 --revise --note "failed checks: drift-lane"')
+    expect(d.options[0]!.why).toContain('drift-lane')
+    expect(d.options[0]!.why).not.toContain('--manual')
+    expect(d.options[0]!.why).not.toContain(',')
+    expect(d.options.find((o) => o.command === 'witness decide plan p1 --approve')!.depth).toBe('deferral')
+  })
+
+  it('checks-failed outranks non-blocking-only', () => {
+    const r = failedRun()
+    ;(r as unknown as { verdicts: Array<{ findings: unknown[] }> }).verdicts[0]!.findings =
+      [{ blocking: false, anchor: 'S', claim: 'nit' }]
+    expect(recommend(ctxFor([r]))!.rule).toBe('checks-failed')
+  })
+
+  it('checks-failed at a ship standing stop', () => {
+    const r = failedRun({ gate: 'ship', standing: 'ship always stops' })
+    expect(recommend({ ...ctxFor([r]), gate: 'ship' })!.rule).toBe('checks-failed')
+  })
+
+  it('checks-failed: amendment-ack alone leads with approve — approving is the ack', () => {
+    const r = failedRun({ gate: 'decompose', checks: [{ name: 'amendment-ack', ok: false,
+      detail: 'amended under in-progress plans (approve = explicit ack): p9' }] })
+    const d = recommend({ ...ctxFor([r]), gate: 'decompose' })!
+    expect(d.rule).toBe('checks-failed')
+    expect(d.options[0]!.command).toBe('witness decide decompose p1 --approve')
+    expect(d.options[0]!.depth).toBe('root')
+    expect(d.options[0]!.why).toContain('amendment-ack')
+    expect(d.options[0]!.why).not.toContain(',')
+    expect(d.options.some((o) => o.command.startsWith('witness decide decompose p1 --revise --note'))).toBe(true)
+  })
+
+  it('checks-failed: amendment-ack beside another failed check still leads with revise', () => {
+    const r = failedRun({ gate: 'decompose', checks: [
+      { name: 'amendment-ack', ok: false, detail: 'amended under in-progress plans (approve = explicit ack): p9' },
+      { name: 'goal-coverage', ok: false, detail: 'g1 uncovered' }] })
+    const d = recommend({ ...ctxFor([r]), gate: 'decompose' })!
+    expect(d.options[0]!.command).toMatch(/--revise --note/)
+  })
+
+  it('the trust twin of a deferral approve is a deferral too', () => {
+    const d = recommend({ ...ctxFor([failedRun()]), untrustedCmds: ['pnpm verify:baseline'] })!
+    const twin = d.options.find((o) => o.command === 'witness decide plan p1 --approve --trust-cmds')!
+    expect(twin.depth).toBe('deferral')
   })
 
   it('manual-stop: green, no standing stop, stopped anyway', () => {
@@ -447,6 +502,7 @@ describe('block properties', () => {
     ['recurrence', [run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')], {}],
     ['bound', [run(1, 'a', 'S'), run(2, 'b', 'S2'), run(3, 'c', 'S3')], {}],
     ['stale-below-bound', [run(1, 'a', 'p1 > ## Step: s1')], { stale: true }],
+    ['checks-failed', [failedRun()], {}],
   ]
 
   it('exactly one rule matches, and every recommendation is runnable', () => {

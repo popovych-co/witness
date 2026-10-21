@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -108,15 +108,42 @@ export interface InvokeExtras {
   extensions?: readonly string[]
 }
 
-export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string }
+// `lens` reaches the reviewer as WITNESS_LENS, the way runners get WITNESS_SCREENS_DIR: the
+// battery launches its lenses at once, so call order no longer says which lens a call was.
+export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; lens?: string }
 
 const REVIEWER_TIMEOUT_MS = 600_000
 // One stalled call must not cost a whole run: a full calibration battery is ~200
 // invocations over hours, and treating a transient stall as fatal throws away every
 // sample already paid for. Retries are bounded so a genuinely wedged binary still ends.
 const TIMEOUT_RETRIES = 2
+const MAX_OUTPUT = 64 * 1024 * 1024
+const TERM_GRACE_MS = 5_000
+// setTimeout clamps a delay above 2^31-1 ms to 1 ms, which would turn a "never time out"
+// config into an instant timeout on every call. spawnSync has no such ceiling.
+const MAX_TIMER_MS = 2 ** 31 - 1
+const EXIT_GRACE_MS = 2_000
 
-export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<{ text: string }> {
+interface Prepared {
+  cmd: string
+  file: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  windowsVerbatimArguments: boolean
+  timeout: number
+}
+
+interface Attempt {
+  timedOut: boolean
+  error?: Error
+  status: number | null
+  stdout: string
+  stderr: string
+}
+
+// The two invokers share everything but the spawn itself, so they cannot drift apart:
+// the pin check, the spawn resolution, and below, the mapping from what happened to a row.
+function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<Prepared> {
   let pin: ParsedPin | undefined
   if (opts.model !== undefined) {
     const pinR = validatePin(harness, 'gates.model', opts.model)
@@ -128,37 +155,137 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
   // prompt rides stdin, so the shim's second parse of the command line never sees it. A
   // reviewer that cannot be started is an invocation failure on every platform: the
   // resolution's own got/want, under the rule a missing binary has always reported.
-  const run = resolveSpawn(cmd, args, { ...ctx.env, ...env })
+  const run = resolveSpawn(cmd, args, {
+    ...ctx.env, ...env, ...(opts.lens !== undefined ? { WITNESS_LENS: opts.lens } : {}),
+  })
   if (!run.ok) return refuse(run.violations.map((x) => ({ ...x, rule: 'reviewer-invocation' })))
-  const timeout = opts.timeoutMs ?? REVIEWER_TIMEOUT_MS
+  return ok({
+    cmd, file: run.value.file, args: run.value.args, env: run.value.env as NodeJS.ProcessEnv,
+    windowsVerbatimArguments: run.value.windowsVerbatimArguments,
+    timeout: opts.timeoutMs ?? REVIEWER_TIMEOUT_MS,
+  })
+}
+
+function classifyAttempt(harness: Harness, p: Prepared, attempt: number, r: Attempt): 'retry' | Result<{ text: string }> {
+  // A stall is NOT the missing-binary case. Reporting it as one sent the last
+  // reader hunting a PATH problem on a machine where the reviewer answered in 6s.
+  if (r.timedOut) {
+    if (attempt < TIMEOUT_RETRIES) return 'retry'
+    return refuse([v(p.cmd, 'reviewer-timeout',
+      `no response in ${p.timeout}ms after ${attempt + 1} attempts`,
+      'a reviewer that answers within the timeout — raise gates.reviewerTimeoutMs in witness.config.yaml if the model is simply slow')])
+  }
+  if (r.error) {
+    return refuse([v(p.cmd, 'reviewer-invocation', String(r.error.message),
+      `a runnable ${p.cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
+  }
+  if (r.status !== 0) {
+    return refuse([v(p.cmd, 'reviewer-invocation',
+      `exit ${String(r.status)}: ${r.stderr.slice(0, 200)}`, `${p.cmd} print mode exiting 0`)])
+  }
+  return harness.reviewer.parseEnvelope(r.stdout)
+}
+
+export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<{ text: string }> {
+  const pR = prepareInvocation(ctx, harness, opts)
+  if (!pR.ok) return pR
+  const p = pR.value
   for (let attempt = 0; ; attempt += 1) {
-    const r = spawnSync(run.value.file, run.value.args, {
+    const r = spawnSync(p.file, p.args, {
       cwd: opts.cwd,
-      env: run.value.env as NodeJS.ProcessEnv,
+      env: p.env,
       input: opts.prompt,
       encoding: 'utf8',
-      timeout,
-      maxBuffer: 64 * 1024 * 1024,
-      windowsVerbatimArguments: run.value.windowsVerbatimArguments,
+      timeout: p.timeout,
+      maxBuffer: MAX_OUTPUT,
+      windowsVerbatimArguments: p.windowsVerbatimArguments,
     })
-    if (r.error) {
-      // A stall is NOT the missing-binary case. Reporting it as one sent the last
-      // reader hunting a PATH problem on a machine where the reviewer answered in 6s.
-      if ((r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-        if (attempt < TIMEOUT_RETRIES) continue
-        return refuse([v(cmd, 'reviewer-timeout',
-          `no response in ${timeout}ms after ${attempt + 1} attempts`,
-          'a reviewer that answers within the timeout — raise gates.reviewerTimeoutMs in witness.config.yaml if the model is simply slow')])
-      }
-      return refuse([v(cmd, 'reviewer-invocation', String((r.error as Error).message),
-        `a runnable ${cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
-    }
-    if (r.status !== 0) {
-      return refuse([v(cmd, 'reviewer-invocation',
-        `exit ${String(r.status)}: ${(r.stderr ?? '').slice(0, 200)}`, `${cmd} print mode exiting 0`)])
-    }
-    return harness.reviewer.parseEnvelope(r.stdout)
+    const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+    const c = classifyAttempt(harness, p, attempt, {
+      timedOut, error: timedOut ? undefined : r.error, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
+    })
+    if (c !== 'retry') return c
   }
+}
+
+// The battery's invoker: lenses run at once, so a reviewer call cannot block the process.
+// Settles on `close`, bounded by `exit` plus a grace, for D145's reason: a reviewer CLI
+// spawns its own children, they inherit stdout, and a killed parent whose grandchild
+// survives would otherwise hold the pipe — and this call — open with no timeout above it.
+export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: InvokeOpts): Promise<Result<{ text: string }>> {
+  const pR = prepareInvocation(ctx, harness, opts)
+  if (!pR.ok) return pR
+  const p = pR.value
+  for (let attempt = 0; ; attempt += 1) {
+    const r = await spawnAttempt(p, opts)
+    const c = classifyAttempt(harness, p, attempt, r)
+    if (c !== 'retry') return c
+  }
+}
+
+function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
+  return new Promise<Attempt>((resolve) => {
+    const child = spawn(p.file, p.args, {
+      cwd: opts.cwd, env: p.env, stdio: ['pipe', 'pipe', 'pipe'],
+      windowsVerbatimArguments: p.windowsVerbatimArguments,
+    })
+    const out: string[] = []
+    const err: string[] = []
+    let outBytes = 0
+    let epipe = false
+    let timedOut = false
+    let error: Error | undefined
+    let status: number | null = null
+    let settled = false
+    let killTimer: NodeJS.Timeout | undefined
+    let grace: NodeJS.Timeout | undefined
+    const settle = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(killTimer)
+      clearTimeout(grace)
+      child.stdout.destroy()
+      child.stderr.destroy()
+      // Exit 0 after closing its stdin early means the reviewer answered without reading the
+      // whole prompt — a verdict on content it never saw, so it fails closed, as sync does.
+      if (epipe && status === 0 && !timedOut && error === undefined) {
+        error = new Error('exited 0 before reading the whole prompt (EPIPE)')
+      }
+      resolve({ timedOut, error, status, stdout: out.join(''), stderr: err.join('') })
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
+    }, Math.min(p.timeout, MAX_TIMER_MS))
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (c: string) => {
+      outBytes += Buffer.byteLength(c)
+      if (outBytes > MAX_OUTPUT) {
+        if (error === undefined) error = new Error('output exceeded 64 MiB')
+        child.kill('SIGKILL')
+        return
+      }
+      out.push(c)
+    })
+    child.stderr.on('data', (c: string) => { err.push(c) })
+    // A reviewer that exits before reading its whole prompt closes the pipe under us: a
+    // nonzero exit is the answer, and exit 0 is refused at settle.
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code === 'EPIPE') epipe = true
+      else if (error === undefined) error = e
+    })
+    child.stdin.end(opts.prompt)
+    child.on('error', (e) => { error = e; settle() })
+    child.on('exit', (code) => {
+      status = code
+      clearTimeout(killTimer)
+      grace = setTimeout(settle, EXIT_GRACE_MS)
+    })
+    child.on('close', (code) => { status = code; settle() })
+  })
 }
 
 export function parseVerdictText(text: string): Result<unknown> {

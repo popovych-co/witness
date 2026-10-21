@@ -1,6 +1,6 @@
 import { expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
@@ -282,9 +282,29 @@ export function gateEnv(scenario: string, extra: Record<string, string> = {}): R
   return { ...base, PATH: `${fakeBinDir()}${delimiter}${base.PATH}`, WITNESS_FAKE_DIR: scenario }
 }
 
-export function putVerdict(scenario: string, verdict: unknown, call?: number): void {
+// A number answers that call; a lens name answers every call that lens makes — the
+// battery runs its lenses at once, so call order no longer names a lens.
+export function putVerdict(scenario: string, verdict: unknown, call?: number | string): void {
   const name = call === undefined ? 'verdict.json' : `verdict-${call}.json`
   writeFileSync(join(scenario, name), JSON.stringify(verdict, null, 2))
+}
+
+function callDirs(scenario: string, bin: 'claude' | 'pi'): Array<{ n: number; dir: string }> {
+  const calls = join(scenario, `${bin}-calls`)
+  if (!existsSync(calls)) return []
+  return readdirSync(calls).filter((d) => /^call-\d+$/.test(d))
+    .map((d) => ({ n: Number(d.slice('call-'.length)), dir: join(calls, d) }))
+}
+
+// The latest call a lens made — a rerolled or fallen-back lens makes several.
+export function callFor(scenario: string, lens: string, bin: 'claude' | 'pi' = 'claude'): string | undefined {
+  return callDirs(scenario, bin)
+    .filter((c) => existsSync(join(c.dir, 'lens')) && readFileSync(join(c.dir, 'lens'), 'utf8').trim() === lens)
+    .sort((a, b) => b.n - a.n)[0]?.dir
+}
+
+export function callCount(scenario: string, bin: 'claude' | 'pi' = 'claude'): number {
+  return callDirs(scenario, bin).length
 }
 
 export function ghState(scenario: string, pr: number, state: string): void {

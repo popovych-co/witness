@@ -5,14 +5,37 @@ set -e
 if [ "$1" = "--version" ]; then echo "pi fake 0.0.0"; exit 0; fi
 dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
 mkdir -p "$dir/pi-calls"
-n=0
-for d in "$dir"/pi-calls/call-*; do [ -e "$d" ] && n=$((n + 1)); done
-n=$((n + 1))
+# claim the next number atomically: mkdir without -p fails when the dir exists, so
+# lenses the gate launches together can never share a number
+n=1
+while ! mkdir "$dir/pi-calls/call-$n" 2>/dev/null; do n=$((n + 1)); done
 call="$dir/pi-calls/call-$n"
-mkdir -p "$call"
 if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"
+# the lens this call reviews for — witness exports WITNESS_LENS to every reviewer
+lens="${WITNESS_LENS:-}"
+if [ -n "$lens" ]; then printf '%s\n' "$lens" > "$call/lens"; fi
+# barrier: hold until N calls exist — only a concurrent battery fills it
+if [ -f "$dir/pi-barrier" ]; then
+  want=$(cat "$dir/pi-barrier"); i=0
+  while :; do
+    have=0
+    for d in "$dir"/pi-calls/call-*; do [ -e "$d" ] && have=$((have + 1)); done
+    [ "$have" -ge "$want" ] && break
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then echo "fake pi: barrier of $want not reached ($have in flight)" >&2; exit 1; fi
+    sleep 0.1
+  done
+fi
+if [ -n "$lens" ] && [ -f "$dir/pi-delay-$lens" ]; then sleep "$(cat "$dir/pi-delay-$lens")"; fi
+if [ -n "$lens" ] && [ -f "$dir/pi-fail-$lens" ]; then
+  only=$(cat "$dir/pi-fail-$lens")
+  if [ -z "$only" ] || grep -qF -- "$only" "$call/argv"; then
+    echo "fake pi: injected failure for lens $lens" >&2
+    exit 1
+  fi
+fi
 if [ -f "$dir/pi-hang" ] && [ "$n" -le "$(cat "$dir/pi-hang")" ]; then
   sleep 30
 fi
@@ -32,6 +55,7 @@ if [ -f "$dir/pi-error" ]; then
   exit 0
 fi
 body="$dir/verdict.json"
+if [ -n "$lens" ] && [ -f "$dir/verdict-$lens.json" ]; then body="$dir/verdict-$lens.json"; fi
 [ -f "$dir/verdict-$n.json" ] && body="$dir/verdict-$n.json"
 node -e '
   const fs = require("fs")

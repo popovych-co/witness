@@ -47,14 +47,26 @@ export function openDeferrals(entries: Entry[]): DeferralEntry[] {
 // Deliberately the INVERSE of a pin: a pin tells reviewers not to re-litigate, this tells
 // them to report the thing if it is still there. Pins suppress findings; obligations
 // solicit them — which is what makes the discharge automatic and evidence-shaped.
+//
+// The block states the rule the gate applies, word for word: discharge (gate.ts) reads an
+// obligation the round does not report as fixed. It once said the opposite — "silence is read
+// as still present" — which let a reviewer who still saw a deferred defect stay quiet and
+// close it (row 122, amended 0.15.0). An omission is stored as `omission:<scope>`, which is no
+// anchor a verdict can carry, so it is listed with the anchor object a finding must emit.
 export function deferralsBlock(open: DeferralEntry[]): string {
   if (open.length === 0) return ''
-  return '## Open deferrals (human overrides — report these if they still hold)\n\n' +
-    'A human approved this artifact over the findings below rather than fixing them. They are ' +
-    'NOT settled policy and they are NOT pins. If the defect is still present, report it as a ' +
-    'finding and anchor it exactly as listed. If it is gone, say so in your coverage. Silence ' +
-    'is read as "still present".\n\n' +
-    open.map((d, i) => `${i + 1}. ${d.anchor} — ${d.gate} round ${d.round} (${d.id})`).join('\n') + '\n\n'
+  const line = (d: DeferralEntry, i: number): string => {
+    const where = `${d.gate} round ${d.round} (${d.id})`
+    if (!d.anchor.startsWith('omission:')) return `${i + 1}. ${d.anchor} — ${where}`
+    const scope = d.anchor.slice('omission:'.length)
+    return `${i + 1}. omission · scope ${scope} — ${where} — report it with "anchor": { "kind": "omission", "scope": ${JSON.stringify(scope)} }`
+  }
+  return '## Open deferrals (approved over findings — report these if they still hold)\n\n' +
+    'This artifact was approved over the findings below rather than fixed. They are NOT settled ' +
+    'policy and they are NOT pins. If a defect is still present, report it as a finding anchored ' +
+    'exactly as listed: that keeps its obligation open. Silence is read as fixed: an obligation ' +
+    'this round does not report is discharged.\n\n' +
+    open.map(line).join('\n') + '\n\n'
 }
 
 // D122 + D166. A debt changes homes when the artifact holding it stops being the one the next

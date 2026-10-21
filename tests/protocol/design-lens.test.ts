@@ -111,7 +111,7 @@ describe('the design lens, end to end', () => {
     // implement gate: 4 tree lenses clean, design-reviewer blocks a planted violation
     const blockScenario = fakeScenario()
     putVerdict(blockScenario, treeClean(wt))
-    putVerdict(blockScenario, DESIGN_BLOCK, 5)
+    putVerdict(blockScenario, DESIGN_BLOCK, 'design-reviewer')
     const blocked = await repo.cli(['gate', 'implement', 'auth-refresh-plan-1'], { env: gateEnv(blockScenario) })
     expect(blocked.code).toBe(1)
     const blockedRuns = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'gate-run')
@@ -134,7 +134,7 @@ describe('the design lens, end to end', () => {
     // recover, and confirm the re-run converges to the same green outcome (north star 6)
     const greenScenario = fakeScenario()
     putVerdict(greenScenario, treeClean(wt))
-    putVerdict(greenScenario, DESIGN_SCREEN_CLEAN, 5)
+    putVerdict(greenScenario, DESIGN_SCREEN_CLEAN, 'design-reviewer')
     const greenEnv = gateEnv(greenScenario)
     const crashed = spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], { ...greenEnv, WITNESS_CRASH_AFTER: 'gate-journal' })
     expect(crashed.code).toBe(9)
