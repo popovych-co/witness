@@ -33,7 +33,7 @@ describe('design under autonomy (A6)', () => {
   it('the human opens the look before approving it', async () => {
     const { repo, env } = await registered()
     await repo.cli(['gate', 'design', 'auth-refresh'], { env })  // clean → the kept stop
-    const out = await nextLine(repo)
+    const out = await nextLine(repo, { env })                     // gateEnv clears CI: settling never runs under CI (A1)
     expect(out).toContain('witness decide design auth-refresh --show')
     expect(out).toContain('kept-stop: design look — the human opens the look with witness design auth-refresh --open · then approves it or sends a note — witness decide design auth-refresh --show')
     const blind = await repo.cli(['decide', 'design', 'auth-refresh', '--approve'])
