@@ -1,3 +1,4 @@
+import { askOf, askText } from './ask.js'
 import type { Ctx } from './cli.js'
 import { decidedBy } from './autonomy.js'
 import { loadLocalConfig, type Config } from './config.js'
@@ -202,6 +203,10 @@ export function decisionEvidence(
       }
     }
     sections.push({ title: 'Scope', body: scope.join('\n\n') })
+    // Row 177. A decompose stop is judged against the ask as well as the recap: both of its
+    // arbiter routes (the feature-scope stop and amendment-ack) re-scope what the human asked.
+    const ask = gate === 'decompose' ? askOf(root, target) : undefined
+    if (ask !== undefined) sections.push({ title: 'The ask', body: `${ask.id} — ${askText(ask.text)}` })
   }
   return sections
 }

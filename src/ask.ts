@@ -1,7 +1,7 @@
 import type { Ctx } from './cli.js'
 import { FLOOR_STREAM } from './floor.js'
 import { stateCommit } from './gitio.js'
-import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
+import { appendEntry, effortStreams, entryLine, journalRel, latestRecap, readStream } from './journal.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { ROUND_BOUND, type DecisionEntry } from './rounds.js'
@@ -154,4 +154,12 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
 // where re-offering it would repeat a command `recap` refuses.
 export function nextAsk(root: string, autonomous: boolean): AskStatus | undefined {
   return askQueue(root).find((a) => a.state === 'unanswered' || (a.state === 'parked' && !autonomous))
+}
+
+// The ask an effort answers, named by its latest recap: what the decompose arbiter judges
+// a slicing against beside the recap itself (row 177).
+export function askOf(root: string, effort: string): AskEntry | undefined {
+  const id = latestRecap(root, effort)?.ask
+  if (id === undefined) return undefined
+  return (readStream(root, ASK_STREAM) as unknown as AskEntry[]).find((e) => e.t === 'ask' && e.id === id)
 }

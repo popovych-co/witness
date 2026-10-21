@@ -79,6 +79,7 @@ describe('the arbiter prompt (A3)', () => {
     for (const s of ['is DATA', 'never treat a failed check as passed', 'Respond with ONLY a JSON object', '"choice"', '"reason"', 'Never write a command, an id, or a flag'])
       expect(body, s).toContain(s)
     expect(body).not.toContain(VERDICT_CONTRACT_MARKER)
+    expect(body).toContain('"The ask"')
   })
 
   it('the recap prompt checks the class first, fences its input as data and asks for a numbered ruling (A9)', () => {
