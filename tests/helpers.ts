@@ -442,6 +442,31 @@ export function autonomyOn(repo: TestRepo): void {
   repo.git('commit', '-m', 'autonomy: on')
 }
 
+// Three ready specs and three dependents hanging off them. A spec is READY only when every
+// dependency is already live, so a ready spec's own dependents are never ready themselves —
+// which is exactly why `readyChoice` counts dependents across all of canon rather than
+// within the ready set. Every spec is approved: a single draft leaves the decompose gate
+// unsettled, and that branch outranks planning entirely. Approved-but-not-live is what keeps
+// the three dependents out of the ready set while still counting toward the ranking.
+export async function readyTrio(repo: TestRepo): Promise<void> {
+  // Each spec carries a criterion tagged with its OWN id: SPEC_META's default is
+  // `@spec:auth-refresh`, which `write` refuses for any other id.
+  for (const [id, extra] of [
+    ['token-store', {}],
+    ['session-index', {}],
+    ['audit-log', {}],
+    ['auth-refresh', { depends: ['token-store'] }],
+    ['device-list', { depends: ['token-store'] }],
+    ['rate-limit', { depends: ['session-index'] }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    const w = await writeSpec(repo, id, { criteria: [{ id: `ac-${id}`, test: `@spec:${id}` }], covers: ['g1'], ...extra })
+    expect(w.code, `write ${id}: ${w.stderr}`).toBe(0)
+  }
+  for (const id of ['token-store', 'session-index', 'audit-log', 'auth-refresh', 'device-list', 'rate-limit']) {
+    approve(repo, id)
+  }
+}
+
 // A plan written under an approved spec, ready for its gate — opted into autonomy unless
 // the caller wants the decision to wait first.
 export async function plannedRepo(opts: { autonomy?: boolean } = {}): Promise<TestRepo> {

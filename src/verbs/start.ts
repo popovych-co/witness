@@ -10,7 +10,7 @@ import { findById, loadCanon } from '../scan.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
-import { autonomyLines } from '../autonomy.js'
+import { autonomyLines, keptStopLine, policyFor } from '../autonomy.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { branchName, createWorktree, worktreePath } from '../worktree.js'
@@ -101,6 +101,17 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (unmet.length) {
     renderRefusal([v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '),
       'all needs ok (witness check shows details; witness satisfy flips manual ones)')]).forEach((l) => ctx.err(l))
+    // Row 171. Under autonomy an unmet plan need is a kept stop: only this plan waits, and
+    // the line names the act that unblocks it — satisfy indexes a plan's manual needs from 1.
+    if (cfgR.value.autonomy) {
+      const p = policyFor({ at: 'start', target: planId, unmet: unmet.map((n) => n.label) })
+      if (p.kind === 'human') {
+        const manuals = ((plan.meta.needs ?? []) as Need[]).flatMap((n) => ('manual' in n ? [n.manual] : []))
+        const satisfy = unmet.filter((n) => n.kind === 'manual')
+          .map((n) => ` · witness satisfy ${planId} --need ${manuals.indexOf(n.label) + 1}`).join('')
+        ctx.out(keptStopLine(p.stop, `${unmet.map((n) => n.label).join(' · ')}${satisfy}`))
+      }
+    }
     return EXIT.REFUSED
   }
 

@@ -8,7 +8,7 @@ import { anchorRecurrence, ladderSpent, liveExits } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
-import { PLAN_BLOCKING, approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { PLAN_BLOCKING, approve, fakeScenario, readyTrio, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const D: Decision = {
   key: 'decide',
@@ -348,27 +348,7 @@ describe('next and recover rank their own choices', () => {
 
   it('multiple ready ranks by direct dependents and says what it cannot see', async () => {
     const repo = await seededRepo()
-    // A spec is READY only when every dependency is already live, so a ready spec's own
-    // dependents are never ready themselves — which is exactly why the ranking counts
-    // dependents across all of canon rather than within the ready set. Three ready specs
-    // (no deps), and three more hanging off them to give the count something to rank.
-    for (const [id, extra] of [
-      ['token-store', {}],
-      ['session-index', {}],
-      ['audit-log', {}],
-      ['auth-refresh', { depends: ['token-store'] }],
-      ['device-list', { depends: ['token-store'] }],
-      ['rate-limit', { depends: ['session-index'] }],
-    ] as Array<[string, Record<string, unknown>]>) {
-      const w = await spec(repo, id, extra)
-      expect(w.code, `write ${id}: ${w.stderr}`).toBe(0)
-    }
-    // Every spec is approved: a single draft leaves the decompose gate unsettled, and that
-    // branch outranks planning entirely. Approved-but-not-live is what keeps the three
-    // dependents out of the ready set while still counting toward the ranking.
-    for (const id of ['token-store', 'session-index', 'audit-log', 'auth-refresh', 'device-list', 'rate-limit']) {
-      approve(repo, id)
-    }
+    await readyTrio(repo)
 
     const n = await repo.cli(['next'])
     expect(n.stdout).toContain('choose: 3 options · 1 is recommended')

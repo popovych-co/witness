@@ -9,9 +9,10 @@ import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal } from './refusal.js'
 import type { DecisionEntry, GateRunEntry } from './rounds.js'
 import { criteriaOwner, loadCanon } from './scan.js'
-import { cmd } from './toon.js'
+import { cmd, kv } from './toon.js'
 import { actOfCommand, applyDecision, type DecisionAct } from './verbs/decide.js'
-import { owedRun } from './verbs/next.js'
+import { owedDecisions, owedRun } from './verbs/next.js'
+import { pendingTxn } from './txn.js'
 
 // Row 173. Under `autonomy: on` a stop is settled where it is produced — the end of
 // `witness gate`, and `next` for anything still owed — through the one door every human
@@ -139,4 +140,34 @@ export function settledCode(code: number, s: Settled): number {
   if (s.kind === 'decided') return s.decision === 'approve' ? EXIT.OK : EXIT.FINDINGS
   if (s.kind === 'left') return s.code
   return code
+}
+
+export interface SettleReport { gate: string; target: string; settled: Settled }
+
+// Row 173. `next` settles every decision the repo owes, in tier-2 order, before it routes —
+// a decision left pending by a crash, or one that was waiting when autonomy was turned on,
+// is resolved by the same policy the gate's tail applies. Read-only under CI (a runner
+// must never spend a model call or journal a decision) and while a transaction is pending
+// (recovery outranks everything). Each stop's own output is silenced: `next` prints one
+// line per report, above its routing block.
+export async function settleOwed(ctx: Ctx, root: string, cfg: Config): Promise<SettleReport[]> {
+  if (ctx.env.CI) return []
+  if (pendingTxn(root) !== undefined) return []
+  const quiet: Ctx = { ...ctx, out: () => {}, err: () => {} }
+  const out: SettleReport[] = []
+  for (const o of owedDecisions(root, loadCanon(root))) {
+    out.push({ gate: o.gate, target: o.target, settled: await settleStop(quiet, root, cfg, o.gate, o.target) })
+  }
+  return out
+}
+
+export function settledLine(r: SettleReport): string | undefined {
+  const s = r.settled
+  switch (s.kind) {
+    case 'decided': return kv('decided', `${r.gate} ${r.target} → ${s.decision} · ${s.by} · ${s.rule}`)
+    case 'routed': return s.line
+    case 'kept': return s.line
+    case 'left': return leftLine(r.gate, r.target, s.why)
+    case 'none': return undefined
+  }
 }
