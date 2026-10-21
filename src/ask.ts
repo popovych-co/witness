@@ -1,7 +1,7 @@
 import type { Ctx } from './cli.js'
 import { FLOOR_STREAM } from './floor.js'
 import { stateCommit } from './gitio.js'
-import { appendEntry, entryLine, journalRel, readStream } from './journal.js'
+import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { crashPoint, pendingTxn, withTxn } from './txn.js'
@@ -38,6 +38,18 @@ export function askQueue(root: string): AskStatus[] {
       const a = out.find((x) => x.id === e.ask)
       if (a) a.state = 'withdrawn'
     }
+  }
+  // An ask is answered once any recap names it, even one an abandon later ended: re-asking is
+  // the human's act, so an abandoned effort never puts its ask back in the queue.
+  const answeredBy = new Map<string, string>()
+  for (const effort of effortStreams(root)) {
+    for (const e of readStream(root, effort)) {
+      if (e.t === 'recap' && typeof e.ask === 'string' && !answeredBy.has(e.ask)) answeredBy.set(e.ask, effort)
+    }
+  }
+  for (const a of out) {
+    const effort = answeredBy.get(a.id)
+    if (effort !== undefined) { a.state = 'answered'; a.effort = effort }
   }
   return out
 }
@@ -82,6 +94,10 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
     const ask = askQueue(root).find((a) => a.id === id)
     if (!ask) return refuse([v('--withdraw', 'unknown-ask', id, 'an ask id — witness status lists the queue')])
     if (ask.state === 'withdrawn') return ok({ already: true })
+    if (ask.state === 'answered') {
+      return refuse([v('--withdraw', 'ask-answered', `${id} is answered by ${ask.effort}`,
+        `an unanswered ask — ${ask.effort} answers it now · witness abandon ${ask.effort} ends that effort`)])
+    }
     const entry = { t: 'ask-withdrawn' as const, ask: id, ...(note !== undefined ? { note } : {}) }
     const stream = journalRel(ASK_STREAM)
     const res = withTxn(root, { op: `ask(${id})`, files: [stream], journal: { stream: ASK_STREAM, line: entryLine(entry) } }, () => {

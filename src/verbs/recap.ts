@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { reservedId } from '../ask.js'
+import { askQueue, reservedId } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -12,13 +12,16 @@ import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
-interface RecapInput {
+export interface RecapInput {
   effort: string
   class: 'feature' | 'fix' | 'chore'
   goals: Array<{ id: string; text: string }>
   non_goals: Array<{ id: string; text: string }>
   constraints: Array<{ id: string; text: string }>
   slices: string[]
+  // Row 176. Set from --ask only, never from the file: the ask a recap answers is the CLI's
+  // record of what the human asked, so a recap cannot name its own.
+  ask?: string
 }
 
 function idTextList(raw: unknown, field: string, prefix: string, required: boolean): Violation[] {
@@ -63,8 +66,17 @@ export function validateRecap(raw: unknown): Violation[] {
   return out
 }
 
+// Whether this ask may be answered by a new effort, read from one queue derivation.
+function askRefusal(root: string, id: string): Violation | undefined {
+  const ask = askQueue(root).find((a) => a.id === id)
+  if (!ask) return v('--ask', 'unknown-ask', id, 'an ask id — witness status lists the queue')
+  if (ask.state === 'answered') return v('--ask', 'ask-answered', `${id} is answered by ${ask.effort}`, 'an unanswered ask — one ask births one effort')
+  if (ask.state === 'withdrawn') return v('--ask', 'ask-withdrawn', id, 'an unanswered ask — this one was withdrawn')
+  return undefined
+}
+
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { file: { type: 'string' }, amend: { type: 'boolean' } } })
+  const { values } = parseArgs({ args: argv, options: { file: { type: 'string' }, amend: { type: 'boolean' }, ask: { type: 'string' } } })
   if (!values.file) {
     renderRefusal([v('--file', 'required', 'absent', 'path to a recap JSON file')]).forEach(ctx.err)
     return EXIT.REFUSED
@@ -93,6 +105,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   recap.non_goals ??= []
   recap.constraints ??= []
   recap.slices ??= []
+  delete recap.ask
+  if (values.ask !== undefined) recap.ask = values.ask
 
   // Row 176. Before slug-reuse and for --amend too: a reserved stream is refused whether or not
   // it exists yet, and an amend would append a recap to witness's own history.
@@ -114,6 +128,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('effort', 'terminal', 'effort was abandoned', 'amend only live efforts')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
+  // Row 176. One ask births one effort: an amend re-scopes an effort an ask already birthed.
+  if (recap.ask !== undefined) {
+    if (values.amend) {
+      renderRefusal([v('--ask', 'ask-amend', 'with --amend', 'an ask births its own effort — drop --amend')]).forEach(ctx.err)
+      return EXIT.REFUSED
+    }
+    const refusal = askRefusal(root, recap.ask)
+    if (refusal) { renderRefusal([refusal]).forEach(ctx.err); return EXIT.REFUSED }
+  }
 
   const lock = acquireLock(root)
   if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
@@ -121,6 +144,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const entry = {
       t: 'recap' as const, effort: recap.effort, class: recap.class,
       goals: recap.goals, non_goals: recap.non_goals, constraints: recap.constraints, slices: recap.slices,
+      ...(recap.ask !== undefined ? { ask: recap.ask } : {}),
     }
     // entryLine, never a second inline JSON.stringify — completeTxn re-appends when this
     // marker line differs from what appendEntry wrote, so the two must be one derivation.
@@ -129,12 +153,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const res = withTxn(root, { op: `recap(${recap.effort})`, files: [stream], journal: { stream: recap.effort, line } }, () => {
       appendEntry(root, recap.effort, entry)
       crashPoint(ctx.env, 'journal-append')
-      return stateCommit(root, [stream], `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}`)
+      return stateCommit(root, [stream], `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}${recap.ask !== undefined ? ` · ask ${recap.ask}` : ''}`)
     })
     if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
     ctx.out(kv('effort', recap.effort))
     ctx.out(kv('class', recap.class))
     ctx.out(kv('goals', recap.goals.length))
+    if (recap.ask !== undefined) ctx.out(kv('ask', `${recap.ask} — answered`))
     if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage re-validates against it'))
     ctx.out(`next: witness write --effort ${recap.effort} --meta <m.json> --body <b.md> <spec-id>`)
     return EXIT.OK

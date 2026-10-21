@@ -83,7 +83,7 @@ const VERB_USAGE: Record<string, string> = {
   log: 'witness log <stream> [--all] [--lineage]',
   next: 'witness next',
   read: 'witness read <id> [--design] [--outline] [--lines <a>-<b>]',
-  recap: 'witness recap --file <recap.json> [--amend]',
+  recap: 'witness recap --file <recap.json> [--ask <id>] [--amend] [--manual]',
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
   satisfy: 'witness satisfy <doc-id> --need <text | index>',
