@@ -405,6 +405,16 @@ describe('sessions carry their target (B1 · B3)', () => {
     expect(end.ms).toBeGreaterThan(0)
   }, 20000)
 
+  it('a stopped session takes its whole process tree with it (F11)', async () => {
+    const repo = await seededRepo()
+    const dir = fakeScenario()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(`(sleep 2; echo acted > "${dir}/late") &\nexec sleep 30`) } })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 300 } }
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 1)).outcome).toBe('timeout')
+    await new Promise((r) => setTimeout(r, 3_000))
+    expect(existsSync(join(dir, 'late'))).toBe(false)
+  }, 20000)
+
   it('hands the child its deadline (F14)', async () => {
     const repo = await seededRepo()
     const lines: string[] = []

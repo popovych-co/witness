@@ -107,6 +107,9 @@ const MANUAL_PROMPT = '/witness --manual'
 // How long a SIGTERMed session gets before SIGKILL, and how long a dead session's pipes
 // get to drain before drive stops waiting on the grandchildren that inherited them.
 const TERM_GRACE_MS = 5_000
+// The process groups of the sessions now running (F11): a second signal to drive kills them
+// before drive itself goes, so nothing a session started outlives the run.
+const LIVE_GROUPS = new Set<number>()
 const EXIT_GRACE_MS = 2_000
 
 // This CLI, for the child. A spawned session shells out to `witness` through
@@ -175,12 +178,24 @@ export async function spawnSession(
   const out = lineSink('', emit)
   const err = lineSink('', emit)
   return await new Promise<SessionEnd>((resolve) => {
+    // Final review F11: its own process group, so a stop reaches the tools, shells and gates
+    // the session started, not just the agent — an orphan would keep writing state after
+    // drive moved on. Windows has no groups to signal; the agent alone is stopped there.
+    const grouped = process.platform !== 'win32'
     const child = spawn(run.value.file, run.value.args, {
       cwd: step.home,
       env: run.value.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsVerbatimArguments: run.value.windowsVerbatimArguments,
+      detached: grouped,
     })
+    const signal = (sig: NodeJS.Signals) => {
+      try {
+        if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
+        else child.kill(sig)
+      } catch { /* already gone */ }
+    }
+    if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)
     let outcome: SpawnOutcome = 'exited'
     let code: number | null = null
     let settled = false
@@ -188,14 +203,15 @@ export async function spawnSession(
     let grace: NodeJS.Timeout | undefined
     const stop = (o: SpawnOutcome) => {
       outcome = o
-      child.kill('SIGTERM')
+      signal('SIGTERM')
       // A session that ignores SIGTERM is exactly the session the ceiling exists for.
-      killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
+      killTimer = setTimeout(() => signal('SIGKILL'), TERM_GRACE_MS)
     }
     const onAbort = () => stop('stopped')
     const settle = (o: SpawnOutcome) => {
       if (settled) return
       settled = true
+      if (child.pid !== undefined) LIVE_GROUPS.delete(child.pid)
       clearTimeout(timer)
       clearTimeout(killTimer)
       clearTimeout(grace)
@@ -224,6 +240,9 @@ export async function spawnSession(
     // not have. Measured here: SIGTERM to a shell whose `sleep` survived it.
     child.on('exit', (c) => {
       code = c
+      // A stopped session's group goes with it: what it started dies even if the agent
+      // exited on SIGTERM before its children did.
+      if (outcome === 'timeout' || outcome === 'stopped') signal('SIGKILL')
       clearTimeout(killTimer)
       grace = setTimeout(() => settle(outcome), EXIT_GRACE_MS)
     })
@@ -324,7 +343,12 @@ export async function driveLoop(
   const abort = new AbortController()
   let signalled: NodeJS.Signals | undefined
   const onSignal = (sig: NodeJS.Signals) => {
-    if (signalled !== undefined) { process.removeListener(sig, onSignal); process.kill(process.pid, sig); return }
+    if (signalled !== undefined) {
+      for (const pid of LIVE_GROUPS) { try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ } }
+      process.removeListener(sig, onSignal)
+      process.kill(process.pid, sig)
+      return
+    }
     signalled = sig
     abort.abort()
   }
