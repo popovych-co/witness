@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
 import { posix } from 'node:path'
 import { splitDoc } from './fm.js'
 import type { Entry } from './journal.js'
+import { promptsSha, type Lens } from './reviewer.js'
 import { deltaBase, type GateRunEntry } from './rounds.js'
 import { canonicalSha } from './sha.js'
 import { blobText, changedPaths, treeDiff, treeReadable } from './snapshot.js'
@@ -137,4 +139,16 @@ export function deltaBlock(d: { baseRound: number; prior: readonly PriorFinding[
     sections +
     `### Change since round ${n}\n\n${d.diff}\n\n` +
     'Judge whether the changed parts are sound. Report every defect the change introduced or exposed. When the change caused a defect, anchor it at the changed code or section that caused it, even when its symptom shows elsewhere.\n\n'
+}
+
+// A digest of everything a gate's prompt carries besides the artifact under review.
+export function contextDigest(...parts: string[]): string {
+  return createHash('sha256').update(parts.join('\0')).digest('hex')
+}
+
+// Row 185. What a delta may not span: the lens prompts and their injected docs, the gate's
+// context, the pin and the harness. A round under another basis read with other eyes or
+// against another frame, so its findings are no base for this one.
+export function basisSha(lenses: readonly Lens[], context: string, pin: string, harness: string): string {
+  return contextDigest(promptsSha([...lenses]), context, pin, harness)
 }

@@ -1,6 +1,8 @@
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { serializeDoc } from '../fm.js'
-import { canonicalSha, short } from '../sha.js'
+import { canonicalJson, canonicalSha, short } from '../sha.js'
+import { contextDigest } from '../delta.js'
+import { snapshotFiles } from '../snapshot.js'
 import { latestRecap } from '../journal.js'
 import { baseForSpec } from '../history.js'
 import { findById, plannableParent, type CanonDoc } from '../scan.js'
@@ -72,9 +74,12 @@ registerGate({
       `### Plan: ${planId}`, serializeDoc({ meta: plan.meta, body: plan.body }),
     ].join('\n\n')
 
+    const tree = snapshotFiles(root, [{ name: `${planId}.md`, content: serializeDoc({ meta: plan.meta, body: plan.body }) }])
+
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: planPairSha(plan, parent),
+      ...(tree ? { snapshot: { tree, context: contextDigest(parentSha, canonicalJson(base)) } } : {}),
       artifactSha: canonicalSha(plan.meta, plan.body),
       reviewed: {
         kind: 'docs',

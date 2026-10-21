@@ -17,6 +17,7 @@ import { loadMatrix, resolveModel } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { anchorMenu, type Reviewed } from './verdict.js'
+import { basisSha } from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -59,6 +60,9 @@ export interface GateInput {
   // name cannot be read — "not applicable" and "could not run" look identical, and only one
   // of them is benign.
   skipLenses?: Array<{ lens: string; why: string }>
+  // Row 186. The artifact as a git tree, and a digest of everything else the prompt carries.
+  // Undefined when the tree could not be written; that run is then never a delta base.
+  snapshot?: { tree: string; context: string }
 }
 
 // Row 178. What `resolve` may need to know about the run itself, not the target: whether the
@@ -311,6 +315,7 @@ async function judge(
   // answered — from being compared against it by accident, which is how the streak brake
   // below spent three releases never firing.
   const pin = chain[0]!
+  const basis = basisSha(lenses, input.snapshot?.context ?? '', pin, harness.name)
   const key: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate,
     prompts_sha: promptsSha(lenses, [pinsText, deferralsText].filter((t) => t !== '').join('') || undefined),
@@ -512,6 +517,7 @@ async function judge(
       ...(outcome === 'stopped' && standing ? { standing } : {}),
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
+      ...(input.snapshot ? { reviewed_tree: input.snapshot.tree, basis_sha: basis } : {}),
       checks: input.checks,
       ...(verdicts.length ? { verdicts } : {}),
       ...(malformed.length ? { malformed } : {}),
