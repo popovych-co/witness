@@ -8,7 +8,7 @@ import { anchorRecurrence, ladderSpent, liveExits } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { PLAN_BLOCKING, approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const D: Decision = {
   key: 'decide',
@@ -311,13 +311,7 @@ describe('the rule table is ordered and total', () => {
   })
 })
 
-const BLOCKING_VERDICT = {
-  coverage: [
-    { anchor: 'auth-refresh-plan-1 > ## Step: s1', note: 'read' },
-    { anchor: 'auth-refresh > ## Behavior', note: 'read' },
-  ],
-  findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'step is untestable' }],
-}
+const BLOCKING_VERDICT = PLAN_BLOCKING
 
 async function stopped() {
   const repo = await seededRepo()

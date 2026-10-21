@@ -442,6 +442,26 @@ export function autonomyOn(repo: TestRepo): void {
   repo.git('commit', '-m', 'autonomy: on')
 }
 
+// A plan written under an approved spec, ready for its gate — opted into autonomy unless
+// the caller wants the decision to wait first.
+export async function plannedRepo(opts: { autonomy?: boolean } = {}): Promise<TestRepo> {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  if (opts.autonomy !== false) autonomyOn(repo)
+  return repo
+}
+
+// One blocking finding anchored inside the plan: the recommender's `blocking-here`.
+export const PLAN_BLOCKING = {
+  coverage: [
+    { anchor: 'auth-refresh-plan-1 > ## Step: s1', note: 'read' },
+    { anchor: 'auth-refresh > ## Behavior', note: 'read' },
+  ],
+  findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'step is untestable' }],
+}
+
 export const VERDICT_CONTRACT_MARKER = '## Verdict contract'
 export const VERDICT_CONTRACT_SNIPPETS = [
   'Respond with ONLY a JSON object',

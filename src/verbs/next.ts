@@ -21,7 +21,7 @@ import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines } from '../autonomy.js'
-import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
+import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -64,6 +64,19 @@ export function gateParked(entries: Entry[], gate: string): boolean {
   // the upstream instruction is live work, and it outranks the park it lands on
   if (openReopen(entries, gate) !== undefined) return false
   return lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))?.decision === 'stop'
+}
+
+// Rows 173. The run a decision is owed on: the pending one, or — at the bound, where the
+// gate short-circuits and no pending decision can ever be created — the last run, until
+// the endgame is settled or parked. The two halves `next`'s tier 2 has always walked,
+// named once so the gate's tail and `next` settle exactly the same stops.
+export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefined {
+  const pending = pendingDecision(entries, gate)
+  if (pending !== undefined) return pending
+  if (boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)) {
+    return lastGateRun(entries, gate)
+  }
+  return undefined
 }
 
 // `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
