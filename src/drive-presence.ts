@@ -37,8 +37,11 @@ function readHolder(root: string): DriveHolder | 'absent' | 'unreadable' {
   }
   try {
     const h = JSON.parse(text) as { pid?: unknown; log?: unknown }
-    if (typeof h.pid !== 'number' || !Number.isInteger(h.pid)) return 'unreadable'
-    return { pid: h.pid, ...(typeof h.log === 'string' ? { log: h.log } : {}) }
+    if (typeof h.pid !== 'number' || !Number.isInteger(h.pid) || h.pid < 1) return 'unreadable'
+    // The lock says only WHETHER a background log exists; its path is always derived. What
+    // the file says is never printed: `watch:` is a line the engine acts on, and a path read
+    // from a file could carry a newline and a forged `launch:` or `run:` line.
+    return { pid: h.pid, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
   } catch {
     return 'unreadable'
   }
@@ -78,8 +81,11 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
   return refuse([v(DRIVE_LOCK, 'drive-running', 'the lock changed hands while it was being taken', 'run this again')])
 }
 
+// A path is quoted only when it needs it, so the common line stays the one a human types.
+const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
+
 export function watchLine(h: DriveHolder): string {
   return h.log !== undefined
-    ? `tail -f ${h.log} · stop it: kill ${h.pid}`
+    ? `tail -f ${shellArg(h.log)} · stop it: kill ${h.pid}`
     : `the terminal running witness drive · pid ${h.pid}`
 }
