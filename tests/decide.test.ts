@@ -7,6 +7,7 @@ import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
+import { actOfCommand, applyDecision, decisionAct } from '../src/verbs/decide.js'
 import { SPEC_META, approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const BLOCKING = {
@@ -447,5 +448,53 @@ describe('a revised gate still has exits', () => {
     const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve'])
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('nothing-pending')
+  })
+})
+
+describe('applyDecision — the one door (A4)', () => {
+  const at = (repo: { root: string }) => {
+    const outs: string[] = []; const errs: string[] = []
+    return { ctx: fakeCtx(repo.root, { out: (l) => outs.push(l), err: (l) => errs.push(l) }), out: () => outs.join('\n'), err: () => errs.join('\n') }
+  }
+  it('journals a policy selection and says who decided', async () => {
+    const { repo } = await stoppedGate(); const h = at(repo)
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'revise', note: 'n', selected: 'policy' })).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'revise', selected: 'policy', rule: 'blocking-parent', recommended: 'revise' })
+    expect(h.out()).toContain('decided: plan auth-refresh → revise · policy · blocking-parent')
+  })
+  it('journals the arbiter reason and identity', async () => {
+    const { repo } = await stoppedGate(); const h = at(repo)
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'approve', selected: 'arbiter',
+      reason: 'the finding misreads the spec', arbiter: { model: 'test-model-1', prompts_sha: 'abc' } })).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ selected: 'arbiter', reason: 'the finding misreads the spec', arbiter: { model: 'test-model-1', prompts_sha: 'abc' } })
+    expect(h.out()).toContain('reason: the finding misreads the spec')
+  })
+  it('no autonomous selection grants trust, and the policy never overrides', async () => {
+    const { repo } = await stoppedGate(); const h = at(repo)
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'approve', trustCmds: true, selected: 'policy' })).toBe(2)
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'approve', override: true, selected: 'policy' })).toBe(2)
+    expect(h.err().match(/autonomy-cannot/g)).toHaveLength(2)
+    expect(decisions(repo)).toEqual([])
+  })
+  it('refuses to decide a run the decider did not judge', async () => {
+    const { repo } = await stoppedGate(); const h = at(repo)
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'stop', selected: 'policy', runId: 'r-other' })).toBe(2)
+    expect(h.err()).toContain('anchor-moved')
+    expect(decisions(repo)).toEqual([])
+  })
+  it('a second decision on a run already disposed of refuses and journals nothing', async () => {
+    const { repo } = await stoppedGate(); const h = at(repo)
+    const run = (readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'gate-run').at(-1) as unknown as { run_id: string }).run_id
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'revise', note: 'x', selected: 'policy', runId: run })).toBe(0)
+    expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'revise', note: 'x', selected: 'policy', runId: run })).toBe(2)
+    expect(h.err()).toMatch(/nothing-pending|anchor-moved/)
+    expect(decisions(repo)).toHaveLength(1)
+  })
+  it('reads a rendered command into the same act the verb parses', () => {
+    expect(actOfCommand('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1 "quoted""'))
+      .toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: '1 blocking finding: p1 > ## Step: s1 "quoted"' }))
+    expect(actOfCommand('witness decide implement p1 --approve --override')).toEqual(ok({ gate: 'implement', target: 'p1', decision: 'approve', override: true }))
+    expect(actOfCommand('witness gate plan p1').ok).toBe(false)
+    expect(decisionAct(['plan', 'p1', '--revise', '--note', 'x', '--via', 'affirmation'])).toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: 'x', selected: 'affirmation' }))
   })
 })

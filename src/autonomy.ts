@@ -1,7 +1,7 @@
 import type { Config } from './config.js'
 import type { Entry } from './journal.js'
 import type { Decision } from './recommend.js'
-import { boundReached, fellBack, type GateRunEntry } from './rounds.js'
+import { boundReached, fellBack, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { cmd, kv } from './toon.js'
 
 // Rows 171-175. PURE, like recommend.ts: the setting's rendering, the kept-stop names, and
@@ -88,4 +88,13 @@ export function policyFor(facts: StopFacts): Policy {
   if (TAKEN.has(block.rule) || block.rule.startsWith('anchor-recurrence-')) return first()
   // bound · bound-stale · ladder-spent · pin-contradiction · reserved-stop-clean · manual-stop
   return { kind: 'arbiter' }
+}
+
+// Row 173. Who made a disposition, in one spelling for every surface that says so
+// (`decide --show`, `log`, `status`).
+export function decidedBy(d: Pick<DecisionEntry, 'selected' | 'arbiter'>): string {
+  if (d.selected === 'policy') return 'policy'
+  if (d.selected === 'arbiter') return `arbiter · ${d.arbiter?.model ?? 'unknown'}`
+  if (d.selected === 'affirmation') return 'human · affirmation'
+  return 'human'
 }

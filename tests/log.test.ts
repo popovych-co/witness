@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { appendEntry } from '../src/journal.js'
 import { SPEC_META, seededRepo, writeSpec } from './helpers.js'
 
 describe('witness log', () => {
@@ -24,5 +25,19 @@ describe('witness log', () => {
     const res = await repo.cli(['log', 'ghost'])
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('unknown-stream')
+  })
+})
+
+describe('witness log says who decided (A5)', () => {
+  it('names the arbiter and its model on an autonomous decision', async () => {
+    const repo = await seededRepo()
+    appendEntry(repo.root, repo.effort, {
+      v: 1, t: 'human-decision', gate: 'decompose', artifact: repo.effort, round: 1, decision: 'approve',
+      selected: 'arbiter', reason: 'the slice covers g1', arbiter: { model: 'test-model-1', prompts_sha: 'p' }, rule: 'reserved-stop-clean',
+    })
+    appendEntry(repo.root, repo.effort, { v: 1, t: 'human-decision', gate: 'decompose', artifact: repo.effort, round: 1, decision: 'revise' })
+    const out = (await repo.cli(['log', repo.effort])).stdout
+    expect(out).toContain('decompose: approve · arbiter · test-model-1')
+    expect(out).toMatch(/decompose: revise$/m)
   })
 })

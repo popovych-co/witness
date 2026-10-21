@@ -8,6 +8,8 @@ import { journalRel, readStream, streamExists, type Entry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { rows } from '../toon.js'
+import { decidedBy } from '../autonomy.js'
+import type { DecisionEntry } from '../rounds.js'
 
 function detail(e: Entry): string {
   switch (e.t) {
@@ -30,8 +32,10 @@ function detail(e: Entry): string {
       return `gate ${g.gate} r${g.round} ${g.outcome} @${g.reviewed_sha.slice(0, 7)}`
     }
     case 'human-decision': {
-      const d = e as unknown as { gate: string; decision: string; note?: string }
-      return `${d.gate}: ${d.decision}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
+      const d = e as unknown as DecisionEntry
+      // Row 173: a decision nobody typed says who made it; a named human one reads as before.
+      const by = d.selected !== undefined ? ` · ${decidedBy(d)}` : ''
+      return `${d.gate}: ${d.decision}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
     }
     case 'status': {
       const s = e as unknown as { from: string; to: string; cause: string }

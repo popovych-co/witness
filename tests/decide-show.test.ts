@@ -291,3 +291,22 @@ it('at the bound with moved content, --show names the endgame minus approve', as
   expect(r.stdout).toContain('--upstream')
   expect(r.stdout).not.toContain('witness gate decompose')
 })
+
+describe('decide --show says who decided (A5)', () => {
+  it('an arbiter disposition names the arbiter and its reason', async () => {
+    const repo = await gatedEffort()
+    appendEntry(repo.root, repo.effort, {
+      v: 1, t: 'human-decision', gate: 'decompose', artifact: repo.effort, round: 1, decision: 'approve',
+      selected: 'arbiter', reason: 'the slice covers g1', arbiter: { model: 'test-model-1', prompts_sha: 'p' }, rule: 'reserved-stop-clean',
+    })
+    const out = (await repo.cli(['decide', 'decompose', repo.effort, '--show'])).stdout
+    expect(out).toContain('state: settled — approve')
+    expect(out).toContain('decided-by: arbiter · test-model-1')
+    expect(out).toContain('reason: the slice covers g1')
+  })
+  it('a named decision reads as the human', async () => {
+    const repo = await gatedEffort()
+    expect((await repo.cli(['decide', 'decompose', repo.effort, '--approve'])).code).toBe(0)
+    expect((await repo.cli(['decide', 'decompose', repo.effort, '--show'])).stdout).toContain('decided-by: human')
+  })
+})

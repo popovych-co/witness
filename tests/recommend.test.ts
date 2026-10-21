@@ -479,6 +479,12 @@ describe('status reports the recommender by rule', () => {
     ])
     expect(rows).toEqual([{ rule: 'blocking-here', fired: 5, overridden: 1, nodded: 2 }])
   })
+
+  it('leaves policy decisions out of the audit — they are the rule, not a judgment of it (A5)', () => {
+    const five = (selected: string) => Array.from({ length: 5 }, () => ({ rule: 'blocking-here', recommended: 'revise', decision: 'revise', selected }))
+    expect(recommenderRowsFrom(five('policy'))).toEqual([])
+    expect(recommenderRowsFrom(five('arbiter'))).toEqual([{ rule: 'blocking-here', fired: 5, overridden: 0, nodded: 0 }])
+  })
 })
 
 // D121's hard constraint: these three fields are recorded and never consumed. A gate
