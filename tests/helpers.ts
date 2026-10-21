@@ -11,6 +11,7 @@ import { appendEntry, journalRel } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
+import type { Clock } from '../src/usage.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
 
@@ -272,6 +273,18 @@ export function writeLocalConfig(root: string, opts: { opener?: string; reviewer
 export async function witnessDesign(repo: TestRepo, specId: string): Promise<CliResult> {
   writeLocalConfig(repo.root, { opener: noopOpener() })
   return repo.cli(['design', specId, '--open'])
+}
+
+// Task 5 (B4). A clock whose sleep returns at once, records the ms and advances `now`, so a
+// usage wait of hours runs in a test in no time and its length is asserted exactly.
+export function fakeClock(start: number): Clock & { slept: number[] } {
+  let now = start
+  const slept: number[] = []
+  return {
+    slept,
+    now: () => now,
+    sleep: async (ms: number) => { slept.push(ms); now += ms },
+  }
 }
 
 export function fakeScenario(): string {

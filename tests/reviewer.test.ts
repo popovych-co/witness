@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadHarness } from '../src/harness.js'
 import { invokeReviewer, invokeReviewerAsync, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
-import { fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
+import { fakeClock, fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
 
 describe('prompt resolution', () => {
   it('resolves every shipped lens and hashes contents order-insensitively', () => {
@@ -298,5 +298,62 @@ describe('invokeReviewerAsync fails closed', () => {
     const r = await invokeReviewerAsync(ctx, claudeHarness, { cwd: repo.root, prompt })
     expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
     expect(!r.ok && r.violations[0]!.got).toContain('before reading the whole prompt')
+  })
+})
+
+describe('usage limits at the reviewer (B4)', () => {
+  const LIMIT = "You've hit your session limit · resets 2pm (America/Los_Angeles)"
+  const START = Date.parse('2026-10-19T19:30:00Z')
+  const setup = async (limit = LIMIT, env: Record<string, string> = {}) => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    writeFileSync(join(scenario, 'pi-error'), limit)
+    writeFileSync(join(scenario, 'pi-error-calls'), '1')
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { ...gateEnv(scenario), ...env }, err: (l) => errs.push(l) })
+    return { repo, scenario, ctx, errs, clock: fakeClock(START) }
+  }
+
+  it('inside drive a limited call waits for the reset and retries', async () => {
+    const { repo, scenario, ctx, errs, clock } = await setup(LIMIT, { WITNESS_DRIVE: 'p1' })
+    const r = await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })
+    expect(r.ok).toBe(true)
+    expect(clock.slept).toEqual([5_460_000])
+    expect(errs).toContain(`reviewer: usage limit — waiting 1h31m · ${LIMIT}`)
+    expect(existsSync(join(scenario, 'pi-calls/call-2'))).toBe(true)
+  })
+
+  it('outside drive it refuses at once and names the reset', async () => {
+    const { repo, scenario, ctx, clock } = await setup()
+    const r = await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })
+    expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['usage-limit', LIMIT])
+    expect(clock.slept).toEqual([])
+    expect(existsSync(join(scenario, 'pi-calls/call-2'))).toBe(false)
+  })
+
+  it('a reset past the 6h reviewer wait refuses inside drive too', async () => {
+    const late = "You've hit your session limit · resets 9pm (America/Los_Angeles)"   // 8h31m away
+    const { repo, ctx, clock } = await setup(late, { WITNESS_DRIVE: 'p1' })
+    const r = await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })
+    expect(!r.ok && r.violations[0]!.rule).toBe('usage-limit')
+    expect(clock.slept).toEqual([])
+  })
+
+  it('the sync invoker (calibration) never waits · it refuses as outside drive', async () => {
+    const { repo, scenario, ctx } = await setup(LIMIT, { WITNESS_DRIVE: 'p1' })
+    const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'x' })
+    expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['usage-limit', LIMIT])
+    expect(existsSync(join(scenario, 'pi-calls/call-2'))).toBe(false)
+  })
+
+  it('a verdict that quotes the limit line is a verdict', async () => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [{ blocking: false, anchor: 'src/usage.ts', claim: LIMIT }] })
+    const clock = fakeClock(START)
+    const ctx = fakeCtx(repo.root, { env: { ...gateEnv(scenario), WITNESS_DRIVE: 'p1' } })
+    expect((await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })).ok).toBe(true)
+    expect(clock.slept).toEqual([])
   })
 })

@@ -44,7 +44,8 @@ if [ -f "$dir/pi-fail" ] && [ "$n" -le "$(cat "$dir/pi-fail")" ]; then
   exit 1
 fi
 # pi-error: the in-stream provider-error shape (billing block) — exit 0, stopReason error.
-if [ -f "$dir/pi-error" ]; then
+# pi-error-calls limits it to the first N calls (a usage limit that lifts after a wait).
+if [ -f "$dir/pi-error" ] && { [ ! -f "$dir/pi-error-calls" ] || [ "$n" -le "$(cat "$dir/pi-error-calls")" ]; }; then
   node -e '
     const fs = require("fs")
     const msg = fs.readFileSync(process.argv[1], "utf8").trim()
