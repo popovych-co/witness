@@ -8,7 +8,9 @@ import { readStream, type Entry } from './journal.js'
 import { unmetNeeds } from './needs.js'
 import type { DecisionEntry } from './rounds.js'
 import { findById, loadCanon } from './scan.js'
+import { pendingTxn } from './txn.js'
 import { owedDecisions, parkedGates } from './verbs/next.js'
+import { recoverChoice } from './verbs/recover.js'
 
 // Row 184. What the run did and what waits, read from the journal written since the run
 // began plus the state at its end (design B6). Drive journals nothing of its own (D145), so
@@ -47,6 +49,11 @@ export function driveReport(
   const waits: string[] = []
   const named = new Set<string>()
   const wait = (target: string, rows: string[]) => { named.add(target); waits.push(...rows) }
+  // A crash no session could recover blocks every write: it is named first (F4).
+  const txn = pendingTxn(root)
+  if (txn !== undefined) {
+    wait('-txn', [`wait: pending transaction · ${txn.op}`, `  run: ${recoverChoice(root, txn).options[0]!.command}`])
+  }
   for (const a of aside.filter((x) => x.kind === 'kept' && (x.stop === 'design-look' || x.stop === 'trust-grant'))) {
     if (named.has(a.target)) continue
     wait(a.target, a.stop === 'design-look'

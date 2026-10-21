@@ -826,3 +826,21 @@ describe('one command (B1)', () => {
     expect(r.stdout).toContain('] ask-seen')
   }, 60000)
 })
+
+// Final review F4. A crashed transaction no session resolves answered every fill with the same
+// target-less recovery line, never judged and never capped: drive spent its whole ceiling.
+describe('a wedged transaction (B3)', () => {
+  it('is set aside after one empty session and named in the report', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'txn.json'), JSON.stringify({ op: 'write(a)', files: [] }))
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo tick') }, out), { maxSpawns: 6 })
+    expect(out.filter((l) => /\] tick$/.test(l))).toHaveLength(1)
+    expect(out).toContain('wait: pending transaction · write(a)')
+    expect(out.some((l) => l.startsWith('  run: witness recover'))).toBe(true)
+    expect(code).toBe(1)
+  }, 60_000)
+})

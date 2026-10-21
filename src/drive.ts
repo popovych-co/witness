@@ -256,9 +256,14 @@ const streamLines = (root: string, id: string): number => readStream(root, id).l
 // A target's key is its line, its stream and its owning effort's stream; target-less work
 // (brainstorm, the recovery fork) keys on the effort count and the asks stream, because a
 // rejected recap check grows the asks and an accepted one births an effort.
+// A crashed transaction is part of the target-less key (F4): the recovery fork is
+// judged like any other work, so a session that leaves the same crash behind is set aside
+// instead of being respawned to the ceiling.
 function progressKey(root: string, action: NextAction): string {
   if (action.target === undefined) {
-    return [action.line, effortStreams(root).length, streamLines(root, ASK_STREAM)].join('\u0000')
+    const txn = pendingTxn(root)
+    return [action.line, effortStreams(root).length, streamLines(root, ASK_STREAM),
+      txn ? JSON.stringify({ op: txn.op, files: txn.files }) : ''].join('\u0000')
   }
   const effort = effortOf(root, action.target)
   return [action.line, streamLines(root, action.target), effort ? streamLines(root, effort) : 0].join('\u0000')
@@ -326,7 +331,7 @@ export async function driveLoop(
   // that executes and journals nothing would otherwise re-render its own block forever.
   const unmoved = (key: string, action: NextAction): boolean => {
     const pk = progressKey(root, action)
-    if (pendingTxn(root) === undefined && progress.get(key) === pk) { stuck(key, action); return true }
+    if (progress.get(key) === pk) { stuck(key, action); return true }
     progress.set(key, pk)
     return false
   }
