@@ -16,7 +16,10 @@ import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, readStream } from './journal.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
-import { realClock, type Clock } from './usage.js'
+import {
+  duration, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock,
+} from './usage.js'
+import { keepAwake } from './awake.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -287,9 +290,14 @@ export async function driveLoop(
   const progress = new Map<string, string>()
   const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
   let spawns = 0
-  let stop: 'ceiling' | 'spawn-failed' | undefined
+  let stop: 'ceiling' | 'spawn-failed' | 'usage' | undefined
   let idle: string | undefined
-  const pausedUntil = 0
+  // Row 182. A usage limit pauses every lane: nothing new starts until the reset, and the
+  // running sessions finish, because they meet the same account. Every wait is printed, one
+  // wait is at most 6 h, and a run waits at most 12 h in all.
+  let pausedUntil = 0
+  let waited = 0
+  let streak = 0
 
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
@@ -350,7 +358,36 @@ export async function driveLoop(
     return lane
   }
 
+  // A session that ended on a limit counts toward no cap, and its target's next
+  // consideration is not judged for progress: the session never got to act.
+  const limited = (key: string, end: SessionEnd): boolean => {
+    if (end.outcome !== 'exited' && end.outcome !== 'timeout') return false
+    const now = clock.now()
+    const limit = sessionLimit(end, now)
+    if (!limit) { streak = 0; return false }
+    progress.delete(key)
+    const wait = waitFor(limit, streak, now)
+    streak += 1
+    if (wait > SINGLE_WAIT_MAX_MS) {
+      ctx.out(`drive: usage limit — resets in ${duration(wait)} — beyond drive's 6h wait · ${limit.text}`)
+      stop ??= 'usage'
+      return true
+    }
+    // Only the time a wait adds beyond a pause already running counts toward the total.
+    const added = Math.max(0, now + wait - Math.max(pausedUntil, now))
+    if (waited + added > TOTAL_WAIT_MAX_MS) {
+      ctx.out(`drive: usage limit — waited ${duration(waited)} — the next wait passes drive's 12h bound · ${limit.text}`)
+      stop ??= 'usage'
+      return true
+    }
+    ctx.out(`drive: usage limit — waiting ${duration(wait)} · ${limit.text}`)
+    waited += added
+    pausedUntil = Math.max(pausedUntil, now + wait)
+    return true
+  }
+
   const settle = (key: string, lane: Lane, end: SessionEnd) => {
+    if (limited(key, end)) return
     const u = use.get(key) ?? { spawns: 0, ms: 0 }
     use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
     if (end.outcome === 'timeout') {
@@ -427,46 +464,54 @@ export async function driveLoop(
     return true
   }
 
-  for (;;) {
-    if (autonomous && !stop) await settlePass()
-    while (!stop && lanes.size < parallel && clock.now() >= pausedUntil) {
-      const action = computeNext(root, ctx, loadCanon(root), cfg, { scope: admits })
-      const key = action.target ?? TARGETLESS
-      if (lanes.has(key) || aside.has(key)) break         // a global rung, already in hand
-      let step = classifyAction(action, root, { autonomy: autonomous })
-      if (step.kind === 'idle') { idle = action.line; break }
-      idle = undefined
-      // A stop whose settle the CLI routed to a re-run: the target's own session runs it,
-      // because its scoped `next` prints the re-run (A1).
-      if (step.kind === 'decision' && autonomous && action.target !== undefined && routed.has(action.target)) {
-        step = { kind: 'spawn', home: root, target: action.target }
+  const awake = keepAwake(ctx.env, process.platform, process.pid)
+  ctx.out(awake.command !== undefined
+    ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
+    : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
+  try {
+    for (;;) {
+      if (autonomous && !stop) await settlePass()
+      while (!stop && lanes.size < parallel && clock.now() >= pausedUntil) {
+        const action = computeNext(root, ctx, loadCanon(root), cfg, { scope: admits })
+        const key = action.target ?? TARGETLESS
+        if (lanes.has(key) || aside.has(key)) break         // a global rung, already in hand
+        let step = classifyAction(action, root, { autonomy: autonomous })
+        if (step.kind === 'idle') { idle = action.line; break }
+        idle = undefined
+        // A stop whose settle the CLI routed to a re-run: the target's own session runs it,
+        // because its scoped `next` prints the re-run (A1).
+        if (step.kind === 'decision' && autonomous && action.target !== undefined && routed.has(action.target)) {
+          step = { kind: 'spawn', home: root, target: action.target }
+        }
+        if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
+        if (spawns >= ceiling) {
+          stop = 'ceiling'
+          ctx.out(`drive: spawn ceiling reached (${ceiling}) — ${action.line}`)
+          ctx.out('help: re-run witness drive to continue, or raise --max-spawns')
+          break
+        }
+        if (waitingNeed(action, key)) continue
+        // A cap outranks a stall in the report, and no session is spent past it.
+        if (await capped(action, key)) continue
+        if (unmoved(key, action)) continue
+        spawns += 1
+        lanes.set(key, launch(step, action, spawns))
       }
-      if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
-      if (spawns >= ceiling) {
-        stop = 'ceiling'
-        ctx.out(`drive: spawn ceiling reached (${ceiling}) — ${action.line}`)
-        ctx.out('help: re-run witness drive to continue, or raise --max-spawns')
+      if (lanes.size === 0) {
+        if (!stop && pausedUntil > clock.now()) { await clock.sleep(pausedUntil - clock.now()); continue }
         break
       }
-      if (waitingNeed(action, key)) continue
-      // A cap outranks a stall in the report, and no session is spent past it.
-      if (await capped(action, key)) continue
-      if (unmoved(key, action)) continue
-      spawns += 1
-      lanes.set(key, launch(step, action, spawns))
+      const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
+      settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
+      lanes.delete(key)
     }
-    if (lanes.size === 0) {
-      if (!stop && pausedUntil > clock.now()) { await clock.sleep(pausedUntil - clock.now()); continue }
-      break
-    }
-    const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
-    settle(key, lanes.get(key)!, end)                     // Task 11 reads limits here
-    lanes.delete(key)
-  }
 
-  if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
-  const failed = [...aside.values()].some((a) => a.kind === 'stuck' || a.kind === 'capped')
-  return failed || stop !== undefined ? EXIT.FINDINGS : EXIT.OK
+    if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
+    const failed = [...aside.values()].some((a) => a.kind === 'stuck' || a.kind === 'capped')
+    return failed || stop !== undefined ? EXIT.FINDINGS : EXIT.OK
+  } finally {
+    awake.stop()
+  }
 }
 
 export interface BlockOption {

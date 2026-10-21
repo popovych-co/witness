@@ -15,7 +15,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  approve, autonomyOn, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -31,8 +31,9 @@ const fakeAgent = (body: string): string => {
   writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
   return bin
 }
+// A noop keep-awake by default: the real `caffeinate` must never run from the suite.
 const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
-  fakeCtx(repo.root, { tty: true, env: fixtureEnv(env), out: (l) => out.push(l) })
+  fakeCtx(repo.root, { tty: true, env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
 // A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
 // harness: the assertion under test is the decision, not what follows it. It says `tick`
 // so a test can find its session by prefix.
@@ -44,7 +45,7 @@ const idleAgent = (): string => {
 const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
   fakeCtx(repo.root, {
     tty: true, answers, out: (l) => out.push(l),
-    env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent() }),
+    env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent(), WITNESS_KEEP_AWAKE_BIN: noopOpener() }),
   })
 
 // n started flows, one spec each. A fresh worktree owes its first red, so every flow sits
@@ -643,5 +644,67 @@ describe('caps (B5)', () => {
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
     expect(out.join('\n')).toContain('drive: capped — a-plan-1 · drive cap: 1 session(s) this run · drive.caps.spawns 1 · no gate run to park it on')
+  }, 60000)
+})
+
+describe('surviving unattended (B4)', () => {
+  const LIMIT = "You've hit your session limit · resets 2pm (America/Los_Angeles)"
+  const START = Date.parse('2026-10-19T19:30:00Z')
+
+  it('waits out a usage limit and spawns again after the reset', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const flag = join(fakeScenario(), 'limited')
+    const agent = script(`if [ ! -f "${flag}" ]; then touch "${flag}"; echo "${LIMIT}" >&2; exit 1; fi\nexec ${witnessCli()} start auth-refresh-plan-1`)
+    const clock = fakeClock(START)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 2 }, clock)
+    expect(out.join('\n')).toContain(`drive: usage limit — waiting 1h31m · ${LIMIT}`)
+    expect(clock.slept).toEqual([5_460_000])
+    expect(existsSync(worktreePath(repo.root, 'auth-refresh-plan-1'))).toBe(true)   // the second session acted
+    expect(out.join('\n')).not.toContain('drive: no progress — witness start')
+  }, 60000)
+
+  it('a reset past the single wait stops the run', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const late = "You've hit your session limit · resets 4am (America/Los_Angeles)"          // 15h30m away
+    const clock = fakeClock(START)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "${late}" >&2\nexit 1`) }, out), {}, clock)
+    expect(out.join('\n')).toContain("drive: usage limit — resets in 15h31m — beyond drive's 6h wait")
+    expect(clock.slept).toEqual([])
+    expect(code).toBe(1)
+  }, 60000)
+
+  it('a limit that never lifts never waits past the total bound (Review Focus 5)', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const spawned = join(fakeScenario(), 'spawned')
+    const agent = script(`echo x >> "${spawned}"\necho '429 {"type":"error","error":{"type":"rate_limit_error","message":"x"}}' >&2\nexit 1`)
+    const clock = fakeClock(START)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {}, clock)
+    expect(out.join('\n')).toContain("the next wait passes drive's 12h bound")
+    expect(clock.slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(43_200_000)
+    expect(readFileSync(spawned, 'utf8').trim().split('\n')).toHaveLength(clock.slept.length + 1)
+    expect(code).toBe(1)
+  }, 120000)
+
+  it('keeps the machine awake for the run and lets go after', async () => {
+    const repo = await planReady()
+    const dir = fakeScenario()
+    const awake = join(dir, 'awake')
+    writeFileSync(awake, `#!/bin/sh\necho "$@" > "${dir}/args"\necho $$ > "${dir}/pid"\nexec sleep 30\n`, { mode: 0o755 })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, { tty: true, out: (l) => out.push(l),
+      env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: awake, WITNESS_DRIVE_AGENT_BIN: script('sleep 0.5') }) }), { maxSpawns: 1 })
+    expect(readFileSync(join(dir, 'args'), 'utf8').trim()).toBe(`-ims -w ${process.pid}`)
+    expect(out.join('\n')).toContain(`keep-awake: ${awake} -ims -w ${process.pid} — a closed lid on battery still sleeps`)
+    const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'))
+    await expect.poll(() => { try { process.kill(pid, 0); return 'alive' } catch { return 'gone' } }, { timeout: 5_000 }).toBe('gone')
   }, 60000)
 })
