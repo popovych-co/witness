@@ -251,22 +251,32 @@ const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 
 const streamLines = (root: string, id: string): number => readStream(root, id).length
 
+// A refused write is the CLI saying no: it moves nothing (F5).
+const moved = (e: { t: string }) => e.t !== 'write-refused'
+
 // Row 181. Did anything happen for THIS target? A whole-journal count is satisfied by any
 // other lane's progress, so a stalled flow beside a busy one would spawn until the ceiling.
-// A target's key is its line, its stream and its owning effort's stream; target-less work
+// A target's key is its line, its stream, and the entries in its owning effort's stream that
+// are about its own flow (F5: one effort carries every sibling's writes). Target-less work
 // (brainstorm, the recovery fork) keys on the effort count and the asks stream, because a
-// rejected recap check grows the asks and an accepted one births an effort.
-// A crashed transaction is part of the target-less key (F4): the recovery fork is
-// judged like any other work, so a session that leaves the same crash behind is set aside
-// instead of being respawned to the ceiling.
-function progressKey(root: string, action: NextAction): string {
+// rejected recap check grows the asks and an accepted one births an effort. A crashed
+// transaction is part of the target-less key (F4): the recovery fork is judged like any other
+// work, so a session that leaves the same crash behind is set aside instead of being
+// respawned to the ceiling.
+function progressKey(root: string, action: NextAction, family: (t: string) => string[]): string {
   if (action.target === undefined) {
     const txn = pendingTxn(root)
     return [action.line, effortStreams(root).length, streamLines(root, ASK_STREAM),
       txn ? JSON.stringify({ op: txn.op, files: txn.files }) : ''].join('\u0000')
   }
-  const effort = effortOf(root, action.target)
-  return [action.line, streamLines(root, action.target), effort ? streamLines(root, effort) : 0].join('\u0000')
+  const target = action.target
+  const effort = effortOf(root, target)
+  const flow = family(target)
+  const own = readStream(root, target).filter(moved).length
+  const inEffort = effort !== undefined && effort !== target
+    ? readStream(root, effort).filter((e) => moved(e) && flow.includes(String((e as { artifact?: unknown }).artifact))).length
+    : 0
+  return [action.line, own, inEffort].join('\u0000')
 }
 
 interface Lane { action: NextAction; end: Promise<SessionEnd>; merged?: string }
@@ -347,7 +357,7 @@ export async function driveLoop(
   // A decision is an act too, and it gets the same convergence guard as a spawn: a decision
   // that executes and journals nothing would otherwise re-render its own block forever.
   const unmoved = (key: string, action: NextAction): boolean => {
-    const pk = progressKey(root, action)
+    const pk = progressKey(root, action, family)
     if (progress.get(key) === pk) { stuck(key, action); return true }
     progress.set(key, pk)
     return false

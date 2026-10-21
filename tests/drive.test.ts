@@ -16,7 +16,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  PLAN_BODY, PLAN_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -868,5 +868,27 @@ echo "end $WITNESS_DRIVE" >> "${log}"`)
     const lines = readFileSync(log, 'utf8').trim().split('\n')
     const planStart = lines.indexOf('start x-plan-1')
     expect(planStart === -1 || planStart > lines.indexOf('end x')).toBe(true)
+  }, 120_000)
+})
+
+// Final review F5. Progress keyed on the whole effort stream: a sibling's write anywhere in
+// the shared effort reset a stalled flow's key, and a refused write counted as progress.
+describe('progress is the target\'s own (Review Focus 1)', () => {
+  it('a stalled flow is set aside while a sibling writes to their shared effort', async () => {
+    const repo = await startedFlows(['a', 'b'])
+    const dir = fakeScenario()
+    writeFileSync(join(dir, 'm.json'), JSON.stringify({ ...SPEC_META, criteria: [] }))
+    writeFileSync(join(dir, 'b.md'), SPEC_BODY)
+    const agent = script(`echo tick
+case "$WITNESS_DRIVE" in
+  a-plan-1)
+    n=$(cat "${dir}/n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${dir}/n"
+    cd "${repo.root}" && ${witnessCli()} write extra-$n --effort ${repo.effort} --meta "${dir}/m.json" --body "${dir}/b.md" >/dev/null 2>&1 ;;
+  *) sleep 2 ;;
+esac`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 8 })
+    expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
+    expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)   // its refused write is no progress
   }, 120_000)
 })
