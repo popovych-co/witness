@@ -8,7 +8,7 @@ import { entryLine, appendEntry, journalRel, readStream } from './journal.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
-import { runFiltered, runFullSuite, runnerConfig } from './runner.js'
+import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
 import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
 import { kv } from './toon.js'
@@ -255,6 +255,8 @@ export interface RegressionOutcome {
   spec: string
   state: 'green' | 'red' | 'unknown' | 'unrunnable'
   detail: string
+  // Row 171: the command trust kept from running, when that is why this spec was unrunnable.
+  untrusted?: string
 }
 
 // Never a `Result` refusal: this runs inside a gate's resolve(), and a refusal there aborts
@@ -289,7 +291,9 @@ export async function runRegression(
       memo.set(id, run)
     }
     if (!run.ok) {
-      out.push({ spec: id, state: 'unrunnable', detail: run.violations.map((x) => x.rule).join(' · ') })
+      const blocked = untrustedOf(run.violations)
+      out.push({ spec: id, state: 'unrunnable', detail: run.violations.map((x) => x.rule).join(' · '),
+        ...(blocked !== undefined ? { untrusted: blocked } : {}) })
       continue
     }
     const failed = run.value.tests.filter((t) => !t.ok).length

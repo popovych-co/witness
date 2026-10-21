@@ -2,7 +2,10 @@ import type { Entry } from './journal.js'
 import type { Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
-export interface GateCheck { name: string; ok: boolean; detail?: string }
+// `untrusted` (row 171): the commands the trust list kept this check from running, so the
+// trust stop is read from the run's own record rather than inferred from a detail string.
+// Present only when non-empty.
+export interface GateCheck { name: string; ok: boolean; detail?: string; untrusted?: string[] }
 export interface ReviewerVerdict { reviewer: string; coverage: CoverageItem[]; findings: Finding[] }
 
 export interface GateRunEntry {

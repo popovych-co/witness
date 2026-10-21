@@ -10,7 +10,7 @@ import { latestRecap, readStream } from '../journal.js'
 import type { LensDoc } from '../reviewer.js'
 import { findById, type CanonDoc } from '../scan.js'
 import { changedFiles, changedTestSpecs, diffBase, evidenceForDiff, runRegression, screensDir } from '../evidence.js'
-import { runCriteria } from '../criteria.js'
+import { laneCheck, runCriteria } from '../criteria.js'
 import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
@@ -137,6 +137,7 @@ registerGate({
     // criteria, arbitrary trust-gated commands, inside an unattended gate.
     const foreign = changedTestSpecs(wt, base, String(plan.meta.parent))
     const regression = await runRegression(wt, ctx, root, foreign, (id) => findById(canon, id) !== undefined)
+    const regressionUntrusted = [...new Set(regression.flatMap((r) => (r.untrusted !== undefined ? [r.untrusted] : [])))]
     checks.push({
       name: 'regression',
       // `unknown` does not fail: witness cannot judge an obligation for a spec it does not
@@ -146,16 +147,10 @@ registerGate({
       detail: regression.length === 0
         ? 'no foreign spec tests touched'
         : regression.map((r) => `${r.spec}:${r.state}`).join(' · '),
+      ...(regressionUntrusted.length > 0 ? { untrusted: regressionUntrusted } : {}),
     })
 
-    const lane = await runCriteria(wt, ctx, parent, { trustRoot: root })
-    checks.push({
-      name: 'drift-lane',
-      ok: lane.ok && lane.value.ok,
-      detail: lane.ok
-        ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ')
-        : lane.violations.map((x) => `${x.field}:${x.rule}`).join(' · '),
-    })
+    checks.push(laneCheck(await runCriteria(wt, ctx, parent, { trustRoot: root })))
 
     const effort = effortOf(root, planId)
     const recap = effort ? latestRecap(root, effort) : undefined
