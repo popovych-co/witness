@@ -10,7 +10,8 @@ import { resolveSpawn } from './spawn.js'
 import { computeNext, type NextAction } from './verbs/next.js'
 import { DRIVE_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
-import type { KeptStop } from './autonomy.js'
+import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
+import { unmetNeeds } from './needs.js'
 import { effortStreams, readStream } from './journal.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
@@ -314,8 +315,11 @@ export async function driveLoop(
       setAside(key, { kind: 'merge', line: step.line, why: 'the merge is a human\'s' })
       return
     }
-    // Task 9 settles an autonomous decision in front of the fill. Until then it waits.
+    // Under autonomy a `witness decide` line still reaching the fill is a stop the settle
+    // pass did not settle. A re-run the CLI named is spawned (see the fill); anything else is
+    // a `--manual` run's stop, which waits for the human and is never settled.
     if (autonomous) {
+      ctx.out(`drive: waits on you — ${action.target ?? 'untargeted work'} · decision · ${action.line}`)
       setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
       return
     }
@@ -356,15 +360,58 @@ export async function driveLoop(
     }
   }
 
+  // Row 180. Under autonomy each round starts with one settle pass over every target no
+  // session holds and nothing has set aside — a running session settles its own target
+  // through its gate and its scoped `next`, so each stop has exactly one settler. Whatever
+  // the pass leaves for a human, drive sets aside. The pass's ctx carries the targetless
+  // marker, so an arbiter call in it waits out a usage limit as a drive session's would.
+  const routed = new Set<string>()
+  const settlePass = async () => {
+    const { settleOwed, settledLine } = await import('./settle.js')
+    const passCtx: Ctx = { ...ctx, env: { ...ctx.env, [DRIVE_ENV]: TARGETLESS } }
+    for (const r of await settleOwed(passCtx, root, cfg, { scope: admits })) {
+      const line = settledLine(r)
+      if (line !== undefined) ctx.out(line)
+      const s = r.settled
+      if (s.kind === 'kept') {
+        ctx.out(`drive: waits on you — ${r.target} · ${KEPT_STOP_NAMES[s.stop]}`)
+        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop })
+      } else if (s.kind === 'left') {
+        ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
+        setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate })
+      } else if (s.kind === 'routed') {
+        routed.add(r.target)
+      }
+    }
+  }
+
+  // Row 179's kept stop, in both modes: a start an unmet manual need blocks is set aside
+  // without spawning a session only to be refused. Env and cmd needs stay `start`'s.
+  const waitingNeed = (action: NextAction, key: string): boolean => {
+    if (!action.line.startsWith('witness start ') || action.target === undefined) return false
+    const needs = unmetNeeds(loadCanon(root)).filter((u) => u.doc === action.target && u.blocks === 'start')
+    if (needs.length === 0) return false
+    ctx.out(`drive: waits on you — ${action.target} · unmet need`)
+    const line = keptStopLine('unmet-need', [...needs.map((u) => u.text), ...needs.map((u) => u.satisfy)].join(' · '))
+    ctx.out(line)
+    setAside(key, { kind: 'kept', line, why: KEPT_STOP_NAMES['unmet-need'], stop: 'unmet-need' })
+    return true
+  }
+
   for (;;) {
-    // Task 9's settle pass runs here under autonomy: A1's settleOwed over what `admits` covers
+    if (autonomous && !stop) await settlePass()
     while (!stop && lanes.size < parallel && clock.now() >= pausedUntil) {
       const action = computeNext(root, ctx, loadCanon(root), cfg, { scope: admits })
       const key = action.target ?? TARGETLESS
       if (lanes.has(key) || aside.has(key)) break         // a global rung, already in hand
-      const step = classifyAction(action, root, { autonomy: autonomous })
+      let step = classifyAction(action, root, { autonomy: autonomous })
       if (step.kind === 'idle') { idle = action.line; break }
       idle = undefined
+      // A stop whose settle the CLI routed to a re-run: the target's own session runs it,
+      // because its scoped `next` prints the re-run (A1).
+      if (step.kind === 'decision' && autonomous && action.target !== undefined && routed.has(action.target)) {
+        step = { kind: 'spawn', home: root, target: action.target }
+      }
       if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
       if (spawns >= ceiling) {
         stop = 'ceiling'
@@ -372,7 +419,8 @@ export async function driveLoop(
         ctx.out('help: re-run witness drive to continue, or raise --max-spawns')
         break
       }
-      // Task 9's waiting-need check, then Task 10's caps, go here: a cap outranks a stall in the report
+      if (waitingNeed(action, key)) continue
+      // Task 10's caps go here: a cap outranks a stall in the report
       if (unmoved(key, action)) continue
       spawns += 1
       lanes.set(key, launch(step, action, spawns))
