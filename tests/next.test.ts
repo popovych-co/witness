@@ -4,8 +4,8 @@ import { cpSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { worktreePath } from '../src/worktree.js'
 import {
-  TOKEN_FIXED, approve, fakeScenario, fixturePath, gateEnv, nextLine, putVerdict, seededRepo,
-  shippableRepo, singleConfig, witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
+  SPEC_META, TOKEN_FIXED, approve, fakeScenario, fixturePath, gateEnv, nextLine, putVerdict, seededRepo,
+  shippableRepo, singleConfig, stampLive, witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
 } from './helpers.js'
 
 describe('witness next — the ladder', () => {
@@ -266,5 +266,19 @@ describe('a judge that changes mid-flow is named', () => {
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('unknown-harness')
     expect(r.stdout).not.toContain('judge changed')
+  })
+})
+
+describe('next — a satisfy is no content change (A10)', () => {
+  it('a satisfy on a live spec with a done plan queues no new plan', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ...SPEC_META, needs: [{ id: 'sbx', manual: 'Stripe sandbox account created', satisfied: false }] })
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    expect(await nextLine(repo)).not.toContain('witness write auth-refresh-plan-2')
+    expect((await repo.cli(['satisfy', 'auth-refresh', '--need', 'sbx'])).code).toBe(0)
+    expect(await nextLine(repo)).not.toContain('witness write auth-refresh-plan-2')
   })
 })

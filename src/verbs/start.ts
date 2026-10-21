@@ -96,7 +96,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       'spec deps live / plan deps done before implement starts')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
-  const needs = await evaluateNeeds(root, ctx, (plan.meta.needs ?? []) as Need[])
+  const needs = await evaluateNeeds(root, ctx, (plan.meta.needs ?? []) as Need[], plan)
   const unmet = needs.filter((n) => n.status !== 'ok')
   if (unmet.length) {
     renderRefusal([v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '),

@@ -215,7 +215,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   for (const doc of canon.docs) {
     const needs = Array.isArray(doc.meta.needs) ? doc.meta.needs : []
     if (needs.length === 0) continue
-    for (const r of await evaluateNeeds(root, ctx, needs)) {
+    for (const r of await evaluateNeeds(root, ctx, needs, doc)) {
       if (r.status === 'ok') continue
       const rule = r.status === 'unmet' ? 'need-unmet' : `need-${r.status}`
       findings.push(f('warn', 'needs', `${doc.rel}: ${r.label}`, rule, r.detail))

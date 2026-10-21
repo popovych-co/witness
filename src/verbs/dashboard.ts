@@ -9,6 +9,7 @@ import { divergence, primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
+import { needMet } from '../needs.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { openDeferrals } from '../deferral.js'
@@ -41,7 +42,7 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
     const needs = Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : []
     for (const n of needs) {
       if (typeof n.env === 'string' && !ctx.env[n.env]) out.push({ doc: id, why: `needs: ${n.env} unset` })
-      if (typeof n.manual === 'string' && n.satisfied !== true) out.push({ doc: id, why: `needs: ${n.manual} unsatisfied` })
+      if (typeof n.manual === 'string' && !needMet(doc, n as { manual: string })) out.push({ doc: id, why: `needs: ${n.manual} unsatisfied` })
     }
   }
   return out

@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process'
 import { ensureTrusted } from './allowlist.js'
 import type { Ctx } from './cli.js'
+import type { CanonDoc } from './scan.js'
 
 export interface NeedResult {
   label: string
@@ -9,7 +10,20 @@ export interface NeedResult {
   detail: string
 }
 
-export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[]): Promise<NeedResult[]> {
+// Row 179. What a journaled satisfaction names a need by: its id, else its manual text.
+export function needKey(n: { id?: string; manual: string }): string {
+  return n.id ?? n.manual
+}
+
+// The one judge of a manual need. Satisfying a need is a human's assertion about the world,
+// so `witness satisfy` journals it rather than rewriting the spec — a frontmatter flip moved
+// the content sha, which re-queued a plan and re-armed a look for no change in behavior. The
+// frontmatter flag stays as legacy input: a doc written `satisfied: true` reads met.
+export function needMet(doc: CanonDoc, n: { id?: string; manual: string; satisfied?: boolean }): boolean {
+  return n.satisfied === true || doc.satisfiedNeeds.includes(needKey(n))
+}
+
+export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[], doc: CanonDoc): Promise<NeedResult[]> {
   const out: NeedResult[] = []
   for (const raw of needs) {
     const n = raw as Record<string, unknown>
@@ -17,7 +31,7 @@ export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[]): P
       const set = Boolean(ctx.env[n.env])
       out.push({ label: n.env, kind: 'env', status: set ? 'ok' : 'unmet', detail: set ? 'set' : 'env var unset' })
     } else if (typeof n.manual === 'string') {
-      const done = n.satisfied === true
+      const done = needMet(doc, n as { id?: string; manual: string; satisfied?: boolean })
       out.push({ label: n.manual, kind: 'manual', status: done ? 'ok' : 'unmet', detail: done ? 'satisfied' : 'flip via witness satisfy' })
     } else if (typeof n.cmd === 'string') {
       const trust = await ensureTrusted(root, ctx, n.cmd)

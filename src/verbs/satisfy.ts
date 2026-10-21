@@ -1,13 +1,13 @@
-import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { writeDoc } from '../fm.js'
+import { appendEntry, entryLine, journalRel } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { acquireLock } from '../lock.js'
+import { needKey, needMet } from '../needs.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { kv } from '../toon.js'
-import { guardTxn, withTxn } from '../txn.js'
+import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -42,17 +42,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('--need', 'unknown-manual-need', values.need, `one of: ${listed.join(' · ') || '(no manual needs)'}`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
-  if (target.satisfied === true) {
-    ctx.out(kv('satisfy', `already satisfied: ${target.manual}`))
+  const need = target as { id?: string; manual: string; satisfied?: boolean }
+  if (needMet(doc, need)) {
+    ctx.out(kv('satisfy', `already satisfied: ${need.manual}`))
     return EXIT.OK
   }
   const lock = acquireLock(root)
   if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
   try {
-    target.satisfied = true
-    const res = withTxn(root, { op: `satisfy(${id})`, files: [doc.rel] }, () => {
-      writeDoc(join(root, doc.rel), { meta: doc.meta, body: doc.body })
-      return stateCommit(root, [doc.rel], `satisfy(${id}): ${target.manual}`)
+    // Row 179. Journaled on the doc's own stream, never written into the spec: the content
+    // sha does not move, so no plan re-queues and no approved look re-arms.
+    const entry = { t: 'need-satisfied' as const, artifact: id, need: needKey(need) }
+    const stream = journalRel(id)
+    const res = withTxn(root, { op: `satisfy(${id})`, files: [stream], journal: { stream: id, line: entryLine(entry) } }, () => {
+      appendEntry(root, id, entry)
+      crashPoint(ctx.env, 'journal-append')
+      return stateCommit(root, [stream], `satisfy(${id}): ${needKey(need)}`)
     })
     if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
     ctx.out(kv('satisfied', String(target.manual)))

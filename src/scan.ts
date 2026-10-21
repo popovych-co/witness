@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { canonPaths, type CanonPaths } from './config.js'
 import { readDoc } from './fm.js'
+import { readStream } from './journal.js'
 import { type Violation } from './refusal.js'
 import { validateDoc } from './schemas.js'
 
@@ -10,12 +11,25 @@ export interface CanonDoc {
   meta: Record<string, unknown>
   body: string
   violations: Violation[]
+  // Row 179. The manual needs the journal records as satisfied, by needKey: read here, once per
+  // load, so every judge of a need (needMet) sees the same answer without a journal read of
+  // its own. Empty for a doc that carries no manual need.
+  satisfiedNeeds: readonly string[]
 }
 
 export interface Canon {
   docs: CanonDoc[]
   errors: Violation[]
   paths: CanonPaths
+}
+
+// Keyed by the doc's own stream, not by the entry's `artifact`: a rename moves the stream and
+// keeps every satisfaction it recorded.
+function satisfiedNeeds(root: string, meta: Record<string, unknown>): string[] {
+  const needs = Array.isArray(meta.needs) ? (meta.needs as unknown[]) : []
+  if (!needs.some((n) => typeof n === 'object' && n !== null && typeof (n as Record<string, unknown>).manual === 'string')) return []
+  if (typeof meta.id !== 'string') return []
+  return readStream(root, meta.id).filter((e) => e.t === 'need-satisfied').map((e) => String(e.need))
 }
 
 export function loadCanon(root: string): Canon {
@@ -38,6 +52,7 @@ export function loadCanon(root: string): Canon {
         meta: parsed.value.meta,
         body: parsed.value.body,
         violations: validateDoc(parsed.value.meta, parsed.value.body),
+        satisfiedNeeds: satisfiedNeeds(root, parsed.value.meta),
       })
     }
   }

@@ -19,6 +19,9 @@ export type EntryType =
   | 'deferral' | 'deferral-moved' | 'deferral-retyped' | 'deferral-discharged' | 'deferral-dismissed'
   // Row 176. The human's ask, queued on witness's own `asks` stream, and its withdrawal.
   | 'ask' | 'ask-withdrawn'
+  // Row 179. A human's assertion that a manual need is met: journaled, never a frontmatter
+  // rewrite, so no content sha moves when the world changes.
+  | 'need-satisfied'
 
 export interface Entry {
   v: 1

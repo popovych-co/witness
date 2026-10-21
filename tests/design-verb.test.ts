@@ -1,7 +1,10 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { designPending } from '../src/design.js'
 import { readStream } from '../src/journal.js'
+import { findById, loadCanon } from '../src/scan.js'
+import { canonicalSha } from '../src/sha.js'
 import { DESIGN_HTML, approve, seededRepo, writeDesign, writeSpec } from './helpers.js'
 
 describe('witness design', () => {
@@ -48,5 +51,17 @@ describe('witness design', () => {
     const res = await repo.cli(['design', 'booking-form', '--reconfirm'])
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('no-stamp')
+  })
+
+  it('a satisfy leaves an approved look approved (A10)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ui: true, needs: [{ id: 'sbx', manual: 'Stripe sandbox account created', satisfied: false }] })
+    approve(repo, 'auth-refresh')
+    const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+    repo.setMeta('auth-refresh', { design: { sha: 'a'.repeat(64), spec: canonicalSha(doc.meta, doc.body) } })   // the approved look's stamp
+    const spec = () => findById(loadCanon(repo.root), 'auth-refresh')!
+    expect(designPending(repo.root, spec())).toBe(false)
+    expect((await repo.cli(['satisfy', 'auth-refresh', '--need', 'sbx'])).code).toBe(0)
+    expect(designPending(repo.root, spec())).toBe(false)
   })
 })
