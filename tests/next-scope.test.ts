@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 import { appendEntry, readStream } from '../src/journal.js'
-import { loadCanon } from '../src/scan.js'
+import { findById, loadCanon } from '../src/scan.js'
+import { canonicalSha } from '../src/sha.js'
 import { computeNext, NOTHING_OWED } from '../src/verbs/next.js'
 import {
-  approve, autonomyOn, fakeCtx, fakeScenario, gateEnv, ghState, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
+  approve, autonomyOn, fakeCtx, fixtureEnv, fakeScenario, gateEnv, ghState, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -119,4 +120,40 @@ describe('next hands an autonomous chat session to drive (B1)', () => {
     expect(await nextLine(auto, { env: { WITNESS_DRIVE: auto.effort } })).not.toMatch(/^(launch|watch):/m)
     expect(await nextLine(await seededRepo())).not.toMatch(/^(launch|watch):/m)
   })
+})
+
+// Final review F8. A human's stop is theirs to see: `launch:` only when drive has work beyond
+// the stops that wait for the human, and never instead of showing them.
+describe('the chat shows the human their stop (B1)', () => {
+  const pendingLook = async (repo: TestRepo) => {
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+    const doc = findById(loadCanon(repo.root), 'billing-page')!
+    appendEntry(repo.root, 'billing-page', {
+      v: 1, t: 'gate-run', gate: 'design', artifact: 'billing-page', round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+      standing: 'design always stops — the human judges the look',
+      verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: 'billing-page > ## Behavior', note: 'read' }], findings: [] }],
+    } as never)
+  }
+  it('prints no launch: when only a human stop waits', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await pendingLook(repo)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness decide design billing-page --show')
+    expect(out).not.toMatch(/^(launch|watch):/m)
+  }, 60_000)
+  it('prints launch: when drive has work beyond the stop', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    await pendingLook(repo)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness decide design billing-page --show')
+    expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
 })

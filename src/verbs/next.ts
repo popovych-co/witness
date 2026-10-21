@@ -855,6 +855,26 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   return { line: 'witness check', note: NOTHING_OWED }
 }
 
+// A stop that waits for the human: a decision the CLI could not settle, or a start an unmet
+// manual need blocks. Drive sets either aside, so neither is work to launch it for.
+function humanStop(canon: Canon, a: NextAction): boolean {
+  if (a.line.startsWith('witness decide ')) return true
+  return a.line.startsWith('witness start ') &&
+    unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
+}
+
+// The ladder with the human's stops set aside, the way drive's fill reads it.
+function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
+  const held = new Set<string>()
+  for (let a = first; ;) {
+    if (a.line === 'witness check') return false
+    if (!humanStop(canon, a)) return true
+    if (a.target === undefined || held.has(a.target)) return false
+    held.add(a.target)
+    a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
+  }
+}
+
 // Exported for `drive`, which claims a flow with the same `--flow` semantics `next` has:
 // a claim that refuses when false. A second copy of these three refusals would be a
 // second answer to "is this a flow", and the two would part company on the first change.
@@ -996,7 +1016,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
   // the background and ends its turn, or says where to watch the one already running. Last,
   // so it never splits the routing unit, and raw, because both lines are commands (D120).
-  if (cfgR.value.autonomy && marked === undefined && action.line !== 'witness check') {
+  // Only when drive has work beyond the stops that wait for the human (F8): with nothing
+  // else, a launched drive would set the stop aside and exit, and the chat would never show it.
+  if (cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)) {
     const holder = driveHolder(root)
     ctx.out(holder !== undefined ? cmd('watch', watchLine(holder)) : cmd('launch', 'witness drive --detach'))
   }
