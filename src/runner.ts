@@ -6,6 +6,7 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { withRunnerTurn } from './runner-lock.js'
 
 export type RunnerConfig =
   | { mode: 'filtered'; template: string; reportGlob?: string }
@@ -56,6 +57,10 @@ export interface RunOutcome {
 }
 
 export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
+  return withRunnerTurn(runRoot, ctx, cmd, (env) => runCommand(runRoot, { ...ctx, env }, cmd))
+}
+
+function runCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
   try {
     // D158. Suite stdout is unbounded and only the last 4000 chars are kept — but at
     // Node's 1 MiB default a chatty GREEN suite threw ENOBUFS into the catch and read

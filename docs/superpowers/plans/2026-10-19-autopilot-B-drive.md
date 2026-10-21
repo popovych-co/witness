@@ -43,16 +43,16 @@ These are reconciled against `docs/superpowers/plans/2026-10-19-autopilot-A1-dec
 - **A1 (0.16.0):**
   - `Config.autonomy: boolean`, from `autonomy: on | off`, default off. A run is **autonomous** when `cfg.autonomy && !manual`.
   - In `src/autonomy.ts`: `KeptStop` (`'design-look' | 'unmet-need' | 'trust-grant'`), `KEPT_STOP_NAMES` (design look · unmet need · trust grant) and `keptStopLine(stop, detail)`.
-  - In `src/settle.ts`: `settleOwed(ctx, root, cfg): Promise<SettleReport[]>`, `settledLine(r)`, `SettleReport { gate, target, settled }` and `Settled` (`none · decided · routed · kept · left`). They are always loaded with `await import()`, as A1 requires of `gate.ts` and `next.ts`. Task 6 adds `settleOwed`'s optional `scope`.
+  - In `src/settle.ts`: `settleOwed(ctx, root, cfg): Promise<SettleReport[]>`, `settledLine(r)`, `SettleReport { gate, target, settled }` and `Settled` (`none · decided · routed · kept · left`). They are always loaded with `await import()`, as A1 requires of `gate.ts` and `next.ts`. Task 6 adds `settleOwed`'s optional `scope`. Under CI (`ctx.env.CI`) `settleOwed` returns `[]`, because CI never writes state. GitHub Actions sets `CI=true`, so every test that expects drive or `next` to settle runs them with `gateEnv(...)`, which clears it. A2's `71370cb` fixed exactly this failure, which passed locally and failed only on GitHub.
   - In `src/verbs/decide.ts`: `applyDecision(ctx, act: DecisionAct): Promise<number>`, with `DecisionCore`'s `runId`. Task 10 adds two optional fields, `park` and `rule`, for the cap park.
   - In `src/verbs/next.ts`: `owedDecisions(root, canon): OwedDecision[]` (`{ gate, target, bound }`), tier 2's own list.
   - `DecisionEntry.selected` is widened to `'affirmation' | 'policy' | 'arbiter'`.
-  - `mergeOwnPr` never prints `merge PR`. Drive's merge sniff therefore fires only where a human merges.
+  - `mergeOwnPr` (`src/ship.ts`) prints `merge PR #<n> on GitHub when ready` only when it leaves the merge to a human: autonomy is off when re-read at merge time, or off on the PR's base (`refs/witness/ship-authority`). Its held paths print `merge: held — …` instead. Drive's merge sniff therefore fires only where a human merges.
   - The trust stop's human act is running the stopped gate in a terminal, where `ensureTrusted` asks before each command.
   - `autonomyOn(repo)`, `plannedRepo(opts)` and `PLAN_BLOCKING` in `tests/helpers.ts`.
   - The engine's `## Under \`autonomy: on\`` section. Task 14's rows sit at the top of the action table and leave it as it is.
 - **A2 (0.17.0):**
-  - `queueAsk(ctx, root, text): Result<{ id: string; unanswered: number }>` and `ASK_STREAM` (`'asks'`) in `src/ask.ts`. `drive --ask` calls `queueAsk`.
+  - `queueAsk(ctx, root, text): Result<{ id: string; unanswered: number; already: boolean }>` and `ASK_STREAM` (`'asks'`) in `src/ask.ts`. `already` is true when the same open words already wait, and then the id is that ask's. `drive --ask` calls `queueAsk`.
   - The ask rung at the top of tier 3 carries no `target`, so Task 6's scope passes it `undefined`.
   - `unmetNeeds(canon): UnmetNeed[]` in `src/needs.ts`, with `{ doc, type, need, text, holds, blocks: 'start' | 'nothing', satisfy }`. Task 9 and the report read it.
   - Under autonomy, brainstorm and design authoring are no conversations, and the engine queues `/witness <words>` with `ask` before the first `next`.
@@ -111,7 +111,7 @@ Read A1's `src/autonomy.ts`, `src/settle.ts`, and its edits to `src/verbs/decide
 
 - [ ] **Step 3: Commit revisions to this plan, if any**
 
-This plan landed on `main` with wave 1's Task 0. Commit only edits that Step 2 made:
+This plan landed on `main` with wave 1's Task 0. On 2026-10-21 its **Consumed from A1 and A2** names were re-checked against the merged code, and those edits (`queueAsk`'s `already`, `mergeOwnPr`'s print paths, `settleOwed` under CI) sit uncommitted on `main`. Commit them together with any edits Step 2 made:
 
 ```bash
 git add docs/superpowers/plans/2026-10-19-autopilot-B-drive.md
@@ -1186,7 +1186,7 @@ git commit -m "feat(drive): up to drive.parallel targets at once · progress jud
 
   `resolveDecision` (`drive.ts:402-441`) runs only when autonomy is off.
 - **The needs check, in both modes.** `witness start <plan>`, where `unmetNeeds(canon)` lists a `blocks: 'start'` need of that plan. Print `drive: waits on you — <plan> · unmet need`, then `keptStopLine('unmet-need', <the needs' texts, then their satisfy commands, all joined ' · '>)`, and set the plan aside `kept` with `stop: 'unmet-need'`. No session is spawned only to be refused. A2's start rung reaches this only when every approved plan waits. Env and cmd needs stay `start`'s, as A2 decided.
-- The `merge PR` sniff stays on in both modes. Under autonomy `mergeOwnPr` never prints it (A1), so it fires only where a human merges.
+- The `merge PR` sniff stays on in both modes. `mergeOwnPr` prints it only when it leaves the merge to a human (A1: autonomy off at merge time, or off on the PR's base), so it fires only where a human merges.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1854,7 +1854,7 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
   4. no TTY while the run is not autonomous → `drive-needs-tty`;
   5. a live drive lock → `drive-running`;
   6. `--flow` → `resolveFlow`, with today's claim refusals;
-  7. `--ask <text>` → `queueAsk(ctx, root, text)`. A refusal renders and exits 2. Success prints `ask: <id> — queued`.
+  7. `--ask <text>` → `queueAsk(ctx, root, text)`. A refusal renders and exits 2. Success prints what `witness ask` prints (`src/verbs/ask.ts:42`): `ask: <id> — queued`, or `ask: <id> — already queued` when `already` is true.
   8. `--detach` → `detachDrive` with every flag except `--detach` and `--ask`. Print `drive: started in the background · pid <n>`, then `watch: <watchLine>`, and exit 0.
   9. Acquire the drive lock, run `driveLoop`, and release the lock.
 - **The refusals, `field · rule · got · want`:**

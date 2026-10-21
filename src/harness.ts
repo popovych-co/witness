@@ -56,14 +56,23 @@ export interface Harness {
 }
 
 function parseClaudeEnvelope(stdout: string): Result<{ text: string }> {
+  let envelope: { result?: unknown; is_error?: unknown }
   try {
-    const envelope = JSON.parse(stdout) as { result?: unknown }
-    if (typeof envelope.result !== 'string') throw new Error('missing result')
-    return ok({ text: envelope.result })
+    envelope = JSON.parse(stdout) as { result?: unknown; is_error?: unknown }
   } catch {
+    envelope = {}
+  }
+  // Row 182. claude reports a usage limit (and every provider failure) in an envelope with
+  // is_error: true, often at exit 0. Its result is the failure text, never a verdict.
+  if (envelope.is_error === true) {
+    return refuse([v('claude', 'reviewer-invocation', String(envelope.result ?? '').slice(0, 200),
+      'claude print mode answering without an error envelope — check auth and usage for that account')])
+  }
+  if (typeof envelope.result !== 'string') {
     return refuse([v('claude', 'envelope-unparseable', stdout.slice(0, 120),
       'a --output-format json envelope carrying a result string')])
   }
+  return ok({ text: envelope.result })
 }
 
 interface PiMessage {

@@ -85,6 +85,13 @@ export interface DecisionCore {
   // Row 173: the run the decider judged. A settler sets it; `applyDecision` refuses
   // `anchor-moved` when the run it would dispose of is a different one.
   runId?: string
+  // Row 183, policy-only (`decisionAct` never sets them, so the human verb never does). A
+  // cap park is a decision about the FLOW: `park` lets a stop anchor on the gate's last run
+  // when the anchor rule finds none — mid-revise, the author kept editing after the last
+  // `--revise` — and `rule` journals the cap that decided in place of the recommender's
+  // (D121: the rule that matched is the rule recorded).
+  park?: true
+  rule?: string
 }
 
 // Who selected the option rides with the act, so the record is written by the same door
@@ -310,6 +317,14 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     return EXIT.REFUSED
   }
 
+  if ((act.park !== undefined || act.rule !== undefined) && act.selected !== 'policy') {
+    const what = act.park !== undefined ? 'park' : `rule ${act.rule}`
+    renderRefusal([v('selected', 'autonomy-cannot', `${act.selected ?? 'a human'} with ${what}`,
+      'the policy alone — a cap park and its own rule are the drive policy\'s acts (row 183)')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   const atBound = boundReached(entries, gate)
 
   // Row 109. The grant is a REVISE — the human is sending the artifact back, they are just
@@ -366,8 +381,10 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // run, or the target livelocks (incident c2692b93)
     const endgame = boundReached(es, gate) && (decision === 'stop' || (decision === 'approve' && override) ||
       (decision === 'revise' && (upstream !== undefined || repair)))
+    // Row 183: a cap park disposes of the flow, not of bytes — `gateParked` has no sha term
+    const parked = act.park === true && decision === 'stop'
     return {
-      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor) ? lastRun : undefined),
+      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor || parked) ? lastRun : undefined),
       after: afterLast.length,
     }
   }
@@ -482,7 +499,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ...(repair ? { repair: true as const } : {}),
     ...(note ? { note } : {}),
     ...(recommendedVerb ? { recommended: recommendedVerb } : {}),
-    ...(rec?.rule ? { rule: rec.rule } : {}),
+    ...(act.rule ?? rec?.rule ? { rule: act.rule ?? rec?.rule } : {}),
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
     ...(act.selected !== undefined ? { selected: act.selected } : {}),
     ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
@@ -657,7 +674,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   }
   // Row 173: a decision nobody typed says so, with the rule it acted on.
   const by = act.selected === 'policy' || act.selected === 'arbiter'
-    ? ` · ${act.selected}${rec?.rule ? ` · ${rec.rule}` : ''}` : ''
+    ? ` · ${act.selected}${entry.rule ? ` · ${entry.rule}` : ''}` : ''
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}${by}`))
   if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))

@@ -1,20 +1,77 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { worktreePath } from '../src/worktree.js'
+import { gateParked } from '../src/verbs/next.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { effortReviewedSha } from '../src/reviewed.js'
-import { loadCanon } from '../src/scan.js'
+import { findById, loadCanon } from '../src/scan.js'
+import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  approve, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, seededRepo, writePlan, writeSpec,
-  type TestRepo,
+  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
+
+const cfgOf = (repo: TestRepo): Config => {
+  const r = loadConfig(repo.root)
+  if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
+  return r.value
+}
+// Fakes are written into a mkdtemp scenario dir, never fakeBinDir() — that one is a
+// COMMITTED fixture directory and a test that writes there dirties the repo.
+const fakeAgent = (body: string): string => {
+  const bin = join(fakeScenario(), 'fake-agent')
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  return bin
+}
+// A noop keep-awake by default: the real `caffeinate` must never run from the suite.
+const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
+  fakeCtx(repo.root, { tty: true, env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+// A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
+// harness: the assertion under test is the decision, not what follows it. It says `tick`
+// so a test can find its session by prefix.
+const idleAgent = (): string => {
+  const bin = join(fakeScenario(), 'idle-agent')
+  writeFileSync(bin, '#!/bin/sh\necho tick\nexit 0\n', { mode: 0o755 })
+  return bin
+}
+const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
+  fakeCtx(repo.root, {
+    tty: true, answers, out: (l) => out.push(l),
+    env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent(), WITNESS_KEEP_AWAKE_BIN: noopOpener() }),
+  })
+
+// n started flows, one spec each. A fresh worktree owes its first red, so every flow sits
+// at `witness test-evidence <plan> --phase red` (rank 1). `shipping` gets a pr (rank 3).
+async function startedFlows(specs: string[], opts: { shipping?: string } = {}): Promise<TestRepo> {
+  const repo = await seededRepo()
+  for (const s of specs) {
+    await writeSpec(repo, s, { criteria: [{ id: `ac-${s}`, test: `@spec:${s}` }] })
+    approve(repo, s)
+    await writePlan(repo, `${s}-plan-1`, { parent: s, steps: [{ id: 's1', title: s, criteria: [`ac-${s}`] }] })
+    approve(repo, `${s}-plan-1`)
+    await repo.cli(['start', `${s}-plan-1`])
+  }
+  if (opts.shipping) repo.setMeta(`${opts.shipping}-plan-1`, { pr: 7 })
+  autonomyOn(repo)
+  writeLocalConfig(repo.root, { notify: noopOpener() })
+  return repo
+}
+const autoCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
+  fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+const script = (body: string): string => {
+  const bin = join(fakeScenario(), 'agent')
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  return bin
+}
 
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
@@ -89,19 +146,6 @@ describe('classifyAction (D145 addendum §6)', () => {
 })
 
 describe('spawnSession (D145 addendum §3-5)', () => {
-  const cfgOf = (repo: TestRepo): Config => {
-    const r = loadConfig(repo.root)
-    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
-    return r.value
-  }
-  // Fakes are written into a mkdtemp scenario dir, never fakeBinDir() — that one is a
-  // COMMITTED fixture directory and a test that writes there dirties the repo.
-  const fakeAgent = (body: string): string => {
-    const bin = join(fakeScenario(), 'fake-agent')
-    writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
-    return bin
-  }
-
   it('streams both pipes prefixed, from the action home', async () => {
     const repo = await seededRepo()
     const bin = fakeAgent('echo one\necho two >&2\npwd')
@@ -111,7 +155,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     })
     const res = await spawnSession(
       { kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
-    expect(res).toBe('exited')
+    expect(res.outcome).toBe('exited')
     expect(lines).toContain('[1 implement/p1] one')
     expect(lines).toContain('[1 implement/p1] two')
     expect(lines).toContain(`[1 implement/p1] ${repo.root}`)
@@ -121,8 +165,8 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const repo = await seededRepo()
     const bin = fakeAgent('sleep 60')
     const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin } })
-    const cfg = { ...cfgOf(repo), drive: { sessionTimeoutMs: 100 } }
-    expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).toBe('timeout')
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 100 } }
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).outcome).toBe('timeout')
   }, 20000)
 
   it('returns when the session exits even if a grandchild still holds the pipe', async () => {
@@ -136,7 +180,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     })
     const started = Date.now()
     const res = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 9)
-    expect(res).toBe('exited')
+    expect(res.outcome).toBe('exited')
     expect(lines.join('\n')).toContain('started')
     expect(Date.now() - started).toBeLessThan(10000)
   }, 20000)
@@ -146,7 +190,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const ctx = fakeCtx(repo.root, {
       tty: true, env: { WITNESS_DRIVE_AGENT_BIN: join(repo.root, 'no-such-agent') },
     })
-    expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).toBe('spawn-failed')
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).outcome).toBe('spawn-failed')
   }, 20000)
 
   it('builds the headless session command per harness, carrying the stage pin', async () => {
@@ -171,11 +215,11 @@ describe('spawnSession (D145 addendum §3-5)', () => {
 
 // The fixture every loop case needs: an approved plan, so computeNext's first answer is
 // `witness start <plan-id>` — a real act a fake agent can perform through the real CLI.
-async function planReady(): Promise<TestRepo> {
+async function planReady(opts: Parameters<typeof writePlan>[2] = {}): Promise<TestRepo> {
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   approve(repo, 'auth-refresh')
-  await writePlan(repo, 'auth-refresh-plan-1')
+  await writePlan(repo, 'auth-refresh-plan-1', opts)
   approve(repo, 'auth-refresh-plan-1')
   return repo
 }
@@ -205,14 +249,6 @@ function actsOnceAgent(scenario: string, act: string): string {
 }
 
 describe('driveLoop (D145)', () => {
-  const cfgOf = (repo: TestRepo): Config => {
-    const r = loadConfig(repo.root)
-    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
-    return r.value
-  }
-  const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
-    fakeCtx(repo.root, { tty: true, env: fixtureEnv(env), out: (l) => out.push(l) })
-
   it('spawns, sees the journal grow, and stops when the action stops moving', async () => {
     const repo = await planReady()
     const bin = actsOnceAgent(fakeScenario(), 'start auth-refresh-plan-1')
@@ -254,7 +290,7 @@ describe('driveLoop (D145)', () => {
     const bin = join(fakeScenario(), 'hang')
     writeFileSync(bin, '#!/bin/sh\nsleep 60\n', { mode: 0o755 })
     const out: string[] = []
-    const cfg = { ...cfgOf(repo), drive: { sessionTimeoutMs: 200 } }
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 200 } }
     const code = await driveLoop(repo.root, cfg, ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), {})
 
     expect(code).toBe(1)
@@ -286,24 +322,6 @@ async function gatedEffort(): Promise<TestRepo> {
 }
 
 describe('judgment stops in the driver terminal (D145, D143)', () => {
-  const cfgOf = (repo: TestRepo): Config => {
-    const r = loadConfig(repo.root)
-    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
-    return r.value
-  }
-  // A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
-  // harness: the assertion under test is the decision, not what follows it.
-  const idleAgent = (): string => {
-    const bin = join(fakeScenario(), 'idle-agent')
-    writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    return bin
-  }
-  const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
-    fakeCtx(repo.root, {
-      tty: true, answers, out: (l) => out.push(l),
-      env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent() }),
-    })
-
   const lastDecision = (repo: TestRepo): Record<string, unknown> | undefined =>
     readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1) as
       Record<string, unknown> | undefined
@@ -366,4 +384,619 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     expect(out.join('\n')).toMatch(/nod-cannot|name the option/)
     expect(lastDecision(repo)).toBeUndefined()
   }, 30000)
+})
+
+describe('sessions carry their target (B1 · B3)', () => {
+  it('hands the child its target as the drive marker', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo "marker=$WITNESS_DRIVE"') }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 2)
+    expect(lines).toContain('[1 implement/p1] marker=p1')
+    expect(lines.find((l) => l.startsWith('[2 '))).toMatch(/marker=-$/)
+  }, 20000)
+
+  it('reports the exit code and the last three lines', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent("printf 'a\\nb\\n\\nc\\nd\\n'\nexit 3") } })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1)
+    expect(end).toMatchObject({ outcome: 'exited', code: 3, tail: ['b', 'c', 'd'] })
+    expect(end.ms).toBeGreaterThan(0)
+  }, 20000)
+
+  it('a stopped session takes its whole process tree with it (F11)', async () => {
+    const repo = await seededRepo()
+    const dir = fakeScenario()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(`(sleep 2; echo acted > "${dir}/late") &\nexec sleep 30`) } })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 300 } }
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 1)).outcome).toBe('timeout')
+    await new Promise((r) => setTimeout(r, 3_000))
+    expect(existsSync(join(dir, 'late'))).toBe(false)
+  }, 20000)
+
+  it('hands the child its deadline (F14)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo "deadline=$WITNESS_DRIVE_DEADLINE"') }, out: (l) => lines.push(l) })
+    const t0 = Date.now()
+    await spawnSession({ kind: 'spawn', home: repo.root, target: 'p1' }, cfgOf(repo), ctx, 1)
+    const deadline = Number(/deadline=(\d+)/.exec(lines.join('\n'))?.[1])
+    expect(deadline).toBeGreaterThanOrEqual(t0 + cfgOf(repo).drive.sessionTimeoutMs)
+    expect(deadline).toBeLessThan(t0 + cfgOf(repo).drive.sessionTimeoutMs + 10_000)
+  }, 20000)
+
+  it('prompts a --manual session with /witness --manual', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo "prompt=$2"') }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1, { manual: true })
+    expect(lines.join('\n')).toContain('prompt=/witness --manual')
+  }, 20000)
+
+  it('an abort stops the session', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 30') } })
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), 200)
+    const t0 = Date.now()
+    const end = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1, { signal: ac.signal })
+    expect(end.outcome).toBe('stopped')
+    expect(Date.now() - t0).toBeLessThan(10_000)
+  }, 20000)
+})
+
+describe('classifyAction under autonomy (B2)', () => {
+  const root = '/repo'
+  const auto = { autonomy: true }
+  it('runs conversations and option blocks headless · decisions stay decisions', () => {
+    expect(classifyAction({ line: 'witness recap --file <recap.json> --ask a1', stage: 'brainstorm' }, root, auto))
+      .toEqual({ kind: 'spawn', home: root, stage: 'brainstorm', target: undefined, model: undefined })
+    expect(classifyAction({ line: 'witness design auth-refresh --file <html>', stage: 'design', target: 'auth-refresh' }, root, auto).kind)
+      .toBe('spawn')
+    expect(classifyAction({ line: 'witness recover --complete', block: ['recovery: 2 options · 1 is recommended'] }, root, auto).kind)
+      .toBe('spawn')
+    expect(classifyAction({
+      line: 'witness write a-plan-1 --effort e --meta m.json --body b.md', stage: 'plan', target: 'a',
+      block: ['choose: 2 options · 1 is recommended'],
+    }, root, auto).kind).toBe('spawn')
+    expect(classifyAction({ line: 'witness decide ship p1 --show', target: 'p1' }, root, auto))
+      .toEqual({ kind: 'decision', gate: 'ship', target: 'p1' })
+  })
+})
+
+describe('side by side (B3)', () => {
+  it('runs two targets at once, most advanced first, never two on one target (Review Focus 2)', async () => {
+    const repo = await startedFlows(['a', 'b', 'c'], { shipping: 'c' })
+    const log = join(fakeScenario(), 'log')
+    const agent = script(`echo hi\necho "$WITNESS_DRIVE start" >> "${log}"\nsleep 1\necho "$WITNESS_DRIVE end" >> "${log}"`)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(out).toContain('[1 ship/c-plan-1] hi')                    // the ladder's own order (D73)
+    expect(out).toContain('[2 implement/a-plan-1] hi')
+    expect(out).toContain('[3 implement/b-plan-1] hi')
+    const lines = readFileSync(log, 'utf8').trim().split('\n')
+    expect(lines.slice(0, 2).sort()).toEqual(['a-plan-1 start', 'c-plan-1 start'])      // both ran at once
+    expect(lines.indexOf('b-plan-1 start')).toBeGreaterThan(Math.min(lines.indexOf('c-plan-1 end'), lines.indexOf('a-plan-1 end')))
+    for (const t of ['a-plan-1', 'b-plan-1', 'c-plan-1']) expect(lines.filter((l) => l === `${t} start`)).toHaveLength(1)
+    expect(code).toBe(1)                               // all three made no progress
+  }, 60000)
+
+  it('catches a stalled target while another target journals every spawn (Review Focus 1)', async () => {
+    const repo = await startedFlows(['a', 'b'])
+    const agent = script(`echo tick\ncase "$WITNESS_DRIVE" in a-plan-1) exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0 ;; *) exit 0 ;; esac`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
+    const all = out.join('\n')
+    expect(all).toContain('drive: no progress — witness test-evidence b-plan-1 --phase red')
+    expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
+    expect(all).toMatch(/drive: spawn ceiling reached \(6\)/)
+  }, 90000)
+
+  it('with autonomy off a standing decision no longer ends the run', async () => {
+    const repo = await gatedEffort()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['', ''], out), { maxSpawns: 1 })
+    expect(out.join('\n')).toMatch(/drive: decision stands/)
+    expect(out.join('\n')).toMatch(/\[1 drive\/auth-mfa-plan-1\]/)       // the start ran after it
+  }, 60000)
+})
+
+// a ui spec whose design gate stopped clean: under autonomy the look is the human's (A1)
+// The verdict carries the gate's own current sha (with no artifact, the spec's): a stale
+// verdict would make A1 route a re-run instead of keeping the look for the human.
+function pendingLook(repo: TestRepo, spec: string): void {
+  const doc = findById(loadCanon(repo.root), spec)!
+  appendEntry(repo.root, spec, {
+    v: 1, t: 'gate-run', gate: 'design', artifact: spec, round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
+    prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+    standing: 'design always stops — the human judges the look',
+    verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: `${spec} > ## Behavior`, note: 'read' }], findings: [] }],
+  })
+}
+const uiSpec = async (repo: TestRepo, id: string) => {
+  await writeSpec(repo, id, { ui: true, criteria: [{ id: `ac-${id}`, test: `@spec:${id}` }] })
+  approve(repo, id)
+}
+
+describe('autonomy in the loop (B2)', () => {
+  it('a kept stop holds only its target and the run moves on (Review Focus 3)', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await uiSpec(repo, 'billing-page')
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    pendingLook(repo, 'billing-page')                   // last: an uncommitted append makes a later write refuse
+    const seen = join(fakeScenario(), 'seen')
+    const out: string[] = []
+    let asked = 0
+    const ctx = { ...autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), ask: async () => { asked++; return '' } }
+    await driveLoop(repo.root, cfgOf(repo), ctx, {})
+    expect(out.join('\n')).toContain('kept-stop: design look — ')
+    expect(out).toContain('drive: waits on you — billing-page · design look')
+    expect(readFileSync(seen, 'utf8')).toContain('auth-mfa-plan-1')
+    expect(asked).toBe(0)
+  }, 60000)
+
+  it('a run that ends on kept stops alone exits 0', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await uiSpec(repo, 'billing-page')
+    pendingLook(repo, 'billing-page')
+    const out: string[] = []
+    expect(await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 9') }, out), {})).toBe(0)
+    expect(out.join('\n')).not.toMatch(/\[\d+ /)        // no session was spawned
+  }, 60000)
+
+  it('a plan waiting on a manual need waits without a session', async () => {
+    const repo = await planReady({ needs: [{ id: 'ses-prod', manual: 'SES production access', satisfied: false }] })
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 9') }, out), {})
+    expect(out).toContain('drive: waits on you — auth-refresh-plan-1 · unmet need')
+    expect(out).toContain('kept-stop: unmet need — SES production access · witness satisfy auth-refresh-plan-1 --need ses-prod')
+    expect(out.join('\n')).not.toMatch(/\[\d+ /)
+    expect(code).toBe(0)
+  }, 60000)
+
+  it('drive settles a waiting decision itself, then hands the target to its own session', async () => {
+    const repo = await gatedEffort()                    // stopped on a blocking finding while autonomy was off
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const seen = join(fakeScenario(), 'seen')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), { maxSpawns: 1 })
+    expect(out).toContain(`decided: decompose ${repo.effort} → revise · policy · blocking-here`)
+    expect(readFileSync(seen, 'utf8').trim()).toBe(repo.effort)
+  }, 60000)
+
+  it('a --manual run\'s stop waits for the human and is never settled', async () => {
+    const repo = await plannedRepo()                    // A1 · autonomy on
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1', '--manual'], { env: gateEnv(scenario) })
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 9') }, out), {})
+    expect(out).toContain('drive: waits on you — auth-refresh-plan-1 · decision · witness decide plan auth-refresh-plan-1 --show')
+    expect(readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'human-decision')).toEqual([])
+    expect(code).toBe(0)
+  }, 60000)
+
+  it('brainstorm runs headless under autonomy', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await repo.cli(['ask', 'Refresh tokens rotate before expiry'])
+    const seen = join(fakeScenario(), 'seen')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), { maxSpawns: 1 })
+    expect(readFileSync(seen, 'utf8').trim()).toBe('-')
+    expect(out.join('\n')).not.toContain('drive: conversation')
+  }, 60000)
+})
+
+// `witness next` in a process of its own: two of them are two settlers, which two
+// in-process calls (one pid, one lock re-entry) could never be.
+function nextChild(root: string, env: Record<string, string>): Promise<{ code: number | null; stdout: string }> {
+  const repo = resolve(import.meta.dirname, '..')
+  return new Promise((done) => {
+    const child = spawn(join(repo, 'node_modules', '.bin', 'tsx'), [join(repo, 'src', 'bin.ts'), 'next'],
+      { cwd: root, env: env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'ignore'] })
+    let stdout = ''
+    child.stdout!.on('data', (d) => { stdout += String(d) })
+    child.on('close', (code) => done({ code, stdout }))
+  })
+}
+
+describe('one decision per stop (B3)', () => {
+  it('two settlers racing one stop journal exactly one decision · the loser reads left', async () => {
+    // a stopped plan gate with one blocking-here finding, taken under autonomy: the policy revises
+    const repo = await plannedRepo({ autonomy: false })
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+    autonomyOn(repo)
+    const env = { ...process.env, ...gateEnv(scenario) } as Record<string, string>
+    const [x, y] = await Promise.all([nextChild(repo.root, env), nextChild(repo.root, env)])
+    const decided = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'human-decision')
+    expect(decided).toHaveLength(1)
+    expect([x, y].filter((r) => r.stdout.includes('decided:'))).toHaveLength(1)
+  }, 60_000)
+})
+
+describe('caps (B5)', () => {
+  it('parks a capped flow through the policy even after the author moved the tree (Review Focus 4)', async () => {
+    const repo = await startedFlows(['a'])
+    for (const round of [1, 2]) {
+      appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round,
+        run_id: `ri${round}`, reviewed_sha: `s${round}`, prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
+        calibration: 'none', checks: [], outcome: 'stopped' })
+      appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'human-decision', gate: 'implement', artifact: 'a-plan-1', round, decision: 'revise' })
+    }
+    writeFileSync(join(worktreePath(repo.root, 'a-plan-1'), 'moved.txt'), 'the author kept working\n')
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    rounds: 2\n`)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo tick') }, out), {})
+    const entries = readStream(repo.root, 'a-plan-1')
+    expect(gateParked(entries, 'implement')).toBe(true)
+    expect(entries.at(-1)).toMatchObject({ t: 'human-decision', decision: 'stop', selected: 'policy', rule: 'cap-rounds' })
+    expect(out.join('\n')).toContain('drive: parked — a-plan-1 · drive cap: implement ran 2 rounds across budget resets · drive.caps.rounds 2')
+    expect(out.join('\n')).not.toContain('] tick')       // no session past the cap
+    expect(code).toBe(1)
+  }, 60000)
+
+  it('a cap never parks a flow on a gate that settled (F7)', async () => {
+    const repo = await startedFlows(['a'])
+    appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round: 1,
+      run_id: 'ri1', reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
+      calibration: 'none', checks: [], outcome: 'passed' })
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+    const agent = script(`exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(readStream(repo.root, 'a-plan-1').filter((e) => e.t === 'human-decision')).toEqual([])
+    expect(gateParked(readStream(repo.root, 'a-plan-1'), 'implement')).toBe(false)
+    expect(out.join('\n')).toContain('drive: capped — a-plan-1 · drive cap: 1 session(s) this run · drive.caps.spawns 1 · no open gate to park it on')
+  }, 60000)
+
+  it('a target with no gate run to park on is set aside and named', async () => {
+    const repo = await startedFlows(['a'])
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+    const agent = script(`exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(out.join('\n')).toContain('drive: capped — a-plan-1 · drive cap: 1 session(s) this run · drive.caps.spawns 1 · no gate run to park it on')
+  }, 60000)
+})
+
+describe('surviving unattended (B4)', () => {
+  const LIMIT = "You've hit your session limit · resets 2pm (America/Los_Angeles)"
+  const START = Date.parse('2026-10-19T19:30:00Z')
+
+  it('waits out a usage limit and spawns again after the reset', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const flag = join(fakeScenario(), 'limited')
+    const agent = script(`if [ ! -f "${flag}" ]; then touch "${flag}"; echo "${LIMIT}" >&2; exit 1; fi\nexec ${witnessCli()} start auth-refresh-plan-1`)
+    const clock = fakeClock(START)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 2 }, clock)
+    expect(out.join('\n')).toContain(`drive: usage limit — waiting 1h31m · ${LIMIT}`)
+    expect(clock.slept).toEqual([5_460_000])
+    expect(existsSync(worktreePath(repo.root, 'auth-refresh-plan-1'))).toBe(true)   // the second session acted
+    expect(out.join('\n')).not.toContain('drive: no progress — witness start')
+  }, 60000)
+
+  it('a reset past the single wait stops the run', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const late = "You've hit your session limit · resets 4am (America/Los_Angeles)"          // 15h30m away
+    const clock = fakeClock(START)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "${late}" >&2\nexit 1`) }, out), {}, clock)
+    expect(out.join('\n')).toContain("drive: usage limit — resets in 15h31m — beyond drive's 6h wait")
+    expect(clock.slept).toEqual([])
+    expect(code).toBe(1)
+  }, 60000)
+
+  it('a limit that never lifts never waits past the total bound (Review Focus 5)', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const spawned = join(fakeScenario(), 'spawned')
+    const agent = script(`echo x >> "${spawned}"\necho '429 {"type":"error","error":{"type":"rate_limit_error","message":"x"}}' >&2\nexit 1`)
+    const clock = fakeClock(START)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {}, clock)
+    expect(out.join('\n')).toContain("the next wait passes drive's 12h bound")
+    expect(clock.slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(43_200_000)
+    expect(readFileSync(spawned, 'utf8').trim().split('\n')).toHaveLength(clock.slept.length + 1)
+    expect(code).toBe(1)
+  }, 120000)
+
+  it('keeps the machine awake for the run and lets go after', async () => {
+    const repo = await planReady()
+    const dir = fakeScenario()
+    const awake = join(dir, 'awake')
+    writeFileSync(awake, `#!/bin/sh\necho "$@" > "${dir}/args"\necho $$ > "${dir}/pid"\nexec sleep 30\n`, { mode: 0o755 })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, { tty: true, out: (l) => out.push(l),
+      env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: awake, WITNESS_DRIVE_AGENT_BIN: script('sleep 0.5') }) }), { maxSpawns: 1 })
+    expect(readFileSync(join(dir, 'args'), 'utf8').trim()).toBe(`-ims -w ${process.pid}`)
+    expect(out.join('\n')).toContain(`keep-awake: ${awake} -ims -w ${process.pid} — a closed lid on battery still sleeps`)
+    const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'))
+    await expect.poll(() => { try { process.kill(pid, 0); return 'alive' } catch { return 'gone' } }, { timeout: 5_000 }).toBe('gone')
+  }, 60000)
+})
+
+describe('coming back (B6)', () => {
+  const recorder = () => {
+    const dir = fakeScenario()
+    const bin = join(dir, 'notify')
+    writeFileSync(bin, `#!/bin/sh\necho "$1" >> "${dir}/got"\n`, { mode: 0o755 })
+    return { bin, got: join(dir, 'got') }
+  }
+
+  it('an autonomous run ends with the report and one notification', async () => {
+    const repo = await startedFlows(['a'])
+    const n = recorder()
+    writeLocalConfig(repo.root, { notify: n.bin })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0') }, out), {})
+    expect(out).toContain('drive: done — 0 merged · 0 wait on you · 0 parked · 1 stuck')
+    expect(readFileSync(n.got, 'utf8').trim().split('\n'))
+      .toEqual([`witness drive — ${basename(repo.root)} · 0 merged · 0 wait on you · 0 parked · 1 stuck`])
+    expect(out).toContain(`notify: sent via ${n.bin}`)
+  }, 60000)
+
+  it('a run with autonomy off reports and sends nothing', async () => {
+    const repo = await planReady()
+    const n = recorder()
+    writeLocalConfig(repo.root, { notify: n.bin })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0'), WITNESS_KEEP_AWAKE_BIN: noopOpener() }, out), { maxSpawns: 1 })
+    expect(out.some((l) => l.startsWith('drive: done — ') || l.startsWith('drive: stopped — '))).toBe(true)
+    expect(existsSync(n.got)).toBe(false)
+  }, 60000)
+})
+
+describe('one command (B1)', () => {
+  const autonomous = async (): Promise<TestRepo> => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    return repo
+  }
+  const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' }
+
+  it('a session drive spawned is refused even in a terminal', async () => {
+    const repo = await seededRepo()
+    // `quiet` matters while this test fails: today's drive would otherwise spawn the real harness CLI
+    const r = await repo.cli(['drive'], { tty: true, env: { ...quiet, WITNESS_DRIVE: 'p1' } })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('drive-inside-drive')
+  })
+
+  it('under autonomy drive needs no terminal · --manual still does', async () => {
+    const repo = await autonomous()
+    const r = await repo.cli(['drive', '--max-spawns', '1'], { env: quiet })
+    expect(r.stderr).not.toContain('drive-needs-tty')
+    const manual = await repo.cli(['drive', '--manual'], { env: quiet })
+    expect(manual.code).toBe(2)
+    expect(manual.stderr).toContain('drive-needs-tty')
+  }, 60000)
+
+  it('one drive per repo', async () => {
+    const repo = await autonomous()
+    const holder = spawn('sleep', ['30'])
+    writeFileSync(join(repo.root, '.witness/drive.lock'), JSON.stringify({ pid: holder.pid, log: join(repo.root, '.witness/drive.log') }))
+    const r = await repo.cli(['drive'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('drive-running')
+    expect(r.stderr).toContain(`stop it: kill ${holder.pid}`)
+    holder.kill()
+    await once(holder, 'exit')
+    expect((await repo.cli(['drive', '--max-spawns', '1'], { env: quiet })).stderr).not.toContain('drive-running')
+  }, 60000)
+
+  it('--detach needs autonomy', async () => {
+    const repo = await seededRepo()
+    const r = await repo.cli(['drive', '--detach'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('detach-needs-autonomy')
+  })
+
+  it('--detach starts drive in the background · says where to watch · a SIGTERM stops it and its sessions', async () => {
+    const repo = await autonomous()
+    const dir = fakeScenario()
+    const agent = join(dir, 'agent')
+    writeFileSync(agent, `#!/bin/sh\necho $$ > "${dir}/session"\nexec sleep 30\n`, { mode: 0o755 })
+    const r = await repo.cli(['drive', '--detach'], { env: { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
+    expect(r.code).toBe(0)
+    const pid = Number(/background · pid (\d+)/.exec(r.stdout)![1])
+    const log = join(repo.root, '.witness', 'drive.log')
+    expect(r.stdout).toContain(`watch: tail -f ${log} · stop it: kill ${pid}`)
+    await expect.poll(() => existsSync(join(dir, 'session')), { timeout: 30_000 }).toBe(true)
+    process.kill(pid, 'SIGTERM')
+    await expect.poll(() => readFileSync(log, 'utf8'), { timeout: 30_000 }).toContain('drive: stopped — signal SIGTERM')
+    const session = Number(readFileSync(join(dir, 'session'), 'utf8'))
+    await expect.poll(() => { try { process.kill(session, 0); return 'alive' } catch { return 'gone' } }, { timeout: 15_000 }).toBe('gone')
+    // released after the report and the notification, which print after the stopped line
+    await expect.poll(() => existsSync(join(repo.root, '.witness', 'drive.lock')), { timeout: 15_000 }).toBe(false)
+  }, 90000)
+
+  it('--detach never writes through a symlinked log', async () => {
+    const repo = await autonomous()
+    const outside = join(fakeScenario(), 'rc')
+    writeFileSync(outside, 'export SAFE=1\n')
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    symlinkSync(outside, join(repo.root, '.witness', 'drive.log'))
+    const r = await repo.cli(['drive', '--detach'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('drive-log-unsafe')
+    expect(readFileSync(outside, 'utf8')).toBe('export SAFE=1\n')
+  })
+
+  it('--ask queues the ask before the first session', async () => {
+    const repo = await autonomous()
+    const agent = script(`grep -rqF 'add dark mode' "${repo.root}/.witness/journal" && echo ask-seen`)
+    const r = await repo.cli(['drive', '--ask', 'add dark mode', '--max-spawns', '1'], { env: { ...quiet, WITNESS_DRIVE_AGENT_BIN: agent } })
+    expect(r.stdout).toMatch(/ask: a\d+ — queued/)
+    expect(r.stdout).toContain('] ask-seen')
+  }, 60000)
+})
+
+// Final review F4. A crashed transaction no session resolves answered every fill with the same
+// target-less recovery line, never judged and never capped: drive spent its whole ceiling.
+describe('a wedged transaction (B3)', () => {
+  it('is set aside after one empty session and named in the report', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'txn.json'), JSON.stringify({ op: 'write(a)', files: [] }))
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo tick') }, out), { maxSpawns: 6 })
+    expect(out.filter((l) => /\] tick$/.test(l))).toHaveLength(1)
+    expect(out).toContain('wait: pending transaction · write(a)')
+    expect(out.some((l) => l.startsWith('  run: witness recover'))).toBe(true)
+    expect(code).toBe(1)
+  }, 60_000)
+})
+
+// Final review F2. The plan queue's lane is keyed by the SPEC, and its session writes the plan
+// and keeps working on it (witness-plan gates it in the same session): the plan's own id must
+// not read as a free target meanwhile.
+describe('one session per flow (Review Focus 2)', () => {
+  it('a plan-writing lane and its new plan never run at once', async () => {
+    const repo = await startedFlows(['a'])
+    await writeSpec(repo, 'x', { criteria: [{ id: 'ac-x', test: '@spec:x' }] })
+    approve(repo, 'x')
+    const dir = fakeScenario()
+    writeFileSync(join(dir, 'm.json'), JSON.stringify({ ...PLAN_META, parent: 'x', steps: [{ id: 's1', title: 'x', criteria: ['ac-x'] }] }))
+    writeFileSync(join(dir, 'b.md'), PLAN_BODY)
+    const log = join(dir, 'log')
+    const agent = script(`echo "start $WITNESS_DRIVE" >> "${log}"
+case "$WITNESS_DRIVE" in
+  x) cd "${repo.root}" && ${witnessCli()} write x-plan-1 --effort ${repo.effort} --meta "${dir}/m.json" --body "${dir}/b.md" >/dev/null 2>&1; sleep 6 ;;
+  *) sleep 0.5 ;;
+esac
+echo "end $WITNESS_DRIVE" >> "${log}"`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
+    const lines = readFileSync(log, 'utf8').trim().split('\n')
+    const planStart = lines.indexOf('start x-plan-1')
+    expect(planStart === -1 || planStart > lines.indexOf('end x')).toBe(true)
+  }, 120_000)
+})
+
+// Final review F5. Progress keyed on the whole effort stream: a sibling's write anywhere in
+// the shared effort reset a stalled flow's key, and a refused write counted as progress.
+describe('progress is the target\'s own (Review Focus 1)', () => {
+  it('a stalled flow is set aside while a sibling writes to their shared effort', async () => {
+    const repo = await startedFlows(['a', 'b'])
+    const dir = fakeScenario()
+    writeFileSync(join(dir, 'm.json'), JSON.stringify({ ...SPEC_META, criteria: [] }))
+    writeFileSync(join(dir, 'b.md'), SPEC_BODY)
+    const agent = script(`echo tick
+case "$WITNESS_DRIVE" in
+  a-plan-1)
+    n=$(cat "${dir}/n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${dir}/n"
+    cd "${repo.root}" && ${witnessCli()} write extra-$n --effort ${repo.effort} --meta "${dir}/m.json" --body "${dir}/b.md" >/dev/null 2>&1 ;;
+  *) sleep 2 ;;
+esac`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 8 })
+    expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
+    expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)   // its refused write is no progress
+  }, 120_000)
+})
+
+// Final review F6. The settle pass's arbiter met a usage limit and waited inside the reviewer:
+// silently (the pass's ctx is quiet), outside drive's 12 h total, deaf to a signal, and even
+// while drive itself was paused. The pass now never waits: a limit there is drive's own pause.
+describe('a limit in the settle pass is drive\'s pause (B4)', () => {
+  it('prints and counts the wait · then the arbiter is asked again', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
+    await repo.cli(['gate', 'decompose', '--effort', repo.effort], { env: gateEnv(scenario) })   // autonomy off: the stop waits
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    putVerdict(scenario, { choice: 1, reason: 'one slice covers the recap' }, 'arbiter')
+    const used = existsSync(join(scenario, 'claude-calls')) ? readdirSync(join(scenario, 'claude-calls')).length : 0
+    writeFileSync(join(scenario, 'claude-error'), "You've hit your session limit · resets in 0m")
+    writeFileSync(join(scenario, 'claude-error-calls'), String(used + 2))   // the pinned rung and its fallback (row 169)
+    const clock = fakeClock(Date.parse('2026-10-19T19:30:00Z'))
+    const out: string[] = []
+    const t0 = Date.now()
+    await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, {
+      env: gateEnv(scenario, { WITNESS_DRIVE_AGENT_BIN: script('echo tick'), WITNESS_KEEP_AWAKE_BIN: noopOpener() }), out: (l) => out.push(l),
+    }), { maxSpawns: 1 }, clock)
+    expect(out.join('\n')).toContain("drive: usage limit — waiting 1m · You've hit your session limit · resets in 0m")
+    expect(clock.slept).toContain(60_000)
+    expect(Date.now() - t0).toBeLessThan(30_000)                                  // nothing slept for real
+    expect(readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1)).toMatchObject({ selected: 'arbiter' })
+  }, 120_000)
+})
+
+// Final review F9. drive read the config once: a human who committed autonomy: off mid-run
+// still had their stops settled by the policy until the run ended.
+describe('autonomy turned off mid-run (B2)', () => {
+  it('drive stops deciding and starts nothing more', async () => {
+    const repo = await plannedRepo()                                     // A1 · autonomy on
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const agent = script(`cd "${repo.root}"
+perl -pi -e 's/^autonomy: on$/autonomy: off/' witness.config.yaml && git add witness.config.yaml && git commit -qm 'autonomy: off'
+${witnessCli()} gate plan auth-refresh-plan-1 >/dev/null 2>&1
+echo gated`)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, {
+      env: gateEnv(scenario, { WITNESS_KEEP_AWAKE_BIN: noopOpener(), WITNESS_DRIVE_AGENT_BIN: agent }), out: (l) => out.push(l),
+    }), { maxSpawns: 3 })
+    expect(readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'human-decision')).toEqual([])
+    expect(out).toContain('drive: autonomy is off now — no new session starts')
+    expect(out.filter((l) => l.endsWith('] gated'))).toHaveLength(1)
+    expect(code).toBe(1)
+  }, 120_000)
+})
+
+// Final review F10. Any child line containing "merge PR" set the flow aside as a merge for the
+// human and the report handed out `gh pr merge <n>` — for a flow with no PR at all.
+describe('the merge sniff (B2)', () => {
+  it('agent text that mentions a merge is not one', async () => {
+    const repo = await startedFlows(['a'])
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo "next the ship stage will merge PR #7 once CI is green"') }, out), {})
+    expect(out.join('\n')).not.toContain('drive: merge')
+    expect(out.join('\n')).not.toContain('gh pr merge')
+  }, 60_000)
+  it('the CLI\'s own merge line on a flow with a PR still sets it aside', async () => {
+    const repo = await startedFlows(['a'], { shipping: 'a' })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo "ship: merge PR #7 on GitHub when ready — the lazy stamp flips plan → done · spec → live"') }, out), {})
+    expect(out).toContain('wait: merge · a-plan-1 · PR #7')
+    expect(out).toContain('  run: gh pr merge 7')
+  }, 60_000)
 })

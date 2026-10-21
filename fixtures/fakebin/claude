@@ -50,6 +50,17 @@ if [ -f "$dir/claude-fail" ] && [ "$n" -le "$(cat "$dir/claude-fail")" ]; then
   echo "fake claude: injected failure for call $n" >&2
   exit 1
 fi
+# claude-error: what claude 2.1.306's print mode does on a usage limit or any provider
+# failure — an is_error result envelope on stdout, and exit 1. claude-error-calls limits it to
+# the first N calls (a limit that lifts after a wait).
+if [ -f "$dir/claude-error" ] && { [ ! -f "$dir/claude-error-calls" ] || [ "$n" -le "$(cat "$dir/claude-error-calls")" ]; }; then
+  node -e '
+    const fs = require("fs")
+    const msg = fs.readFileSync(process.argv[1], "utf8").trim()
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: true, result: msg }))
+  ' "$dir/claude-error"
+  exit 1
+fi
 body="$dir/verdict.json"
 if [ -n "$lens" ] && [ -f "$dir/verdict-$lens.json" ]; then body="$dir/verdict-$lens.json"; fi
 [ -f "$dir/verdict-$n.json" ] && body="$dir/verdict-$n.json"

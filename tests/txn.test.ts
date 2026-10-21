@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireLock } from '../src/lock.js'
 import { completeTxn, guardTxn, pendingTxn, rollbackTxn, withTxn } from '../src/txn.js'
@@ -22,13 +24,86 @@ describe('acquireLock', () => {
     const repo = seeded()
     const first = acquireLock(repo.root)
     expect(first.ok).toBe(true)
-    const foreign = acquireLock(repo.root, process.pid + 1)
+    const foreign = acquireLock(repo.root, process.pid + 1, 0)
     expect(!foreign.ok && foreign.violations[0]?.rule).toBe('locked')
     if (first.ok) first.value()
     repo.write('.witness/lock', JSON.stringify({ pid: 999999999 }))
     const stolen = acquireLock(repo.root)
     expect(stolen.ok).toBe(true)
     if (stolen.ok) stolen.value()
+  })
+})
+
+// A second process holds the lock: a same-process holder cannot let go while
+// acquireLock's synchronous wait blocks the thread.
+async function holdLock(root: string, ms: number): Promise<ChildProcess> {
+  mkdirSync(join(root, '.witness'), { recursive: true })
+  const child = spawn(process.execPath, ['-e', `
+    const fs = require('fs'); const p = process.argv[1]
+    fs.writeFileSync(p, JSON.stringify({ pid: process.pid }), { flag: 'wx' })
+    process.stdout.write('held\\n')
+    setTimeout(() => { fs.rmSync(p, { force: true }); process.exit(0) }, ${ms})
+  `, join(root, '.witness', 'lock')], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await once(child.stdout!, 'data')
+  return child
+}
+
+describe('acquireLock waits (B3)', () => {
+  it('waits for a live holder to let go, then takes the lock', async () => {
+    const repo = seeded()
+    await holdLock(repo.root, 400)
+    const t0 = Date.now()
+    const r = acquireLock(repo.root, process.pid, 5_000)
+    expect(r.ok).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(250)
+    if (r.ok) r.value()
+  }, 15_000)
+
+  it('refuses once the wait is spent and names the holder', async () => {
+    const repo = seeded()
+    const holder = await holdLock(repo.root, 5_000)
+    const r = acquireLock(repo.root, process.pid, 300)
+    expect(!r.ok && r.violations[0]!.rule).toBe('locked')
+    expect(!r.ok && r.violations[0]!.got).toBe(`held by pid ${holder.pid} · waited 300ms`)
+    holder.kill()
+  }, 15_000)
+
+  it('a lock it cannot write refuses at once instead of spinning', () => {
+    const repo = seeded()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    chmodSync(join(repo.root, '.witness'), 0o555)
+    try {
+      const t0 = Date.now()
+      const r = acquireLock(repo.root, process.pid, 5_000)
+      expect(!r.ok && r.violations[0]!.rule).toBe('lock-unwritable')
+      expect(Date.now() - t0).toBeLessThan(1_000)
+    } finally {
+      chmodSync(join(repo.root, '.witness'), 0o755)
+    }
+  })
+
+  it('a dangling symlink at the lock path is unreadable · taken after the grace and replaced by a file', () => {
+    const repo = seeded()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    symlinkSync(join(repo.root, 'nowhere'), join(repo.root, '.witness', 'lock'))
+    const t0 = Date.now()
+    const r = acquireLock(repo.root, process.pid, 5_000)
+    expect(r.ok).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
+    expect(Date.now() - t0).toBeLessThan(4_000)
+    expect(lstatSync(join(repo.root, '.witness', 'lock')).isSymbolicLink()).toBe(false)
+    expect(existsSync(join(repo.root, 'nowhere'))).toBe(false)
+    if (r.ok) r.value()
+  })
+
+  it('reads an unreadable lock as a write in progress and takes it after a grace', () => {
+    const repo = seeded()
+    repo.write('.witness/lock', '')
+    const t0 = Date.now()
+    const r = acquireLock(repo.root, process.pid, 5_000)
+    expect(r.ok).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
+    if (r.ok) r.value()
   })
 })
 
@@ -165,5 +240,32 @@ describe('guardTxn message', () => {
 
     expect(code).toBe(3)
     expect(errs.join('\n')).toContain('specs/a.md')
+  })
+})
+
+// Final review F3. Under parallel lanes another process's write is routinely in flight: its
+// marker is not a crash while that writer lives and holds the repo lock, and no write may
+// overwrite the marker a real crash left.
+describe('a live write is not a crash (B3)', () => {
+  it('reads a marker as pending only when its writer is gone or lost the lock', async () => {
+    const repo = seeded()
+    const holder = await holdLock(repo.root, 5_000)
+    const marker = (pid?: number) => repo.write('.witness/txn.json', JSON.stringify({ op: 'write(a)', files: ['specs/a.md'], ...(pid ? { pid } : {}) }))
+    marker(holder.pid)
+    expect(pendingTxn(repo.root)).toBeUndefined()
+    marker(999_999)
+    expect(pendingTxn(repo.root)?.op).toBe('write(a)')
+    marker()
+    expect(pendingTxn(repo.root)?.op).toBe('write(a)')                 // a legacy marker names no writer
+    holder.kill()
+  }, 15_000)
+
+  it('withTxn never overwrites a crashed marker', () => {
+    const repo = seeded()
+    const crashed = JSON.stringify({ op: 'gate-plan(a)', files: ['specs/a.md'], pid: 999_999 })
+    repo.write('.witness/txn.json', crashed)
+    const res = withTxn(repo.root, { op: 'write(a)', files: ['specs/a.md'] }, () => ok({ sha: 'x' }))
+    expect(!res.ok && res.violations[0]!.rule).toBe('txn-pending')
+    expect(readFileSync(join(repo.root, '.witness', 'txn.json'), 'utf8')).toBe(crashed)
   })
 })

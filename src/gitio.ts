@@ -94,6 +94,15 @@ export function stateOnlyAdvance(wt: string, root: string, from: string, to: str
 
 const LOCAL_STATE_FILES = new Set([
   '.witness/lock',
+  // Row 181: held across a whole suite in one worktree while another flow writes state.
+  '.witness/runner.lock',
+  // Row 180: the live drive's pid and its background log.
+  '.witness/drive.lock',
+  '.witness/drive.log',
+  // F15's steal guards, held for milliseconds while a stale lock is taken.
+  '.witness/lock.steal',
+  '.witness/runner.lock.steal',
+  '.witness/drive.lock.steal',
   '.witness/txn.json',
   '.witness/allow.json',
   '.witness/calibration.local.yaml',

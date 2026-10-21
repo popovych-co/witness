@@ -4,7 +4,8 @@ import type { Ctx } from './cli.js'
 import { EXIT } from './cli.js'
 import { git, stateCommit, tryGit } from './gitio.js'
 import { journalRel } from './journal.js'
-import { type Result } from './refusal.js'
+import { isAlive, lockHolder } from './lock.js'
+import { refuse, v, type Result } from './refusal.js'
 
 export interface TxnMarker {
   op: string
@@ -16,13 +17,23 @@ export interface TxnMarker {
   // `recover`, reads a crash by (D167)
   journal?: { stream: string; line: string }
   journalMulti?: Array<{ stream: string; line: string }>
+  // Final review F3: the writer. Every writer holds the repo lock across its transaction, so
+  // a marker whose writer lives and holds the lock is a write in flight, not a crash.
+  pid?: number
 }
 
 const markerPath = (root: string) => join(root, '.witness', 'txn.json')
 
+// A CRASHED transaction: its marker is on disk and its writer is gone or no longer holds the
+// repo lock. Under parallel lanes another process's write is routinely in flight, and reading
+// that as a crash routed `recover` onto a live write. A marker with no pid (written before
+// this field) is read as a crash, as it always was.
 export function pendingTxn(root: string): TxnMarker | undefined {
   if (!existsSync(markerPath(root))) return undefined
-  return JSON.parse(readFileSync(markerPath(root), 'utf8')) as TxnMarker
+  const marker = JSON.parse(readFileSync(markerPath(root), 'utf8')) as TxnMarker
+  const live = typeof marker.pid === 'number' && marker.pid !== process.pid && isAlive(marker.pid) &&
+    lockHolder(root) === marker.pid
+  return live ? undefined : marker
 }
 
 export function crashPoint(env: Record<string, string | undefined>, name: string): void {
@@ -31,7 +42,14 @@ export function crashPoint(env: Record<string, string | undefined>, name: string
 
 export function withTxn<T>(root: string, marker: TxnMarker, fn: () => Result<T>): Result<T> {
   mkdirSync(join(root, '.witness'), { recursive: true })
-  writeFileSync(markerPath(root), JSON.stringify(marker))
+  // A crash's marker is the only record of what to complete or roll back. A writer that
+  // checked before an unlocked stretch (test-evidence's suite) must not overwrite it now.
+  const crashed = pendingTxn(root)
+  if (crashed !== undefined) {
+    return refuse([v('.witness/txn.json', 'txn-pending', crashed.op,
+      'recover the crashed transaction first — run: witness recover')])
+  }
+  writeFileSync(markerPath(root), JSON.stringify({ ...marker, pid: process.pid }))
   let res: Result<T>
   try {
     res = fn()

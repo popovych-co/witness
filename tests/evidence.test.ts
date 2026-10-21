@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { main } from '../src/cli.js'
 import { isTestPath } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
+import { worktreePath } from '../src/worktree.js'
 import type { TestRepo } from './helpers.js'
 import {
   TOKEN_BROKEN, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
-  breakSingleFixture, copyFixture, fakeCtx, fixSingleFixture, fixtureEnv, seededRepo,
+  approve, breakSingleFixture, copyFixture, fakeCtx, fakeScenario, fixSingleFixture, fixtureEnv, seededRepo,
   singleConfig, stampLive, vitestBin, writePlan, writeSpec,
 } from './helpers.js'
 
@@ -114,4 +117,23 @@ describe('witness test-evidence', () => {
     expect(entries).toHaveLength(1)
     repo.git('worktree', 'remove', '--force', wt)
   })
+})
+
+it('test-evidence runs the suite outside the repo lock and journals inside it (D76 · B3)', async () => {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  approve(repo, 'auth-refresh-plan-1')
+  await repo.cli(['start', 'auth-refresh-plan-1'])
+  const wt = worktreePath(repo.root, 'auth-refresh-plan-1')
+  const probe = join(fakeScenario(), 'probe')
+  writeFileSync(join(wt, 'probe.sh'),
+    `if [ -e "${repo.root}/.witness/lock" ]; then echo held; else echo free; fi > "${probe}"\nexit 1\n`)
+  writeFileSync(join(wt, 'witness.config.yaml'), "schema: 1\ncriteria:\n  runner: 'sh probe.sh {id}'\n")
+  const r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+  expect(r.code).toBe(0)
+  expect(readFileSync(probe, 'utf8').trim()).toBe('free')
+  expect(readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'test-evidence')).toHaveLength(1)
+  expect(existsSync(join(repo.root, '.witness', 'lock'))).toBe(false)
 })

@@ -11,6 +11,7 @@ import { appendEntry, journalRel } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
+import type { Clock } from '../src/usage.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
 
@@ -66,6 +67,9 @@ export function tmpRepo(): TestRepo {
       // It is a test seam, not a config key — see the note in src/registry.ts.
       env: {
         ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined,
+        // a suite run inside a drive session or a runner turn must not inherit either:
+        // the marker would scope every `next` and refuse every `drive` (row 180)
+        WITNESS_DRIVE: undefined, WITNESS_RUNNER_TURN: undefined,
         WITNESS_REGISTRY: 'off', ...opts.env,
       },
       isTTY: opts.tty ?? answers.length > 0,
@@ -255,10 +259,11 @@ export function noopOpener(): string {
   return join(fakeBinDir(), 'noop-open')
 }
 
-export function writeLocalConfig(root: string, opts: { opener?: string; reviewerExtensions?: string[] } = {}): void {
+export function writeLocalConfig(root: string, opts: { opener?: string; reviewerExtensions?: string[]; notify?: string } = {}): void {
   mkdirSync(join(root, '.witness'), { recursive: true })
   const lines: string[] = []
   if (opts.opener !== undefined) lines.push(`opener: '${opts.opener}'`)
+  if (opts.notify !== undefined) lines.push(`notify: '${opts.notify}'`)
   if (opts.reviewerExtensions !== undefined) {
     lines.push(`reviewerExtensions: [${opts.reviewerExtensions.map((x) => `'${x}'`).join(', ')}]`)
   }
@@ -271,6 +276,18 @@ export function writeLocalConfig(root: string, opts: { opener?: string; reviewer
 export async function witnessDesign(repo: TestRepo, specId: string): Promise<CliResult> {
   writeLocalConfig(repo.root, { opener: noopOpener() })
   return repo.cli(['design', specId, '--open'])
+}
+
+// Task 5 (B4). A clock whose sleep returns at once, records the ms and advances `now`, so a
+// usage wait of hours runs in a test in no time and its length is asserted exactly.
+export function fakeClock(start: number): Clock & { slept: number[] } {
+  let now = start
+  const slept: number[] = []
+  return {
+    slept,
+    now: () => now,
+    sleep: async (ms: number) => { slept.push(ms); now += ms },
+  }
 }
 
 export function fakeScenario(): string {

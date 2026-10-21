@@ -1,5 +1,5 @@
-import { beforeAll, describe, expect, it } from 'vitest'
-import { execSync, spawnSync } from 'node:child_process'
+import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,10 +24,6 @@ function spawnCli(root: string, args: string[], env: Record<string, string> = {}
   })
   return { code: res.status ?? -1, stdout: res.stdout, stderr: res.stderr }
 }
-
-beforeAll(() => {
-  execSync('npm run build', { cwd: pkgRoot, stdio: 'ignore' })
-}, 120000)
 
 describe('kill/resume protocol', () => {
   it('crash after artifact-write: guard blocks, rollback converges, rerun succeeds', async () => {

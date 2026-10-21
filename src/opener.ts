@@ -11,7 +11,7 @@ function platformOpener(): string[] {
 
 // win32 has no `sh`, so a POSIX probe there would report every opener missing and
 // make approve permanently unreachable. `where` is the cmd equivalent.
-function resolves(cmd: string): boolean {
+export function resolves(cmd: string): boolean {
   const probe = process.platform === 'win32'
     ? spawnSync('where', [cmd], { encoding: 'utf8' })
     : spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' })

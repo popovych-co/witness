@@ -14,6 +14,8 @@ export default defineConfig({
     // maxForks=4 gave 2.4× the wall clock and 5× the failures. At 60000 the full suite is
     // 1055/1055 green in 357s versus 310s — the difference is the tests that used to die.
     testTimeout: 60000,
+    // dist/ is built once here, never per file (tests/global-setup.ts says why)
+    globalSetup: ['tests/global-setup.ts'],
     // `.claude/**`: a git worktree checked out INSIDE the repo is a second full copy of
     // `tests/`, so vitest collected every file twice — 243 files and ~5000s of test time,
     // which starves the fork pool until the heaviest files trip the 20s timeout. The

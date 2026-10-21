@@ -318,3 +318,11 @@ describe('thinking-aware handoff rendering', () => {
       .toBe("cd '/wt' && claude '/witness'")
   })
 })
+
+describe('claude envelope errors (B4)', () => {
+  it('claude: an is_error envelope is an invocation failure, not a verdict', () => {
+    const h = loadHarness('claude-code')
+    const r = h.ok && h.value.reviewer.parseEnvelope(JSON.stringify({ type: 'result', is_error: true, result: 'boom' }))
+    expect(r && !r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['reviewer-invocation', 'boom'])
+  })
+})

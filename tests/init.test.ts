@@ -13,6 +13,7 @@ describe('witness init', () => {
     expect(repo.read('.gitignore')).toContain('.witness/lock')
     expect(repo.read('.gitignore')).toContain('.witness/txn.json')
     expect(repo.read('.gitignore')).toContain('.witness/config.local.yaml')
+    expect(repo.read('.gitignore')).toContain('.witness/runner.lock')
     expect(repo.git('log', '-1', '--format=%(trailers:key=Witness-State,valueonly=true)')).toBe('1')
     expect(repo.git('status', '--porcelain')).toBe('')
     expect(res.stdout).toContain('next: witness recap')
@@ -32,5 +33,13 @@ describe('witness init', () => {
     const again = await repo.cli(['init'])
     expect(again.code).toBe(2)
     expect(again.stderr).toContain('already-initialized')
+  })
+})
+
+describe('drive local files (B1)', () => {
+  it('init ignores drive\'s lock and log', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init'])
+    expect(repo.read('.gitignore')).toContain('.witness/drive.lock\n.witness/drive.log\n')
   })
 })

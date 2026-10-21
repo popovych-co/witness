@@ -110,6 +110,24 @@ describe('stateCommit', () => {
     repo.write('specs/a.md', 'a')
     expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
   })
+
+  it('the runner turn is a witness local file — another worktree\'s suite never dirties a state write (B3)', () => {
+    const repo = tmpRepo()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    repo.write('.witness/runner.lock', '{"pid":1}')
+    repo.write('specs/a.md', 'a')
+    expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
+  })
+})
+
+describe('drive local files (B1)', () => {
+  it('drive\'s lock and log are witness local files', () => {
+    const repo = tmpRepo()
+    repo.write('.witness/drive.lock', '{"pid":1}')
+    repo.write('.witness/drive.log', 'x\n')
+    repo.write('specs/a.md', 'a')
+    expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
+  })
 })
 
 describe('auditStateCommits', () => {

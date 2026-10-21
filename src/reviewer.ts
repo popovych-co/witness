@@ -9,6 +9,8 @@ import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { resolveSpawn } from './spawn.js'
+import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
+import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
 
 export const PROMPT_NAMES = [
   'slicing-critic', 'plan-critic', 'code-reviewer', 'silent-failure-hunter',
@@ -110,7 +112,15 @@ export interface InvokeExtras {
 
 // `lens` reaches the reviewer as WITNESS_LENS, the way runners get WITNESS_SCREENS_DIR: the
 // battery launches its lenses at once, so call order no longer says which lens a call was.
-export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; lens?: string }
+export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; lens?: string; clock?: Clock }
+
+// Row 182. Inside a drive session a usage-limited reviewer call waits for the reset and
+// retries, at most this long in all per invocation. Outside drive it refuses at once: an
+// attended gate must never block silently for hours.
+export const REVIEWER_WAIT_MAX_MS = SINGLE_WAIT_MAX_MS
+const OUTSIDE_DRIVE_WANT = 'wait for the reset — witness drive waits it out on its own'
+// How long before its session's deadline a reviewer stops waiting: room to journal and exit.
+const SESSION_MARGIN_MS = 60_000
 
 const REVIEWER_TIMEOUT_MS = 600_000
 // One stalled call must not cost a whole run: a full calibration battery is ~200
@@ -180,6 +190,11 @@ function classifyAttempt(harness: Harness, p: Prepared, attempt: number, r: Atte
       `a runnable ${p.cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
   }
   if (r.status !== 0) {
+    // Final review F12: claude exits 1 on an is_error envelope, so a provider failure (a usage
+    // limit included) sits on stdout under a non-zero exit. The envelope's own refusal names
+    // it; anything else is the bare exit it always was.
+    const envelope = harness.reviewer.parseEnvelope(r.stdout)
+    if (!envelope.ok && envelope.violations[0]?.rule === 'reviewer-invocation') return envelope
     return refuse([v(p.cmd, 'reviewer-invocation',
       `exit ${String(r.status)}: ${r.stderr.slice(0, 200)}`, `${p.cmd} print mode exiting 0`)])
   }
@@ -204,7 +219,10 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
     const c = classifyAttempt(harness, p, attempt, {
       timedOut, error: timedOut ? undefined : r.error, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
     })
-    if (c !== 'retry') return c
+    if (c === 'retry') continue
+    // Calibration's lane never waits: it refuses a limit as an attended gate does.
+    const limit = usageLimitOf(c, Date.now())
+    return limit ? refuse([v(p.cmd, 'usage-limit', limit.text, OUTSIDE_DRIVE_WANT)]) : c
   }
 }
 
@@ -216,11 +234,39 @@ export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: Invo
   const pR = prepareInvocation(ctx, harness, opts)
   if (!pR.ok) return pR
   const p = pR.value
-  for (let attempt = 0; ; attempt += 1) {
+  const clock = opts.clock ?? realClock
+  const inDrive = driveChild(ctx.env) !== undefined
+  let waited = 0
+  let streak = 0
+  for (let attempt = 0; ; ) {
     const r = await spawnAttempt(p, opts)
     const c = classifyAttempt(harness, p, attempt, r)
-    if (c !== 'retry') return c
+    if (c === 'retry') { attempt += 1; continue }
+    const limit = usageLimitOf(c, clock.now())
+    if (!limit) return c
+    // A wait spends no timeout retry: the same rung is asked again after the reset.
+    const wait = waitFor(limit, streak, clock.now())
+    // Inside a drive session the wait must also end before drive kills the session (F14).
+    const deadline = Number(ctx.env[DRIVE_DEADLINE_ENV])
+    const outlives = Number.isFinite(deadline) && clock.now() + wait + SESSION_MARGIN_MS > deadline
+    if (!inDrive || waited + wait > REVIEWER_WAIT_MAX_MS || outlives) {
+      return refuse([v(p.cmd, 'usage-limit', limit.text, inDrive
+        ? 'a reset inside the 6h reviewer wait and this session\'s time — re-run the gate after it'
+        : OUTSIDE_DRIVE_WANT)])
+    }
+    ctx.err(`reviewer: usage limit — waiting ${duration(wait)} · ${limit.text}`)
+    await clock.sleep(wait)
+    waited += wait
+    streak += 1
   }
+}
+
+// Only a provider failure is read — a refusal's got, never verdict text: a finding that
+// quotes a limit message stays a finding.
+function usageLimitOf(r: Result<{ text: string }>, now: number): Limit | undefined {
+  if (r.ok) return undefined
+  const row = r.violations.find((x) => x.rule === 'reviewer-invocation')
+  return row ? limitIn(row.got, now) : undefined
 }
 
 function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
