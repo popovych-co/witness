@@ -7,8 +7,8 @@ import { appendEntry, journalRel } from '../journal.js'
 import { primaryRoot, resolveStartBase, stateCommit } from '../gitio.js'
 import { autoSync } from './sync.js'
 import { findById, loadCanon } from '../scan.js'
-import { evaluateNeeds } from '../needs.js'
-import { renderRefusal, v } from '../refusal.js'
+import { evaluateNeeds, unmetNeeds } from '../needs.js'
+import { humanCall, renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 import { autonomyLines, keptStopLine, policyFor } from '../autonomy.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
@@ -99,17 +99,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const needs = await evaluateNeeds(root, ctx, (plan.meta.needs ?? []) as Need[], plan)
   const unmet = needs.filter((n) => n.status !== 'ok')
   if (unmet.length) {
-    renderRefusal([v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '),
-      'all needs ok (witness check shows details; witness satisfy flips manual ones)')]).forEach((l) => ctx.err(l))
+    // Row 179. Satisfying a manual need is the human's act, so its commands are named in `want`
+    // and the row is a human's decision — never a `remedy`, whose `run:` line reads as mechanical.
+    const satisfy = unmetNeeds(canon).filter((u) => u.doc === planId).map((u) => u.satisfy)
+    const machine = unmet.some((n) => n.kind !== 'manual')
+    const want = [...satisfy.map((c) => `a human runs ${c}`), ...(machine ? ['witness check shows env and cmd needs'] : [])].join(' · ')
+    const row = v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '), want)
+    renderRefusal([unmet.some((n) => n.kind === 'manual') ? humanCall(row) : row]).forEach((l) => ctx.err(l))
     // Row 171. Under autonomy an unmet plan need is a kept stop: only this plan waits, and
-    // the line names the act that unblocks it — satisfy indexes a plan's manual needs from 1.
+    // the line names the act that unblocks it.
     if (cfgR.value.autonomy) {
       const p = policyFor({ at: 'start', target: planId, unmet: unmet.map((n) => n.label) })
       if (p.kind === 'human') {
-        const manuals = ((plan.meta.needs ?? []) as Need[]).flatMap((n) => ('manual' in n ? [n.manual] : []))
-        const satisfy = unmet.filter((n) => n.kind === 'manual')
-          .map((n) => ` · witness satisfy ${planId} --need ${manuals.indexOf(n.label) + 1}`).join('')
-        ctx.out(keptStopLine(p.stop, `${unmet.map((n) => n.label).join(' · ')}${satisfy}`))
+        ctx.out(keptStopLine(p.stop, `${unmet.map((n) => n.label).join(' · ')}${satisfy.map((c) => ` · ${c}`).join('')}`))
       }
     }
     return EXIT.REFUSED

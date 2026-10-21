@@ -4,7 +4,7 @@ import { cpSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { worktreePath } from '../src/worktree.js'
 import {
-  SPEC_META, TOKEN_FIXED, approve, fakeScenario, fixturePath, gateEnv, nextLine, putVerdict, seededRepo,
+  SPEC_META, TOKEN_FIXED, approve, autonomyOn, fakeScenario, fixturePath, gateEnv, nextLine, putVerdict, seededRepo,
   shippableRepo, singleConfig, stampLive, witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
 } from './helpers.js'
 
@@ -280,5 +280,39 @@ describe('next — a satisfy is no content change (A10)', () => {
     expect(await nextLine(repo)).not.toContain('witness write auth-refresh-plan-2')
     expect((await repo.cli(['satisfy', 'auth-refresh', '--need', 'sbx'])).code).toBe(0)
     expect(await nextLine(repo)).not.toContain('witness write auth-refresh-plan-2')
+  })
+})
+
+describe('next — a plan that waits on a need (A10)', () => {
+  const DEVICE = [{ id: 'device', manual: 'a test device on the desk', satisfied: false }]
+  it('starts the approved plan no need blocks', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-mfa')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', needs: DEVICE, steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-mfa-plan-1', 'approved')
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    expect(await nextLine(repo)).toContain('next: witness start auth-refresh-plan-1')
+  })
+  it('names the kept stop when every approved plan waits on a need', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', { needs: DEVICE })
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    const out = await nextLine(repo)
+    expect(out).toContain('next: witness start auth-refresh-plan-1')
+    expect(out).toContain('auth-refresh-plan-1 waits on an unmet need — a human runs witness satisfy auth-refresh-plan-1 --need device')
+    const start = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(start.code).toBe(2)
+    expect(start.stderr).toContain('a human runs witness satisfy auth-refresh-plan-1 --need device')
+    expect(start.stderr).toContain("help: a human's decision: needs-unmet")
+    expect(start.stderr).not.toContain('run: witness satisfy')
+    autonomyOn(repo)
+    expect((await repo.cli(['start', 'auth-refresh-plan-1'])).stdout)
+      .toContain('kept-stop: unmet need — a test device on the desk · witness satisfy auth-refresh-plan-1 --need device')
   })
 })

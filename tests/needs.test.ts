@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { evaluateNeeds, needMet } from '../src/needs.js'
-import type { CanonDoc } from '../src/scan.js'
-import { tmpRepo } from './helpers.js'
+import { evaluateNeeds, needMet, unmetNeeds } from '../src/needs.js'
+import { loadCanon, type CanonDoc } from '../src/scan.js'
+import { approve, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
 import type { Ctx } from '../src/cli.js'
 
 function ctxFor(root: string, opts: { tty?: boolean; answers?: string[]; env?: Record<string, string> } = {}): Ctx {
@@ -72,5 +72,34 @@ describe('evaluateNeeds', () => {
     expect(declined[0]?.status).toBe('declined')
     const ci = await evaluateNeeds(repo.root, ctxFor(repo.root, { tty: false, env: { WITNESS_TRUST_CMDS: '1' } }), [{ cmd: 'true' }], DOC)
     expect(ci[0]?.status).toBe('ok')
+  })
+})
+
+describe('unmetNeeds (A10)', () => {
+  it('lists every unmet manual need with what it holds or blocks and its satisfy command', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', {
+      needs: [{ id: 'prod', manual: 'production access granted', satisfied: false, holds: ['ac-prod'] },
+        { manual: 'docs reviewed', satisfied: false }, { env: 'X' }],
+      criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd: 'true' }],
+    })
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', {
+      needs: [{ manual: 'device on the desk', satisfied: false }],
+      steps: [{ id: 's1', title: 't', criteria: ['ac-rotate', 'ac-prod'] }],
+    })
+    expect(unmetNeeds(loadCanon(repo.root))).toEqual([
+      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', satisfy: 'witness satisfy auth-refresh --need prod' },
+      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', satisfy: 'witness satisfy auth-refresh --need 2' },
+      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1' },
+    ])
+  })
+  it('a satisfied need and a started plan need are not listed', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { needs: [{ id: 'sbx', manual: 'sandbox', satisfied: true }] })
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ manual: 'device', satisfied: false }] })
+    repo.flipStatus('auth-refresh-plan-1', 'in-progress')
+    expect(unmetNeeds(loadCanon(repo.root))).toEqual([])
   })
 })

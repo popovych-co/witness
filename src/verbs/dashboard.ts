@@ -9,7 +9,7 @@ import { divergence, primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
-import { needMet } from '../needs.js'
+import { unmetNeeds } from '../needs.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { openDeferrals } from '../deferral.js'
@@ -39,10 +39,10 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
       if (!target) out.push({ doc: id, why: `depends: ${dep} (missing)` })
       else if (target.meta.status !== 'live') out.push({ doc: id, why: `depends: ${dep} (${String(target.meta.status)})` })
     }
+    // Row 179. A manual need's one home is the `needs` table (unmetNeeds): a spec's never blocks.
     const needs = Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : []
     for (const n of needs) {
       if (typeof n.env === 'string' && !ctx.env[n.env]) out.push({ doc: id, why: `needs: ${n.env} unset` })
-      if (typeof n.manual === 'string' && !needMet(doc, n as { manual: string })) out.push({ doc: id, why: `needs: ${n.manual} unsatisfied` })
     }
   }
   return out
@@ -315,6 +315,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   }
   const blocked = blockedRows(canon, ctx)
   if (blocked.length) rows('blocked', ['doc', 'why'], blocked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  const unmet = unmetNeeds(canon).map((u) => ({
+    doc: u.doc, need: u.need, satisfy: u.satisfy,
+    effect: u.blocks === 'start' ? 'blocks start' : u.holds.length > 0 ? `holds ${u.holds.join(' · ')}` : 'holds nothing',
+  }))
+  if (unmet.length) rows('needs', ['doc', 'need', 'effect', 'satisfy'], unmet).forEach(ctx.out)
   const reconcile = reconcileRows(root, canon)
   if (reconcile.length) {
     rows('reconcile', ['spec', 'why', 'detail'], reconcile as unknown as Array<Record<string, unknown>>).forEach(ctx.out)

@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process'
 import { ensureTrusted } from './allowlist.js'
 import type { Ctx } from './cli.js'
-import type { CanonDoc } from './scan.js'
+import type { Canon, CanonDoc } from './scan.js'
 
 export interface NeedResult {
   label: string
@@ -79,4 +79,35 @@ export function heldRows(doc: CanonDoc): HeldRow[] {
   const criteria = Array.isArray(doc.meta.criteria) ? (doc.meta.criteria as Array<Record<string, unknown>>) : []
   return criteria.flatMap((c) => (held.get(String(c.id)) ?? []).map((need) =>
     ({ criterion: String(c.id), need, satisfy: satisfyCommand(String(doc.meta.id), need) })))
+}
+
+// Row 179. The one listing of what waits on a human's assertion about the world: `status`,
+// `next`, `start` and drive's run report all read it. A plan need blocks its plan's start; a
+// spec need never blocks anything — it holds the criteria it names, or nothing.
+export interface UnmetNeed {
+  doc: string                     // the spec or plan carrying the need
+  type: 'spec' | 'plan'
+  need: string                    // its id · else its manual text
+  text: string                    // the manual text
+  holds: string[]                 // criteria it holds while unmet · [] for a plan need
+  blocks: 'start' | 'nothing'
+  satisfy: string                 // the human's command — the id when the need has one, else its index
+}
+
+export function unmetNeeds(canon: Canon): UnmetNeed[] {
+  const docs = canon.docs
+    .filter((d) => d.meta.type === 'spec' || (d.meta.type === 'plan' && ['draft', 'approved'].includes(String(d.meta.status))))
+    .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
+  return docs.flatMap((d) => {
+    const id = String(d.meta.id)
+    const type = d.meta.type as 'spec' | 'plan'
+    const needs = Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []
+    const manuals = needs.filter((n) => typeof n.manual === 'string') as Array<{ id?: string; manual: string; satisfied?: boolean; holds?: unknown }>
+    return manuals.flatMap((n, i) => needMet(d, n) ? [] : [{
+      doc: id, type, need: needKey(n), text: n.manual,
+      holds: type === 'spec' && Array.isArray(n.holds) ? (n.holds as string[]) : [],
+      blocks: type === 'plan' ? 'start' as const : 'nothing' as const,
+      satisfy: satisfyCommand(id, n.id ?? String(i + 1)),
+    }])
+  })
 }
