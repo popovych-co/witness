@@ -201,3 +201,19 @@ it('merges only when the shipped branch itself says autonomy: on — a local com
   expect(outs.join('\n')).toContain('merge PR #1 on GitHub when ready')
   expect(readFileSync(join(scenario, 'gh-calls'), 'utf8')).not.toContain('pr merge')
 })
+it('holds when the PR targets a branch other than ship.branch — authority is the base the merge lands on (security)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'pr-1-base'), 'release')
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain('merge: held — the PR targets release but ship.branch is main')
+  expect(s.calls()).not.toContain('pr merge')
+})
+it('reads the merge authority from what the remote holds, never a local tracking ref (security)', async () => {
+  const s = await autonomousShip()
+  const before = s.repo.git('rev-parse', `${s.repo.git('log', '-1', '--format=%H', '--', 'witness.config.yaml')}~1`)   // before autonomy: on
+  expect(s.repo.git('show', `${before}:witness.config.yaml`)).not.toContain('autonomy')
+  writeFileSync(join(s.scenario, 'gh-checks-hook'),
+    `cd "${s.repo.root}" && git config remote.origin.fetch '+refs/heads/none:refs/remotes/origin/none' && git update-ref refs/remotes/origin/main ${before}\n`)
+  expect(await runShip(s.ctx, s.planId)).toBe(0)
+  expect(s.calls()).toContain('pr merge 1 --merge')
+})

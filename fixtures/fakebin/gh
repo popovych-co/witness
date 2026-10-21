@@ -32,7 +32,8 @@ case "$sub" in
   "pr view")
     state=$(cat "$dir/pr-$3-state" 2>/dev/null || echo "")
     [ -z "$state" ] && { echo "no pull requests found for $3" >&2; exit 1; }
-    printf '{"state":"%s"}\n' "$state"; exit 0 ;;
+    base=$(cat "$dir/pr-$3-base" 2>/dev/null || echo main)
+    printf '{"state":"%s","baseRefName":"%s"}\n' "$state" "$base"; exit 0 ;;
   "pr checks")
     # a test may act on the world while CI "runs" — e.g. another flow merging to main
     # its exit is the hook's own business: a second run that finds nothing to do must not kill gh

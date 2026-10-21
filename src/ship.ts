@@ -200,10 +200,30 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
     return EXIT.FINDINGS
   }
-  // The merge is the one irreversible outward act, so its authority comes from the shipped
-  // branch as the remote holds it — pushed and, on most repos, branch-protected — never from
-  // HEAD alone, which the coding agent can commit to. Without it the merge is the human's.
-  if (!autonomyAt(root, `origin/${shipBranch}`)) {
+  // The merge is the one irreversible outward act, so its authority comes from the branch it
+  // lands on, as the remote holds it — pushed and, on most repos, branch-protected — never
+  // from HEAD alone, which the coding agent can commit to. "The branch it lands on" is the
+  // PR's base as GitHub reports it, not `ship.branch`, which is working-copy config: a PR
+  // aimed anywhere else is a human's call.
+  const view = gh(ctx, root, ['pr', 'view', String(pr), '--json', 'baseRefName'])
+  let prBase: string | undefined
+  try { prBase = view.ok ? (JSON.parse(view.out) as { baseRefName?: string }).baseRefName : undefined } catch { prBase = undefined }
+  if (prBase === undefined) {
+    ctx.out(kv('merge', `held — the PR's base branch cannot be read · witness ship ${planId} retries`))
+    return EXIT.FINDINGS
+  }
+  if (prBase !== shipBranch) {
+    ctx.out(kv('merge', `held — the PR targets ${prBase} but ship.branch is ${shipBranch} · a human's call`))
+    return EXIT.FINDINGS
+  }
+  // Fetched into a witness-owned ref with an explicit forced refspec and read from there:
+  // `origin/<base>` is a local ref that `update-ref` or a rewritten fetch refspec can forge.
+  // Residual, recorded: an agent with this shell can still rewrite the remote's URL itself.
+  if (!tryGit(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`).ok) {
+    ctx.out(kv('merge', `held — cannot verify ${prBase} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
+    return EXIT.FINDINGS
+  }
+  if (!autonomyAt(root, 'refs/witness/ship-authority')) {
     ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
     return EXIT.OK
   }
