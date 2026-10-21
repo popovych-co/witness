@@ -31,6 +31,20 @@ describe('code gates: a unit is a path', () => {
     expect(v.state('specs/s.md')).toBe('context')
     expect(v.state('plans/p.md')).toBe('context')
   })
+
+  // Final review I2: a path neither tree holds by its exact spelling cannot be placed — a case
+  // alias of a changed file on a case-insensitive disk, a path through a symlink, an ignored file.
+  it('a path in neither tree is never unchanged', () => {
+    const { repo, base } = based()
+    repo.write('src/a.ts', 'a1\n'); const from = snapshotTree(repo.root, base, ['src/a.ts'])!
+    repo.write('src/a.ts', 'a2\n'); const to = snapshotTree(repo.root, base, ['src/a.ts'])!
+    const v = deltaView(repo.root, { kind: 'tree', root: repo.root, files: ['src/a.ts'], canonRoot: repo.root, canonDirs: CANON }, from, to)
+    expect(v.state('src/A.ts#alpha')).not.toBe('unchanged')
+    expect(v.state('lib/a.ts')).not.toBe('unchanged')
+    expect(v.state({ kind: 'omission', scope: 'nowhere/' })).not.toBe('unchanged')
+    expect(v.state('src/b.ts#beta')).toBe('unchanged')                       // guard: a real unchanged path
+    expect(v.state({ kind: 'omission', scope: 'src' })).toBe('changed')
+  })
 })
 
 describe('doc gates: a unit is a section', () => {

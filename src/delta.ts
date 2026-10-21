@@ -5,7 +5,7 @@ import type { Entry } from './journal.js'
 import { promptsSha, type Lens } from './reviewer.js'
 import { deltaBase, fellBack, gateRuns, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
 import { canonicalSha } from './sha.js'
-import { blobText, changedPaths, treeDiff, treeReadable } from './snapshot.js'
+import { blobText, changedPaths, treeDiff, treePaths, treeReadable } from './snapshot.js'
 import { anchorKey, headingLines, sectionText, type AnchorInput, type Reviewed } from './verdict.js'
 
 // Row 186. Where an anchor sits relative to the change between two reviewed trees. Only
@@ -15,6 +15,7 @@ export type UnitState = 'changed' | 'unchanged' | 'context'
 export interface DeltaView { state(anchor: AnchorInput): UnitState }
 
 const targetOf = (a: AnchorInput): string => (typeof a === 'string' ? a : a.scope)
+const normPath = (p: string): string => posix.normalize(p).replace(/\/+$/, '') || '.'
 
 export function deltaView(root: string, reviewed: Reviewed, from: string, to: string): DeltaView {
   const changed = changedPaths(root, from, to)
@@ -22,11 +23,15 @@ export function deltaView(root: string, reviewed: Reviewed, from: string, to: st
     case 'tree': {
       // A unit is a path: the file part of `file#symbol`, or an omission's scope.
       const canon = reviewed.canonDirs ?? []
+      // A path neither tree holds by its exact spelling cannot be placed: a case alias of a changed
+      // file on a case-insensitive disk, a path through a symlink, an ignored file.
+      const known = new Set([...treePaths(root, from), ...treePaths(root, to)])
       return {
         state(a) {
-          const path = posix.normalize(targetOf(a).split('#')[0]!).replace(/\/+$/, '') || '.'
+          const path = normPath(targetOf(a).split('#')[0]!)
           if (canon.some((d) => path === d || path.startsWith(`${d}/`))) return 'context'
           if (path === '.') return changed.length > 0 ? 'changed' : 'unchanged'
+          if (!known.has(path)) return 'context'
           return changed.some((p) => p === path || p.startsWith(`${path}/`)) ? 'changed' : 'unchanged'
         },
       }
@@ -80,11 +85,38 @@ export function deltaView(root: string, reviewed: Reviewed, from: string, to: st
 }
 
 export interface PriorFinding { reviewer: string; anchor: AnchorInput; claim: string }
+
+// Whether a finding is one the base already reported. Doc anchors compare exactly (D123). At the
+// code gates a spelling is not a finding: the file part is normalized (`./src/a.ts#f` is
+// `src/a.ts#f`), and a bare path matches any anchor in its file either way round — a lens that
+// re-reports a standing blocker as `src/a.ts` has not found something new.
+export function reportedBy(prior: readonly AnchorInput[], paths: boolean): (a: AnchorInput) => boolean {
+  if (!paths) {
+    const keys = new Set(prior.map(anchorKey))
+    return (a) => keys.has(anchorKey(a))
+  }
+  const parse = (a: AnchorInput): { key: string; file?: string; bare: boolean } => {
+    if (typeof a !== 'string') return { key: `omission:${normPath(a.scope)}`, bare: false }
+    const i = a.indexOf('#')
+    const file = normPath(i === -1 ? a : a.slice(0, i))
+    return { key: i === -1 ? file : `${file}${a.slice(i)}`, file, bare: i === -1 }
+  }
+  const p = prior.map(parse)
+  const keys = new Set(p.map((x) => x.key))
+  const files = new Set(p.flatMap((x) => (x.file !== undefined ? [x.file] : [])))
+  const bare = new Set(p.flatMap((x) => (x.bare ? [x.file!] : [])))
+  return (a) => {
+    const x = parse(a)
+    if (keys.has(x.key)) return true
+    if (x.file === undefined) return false
+    return bare.has(x.file) || (x.bare && files.has(x.file))
+  }
+}
 export interface DeltaPlan {
   base: GateRunEntry
   baseRound: number
   prior: PriorFinding[]       // the base's blocking findings from delta-mode lenses, battery order
-  reported: Set<string>       // anchorKey of EVERY base blocking finding, every lens
+  reported: (a: AnchorInput) => boolean   // did the base report it blocking, by any lens (reportedBy)
   view: DeltaView
   diff: string
   sections?: string[]         // doc gates only: the heading anchors whose section the change touched
@@ -115,7 +147,7 @@ export function planDelta(root: string, entries: Entry[], gate: string, cur: {
   return {
     base, baseRound: base.round,
     prior: blocking.filter((f) => cur.inDelta(f.reviewer)),
-    reported: new Set(blocking.map((f) => anchorKey(f.anchor))),
+    reported: reportedBy(blocking.map((f) => f.anchor), cur.reviewed.kind === 'tree'),
     view, diff,
     ...(sections ? { sections } : {}),
   }
@@ -160,13 +192,13 @@ export function basisSha(lenses: readonly Lens[], context: string, pin: string, 
 // counts — recurrence, the ladder, the prefilled note, the recommender, obligation minting —
 // reads `blocking`, so a demotion counts for none of them.
 export function demote(
-  verdicts: ReviewerVerdict[], d: { baseRound: number; reported: ReadonlySet<string>; view: DeltaView },
+  verdicts: ReviewerVerdict[], d: { baseRound: number; reported: (a: AnchorInput) => boolean; view: DeltaView },
   inDelta: (lens: string) => boolean,
 ): ReviewerVerdict[] {
   return verdicts.map((rv) => !inDelta(rv.reviewer) ? rv : {
     ...rv,
     findings: rv.findings.map((f) =>
-      f.blocking && f.contradicts_pin === undefined && !d.reported.has(anchorKey(f.anchor)) &&
+      f.blocking && f.contradicts_pin === undefined && !d.reported(f.anchor) &&
       d.view.state(f.anchor) === 'unchanged'
         ? { ...f, blocking: false, demoted: d.baseRound }
         : f),
@@ -177,13 +209,15 @@ export interface OutstandingDemotion { reviewer: string; anchor: AnchorInput; cl
 
 // Plan decision 16. What a demotion let through at `gate` that no full review has judged since:
 // the demoted findings on its runs after the last real full review (no delta mark, not
-// malformed, not fallen back, carrying verdicts), one per lens and anchor, the latest kept.
+// malformed, not fallen back, not a cached replay, carrying verdicts), one per lens and anchor, the
+// latest kept. The gate that backstops them never demotes one of them again (gate.ts).
 export function outstandingDemotions(entries: Entry[], gate: string): OutstandingDemotion[] {
   const runs = gateRuns(entries, gate)
   let start = 0
   for (let i = runs.length - 1; i >= 0; i--) {
     const r = runs[i]!
-    if (!r.delta && r.outcome !== 'malformed' && !fellBack(r) && (r.verdicts?.length ?? 0) > 0) { start = i + 1; break }
+    // A cached replay re-served an older verdict: it re-judged nothing.
+    if (!r.delta && !r.cached && r.outcome !== 'malformed' && !fellBack(r) && (r.verdicts?.length ?? 0) > 0) { start = i + 1; break }
   }
   const out = new Map<string, OutstandingDemotion>()
   for (const r of runs.slice(start)) {
@@ -210,7 +244,7 @@ export function demotionsBlock(gate: string, list: readonly OutstandingDemotion[
     return `${i + 1}. omission · scope ${scope} — ${d.claim} — ${where} — report it with "anchor": { "kind": "omission", "scope": ${JSON.stringify(scope)} }`
   }
   return `## Demoted at ${gate} (never re-judged in full — report these if they still hold)\n\n` +
-    `The ${gate} gate recorded the findings below as non-blocking: they were new in a round that reviewed a change, and the content they name had not changed. No full review has judged them since. ` +
+    `The ${gate} gate recorded the findings below as non-blocking: they were new in a round that reviewed a change, and the content they name had not changed. No full review at the ${gate} gate has judged them since. ` +
     'Judge each against the current content. If a defect is still present, report it as a finding anchored exactly as listed: it then blocks here.\n\n' +
     list.map(line).join('\n') + '\n\n'
 }

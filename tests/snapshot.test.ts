@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:f
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { changedFiles } from '../src/evidence.js'
+import { diffReviewedSha } from '../src/reviewed.js'
 import { blobText, changedPaths, snapshotFiles, snapshotTree, treeDiff, treeReadable } from '../src/snapshot.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
 
@@ -45,6 +46,20 @@ describe('snapshotTree', () => {
     const tree = snapshotTree(repo.root, base, files)!
     expect(entry(repo, tree, 'vendor/lib')).toBe(`160000 commit ${head}\tvendor/lib`)
     expect(entry(repo, tree, 'vendor/pinned')).toBe(`160000 commit ${head}\tvendor/pinned`)
+  })
+
+  // Final review #3: with core.quotePath on, git quotes a non-ASCII path, and a quoted name is no
+  // path — lstat found nothing, so the edit was invisible to the snapshot and to reviewed_sha.
+  it('sees an edit to a non-ASCII path, in the snapshot and in the reviewed identity', () => {
+    const { repo } = based()
+    repo.write('src/café.ts', 'v1\n'); repo.git('add', '-A'); repo.git('commit', '-m', 'accent')
+    const base = repo.git('rev-parse', 'HEAD~1')
+    const before = diffReviewedSha(repo.root, base)
+    repo.write('src/café.ts', 'v2\n')
+    expect(changedFiles(repo.root, base)).toContain('src/café.ts')
+    expect(diffReviewedSha(repo.root, base)).not.toBe(before)
+    const tree = snapshotTree(repo.root, base, changedFiles(repo.root, base))!
+    expect(repo.git('cat-file', 'blob', `${tree}:src/café.ts`)).toBe('v2')
   })
 
   it('leaves the real index alone, and the same content always makes the same tree', () => {

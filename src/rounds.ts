@@ -129,9 +129,13 @@ const isDecision = (e: Entry | undefined, gate: string): e is DecisionEntry & En
   e !== undefined && e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate
 
 export function keyOf(run: GateRunEntry): GateKey {
-  const { reviewed_sha, gate, prompts_sha, witness } = run
+  const { reviewed_sha, gate, witness } = run
   return {
-    reviewed_sha, gate, prompts_sha, witness,
+    // Row 185: a run is identified by what it read and who read it — the SETUP — never by its
+    // delta block, which is how a round reviewed. A pass or an approve resets the window the
+    // delta base lives in, so a key carrying the block could not be rebuilt after one, and the
+    // content a settled delta round read would have run a fresh battery and un-settled the gate.
+    reviewed_sha, gate, prompts_sha: run.setup_sha ?? run.prompts_sha, witness,
     pin: run.pin ?? run.model,
     harness: run.harness ?? 'claude-code',
   }

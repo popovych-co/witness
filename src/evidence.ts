@@ -172,9 +172,12 @@ export function diffBase(runRoot: string, cfg: Config, override?: string): Resul
   return ok(b)
 }
 
+// `-z` on both: with core.quotePath on (git's default), a non-ASCII or special path is printed
+// quoted, and a quoted name is no path — the edit was invisible to the reviewed identity, the
+// snapshot and the delta view alike.
 export function changedFiles(runRoot: string, base: string): string[] {
-  const tracked = git(runRoot, 'diff', '--name-only', base).split('\n').filter(Boolean)
-  const untracked = git(runRoot, 'ls-files', '--others', '--exclude-standard').split('\n').filter(Boolean)
+  const tracked = git(runRoot, 'diff', '--name-only', '-z', base).split('\0').filter(Boolean)
+  const untracked = git(runRoot, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean)
   return [...new Set([...tracked, ...untracked])].sort()
 }
 

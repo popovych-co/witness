@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { openDeferrals, type DeferralEntry } from '../src/deferral.js'
@@ -27,14 +27,18 @@ function input(root: string, doc: { meta: Record<string, unknown>; body: string 
     snapshot: { tree: snapshotFiles(root, [{ name: `${target}.md`, content: doc.body }])!, context: 'synthetic' }, ...extra,
   }
 }
-registerGate({ gate: 'plan', targetKind: 'plan',
-  async resolve(root, _c, canon, _cfg, target) { return ok(input(root, findById(canon, target)!, target)) } })
-// Demotes as the real code gates do, over docs: the section-level cases of the rule reach gate.ts here.
-registerGate({ gate: 'ship', targetKind: 'plan', demotes: true,
-  async resolve(root, _c, canon, _cfg, target) {
-    return ok(input(root, findById(canon, target)!, target, { checks: [{ name: 'synthetic', ok: true }],
-      lensOverrides: { 'code-reviewer': { reviewed: { kind: 'screens', captures: [{ name: 'home.png', path: '/w/home.png' }] }, promptBody: 'READ /w/home.png' } } }))
-  } })
+// Registered before every test: an in-process `decide` imports gates/index.js, which puts the
+// real gates back for the rest of the file.
+beforeEach(() => {
+  registerGate({ gate: 'plan', targetKind: 'plan',
+    async resolve(root, _c, canon, _cfg, target) { return ok(input(root, findById(canon, target)!, target)) } })
+  // Demotes as the real code gates do, over docs: the section-level cases of the rule reach gate.ts here.
+  registerGate({ gate: 'ship', targetKind: 'plan', demotes: true, backstops: 'implement',
+    async resolve(root, _c, canon, _cfg, target) {
+      return ok(input(root, findById(canon, target)!, target, { checks: [{ name: 'synthetic', ok: true }],
+        lensOverrides: { 'code-reviewer': { reviewed: { kind: 'screens', captures: [{ name: 'home.png', path: '/w/home.png' }] }, promptBody: 'READ /w/home.png' } } }))
+    } })
+})
 
 async function spec() {
   const repo = await seededRepo(); await writeSpec(repo, 'auth-refresh')
@@ -158,5 +162,27 @@ describe('what a demotion counts for (C3)', () => {
     expect(d.code).toBe(0)
     const minted = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'deferral') as unknown as DeferralEntry[]
     expect(minted.map((x) => x.anchor)).toEqual([M])
+  })
+})
+
+// Final review I1. Ship lists implement's outstanding demotions and promises "it then blocks
+// here" — so ship must never demote one of them again, whichever lens reports it.
+describe('ship never demotes what it backstops (C3, final review)', () => {
+  it('a listed implement demotion re-reported in a ship delta round blocks', async () => {
+    const { repo, scenario, ctx } = await spec()
+    const imp = (round: number, findings: unknown[], extra: Record<string, unknown> = {}) => appendEntry(repo.root, 'auth-refresh', {
+      v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh', round, run_id: `i-${round}`, reviewed_sha: `x${round}`,
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'passed',
+      verdicts: [{ reviewer: 'pr-test', coverage: [], findings }], ...extra } as never)
+    imp(1, [])
+    imp(2, [{ blocking: false, anchor: DOC, claim: 'x', demoted: 1 }], { delta: { round: 1, run: 'i-1' } })
+    putVerdict(scenario, SCREEN(false), 'code-reviewer')
+    putVerdict(scenario, at(M), 'drift-reviewer'); await runGate(ctx, 'ship', 'auth-refresh', F)
+    await amend(repo)
+    putVerdict(scenario, at(DOC), 'drift-reviewer')
+    expect(await runGate(ctx, 'ship', 'auth-refresh', F)).toBe(1)
+    const r2 = runs(repo.root).filter((r) => r.gate === 'ship')[1]!
+    expect(r2.delta).toBeDefined()
+    expect(r2.verdicts!.find((v) => v.reviewer === 'drift-reviewer')!.findings[0]).toEqual({ blocking: true, anchor: DOC, claim: 'x' })
   })
 })

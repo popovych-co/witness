@@ -172,3 +172,28 @@ describe('a demotion is shown (C3)', () => {
     expect((await repo.cli(['status'])).stdout).not.toContain('demoted[')
   })
 })
+
+// Final review C1. A pass or an approve resets the budget window, and the delta base lives in
+// that window — so the delta key could not be rebuilt, and a re-gate of the very content the
+// settled round read ran a fresh full battery and un-settled the gate.
+describe('a settled delta round resumes (C3, final review)', () => {
+  it('re-gating the content a passed delta round read resumes it', async () => {
+    const { repo, scenario, gate, code } = await twoRounds({ coverage: COVER, findings: [] })
+    expect(code).toBe(0)
+    expect(runs(repo.root)[1]!.delta).toBeDefined()
+    expect(await gate()).toBe(0)
+    expect(runs(repo.root)).toHaveLength(2)
+    expect(existsSync(join(scenario, 'claude-calls/call-3'))).toBe(false)
+  })
+
+  it('re-gating the content an approved delta round read resumes it, with no false warning', async () => {
+    const t = await twoRounds(verdict({ anchor: S1 }))
+    expect((await t.repo.cli(['decide', 'plan', PLAN, '--approve'])).code).toBe(0)
+    const errs: string[] = []
+    const code = await runGate(fakeCtx(t.repo.root, { env: gateEnv(t.scenario), err: (l) => errs.push(l) }), 'plan', PLAN, { fresh: false, manual: false })
+    expect(code).toBe(1)
+    expect(runs(t.repo.root)).toHaveLength(2)
+    expect(existsSync(join(t.scenario, 'claude-calls/call-3'))).toBe(false)
+    expect(errs.join('\n')).not.toContain('reviewer setup changed')
+  })
+})

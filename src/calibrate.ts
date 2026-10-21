@@ -15,9 +15,9 @@ import { PROMPT_NAMES, invokeReviewer, parseVerdictText, resolvePrompt } from '.
 import type { InvokeExtras } from './reviewer.js'
 import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
-import { anchorKey, anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
+import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import { createWorktree } from './worktree.js'
-import { deltaBlock, deltaView, demote, type PriorFinding } from './delta.js'
+import { deltaBlock, deltaView, demote, reportedBy, type PriorFinding } from './delta.js'
 import { snapshotTree, treeDiff } from './snapshot.js'
 
 export interface CalSeed { id: string; overlay: string; defect: string }
@@ -242,7 +242,7 @@ export function runDeltaSample(
   const violations = verdictViolations(verdict.value, reviewed)
   if (violations.length > 0) return ok({ ok: false, why: `malformed: ${violations[0]!.rule}` })
   const [judged] = demote([{ reviewer: suite.reviewer, coverage: verdict.value.coverage, findings: verdict.value.findings }], {
-    baseRound: 1, reported: new Set(seed.findings.map((f) => anchorKey(f.anchor))), view: deltaView(m.dir, reviewed, m.from, m.to),
+    baseRound: 1, reported: reportedBy(seed.findings.map((f) => f.anchor), true), view: deltaView(m.dir, reviewed, m.from, m.to),
   }, () => true)
   const blocking = judged!.findings.filter((f) => f.blocking).length
   return ok(seed.expect === 'block'

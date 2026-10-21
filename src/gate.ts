@@ -17,7 +17,7 @@ import { loadMatrix, resolveModel } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
-import { basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta } from './delta.js'
+import { basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy } from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -327,7 +327,8 @@ async function judge(
   // below spent three releases never firing.
   const pin = chain[0]!
   const basis = basisSha(lenses, input.snapshot?.context ?? '', pin, harness.name)
-  const backstopText = spec.backstops ? demotionsBlock(spec.backstops, outstandingDemotions(entries, spec.backstops)) : ''
+  const backstopped = spec.backstops ? outstandingDemotions(entries, spec.backstops) : []
+  const backstopText = spec.backstops ? demotionsBlock(spec.backstops, backstopped) : ''
   const setupText = [pinsText, deferralsText, backstopText].filter((t) => t !== '').join('')
   const setupSha = promptsSha(lenses, setupText || undefined)          // the full-review prompts_sha
   const fullKey: GateKey = {
@@ -337,14 +338,10 @@ async function judge(
   // Row 185. A lens that reads an override (the design-reviewer's captures) always reviews in
   // full: its content has no tree, and the base's findings from it mean nothing to the others.
   const inDelta = (lens: string) => input.lensOverrides?.[lens]?.reviewed === undefined
-  // Full review first. A full verdict for exactly this content and setup is resumed or replayed
-  // as before; only a fresh full key plans a delta. The delta block joins `prompts_sha`, and
-  // `deltaBase` never picks a same-content round, so a re-gate of what a delta round read
-  // renders the same block and lands on that round's key.
-  const delta = !flags.fresh && appendKind(entries, spec.gate, fullKey).kind !== 'fresh' ? undefined
-    : planDelta(root, entries, spec.gate, { reviewedSha: input.reviewedSha, snapshot: input.snapshot, basis, reviewed: input.reviewed, inDelta })
-  const block = delta ? deltaBlock(delta) : ''
-  const key: GateKey = { ...fullKey, prompts_sha: delta ? promptsSha(lenses, setupText + block) : setupSha }
+  // The key is the content and the setup (row 185, `keyOf`): any run that read this content under
+  // this setup resumes, meets changed-nothing or replays, whether it was a full or a delta round.
+  // Only a fresh key plans a delta, further down.
+  const key: GateKey = fullKey
   // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
   // Content moving is a legitimate, self-explaining reason. A flag is not — `--fresh`
   // discarded a human decision with nothing printed and nothing journaled about it, and
@@ -457,6 +454,13 @@ async function judge(
   // Holding the repo-global lock across a multi-minute LLM battery refuses every state
   // write in every other flow for its full duration, on a lock whose real job is a ~100ms
   // commit. The guarded window opens below, immediately before the journal append.
+  // Full review first: a delta is planned only for a round that will judge (the key is fresh).
+  const delta = kind.kind === 'fresh'
+    ? planDelta(root, entries, spec.gate, { reviewedSha: input.reviewedSha, snapshot: input.snapshot, basis, reviewed: input.reviewed, inDelta })
+    : undefined
+  const block = delta ? deltaBlock(delta) : ''
+  // A replayed delta verdict re-serves a round that already discharged all its silence could.
+  const replayedDelta = kind.kind === 'cached' && kind.from.delta !== undefined
   let verdicts: ReviewerVerdict[] = []
   let malformed: NonNullable<GateRunEntry['malformed']> = []
   let fallback: string[] = []
@@ -484,7 +488,11 @@ async function judge(
     if (!ranR.ok) { renderRefusal(ranR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ;({ verdicts, malformed, fallback, rerolled, model } = ranR.value)
     // A malformed round judged nothing, so it demotes nothing.
-    if (delta && spec.demotes && malformed.length === 0) verdicts = demote(verdicts, delta, inDelta)
+    // A backstopping gate never demotes what it backstops: it promised the listed finding blocks here.
+    if (delta && spec.demotes && malformed.length === 0) {
+      const listed = reportedBy(backstopped.map((d) => d.anchor), input.reviewed.kind === 'tree')
+      verdicts = demote(verdicts, { ...delta, reported: (a) => delta.reported(a) || listed(a) }, inDelta)
+    }
   }
 
   const blocking = verdicts.flatMap((x) => x.findings).filter((f) => f.blocking).length
@@ -536,7 +544,7 @@ async function judge(
     const entry: GateRunEntry = {
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
-      reviewed_sha: input.reviewedSha, prompts_sha: key.prompts_sha,
+      reviewed_sha: input.reviewedSha, prompts_sha: delta ? promptsSha(lenses, setupText + block) : setupSha,
       witness: key.witness, model, pin, harness: harness.name, calibration: calibrationOf(model),
       ...(localR.value.reviewerExtensions.length ? { reviewer_extensions: localR.value.reviewerExtensions } : {}),
       ...(cached ? { cached: true } : {}),
@@ -548,7 +556,7 @@ async function judge(
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
       ...(input.snapshot ? { reviewed_tree: input.snapshot.tree, basis_sha: basis } : {}),
-      ...(key.prompts_sha !== setupSha ? { setup_sha: setupSha } : {}),
+      ...(delta ? { setup_sha: setupSha } : {}),
       ...(deltaMark ? { delta: deltaMark } : {}),
       checks: input.checks,
       ...(verdicts.length ? { verdicts } : {}),
@@ -574,7 +582,8 @@ async function judge(
     // Row 187. A delta round was asked about the change, never to re-read what it left alone, so
     // its silence discharges only an obligation whose unit the change touched. Silence on an
     // unchanged unit, or on context, is not evidence that anything was fixed.
-    const silenceCounts = (anchor: string) => delta === undefined || delta.view.state(anchorFromKey(anchor)) === 'changed'
+    const silenceCounts = (anchor: string) =>
+      !replayedDelta && (delta === undefined || delta.view.state(anchorFromKey(anchor)) === 'changed')
     const discharged = entry.outcome === 'malformed' ? []
       : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor) && silenceCounts(d.anchor))
         .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))

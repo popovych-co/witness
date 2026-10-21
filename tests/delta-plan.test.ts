@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
-import { deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta } from '../src/delta.js'
+import { deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy } from '../src/delta.js'
 import { snapshotFiles } from '../src/snapshot.js'
 import { tmpRepo } from './helpers.js'
 
@@ -36,7 +36,7 @@ describe('planDelta', () => {
     expect(plan.baseRound).toBe(1)
     expect(plan.base.run_id).toBe('r-1')
     expect(plan.prior).toEqual([{ reviewer: 'plan-critic', anchor: 'p > ## Step: s1', claim: 'untestable' }])
-    expect([...plan.reported].sort()).toEqual(['home.png', 'p > ## Step: s1'])     // the screens lens still counts
+    expect(['home.png', 'p > ## Step: s1', 'p > ## Step: s2'].map((a) => plan.reported(a))).toEqual([true, true, false])   // the screens lens still counts
     expect(plan.diff).toContain('-A')
     expect(plan.diff).toContain('+B')
     expect(plan.view.state('p > ## Step: s2')).toBe('unchanged')
@@ -84,7 +84,7 @@ describe('deltaBlock', () => {
 describe('demote', () => {
   const unchanged = { state: () => 'unchanged' as const }
   const f = (anchor: unknown, extra: Record<string, unknown> = {}) => ({ blocking: true, anchor, claim: 'x', ...extra })
-  const d = (view = unchanged, reported: string[] = []) => ({ baseRound: 1, reported: new Set(reported), view })
+  const d = (view = unchanged, reported: string[] = []) => ({ baseRound: 1, reported: (a: unknown) => reported.includes(a as string), view })
   const inDelta = (lens: string) => lens !== 'design-reviewer'
 
   it('demotes a blocking finding in an unchanged unit that the base did not report', () => {
@@ -127,6 +127,12 @@ describe('outstandingDemotions and demotionsBlock (ship backstops implement)', (
     ])
   })
 
+  // Final review M1: a cached replay re-judged nothing — it re-served an older verdict.
+  it('a cached replay of a full verdict is no re-judgment', () => {
+    const e = [run(1, []), run(2, [dem('a.ts', 1)], delta(1)), run(3, [], { cached: true })]
+    expect(outstandingDemotions(e, 'implement').map((d) => d.anchor)).toEqual(['a.ts'])
+  })
+
   it('a later full review re-judged them all', () => {
     const e = [run(1, []), run(2, [dem('a.ts', 1)], delta(1)), run(3, [])]
     expect(outstandingDemotions(e, 'implement')).toEqual([])
@@ -142,5 +148,28 @@ describe('outstandingDemotions and demotionsBlock (ship backstops implement)', (
     expect(b).toContain('it then blocks here')
     expect(b.endsWith('\n\n')).toBe(true)
     expect(demotionsBlock('implement', [])).toBe('')
+  })
+})
+
+// Final review #5: a prior blocker re-reported under another spelling is the same finding.
+describe('reportedBy at the code gates (C3, final review)', () => {
+  const f = (anchor: unknown) => ({ blocking: true, anchor, claim: 'x' })
+  const unchanged = { state: () => 'unchanged' as const }
+  const run = (reported: (a: unknown) => boolean, anchors: unknown[]) =>
+    demote([{ reviewer: 'code-reviewer', coverage: [], findings: anchors.map(f) }] as never, { baseRound: 1, reported: reported as never, view: unchanged }, () => true)[0]!
+      .findings.map((x) => x.blocking)
+
+  it('normalizes the path, and a bare path matches any anchor in its file', () => {
+    const r = reportedBy(['src/token.ts#nextToken', { kind: 'omission', scope: 'tests/' }], true)
+    expect(run(r, ['./src/token.ts#nextToken', 'src/token.ts', { kind: 'omission', scope: './tests' }])).toEqual([true, true, true])
+    expect(run(r, ['src/token.ts#other', 'src/other.ts'])).toEqual([false, false])     // new in an unchanged file: demotable
+  })
+
+  it('a bare path the base reported covers every symbol in its file', () => {
+    expect(run(reportedBy(['src/a.ts'], true), ['src/a.ts#f', './src/a.ts'])).toEqual([true, true])
+  })
+
+  it('doc anchors compare exactly', () => {
+    expect(run(reportedBy(['p > ## Step: s1'], false), ['p > ## Step: s1', 'p'])).toEqual([true, false])
   })
 })

@@ -78,6 +78,11 @@ export function treeReadable(root: string, tree: string): boolean {
   return tryGit(root, 'cat-file', '-e', `${tree}^{tree}`).ok
 }
 
+// Every path a tree holds, directories included, by its exact spelling.
+export function treePaths(root: string, tree: string): string[] {
+  return run(root, ['ls-tree', '-r', '-t', '--name-only', '-z', tree]).split('\0').filter((p) => p !== '')
+}
+
 export function changedPaths(root: string, from: string, to: string): string[] {
   return run(root, ['diff', '--name-only', '-z', '--no-renames', from, to]).split('\0').filter((p) => p !== '')
 }
