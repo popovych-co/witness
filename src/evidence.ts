@@ -192,11 +192,28 @@ export async function verifyRed(
   const untracked = new Set(git(runRoot, 'ls-files', '--others', '--exclude-standard').split('\n').filter(Boolean))
   const trackedNonTest = nonTest.filter((f) => !untracked.has(f))
 
+  // Final review F1. `refs/stash` is ONE stack for every worktree of the repo, so two plans
+  // verifying at once popped each other's work. The stash commit is taken off the shared
+  // stack the moment it is made — under the repo lock, for that ~100 ms only — and held by a
+  // per-plan ref until it is applied back, which also keeps it recoverable after a crash.
+  const held = `refs/witness/verify-red/${planId}`
   let stashed = false
   if (nonTest.length) {
-    const before = git(runRoot, 'stash', 'list').split('\n').filter(Boolean).length
-    git(runRoot, 'stash', 'push', '--include-untracked', '--', ...nonTest)
-    stashed = git(runRoot, 'stash', 'list').split('\n').filter(Boolean).length > before
+    const lock = acquireLock(stateRoot)
+    if (!lock.ok) return lock
+    try {
+      const top = () => tryGit(runRoot, 'rev-parse', '-q', '--verify', 'refs/stash')
+      const before = top()
+      git(runRoot, 'stash', 'push', '--include-untracked', '--', ...nonTest)
+      const after = top()
+      stashed = after.ok && (!before.ok || after.out.trim() !== before.out.trim())
+      if (stashed) {
+        git(runRoot, 'update-ref', held, after.out.trim())
+        git(runRoot, 'stash', 'drop', '-q')
+      }
+    } finally {
+      lock.value()
+    }
   }
   let red: Result<SpecTestRun>
   try {
@@ -209,7 +226,10 @@ export async function verifyRed(
     for (const rel of trackedNonTest) {
       if (inCommit(runRoot, 'HEAD', rel)) git(runRoot, 'checkout', 'HEAD', '--', rel)
     }
-    if (stashed) git(runRoot, 'stash', 'pop')
+    if (stashed) {
+      git(runRoot, 'stash', 'apply', '-q', held)
+      git(runRoot, 'update-ref', '-d', held)
+    }
   }
   // D148. The stash/checkout cycle above rewrote every non-test file on disk — the agent's
   // prior reads are stale, and witness is what made them stale. Announced rather than left

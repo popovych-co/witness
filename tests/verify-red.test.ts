@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync, spawn } from 'node:child_process'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { worktreePath } from '../src/worktree.js'
 import { readStream } from '../src/journal.js'
 import type { TestRepo } from './helpers.js'
+import { approve as approveDoc, seededRepo as seeded, writePlan as plan, writeSpec as spec } from './helpers.js'
 import {
   TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
   copyFixture, fixtureEnv, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
@@ -106,4 +111,45 @@ describe('witness verify-red', () => {
     const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--base', base], { env: fixtureEnv() })
     expect(res.code).toBe(0)
   })
+})
+
+// Final review F1. `refs/stash` is ONE stack for every worktree of a repo: A pushes, B pushes,
+// A's pop takes B's work. B starts while A's red run holds the runner turn, so B's push lands
+// between A's push and A's pop every time.
+describe('verify-red in two worktrees at once (B3)', () => {
+  const REPO = resolve(import.meta.dirname, '..')
+  const child = (cwd: string, id: string): Promise<number | null> => new Promise((done) => {
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', id, '--base', 'HEAD'],
+      { cwd, env: fixtureEnv() as NodeJS.ProcessEnv, stdio: 'ignore' })
+    c.on('close', (code) => done(code))
+  })
+  it('each worktree keeps its own uncommitted implementation', async () => {
+    const repo = await seeded()
+    for (const s of ['a', 'b']) {
+      await spec(repo, s, { criteria: [{ id: `ac-${s}`, test: `@spec:${s}` }] })
+      approveDoc(repo, s)
+      await plan(repo, `${s}-plan-1`, { parent: s, steps: [{ id: 's1', title: s, criteria: [`ac-${s}`] }] })
+      approveDoc(repo, `${s}-plan-1`)
+      await repo.cli(['start', `${s}-plan-1`])
+    }
+    const wts = ['a', 'b'].map((s) => worktreePath(repo.root, `${s}-plan-1`))
+    for (const [i, wt] of wts.entries()) {
+      const s = ['a', 'b'][i]!
+      writeFileSync(join(wt, 'turn.sh'), 'sleep 2\nexit 1\n')
+      writeFileSync(join(wt, 'witness.config.yaml'), "schema: 1\ncriteria:\n  runner: 'sh turn.sh {id}'\n")
+      execFileSync('git', ['add', '-A'], { cwd: wt })
+      execFileSync('git', ['commit', '-qm', 'runner'], { cwd: wt })
+      mkdirSync(join(wt, 'tests'), { recursive: true })
+      mkdirSync(join(wt, 'src'), { recursive: true })
+      writeFileSync(join(wt, 'tests', `${s}.test.ts`), `// @spec:${s}\n`)
+      writeFileSync(join(wt, 'src', `${s}-impl.ts`), `export const impl = '${s}'\n`)
+    }
+    const a = child(wts[0]!, 'a-plan-1')
+    await new Promise((r) => setTimeout(r, 1_000))
+    const b = child(wts[1]!, 'b-plan-1')
+    await Promise.all([a, b])
+    expect([existsSync(join(wts[0]!, 'src', 'a-impl.ts')), existsSync(join(wts[1]!, 'src', 'b-impl.ts'))]).toEqual([true, true])
+    expect([existsSync(join(wts[0]!, 'src', 'b-impl.ts')), existsSync(join(wts[1]!, 'src', 'a-impl.ts'))]).toEqual([false, false])
+    expect(execFileSync('git', ['stash', 'list'], { cwd: repo.root, encoding: 'utf8' })).toBe('')
+  }, 90_000)
 })
