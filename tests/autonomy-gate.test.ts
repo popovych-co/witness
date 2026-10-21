@@ -8,7 +8,7 @@ import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
 import {
   PLAN_BLOCKING, approve, autonomyOn, callCount, callFor, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict,
-  seededRepo, shippableRepo, witnessDesign, writeDesign, writeSpec,
+  seededRepo, shippableRepo, vitestBin, witnessDesign, writeDesign, writeSpec,
 } from './helpers.js'
 
 const cover = (ids: string[]) => ({
@@ -158,4 +158,57 @@ it('an arbiter that cannot be invoked leaves the stop for a human', async () => 
   expect(decisions(repo.root, 'auth-hardening')).toEqual([])
   expect(h.err()).toContain('reviewer-invocation')
   expect(h.out()).toContain('autonomy: left for a human — the arbiter could not be invoked')
+})
+
+it('a granted command that really fails lands a round and is revised, never resumed forever (F3)', async () => {
+  const { repo, planId } = await shippableRepo()
+  const runner = `node "${vitestBin()}" run -t "@spec:{id}" --passWithNoTests`
+  repo.write('witness.config.yaml', `schema: 1\ncriteria:\n  runner: '${runner}'\nship:\n  test: 'true'\n  lint: 'false'\nautonomy: on\n`)
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint false')
+  const SHIP_CLEAN = {
+    coverage: [
+      { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+      { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
+    ],
+    findings: [],
+  }
+  const scenario = fakeScenario(); putVerdict(scenario, SHIP_CLEAN)
+  expect(await runGate(capture(repo.root, scenario).ctx, 'implement', planId, F)).toBe(0)
+  writeFileSync(join(repo.root, '.witness', 'allow.json'), JSON.stringify({ commands: ['true', runner] }))
+  const blocked = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
+  expect(await runGate(blocked.ctx, 'ship', planId, F)).toBe(1)
+  expect(blocked.out()).toContain('kept-stop: trust grant — false')
+  writeFileSync(join(repo.root, '.witness', 'allow.json'), JSON.stringify({ commands: ['true', runner, 'false'] }))
+  const granted = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
+  expect(await runGate(granted.ctx, 'ship', planId, F)).toBe(1)
+  const ships = (readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]).filter((r) => r.gate === 'ship')
+  expect(ships).toHaveLength(2)
+  expect(ships[1]!.checks.find((c) => c.name === 'lint')!.untrusted).toBeUndefined()
+  expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship').at(-1))
+    .toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-failed' })
+})
+
+it('an arbiter choice the one door refuses parks the flow once, so no stop re-asks the model (F4)', async () => {
+  const repo = await plannedRepo()
+  // the parent spec has no owning effort, so `--revise --upstream auth-refresh` refuses unknown-owner
+  const effort = join(repo.root, '.witness', 'journal', 'auth-hardening.jsonl')
+  writeFileSync(effort, readFileSync(effort, 'utf8').split('\n')
+    .filter((l) => !(l.includes('"t":"write"') && l.includes('"artifact":"auth-refresh"'))).join('\n'))
+  repo.git('add', '.witness/journal/auth-hardening.jsonl'); repo.git('commit', '-m', 'orphan the spec', '-m', 'Witness-State: 1')
+  for (const [round, anchor] of [[1, 'X1'], [2, 'X2'], [3, 'auth-refresh > ## Behavior']] as const) {
+    appendEntry(repo.root, 'auth-refresh-plan-1', {
+      v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
+      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      checks: [], outcome: 'stopped', verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor, claim: 'x' }] }],
+    })
+  }
+  const scenario = fakeScenario(); putVerdict(scenario, { choice: 1, reason: 'the spec is what is wrong' }, 'arbiter')
+  const h = capture(repo.root, scenario)
+  expect(await runGate(h.ctx, 'plan', 'auth-refresh-plan-1', F)).toBe(1)
+  const d = decisions(repo.root, 'auth-refresh-plan-1').at(-1)!
+  expect(d).toMatchObject({ decision: 'stop', selected: 'policy' })
+  expect(d.note).toContain('unknown-owner')
+  expect(callCount(scenario)).toBe(1)
+  await repo.cli(['next'], { env: gateEnv(scenario) })
+  expect(callCount(scenario)).toBe(1)
 })

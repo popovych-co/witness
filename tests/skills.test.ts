@@ -267,5 +267,7 @@ describe('one autonomy conditional per skill (A8)', () => {
     expect(read('witness-ship')).toContain('Never merge');
     expect(read('witness-design')).toContain('the kept stop `design look`');
     expect(read('witness-brainstorm')).toContain('the confirmation is theirs');
+    expect(read('witness-ship')).toContain('Any other `merge: held`');
+    expect(read('witness-ship')).toContain('ship <plan-id>    # append --manual when the run asked for it');
   });
 });

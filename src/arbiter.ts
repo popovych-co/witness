@@ -6,7 +6,7 @@ import { serializeDoc } from './fm.js'
 import { resolveJudge } from './harness.js'
 import { latestRecap, policyPins, type Entry } from './journal.js'
 import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
-import type { Decision, Option } from './recommend.js'
+import { PLACEHOLDER, type Decision, type Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
 import { effortOf, effortSpecs } from './reviewed.js'
@@ -118,13 +118,16 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
 // any command whose id the CLI could not resolve (the arbiter fills a note, never an id),
 // and every approve over a failed deterministic check — it may overrule a reviewer, never a
 // check. `amendment-ack` alone is the exception: approving IS its acknowledgement.
+// The design gate is the exception that holds whatever the evidence says: the look is the
+// human's (§3 G2), so no approve of it is ever offered — at the bound, on a fallback round or
+// past a spent ladder the arbiter may revise, reset upstream, repair or park, never stamp.
 export function menuFor(block: Decision, run: GateRunEntry): Option[] {
   const failed = run.checks.filter((c) => !c.ok)
-  const approveBarred = failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack')
+  const approveBarred = run.gate === 'design' || (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))
   return block.options.filter((o) =>
     o.command.startsWith('witness decide ') &&
     !/ --trust-cmds\b/.test(o.command) &&
-    !/<[^>]+>/.test(o.command.replace(' --note "<why>"', '')) &&
+    !PLACEHOLDER.test(o.command.replace(' --note "<why>"', '')) &&
     !(approveBarred && / --approve\b/.test(o.command)))
 }
 

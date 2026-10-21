@@ -297,9 +297,13 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // Rows 172-173. Trust stays a human's (D154): no autonomous decision grants it. And the
   // obligation D122 mints is a judgment that the finding is wrong, which the rule cannot
   // make about its own recommendation — only the arbiter may take an override.
-  if ((act.selected === 'policy' || act.selected === 'arbiter') && (trustCmds || (act.selected === 'policy' && override))) {
-    renderRefusal([v('selected', 'autonomy-cannot', `${act.selected} with --${trustCmds ? 'trust-cmds' : 'override'}`,
-      'a named human selection — no autonomous decision grants trust (D154) and only the arbiter mints an obligation')])
+  // And the look of a screen is the human's (§3 G2): no autonomous decision approves a design.
+  const lookApproved = gate === 'design' && decision === 'approve'
+  if ((act.selected === 'policy' || act.selected === 'arbiter') &&
+      (trustCmds || lookApproved || (act.selected === 'policy' && override))) {
+    const what = trustCmds ? '--trust-cmds' : lookApproved ? 'a design approve' : '--override'
+    renderRefusal([v('selected', 'autonomy-cannot', `${act.selected} with ${what}`,
+      'a named human selection — no autonomous decision grants trust (D154) or approves a look · only the arbiter mints an obligation')])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }

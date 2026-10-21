@@ -498,3 +498,17 @@ describe('applyDecision — the one door (A4)', () => {
     expect(decisionAct(['plan', 'p1', '--revise', '--note', 'x', '--via', 'affirmation'])).toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: 'x', selected: 'affirmation' }))
   })
 })
+
+describe('the look stays the human\'s at the one door (F1)', () => {
+  it('refuses an autonomous approve of a design', async () => {
+    const repo = await seededRepo()
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { err: (l) => errs.push(l) })
+    for (const act of [
+      { gate: 'design', target: 'auth-refresh', decision: 'approve' as const, selected: 'policy' as const },
+      { gate: 'design', target: 'auth-refresh', decision: 'approve' as const, override: true, selected: 'arbiter' as const,
+        reason: 'r', arbiter: { model: 'm', prompts_sha: 'p' } },
+    ]) expect(await applyDecision(ctx, act)).toBe(2)
+    expect(errs.join('\n').match(/autonomy-cannot/g)).toHaveLength(2)
+  })
+})

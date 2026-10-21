@@ -35,6 +35,12 @@ export function stillUntrusted(root: string, env: Ctx['env'], run: GateRunEntry)
   return [...new Set(run.checks.filter((c) => !c.ok).flatMap((c) => c.untrusted ?? []))].filter((c) => !trusted.has(c))
 }
 
+// The rule of the first row of a rendered refusal (`refused[N]{field,rule,got,want}:`).
+function refusedRule(lines: readonly string[]): string | undefined {
+  const at = lines.findIndex((l) => /^refused\[\d+\]\{/.test(l))
+  return at >= 0 ? lines[at + 1]?.trim().split(',')[1] : undefined
+}
+
 const leftLine = (gate: string, target: string, why: string) =>
   cmd('autonomy', `left for a human — ${why} · witness decide ${gate} ${target} --show`)
 
@@ -59,9 +65,23 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   const policy = policyFor({ at: 'gate', gate, target, entries, run: owed, block, untrusted })
 
   const settle = async (act: DecisionAct, by: 'policy' | 'arbiter'): Promise<Settled> => {
-    const code = await applyDecision(ctx, act)
+    // The refusal's rule is read off the rows the door printed, so the line that leaves the
+    // stop can say WHY — the quiet ctx of `next` would otherwise swallow it.
+    const errs: string[] = []
+    const code = await applyDecision({ ...ctx, err: (l) => { errs.push(l); ctx.err(l) } }, act)
     if (code !== EXIT.OK) {
-      const why = `the ${by} decision was refused (exit ${code})`
+      const rule = refusedRule(errs)
+      // An arbiter choice the door refuses would stay owed, and every `next` would pay for the
+      // same model call to reach the same refusal (F4). It parks instead — once, reversibly,
+      // as the policy's act — exactly as a second malformed answer does. A lock or a pending
+      // transaction is transient (exit 3), so that stop is left to be tried again.
+      if (by === 'arbiter' && code === EXIT.REFUSED) {
+        return settle({
+          gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id,
+          note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
+        }, 'policy')
+      }
+      const why = `the ${by} decision was refused (${rule ?? `exit ${code}`})`
       ctx.out(leftLine(gate, target, why))
       return { kind: 'left', why, code }
     }

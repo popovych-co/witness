@@ -226,9 +226,19 @@ describe('autonomy (A1)', () => {
     const repo = tmpRepo()
     for (const [line, want] of [['', false], ['autonomy: on\n', true], ['autonomy: off\n', false]] as const) {
       repo.write('witness.config.yaml', `schema: 1\n${line}`)
+      repo.git('add', 'witness.config.yaml'); repo.git('commit', '--allow-empty', '-m', `config ${line.trim() || 'none'}`)
       const r = loadConfig(repo.root)
       expect(r.ok && r.value.autonomy).toBe(want)
     }
+  })
+  it('is on only once committed — a working-copy edit grants nothing (F11)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\n')
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'config')
+    repo.write('witness.config.yaml', 'schema: 1\nautonomy: on\n')
+    const r = loadConfig(repo.root)
+    expect(r.ok && r.value.autonomy).toBe(false)
+    expect(r.ok && r.value.warning).toContain('autonomy: on is not committed')
   })
   it('refuses anything but on or off', () => {
     const repo = tmpRepo()

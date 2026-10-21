@@ -4,6 +4,6 @@ import { runShip } from '../ship.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const planId = argv.find((a) => !a.startsWith('--'))
-  if (!planId) { ctx.err('usage: witness ship <plan-id>'); return EXIT.REFUSED }
-  return runShip(ctx, planId)
+  if (!planId) { ctx.err('usage: witness ship <plan-id> [--manual]'); return EXIT.REFUSED }
+  return runShip(ctx, planId, { manual: argv.includes('--manual') })
 }

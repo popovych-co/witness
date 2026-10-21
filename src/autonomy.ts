@@ -72,6 +72,10 @@ export function policyFor(facts: StopFacts): Policy {
   }
 
   if (untrusted.length > 0) return { kind: 'human', stop: 'trust-grant' }
+  // A verdict that describes bytes no longer there, or a round that judged nothing, is a free
+  // re-run before it is anything else: no human or arbiter can honestly act on it, and the
+  // standing and fallback arms below would hand it to one with the re-run filtered away.
+  if (block.rule === 'stale-below-bound' || block.rule === 'malformed-rerun') return first()
   if (gate === 'design' && clean) return { kind: 'human', stop: 'design-look' }
   if ((gate === 'ship' || gate === 'decompose') && clean && run.standing !== undefined) return { kind: 'arbiter' }
   if (fellBack(run)) return { kind: 'arbiter' }

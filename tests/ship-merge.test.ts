@@ -26,10 +26,11 @@ const lastRun = (repo: TestRepo, stream: string, gate: string) =>
 
 // The config commit moves origin/main past the worktree's cut, so the gate phase rebases
 // first — which is what exercises the re-derivation after the arbiter approves.
+const shipConfig = (merge?: string, autonomy = true) =>
+  `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n  ciSettleMs: 0\n${merge ? `  merge: ${merge}\n` : ''}${autonomy ? 'autonomy: on\n' : ''}`
 async function autonomousShip(merge?: string) {
   const seed = await shippableRepo()
-  seed.repo.write('witness.config.yaml',
-    `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n${merge ? `  merge: ${merge}\n` : ''}autonomy: on\n`)
+  seed.repo.write('witness.config.yaml', shipConfig(merge))
   seed.repo.git('add', 'witness.config.yaml'); seed.repo.git('commit', '-m', 'autonomy: on')
   addOrigin(seed.repo)
   const scenario = fakeScenario()
@@ -113,4 +114,75 @@ it('a PR head that moved after review is refused by GitHub and left for a human'
   expect(await runShip(s.ctx, s.planId)).toBe(2)
   expect(s.err()).toContain('merge-refused')
   expect(readFileSync(join(s.scenario, 'pr-1-state'), 'utf8').trim()).toBe('OPEN')
+})
+
+// ── final review fixes ──────────────────────────────────────────────────────────────────
+it('a --manual ship stop met by ship under autonomy is shown to the human (F5)', async () => {
+  const s = await autonomousShip()
+  expect(await runGate(s.ctx, 'ship', s.planId, { fresh: false, manual: true })).toBe(1)
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain(`ship: ${s.planId} awaits the ship decision`)
+  expect(s.out()).toMatch(/^decide: \d+ options · 1 is recommended$/m)
+  expect(existsSync(join(s.scenario, 'claude-calls'))).toBe(true)
+  expect(s.calls()).not.toContain('pr create')
+})
+it('ship --manual keeps the stop and the merge for a human (F6)', async () => {
+  const s = await autonomousShip()
+  expect(await runShip(s.ctx, s.planId, { manual: true })).toBe(1)
+  expect(lastRun(s.repo, s.planId, 'ship').manual).toBe(true)
+  expect((readStream(s.repo.root, s.planId).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]).filter((d) => d.gate === 'ship')).toEqual([])
+  expect((await s.repo.cli(['decide', 'ship', s.planId, '--approve'], { env: gateEnv(s.scenario) })).code).toBe(0)
+  expect(await runShip(s.ctx, s.planId, { manual: true })).toBe(0)
+  expect(s.out()).toContain('merge PR #1 on GitHub when ready')
+  expect(s.calls()).not.toContain('pr merge')
+})
+it('never merges on cancelled checks, which gh --watch exits 0 for (F7)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'pr-1-checks'), 'cancel')
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain('ci: red — cancel: ci')
+  expect(s.calls()).not.toContain('pr merge')
+})
+it('never merges when every check skipped — no passing evidence (F7)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'pr-1-checks'), 'skipping')
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain('merge: held — no passing CI check · witness merges only on green CI')
+  expect(s.calls()).not.toContain('pr merge')
+})
+it('a check that registers after the watch ended is watched too, and its failure blocks the merge (F7)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'pr-1-rollups'), 'cla:pass\ncla:pass,tests:pending\ncla:pass,tests:fail\n')
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain('ci: red')
+  expect(s.calls()).not.toContain('pr merge')
+})
+it('pushes the approved tree before it watches, so the merged commit is the one approved (F8)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'pr-1-checks'), 'fail')
+  expect(await runShip(s.ctx, s.planId)).toBe(1)                                   // PR opened, CI red
+  writeFileSync(join(s.wt, 'src/token.ts'), `${readFileSync(join(s.wt, 'src/token.ts'), 'utf8')}// the reviewed fix\n`)
+  writeFileSync(join(s.scenario, 'pr-1-checks'), 'pass')
+  expect(await runShip(s.ctx, s.planId)).toBe(0)
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: s.wt, encoding: 'utf8' }).trim()
+  expect(execFileSync('git', ['status', '--porcelain'], { cwd: s.wt, encoding: 'utf8' })).toBe('')
+  expect(s.calls()).toContain(`--match-head-commit ${head}`)
+  const pushed = execFileSync('git', ['--git-dir', `${s.repo.root}-origin.git`, 'show', `witness/${s.planId}:src/token.ts`], { encoding: 'utf8' })
+  expect(pushed).toContain('// the reviewed fix')
+})
+it('holds the merge when the base cannot be fetched (F9)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'gh-checks-hook'), `mv "${s.repo.root}-origin.git" "${s.repo.root}-origin.gone"\n`)
+  expect(await runShip(s.ctx, s.planId)).toBe(1)
+  expect(s.out()).toContain('merge: held — cannot verify main')
+  expect(s.calls()).not.toContain('pr merge')
+})
+it('a human who turns autonomy off while CI runs gets the merge back (F10)', async () => {
+  const s = await autonomousShip()
+  writeFileSync(join(s.scenario, 'off.yaml'), shipConfig(undefined, false))
+  writeFileSync(join(s.scenario, 'gh-checks-hook'),
+    `cd "${s.repo.root}" && cp "${join(s.scenario, 'off.yaml')}" witness.config.yaml && git add witness.config.yaml && git -c user.name=t -c user.email=t@e commit -m off\n`)
+  expect(await runShip(s.ctx, s.planId)).toBe(0)
+  expect(s.out()).toContain('merge PR #1 on GitHub when ready')
+  expect(s.calls()).not.toContain('pr merge')
 })

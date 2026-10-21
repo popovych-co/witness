@@ -66,5 +66,6 @@ describe('the engine under autonomy (A8)', () => {
     for (const s of ['## Under `autonomy: on`', 'Never run `witness decide`', '`kept-stop:`', '`merged:`']) expect(b, s).toContain(s);
     expect(b).toContain('END YOUR TURN');
     expect(b).toContain('Never merge');
+    expect(b).toContain('`--manual` on `gate` and `ship` when armed');
   });
 });

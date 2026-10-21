@@ -96,3 +96,16 @@ describe('arbitrate (A3)', () => {
     expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
   })
 })
+
+describe('the look is never the arbiter\'s to approve (F1)', () => {
+  it('drops every approve at the design gate, at the bound and below it', () => {
+    const d = (round: number, sha: string, extra: Record<string, unknown> = {}) => run(round, sha, { gate: 'design', ...extra }, blocking('design#save-bar'))
+    const at = (entries: Entry[]) => {
+      const block = recommend({ gate: 'design', target: 'p1', entries, upstream: 'auth-hardening', stale: false })!
+      return menuFor(block, lastGateRun(entries, 'design')!).map((x) => x.command)
+    }
+    expect(at([d(1, 'a'), d(2, 'b'), d(3, 'c')]).filter((c) => c.includes('--approve'))).toEqual([])
+    expect(at([d(1, 'a', { pin: 'pinned-model' })]).filter((c) => c.includes('--approve'))).toEqual([])
+    expect(at([d(1, 'a'), d(2, 'b'), d(3, 'c')])).toContain('witness decide design p1 --stop')
+  })
+})

@@ -35,12 +35,39 @@ case "$sub" in
     printf '{"state":"%s"}\n' "$state"; exit 0 ;;
   "pr checks")
     # a test may act on the world while CI "runs" — e.g. another flow merging to main
-    if [ -f "$dir/gh-checks-hook" ]; then sh "$dir/gh-checks-hook" >/dev/null 2>&1; fi
-    status=$(cat "$dir/pr-$3-checks" 2>/dev/null || echo pass)
-    if [ "$status" = "pass" ]; then echo "All checks were successful"; exit 0; fi
-    # gh's own words for a PR whose repo runs no CI at all
-    if [ "$status" = "none" ]; then echo "no checks reported on the 'witness/$3' branch" >&2; exit 1; fi
-    echo "Some checks were not successful"; exit 1 ;;
+    # its exit is the hook's own business: a second run that finds nothing to do must not kill gh
+    if [ -f "$dir/gh-checks-hook" ]; then sh "$dir/gh-checks-hook" >/dev/null 2>&1 || true; fi
+    json=""; watch=""
+    for a in "$@"; do [ "$a" = "--json" ] && json=1; [ "$a" = "--watch" ] && watch=1; done
+    # The rollup this call sees: name:bucket pairs, buckets as gh names them (pass fail
+    # pending skipping cancel). `pr-<n>-rollups` is a sequence, one line per call — `--watch`
+    # walks past pending lines, as gh blocks while anything is pending. Otherwise
+    # `pr-<n>-checks` names one bucket for a single check called `ci` (`none`: no checks).
+    if [ -f "$dir/pr-$3-rollups" ]; then
+      at=$(cat "$dir/pr-$3-rollup-at" 2>/dev/null || echo 1)
+      total=$(wc -l < "$dir/pr-$3-rollups" | tr -d ' ')
+      line=$(sed -n "${at}p" "$dir/pr-$3-rollups")
+      if [ -n "$watch" ]; then
+        while echo "$line" | grep -q ':pending' && [ "$at" -lt "$total" ]; do
+          at=$((at + 1)); line=$(sed -n "${at}p" "$dir/pr-$3-rollups")
+        done
+      fi
+      if [ "$at" -lt "$total" ]; then echo $((at + 1)) > "$dir/pr-$3-rollup-at"; else echo "$at" > "$dir/pr-$3-rollup-at"; fi
+    else
+      status=$(cat "$dir/pr-$3-checks" 2>/dev/null || echo pass)
+      if [ "$status" = "none" ]; then line=""; else line="ci:$status"; fi
+    fi
+    if [ -n "$json" ]; then
+      printf '['; sep=""
+      for pair in $(echo "$line" | tr ',' ' '); do printf '%s{"name":"%s","bucket":"%s"}' "$sep" "${pair%%:*}" "${pair#*:}"; sep=","; done
+      printf ']\n'; exit 0
+    fi
+    # gh's own words and exit rule (pkg/cmd/pr/checks): no checks at the first poll → 1,
+    # any failure → 1, anything pending → 8, and otherwise 0 — cancelled and skipped included
+    if [ -z "$line" ]; then echo "no checks reported on the 'witness/$3' branch" >&2; exit 1; fi
+    if echo "$line" | grep -q ':fail'; then echo "Some checks were not successful"; exit 1; fi
+    if echo "$line" | grep -q ':pending'; then echo "Some checks are still pending"; exit 8; fi
+    echo "All checks were successful"; exit 0 ;;
   "pr merge")
     if [ -f "$dir/pr-$3-merge-refuse" ]; then cat "$dir/pr-$3-merge-refuse" >&2; exit 1; fi
     # GitHub refuses --match-head-commit when the PR head is another commit

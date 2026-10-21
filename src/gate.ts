@@ -336,7 +336,11 @@ async function judge(
   // silently re-rendering; the verdicts are REPLAYED (`cached`), so no battery is spent.
   // Compared on `ok` alone: a detail carries run output on some gates (timings, paths), and
   // keying on it would append a round for every re-run of an unchanged tree.
-  const checkOk = (cs: GateCheck[]) => cs.map((c) => `${c.name}:${c.ok}`).sort().join('|')
+  // A check trust kept from running and one that ran and failed are both `ok: false`, but they
+  // are different judgments: granting the command flips the first into the second, and without
+  // this term the gate resumed the blocked round forever while the policy re-ran it (F3).
+  const checkOk = (cs: GateCheck[]) =>
+    cs.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}`).sort().join('|')
   if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') &&
       checkOk(kind.entry.checks) !== checkOk(input.checks) &&
       kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {

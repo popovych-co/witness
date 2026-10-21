@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { autonomyLines, keptStopLine, policyFor } from '../src/autonomy.js'
 import type { Entry } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
-import { lastGateRun } from '../src/rounds.js'
+import { lastGateRun, type GateRunEntry } from '../src/rounds.js'
 import { autonomyOn, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const cover = (ids: string[]) => ({
@@ -111,4 +111,33 @@ it('answers the stops that are not gates', () => {
   expect(policyFor({ at: 'choose', block: { key: 'choose', rule: 'multiple-ready', options: [opt('token-store'), opt('audit-log')] } })).toEqual(take('token-store'))
   expect(policyFor({ at: 'recover', block: { key: 'recover', rule: 'txn-write-landed', options: [opt('witness recover --complete')] } })).toEqual(take('witness recover --complete'))
   expect(policyFor({ at: 'start', target: 'p1', unmet: ['ses-prod'] })).toEqual({ kind: 'human', stop: 'unmet-need' })
+})
+
+// Final review fixes (F2 · F4 · F13). The policy re-runs before it judges, and the block it
+// acts on never offers an act `decide` would refuse.
+it('re-runs a stale or malformed round before any standing or design arm (F2)', () => {
+  const at = (gate: string, extra = {}) => [run(1, 'a', { gate, standing: `${gate} always stops`, ...extra })]
+  expect(policy('ship', at('ship'), { stale: true })).toEqual(take('witness gate ship p1'))
+  expect(policy('decompose', at('decompose'), { stale: true })).toEqual(take('witness gate decompose p1'))
+  expect(policy('design', at('design'), { stale: true })).toEqual(take('witness gate design p1'))
+  const owed = run(1, 'a', { gate: 'decompose', standing: 'feature scope' })
+  const entries = [owed, run(2, 'b', { gate: 'decompose', outcome: 'malformed', verdicts: [], malformed: [{ reviewer: 'lens', violations: [] }] })]
+  const block = recommend({ gate: 'decompose', target: 'p1', entries, upstream: 'auth-refresh', stale: false })!
+  expect(block.rule).toBe('malformed-rerun')
+  expect(policyFor({ at: 'gate', gate: 'decompose', target: 'p1', entries, run: owed as unknown as GateRunEntry, block, untrusted: [] }))
+    .toEqual(take('witness gate decompose p1'))
+})
+it('never offers an override decide would refuse as stale (F4)', () => {
+  const S = blocking('S')
+  const ladder = [run(1, 'a', {}, S), decision('revise-upstream', { anchor: 'S' }), run(2, 'b', {}, S), run(3, 'c', {}, S), run(4, 'd', {}, S)]
+  const recur = [run(1, 'a', {}, S), run(2, 'b', {}, S), run(3, 'c', {}, S)]
+  for (const [rule, entries] of [['ladder-spent', ladder], ['bound-recurrence', recur]] as const) {
+    const block = recommend({ gate: 'plan', target: 'p1', entries, upstream: 'auth-refresh', stale: true })!
+    expect(block.rule).toBe(rule)
+    expect(block.options.filter((o) => o.command.includes('--approve'))).toEqual([])
+  }
+})
+it('an anchor that reads like a placeholder still leaves the CLI\'s revise runnable (F13)', () => {
+  expect(policy('plan', [run(1, 'a', {}, blocking('p1 > ## Rendering <SaveBar>'))]))
+    .toEqual(take('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Rendering <SaveBar>"'))
 })
