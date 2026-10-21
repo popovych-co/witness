@@ -255,3 +255,17 @@ describe('the execution protocol', () => {
     expect(cmd).toContain('--via affirmation')
   })
 })
+
+describe('one autonomy conditional per skill (A8)', () => {
+  const read = (name: string) => readFileSync(skillPath(name), 'utf8');
+  it('every skill keys it on the CLI line, exactly once', () => {
+    for (const name of SKILLS) expect(read(name).match(/Under `autonomy: on`/g), name).toHaveLength(1);
+  });
+  it('names what changes per stage', () => {
+    expect(read('witness-implement')).toContain('the plan says X; doing Y because Z');
+    expect(read('witness-ship')).toContain('`merged:`');
+    expect(read('witness-ship')).toContain('Never merge');
+    expect(read('witness-design')).toContain('the kept stop `design look`');
+    expect(read('witness-brainstorm')).toContain('the confirmation is theirs');
+  });
+});

@@ -45,6 +45,7 @@ The CLI derives the phase from world state (`pr:` field, journal, PR head) — k
 - **`semantic-conflict`** → the CLI aborted its mechanical rebase; the conflict is yours (next section), then re-run ship.
 - **CI red** → investigate in the worktree; fix under TDD discipline (a behavior fix gets a red first — reuse the implement protocol); commit, `git push --force-with-lease` if you rebased, plain push otherwise; re-run `$WITNESS ship <plan-id>` to re-watch.
 - **CI green** → tell the human the PR is ready to merge. **Never merge it yourself** — merging is the human's act on GitHub; the lazy stamp flips `plan → done`, `spec → live` on the next scan (`$WITNESS next` after merging shows it).
+- **Under `autonomy: on`** (printed by `gate`): the arbiter settles the ship gate's stop, and `witness ship` carries on in the same run — PR, CI watch, and on green it merges the PR itself and prints `merged:`. Never run `witness decide`, and never merge yourself. `merge: held` means the approval lapsed: re-run `witness ship`, which re-gates. A `merge-refused` refusal or a `kept-stop:` line is the human's: render it and END YOUR TURN.
 
 ## Semantic conflict resolution
 
