@@ -14,6 +14,7 @@ import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, streamExists, type Entry } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { effortOf } from '../reviewed.js'
+import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
 import { journalTrust } from './trust.js'
@@ -184,7 +185,8 @@ function show(ctx: Ctx, spec: GateSpec, gate: string, target: string): number {
   // `witness gate …` in the one state where the gate answers changed-nothing. An
   // uncomputable sha is NOT staleness — same doctrine as the approve-time check.
   const shownSha = spec.currentSha?.(root, canon, cfgR.value, target)
-  const stale = shownSha !== undefined && shownSha !== last.reviewed_sha
+  const stale = (shownSha !== undefined && shownSha !== last.reviewed_sha) ||
+    liftedHolds(criteriaOwner(canon, target), last).length > 0
 
   if (reopen) {
     ctx.out(kv('gate', gate))
@@ -443,6 +445,16 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
           ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
           : `a verdict describing current content — run: witness gate ${gate} ${target}`))
     }
+    // Final review F1: a criterion the run held is no longer held, so the verdict never ran
+    // what approving it now asserts. Re-gating appends a cached round with fresh checks.
+    const lifted = liftedHolds(criteriaOwner(canon, target), anchor)
+    if (lifted.length > 0 && !(now !== undefined && now !== anchor.reviewed_sha)) {
+      blockers.push(v('gate', 'hold-lifted',
+        `${lifted.join(' · ')} held at round ${anchor.round} · its need is met now`,
+        atBound
+          ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
+          : `a verdict that ran it — run: witness gate ${gate} ${target}`))
+    }
     if (blockers.length > 0) {
       renderRefusal(blockers).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
@@ -460,7 +472,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // The truth, not `false`. The hardcode existed because a stale state produced no rule at
     // all and the entry's fields would have been empty; with the stale rule in place it only
     // misattributes — D130's audit was reporting rules that were never rendered.
-    stale: nowSha !== undefined && nowSha !== anchor.reviewed_sha,
+    stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0,
   })
   const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
   const entry: DecisionEntry = {

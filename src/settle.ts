@@ -4,6 +4,7 @@ import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { designUnseen } from './design.js'
+import { liftedHolds } from './needs.js'
 import { gateSpec } from './gate.js'
 import { readStream } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
@@ -56,7 +57,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
 
   const canon = loadCanon(root)
   const now = spec.currentSha?.(root, canon, cfg, target)
-  const stale = now !== undefined && now !== owed.reviewed_sha
+  const stale = (now !== undefined && now !== owed.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), owed).length > 0
   const block = recommend({
     gate, target, entries, upstream: spec.upstreamOf?.(root, canon, target), stale,
     untrustedCmds: untrustedCmdsFor(root, criteriaOwner(canon, target)),

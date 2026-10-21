@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
@@ -61,5 +61,37 @@ describe('held criteria at the gates (A10)', () => {
     const calls = readFileSync(join(scenario, 'gh-calls'), 'utf8')
     expect(calls).toContain('Held — not verified while a need is unmet:')
     expect(calls).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
+  })
+})
+
+// Final review F1. A hold that lifts after the gate ran is a new judgment, like moved content:
+// the verdict never ran the criterion, so approving it — or shipping on an approval it
+// predates — would merge a criterion no gate ever ran.
+describe('a hold lifted after the gate ran (A10 · final review F1)', () => {
+  it('approve refuses and the block recommends re-running the gate', async () => {
+    const { repo, planId, scenario, ctx } = await heldFlow()
+    addOrigin(repo)
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runShip(ctx, planId)                                         // gate phase → the ship stop
+    await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])
+    const show = await repo.cli(['decide', 'ship', planId, '--show'], { env: gateEnv(scenario) })
+    expect(show.stdout).toContain(`witness gate ship ${planId}`)
+    const approve = await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })
+    expect(approve.code).toBe(2)
+    expect(approve.stderr).toContain('hold-lifted')
+    expect(approve.stderr).toContain('ac-prod')
+  })
+  it('an approval the hold lifted after re-gates instead of opening the PR', async () => {
+    const { repo, planId, scenario, ctx } = await heldFlow()
+    addOrigin(repo)
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runShip(ctx, planId)
+    expect((await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })).code).toBe(0)
+    await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])
+    expect(await runShip(ctx, planId)).toBe(1)                         // re-gated: ac-prod now runs and fails
+    const gh = join(scenario, 'gh-calls')
+    expect(existsSync(gh) ? readFileSync(gh, 'utf8') : '').not.toContain('pr create')
+    const lane = laneOf(runs(repo, planId).filter((r) => r.gate === 'ship').at(-1)!)
+    expect(lane).toMatchObject({ ok: false, detail: 'ac-rotate:ok · ac-prod:fail' })
   })
 })

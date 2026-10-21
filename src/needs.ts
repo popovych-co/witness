@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process'
 import { ensureTrusted } from './allowlist.js'
 import type { Ctx } from './cli.js'
+import type { GateCheck } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 
 export interface NeedResult {
@@ -70,16 +71,10 @@ export function heldCriteria(doc: CanonDoc): Map<string, string[]> {
   return out
 }
 
-// Row 179. One row per (criterion · unmet need holding it), in criteria order: what a gate's
-// lane check, its `held:` lines and a PR body name as not verified.
+// Row 179. One row per (criterion · unmet need holding it): what a gate's lane check, its
+// `held:` lines and a PR body name as not verified. Built by `laneCheck` from the lane's own
+// outcome, so the record and every surface read one derivation.
 export interface HeldRow { criterion: string; need: string; satisfy: string }
-
-export function heldRows(doc: CanonDoc): HeldRow[] {
-  const held = heldCriteria(doc)
-  const criteria = Array.isArray(doc.meta.criteria) ? (doc.meta.criteria as Array<Record<string, unknown>>) : []
-  return criteria.flatMap((c) => (held.get(String(c.id)) ?? []).map((need) =>
-    ({ criterion: String(c.id), need, satisfy: satisfyCommand(String(doc.meta.id), need) })))
-}
 
 // Row 179. The one listing of what waits on a human's assertion about the world: `status`,
 // `next`, `start` and drive's run report all read it. A plan need blocks its plan's start; a
@@ -110,4 +105,14 @@ export function unmetNeeds(canon: Canon): UnmetNeed[] {
       satisfy: satisfyCommand(id, n.id ?? String(i + 1)),
     }])
   })
+}
+
+// Final review F1. The criteria a gate-run recorded as held that no unmet need holds now. A
+// satisfy moves no sha, so without this the verdict still "describes current content" while
+// a criterion it never ran is now owed: approving it, or shipping on an approval it predates,
+// would merge that criterion unverified. A lifted hold is staleness at consumption (D75).
+export function liftedHolds(doc: CanonDoc | undefined, run: { checks: GateCheck[] } | undefined): string[] {
+  if (doc === undefined || run === undefined) return []
+  const now = heldCriteria(doc)
+  return [...new Set(run.checks.flatMap((c) => (c.held ?? []).map((h) => h.criterion)))].filter((c) => !now.has(c))
 }
