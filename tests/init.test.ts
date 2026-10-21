@@ -35,3 +35,11 @@ describe('witness init', () => {
     expect(again.stderr).toContain('already-initialized')
   })
 })
+
+describe('drive local files (B1)', () => {
+  it('init ignores drive\'s lock and log', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init'])
+    expect(repo.read('.gitignore')).toContain('.witness/drive.lock\n.witness/drive.log\n')
+  })
+})

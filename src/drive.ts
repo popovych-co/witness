@@ -1,14 +1,15 @@
 import { spawn } from 'node:child_process'
+import { appendFileSync, closeSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
 import { loadLocalConfig, type Config } from './config.js'
 import { resolveJudge } from './harness.js'
-import { renderRefusal } from './refusal.js'
+import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
 import { computeNext, type NextAction } from './verbs/next.js'
-import { DRIVE_ENV, TARGETLESS } from './drive-presence.js'
+import { DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
@@ -300,6 +301,16 @@ export async function driveLoop(
   let pausedUntil = 0
   let waited = 0
   let streak = 0
+  // A signal aborts every running session through spawnSession's `signal`, stops filling,
+  // and ends the run. A second signal is the human insisting: the default action takes it.
+  const abort = new AbortController()
+  let signalled: NodeJS.Signals | undefined
+  const onSignal = (sig: NodeJS.Signals) => {
+    if (signalled !== undefined) { process.removeListener(sig, onSignal); process.kill(process.pid, sig); return }
+    signalled = sig
+    abort.abort()
+  }
+  const aborted = new Promise<void>((done) => abort.signal.addEventListener('abort', () => done(), { once: true }))
 
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
@@ -356,7 +367,7 @@ export async function driveLoop(
       ...ctx,
       out: (l) => { if (l.includes('merge PR')) lane.merged = l.replace(STREAM_PREFIX, ''); ctx.out(l) },
     }
-    lane.end = spawnSession(step, cfg, childCtx, n, { manual: flags.manual })
+    lane.end = spawnSession(step, cfg, childCtx, n, { manual: flags.manual, signal: abort.signal })
     return lane
   }
 
@@ -389,6 +400,7 @@ export async function driveLoop(
   }
 
   const settle = (key: string, lane: Lane, end: SessionEnd) => {
+    if (end.outcome === 'stopped') return                // the signal's, reported once at the end
     if (limited(key, end)) return
     const u = use.get(key) ?? { spawns: 0, ms: 0 }
     use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
@@ -471,10 +483,12 @@ export async function driveLoop(
   ctx.out(awake.command !== undefined
     ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
   try {
     for (;;) {
-      if (autonomous && !stop) await settlePass()
-      while (!stop && lanes.size < parallel && clock.now() >= pausedUntil) {
+      if (autonomous && !stop && !signalled) await settlePass()
+      while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
         const action = computeNext(root, ctx, loadCanon(root), cfg, { scope: admits })
         const key = action.target ?? TARGETLESS
         if (lanes.has(key) || aside.has(key)) break         // a global rung, already in hand
@@ -501,7 +515,10 @@ export async function driveLoop(
         lanes.set(key, launch(step, action, spawns))
       }
       if (lanes.size === 0) {
-        if (!stop && pausedUntil > clock.now()) { await clock.sleep(pausedUntil - clock.now()); continue }
+        if (!stop && !signalled && pausedUntil > clock.now()) {
+          await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted])
+          continue
+        }
         break
       }
       const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
@@ -509,10 +526,12 @@ export async function driveLoop(
       lanes.delete(key)
     }
 
-    if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
+    if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)
+    else if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
     // Row 184. One report when nothing else can move, and for an autonomous run one
     // notification — a human at a TTY prompt is already watching.
-    const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stop ? { stopped: stop } : {}) })
+    const stopped = signalled !== undefined ? `signal ${signalled}` : stop
+    const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stopped ? { stopped } : {}) })
     report.lines.forEach((l) => ctx.out(l))
     if (autonomous) {
       const local = loadLocalConfig(root)
@@ -522,9 +541,37 @@ export async function driveLoop(
           : `notify: none on ${process.platform} — set notify: in .witness/config.local.yaml`)
     }
     const failed = [...aside.values()].some((a) => a.kind === 'stuck' || a.kind === 'capped')
-    return failed || stop !== undefined ? EXIT.FINDINGS : EXIT.OK
+    return failed || stopped !== undefined ? EXIT.FINDINGS : EXIT.OK
   } finally {
+    process.removeListener('SIGINT', onSignal)
+    process.removeListener('SIGTERM', onSignal)
     awake.stop()
+  }
+}
+
+// Row 180. `--detach`: this CLI again, as `witness drive <args>`, in the background at the
+// root, appending to `.witness/drive.log`. With WITNESS_BIN set it runs through
+// `exec <bin> "$@"`, so the printed pid is the CLI's own and no shell sits between it and a
+// `kill`. The child takes the drive lock itself and records its log there.
+export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Result<{ pid: number; log: string }> {
+  const log = join(root, DRIVE_LOG)
+  mkdirSync(dirname(log), { recursive: true })
+  appendFileSync(log, `--- witness drive ${new Date().toISOString()} ---\n`)
+  const [file, argv] = ctx.env.WITNESS_BIN !== undefined
+    ? ['/bin/sh', ['-c', `exec ${ctx.env.WITNESS_BIN} "$@"`, 'witness', 'drive', ...args]]
+    : [process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'bin.js'), 'drive', ...args]]
+  const fd = openSync(log, 'a')
+  try {
+    const child = spawn(file, argv as string[], {
+      cwd: root, detached: true, stdio: ['ignore', fd, fd],
+      env: { ...ctx.env, [DRIVE_LOG_ENV]: log } as NodeJS.ProcessEnv,
+    })
+    if (child.pid === undefined) return refuse([v('--detach', 'spawn-failed', file, 'a runnable witness CLI')])
+    child.on('error', () => {})
+    child.unref()
+    return ok({ pid: child.pid, log })
+  } finally {
+    closeSync(fd)
   }
 }
 

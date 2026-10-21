@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
@@ -737,5 +738,79 @@ describe('coming back (B6)', () => {
     await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0'), WITNESS_KEEP_AWAKE_BIN: noopOpener() }, out), { maxSpawns: 1 })
     expect(out.some((l) => l.startsWith('drive: done — ') || l.startsWith('drive: stopped — '))).toBe(true)
     expect(existsSync(n.got)).toBe(false)
+  }, 60000)
+})
+
+describe('one command (B1)', () => {
+  const autonomous = async (): Promise<TestRepo> => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    return repo
+  }
+  const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' }
+
+  it('a session drive spawned is refused even in a terminal', async () => {
+    const repo = await seededRepo()
+    // `quiet` matters while this test fails: today's drive would otherwise spawn the real harness CLI
+    const r = await repo.cli(['drive'], { tty: true, env: { ...quiet, WITNESS_DRIVE: 'p1' } })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('drive-inside-drive')
+  })
+
+  it('under autonomy drive needs no terminal · --manual still does', async () => {
+    const repo = await autonomous()
+    const r = await repo.cli(['drive', '--max-spawns', '1'], { env: quiet })
+    expect(r.stderr).not.toContain('drive-needs-tty')
+    const manual = await repo.cli(['drive', '--manual'], { env: quiet })
+    expect(manual.code).toBe(2)
+    expect(manual.stderr).toContain('drive-needs-tty')
+  }, 60000)
+
+  it('one drive per repo', async () => {
+    const repo = await autonomous()
+    const holder = spawn('sleep', ['30'])
+    writeFileSync(join(repo.root, '.witness/drive.lock'), JSON.stringify({ pid: holder.pid, log: join(repo.root, '.witness/drive.log') }))
+    const r = await repo.cli(['drive'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('drive-running')
+    expect(r.stderr).toContain(`stop it: kill ${holder.pid}`)
+    holder.kill()
+    await once(holder, 'exit')
+    expect((await repo.cli(['drive', '--max-spawns', '1'], { env: quiet })).stderr).not.toContain('drive-running')
+  }, 60000)
+
+  it('--detach needs autonomy', async () => {
+    const repo = await seededRepo()
+    const r = await repo.cli(['drive', '--detach'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('detach-needs-autonomy')
+  })
+
+  it('--detach starts drive in the background · says where to watch · a SIGTERM stops it and its sessions', async () => {
+    const repo = await autonomous()
+    const dir = fakeScenario()
+    const agent = join(dir, 'agent')
+    writeFileSync(agent, `#!/bin/sh\necho $$ > "${dir}/session"\nexec sleep 30\n`, { mode: 0o755 })
+    const r = await repo.cli(['drive', '--detach'], { env: { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
+    expect(r.code).toBe(0)
+    const pid = Number(/background · pid (\d+)/.exec(r.stdout)![1])
+    const log = join(repo.root, '.witness', 'drive.log')
+    expect(r.stdout).toContain(`watch: tail -f ${log} · stop it: kill ${pid}`)
+    await expect.poll(() => existsSync(join(dir, 'session')), { timeout: 30_000 }).toBe(true)
+    process.kill(pid, 'SIGTERM')
+    await expect.poll(() => readFileSync(log, 'utf8'), { timeout: 30_000 }).toContain('drive: stopped — signal SIGTERM')
+    const session = Number(readFileSync(join(dir, 'session'), 'utf8'))
+    await expect.poll(() => { try { process.kill(session, 0); return 'alive' } catch { return 'gone' } }, { timeout: 15_000 }).toBe('gone')
+    // released after the report and the notification, which print after the stopped line
+    await expect.poll(() => existsSync(join(repo.root, '.witness', 'drive.lock')), { timeout: 15_000 }).toBe(false)
+  }, 90000)
+
+  it('--ask queues the ask before the first session', async () => {
+    const repo = await autonomous()
+    const agent = script(`grep -rqF 'add dark mode' "${repo.root}/.witness/journal" && echo ask-seen`)
+    const r = await repo.cli(['drive', '--ask', 'add dark mode', '--max-spawns', '1'], { env: { ...quiet, WITNESS_DRIVE_AGENT_BIN: agent } })
+    expect(r.stdout).toMatch(/ask: a\d+ — queued/)
+    expect(r.stdout).toContain('] ask-seen')
   }, 60000)
 })

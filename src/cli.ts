@@ -75,7 +75,7 @@ const VERB_USAGE: Record<string, string> = {
   floor: 'witness floor --show | --set <triple> --note <why>',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
   diff: 'witness diff <spec-id>',
-  drive: 'witness drive [--flow <plan-id>] [--max-spawns <n>] — schedule green-path work through headless sessions; you appear at judgment stops',
+  drive: 'witness drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] [--ask "<text>"] — runs every session itself · under autonomy it needs no terminal and reports when nothing else can move',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
   gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
   index: 'witness index',

@@ -67,6 +67,9 @@ export function tmpRepo(): TestRepo {
       // It is a test seam, not a config key — see the note in src/registry.ts.
       env: {
         ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined,
+        // a suite run inside a drive session or a runner turn must not inherit either:
+        // the marker would scope every `next` and refuse every `drive` (row 180)
+        WITNESS_DRIVE: undefined, WITNESS_RUNNER_TURN: undefined,
         WITNESS_REGISTRY: 'off', ...opts.env,
       },
       isTTY: opts.tty ?? answers.length > 0,

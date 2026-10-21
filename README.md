@@ -196,7 +196,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `design <spec-id> --file <html>\|--open\|--reconfirm` | register/show a `ui` spec's approved look |
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
-| `drive [--flow <plan-id>] [--max-spawns <n>]` | schedule green-path work through headless sessions; you appear only at judgment stops. TTY-only — agents are what drive spawns, never what spawns drive |
+| `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] [--ask "<text>"]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log`; `--ask` queues an ask first; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
 | `ship <plan-id> [--manual]` | lanes → ship gate → PR → CI watch → under autonomy: merge on green · `--manual` keeps that run's stop and merge for a human |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
 | `adopt <path>` | absolve a finished hand-edit into the journal |
@@ -241,7 +241,8 @@ depends on none of them (DESIGN.md row 79):
 
 - **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt
   cache; on wake the full agent context is re-written at cache-write price. On macOS:
-  `caffeinate -dims` for the session, or plug in and disable sleep.
+  `witness drive` holds `caffeinate -ims` for its own lifetime (a closed lid on battery
+  still sleeps); for a chat session, `caffeinate -dims`, or plug in and disable sleep.
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`** (set at CLI launch) lowers the harness's
   auto-compaction threshold as belt-and-suspenders under the dispatch budget. It is
   documented for main sessions only — whether subagents honor it is unverified.

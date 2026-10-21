@@ -120,6 +120,16 @@ describe('stateCommit', () => {
   })
 })
 
+describe('drive local files (B1)', () => {
+  it('drive\'s lock and log are witness local files', () => {
+    const repo = tmpRepo()
+    repo.write('.witness/drive.lock', '{"pid":1}')
+    repo.write('.witness/drive.log', 'x\n')
+    repo.write('specs/a.md', 'a')
+    expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
+  })
+})
+
 describe('auditStateCommits', () => {
   it('flags commits touching state paths without the trailer', () => {
     const repo = tmpRepo()
