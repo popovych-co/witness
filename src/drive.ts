@@ -9,6 +9,7 @@ import { renderRefusal } from './refusal.js'
 import { loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
 import { computeNext, flowAction, resolveFlow, type NextAction } from './verbs/next.js'
+import { DRIVE_ENV, TARGETLESS } from './drive-presence.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -34,7 +35,13 @@ function isConversation(action: NextAction): boolean {
 // The rule table is an ORDERED FIRST-MATCH list, on `recommend.ts`'s precedent: a
 // misrouted action is attributable to one line here rather than to a weighting. Pure over
 // the NextAction shape — no I/O — so every branch is one `expect` away.
-export function classifyAction(action: NextAction, root: string): DriveStep {
+//
+// Row 180. Under autonomy nothing is a conversation: brainstorm, `witness recap` and design
+// authoring run headless (A2), and A1 answers the choose block and the recovery fork with
+// the policy's pick. A block that still reaches drive under a runnable line spawns, and the
+// session's own `next` takes it, so no block stops an unattended run. `witness decide`
+// lines stay decisions in both modes.
+export function classifyAction(action: NextAction, root: string, opts: { autonomy?: boolean } = {}): DriveStep {
   const { line } = action
   // Both decision surfaces render `witness decide <gate> <target> …`: tier 2's pending
   // decision (`--show`) and the bound endgame (`liveExits`, which joins several decide
@@ -47,10 +54,10 @@ export function classifyAction(action: NextAction, root: string): DriveStep {
   // D121: a block is the CLI saying the human is choosing, not being told — so a runnable
   // line under a block (the recovery fork, `N ready — ranked below`) is still a stop.
   // Below the decide rule so a gate decision keeps its gate/target rather than its block.
-  if (action.block !== undefined) {
+  if (action.block !== undefined && !opts.autonomy) {
     return { kind: 'decision', target: action.target, block: action.block }
   }
-  if (isConversation(action)) return { kind: 'conversation', line }
+  if (!opts.autonomy && isConversation(action)) return { kind: 'conversation', line }
   // The merge is GitHub's act, not witness's — a flow at `watch` has nothing left for an
   // agent to do. In practice this line arrives in the spawned ship session's OUTPUT
   // (ship.ts:277) rather than in a routing row, which is why the loop reads the child's
@@ -69,13 +76,20 @@ export function classifyAction(action: NextAction, root: string): DriveStep {
 }
 
 export type SpawnStep = Extract<DriveStep, { kind: 'spawn' }>
-export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed'
+export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
+// How a session ended. `tail` is the last three non-empty lines it printed on either pipe,
+// unprefixed, which is where a usage limit shows (row 182); `code` is null when it was
+// killed; `ms` runs from spawn to settle.
+export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number }
+const TAIL_LINES = 3
 
 // The prompt every spawned session gets. Not a plan, not a stage instruction: the same
 // slash command a human types, which routes through `next` in the session's own home —
 // so a child rediscovers its work from state rather than from what drive believed a
 // moment ago. That is what makes a killed drive costless to re-run (north star 6).
 const SESSION_PROMPT = '/witness'
+// A `--manual` run's sessions arm the engine the same way: every gate they run stops.
+const MANUAL_PROMPT = '/witness --manual'
 
 // How long a SIGTERMed session gets before SIGKILL, and how long a dead session's pipes
 // get to drain before drive stops waiting on the grandchildren that inherited them.
@@ -119,22 +133,34 @@ function lineSink(prefix: string, emit: (line: string) => void): { push: (chunk:
 // detection deciding what drive spawns would make the same repo drive differently from
 // two terminals.
 export async function spawnSession(
-  step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number,
-): Promise<SpawnOutcome> {
+  step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number, opts: { manual?: boolean; signal?: AbortSignal } = {},
+): Promise<SessionEnd> {
+  const t0 = Date.now()
+  const end = (outcome: SpawnOutcome, code: number | null = null, tail: string[] = []): SessionEnd =>
+    ({ outcome, code, tail, ms: Math.max(1, Date.now() - t0) })
+  if (opts.signal?.aborted) return end('stopped')
   const hxR = resolveJudge(ctx.env, cfg.raw)
-  if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return 'spawn-failed' }
-  const { cmd, args, env } = hxR.value.harness.worker.spawn(SESSION_PROMPT, step.model)
+  if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
+  const { cmd, args, env } = hxR.value.harness.worker.spawn(opts.manual ? MANUAL_PROMPT : SESSION_PROMPT, step.model)
   // Test-only seam, on WITNESS_TRUST_CMDS' precedent (decide.ts): the suite points this at
   // a scripted fake that performs real CLI acts. Never documented for users — a spawn
   // binary chosen by ambient env is exactly the identity confusion row 90 removed.
   const bin = ctx.env.WITNESS_DRIVE_AGENT_BIN ?? cmd
   // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
-  const run = resolveSpawn(bin, args, { ...ctx.env, ...env, WITNESS_BIN: localBin(ctx) })
-  if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return 'spawn-failed' }
+  // Row 180: the marker is the child's target and its recursion guard in one.
+  const run = resolveSpawn(bin, args, {
+    ...ctx.env, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
+  })
+  if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `
-  const out = lineSink(prefix, (l) => ctx.out(l))
-  const err = lineSink(prefix, (l) => ctx.out(l))
-  return await new Promise<SpawnOutcome>((resolve) => {
+  const tail: string[] = []
+  const emit = (l: string) => {
+    if (l.trim() !== '') { tail.push(l); if (tail.length > TAIL_LINES) tail.shift() }
+    ctx.out(prefix + l)
+  }
+  const out = lineSink('', emit)
+  const err = lineSink('', emit)
+  return await new Promise<SessionEnd>((resolve) => {
     const child = spawn(run.value.file, run.value.args, {
       cwd: step.home,
       env: run.value.env,
@@ -142,27 +168,32 @@ export async function spawnSession(
       windowsVerbatimArguments: run.value.windowsVerbatimArguments,
     })
     let outcome: SpawnOutcome = 'exited'
+    let code: number | null = null
     let settled = false
     let killTimer: NodeJS.Timeout | undefined
     let grace: NodeJS.Timeout | undefined
+    const stop = (o: SpawnOutcome) => {
+      outcome = o
+      child.kill('SIGTERM')
+      // A session that ignores SIGTERM is exactly the session the ceiling exists for.
+      killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
+    }
+    const onAbort = () => stop('stopped')
     const settle = (o: SpawnOutcome) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       clearTimeout(killTimer)
       clearTimeout(grace)
+      opts.signal?.removeEventListener('abort', onAbort)
       out.flush()
       err.flush()
       child.stdout.destroy()
       child.stderr.destroy()
-      resolve(o)
+      resolve(end(o, code, [...tail]))
     }
-    const timer = setTimeout(() => {
-      outcome = 'timeout'
-      child.kill('SIGTERM')
-      // A session that ignores SIGTERM is exactly the session the ceiling exists for.
-      killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
-    }, cfg.drive.sessionTimeoutMs)
+    const timer = setTimeout(() => stop('timeout'), cfg.drive.sessionTimeoutMs)
+    opts.signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (c: string) => out.push(c))
@@ -177,7 +208,8 @@ export async function spawnSession(
     // whose grandchild survives holds stdout open forever. Waiting for `close` alone is
     // therefore a hang with no timeout above it, which is the one failure a timeout must
     // not have. Measured here: SIGTERM to a shell whose `sleep` survived it.
-    child.on('exit', () => {
+    child.on('exit', (c) => {
+      code = c
       clearTimeout(killTimer)
       grace = setTimeout(() => settle(outcome), EXIT_GRACE_MS)
     })
@@ -286,7 +318,7 @@ export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: Driv
       ...ctx,
       out: (l) => { if (l.includes('merge PR')) merged = l.replace(STREAM_PREFIX, ''); ctx.out(l) },
     }
-    const outcome = await spawnSession(step, cfg, childCtx, spawns)
+    const { outcome } = await spawnSession(step, cfg, childCtx, spawns)
     if (outcome !== 'exited') {
       ctx.out(`drive: spawn-${outcome === 'timeout' ? 'timeout' : 'failed'} — ${action.line}`)
       return EXIT.FINDINGS

@@ -16,6 +16,34 @@ import {
   type TestRepo,
 } from './helpers.js'
 
+const cfgOf = (repo: TestRepo): Config => {
+  const r = loadConfig(repo.root)
+  if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
+  return r.value
+}
+// Fakes are written into a mkdtemp scenario dir, never fakeBinDir() — that one is a
+// COMMITTED fixture directory and a test that writes there dirties the repo.
+const fakeAgent = (body: string): string => {
+  const bin = join(fakeScenario(), 'fake-agent')
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  return bin
+}
+const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
+  fakeCtx(repo.root, { tty: true, env: fixtureEnv(env), out: (l) => out.push(l) })
+// A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
+// harness: the assertion under test is the decision, not what follows it. It says `tick`
+// so a test can find its session by prefix.
+const idleAgent = (): string => {
+  const bin = join(fakeScenario(), 'idle-agent')
+  writeFileSync(bin, '#!/bin/sh\necho tick\nexit 0\n', { mode: 0o755 })
+  return bin
+}
+const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
+  fakeCtx(repo.root, {
+    tty: true, answers, out: (l) => out.push(l),
+    env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent() }),
+  })
+
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
     const repo = await seededRepo()
@@ -89,19 +117,6 @@ describe('classifyAction (D145 addendum §6)', () => {
 })
 
 describe('spawnSession (D145 addendum §3-5)', () => {
-  const cfgOf = (repo: TestRepo): Config => {
-    const r = loadConfig(repo.root)
-    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
-    return r.value
-  }
-  // Fakes are written into a mkdtemp scenario dir, never fakeBinDir() — that one is a
-  // COMMITTED fixture directory and a test that writes there dirties the repo.
-  const fakeAgent = (body: string): string => {
-    const bin = join(fakeScenario(), 'fake-agent')
-    writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
-    return bin
-  }
-
   it('streams both pipes prefixed, from the action home', async () => {
     const repo = await seededRepo()
     const bin = fakeAgent('echo one\necho two >&2\npwd')
@@ -111,7 +126,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     })
     const res = await spawnSession(
       { kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
-    expect(res).toBe('exited')
+    expect(res.outcome).toBe('exited')
     expect(lines).toContain('[1 implement/p1] one')
     expect(lines).toContain('[1 implement/p1] two')
     expect(lines).toContain(`[1 implement/p1] ${repo.root}`)
@@ -122,7 +137,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const bin = fakeAgent('sleep 60')
     const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin } })
     const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 100 } }
-    expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).toBe('timeout')
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).outcome).toBe('timeout')
   }, 20000)
 
   it('returns when the session exits even if a grandchild still holds the pipe', async () => {
@@ -136,7 +151,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     })
     const started = Date.now()
     const res = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 9)
-    expect(res).toBe('exited')
+    expect(res.outcome).toBe('exited')
     expect(lines.join('\n')).toContain('started')
     expect(Date.now() - started).toBeLessThan(10000)
   }, 20000)
@@ -146,7 +161,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const ctx = fakeCtx(repo.root, {
       tty: true, env: { WITNESS_DRIVE_AGENT_BIN: join(repo.root, 'no-such-agent') },
     })
-    expect(await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).toBe('spawn-failed')
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).outcome).toBe('spawn-failed')
   }, 20000)
 
   it('builds the headless session command per harness, carrying the stage pin', async () => {
@@ -205,14 +220,6 @@ function actsOnceAgent(scenario: string, act: string): string {
 }
 
 describe('driveLoop (D145)', () => {
-  const cfgOf = (repo: TestRepo): Config => {
-    const r = loadConfig(repo.root)
-    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
-    return r.value
-  }
-  const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
-    fakeCtx(repo.root, { tty: true, env: fixtureEnv(env), out: (l) => out.push(l) })
-
   it('spawns, sees the journal grow, and stops when the action stops moving', async () => {
     const repo = await planReady()
     const bin = actsOnceAgent(fakeScenario(), 'start auth-refresh-plan-1')
@@ -286,24 +293,6 @@ async function gatedEffort(): Promise<TestRepo> {
 }
 
 describe('judgment stops in the driver terminal (D145, D143)', () => {
-  const cfgOf = (repo: TestRepo): Config => {
-    const r = loadConfig(repo.root)
-    if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
-    return r.value
-  }
-  // A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
-  // harness: the assertion under test is the decision, not what follows it.
-  const idleAgent = (): string => {
-    const bin = join(fakeScenario(), 'idle-agent')
-    writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    return bin
-  }
-  const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
-    fakeCtx(repo.root, {
-      tty: true, answers, out: (l) => out.push(l),
-      env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent() }),
-    })
-
   const lastDecision = (repo: TestRepo): Record<string, unknown> | undefined =>
     readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1) as
       Record<string, unknown> | undefined
@@ -366,4 +355,62 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     expect(out.join('\n')).toMatch(/nod-cannot|name the option/)
     expect(lastDecision(repo)).toBeUndefined()
   }, 30000)
+})
+
+describe('sessions carry their target (B1 · B3)', () => {
+  it('hands the child its target as the drive marker', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo "marker=$WITNESS_DRIVE"') }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 2)
+    expect(lines).toContain('[1 implement/p1] marker=p1')
+    expect(lines.find((l) => l.startsWith('[2 '))).toMatch(/marker=-$/)
+  }, 20000)
+
+  it('reports the exit code and the last three lines', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent("printf 'a\\nb\\n\\nc\\nd\\n'\nexit 3") } })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1)
+    expect(end).toMatchObject({ outcome: 'exited', code: 3, tail: ['b', 'c', 'd'] })
+    expect(end.ms).toBeGreaterThan(0)
+  }, 20000)
+
+  it('prompts a --manual session with /witness --manual', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo "prompt=$2"') }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1, { manual: true })
+    expect(lines.join('\n')).toContain('prompt=/witness --manual')
+  }, 20000)
+
+  it('an abort stops the session', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 30') } })
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), 200)
+    const t0 = Date.now()
+    const end = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1, { signal: ac.signal })
+    expect(end.outcome).toBe('stopped')
+    expect(Date.now() - t0).toBeLessThan(10_000)
+  }, 20000)
+})
+
+describe('classifyAction under autonomy (B2)', () => {
+  const root = '/repo'
+  const auto = { autonomy: true }
+  it('runs conversations and option blocks headless · decisions stay decisions', () => {
+    expect(classifyAction({ line: 'witness recap --file <recap.json> --ask a1', stage: 'brainstorm' }, root, auto))
+      .toEqual({ kind: 'spawn', home: root, stage: 'brainstorm', target: undefined, model: undefined })
+    expect(classifyAction({ line: 'witness design auth-refresh --file <html>', stage: 'design', target: 'auth-refresh' }, root, auto).kind)
+      .toBe('spawn')
+    expect(classifyAction({ line: 'witness recover --complete', block: ['recovery: 2 options · 1 is recommended'] }, root, auto).kind)
+      .toBe('spawn')
+    expect(classifyAction({
+      line: 'witness write a-plan-1 --effort e --meta m.json --body b.md', stage: 'plan', target: 'a',
+      block: ['choose: 2 options · 1 is recommended'],
+    }, root, auto).kind).toBe('spawn')
+    expect(classifyAction({ line: 'witness decide ship p1 --show', target: 'p1' }, root, auto))
+      .toEqual({ kind: 'decision', gate: 'ship', target: 'p1' })
+  })
 })
