@@ -249,6 +249,8 @@ export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck'
 export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop }
 
 const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
+// What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
+const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
 
 const streamLines = (root: string, id: string): number => readStream(root, id).length
 
@@ -396,9 +398,16 @@ export async function driveLoop(
     // row — a flow whose PR is open routes to `witness ship` forever, and only the child
     // knows it printed "merge PR". `mergeOwnPr` prints it only when it leaves the merge to a
     // human, so under autonomy this fires only where a human merges.
+    // Final review F10: only the CLI's own line counts, and only for a flow with a PR — agent
+    // prose that mentions a merge must never hand a human `gh pr merge` for a flow without one.
+    const pr = action.target !== undefined ? findById(canonNow, action.target)?.meta.pr : undefined
     const childCtx: Ctx = {
       ...ctx,
-      out: (l) => { if (l.includes('merge PR')) lane.merged = l.replace(STREAM_PREFIX, ''); ctx.out(l) },
+      out: (l) => {
+        const line = l.replace(STREAM_PREFIX, '')
+        if (pr !== undefined && MERGE_LINE.exec(line)?.[1] === String(pr)) lane.merged = line
+        ctx.out(l)
+      },
     }
     lane.end = spawnSession(step, cfg, childCtx, n, { manual: flags.manual, signal: abort.signal })
     return lane

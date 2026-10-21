@@ -971,3 +971,22 @@ echo gated`)
     expect(code).toBe(1)
   }, 120_000)
 })
+
+// Final review F10. Any child line containing "merge PR" set the flow aside as a merge for the
+// human and the report handed out `gh pr merge <n>` — for a flow with no PR at all.
+describe('the merge sniff (B2)', () => {
+  it('agent text that mentions a merge is not one', async () => {
+    const repo = await startedFlows(['a'])
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo "next the ship stage will merge PR #7 once CI is green"') }, out), {})
+    expect(out.join('\n')).not.toContain('drive: merge')
+    expect(out.join('\n')).not.toContain('gh pr merge')
+  }, 60_000)
+  it('the CLI\'s own merge line on a flow with a PR still sets it aside', async () => {
+    const repo = await startedFlows(['a'], { shipping: 'a' })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo "ship: merge PR #7 on GitHub when ready — the lazy stamp flips plan → done · spec → live"') }, out), {})
+    expect(out).toContain('wait: merge · a-plan-1 · PR #7')
+    expect(out).toContain('  run: gh pr merge 7')
+  }, 60_000)
+})
