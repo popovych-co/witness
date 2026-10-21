@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireLock } from '../src/lock.js'
@@ -22,13 +24,58 @@ describe('acquireLock', () => {
     const repo = seeded()
     const first = acquireLock(repo.root)
     expect(first.ok).toBe(true)
-    const foreign = acquireLock(repo.root, process.pid + 1)
+    const foreign = acquireLock(repo.root, process.pid + 1, 0)
     expect(!foreign.ok && foreign.violations[0]?.rule).toBe('locked')
     if (first.ok) first.value()
     repo.write('.witness/lock', JSON.stringify({ pid: 999999999 }))
     const stolen = acquireLock(repo.root)
     expect(stolen.ok).toBe(true)
     if (stolen.ok) stolen.value()
+  })
+})
+
+// A second process holds the lock: a same-process holder cannot let go while
+// acquireLock's synchronous wait blocks the thread.
+async function holdLock(root: string, ms: number): Promise<ChildProcess> {
+  mkdirSync(join(root, '.witness'), { recursive: true })
+  const child = spawn(process.execPath, ['-e', `
+    const fs = require('fs'); const p = process.argv[1]
+    fs.writeFileSync(p, JSON.stringify({ pid: process.pid }), { flag: 'wx' })
+    process.stdout.write('held\\n')
+    setTimeout(() => { fs.rmSync(p, { force: true }); process.exit(0) }, ${ms})
+  `, join(root, '.witness', 'lock')], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await once(child.stdout!, 'data')
+  return child
+}
+
+describe('acquireLock waits (B3)', () => {
+  it('waits for a live holder to let go, then takes the lock', async () => {
+    const repo = seeded()
+    await holdLock(repo.root, 400)
+    const t0 = Date.now()
+    const r = acquireLock(repo.root, process.pid, 5_000)
+    expect(r.ok).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(250)
+    if (r.ok) r.value()
+  }, 15_000)
+
+  it('refuses once the wait is spent and names the holder', async () => {
+    const repo = seeded()
+    const holder = await holdLock(repo.root, 5_000)
+    const r = acquireLock(repo.root, process.pid, 300)
+    expect(!r.ok && r.violations[0]!.rule).toBe('locked')
+    expect(!r.ok && r.violations[0]!.got).toBe(`held by pid ${holder.pid} · waited 300ms`)
+    holder.kill()
+  }, 15_000)
+
+  it('reads an unreadable lock as a write in progress and takes it after a grace', () => {
+    const repo = seeded()
+    repo.write('.witness/lock', '')
+    const t0 = Date.now()
+    const r = acquireLock(repo.root, process.pid, 5_000)
+    expect(r.ok).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
+    if (r.ok) r.value()
   })
 })
 
