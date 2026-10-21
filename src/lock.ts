@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ok, refuse, v, type Result } from './refusal.js'
 
@@ -30,6 +30,16 @@ export function pause(ms: number): void {
 // A symlink at the lock path is never a holder: `wx` refuses it (EEXIST) while a read
 // follows it, so a dangling one would read `absent` forever. It counts as unreadable and is
 // replaced after the grace — the link itself, never what it points at.
+export function pidOf(text: string | undefined): number | undefined {
+  if (text === undefined) return undefined
+  try {
+    const pid = (JSON.parse(text) as { pid?: unknown }).pid
+    return typeof pid === 'number' && Number.isInteger(pid) ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function readHolder(p: string): number | 'absent' | 'unreadable' {
   let text: string
   try {
@@ -46,22 +56,64 @@ function readHolder(p: string): number | 'absent' | 'unreadable' {
   }
 }
 
-// `unlinkSync`, not `rmSync`: Node's `rmSync({ force })` follows a dangling symlink, meets
-// ENOENT and silently leaves the link in place. A lock path that is a directory fails here,
-// and the caller refuses instead of looping.
-const steal = (p: string): boolean => {
+const readText = (p: string): string | undefined => {
   try {
-    unlinkSync(p)
-    return true
+    return lstatSync(p).isSymbolicLink() ? undefined : readFileSync(p, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+// Final review F15. Take a stale lock file. Several waiters meet one dead holder at once
+// after a crash, and "read it, then delete it" let a slow one delete the lock a faster one
+// had just written — two holders. One stealer at a time holds `<lock>.steal` (created with
+// `wx`) and re-reads the lock under it, so a live lock written in between is never removed.
+// A guard older than 2 s is a stealer that died mid-steal. `undefined` text is an unreadable
+// file. Returns 'taken' when the stale lock is gone and 'busy' when it is not (a live holder,
+// or another stealer at work): the caller re-reads, waits and tries again. A path that cannot
+// be cleared (a directory) throws to the caller's refusal.
+const STEAL_GUARD_STALE_MS = 2_000
+export function takeStale(p: string, stale: (text: string | undefined) => boolean): 'taken' | 'busy' {
+  const guard = `${p}.steal`
+  try {
+    writeFileSync(guard, String(process.pid), { flag: 'wx' })
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+    try { if (Date.now() - lstatSync(guard).mtimeMs > STEAL_GUARD_STALE_MS) unlinkSync(guard) } catch { /* gone */ }
+    return 'busy'
+  }
+  try {
+    let exists = true
+    try { lstatSync(p) } catch { exists = false }
+    if (!exists) return 'taken'
+    if (!stale(readText(p))) return 'busy'
+    unlinkSync(p)
+    return 'taken'
+  } finally {
+    try { unlinkSync(guard) } catch { /* gone */ }
+  }
+}
+
+// A lock is released by its owner only: one taken over by another process stays theirs.
+export function releaseIfMine(p: string, pid: number): void {
+  const text = readText(p)
+  try {
+    if (text !== undefined && (JSON.parse(text) as { pid?: unknown }).pid === pid) unlinkSync(p)
+  } catch { /* gone already, or not ours */ }
+}
+
+const steal = (p: string, stale: (text: string | undefined) => boolean): 'taken' | 'busy' | 'refused' => {
+  try {
+    return takeStale(p, stale)
+  } catch {
+    return 'refused'
   }
 }
 
 export function acquireLock(root: string, pid = process.pid, waitMs = LOCK_WAIT_MS): Result<() => void> {
   mkdirSync(join(root, '.witness'), { recursive: true })
   const p = lockPath(root)
-  const release = () => rmSync(p, { force: true })
+  const release = () => releaseIfMine(p, pid)
   const unwritable = (why: string): Result<() => void> => refuse([v('.witness/lock', 'lock-unwritable', why,
     'a writable .witness directory — witness writes its lock there before any state write')])
   const t0 = Date.now()
@@ -81,13 +133,14 @@ export function acquireLock(root: string, pid = process.pid, waitMs = LOCK_WAIT_
     if (holder === 'unreadable') {
       unreadableSince ??= Date.now()
       if (Date.now() - unreadableSince >= UNREADABLE_GRACE_MS) {
-        if (!steal(p)) return unwritable('the unreadable lock could not be removed')
-        unreadableSince = undefined
-        continue
+        const took = steal(p, (text) => typeof pidOf(text) !== 'number')
+        if (took === 'refused') return unwritable('the unreadable lock could not be removed')
+        if (took === 'taken') { unreadableSince = undefined; continue }
       }
     } else if (typeof holder === 'number' && !isAlive(holder)) {
-      if (!steal(p)) return unwritable(`the dead holder's lock could not be removed`)
-      continue
+      const took = steal(p, (text) => pidOf(text) === holder)
+      if (took === 'refused') return unwritable(`the dead holder's lock could not be removed`)
+      if (took === 'taken') continue
     } else if (typeof holder === 'number') {
       unreadableSince = undefined
     }

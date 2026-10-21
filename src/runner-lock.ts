@@ -1,9 +1,9 @@
-import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
 import { primaryRoot } from './gitio.js'
-import { isAlive, pause } from './lock.js'
+import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
 
 // Row 181 (Task 3b). Every command witness runs takes turns across the worktrees of one
 // repo: evidence, gate checks, regression and ship lanes all pass through `execCommand`.
@@ -41,12 +41,13 @@ function holderOf(p: string): number | 'absent' | 'unreadable' {
   }
 }
 
-const drop = (p: string): boolean => {
+// A stale turn is taken atomically (the repo lock's `takeStale`): of several waiters that
+// meet one dead holder, exactly one gets the turn.
+const drop = (p: string, stale: (text: string | undefined) => boolean): 'taken' | 'busy' | 'error' => {
   try {
-    unlinkSync(p)
-    return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+    return takeStale(p, stale)
+  } catch {
+    return 'error'
   }
 }
 
@@ -56,7 +57,7 @@ const drop = (p: string): boolean => {
 function takeTurn(root: string, ctx: Ctx, label: string): (() => void) | undefined {
   const p = runnerLockPath(root)
   const pid = process.pid
-  const mine = () => { if (holderOf(p) === pid) drop(p) }
+  const mine = () => releaseIfMine(p, pid)
   try {
     mkdirSync(join(root, '.witness'), { recursive: true })
   } catch {
@@ -79,13 +80,14 @@ function takeTurn(root: string, ctx: Ctx, label: string): (() => void) | undefin
     if (holder === 'unreadable') {
       unreadableSince ??= Date.now()
       if (Date.now() - unreadableSince >= UNREADABLE_GRACE_MS) {
-        if (!drop(p)) return undefined                   // a lock path it cannot clear: run unturned
-        unreadableSince = undefined
-        continue
+        const took = drop(p, (text) => pidOf(text) === undefined)
+        if (took === 'error') return undefined           // a path it cannot clear: run unturned
+        if (took === 'taken') { unreadableSince = undefined; continue }
       }
     } else if (!isAlive(holder)) {
-      if (!drop(p)) return undefined
-      continue
+      const took = drop(p, (text) => pidOf(text) === holder)
+      if (took === 'error') return undefined
+      if (took === 'taken') continue
     } else {
       unreadableSince = undefined
       if (!said) { ctx.err(`runner: waiting for pid ${holder} · ${label}`); said = true }

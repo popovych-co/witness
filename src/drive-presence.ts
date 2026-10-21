@@ -1,6 +1,6 @@
-import { lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isAlive } from './lock.js'
+import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 // Row 180. What a process knows about the drive it runs under. Drive marks every child
@@ -56,11 +56,9 @@ export function driveHolder(root: string): DriveHolder | undefined {
 export function acquireDriveLock(root: string, info: { log?: string }, pid = process.pid): Result<() => void> {
   const p = join(root, DRIVE_LOCK)
   mkdirSync(join(root, '.witness'), { recursive: true })
-  const release = () => {
-    const h = readHolder(root)
-    if (typeof h === 'object' && h.pid === pid) rmSync(p, { force: true })
-  }
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const release = () => releaseIfMine(p, pid)
+  const t0 = Date.now()
+  for (;;) {
     try {
       writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}) }), { flag: 'wx' })
       return ok(release)
@@ -75,10 +73,23 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
     if (typeof h === 'object' && isAlive(h.pid)) {
       return refuse([v(DRIVE_LOCK, 'drive-running', `pid ${h.pid}`, `one drive per repo — ${watchLine(h)}`)])
     }
-    // dead, unreadable or a symlink: the lock of a drive that is gone
-    try { unlinkSync(p) } catch { /* raced away */ }
+    if (Date.now() - t0 > 5_000) {
+      return refuse([v(DRIVE_LOCK, 'drive-running', 'the lock changed hands while it was being taken', 'run this again')])
+    }
+    // `wx` creates the file empty before the pid lands: an unreadable lock gets the repo
+    // lock's grace before it counts as a dead drive's. A dead one is taken atomically
+    // (F15), so of several drives started at once exactly one gets in.
+    if (h === 'unreadable') {
+      pause(50)
+      if (Date.now() - t0 < 1_000) continue
+    }
+    try {
+      const took = takeStale(p, (text) => typeof h === 'object' ? pidOf(text) === h.pid : pidOf(text) === undefined)
+      if (took === 'busy') pause(50)
+    } catch (e) {
+      return refuse([v(DRIVE_LOCK, 'drive-lock-unwritable', (e as NodeJS.ErrnoException).code ?? String(e), 'a writable .witness directory')])
+    }
   }
-  return refuse([v(DRIVE_LOCK, 'drive-running', 'the lock changed hands while it was being taken', 'run this again')])
 }
 
 // A path is quoted only when it needs it, so the common line stays the one a human types.
