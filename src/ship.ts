@@ -182,7 +182,11 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
 // another flow moved, or a tree that changed, means the merge would land bytes no battery
 // read, and it is held for `witness ship` to rebase and re-gate. Never `merge PR`: that is
 // drive's human-merge stop (drive.ts), and this is not one.
-export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, pr: number): number {
+// `pushed` is the commit `pushApproved` carried to the PR before the watch: the one tree the
+// approval and CI both describe. The merge is bound to it, and held when the worktree no
+// longer sits cleanly on it — the approval is checked against the WORKING tree, so a commit
+// slipped under a restored working tree would otherwise pass the check and be the one merged.
+export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, pr: number, pushed?: string): number {
   // Re-read, not reused: CI can run for half an hour, and a human who commits `autonomy: off`
   // meanwhile is taking the merge back (F10). The merge is then theirs, as without autonomy.
   const nowR = loadConfig(root)
@@ -228,8 +232,11 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     return EXIT.OK
   }
   const base = diffBase(wt, cfg)
+  const headNow = tryGit(wt, 'rev-parse', 'HEAD')
   const lapsed = baseMoved(wt, root, shipBranch) ? `${shipBranch} moved`
     : !base.ok || !gateSettled(entries, 'ship', diffReviewedSha(wt, base.value)) ? 'the tree moved'
+    : tryGit(wt, 'status', '--porcelain').out !== '' ? 'the worktree is not the pushed commit'
+    : !headNow.ok || (pushed !== undefined && headNow.out.trim() !== pushed) ? 'HEAD moved since the push'
     : undefined
   if (lapsed !== undefined) {
     ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · witness ship ${planId} re-gates`))
@@ -239,12 +246,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   // REMOTE head. Pinning the merge to the reviewed commit makes GitHub refuse a head anyone
   // pushed since — another session, a collaborator, a force-push — so the merge can only
   // ever land the commit CI and the battery saw. A refusal there is a human's call.
-  const head = tryGit(wt, 'rev-parse', 'HEAD')
-  if (!head.ok) {
-    ctx.out(kv('merge', `held — the reviewed commit cannot be read in ${wt} · witness ship ${planId} re-gates`))
-    return EXIT.FINDINGS
-  }
-  const merged = gh(ctx, root, ['pr', 'merge', String(pr), `--${cfg.ship.merge}`, '--match-head-commit', head.out.trim()])
+  const merged = gh(ctx, root, ['pr', 'merge', String(pr), `--${cfg.ship.merge}`, '--match-head-commit', pushed ?? headNow.out.trim()])
   if (!merged.ok) {
     renderRefusal([humanCall(v('gh', 'merge-refused', merged.out.trim().slice(-200),
       "a PR GitHub will merge — branch protection and required reviews are the repo owner's to settle"))])
@@ -260,7 +262,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
 // exists nothing else commits or pushes it, so CI went green on the old head and that is the
 // commit the merge landed. Never a force-push: a remote head this worktree lacks is someone
 // else's work, and overwriting it is a human's call.
-function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Result<void> {
+function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Result<string> {
   if (tryGit(wt, 'status', '--porcelain').out !== '') {
     tryGit(wt, 'add', '-A')
     const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
@@ -273,15 +275,17 @@ function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Re
   const branch = branchName(planId)
   tryGit(wt, 'fetch', 'origin', branch)
   const head = tryGit(wt, 'rev-parse', 'HEAD')
+  if (!head.ok) return refuse([v('push', 'head-unreadable', head.out.slice(0, 200), `a readable HEAD in ${wt}`)])
+  const sha = head.out.trim()
   const remote = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
-  if (head.ok && remote.ok && head.out.trim() === remote.out.trim()) return ok(undefined)
+  if (remote.ok && sha === remote.out.trim()) return ok(sha)
   const push = tryGit(wt, 'push', '-u', 'origin', `HEAD:${branch}`)
   if (!push.ok) {
     return refuse([humanCall(v('push', 'push-diverged', push.out.slice(0, 200),
       'a PR branch this worktree can fast-forward — the remote holds commits it does not, and overwriting them is a human\'s call'))])
   }
   ctx.out(kv('push', `${branch} → the approved tree`))
-  return ok(undefined)
+  return ok(sha)
 }
 
 const WATCH_MS = 1_800_000
@@ -456,7 +460,7 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
     if (ci.kind === 'no-pass') { ctx.out(kv('merge', 'held — no passing CI check · witness merges only on green CI')); return EXIT.FINDINGS }
     if (ci.kind === 'red') { ctx.out(kv('ci', `red — ${ci.detail}`)); return EXIT.FINDINGS }
     ctx.out(kv('ci', 'green'))
-    return mergeOwnPr(ctx, root, cfgR.value, planId, pr)
+    return mergeOwnPr(ctx, root, cfgR.value, planId, pr, pushed.value)
   }
   const green = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], WATCH_MS)
   if (!green.ok) {
