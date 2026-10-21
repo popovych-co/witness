@@ -64,7 +64,7 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
 const HEADING_RE = /^#{1,6}\s+.*$/
 const collapse = (s: string) => s.trim().replace(/\s+/g, ' ')
 
-function headingLines(body: string): string[] {
+export function headingLines(body: string): string[] {
   return body.split('\n').filter((l) => HEADING_RE.test(l)).map(collapse)
 }
 

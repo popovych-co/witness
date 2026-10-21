@@ -1,8 +1,10 @@
 import { posix } from 'node:path'
 import { splitDoc } from './fm.js'
+import type { Entry } from './journal.js'
+import { deltaBase, type GateRunEntry } from './rounds.js'
 import { canonicalSha } from './sha.js'
-import { blobText, changedPaths } from './snapshot.js'
-import { sectionText, type AnchorInput, type Reviewed } from './verdict.js'
+import { blobText, changedPaths, treeDiff, treeReadable } from './snapshot.js'
+import { anchorKey, headingLines, sectionText, type AnchorInput, type Reviewed } from './verdict.js'
 
 // Row 186. Where an anchor sits relative to the change between two reviewed trees. Only
 // `unchanged` lets the demotion rule fire, so every input this cannot place answers `changed`
@@ -73,4 +75,66 @@ export function deltaView(root: string, reviewed: Reviewed, from: string, to: st
     case 'screens':
       return { state: () => 'context' }
   }
+}
+
+export interface PriorFinding { reviewer: string; anchor: AnchorInput; claim: string }
+export interface DeltaPlan {
+  base: GateRunEntry
+  baseRound: number
+  prior: PriorFinding[]       // the base's blocking findings from delta-mode lenses, battery order
+  reported: Set<string>       // anchorKey of EVERY base blocking finding, every lens
+  view: DeltaView
+  diff: string
+  sections?: string[]         // doc gates only: the heading anchors whose section the change touched
+}
+
+// Row 185. Whether this round reviews the change, and against what. The order is the decision:
+// a base must exist and share this round's basis, both trees must still be readable (git gc
+// prunes an unreachable one), and the change must be non-empty. Anything else is a full review.
+export function planDelta(root: string, entries: Entry[], gate: string, cur: {
+  reviewedSha: string
+  snapshot?: { tree: string; context: string }
+  basis: string
+  reviewed: Reviewed
+  inDelta: (lens: string) => boolean
+}): DeltaPlan | undefined {
+  const base = deltaBase(entries, gate, cur.reviewedSha)
+  if (!base || !cur.snapshot || !base.reviewed_tree || base.basis_sha !== cur.basis) return undefined
+  if (!treeReadable(root, base.reviewed_tree) || !treeReadable(root, cur.snapshot.tree)) return undefined
+  const diff = treeDiff(root, base.reviewed_tree, cur.snapshot.tree)
+  if (diff === '') return undefined
+  const blocking: PriorFinding[] = (base.verdicts ?? []).flatMap((rv) => rv.findings
+    .filter((f) => f.blocking)
+    .map((f) => ({ reviewer: rv.reviewer, anchor: f.anchor, claim: f.claim })))
+  const view = deltaView(root, cur.reviewed, base.reviewed_tree, cur.snapshot.tree)
+  const sections = cur.reviewed.kind === 'docs'
+    ? cur.reviewed.docs.flatMap((d) => headingLines(d.body).map((h) => `${d.id} > ${h}`)).filter((a) => view.state(a) === 'changed')
+    : undefined
+  return {
+    base, baseRound: base.round,
+    prior: blocking.filter((f) => cur.inDelta(f.reviewer)),
+    reported: new Set(blocking.map((f) => anchorKey(f.anchor))),
+    view, diff,
+    ...(sections ? { sections } : {}),
+  }
+}
+
+// The one block every delta-mode lens receives, between the open deferrals and the anchor
+// menu. It ends with a blank line so the menu starts on its own.
+export function deltaBlock(d: { baseRound: number; prior: readonly PriorFinding[]; diff: string; sections?: readonly string[] }): string {
+  const n = d.baseRound
+  const anchor = (a: AnchorInput) => (typeof a === 'string' ? a : JSON.stringify(a))
+  const prior = d.prior.length > 0
+    ? d.prior.map((f, i) => `${i + 1}. ${anchor(f.anchor)} — ${f.claim} (${f.reviewer})`).join('\n')
+    : `None — round ${n} reported no blocking finding.`
+  const sections = d.sections?.length
+    ? `### Sections changed since round ${n}\n\n${d.sections.map((s) => `- ${s}`).join('\n')}\n\n`
+    : ''
+  return `## Delta review — round ${n} to now\n\n` +
+    `Round ${n} reviewed this content in full. This round judges what changed since then. The reviewed content below is still the complete current content, and the verdict contract applies to it unchanged.\n\n` +
+    `### Blocking findings from round ${n}\n\n${prior}\n\n` +
+    'For each finding above, decide whether it still holds against the current content. If it does, report it again, copying its anchor exactly as listed while that anchor still resolves. If the change fixed it, leave it out of your findings.\n\n' +
+    sections +
+    `### Change since round ${n}\n\n${d.diff}\n\n` +
+    'Judge whether the changed parts are sound. Report every defect the change introduced or exposed. When the change caused a defect, anchor it at the changed code or section that caused it, even when its symptom shows elsewhere.\n\n'
 }
