@@ -72,3 +72,7 @@ $WITNESS recap --file "$DIR/recap.json"
 ## Stateless by design
 
 Session died mid-interview? Start over — nothing was persisted; that is the accepted cost. If the dashboard's efforts table already shows the effort (the recap landed), do not re-interview — hand back to /witness.
+
+## Under `autonomy: on`
+
+Nothing in this stage changes yet: the interview is a conversation with the human, and the confirmation is theirs. The setting never licenses skipping a question or confirming the recap yourself.

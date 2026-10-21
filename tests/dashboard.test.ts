@@ -4,6 +4,7 @@ import {
   SPEC_META, addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
 } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
+import { appendEntry } from '../src/journal.js'
 
 describe('witness dashboard (no-arg)', () => {
   it('points a fresh repo at recap, then at write', async () => {
@@ -159,5 +160,24 @@ describe('witness status', () => {
     const res = await repo.cli([])
 
     expect(res.stdout).toMatch(/^write-path: 1\/3 artifacts first-try · 2 refusal\(s\)$/m)
+  })
+})
+
+describe('status counts the decisions nobody typed (A5)', () => {
+  it('prints the policy and arbiter counts and each stop\'s latest autonomous decision', async () => {
+    const repo = await seededRepo()
+    const d = (extra: Record<string, unknown>) => appendEntry(repo.root, repo.effort, {
+      v: 1, t: 'human-decision', gate: 'decompose', artifact: repo.effort, round: 1, ...extra })
+    d({ decision: 'revise', selected: 'policy', rule: 'blocking-here', recommended: 'revise' })
+    d({ decision: 'approve', selected: 'arbiter', rule: 'reserved-stop-clean', recommended: 'approve',
+      reason: 'the slice covers g1', arbiter: { model: 'm1', prompts_sha: 'p' } })
+    const out = (await repo.cli(['status'])).stdout
+    expect(out).toContain('autonomous: policy 1 · arbiter 1')
+    expect(out).toContain('recent-decisions[1]{target,gate,round,decision,by,rule}:')
+    expect(out).toContain('  auth-hardening,decompose,1,approve,arbiter · m1,reserved-stop-clean')
+  })
+  it('a fresh repo prints no autonomous line', async () => {
+    const repo = await seededRepo()
+    expect((await repo.cli(['status'])).stdout).not.toContain('autonomous:')
   })
 })

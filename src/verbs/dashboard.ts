@@ -15,6 +15,7 @@ import { pendingDecision, type DecisionEntry, type GateRunEntry } from '../round
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
+import { decidedBy } from '../autonomy.js'
 import { pendingTxn } from '../txn.js'
 import { worktreePath } from '../worktree.js'
 
@@ -86,6 +87,10 @@ export function recommenderRowsFrom(
   const tally = new Map<string, { fired: number; overridden: number; nodded: number }>()
   for (const d of decisions) {
     if (!d.rule || !d.recommended) continue
+    // Row 173. A policy decision IS the rule acting on its own recommendation, so counting
+    // it would measure the rule against itself — always followed, never overridden — and
+    // drown the human and arbiter judgments this audit exists to read.
+    if (d.selected === 'policy') continue
     const row = tally.get(d.rule) ?? { fired: 0, overridden: 0, nodded: 0 }
     row.fired += 1
     // D143. What a nod closed, per rule — the reader that makes closure-by-nod a measured
@@ -116,6 +121,35 @@ export function recommenderRows(
     }
   }
   return recommenderRowsFrom(decisions)
+}
+
+// Row 173. What the CLI decided with nobody typing: the counts, and each stop's latest
+// autonomous decision. "Latest" is per stop on purpose — the journal carries no timestamps
+// (D122), so recency across streams is not derivable, while within a stop the last
+// disposition is the state (D94). Capped, with nothing beyond the cap hidden from the
+// counts.
+const RECENT_DECISIONS = 10
+
+export function autonomousRows(root: string, canon: Canon): {
+  counts: { policy: number; arbiter: number }
+  recent: Array<{ target: string; gate: string; round: number; decision: string; by: string; rule: string }>
+} {
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  const counts = { policy: 0, arbiter: 0 }
+  const latest = new Map<string, DecisionEntry>()
+  for (const id of streams) {
+    for (const e of readStream(root, id)) {
+      if (e.t !== 'human-decision') continue
+      const d = e as unknown as DecisionEntry
+      if (d.selected !== 'policy' && d.selected !== 'arbiter') continue
+      counts[d.selected] += 1
+      latest.set(`${d.artifact} ${d.gate}`, d)
+    }
+  }
+  const recent = [...latest.values()].slice(-RECENT_DECISIONS).map((d) => ({
+    target: d.artifact, gate: d.gate, round: d.round, decision: d.decision, by: decidedBy(d), rule: d.rule ?? '',
+  }))
+  return { counts, recent }
 }
 
 // D150. Row 64 promised this trend and never built it — the 2026-08-29 field report had to
@@ -214,6 +248,12 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const rec = recommenderRows(root, canon)
   if (rec.length > 0) {
     rows('recommender', ['rule', 'fired', 'overridden', 'nodded'], rec as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  const auto = autonomousRows(root, canon)
+  if (auto.counts.policy + auto.counts.arbiter > 0) {
+    ctx.out(kv('autonomous', `policy ${auto.counts.policy} · arbiter ${auto.counts.arbiter}`))
+    rows('recent-decisions', ['target', 'gate', 'round', 'decision', 'by', 'rule'],
+      auto.recent as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
   const wp = writePathStats(root)
   if (wp.artifacts > 0 || wp.refused > 0) {

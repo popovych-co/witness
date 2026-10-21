@@ -220,3 +220,65 @@ describe('loadLocalConfig — .witness/config.local.yaml', () => {
     expect(loadLocalConfig(root).ok).toBe(false)
   })
 })
+
+describe('autonomy (A1)', () => {
+  it('is off unless the repo says on', () => {
+    const repo = tmpRepo()
+    for (const [line, want] of [['', false], ['autonomy: on\n', true], ['autonomy: off\n', false]] as const) {
+      repo.write('witness.config.yaml', `schema: 1\n${line}`)
+      repo.git('add', 'witness.config.yaml'); repo.git('commit', '--allow-empty', '-m', `config ${line.trim() || 'none'}`)
+      const r = loadConfig(repo.root)
+      expect(r.ok && r.value.autonomy).toBe(want)
+    }
+  })
+  it('is on only once committed — a working-copy edit grants nothing (F11)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\n')
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'config')
+    repo.write('witness.config.yaml', 'schema: 1\nautonomy: on\n')
+    const r = loadConfig(repo.root)
+    expect(r.ok && r.value.autonomy).toBe(false)
+    expect(r.ok && r.value.warning).toContain('autonomy: on is not committed')
+  })
+  it('refuses anything but on or off', () => {
+    const repo = tmpRepo()
+    for (const bad of ['true', 'yes', '1', '""', '~']) {
+      repo.write('witness.config.yaml', `schema: 1\nautonomy: ${bad}\n`)
+      const r = loadConfig(repo.root)
+      expect(!r.ok && r.violations[0]).toMatchObject({ field: 'autonomy', rule: 'invalid', want: 'on | off' })
+    }
+  })
+})
+
+describe('ship.merge (A7)', () => {
+  it('defaults to merge and loads squash and rebase', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\n')
+    const d = loadConfig(repo.root)
+    expect(d.ok && d.value.ship.merge).toBe('merge')
+    for (const style of ['squash', 'rebase']) {
+      repo.write('witness.config.yaml', `schema: 1\nship:\n  merge: ${style}\n`)
+      const r = loadConfig(repo.root)
+      expect(r.ok && r.value.ship.merge).toBe(style)
+    }
+  })
+  it('refuses any other style', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\nship:\n  merge: fast-forward\n')
+    const r = loadConfig(repo.root)
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'ship.merge', rule: 'invalid', want: 'merge | squash | rebase' })
+  })
+})
+
+describe('ship.ciSettleMs (row 174)', () => {
+  it('refuses a settle window outside 0 and the 30-minute watch', () => {
+    const repo = tmpRepo()
+    for (const bad of ['-1', '1800001', '2147483648', '1.5']) {
+      repo.write('witness.config.yaml', `schema: 1\nship:\n  ciSettleMs: ${bad}\n`)
+      const r = loadConfig(repo.root)
+      expect(!r.ok && r.violations[0]).toMatchObject({ field: 'ship.ciSettleMs', rule: 'invalid' })
+    }
+    repo.write('witness.config.yaml', 'schema: 1\nship:\n  ciSettleMs: 1800000\n')
+    expect(loadConfig(repo.root).ok).toBe(true)
+  })
+})

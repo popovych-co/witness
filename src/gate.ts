@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { EXIT, version, type Ctx } from './cli.js'
 import { loadConfig, loadLocalConfig, type Config, type DocKey } from './config.js'
 import { writeDoc } from './fm.js'
-import { crashPoint, guardTxn, withTxn } from './txn.js'
+import { crashPoint, guardTxn, pendingTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
 import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry } from './journal.js'
 import { untrustedCmdsFor } from './allowlist.js'
@@ -23,9 +23,10 @@ import {
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { gateSettled } from './verbs/next.js'
+import { gateSettled, owedRun } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
+import { autonomyLines } from './autonomy.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
 export type ChangeClass = 'feature' | 'fix' | 'chore'
@@ -198,7 +199,26 @@ export function printDispatchArithmetic(ctx: Ctx, root: string, gateName: string
   ctx.out(kv('dispatches', `${steps} step(s) ≈ ${Math.ceil(steps / budget)} dispatch(es) at budget ${budget}`))
 }
 
+// Row 173. The gate, then — under `autonomy: on` and not a `--manual` run — the settling of
+// the stop it produced or re-showed, in the same invocation, so a chat session and drive
+// meet one rule. Below that line nothing changes: with autonomy off this is `judge` alone.
 export async function runGate(
+  ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean },
+): Promise<number> {
+  const code = await judge(ctx, gateName, target, flags)
+  if (code !== EXIT.FINDINGS && code !== EXIT.BLOCKED) return code
+  if (flags.manual) return code
+  const rootR = primaryRoot(ctx.cwd)
+  if (!rootR.ok) return code
+  const cfgR = loadConfig(rootR.value)
+  if (!cfgR.ok || !cfgR.value.autonomy || pendingTxn(rootR.value) !== undefined) return code
+  // A dynamic import: settle.ts reaches decide.ts, whose gates/index.js import would close a
+  // static cycle through this module — each gate's registerGate would run before GATES exists.
+  const { settleStop, settledCode } = await import('./settle.js')
+  return settledCode(code, await settleStop(ctx, rootR.value, cfgR.value, gateName, target))
+}
+
+async function judge(
   ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean },
 ): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
@@ -214,6 +234,18 @@ export async function runGate(
   }
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  // `--manual` keeps this run's stop for a human, so for this run autonomy is off and the
+  // CLI does not claim otherwise.
+  if (!flags.manual) autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
+  // Row 173. Under autonomy the tail settles the stop, so the block is ITS to print — the
+  // human's when the stop is kept, nobody's when the CLI decides. Left in place for a stop
+  // the tail will not touch: a `--manual` run's, a parked or settled one, a malformed round.
+  const autonomous = cfgR.value.autonomy && !flags.manual
+  const leftToTail = (es: Entry[]): boolean => {
+    if (!autonomous) return false
+    const owed = owedRun(es, gateName)
+    return owed !== undefined && !owed.manual
+  }
   const canon = loadCanon(root)
   const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -304,7 +336,11 @@ export async function runGate(
   // silently re-rendering; the verdicts are REPLAYED (`cached`), so no battery is spent.
   // Compared on `ok` alone: a detail carries run output on some gates (timings, paths), and
   // keying on it would append a round for every re-run of an unchanged tree.
-  const checkOk = (cs: GateCheck[]) => cs.map((c) => `${c.name}:${c.ok}`).sort().join('|')
+  // A check trust kept from running and one that ran and failed are both `ok: false`, but they
+  // are different judgments: granting the command flips the first into the second, and without
+  // this term the gate resumed the blocked round forever while the policy re-ran it (F3).
+  const checkOk = (cs: GateCheck[]) =>
+    cs.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}`).sort().join('|')
   if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') &&
       checkOk(kind.entry.checks) !== checkOk(input.checks) &&
       kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {
@@ -318,7 +354,10 @@ export async function runGate(
     ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
   }
   if (kind.kind === 'resume') {
-    renderGateRun(ctx, kind.entry, 'resume', { entries, upstream: upstreamId })
+    renderGateRun(ctx, kind.entry, 'resume', {
+      entries, upstream: upstreamId,
+      ...(kind.entry.outcome === 'stopped' && leftToTail(entries) ? { help: false } : {}),
+    })
     printDispatchArithmetic(ctx, root, spec.gate, target)
     return kind.entry.outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   }
@@ -333,7 +372,7 @@ export async function runGate(
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    renderChoices(ctx, spec.gate, target, entries, upstreamId)
+    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId)
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -446,7 +485,7 @@ export async function runGate(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      renderChoices(ctx, spec.gate, target, entriesNow, upstreamId)
+      if (!leftToTail(entriesNow)) renderChoices(ctx, spec.gate, target, entriesNow, upstreamId)
       return EXIT.BLOCKED
     }
 
@@ -518,7 +557,11 @@ export async function runGate(
     })
     if (!txn.ok) { renderRefusal(txn.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
 
-    renderGateRun(ctx, entry, 'ran', { entries: [...entriesNow, entry as unknown as Entry], upstream: upstreamId })
+    const after = [...entriesNow, entry as unknown as Entry]
+    renderGateRun(ctx, entry, 'ran', {
+      entries: after, upstream: upstreamId,
+      ...(entry.outcome === 'stopped' && leftToTail(after) ? { help: false } : {}),
+    })
     printDispatchArithmetic(ctx, root, spec.gate, target)
     for (const d of discharged) ctx.out(kv('discharged', `${d.id} — no longer reported by this round`))
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))

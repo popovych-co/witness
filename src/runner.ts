@@ -5,7 +5,7 @@ import { ensureTrusted } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export type RunnerConfig =
   | { mode: 'filtered'; template: string; reportGlob?: string }
@@ -66,6 +66,12 @@ export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome 
     const err = e as { stdout?: unknown; stderr?: unknown }
     return { exitZero: false, output: `${String(err.stdout ?? '')}${String(err.stderr ?? '')}`.slice(-4000) }
   }
+}
+
+// Row 171. The command a trust refusal names — `got` of the first `untrusted-*` row, which
+// both runner refusals above and below set to the command itself.
+export function untrustedOf(violations: readonly Violation[]): string | undefined {
+  return violations.find((x) => x.rule.startsWith('untrusted-'))?.got
 }
 
 export async function runFiltered(

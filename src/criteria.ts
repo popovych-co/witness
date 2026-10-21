@@ -4,7 +4,8 @@ import { loadConfig } from './config.js'
 import type { TestOutcome } from './junit.js'
 import { matchesTag, sourceTags, type SourceTags } from './matcher.js'
 import { ok, type Result } from './refusal.js'
-import { criteriaExcludes, execCommand, runFiltered, runFullSuite, runnerConfig } from './runner.js'
+import type { GateCheck } from './rounds.js'
+import { criteriaExcludes, execCommand, runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
 import type { CanonDoc } from './scan.js'
 import { canonicalSha } from './sha.js'
 
@@ -13,6 +14,8 @@ export interface CriterionOutcome {
   kind: 'test' | 'cmd'
   ok: boolean
   detail: string
+  // Row 171: the command trust kept from running, when that is why this criterion failed.
+  untrusted?: string
 }
 
 export interface CriteriaResult {
@@ -42,10 +45,14 @@ export async function runCriteria(
 
   let suite = opts.suite
   let suiteProblem: string | undefined
+  let suiteUntrusted: string | undefined
   if (rc.mode === 'full-suite' && suite === undefined && list.some((c) => typeof c.test === 'string')) {
     const res = await runFullSuite(runRoot, ctx, rc, trustRoot)
     if (res.ok) suite = res.value.tests
-    else suiteProblem = res.violations.map((x) => `${x.rule}: ${x.field}`).join('; ')
+    else {
+      suiteProblem = res.violations.map((x) => `${x.rule}: ${x.field}`).join('; ')
+      suiteUntrusted = untrustedOf(res.violations)
+    }
   }
   const src: SourceTags | undefined = rc.mode === 'filtered'
     ? sourceTags(runRoot, criteriaExcludes(cfg.value))
@@ -57,7 +64,8 @@ export async function runCriteria(
     if (typeof c.test === 'string') {
       if (rc.mode === 'full-suite') {
         if (!suite) {
-          criteria.push({ id: cid, kind: 'test', ok: false, detail: suiteProblem ?? 'suite did not run' })
+          criteria.push({ id: cid, kind: 'test', ok: false, detail: suiteProblem ?? 'suite did not run',
+            ...(suiteUntrusted !== undefined ? { untrusted: suiteUntrusted } : {}) })
           continue
         }
         const mine = suite.filter((t) => matchesTag(t.name, id))
@@ -71,7 +79,9 @@ export async function runCriteria(
         const run = await runFiltered(runRoot, ctx, rc.template, id, trustRoot)
         const count = src?.counts.get(id) ?? 0
         if (!run.ok) {
-          criteria.push({ id: cid, kind: 'test', ok: false, detail: run.violations.map((x) => x.rule).join('; ') })
+          const blocked = untrustedOf(run.violations)
+          criteria.push({ id: cid, kind: 'test', ok: false, detail: run.violations.map((x) => x.rule).join('; '),
+            ...(blocked !== undefined ? { untrusted: blocked } : {}) })
         } else if (count === 0) {
           criteria.push({ id: cid, kind: 'test', ok: false, detail: 'no tagged test found in source (grep side)' })
         } else {
@@ -90,6 +100,7 @@ export async function runCriteria(
         criteria.push({
           id: cid, kind: 'cmd', ok: false,
           detail: `untrusted-${trust} — run: witness trust ${id} (or set WITNESS_TRUST_CMDS=1)`,
+          untrusted: c.cmd,
         })
         continue
       }
@@ -110,4 +121,21 @@ export async function runCriteria(
     tagCount,
     criteria,
   })
+}
+
+// The drift-lane row both code gates journal — one renderer, so implement and ship cannot
+// disagree about it. `untrusted` (row 171) collects every command trust kept from running,
+// deduplicated in criterion order, so the trust stop reads it from the run's own record.
+export function laneCheck(lane: Result<CriteriaResult>): GateCheck {
+  const untrusted = lane.ok
+    ? [...new Set(lane.value.criteria.flatMap((c) => (c.untrusted !== undefined ? [c.untrusted] : [])))]
+    : []
+  return {
+    name: 'drift-lane',
+    ok: lane.ok && lane.value.ok,
+    detail: lane.ok
+      ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ')
+      : lane.violations.map((x) => `${x.field}:${x.rule}`).join(' · '),
+    ...(untrusted.length > 0 ? { untrusted } : {}),
+  }
 }

@@ -37,6 +37,16 @@ describe('an untrusted command names its remedy (D154)', () => {
     expect(smoke.detail).toContain('run: witness trust auth-refresh')
     expect(smoke.detail).toContain('WITNESS_TRUST_CMDS=1')
   })
+  it('names the command it could not run (A1)', async () => {
+    const { repo, doc } = await singleRepo([{ id: 'ac-smoke', cmd: 'echo hi' }])
+    const res = await runCriteria(repo.root, fakeCtx(repo.root, { env: { ...fixtureEnv(), WITNESS_TRUST_CMDS: '' } }), doc)
+    expect(res.ok && res.value.criteria.find((c) => c.id === 'ac-smoke')!.untrusted).toBe('echo hi')
+  })
+  it('names the runner template when the filtered run was blocked (A1)', async () => {
+    const { repo, doc } = await singleRepo()
+    const res = await runCriteria(repo.root, fakeCtx(repo.root, { tty: false, env: { PATH: process.env.PATH ?? '' } }), doc)
+    expect(res.ok && res.value.criteria[0]!.untrusted).toContain('run -t "@spec:{id}"')
+  })
 })
 
 describe('runCriteria — filtered mode', () => {

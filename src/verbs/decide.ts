@@ -4,9 +4,10 @@ import { grantCommands, untrustedCmdsFor } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import '../gates/index.js'
-import { gateSpec, liveExits, renderGateRun } from '../gate.js'
+import { gateSpec, liveExits, renderGateRun, type GateSpec } from '../gate.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
 import { recommend, renderDecision } from '../recommend.js'
+import { autonomyLines, decidedBy } from '../autonomy.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -16,12 +17,12 @@ import { effortOf } from '../reviewed.js'
 import { criteriaOwner, findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
 import { journalTrust } from './trust.js'
-import { renderRefusal, v } from '../refusal.js'
+import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, kv, rows } from '../toon.js'
 import {
   ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
-  roundsSinceApprove, type DecisionEntry,
+  roundsSinceApprove, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 
@@ -70,6 +71,73 @@ function renderBound(
   return EXIT.REFUSED
 }
 
+export interface DecisionCore {
+  gate: string
+  target: string
+  decision: 'approve' | 'revise' | 'stop'
+  override?: boolean
+  repair?: boolean
+  note?: string
+  upstream?: string
+  pins?: readonly string[]
+  trustCmds?: boolean
+  // Row 173: the run the decider judged. A settler sets it; `applyDecision` refuses
+  // `anchor-moved` when the run it would dispose of is a different one.
+  runId?: string
+}
+
+// Who selected the option rides with the act, so the record is written by the same door
+// whatever chose it (A5).
+export type DecisionAct = DecisionCore & (
+  | { selected?: 'affirmation' }
+  | { selected: 'policy' }
+  | { selected: 'arbiter'; reason: string; arbiter: { model: string; prompts_sha: string } })
+
+// argv exactly as `decide` receives it. Parses the flags and refuses only what is about the
+// SHAPE of the request; every refusal about the state it acts on is `applyDecision`'s. A
+// flag absent from argv is absent from the act — no field carries `false`.
+export function decisionAct(argv: string[]): Result<DecisionAct> {
+  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' &&
+    argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin' && argv[i - 1] !== '--via')
+  const [gate, target] = positional
+  if (!gate || !target) {
+    return refuse([v('decide', 'usage', argv.join(' ') || '(none)', 'witness decide <gate> <target> --approve|--revise|--stop')])
+  }
+  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => argv.includes(f))
+  if (picked.length !== 1) {
+    return refuse([v('decision', 'one-of-required', picked.join(' ') || '(none)', '--approve | --revise | --stop')])
+  }
+  const via = flagValue(argv, '--via')
+  if (via !== undefined && via !== 'affirmation') {
+    return refuse([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
+  }
+  const note = flagValue(argv, '--note')
+  const upstream = flagValue(argv, '--upstream')
+  const pins = flagValues(argv, '--pin')
+  return ok({
+    gate, target, decision: picked[0]!.slice(2) as DecisionCore['decision'],
+    ...(argv.includes('--override') ? { override: true } : {}),
+    ...(argv.includes('--repair') ? { repair: true } : {}),
+    ...(note !== undefined ? { note } : {}),
+    ...(upstream !== undefined ? { upstream } : {}),
+    ...(pins.length > 0 ? { pins } : {}),
+    ...(argv.includes('--trust-cmds') ? { trustCmds: true } : {}),
+    ...(via === 'affirmation' ? { selected: 'affirmation' as const } : {}),
+  })
+}
+
+// A block's rendered `witness decide …` command, read back into the act the verb would
+// parse. The note is the trailing `--note "(.*)"$` — the block's grammar (recommend.ts),
+// where commands are emitted raw (D120) — so a note may itself contain quotes.
+export function actOfCommand(command: string): Result<DecisionAct> {
+  const m = /^witness decide (.*)$/.exec(command)
+  if (!m) return refuse([v('command', 'not-a-decision', command, 'a rendered witness decide <gate> <target> … command')])
+  const noted = / --note "(.*)"$/.exec(m[1]!)
+  const argv = (noted ? m[1]!.slice(0, noted.index) : m[1]!).split(/\s+/).filter((a) => a !== '')
+  const act = decisionAct(argv)
+  return act.ok && noted ? ok({ ...act.value, note: noted[1]! }) : act
+}
+
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin')
   const [gate, target] = positional
@@ -78,12 +146,18 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
+  if (argv.includes('--show')) return show(ctx, spec, gate, target)
+  const act = decisionAct(argv)
+  if (!act.ok) { renderRefusal(act.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  return applyDecision(ctx, act.value)
+}
+
+function show(ctx: Ctx, spec: GateSpec, gate: string, target: string): number {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value
   const entries = readStream(root, target)
   const last = lastGateRun(entries, gate)
-  const pending = pendingDecision(entries, gate)
 
   // Hoisted above `--show` (D94): both the anchor rule below and `--show`'s staleness
   // line need `spec.currentSha`, which takes canon and config. A decision verb that
@@ -94,74 +168,99 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const canon = loadCanon(root)
   const upstreamId = spec.upstreamOf?.(root, canon, target)
 
-  if (argv.includes('--show')) {
-    if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
-    const reopen = openReopen(entries, gate)
-    const decisionsAfter = entries
-      .slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-      .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-      .map((e) => e as unknown as DecisionEntry)
-    // A caused_by decision is a REOPEN, not a disposition — it can never settle the run
-    // above it, and pairing the two is what presented 15 settled findings as current.
-    // The LAST disposition is the state (D94): `find` returned the first, so a
-    // revise→approve reported `decision: revise` on a gate that is settled.
-    const disposition = decisionsAfter.filter((d) => d.caused_by === undefined).at(-1)
-    // Staleness is a fact about content, not about being reopened. Hardcoding it printed
-    // `witness gate …` in the one state where the gate answers changed-nothing. An
-    // uncomputable sha is NOT staleness — same doctrine as the approve-time check.
-    const shownSha = spec.currentSha?.(root, canon, cfgR.value, target)
-    const stale = shownSha !== undefined && shownSha !== last.reviewed_sha
+  autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
+  if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
+  const reopen = openReopen(entries, gate)
+  const decisionsAfter = entries
+    .slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry)
+  // A caused_by decision is a REOPEN, not a disposition — it can never settle the run
+  // above it, and pairing the two is what presented 15 settled findings as current.
+  // The LAST disposition is the state (D94): `find` returned the first, so a
+  // revise→approve reported `decision: revise` on a gate that is settled.
+  const disposition = decisionsAfter.filter((d) => d.caused_by === undefined).at(-1)
+  // Staleness is a fact about content, not about being reopened. Hardcoding it printed
+  // `witness gate …` in the one state where the gate answers changed-nothing. An
+  // uncomputable sha is NOT staleness — same doctrine as the approve-time check.
+  const shownSha = spec.currentSha?.(root, canon, cfgR.value, target)
+  const stale = shownSha !== undefined && shownSha !== last.reviewed_sha
 
-    if (reopen) {
-      ctx.out(kv('gate', gate))
-      ctx.out(kv('target', target))
-      ctx.out(kv('state', 'reopened — the gate must run again'))
-      ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
-      if (reopen.note) ctx.out(kv('note', reopen.note))
-      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · witness log ${target}`))
-      ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
-      return EXIT.OK
-    }
-    if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
-      ctx.out(kv('gate', gate))
-      ctx.out(kv('target', target))
-      ctx.out(kv('state', `settled — ${disposition.decision}`))
-      if (disposition.note) ctx.out(kv('note', disposition.note))
-      ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · witness log ${target}`))
-      // no exits: the gate is genuinely terminal here. Point at the one verb that owns
-      // what comes next rather than re-deriving routing in a second place (D101).
-      ctx.out('help: witness next')
-      return EXIT.OK
-    }
-    // pending (no disposition) or revise (the author's input): the verdict is actionable
-    renderGateRun(ctx, last, 'ran', { entries, help: false, upstream: upstreamId })
-    const shownPins = policyPins(entries)
-    if (shownPins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], shownPins as unknown as Array<Record<string, unknown>>).join('\n'))
-    if (disposition) {
-      ctx.out(kv('decision', disposition.decision))
-      if (disposition.note) ctx.out(kv('note', disposition.note))
-    }
-    // The surface a human actually reads while deciding, so it is the one that most owes a
-    // ranking rather than a menu. `undefined` is stale with no decision pending, where no
-    // act but the re-gate is legal and the exits line already says exactly that (D131).
-    const shown = recommend({ gate, target, entries, upstream: upstreamId, stale, untrustedCmds: trustFor(ctx, target) })
-    if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
-    else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
+  if (reopen) {
+    ctx.out(kv('gate', gate))
+    ctx.out(kv('target', target))
+    ctx.out(kv('state', 'reopened — the gate must run again'))
+    ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
+    if (reopen.note) ctx.out(kv('note', reopen.note))
+    ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · witness log ${target}`))
+    ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
     return EXIT.OK
   }
+  if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
+    ctx.out(kv('gate', gate))
+    ctx.out(kv('target', target))
+    ctx.out(kv('state', `settled — ${disposition.decision}`))
+    ctx.out(kv('decided-by', decidedBy(disposition)))
+    if (disposition.reason) ctx.out(kv('reason', disposition.reason))
+    if (disposition.note) ctx.out(kv('note', disposition.note))
+    ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · witness log ${target}`))
+    // no exits: the gate is genuinely terminal here. Point at the one verb that owns
+    // what comes next rather than re-deriving routing in a second place (D101).
+    ctx.out('help: witness next')
+    return EXIT.OK
+  }
+  // pending (no disposition) or revise (the author's input): the verdict is actionable
+  renderGateRun(ctx, last, 'ran', { entries, help: false, upstream: upstreamId })
+  const shownPins = policyPins(entries)
+  if (shownPins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], shownPins as unknown as Array<Record<string, unknown>>).join('\n'))
+  if (disposition) {
+    ctx.out(kv('decision', disposition.decision))
+    ctx.out(kv('decided-by', decidedBy(disposition)))
+    if (disposition.reason) ctx.out(kv('reason', disposition.reason))
+    if (disposition.note) ctx.out(kv('note', disposition.note))
+  }
+  // The surface a human actually reads while deciding, so it is the one that most owes a
+  // ranking rather than a menu. `undefined` is stale with no decision pending, where no
+  // act but the re-gate is legal and the exits line already says exactly that (D131).
+  const shown = recommend({ gate, target, entries, upstream: upstreamId, stale, untrustedCmds: trustFor(ctx, target) })
+  if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
+  else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
+  return EXIT.OK
+}
 
-  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => argv.includes(f))
-  if (picked.length !== 1) {
-    renderRefusal([v('decision', 'one-of-required', picked.join(' ') || '(none)', '--approve | --revise | --stop')])
-      .forEach((l) => ctx.err(l))
+// Row 173. The ONE writer of a disposition. The verb parses argv into an act; every
+// autonomous path (the gate's tail, `next`, drive) builds one from a block's rendered
+// command. One door means one set of refusals: a policy cannot reach a stamp the verb
+// would refuse, and a human cannot reach one the policy would.
+export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number> {
+  const { gate, target, decision } = act
+  const spec = gateSpec(gate)
+  if (!spec) {
+    renderRefusal([v('gate', 'unknown-gate', gate, 'decompose | plan | implement | ship | design')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
-  const decision = picked[0]!.slice(2) as 'approve' | 'revise' | 'stop'
-  const note = flagValue(argv, '--note')
-  const override = argv.includes('--override')
-  const repair = argv.includes('--repair')
-  const upstream = flagValue(argv, '--upstream')
-  const pinTexts = flagValues(argv, '--pin')
+  const rootR = primaryRoot(ctx.cwd)
+  if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const root = rootR.value
+  const entries = readStream(root, target)
+  const last = lastGateRun(entries, gate)
+
+  // Hoisted above `--show` (D94): both the anchor rule below and `--show`'s staleness
+  // line need `spec.currentSha`, which takes canon and config. A decision verb that
+  // cannot read the config cannot honestly report state either, so refusing here — and
+  // for `--show` too — is the correct order rather than a regression.
+  const cfgR = loadConfig(root)
+  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const canon = loadCanon(root)
+  const upstreamId = spec.upstreamOf?.(root, canon, target)
+
+  const note = act.note
+  const override = act.override === true
+  const repair = act.repair === true
+  const upstream = act.upstream
+  const pinTexts = [...(act.pins ?? [])]
+  const trustCmds = act.trustCmds === true
+  const nodded = act.selected === 'affirmation'
   if (pinTexts.length > 0 && gate !== 'implement') {
     renderRefusal([v('pin', 'pin-scope', gate, 'policy pins are implement-gate decisions on a plan')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
@@ -173,32 +272,38 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
 
-  // D143 (amends D127). A bare affirmation selects the RECOMMENDED option of a CLI-rendered
-  // block, and `--via affirmation` is how the agent reports that the selection came from a
-  // nod rather than from a named option. Journaled, so closure-by-nod stays measurable
-  // rather than arguable — D121's residual widens here and the ledger is what prices it.
   // D154. The trusting approve form. Executed after the decision lands, so a refused
   // decision never leaves a grant behind.
-  const trustCmds = argv.includes('--trust-cmds')
   if (trustCmds && decision !== 'approve') {
     renderRefusal([v('--trust-cmds', 'trust-scope', `--${decision}`,
       'witness decide … --approve --trust-cmds — a grant rides an approval, nothing else')])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
-  const via = flagValue(argv, '--via')
-  if (via !== undefined && via !== 'affirmation') {
-    renderRefusal([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
-      .forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
-  }
+  // D143 (amends D127). A bare affirmation selects the RECOMMENDED option of a CLI-rendered
+  // block, and `--via affirmation` is how the agent reports that the selection came from a
+  // nod rather than from a named option. Journaled, so closure-by-nod stays measurable
+  // rather than arguable — D121's residual widens here and the ledger is what prices it.
   // The exclusions, spec D143: an obligation-minting override (D122's ledger must not open
   // on an "ok"), and terminal acts. `witness abandon` is excluded at its own verb; a trust
   // grant joins this condition when D154 builds `--trust-cmds`.
-  if (via === 'affirmation' && (override || decision === 'stop' || trustCmds)) {
+  if (nodded && (override || decision === 'stop' || trustCmds)) {
     const which = override ? 'override' : decision === 'stop' ? 'stop' : 'trust-cmds'
     renderRefusal([v('--via', 'nod-cannot', `affirmation with --${which}`,
       'a named option — overrides, stops and trust grants are never taken on a nod (D143)')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  // Rows 172-173. Trust stays a human's (D154): no autonomous decision grants it. And the
+  // obligation D122 mints is a judgment that the finding is wrong, which the rule cannot
+  // make about its own recommendation — only the arbiter may take an override.
+  // And the look of a screen is the human's (§3 G2): no autonomous decision approves a design.
+  const lookApproved = gate === 'design' && decision === 'approve'
+  if ((act.selected === 'policy' || act.selected === 'arbiter') &&
+      (trustCmds || lookApproved || (act.selected === 'policy' && override))) {
+    const what = trustCmds ? '--trust-cmds' : lookApproved ? 'a design approve' : '--override'
+    renderRefusal([v('selected', 'autonomy-cannot', `${act.selected} with ${what}`,
+      'a named human selection — no autonomous decision grants trust (D154) or approves a look · only the arbiter mints an obligation')])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -229,12 +334,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
 
-  // at the bound the gate refuses to run again, so no fresh pending decision can
-  // ever exist — the endgame decisions must stay reachable anchored to the last
-  // run, or the target livelocks (incident c2692b93)
-  const boundEndgame = atBound && (decision === 'stop' || (decision === 'approve' && override) ||
-    (decision === 'revise' && (upstream !== undefined || repair)))
-
   // D94: a revise is the author's INPUT, not a disposition — it leaves the run
   // undisposed, and with the content unchanged `gate` answers `changed-nothing` and
   // appends nothing, so a pending decision can never reappear. Every exit the human is
@@ -245,18 +344,33 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // `undefined` means the sha CANNOT be computed (no worktree, missing parent) and must
   // never read as "moved" — the same doctrine the approve-time staleness check states
   // below. That check still runs and still refuses a genuinely stale approve.
-  const afterLast = last
-    ? entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-        .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-        .map((e) => e as unknown as DecisionEntry)
-    : []
-  const onlyRevises = afterLast.length > 0 &&
-    afterLast.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
   const nowSha = last !== undefined ? spec.currentSha?.(root, canon, cfgR.value, target) : undefined
-  const unchanged = last !== undefined && (nowSha === undefined || nowSha === last.reviewed_sha)
-  const revisedAnchor = onlyRevises && unchanged && (decision === 'approve' || decision === 'stop')
-
-  const anchor = pending ?? ((boundEndgame || revisedAnchor) ? last : undefined)
+  // The run this decision disposes of, and how many decisions already sit after it. A
+  // function of the stream so the lock can ask it again (row 173): read twice, answered
+  // by one derivation.
+  const anchorOf = (es: Entry[]): { anchor: GateRunEntry | undefined; after: number } => {
+    const lastRun = lastGateRun(es, gate)
+    const afterLast = lastRun
+      ? es.slice(es.lastIndexOf(lastRun as unknown as Entry) + 1)
+          .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+          .map((e) => e as unknown as DecisionEntry)
+      : []
+    const onlyRevises = afterLast.length > 0 &&
+      afterLast.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
+    const unchanged = lastRun !== undefined && (nowSha === undefined || nowSha === lastRun.reviewed_sha)
+    const revisedAnchor = onlyRevises && unchanged && (decision === 'approve' || decision === 'stop')
+    // at the bound the gate refuses to run again, so no fresh pending decision can
+    // ever exist — the endgame decisions must stay reachable anchored to the last
+    // run, or the target livelocks (incident c2692b93)
+    const endgame = boundReached(es, gate) && (decision === 'stop' || (decision === 'approve' && override) ||
+      (decision === 'revise' && (upstream !== undefined || repair)))
+    return {
+      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor) ? lastRun : undefined),
+      after: afterLast.length,
+    }
+  }
+  const first = anchorOf(entries)
+  const anchor = first.anchor
   if (!anchor) {
     if (atBound && last) {
       // liveExits, not a hardcoded triple: it drops --approve --override when content
@@ -267,6 +381,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
       `a stopped gate-run awaiting a decision — run: witness gate ${gate} ${target}`)])
       .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  // Row 173. A settler judged ONE run. If the run it would dispose of is no longer that one
+  // — a newer round landed while it was judging — the decision is about a verdict nobody
+  // weighed, so it refuses rather than stamping it.
+  if (act.runId !== undefined && anchor.run_id !== act.runId) {
+    renderRefusal([v('gate', 'anchor-moved', `run ${anchor.run_id}`,
+      `the run the decider judged (${act.runId}) — settle again against the current run`)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const blockedCode = guardTxn(ctx, root)
@@ -350,7 +472,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ...(recommendedVerb ? { recommended: recommendedVerb } : {}),
     ...(rec?.rule ? { rule: rec.rule } : {}),
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
-    ...(via === 'affirmation' ? { selected: 'affirmation' as const } : {}),
+    ...(act.selected !== undefined ? { selected: act.selected } : {}),
+    ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per
@@ -474,6 +597,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const lockR = acquireLock(root)
   if (!lockR.ok) { renderRefusal(lockR.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
   try {
+    // Row 173 — D76's re-read, applied to decisions. Everything above read the stream
+    // unlocked, and two settlers racing one stop (two `next` sessions, drive beside a chat)
+    // both judged the same pending run. Asked again under the lock, the loser finds the run
+    // decided or superseded and refuses, so the race journals exactly one decision.
+    const now = anchorOf(readStream(root, target))
+    if (now.anchor === undefined || (now.anchor.run_id === anchor.run_id && now.after !== first.after)) {
+      renderRefusal([v('gate', 'nothing-pending', `${gate} ${target} — decided since it was read`,
+        `a stopped gate-run awaiting a decision — run: witness decide ${gate} ${target} --show`)])
+        .forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    if (now.anchor.run_id !== anchor.run_id) {
+      renderRefusal([v('gate', 'anchor-moved', `run ${now.anchor.run_id}`,
+        `the run the decider judged (${anchor.run_id}) — settle again against the current run`)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
     const txn = withTxn(root, { op: `decide-${gate}`, files: [...new Set(files)], journalMulti }, () => {
       appendEntry(root, target, asEntry(entry))
       for (const p of pinEntries) appendEntry(root, target, p)
@@ -504,7 +643,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('trusted', 'nothing to grant — every cmd: criterion was already trusted'))
     }
   }
-  ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}`))
+  // Row 173: a decision nobody typed says so, with the rule it acted on.
+  const by = act.selected === 'policy' || act.selected === 'arbiter'
+    ? ` · ${act.selected}${rec?.rule ? ` · ${rec.rule}` : ''}` : ''
+  ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}${by}`))
+  if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   for (const d of deferralEntries) {
     ctx.out(kv('obligation', `${d.id} — ${d.anchor} · ${d.kind} · open until a later ${gate} run no longer reports it, or witness dismiss ${target} --deferral ${d.id} --cause <superseded|lens-retired|judged-wrong> --note "<why>"`))
@@ -521,6 +664,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const pins = policyPins(readStream(root, target))
     if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
     if (note) ctx.out(kv('note', note))
+    if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
     if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
       ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
     }

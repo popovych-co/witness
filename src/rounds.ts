@@ -2,7 +2,10 @@ import type { Entry } from './journal.js'
 import type { Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
-export interface GateCheck { name: string; ok: boolean; detail?: string }
+// `untrusted` (row 171): the commands the trust list kept this check from running, so the
+// trust stop is read from the run's own record rather than inferred from a detail string.
+// Present only when non-empty.
+export interface GateCheck { name: string; ok: boolean; detail?: string; untrusted?: string[] }
 export interface ReviewerVerdict { reviewer: string; coverage: CoverageItem[]; findings: Finding[] }
 
 export interface GateRunEntry {
@@ -83,7 +86,14 @@ export interface DecisionEntry {
   // 'affirmation' means they nodded at a CLI-rendered recommendation. Never read by a gate
   // predicate — it exists so closure-by-nod is countable, which is what makes D121's
   // widened residual a measured cost rather than an argued one.
-  selected?: 'affirmation'
+  // Row 173 widens it: 'policy' is the CLI acting on its own recommendation under
+  // `autonomy: on`, 'arbiter' the model the CLI launched choosing an option. Either is a
+  // disposition exactly like a human's to every reader (A5); only the record says who.
+  selected?: 'affirmation' | 'policy' | 'arbiter'
+  // Row 172. The arbiter's reasoning and the identity it ran under — the audit trail for a
+  // judgment no human made. Model-written text: data, never read by a gate predicate.
+  reason?: string
+  arbiter?: { model: string; prompts_sha: string }
 }
 
 export interface GateKey {

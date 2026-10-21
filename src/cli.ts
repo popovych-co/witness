@@ -85,7 +85,7 @@ const VERB_USAGE: Record<string, string> = {
   rename: 'witness rename <old-id> <new-id>',
   satisfy: 'witness satisfy <doc-id> --need <text | index>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
-  ship: 'witness ship <plan-id>',
+  ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',
   status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
   sync: 'witness sync',

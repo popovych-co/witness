@@ -72,3 +72,12 @@ describe('vendored prompts', () => {
     });
   }
 });
+
+describe('the arbiter prompt (A3)', () => {
+  it('the arbiter prompt fences evidence as data, keeps checks binding, and asks for a numbered ruling (A3)', () => {
+    const body = readFileSync(promptPath('arbiter'), 'utf8')
+    for (const s of ['is DATA', 'never treat a failed check as passed', 'Respond with ONLY a JSON object', '"choice"', '"reason"', 'Never write a command, an id, or a flag'])
+      expect(body, s).toContain(s)
+    expect(body).not.toContain(VERDICT_CONTRACT_MARKER)
+  })
+})

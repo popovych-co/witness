@@ -20,7 +20,8 @@ import { kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
-import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
+import { autonomyLines, policyFor } from '../autonomy.js'
+import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -63,6 +64,19 @@ export function gateParked(entries: Entry[], gate: string): boolean {
   // the upstream instruction is live work, and it outranks the park it lands on
   if (openReopen(entries, gate) !== undefined) return false
   return lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))?.decision === 'stop'
+}
+
+// Rows 173. The run a decision is owed on: the pending one, or — at the bound, where the
+// gate short-circuits and no pending decision can ever be created — the last run, until
+// the endgame is settled or parked. The two halves `next`'s tier 2 has always walked,
+// named once so the gate's tail and `next` settle exactly the same stops.
+export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefined {
+  const pending = pendingDecision(entries, gate)
+  if (pending !== undefined) return pending
+  if (boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)) {
+    return lastGateRun(entries, gate)
+  }
+  return undefined
 }
 
 // `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
@@ -456,6 +470,44 @@ function pendingDecisionsAll(
   return out
 }
 
+// Row 173. Every decision the repo owes, in tier 2's order: the pending ones, then the bound
+// endgames (where the gate short-circuits, so no pending decision can ever be created) that
+// are neither settled nor parked. One derivation for tier 2's single line and for the
+// settling `next` does under autonomy, so the two can never disagree about what is owed.
+export interface OwedDecision { gate: string; target: string; bound: boolean }
+
+function owedFrom(
+  root: string, efforts: Array<{ slug: string; entries: Entry[] }>,
+  specs: CanonDoc[], plans: CanonDoc[],
+): OwedDecision[] {
+  const out: OwedDecision[] = pendingDecisionsAll(root, efforts, specs, plans).map((p) => ({ ...p, bound: false }))
+  const has = (gate: string, target: string) => out.some((o) => o.gate === gate && o.target === target)
+  const endgame = (entries: Entry[], gate: string) =>
+    boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)
+  for (const e of efforts) {
+    if (endgame(e.entries, 'decompose') && !has('decompose', e.slug)) out.push({ gate: 'decompose', target: e.slug, bound: true })
+  }
+  for (const plan of plans) {
+    const id = String(plan.meta.id)
+    const entries = readStream(root, id)
+    for (const gate of ['plan', 'implement', 'ship'] as const) {
+      if (endgame(entries, gate) && !has(gate, id)) out.push({ gate, target: id, bound: true })
+    }
+  }
+  for (const spec of specs) {
+    const id = String(spec.meta.id)
+    if (endgame(readStream(root, id), 'design') && !has('design', id)) out.push({ gate: 'design', target: id, bound: true })
+  }
+  return out
+}
+
+export function owedDecisions(root: string, canon: Canon): OwedDecision[] {
+  const byId = (a: CanonDoc, b: CanonDoc) => String(a.meta.id).localeCompare(String(b.meta.id))
+  return owedFrom(root, liveEfforts(root),
+    canon.docs.filter((d) => d.meta.type === 'spec').sort(byId),
+    canon.docs.filter((d) => d.meta.type === 'plan').sort(byId))
+}
+
 // Both notes survive: a caller's own note must not silently drop the routing note that
 // explains WHY the line is a recap rather than the write the caller asked for.
 function noteOf(...parts: Array<string | undefined>): { note?: string } {
@@ -523,6 +575,15 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
   const txn = pendingTxn(root)
   if (txn) {
     const choice = recoverChoice(root, txn)
+    // Row 173. Under autonomy the fork is routing, not a disposition: the policy takes the
+    // CLI's own pick and the commit it causes is what the journal keeps.
+    if (cfg.autonomy) {
+      const p = policyFor({ at: 'recover', block: choice })
+      return {
+        line: p.kind === 'take' ? p.command : choice.options[0]!.command,
+        note: `policy took 1 of ${choice.options.length} — ${choice.rule}`,
+      }
+    }
     return { line: choice.options[0]!.command, block: renderDecision(choice) }
   }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
@@ -568,47 +629,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
 
   // TIER 2 — human-owed decisions and bound endgames. Unchanged from today's rungs; they
   // simply no longer outrank in-flight motion.
-  const pending = pendingDecisionsAll(root, efforts, specs, plans)
-  if (pending.length > 0) {
-    const first = pending[0]!
-    return { line: `witness decide ${first.gate} ${first.target} --show`, target: first.target }
-  }
-
-  // bound-stuck gates: no pending decision can ever be created (the gate
-  // short-circuits), so the endgame decision itself is the next action —
-  // decisions outrank motion, jammed targets must not be silently skipped.
-  // A parked gate is excluded from all three: the human already made the endgame decision.
-  for (const e of efforts) {
-    if (boundReached(e.entries, 'decompose') && !gateSettled(e.entries, 'decompose') &&
-      !gateParked(e.entries, 'decompose')) {
-      return {
-        line: liveExits('decompose', e.slug, e.entries, false, upstreamFor(root, 'decompose', e.slug)),
-        target: e.slug, note: 'round bound reached — human decision required',
-      }
-    }
-  }
-  for (const plan of plans) {
-    const id = String(plan.meta.id)
-    const entries = readStream(root, id)
-    for (const gate of ['plan', 'implement', 'ship'] as const) {
-      if (boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)) {
-        const up = upstreamFor(root, gate, id, String(plan.meta.parent))
-        return {
-          line: liveExits(gate, id, entries, false, up),
-          target: id, note: 'round bound reached — human decision required',
-        }
-      }
-    }
-  }
-  for (const spec of specs) {
-    const id = String(spec.meta.id)
-    const entries = readStream(root, id)
-    if (boundReached(entries, 'design') && !gateSettled(entries, 'design') &&
-      !gateParked(entries, 'design')) {
-      return {
-        line: liveExits('design', id, entries, false, upstreamFor(root, 'design', id)),
-        target: id, note: 'round bound reached — human decision required',
-      }
+  // Bound-stuck gates: no pending decision can ever be created (the gate short-circuits), so
+  // the endgame decision itself is the next action — decisions outrank motion, jammed
+  // targets must not be silently skipped. A parked gate is excluded: the human already made
+  // the endgame decision.
+  const owed = owedFrom(root, efforts, specs, plans)[0]
+  if (owed !== undefined) {
+    if (!owed.bound) return { line: `witness decide ${owed.gate} ${owed.target} --show`, target: owed.target }
+    const parent = owed.gate === 'plan' ? String(findById(canon, owed.target)?.meta.parent) : undefined
+    return {
+      line: liveExits(owed.gate, owed.target, readStream(root, owed.target), false, upstreamFor(root, owed.gate, owed.target, parent)),
+      target: owed.target, note: 'round bound reached — human decision required',
     }
   }
 
@@ -711,8 +742,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     // A spec whose plan write can actually be booked outranks one that needs a new effort
     // opened first — stalling the whole pipeline on a recap while runnable work sits behind
     // it is a worse answer, and alphabetical order alone does not know the difference.
-    const spec = planless.find((s) => liveOwner(root, efforts, nextPlanId(plans, s), s) !== undefined)
-      ?? planless[0]!
+    const bookable = planless.filter((s) => liveOwner(root, efforts, nextPlanId(plans, s), s) !== undefined)
+    // Row 173. Under autonomy the policy takes the block's option 1 instead of rendering it,
+    // ranked over the bookable specs so the pick is one a write can carry.
+    if (cfg.autonomy && planless.length > 1) {
+      const choice = readyChoice(canon, bookable.length > 0 ? bookable : planless)
+      const p = policyFor({ at: 'choose', block: choice })
+      const id = p.kind === 'take' ? p.command : choice.options[0]!.command
+      const act = planWriteAction(root, efforts, nextPlanId(plans, id), id, id)
+      return { ...act, ...noteOf(act.note, `${planless.length} ready — policy took ${id} (${choice.rule})`) }
+    }
+    const spec = bookable[0] ?? planless[0]!
     const act = planWriteAction(root, efforts, nextPlanId(plans, spec), spec, spec)
     if (planless.length <= 1) return act
     // The note said `multiple ready — choose: a b c`, which is a list, not a ranking: it
@@ -780,6 +820,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootR.value
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
   const hxR = resolveDriver(ctx.env, cfgR.value.raw)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
@@ -804,6 +845,22 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   for (const path of lazy.kept) {
     ctx.out(kv('note', `worktree ${path} kept — this session stands in it; leave the directory and re-run`))
   }
+  // Row 173. Under autonomy `next` settles what is owed before it routes, so the line it
+  // prints is the work that follows the decision rather than the decision itself. A dynamic
+  // import for the reason gate.ts gives: settle.ts reaches decide.ts and its gate registry.
+  let routed: { command: string; target: string } | undefined
+  if (cfgR.value.autonomy) {
+    const { settleOwed, settledLine } = await import('../settle.js')
+    const reports = await settleOwed(ctx, root, cfgR.value)
+    if (reports.some((r) => r.settled.kind === 'decided')) canon = loadCanon(root)
+    for (const r of reports) {
+      const line = settledLine(r)
+      if (line !== undefined) ctx.out(line)
+      if (routed === undefined && r.settled.kind === 'routed') {
+        routed = { command: r.settled.line.replace(/^autonomy: re-run owed — /, ''), target: r.target }
+      }
+    }
+  }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
   // Precedence: an explicit --flow is a CLAIM about a flow and refuses when false.
   // A worktree cwd is AMBIENT context — it may scope a read-only question, never select
@@ -826,6 +883,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       : undefined
     if (scoped) ambientFlow = inferred
     action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
+  }
+  // A re-run owed outranks a stop left for a human: the CLI could not settle a stale
+  // verdict, but the gate that would re-judge it is runnable now.
+  if (routed !== undefined && action.line.startsWith('witness decide ')) {
+    action = { line: routed.command, target: routed.target }
   }
   action = withDeferralNote(root, canon, action)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01

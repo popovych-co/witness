@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -25,6 +26,8 @@ export interface Config {
   implement: ImplementConfig
   gates: GatesConfig
   drive: DriveConfig
+  autonomy: boolean
+  ship: ShipConfig
   warning?: string
 }
 
@@ -175,6 +178,64 @@ export function resolveGates(raw: Record<string, unknown>): Result<GatesConfig> 
   return ok({ reviewerTimeoutMs: val })
 }
 
+// Rows 171-175. Whether the CLI settles its own stops is a REPO fact — committed, read by
+// every teammate's CLI alike — so it lives here and never in config.local.yaml. Spelled as
+// the strings `on | off` and nothing else: YAML 1.1 reads `yes`/`on` as booleans and 1.2
+// does not, so accepting booleans would make the same file mean two things across parsers.
+export function resolveAutonomy(raw: Record<string, unknown>): Result<boolean> {
+  const val = raw.autonomy
+  if (val === undefined) return ok(false)
+  if (val === 'on') return ok(true)
+  if (val === 'off') return ok(false)
+  return refuse([v('autonomy', 'invalid', String(val), 'on | off')])
+}
+
+// Row 174. How `witness ship` merges its own PR under autonomy. Configured, never detected:
+// a style inferred from history would change the day someone merged one PR by hand.
+export type MergeStyle = 'merge' | 'squash' | 'rebase'
+// `ciSettleMs` (row 174): how long a check set must sit still before green counts. gh's
+// watch ends the moment nothing is pending, so a check that registers a few seconds late —
+// Actions behind an instant CLA status — would otherwise merge before it ever ran.
+export interface ShipConfig { merge: MergeStyle; ciSettleMs: number }
+const MERGE_STYLES: readonly MergeStyle[] = ['merge', 'squash', 'rebase']
+export const DEFAULT_CI_SETTLE_MS = 60_000
+export const MAX_CI_SETTLE_MS = 1_800_000
+
+// The rest of `ship.*` (test, lint, branch) is still read loosely at its consumers; only
+// the key with a closed value set is resolved here, and only when `ship` is a map.
+export function resolveShip(raw: Record<string, unknown>): Result<ShipConfig> {
+  const conf = raw.ship
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) return ok({ merge: 'merge', ciSettleMs: DEFAULT_CI_SETTLE_MS })
+  const val = (conf as Record<string, unknown>).merge
+  if (val !== undefined && (typeof val !== 'string' || !(MERGE_STYLES as readonly string[]).includes(val))) {
+    return refuse([v('ship.merge', 'invalid', String(val), 'merge | squash | rebase')])
+  }
+  const settle = (conf as Record<string, unknown>).ciSettleMs
+  // Bounded by the watch window (30 minutes): a longer settle can never be met, and past
+  // 2^31-1 ms a Node timer fires at once — the window would silently become zero.
+  if (settle !== undefined && (typeof settle !== 'number' || !Number.isInteger(settle) || settle < 0 || settle > MAX_CI_SETTLE_MS)) {
+    return refuse([v('ship.ciSettleMs', 'invalid', String(settle),
+      `an integer from 0 to ${MAX_CI_SETTLE_MS} — milliseconds a green check set must hold before witness merges`)])
+  }
+  return ok({ merge: (val ?? 'merge') as MergeStyle, ciSettleMs: (settle as number | undefined) ?? DEFAULT_CI_SETTLE_MS })
+}
+
+// Row 171 (F11). Autonomy is a COMMITTED repo fact: on only when HEAD's witness.config.yaml
+// says so as well. A working-copy edit — the coding agent's, say — grants nothing, because
+// the setting it would grant is merge authority over that agent's own work. `autonomyAt` reads
+// any revision: the merge asks the shipped branch's remote copy (row 174), a fact the agent
+// cannot make true with a local commit.
+export function autonomyAt(root: string, rev: string): boolean {
+  try {
+    const text = execFileSync('git', ['show', `${rev}:witness.config.yaml`],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    return ((parseYaml(text) ?? {}) as Record<string, unknown>).autonomy === 'on'
+  } catch {
+    return false
+  }
+}
+const committedAutonomy = (root: string): boolean => autonomyAt(root, 'HEAD')
+
 // Machine facts live in ONE gitignored file with a closed key set (row 90): a key in
 // the wrong home refuses, so no repo↔local precedence rule can exist. Deliberately
 // NOT wired into loadConfig — same doctrine as harness resolution (row 87): an
@@ -278,6 +339,11 @@ export function loadConfig(root: string): Result<Config> {
   if (!gates.ok) return refuse(gates.violations)
   const drive = resolveDrive(obj)
   if (!drive.ok) return refuse(drive.violations)
+  const autonomy = resolveAutonomy(obj)
+  if (!autonomy.ok) return refuse(autonomy.violations)
+  const shipCfg = resolveShip(obj)
+  if (!shipCfg.ok) return refuse(shipCfg.violations)
+  const uncommitted = autonomy.value && !committedAutonomy(root)
   return ok({
     schema,
     raw: obj,
@@ -286,6 +352,10 @@ export function loadConfig(root: string): Result<Config> {
     implement: implement.value,
     gates: gates.value,
     drive: drive.value,
-    warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)` : undefined,
+    autonomy: autonomy.value && !uncommitted,
+    ship: shipCfg.value,
+    warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)`
+      : uncommitted ? 'autonomy: on is not committed — it stays off until witness.config.yaml is committed'
+      : undefined,
   })
 }

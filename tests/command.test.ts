@@ -59,3 +59,13 @@ describe('design stage in the motion surfaces', () => {
     expect(p).toContain('design-from');
   });
 });
+
+describe('the engine under autonomy (A8)', () => {
+  it('defers to the CLI under autonomy and stops only where it names a human (A8)', () => {
+    const b = body();
+    for (const s of ['## Under `autonomy: on`', 'Never run `witness decide`', '`kept-stop:`', '`merged:`']) expect(b, s).toContain(s);
+    expect(b).toContain('END YOUR TURN');
+    expect(b).toContain('Never merge');
+    expect(b).toContain('`--manual` on `gate` and `ship` when armed');
+  });
+});

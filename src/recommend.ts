@@ -70,8 +70,13 @@ const blockingAnchors = (r: GateRunEntry): string[] =>
   (r.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking)
     .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
 
+// The CLI's own placeholders, and only those. A finding's anchor is the reviewer's text and
+// may itself read `<SaveBar>`; matching any `<…>` made the prefilled revise "not runnable",
+// so the one fix the CLI recommends was the one act nobody could take.
+export const PLACEHOLDER = /<(why|effort)>/
+
 const opt = (command: string, depth: Depth, rest: Partial<Option> = {}): Option =>
-  ({ command, depth, runnable: !/<[^>]+>/.test(command), ...rest })
+  ({ command, depth, runnable: !PLACEHOLDER.test(command), ...rest })
 
 // The rule table is an ORDERED FIRST-MATCH list (D121). The id of the rule that matched is
 // what the journal records, so a wrong recommendation is attributable to one line here
@@ -232,7 +237,9 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       key: 'decide', rule: 'ladder-spent', anchor: primary,
       options: [
         { ...stopOpt, why: `${primary} has recurred across budget windows and the upstream reset already happened for it — the stage above was re-authored and the finding survived, so the depth ladder is spent`, when: undefined, tradeoff: undefined },
-        { ...overrideOpt, when: 'the recurring finding comes from one lens while the content genuinely changed each round — that pattern is a lens problem, files a lens suspicion rather than a debt against the artifact' },
+        // Stale content takes the override away here as at `bound-stale`: `decide` refuses to
+        // stamp bytes no battery read, and a block must not offer what its verb refuses (D129).
+        ...(stale ? [] : [{ ...overrideOpt, when: 'the recurring finding comes from one lens while the content genuinely changed each round — that pattern is a lens problem, files a lens suspicion rather than a debt against the artifact' }]),
       ],
     }
   }
@@ -243,7 +250,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       key: 'decide', rule: 'bound-recurrence', anchor: primary,
       options: [
         opt(up, 'root', { why: `${primary} survived ${recurrence} rounds across distinct reviewed shas — patching here has failed every time, and upstream is unspent for this anchor` }),
-        overrideOpt,
+        ...(stale ? [] : [overrideOpt]),
         ...(repairGranted(entries, gate) ? [] : [repairOpt]),
         stopOpt,
         abandonOpt,

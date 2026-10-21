@@ -119,3 +119,21 @@ describe('a revised ship gate hands back', () => {
     expect(readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length).toBe(before)
   })
 })
+
+describe('a check names the commands trust blocked (A1)', () => {
+  it('a check names each command trust blocked, and only then (A1)', async () => {
+    const { repo, planId } = await shippableRepo()
+    const scenario = fakeScenario(); putVerdict(scenario, CLEAN)
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
+    expect(runs(repo, planId).at(-1)!.checks.every((c) => c.untrusted === undefined)).toBe(true)
+    const blocked = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '' }) })
+    expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
+    const checks = runs(repo, planId).at(-1)!.checks
+    expect(checks.find((c) => c.name === 'tests')!.untrusted).toEqual(['true'])
+    expect(checks.find((c) => c.name === 'lint')!.untrusted).toEqual(['true'])
+    const lane = checks.find((c) => c.name === 'drift-lane')!
+    expect(lane.untrusted).toHaveLength(1)
+    expect(lane.untrusted![0]).toContain('run -t "@spec:{id}"')
+    expect(lane.detail).toBe('ac-rotate:fail')
+  })
+})

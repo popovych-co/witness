@@ -5,7 +5,7 @@ argument-hint: "[--manual]"
 
 # /witness — the engine
 
-The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual` to **every** `witness gate` command you run this session — caution is a per-run mood, never config.
+The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual` to **every** `witness gate` and `witness ship` command you run this session — caution is a per-run mood, never config.
 
 Resolve the CLI once:
 
@@ -34,7 +34,17 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 | `stage: plan` | Use the `witness-plan` skill with `target` (the spec id). |
 | `stage: implement` | Use the `witness-implement` skill with `target` (the plan id). |
 | `stage: ship`, or `next:` names `witness ship` | Use the `witness-ship` skill with `target` (the plan id). |
-| any other `next:` line (`witness gate …`, `witness start …`, `witness check`, `witness recover …`, `witness check --drift`) | Run it verbatim via Bash (plus `--manual` on `gate` when armed). Exit 0 or 1 → loop. Exit 2 or 3 → render the refusal; if it names a mechanical remedy you can do without judgment (e.g. `witness recover --complete`), do it and loop, else stop for the human. |
+| any other `next:` line (`witness gate …`, `witness start …`, `witness check`, `witness recover …`, `witness check --drift`) | Run it verbatim via Bash (plus `--manual` on `gate` and `ship` when armed). Exit 0 or 1 → loop. Exit 2 or 3 → render the refusal; if it names a mechanical remedy you can do without judgment (e.g. `witness recover --complete`), do it and loop, else stop for the human. |
+
+## Under `autonomy: on`
+
+`next`, `start`, `gate` and `decide --show` print `autonomy: on` and the `kept-stops:` set when the repo has opted in. Unless this session is `--manual`-armed, that changes exactly these rules:
+
+- **Decisions are the CLI's.** It settles each stop itself — through its policy, or the arbiter it launches — and prints who decided (`decided: … · policy` or `· arbiter`). Never run `witness decide`. Outside the brainstorm interview and the design session, which stay conversations, never end your turn to ask and never put options of your own to the human: when a stage owes a call of yours, make it, state it in one line, and continue.
+- **A `witness decide` line from `next` belongs to a human.** The CLI left that stop for a person, and the `kept-stop:` line or the refusal above it says why. Run `$WITNESS decide <gate> <target> --show`, render it verbatim, name the human's act, and END YOUR TURN.
+- **The merge is the CLI's.** `witness ship` merges its own PR on green CI and prints `merged:`. You still never merge.
+
+`run:` handoffs, relays, refusals you cannot mechanically repair and no progress end your turn exactly as above.
 
 ## Stop conditions (end your turn)
 

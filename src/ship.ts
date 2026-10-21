@@ -1,13 +1,13 @@
 import { execFileSync } from 'node:child_process'
 import { EXIT, type Ctx } from './cli.js'
-import { loadConfig } from './config.js'
+import { autonomyAt, loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
-import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
+import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
@@ -17,6 +17,9 @@ import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
+// Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
+// so reaching decide.ts from here closes no registration cycle.
+import { settleStop, settledCode } from './settle.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
 
@@ -174,7 +177,153 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   return ok('rebased')
 }
 
-export async function runShip(ctx: Ctx, planId: string): Promise<number> {
+// Row 174. Witness merges what it was allowed to ship — and only that. CI can run for half an
+// hour, so the approval is re-checked against the world as it is AFTER the watch: a base
+// another flow moved, or a tree that changed, means the merge would land bytes no battery
+// read, and it is held for `witness ship` to rebase and re-gate. Never `merge PR`: that is
+// drive's human-merge stop (drive.ts), and this is not one.
+export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, pr: number): number {
+  // Re-read, not reused: CI can run for half an hour, and a human who commits `autonomy: off`
+  // meanwhile is taking the merge back (F10). The merge is then theirs, as without autonomy.
+  const nowR = loadConfig(root)
+  if (!nowR.ok || !nowR.value.autonomy) {
+    ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
+    return EXIT.OK
+  }
+  cfg = nowR.value
+  const entries = readStream(root, planId)
+  const wt = worktreePath(root, planId)
+  const shipBranch = ((cfg.raw.ship ?? {}) as { branch?: string }).branch ?? 'main'
+  // `baseMoved` reads a failed fetch as "not moved" so routing degrades offline; here that
+  // would merge onto a base nobody could check (F9), so an unreachable remote holds instead.
+  if (!tryGit(wt, 'fetch', 'origin', shipBranch).ok) {
+    ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
+    return EXIT.FINDINGS
+  }
+  // The merge is the one irreversible outward act, so its authority comes from the branch it
+  // lands on, as the remote holds it — pushed and, on most repos, branch-protected — never
+  // from HEAD alone, which the coding agent can commit to. "The branch it lands on" is the
+  // PR's base as GitHub reports it, not `ship.branch`, which is working-copy config: a PR
+  // aimed anywhere else is a human's call.
+  const view = gh(ctx, root, ['pr', 'view', String(pr), '--json', 'baseRefName'])
+  let prBase: string | undefined
+  try { prBase = view.ok ? (JSON.parse(view.out) as { baseRefName?: string }).baseRefName : undefined } catch { prBase = undefined }
+  if (prBase === undefined) {
+    ctx.out(kv('merge', `held — the PR's base branch cannot be read · witness ship ${planId} retries`))
+    return EXIT.FINDINGS
+  }
+  if (prBase !== shipBranch) {
+    ctx.out(kv('merge', `held — the PR targets ${prBase} but ship.branch is ${shipBranch} · a human's call`))
+    return EXIT.FINDINGS
+  }
+  // Fetched into a witness-owned ref with an explicit forced refspec and read from there:
+  // `origin/<base>` is a local ref that `update-ref` or a rewritten fetch refspec can forge.
+  // Residual, recorded: an agent with this shell can still rewrite the remote's URL itself.
+  if (!tryGit(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`).ok) {
+    ctx.out(kv('merge', `held — cannot verify ${prBase} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
+    return EXIT.FINDINGS
+  }
+  if (!autonomyAt(root, 'refs/witness/ship-authority')) {
+    ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
+    return EXIT.OK
+  }
+  const base = diffBase(wt, cfg)
+  const lapsed = baseMoved(wt, root, shipBranch) ? `${shipBranch} moved`
+    : !base.ok || !gateSettled(entries, 'ship', diffReviewedSha(wt, base.value)) ? 'the tree moved'
+    : undefined
+  if (lapsed !== undefined) {
+    ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · witness ship ${planId} re-gates`))
+    return EXIT.FINDINGS
+  }
+  // The local checks above prove the WORKTREE is what was judged; `gh pr merge` merges the
+  // REMOTE head. Pinning the merge to the reviewed commit makes GitHub refuse a head anyone
+  // pushed since — another session, a collaborator, a force-push — so the merge can only
+  // ever land the commit CI and the battery saw. A refusal there is a human's call.
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  if (!head.ok) {
+    ctx.out(kv('merge', `held — the reviewed commit cannot be read in ${wt} · witness ship ${planId} re-gates`))
+    return EXIT.FINDINGS
+  }
+  const merged = gh(ctx, root, ['pr', 'merge', String(pr), `--${cfg.ship.merge}`, '--match-head-commit', head.out.trim()])
+  if (!merged.ok) {
+    renderRefusal([humanCall(v('gh', 'merge-refused', merged.out.trim().slice(-200),
+      "a PR GitHub will merge — branch protection and required reviews are the repo owner's to settle"))])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  ctx.out(kv('merged', `#${pr} · ${cfg.ship.merge} — the lazy stamp finishes the lifecycle on the next scan`))
+  return EXIT.OK
+}
+
+// The approved tree is what the PR must carry before CI is watched (F8). Ship owns the code
+// commit, and a revise at the ship gate leaves its fix uncommitted in the worktree — once a PR
+// exists nothing else commits or pushes it, so CI went green on the old head and that is the
+// commit the merge landed. Never a force-push: a remote head this worktree lacks is someone
+// else's work, and overwriting it is a human's call.
+function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Result<void> {
+  if (tryGit(wt, 'status', '--porcelain').out !== '') {
+    tryGit(wt, 'add', '-A')
+    const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
+    if (!committed.ok) {
+      return refuse([v('commit', 'ship-commit-failed', committed.out.slice(0, 200),
+        'a committable worktree — resolve and re-run witness ship')])
+    }
+    ctx.out(kv('commit', `${planId}: ${summary}`))
+  }
+  const branch = branchName(planId)
+  tryGit(wt, 'fetch', 'origin', branch)
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  const remote = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
+  if (head.ok && remote.ok && head.out.trim() === remote.out.trim()) return ok(undefined)
+  const push = tryGit(wt, 'push', '-u', 'origin', `HEAD:${branch}`)
+  if (!push.ok) {
+    return refuse([humanCall(v('push', 'push-diverged', push.out.slice(0, 200),
+      'a PR branch this worktree can fast-forward — the remote holds commits it does not, and overwriting them is a human\'s call'))])
+  }
+  ctx.out(kv('push', `${branch} → the approved tree`))
+  return ok(undefined)
+}
+
+const WATCH_MS = 1_800_000
+const POLL_MS = 10_000
+const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms))
+
+type CiVerdict = { kind: 'green' } | { kind: 'red'; detail: string } | { kind: 'none' } | { kind: 'no-pass' }
+
+// Row 174 (F7). `gh pr checks --watch` exits 0 for every rollup with nothing failed or pending
+// — cancelled and skipped included — and ends the moment nothing is pending, which can be
+// before a late check has registered. So green needs positive evidence on a set that held
+// still: after the watch and `ship.ciSettleMs`, at least one check passed and none failed,
+// was cancelled or is pending; a check that appeared meanwhile is watched in turn. "No
+// checks" at the first poll is retried within the same window before it is believed.
+async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number): Promise<CiVerdict> {
+  const start = Date.now()
+  for (;;) {
+    const left = Math.max(1, WATCH_MS - (Date.now() - start))
+    const watched = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], left)
+    if (!watched.ok) {
+      if (/no checks reported/.test(watched.out)) {
+        if (Date.now() - start < settleMs) { await sleep(Math.min(settleMs, POLL_MS)); continue }
+        return { kind: 'none' }
+      }
+      return { kind: 'red', detail: watched.out.trim().slice(-200) }
+    }
+    if (settleMs > 0) await sleep(settleMs)
+    const read = gh(ctx, root, ['pr', 'checks', String(pr), '--json', 'name,bucket'])
+    let checks: Array<{ name: string; bucket: string }> | undefined
+    try { checks = read.ok ? JSON.parse(read.out) as Array<{ name: string; bucket: string }> : undefined } catch { checks = undefined }
+    if (!Array.isArray(checks)) return { kind: 'red', detail: `the check set could not be read — ${read.out.trim().slice(-120)}` }
+    if (checks.some((c) => c.bucket === 'pending')) {
+      if (Date.now() - start >= WATCH_MS) return { kind: 'red', detail: 'checks still pending when the watch window closed' }
+      continue
+    }
+    const bad = checks.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel')
+    if (bad.length > 0) return { kind: 'red', detail: bad.map((c) => `${c.bucket}: ${c.name}`).join(' · ') }
+    return checks.some((c) => c.bucket === 'pass') ? { kind: 'green' } : { kind: 'no-pass' }
+  }
+}
+
+export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean } = {}): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value
@@ -182,24 +331,38 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   if (blocked !== undefined) return blocked
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const canon = loadCanon(root)
-  const plan = findById(canon, planId)
+  let canon = loadCanon(root)
+  let plan = findById(canon, planId)
   if (!plan || plan.meta.type !== 'plan') {
     renderRefusal([v('plan', 'unknown-plan', planId, 'a plans/ doc id')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const wt = worktreePath(root, planId)
-  const entries = readStream(root, planId)
+  let entries = readStream(root, planId)
   const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
   const shipBranch = ship.branch ?? 'main'
+  // `--manual` keeps this run's stop and its merge for a human, exactly as on `witness gate`.
+  const manual = opts.manual === true
+  const autonomy = cfgR.value.autonomy && !manual
   // One read-only fetch decides the whole routing. A failed fetch (no remote, offline)
   // leaves baseMoved false and the phases behave as they did — the gate phase's own
   // rebaseIfMoved is where that condition turns into a structured refusal.
   const moved = baseMoved(wt, root, shipBranch)
   const baseR = diffBase(wt, cfgR.value)
-  const reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
+  let reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
   let phase = shipPhase(plan, entries, reviewedSha, moved)
   if (moved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
+  // Row 174. Under autonomy an approval settled in this run carries straight on to the PR,
+  // so the phase is derived again from the world as it now stands — the gate phase may
+  // just have rebased, which moves both the tree and the base terms.
+  const rederive = (): ShipPhase => {
+    canon = loadCanon(root)
+    plan = findById(canon, planId)!
+    entries = readStream(root, planId)
+    const b = diffBase(wt, cfgR.value)
+    reviewedSha = b.ok ? diffReviewedSha(wt, b.value) : undefined
+    return shipPhase(plan, entries, reviewedSha, baseMoved(wt, root, shipBranch))
+  }
 
   if (phase === 'gate') {
     // D94: the gate cannot judge unchanged content twice — it answers changed-nothing
@@ -223,12 +386,26 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
       return rebase.violations.some((x) => x.rule === 'textual-conflict') ? EXIT.FINDINGS : EXIT.REFUSED
     }
     if (rebase.value === 'rebased') ctx.out(kv('rebase', `${shipBranch} moved — rebased before the battery`))
-    const code = await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
+    const code = await runGate(ctx, 'ship', planId, { fresh: false, manual })
     if (code !== EXIT.FINDINGS && code !== EXIT.OK) return code
     // No second exits line here: the gate's own render already printed the complete set
     // through liveExits. An approve-only line directly beneath it is two answers to one
     // question, and the narrower one is the one a reader acts on (D119).
-    return EXIT.FINDINGS
+    if (!(autonomy && code === EXIT.OK)) return EXIT.FINDINGS
+    phase = rederive()
+    if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
+  }
+  if (phase === 'awaiting-decision' && autonomy) {
+    // A stop the gate's tail left owed (a crash, or one waiting when autonomy was turned on)
+    // settles here by the same policy; anything but an approve hands back as before.
+    const s = await settleStop(ctx, root, cfgR.value, 'ship', planId)
+    if (s.kind === 'decided' && s.decision === 'approve') {
+      phase = rederive()
+      if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
+    } else if (s.kind !== 'none') {
+      return settledCode(EXIT.FINDINGS, s)
+    }
+    // `none` — a stop the policy does not settle (a `--manual` run's): the human's, rendered below.
   }
   if (phase === 'awaiting-decision') {
     ctx.out(kv('ship', `${planId} awaits the ship decision`))
@@ -244,7 +421,7 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
     return EXIT.FINDINGS
   }
   if (phase === 'pr') {
-    const parent = findById(canon, String(plan.meta.parent))
+    const parent = findById(canon, String(plan!.meta.parent))
     const parentSummary = String(parent?.meta.summary ?? 'witness change')
     // implement leaves the worktree uncommitted — ship owns the sole code commit
     if (tryGit(wt, 'status', '--porcelain').out !== '') {
@@ -257,7 +434,7 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
       }
       ctx.out(kv('commit', `${planId}: ${parentSummary}`))
     }
-    const created = createPr(ctx, wt, root, plan, parentSummary)
+    const created = createPr(ctx, wt, root, plan!, parentSummary)
     if (!created.ok) { renderRefusal(created.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const stamped = stampPr(ctx, root, planId, created.value)
     if (!stamped.ok) { renderRefusal(stamped.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -266,9 +443,22 @@ export async function runShip(ctx: Ctx, planId: string): Promise<number> {
   }
 
   const pr = Number(findById(loadCanon(root), planId)!.meta.pr)
-  // watch never mutates and never rebases: reaching here means shipPhase already
-  // established that both the reviewed tree and the base are the ones the battery judged.
-  const green = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], 1_800_000)
+  // watch never rebases: reaching here means shipPhase already established that both the
+  // reviewed tree and the base are the ones the battery judged. It does carry that tree to
+  // the PR first — a revise answered after the PR opened is otherwise never pushed (F8).
+  const pushed = pushApproved(ctx, wt, planId, String(findById(canon, String(plan!.meta.parent))?.meta.summary ?? 'witness change'))
+  if (!pushed.ok) { renderRefusal(pushed.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  if (autonomy) {
+    const ci = await watchCi(ctx, root, pr, cfgR.value.ship.ciSettleMs)
+    // Row 174 / §11 call 18. Green is the merge's only licence: no checks at all, or none
+    // that passed, is not green — the human's call, never a CI to "fix".
+    if (ci.kind === 'none') { ctx.out(kv('merge', 'held — no CI checks reported · witness merges only on green CI')); return EXIT.FINDINGS }
+    if (ci.kind === 'no-pass') { ctx.out(kv('merge', 'held — no passing CI check · witness merges only on green CI')); return EXIT.FINDINGS }
+    if (ci.kind === 'red') { ctx.out(kv('ci', `red — ${ci.detail}`)); return EXIT.FINDINGS }
+    ctx.out(kv('ci', 'green'))
+    return mergeOwnPr(ctx, root, cfgR.value, planId, pr)
+  }
+  const green = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], WATCH_MS)
   if (!green.ok) {
     ctx.out(kv('ci', `red — ${green.out.trim().slice(-200)}`))
     return EXIT.FINDINGS

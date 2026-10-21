@@ -149,6 +149,9 @@ either.
 | `harness: claude-code \| pi` | **the judge** — which harness runs this repo's gate reviewers, is measured by `calibrate`, and is probed by `check`. Judgment resolves `harness:` → `PI_CODING_AGENT` → `CLAUDECODE` → `claude-code`; session lines (`next`'s handoff, `dispatch`'s relay, `init --agent auto`) resolve detection first, because those name the CLI you are about to type at. Committed, so it binds every teammate's gates; `witness init --agent` writes it once and never re-points it. Undeclared repos are judged by whichever agent's session is open — `witness check` and `witness status` say so |
 | `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
 | `drive.sessionTimeoutMs` | milliseconds a `drive`-spawned session may run before SIGTERM (default 3600000) |
+| `autonomy: on \| off` | whether the CLI settles its own stops — through its recommendation or the arbiter it launches — and merges its own PRs once CI is green (default off). A committed repo fact: it counts only once HEAD says it, and the merge also needs the ship branch on origin to say it. `--manual` on a gate run keeps that run's stop for a human, and three stops always reach one: the look of a new screen, an unmet plan need and a trust grant |
+| `ship.merge: merge \| squash \| rebase` | how `witness ship` merges its own PR under `autonomy: on` (default merge) — only once the ship gate is approved and CI is green, and never when the approval lapsed or GitHub refuses |
+| `ship.ciSettleMs` | milliseconds a green check set must hold still before `witness ship` merges under autonomy (default 60000, at most 1800000) — gh's watch ends the moment nothing is pending, so a check that registers late would otherwise be missed. Green means at least one check passed and none failed, was cancelled or is pending |
 
 There is no `provider:` key. `witness gate` spawns the DECLARED harness's headless
 mode for every reviewer (Decisions 88, 105): claude-code renders bare Anthropic ids, pi
@@ -187,7 +190,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
 | `drive [--flow <plan-id>] [--max-spawns <n>]` | schedule green-path work through headless sessions; you appear only at judgment stops. TTY-only — agents are what drive spawns, never what spawns drive |
-| `ship <plan-id>` | lanes → ship gate → PR → CI watch |
+| `ship <plan-id> [--manual]` | lanes → ship gate → PR → CI watch → under autonomy: merge on green · `--manual` keeps that run's stop and merge for a human |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
 | `adopt <path>` | absolve a finished hand-edit into the journal |
 | `abandon <plan-id \| effort-slug>` | wind a plan/effort down; reverts only specs that effort itself wrote |

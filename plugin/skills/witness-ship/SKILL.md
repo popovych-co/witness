@@ -35,7 +35,7 @@ You are the ship session — spawned fresh at the primary root via the `run:` ha
 `witness ship <plan-id>` is the whole phase machine — gate, PR, CI watch:
 
 ```bash
-$WITNESS ship <plan-id>
+$WITNESS ship <plan-id>    # append --manual when the run asked for it
 ```
 
 The CLI derives the phase from world state (`pr:` field, journal, PR head) — killed anywhere, re-running converges. Your job per outcome:
@@ -45,6 +45,7 @@ The CLI derives the phase from world state (`pr:` field, journal, PR head) — k
 - **`semantic-conflict`** → the CLI aborted its mechanical rebase; the conflict is yours (next section), then re-run ship.
 - **CI red** → investigate in the worktree; fix under TDD discipline (a behavior fix gets a red first — reuse the implement protocol); commit, `git push --force-with-lease` if you rebased, plain push otherwise; re-run `$WITNESS ship <plan-id>` to re-watch.
 - **CI green** → tell the human the PR is ready to merge. **Never merge it yourself** — merging is the human's act on GitHub; the lazy stamp flips `plan → done`, `spec → live` on the next scan (`$WITNESS next` after merging shows it).
+- **Under `autonomy: on`** (printed by `gate`): the arbiter settles the ship gate's stop, and `witness ship` carries on in the same run — PR, CI watch, and on green it merges the PR itself and prints `merged:`. Never run `witness decide`, and never merge yourself. `merge: held — the ship approval lapsed` means re-run `witness ship`, which re-gates. Any other `merge: held` — no CI checks, no passing check, a base it cannot verify — is the human's, and so is a `merge-refused` or `push-diverged` refusal or a `kept-stop:` line: render it and END YOUR TURN.
 
 ## Semantic conflict resolution
 

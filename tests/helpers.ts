@@ -435,6 +435,58 @@ export function addOrigin(repo: TestRepo): void {
   repo.git('push', '-u', 'origin', 'main')
 }
 
+// Rows 171-175: opt the repo into autonomy, as a committed repo fact.
+export function autonomyOn(repo: TestRepo): void {
+  repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}autonomy: on\n`)
+  repo.git('add', 'witness.config.yaml')
+  repo.git('commit', '-m', 'autonomy: on')
+}
+
+// Three ready specs and three dependents hanging off them. A spec is READY only when every
+// dependency is already live, so a ready spec's own dependents are never ready themselves —
+// which is exactly why `readyChoice` counts dependents across all of canon rather than
+// within the ready set. Every spec is approved: a single draft leaves the decompose gate
+// unsettled, and that branch outranks planning entirely. Approved-but-not-live is what keeps
+// the three dependents out of the ready set while still counting toward the ranking.
+export async function readyTrio(repo: TestRepo): Promise<void> {
+  // Each spec carries a criterion tagged with its OWN id: SPEC_META's default is
+  // `@spec:auth-refresh`, which `write` refuses for any other id.
+  for (const [id, extra] of [
+    ['token-store', {}],
+    ['session-index', {}],
+    ['audit-log', {}],
+    ['auth-refresh', { depends: ['token-store'] }],
+    ['device-list', { depends: ['token-store'] }],
+    ['rate-limit', { depends: ['session-index'] }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    const w = await writeSpec(repo, id, { criteria: [{ id: `ac-${id}`, test: `@spec:${id}` }], covers: ['g1'], ...extra })
+    expect(w.code, `write ${id}: ${w.stderr}`).toBe(0)
+  }
+  for (const id of ['token-store', 'session-index', 'audit-log', 'auth-refresh', 'device-list', 'rate-limit']) {
+    approve(repo, id)
+  }
+}
+
+// A plan written under an approved spec, ready for its gate — opted into autonomy unless
+// the caller wants the decision to wait first.
+export async function plannedRepo(opts: { autonomy?: boolean } = {}): Promise<TestRepo> {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  if (opts.autonomy !== false) autonomyOn(repo)
+  return repo
+}
+
+// One blocking finding anchored inside the plan: the recommender's `blocking-here`.
+export const PLAN_BLOCKING = {
+  coverage: [
+    { anchor: 'auth-refresh-plan-1 > ## Step: s1', note: 'read' },
+    { anchor: 'auth-refresh > ## Behavior', note: 'read' },
+  ],
+  findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'step is untestable' }],
+}
+
 export const VERDICT_CONTRACT_MARKER = '## Verdict contract'
 export const VERDICT_CONTRACT_SNIPPETS = [
   'Respond with ONLY a JSON object',

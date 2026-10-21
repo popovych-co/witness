@@ -5,7 +5,7 @@ import { canonicalSha } from '../sha.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
 import { findById } from '../scan.js'
 import { changedFiles, diffBase } from '../evidence.js'
-import { runCriteria } from '../criteria.js'
+import { laneCheck, runCriteria } from '../criteria.js'
 import { execCommand } from '../runner.js'
 import { ensureTrusted } from '../allowlist.js'
 import { diffReviewedSha, effortOf } from '../reviewed.js'
@@ -21,7 +21,7 @@ async function commandLane(
 ): Promise<GateCheck> {
   if (!cmd) return { name, ok: false, detail: `ship.${name === 'tests' ? 'test' : 'lint'} not configured` }
   const trust = await ensureTrusted(root, ctx, cmd)
-  if (trust !== 'trusted') return { name, ok: false, detail: `${cmd}: ${trust}` }
+  if (trust !== 'trusted') return { name, ok: false, detail: `${cmd}: ${trust}`, untrusted: [cmd] }
   const run = execCommand(wt, ctx, cmd)
   return { name, ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
 }
@@ -78,14 +78,7 @@ registerGate({
 
     // deterministic drift lane: spec content from MAIN, execution in the worktree
     const lane = await runCriteria(wt, ctx, parent, { trustRoot: root })
-    const laneOk = lane.ok && lane.value.ok
-    checks.push({
-      name: 'drift-lane',
-      ok: laneOk,
-      detail: lane.ok
-        ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ')
-        : lane.violations.map((x) => `${x.field}:${x.rule}`).join(' · '),
-    })
+    checks.push(laneCheck(lane))
 
     const pin = String(plan.meta['derives-from'])
     const repin = lane.ok && lane.value.ok && pin !== lane.value.sha
@@ -104,7 +97,10 @@ registerGate({
       promptBody: codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
       checks,
-      standingStop: 'ship always stops — a human sends every PR',
+      // Row 174: under autonomy the stop still stands — the arbiter is who answers it.
+      standingStop: cfg.autonomy
+        ? 'ship always stops — the arbiter judges every PR against the recap'
+        : 'ship always stops — a human sends every PR',
       stamps: [],
       repin,
     })

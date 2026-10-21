@@ -39,7 +39,7 @@ The look of a new screen, an unmet plan need and a trust grant still reach a hum
   - row 168 stays reserved for the owed pin-resolution fix;
   - wave 1 used 169–170.
 - Release with `pnpm release minor`, which produces `0.16.0`. Both pushes, main and then the tag, are the human's.
-- Never edit consumer canon: fewhats.com's `docs/specs/**`, `docs/plans/**` and `docs/designs/**`, or any consumer's canon dirs.
+- This plan changes only the witness repo. fewhats.com and every other consumer are read-only evidence; the release check runs against a throwaway clone.
 - Do not edit `src/drive.ts` or `src/verbs/drive.ts`; plan B owns them. Do not touch the battery's prompt composition (`src/gate.ts` lens prompts, `src/battery.ts`); plan C3 owns it.
 - Add no abandon path (design §6, D168). The CLI never abandons, never grants trust, and never merges on red, pending or absent CI.
 - The names under **Shared contract** are fixed for plans A2, B and C3. Use them exactly.
@@ -199,7 +199,7 @@ function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, pr: num
 ### Task 0: Branch after wave 1
 
 **Files:**
-- None. This plan landed on `main` with wave 1's Task 0.
+- Commit only: `docs/superpowers/specs/2026-10-19-autopilot-design.md` and `docs/superpowers/plans/2026-10-19-autopilot-*.md`. Wave 1's Task 0 landed them on `main`; the edits made after that are still on disk, uncommitted.
 
 - [ ] **Step 1: Preconditions**
 
@@ -211,14 +211,16 @@ Expected: `v0.15.0`, then `1`. Anything else means wave 1 has not merged, so sto
 Run: `git checkout -b autopilot-a1`
 Expected: `Switched to a new branch 'autopilot-a1'`
 
-- [ ] **Step 3: Commit revisions to this plan, if any**
+- [ ] **Step 3: Commit the doc revisions made after wave 1 landed the docs**
 
-Commit only edits made since wave 1 landed it:
+The edits that made every plan witness-only came after wave 1's Task 0 and ride onto this branch uncommitted. Commit them first, on their own, so no later task sweeps them into its commit. Skip this step if `git status --short` already prints nothing.
 
 ```bash
-git add docs/superpowers/plans/2026-10-19-autopilot-A1-decisions.md
-git commit -m "docs(autopilot): A1 plan — revisions" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add docs/superpowers/specs/2026-10-19-autopilot-design.md docs/superpowers/plans/2026-10-19-autopilot-*.md
+git commit -m "docs(autopilot): the plans change only the witness repo" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+Expected: `git status --short` prints nothing.
 
 ---
 
@@ -1440,7 +1442,7 @@ git commit -m "docs(design): rows 171-175 -- the CLI decides under autonomy and 
 
 ---
 
-### Task 11: Verify, review, release 0.16.0, upgrade the consumers
+### Task 11: Verify, review, release 0.16.0
 
 - [ ] **Step 1: Full suite and typecheck**
 
@@ -1455,7 +1457,7 @@ Expected:
 Run it as wave 1 did (its Task 7, Step 2), with `v0.15.0` as the baseline:
 1. Build `v0.15.0` in a temporary worktree.
 2. Build this branch in place.
-3. From `~/x/personal/fewhats.com`, run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, and `decide <gate> <target> --show` for every pending decision that `status` lists. Diff the two sets.
+3. In a throwaway clone (`C=$(mktemp -d)/fewhats && git clone --local ~/x/personal/fewhats.com "$C"`, so the real repo is never touched), run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, and `decide <gate> <target> --show` for every pending decision that `status` lists. Diff the two sets.
 4. Remove the temporary worktree.
 
 Expected: identical output, except that `--show` gains `decided-by:` lines. fewhats has not opted in.
@@ -1485,27 +1487,7 @@ Open a PR with `gh pr create`. After the human merges it, on `main`:
 2. The human pushes `main`, then the tag.
 3. Wait for `release.yml` to pass, then for `npm view @popovych.co/witness version` to print `0.16.0`.
 
-- [ ] **Step 5: Upgrade the skills and fewhats.com**
-
-```bash
-npx -y skills@latest add -g -y https://registry.npmjs.org/@popovych.co/witness/-/witness-0.16.0.tgz
-cd ~/x/personal/fewhats.com && npx -y @popovych.co/witness@0.16.0 init --agent pi && CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.16.0 check
-```
-
-Expected:
-- all three skill homes read 0.16.0;
-- `init` commits a pin bump on main and in each live worktree;
-- `check` reports `0 errors`.
-
-KYC is not touched; it stays pinned at 0.14.4.
-
-- [ ] **Step 6: HUMAN, opt fewhats in**
-
-This changes who decides in the user's repo, so it waits for their go.
-1. **Preview.** `CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.16.0 status` lists the pending gates the first `next` will settle.
-2. **On the human's go:**
-   - append `autonomy: on` to `witness.config.yaml` on main only, since autonomy is read at the primary root;
-   - `git commit -m "chore(witness): autonomy on" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- witness.config.yaml`.
+Upgrading the skills and any consumer repo to this release is a separate step, outside this plan.
 
 ---
 
