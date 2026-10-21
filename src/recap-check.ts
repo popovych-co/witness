@@ -1,5 +1,5 @@
 import { arbitrate, type ArbiterSection } from './arbiter.js'
-import { askText, checkReason, recapChecks, type AskStatus } from './ask.js'
+import { askText, checkReason, oneLine, recapChecks, type AskStatus } from './ask.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Option } from './recommend.js'
@@ -28,11 +28,15 @@ export type RecapVerdict =
 const OUTCOME = { approve: 'accepted', revise: 'rejected', stop: 'parked' } as Record<string, string>
 
 export function recapEvidence(root: string, canon: Canon, ask: AskStatus, recap: RecapInput): ArbiterSection[] {
-  // The recap as brainstorm drafted it: the ask it answers is its own section above.
-  const { ask: _ask, ...drafted } = recap
+  // The recap exactly as it would be journaled — the same fields the entry carries — so the
+  // arbiter judges the document the effort is born from, and no stray key in the file reaches
+  // it. The ask it answers is its own section above.
+  const { effort, class: cls, goals, non_goals, constraints, slices } = recap
+  const drafted = { effort, class: cls, goals, non_goals, constraints, slices }
+  // Agent-written canon text, one line each: a summary must never open a section of its own.
   const specs = canon.docs.filter((d) => d.meta.type === 'spec')
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
-    .map((d) => ({ id: d.meta.id, summary: d.meta.summary, ui: d.meta.ui === true, status: d.meta.status }))
+    .map((d) => ({ id: d.meta.id, summary: oneLine(String(d.meta.summary ?? '')), ui: d.meta.ui === true, status: d.meta.status }))
   const sections: ArbiterSection[] = [
     { title: 'The ask', body: `${ask.id} — ${askText(ask.text)}` },
     { title: 'The recap', body: `\`\`\`json\n${JSON.stringify(drafted, null, 2)}\n\`\`\`` },
@@ -40,7 +44,7 @@ export function recapEvidence(root: string, canon: Canon, ask: AskStatus, recap:
   ]
   const prior = recapChecks(root, ask.id).map((e) => {
     const why = e.reason !== undefined ? checkReason({ rule: String(e.rule), class: e.class, decided: e.decided, reason: e.reason }) : ''
-    return `check ${e.round}: ${OUTCOME[e.decision] ?? e.decision}${why ? ` — ${why}` : ''}${e.note ? ` · note: ${e.note}` : ''}`
+    return oneLine(`check ${e.round}: ${OUTCOME[e.decision] ?? e.decision}${why ? ` — ${why}` : ''}${e.note ? ` · note: ${e.note}` : ''}`)
   })
   if (prior.length > 0) sections.push({ title: 'Prior checks of this ask', body: prior.join('\n') })
   return sections

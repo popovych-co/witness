@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { RECAP_CHECK_BOUND, askText, nextAsk } from '../ask.js'
+import { RECAP_CHECK_BOUND, askQueue, askText, nextAsk } from '../ask.js'
 import { unmetNeeds } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
@@ -661,9 +661,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     }
   }
   if (efforts.length === 0) {
-    // Under autonomy nobody is there to interview, so with no ask there is nothing to build.
+    // Under autonomy nobody is there to interview, so with no ask there is nothing to build —
+    // unless an ask waits for a human, which must be named rather than called absent.
     if (cfg.autonomy) {
-      return { line: 'witness check', note: 'nothing to build — no unanswered ask is queued · a human queues one with witness ask <text>' }
+      const parked = askQueue(root).find((a) => a.state === 'parked')
+      return parked !== undefined
+        ? { line: 'witness check', note: `${parked.id} is parked — a human answers it with witness recap --file <recap.json> --ask ${parked.id} --manual · or withdraws it with witness ask --withdraw ${parked.id}` }
+        : { line: 'witness check', note: 'nothing to build — no unanswered ask is queued · a human queues one with witness ask <text>' }
     }
     return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   }

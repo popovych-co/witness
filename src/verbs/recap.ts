@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { ASK_STREAM, RECAP_CHECK_BOUND, askQueue, checkReason, reservedId } from '../ask.js'
+import { ASK_STREAM, RECAP_CHECK_BOUND, askQueue, checkReason, oneLine, reservedId } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -198,7 +198,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (recap.ask !== undefined) ctx.out(kv('ask', `${recap.ask} — answered`))
     if (check !== undefined) {
       ctx.out(kv('recap-check', `accepted — check ${round} of ${RECAP_CHECK_BOUND}`))
-      ctx.out(kv('reason', check.reason))
+      ctx.out(kv('reason', oneLine(check.reason ?? '')))
     }
     if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage re-validates against it'))
     ctx.out(`next: witness write --effort ${recap.effort} --meta <m.json> --body <b.md> <spec-id>`)
@@ -249,8 +249,8 @@ function sentBack(ctx: Ctx, root: string, ask: string, round: number,
     return EXIT.FINDINGS
   }
   ctx.out(kv('recap-check', `rejected — check ${round} of ${RECAP_CHECK_BOUND}${parkedNow ? ' · the ask is parked' : ''}`))
-  ctx.out(kv('reason', checkReason({ rule: verdict.rule, class: check.class, decided: verdict.decided, reason: verdict.reason })))
-  if (verdict.note !== undefined) ctx.out(kv('note', verdict.note))
+  ctx.out(kv('reason', oneLine(checkReason({ rule: verdict.rule, class: check.class, decided: verdict.decided, reason: verdict.reason }))))
+  if (verdict.note !== undefined) ctx.out(kv('note', oneLine(verdict.note)))
   ctx.out(parkedNow ? help : `next: witness recap --file <recap.json> --ask ${ask}`)
   return EXIT.FINDINGS
 }

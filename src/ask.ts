@@ -51,6 +51,13 @@ export function checkReason(e: { rule: string; class: string; decided?: string; 
 
 // Display only: the stored text is the human's, trimmed and otherwise as given.
 export function askText(text: string): string {
+  return oneLine(text)
+}
+
+// Text a human or a model wrote, made safe to print where a reader parses lines: the
+// skills read `next`'s unit line by line, and a prompt section must never open a heading of
+// its own. Whitespace runs collapse to one space; the words stay as written.
+export function oneLine(text: string): string {
   return text.trim().replace(/\s+/g, ' ')
 }
 
@@ -68,8 +75,8 @@ export function askQueue(root: string): AskStatus[] {
     const last = checks.at(-1)
     a.checks = checks.length
     if (last?.decision === 'revise') {
-      a.reason = checkReason({ rule: String(last.rule), class: last.class, decided: last.decided, reason: String(last.reason ?? '') })
-      if (last.note !== undefined) a.note = last.note
+      a.reason = oneLine(checkReason({ rule: String(last.rule), class: last.class, decided: last.decided, reason: String(last.reason ?? '') }))
+      if (last.note !== undefined) a.note = oneLine(last.note)
     }
     if (a.state !== 'unanswered' || last === undefined) continue
     if (last.decision === 'stop') a.parked = 'malformed'
@@ -101,7 +108,7 @@ export function reservedId(id: string): string | undefined {
 
 const TEXT_REQUIRED = v('text', 'required', 'absent', 'what to build in words — witness ask <text>')
 
-export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: string; unanswered: number }> {
+export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: string; unanswered: number; already: boolean }> {
   if (askText(text) === '') return refuse([TEXT_REQUIRED])
   const lock = acquireLock(root)
   if (!lock.ok) return lock
@@ -115,8 +122,14 @@ export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: str
     if (first !== undefined && first.t !== 'ask') {
       return refuse([v(ASK_STREAM, 'stream-taken', `the stream starts with ${first.t}`, 'a stream for asks alone — witness check names the artifact that holds it')])
     }
+    // Final review F10: the same words while that ask is still open are the same ask — a
+    // crashed `/witness <words>` run again must not queue, and build, the work twice.
+    const queue = askQueue(root)
+    const unanswered = (): number => askQueue(root).filter((a) => a.state === 'unanswered').length
+    const open = queue.find((a) => (a.state === 'unanswered' || a.state === 'parked') && askText(a.text) === askText(text))
+    if (open !== undefined) return ok({ id: open.id, unanswered: unanswered(), already: true })
     // numbered under the lock: two queuers racing must not both take the next id
-    const id = `a${askQueue(root).length + 1}`
+    const id = `a${queue.length + 1}`
     const entry = { t: 'ask' as const, id, text: text.trim() }
     const stream = journalRel(ASK_STREAM)
     const res = withTxn(root, { op: `ask(${id})`, files: [stream], journal: { stream: ASK_STREAM, line: entryLine(entry) } }, () => {
@@ -125,7 +138,7 @@ export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: str
       return stateCommit(root, [stream], `ask(${id}): ${askText(text).slice(0, 60)}`)
     })
     if (!res.ok) return res
-    return ok({ id, unanswered: askQueue(root).filter((a) => a.state === 'unanswered').length })
+    return ok({ id, unanswered: unanswered(), already: false })
   } finally {
     lock.value()
   }

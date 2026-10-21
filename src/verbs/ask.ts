@@ -39,7 +39,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const res = queueAsk(ctx, root, text)
   if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return exitOf(res.violations) }
-  ctx.out(kv('ask', `${res.value.id} — queued`))
+  ctx.out(kv('ask', `${res.value.id} — ${res.value.already ? 'already queued' : 'queued'}`))
   ctx.out(kv('queue', `${res.value.unanswered} unanswered — next routes the oldest first`))
   return EXIT.OK
 }

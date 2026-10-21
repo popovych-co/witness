@@ -110,3 +110,18 @@ describe('a reserved id an existing artifact holds (final review F7)', () => {
     expect((await repo.cli(['check'])).stdout).toContain('reserved-stream-taken')
   })
 })
+
+describe('the same ask twice (final review F10)', () => {
+  it('an open ask with the same words is not queued again · a withdrawn one is', async () => {
+    const repo = await initialized()
+    await repo.cli(['ask', 'pay by card'])
+    const head = repo.git('rev-parse', 'HEAD')
+    const again = await repo.cli(['ask', '  pay   by card '])
+    expect(again.code).toBe(0)
+    expect(again.stdout).toContain('ask: a1 — already queued')
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+    expect(askQueue(repo.root)).toHaveLength(1)
+    await repo.cli(['ask', '--withdraw', 'a1'])
+    expect((await repo.cli(['ask', 'pay by card'])).stdout).toContain('ask: a2 — queued')
+  })
+})
