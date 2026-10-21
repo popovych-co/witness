@@ -33,9 +33,14 @@ const HOUR = 60 * MINUTE
 // message is stale and the limit has reset.
 const STALE_TIME_OF_DAY_MS = 23 * HOUR + 30 * MINUTE
 
-const USAGE_LINE = /You[’']ve hit your (?:session|weekly|usage|5-hour|daily) limit · resets (.+)$/
-const CLAUDE_EPOCH = /Claude AI usage limit reached\|(\d{9,11})\b/
-const TRANSIENT_BODY = /"type":"(?:rate_limit_error|overloaded_error)"/
+// Final review F13. Each shape is anchored at the start of its line, after at most one of
+// the prefixes a refusal or a harness puts there: a line that only QUOTES a limit — a test's
+// expectation, an agent's summary — is not one. claude 2.1.306 also names its weekly
+// limits by model (Opus, Sonnet, Fable).
+const PREFIX = String.raw`^(?:exit \d+: |(?:API )?Error: )?`
+const USAGE_LINE = new RegExp(`${PREFIX}(You[’']ve hit your (?:session|weekly|usage|5-hour|daily|Opus|Sonnet|Fable) limit · resets )(.+)$`)
+const CLAUDE_EPOCH = new RegExp(`${PREFIX}(Claude AI usage limit reached\\|(\\d{9,11}))\\b`)
+const TRANSIENT_BODY = new RegExp(`${PREFIX}(?:\\d{3} )?\\{"type":"error".*"type":"(?:rate_limit_error|overloaded_error)"`)
 const TRANSIENT_LINE = /^(?:API Error: )?(?:Request timed out\.|Connection error\.)$/
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const CLOCK_WHEN = new RegExp(
@@ -61,15 +66,17 @@ function zonedEpoch(y: number, mo: number, d: number, h: number, mi: number, tz:
 
 const localZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone
 
-// `<when>` → epoch ms, or undefined when it does not parse (an unknown zone included).
-function resetOf(when: string, now: number): number | undefined {
+// `<when>` → epoch ms and how much of `when` it read, or undefined when it does not parse
+// (an unknown zone included).
+function resetOf(when: string, now: number): { at: number; length: number } | undefined {
   const rel = IN_WHEN.exec(when)
   if (rel) {
     const [, h, hm, m] = rel
-    return now + (h !== undefined ? Number(h) * HOUR + Number(hm ?? 0) * MINUTE : Number(m) * MINUTE)
+    return { at: now + (h !== undefined ? Number(h) * HOUR + Number(hm ?? 0) * MINUTE : Number(m) * MINUTE), length: rel[0].length }
   }
   const c = CLOCK_WHEN.exec(when)
   if (!c) return undefined
+  const length = c[0].length
   const [, mon, day, hh, mm, ampm, zone] = c
   const h12 = Number(hh)
   const minute = Number(mm ?? 0)
@@ -83,30 +90,34 @@ function resetOf(when: string, now: number): number | undefined {
       let t = zonedEpoch(today.year, month, Number(day), hour, minute, tz)
       // a date that reads half a year back is next year's (a December message about January)
       if (t < now - 180 * 24 * HOUR) t = zonedEpoch(today.year + 1, month, Number(day), hour, minute, tz)
-      return t
+      return { at: t, length }
     }
     let t = zonedEpoch(today.year, today.month, today.day, hour, minute, tz)
     if (t <= now) {
       const next = new Date(Date.UTC(today.year, today.month - 1, today.day + 1))
       t = zonedEpoch(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), hour, minute, tz)
     }
-    return t - now > STALE_TIME_OF_DAY_MS ? now : t
+    return { at: t - now > STALE_TIME_OF_DAY_MS ? now : t, length }
   } catch {
     return undefined                                    // RangeError: a zone Intl cannot resolve
   }
 }
 
-function lineLimit(line: string, now: number): Limit | undefined {
+// The text is the limit itself, from "You've hit" to the end of its reset: a prefix and
+// whatever the harness printed after it are not part of what the human reads.
+function lineLimit(raw: string, now: number): Limit | undefined {
+  const line = raw.trim()
   const u = USAGE_LINE.exec(line)
   if (u) {
-    const text = line.slice(u.index).trim()
-    const resetAt = resetOf(u[1]!.trim(), now)
-    return resetAt === undefined ? { kind: 'usage', text } : { kind: 'usage', text, resetAt }
+    const head = u[1]!
+    const start = line.indexOf(head)
+    const reset = resetOf(u[2]!, now)
+    if (reset === undefined) return { kind: 'usage', text: line.slice(start) }
+    return { kind: 'usage', text: line.slice(start, start + head.length + reset.length), resetAt: reset.at }
   }
   const e = CLAUDE_EPOCH.exec(line)
-  if (e) return { kind: 'usage', text: line.slice(e.index).trim(), resetAt: Number(e[1]) * 1000 }
-  const trimmed = line.trim()
-  if (TRANSIENT_BODY.test(trimmed) || TRANSIENT_LINE.test(trimmed)) return { kind: 'transient', text: trimmed }
+  if (e) return { kind: 'usage', text: e[1]!, resetAt: Number(e[2]) * 1000 }
+  if (TRANSIENT_BODY.test(line) || TRANSIENT_LINE.test(line)) return { kind: 'transient', text: line }
   return undefined
 }
 

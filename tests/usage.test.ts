@@ -62,3 +62,31 @@ describe('sessionLimit · waitFor · duration (B4)', () => {
     expect([5_460_000, 45_000, 720_000, 25_200_000].map(duration)).toEqual(['1h31m', '45s', '12m', '7h'])
   })
 })
+
+// Final review F13. A limit is a line the harness or the provider wrote, from its start; text
+// that only quotes one (a test's expectation, an agent's summary) is not a limit.
+describe('limit shapes are anchored (B4)', () => {
+  it.each(['Sonnet', 'Opus', 'Fable'])("reads claude's %s limit", (name) => {
+    expect(limitIn(`You've hit your ${name} limit · resets 6pm (Europe/Kyiv)`, NOW)?.kind).toBe('usage')
+  })
+  it.each([
+    "exit 1: You've hit your session limit · resets 2pm (America/Los_Angeles)",
+    "API Error: You've hit your session limit · resets 2pm (America/Los_Angeles)",
+    "Error: You've hit your session limit · resets 2pm (America/Los_Angeles)",
+  ])('reads %s after a known prefix', (text) => {
+    expect(limitIn(text, NOW)).toMatchObject({ kind: 'usage', text: LA('2pm'), resetAt: at('2026-10-19T21:00:00Z') })
+  })
+  it.each([
+    "expected 'You've hit your session limit · resets 2pm (America/Los_Angeles)' to be undefined",
+    "  ✓ the agent said: You've hit your session limit · resets 2pm (America/Los_Angeles)",
+    'AssertionError: expected {"type":"error","error":{"type":"rate_limit_error"}} to equal {}',
+  ])('a line quoting a limit is not one: %s', (text) => {
+    expect(limitIn(text, NOW)).toBeUndefined()
+  })
+  it('the limit text ends where its reset does', () => {
+    expect(limitIn(`${LA('2pm')}. Upgrade for more.`, NOW)?.text).toBe(LA('2pm'))
+  })
+  it('a successful session whose summary quotes a limit waits for nothing', () => {
+    expect(sessionLimit({ code: 0, tail: ['done', `I saw "${LA('2pm')}" in the log`] }, NOW)).toBeUndefined()
+  })
+})
