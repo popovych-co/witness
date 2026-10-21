@@ -204,6 +204,16 @@ describe('held criteria (A10)', () => {
     expect(r.value.criteria.find((c) => c.id === 'ac-rotate')!.held).toBeUndefined()
   })
 
+  it('a hold names a cmd record — a test criterion sharing its id is still run (final review F5 · security)', async () => {
+    const repo = await heldRepo('true')
+    const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+    // validateCriteria refuses the duplicate id · the lane must still never hold the test record
+    const forged = { ...doc, meta: { ...doc.meta, criteria: [{ id: 'ac-prod', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd: 'true' }, { id: 'ac-x', cmd: 'true' }] } }
+    const r = await runCriteria(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), forged)
+    if (!r.ok) throw new Error('lane refused')
+    expect(r.value.criteria.find((c) => c.kind === 'test')!.held).toBeUndefined()
+  })
+
   it('criterionMark names ok · fail · every holder', () => {
     expect(criterionMark({ id: 'a', kind: 'cmd', ok: true, detail: '' })).toBe('ok')
     expect(criterionMark({ id: 'a', kind: 'cmd', ok: false, detail: '' })).toBe('fail')

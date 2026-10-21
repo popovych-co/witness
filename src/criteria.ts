@@ -71,9 +71,11 @@ export async function runCriteria(
   const criteria: CriterionOutcome[] = []
   for (const c of list) {
     const cid = String(c.id)
-    const holders = held.get(cid)
+    // A hold names a `cmd:` record, never just an id: a hand-edited doc can give a test
+    // criterion the same id, and holding it would skip the spec's tests.
+    const holders = typeof c.cmd === 'string' ? held.get(cid) : undefined
     if (holders !== undefined) {
-      criteria.push({ id: cid, kind: typeof c.test === 'string' ? 'test' : 'cmd', ok: false, held: holders,
+      criteria.push({ id: cid, kind: 'cmd', ok: false, held: holders,
         detail: `held by ${holders.join(' · ')} — ${satisfyCommand(id, holders[0]!)}` })
       continue
     }
