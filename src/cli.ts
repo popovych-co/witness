@@ -22,6 +22,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   recover: () => import('./verbs/recover.js'),
   init: () => import('./verbs/init.js'),
   recap: () => import('./verbs/recap.js'),
+  // Row 176. The human's ask, queued as state so `next` routes it and no session can lose it.
+  ask: () => import('./verbs/ask.js'),
   write: () => import('./verbs/write.js'),
   // Row 132's read route. Canon lives at the primary root and nowhere else, so reading it
   // is a verb rather than a path — which is also what lets a worktree carry no copy.
@@ -65,6 +67,7 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
 const VERB_USAGE: Record<string, string> = {
   abandon: 'witness abandon <plan-id | effort-slug>',
   adopt: 'witness adopt <specs/... | plans/...>.md',
+  ask: 'witness ask <text> | --withdraw <id> [--note <why>]',
   calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
   check: 'witness check',
   clean: 'witness clean',
@@ -80,10 +83,10 @@ const VERB_USAGE: Record<string, string> = {
   log: 'witness log <stream> [--all] [--lineage]',
   next: 'witness next',
   read: 'witness read <id> [--design] [--outline] [--lines <a>-<b>]',
-  recap: 'witness recap --file <recap.json> [--amend]',
+  recap: 'witness recap --file <recap.json> [--ask <id>] [--amend] [--manual]',
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
-  satisfy: 'witness satisfy <doc-id> --need <text | index>',
+  satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',

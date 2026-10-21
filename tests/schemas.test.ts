@@ -111,3 +111,33 @@ describe('validateDoc: principles', () => {
     expect(validateDoc({ ...meta, criteria: [] }, '# Principles\n').map((x) => x.rule)).toContain('forbidden')
   })
 })
+
+describe('needs: ids and holds (A10)', () => {
+  const CRITERIA = [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd: 'pnpm verify:prod' }]
+  const PROD = { id: 'prod', manual: 'production access granted', satisfied: false }
+  const rules = (meta: Record<string, unknown>, body = SPEC_BODY) => validateDoc(meta, body).map((x) => `${x.field}:${x.rule}`)
+  const spec = (needs: unknown[], criteria: unknown[] = CRITERIA) => rules(specMeta({ needs, criteria }))
+
+  it('accepts a manual need with an id that holds a cmd criterion', () => {
+    expect(spec([{ ...PROD, holds: ['ac-prod'] }])).toEqual([])
+  })
+  it('keeps the shapes consumers write today valid', () => {
+    expect(spec([{ manual: 'x', satisfied: false }, { id: 'p2', manual: 'y', satisfied: true }, { env: 'X' }])).toEqual([])
+  })
+  it('refuses holds that cannot say what they hold', () => {
+    expect(spec([{ manual: 'x', satisfied: false, holds: ['ac-prod'] }])).toContain('needs[0].id:required')
+    expect(spec([{ id: 'e', env: 'X', holds: ['ac-prod'] }])).toContain('needs[0].holds:forbidden')
+    expect(spec([{ ...PROD, holds: [] }])).toContain('needs[0].holds:shape')
+    expect(spec([{ ...PROD, holds: ['ac-nope'] }])).toContain('needs[0].holds[0]:unknown-criterion')
+    expect(spec([{ ...PROD, holds: ['ac-rotate'] }])).toContain('needs[0].holds[0]:held-test-criterion')
+  })
+  it('refuses holds that leave the lane nothing to run', () => {
+    expect(spec([{ ...PROD, holds: ['ac-prod'] }], [{ id: 'ac-prod', cmd: 'pnpm verify:prod' }]))
+      .toContain('needs:holds-every-criterion')
+  })
+  it('refuses holds on a plan and malformed or repeated need ids', () => {
+    expect(rules(planMeta({ needs: [{ ...PROD, holds: ['ac-rotate'] }] }), '## Step: s1\nx\n')).toContain('needs[0].holds:forbidden')
+    expect(spec([{ ...PROD, id: 'Bad_Id' }])).toContain('needs[0].id:id-charset')
+    expect(spec([PROD, { ...PROD }])).toContain('needs[1].id:id-unique')
+  })
+})

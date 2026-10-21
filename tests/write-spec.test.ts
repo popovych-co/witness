@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -98,5 +98,14 @@ describe('witness write (spec)', () => {
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('unrelated-dirty')
     expect(() => repo.read('specs/auth-refresh.md')).toThrow()
+  })
+
+  it('write refuses an invalid hold before anything lands (A10)', async () => {
+    const repo = await seededRepo()
+    const r = await writeSpec(repo, 'auth-refresh',
+      { needs: [{ id: 'prod', manual: 'p', satisfied: false, holds: ['ac-nope'] }] })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown-criterion')
+    expect(existsSync(join(repo.root, 'specs/auth-refresh.md'))).toBe(false)
   })
 })

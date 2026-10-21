@@ -182,7 +182,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `read <id> [--design] [--outline] [--lines <a>-<b>]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts |
 | `check` | schema, graph, invariants, needs, trailer audit, probes |
 | `index` | id · summary · status · depends across the canon, then each spec's plans |
-| `satisfy <id> --need <text\|n>` | flip a manual need via the write path |
+| `satisfy <id> --need <id\|n\|text>` | journal a manual need as met — the spec is never rewritten |
 | `log <id>` | render a journal stream |
 | `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
 | `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |

@@ -68,4 +68,9 @@ describe('the engine under autonomy (A8)', () => {
     expect(b).toContain('Never merge');
     expect(b).toContain('`--manual` on `gate` and `ship` when armed');
   });
+
+  it('queues the words it was given as an ask (A9)', () => {
+    expect(body()).toContain('$WITNESS ask "<those words>"')
+    expect(/^---\n([\s\S]*?)\n---/.exec(body())![1]).toContain('[what to build]')
+  })
 });

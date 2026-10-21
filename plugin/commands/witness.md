@@ -1,11 +1,13 @@
 ---
 description: Run the witness pipeline — ask the CLI what's next, do it, loop; stop where a human is owed a decision
-argument-hint: "[--manual]"
+argument-hint: "[--manual] [what to build]"
 ---
 
 # /witness — the engine
 
 The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual` to **every** `witness gate` and `witness ship` command you run this session — caution is a per-run mood, never config.
+
+Any other words in `$ARGUMENTS` are the human's ask: run `$WITNESS ask "<those words>"` once, before the first `next`. The CLI queues it and `next` routes it to brainstorm, so the ask outlives this session.
 
 Resolve the CLI once:
 
@@ -51,7 +53,7 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 - After a `decide` line surfaced and you rendered it, the turn ends. If the human then names an option, run that option's printed string byte-for-byte and resume the loop — naming the option is their judgment, typing it is not yours to substitute. A bare affirmation ("y", "ok", "go") against a block that carries a **recommended** option selects that option: run its printed string with `--via affirmation` appended. It never takes `--approve --override`, `--stop`, a trust grant or `witness abandon` — those still require naming (D143).
 - A `decide` line surfaced — the standing stops (ship always; feature scope; fix-created-spec) and every blocking finding land here by design.
 - The same `next:` line came back twice with nothing changed in between → report `no progress: <line>`, what you tried, and hand off.
-- An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human `witness satisfy <id> --need <text>`), `slug-reuse`, lock contention, calibration floor stops under `--manual`.
+- An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human the witness satisfy command the refusal names), `slug-reuse`, lock contention, calibration floor stops under `--manual`.
 - A skill ended its turn for a gate stop — that stop is yours too; do not restart the loop until the human decides.
 
 **Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** (or wherever the repo's `paths:` config relocates them) — that is what the skills' write path is for. Run `$WITNESS status` — the orientation screen (flows, blocked docs, reconcile rows, pending gates) — when you need position rather than the next action; bare `$WITNESS` prints the same screen. If it reports the reviewer model is uncalibrated, surface that; under `--manual` treat it as a stop.

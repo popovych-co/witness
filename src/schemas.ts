@@ -1,4 +1,4 @@
-import { ID_RE, validateCriteria, validateNeeds } from './dsl.js'
+import { ID_RE, validateCriteria, validateHolds, validateNeeds } from './dsl.js'
 import { v, type Violation } from './refusal.js'
 
 export const SPEC_STATUS = ['draft', 'approved', 'live'] as const
@@ -37,6 +37,7 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
     out.push(v('depends', 'shape', JSON.stringify(meta.depends), 'list of ids matching [a-z0-9-]+'))
   }
   out.push(...validateNeeds(meta.needs))
+  out.push(...validateHolds(meta))
   const statuses: readonly string[] =
     type === 'spec' ? SPEC_STATUS : type === 'plan' ? PLAN_STATUS : PRINCIPLES_STATUS
   if (!statuses.includes(String(meta.status))) {

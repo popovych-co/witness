@@ -3,6 +3,8 @@ import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
+import { designUnseen } from './design.js'
+import { liftedHolds } from './needs.js'
 import { gateSpec } from './gate.js'
 import { readStream } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
@@ -55,7 +57,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
 
   const canon = loadCanon(root)
   const now = spec.currentSha?.(root, canon, cfg, target)
-  const stale = now !== undefined && now !== owed.reviewed_sha
+  const stale = (now !== undefined && now !== owed.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), owed).length > 0
   const block = recommend({
     gate, target, entries, upstream: spec.upstreamOf?.(root, canon, target), stale,
     untrustedCmds: untrustedCmdsFor(root, criteriaOwner(canon, target)),
@@ -92,8 +94,13 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   }
 
   if (policy.kind === 'human') {
+    // Row 178: an autonomous critic ran on a look nobody opened, so the human's first act is
+    // to open it — `decide design --approve` refuses until they have.
+    const unseen = policy.stop === 'design-look' && designUnseen(root, cfg.paths, target) !== undefined
     const detail = policy.stop === 'design-look'
-      ? `the human approves the screen or sends a note — witness decide design ${target} --show`
+      ? unseen
+        ? `the human opens the look with witness design ${target} --open · then approves it or sends a note — witness decide design ${target} --show`
+        : `the human approves the screen or sends a note — witness decide design ${target} --show`
       : `${untrusted.join(' · ')} — the human runs witness gate ${gate} ${target} in a terminal and answers each prompt`
     const line = keptStopLine(policy.stop, detail)
     renderDecision(block).forEach((l) => ctx.out(l))

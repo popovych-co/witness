@@ -3,6 +3,7 @@ import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
 import type { TestOutcome } from './junit.js'
 import { matchesTag, sourceTags, type SourceTags } from './matcher.js'
+import { heldCriteria, satisfyCommand, type HeldRow } from './needs.js'
 import { ok, type Result } from './refusal.js'
 import type { GateCheck } from './rounds.js'
 import { criteriaExcludes, execCommand, runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
@@ -16,6 +17,14 @@ export interface CriterionOutcome {
   detail: string
   // Row 171: the command trust kept from running, when that is why this criterion failed.
   untrusted?: string
+  // Row 179: the unmet manual needs holding this criterion. A held criterion is never run and
+  // never `ok`; the lane's aggregate alone treats it as not failing.
+  held?: string[]
+}
+
+export function criterionMark(c: CriterionOutcome): string {
+  if (c.held !== undefined) return `held by ${c.held.join(' · ')}`
+  return c.ok ? 'ok' : 'fail'
 }
 
 export interface CriteriaResult {
@@ -58,9 +67,18 @@ export async function runCriteria(
     ? sourceTags(runRoot, criteriaExcludes(cfg.value))
     : undefined
 
+  const held = heldCriteria(doc)
   const criteria: CriterionOutcome[] = []
   for (const c of list) {
     const cid = String(c.id)
+    // A hold names a `cmd:` record, never just an id: a hand-edited doc can give a test
+    // criterion the same id, and holding it would skip the spec's tests.
+    const holders = typeof c.cmd === 'string' ? held.get(cid) : undefined
+    if (holders !== undefined) {
+      criteria.push({ id: cid, kind: 'cmd', ok: false, held: holders,
+        detail: `held by ${holders.join(' · ')} — ${satisfyCommand(id, holders[0]!)}` })
+      continue
+    }
     if (typeof c.test === 'string') {
       if (rc.mode === 'full-suite') {
         if (!suite) {
@@ -116,7 +134,9 @@ export async function runCriteria(
   return ok({
     spec: id,
     sha: canonicalSha(doc.meta, doc.body),
-    ok: criteria.length > 0 && criteria.every((c) => c.ok),
+    // A lane passes only when something actually passed and nothing failed: a held criterion
+    // is not a failure, and it is never a pass either.
+    ok: criteria.some((c) => c.ok) && criteria.every((c) => c.ok || c.held !== undefined),
     mode: rc.mode,
     tagCount,
     criteria,
@@ -130,12 +150,19 @@ export function laneCheck(lane: Result<CriteriaResult>): GateCheck {
   const untrusted = lane.ok
     ? [...new Set(lane.value.criteria.flatMap((c) => (c.untrusted !== undefined ? [c.untrusted] : [])))]
     : []
+  // Row 179: a lane that passed with held criteria says so in its own record, so no reader
+  // of the gate-run can take the green for a verification of what was not run.
+  const held: HeldRow[] = lane.ok
+    ? lane.value.criteria.flatMap((c) => (c.held ?? []).map((need) =>
+        ({ criterion: c.id, need, satisfy: satisfyCommand(lane.value.spec, need) })))
+    : []
   return {
     name: 'drift-lane',
     ok: lane.ok && lane.value.ok,
     detail: lane.ok
-      ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ')
+      ? lane.value.criteria.map((c) => `${c.id}:${criterionMark(c)}`).join(' · ')
       : lane.violations.map((x) => `${x.field}:${x.rule}`).join(' · '),
     ...(untrusted.length > 0 ? { untrusted } : {}),
+    ...(held.length > 0 ? { held } : {}),
   }
 }

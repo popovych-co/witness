@@ -61,10 +61,14 @@ export interface GateInput {
   skipLenses?: Array<{ lens: string; why: string }>
 }
 
+// Row 178. What `resolve` may need to know about the run itself, not the target: whether the
+// CLI settles this run's stop (autonomy on, not --manual). Only the design gate reads it.
+export interface GateRun { autonomous: boolean }
+
 export interface GateSpec {
   gate: GateName
   targetKind: 'effort' | 'plan' | 'spec'
-  resolve(root: string, ctx: Ctx, canon: Canon, cfg: Config, target: string): Promise<Result<GateInput>>
+  resolve(root: string, ctx: Ctx, canon: Canon, cfg: Config, target: string, run?: GateRun): Promise<Result<GateInput>>
   // The sha `resolve` would report for the CURRENT content, without doing resolve's work.
   // `decide --approve` needs it to refuse stamping bytes no gate read (D75: staleness at
   // consumption), and resolve() is not usable there — the ship and implement gates run
@@ -131,6 +135,8 @@ export function renderGateRun(
   if (entry.rerolled?.length) ctx.out(kv('rerolled', entry.rerolled.join(' · ')))
   ctx.out(rows('checks', ['name', 'ok', 'detail'],
     entry.checks.map((c) => ({ name: c.name, ok: String(c.ok), detail: c.detail ?? '' }))).join('\n'))
+  // Row 179: what the lane did not run, beside the row that passed without it.
+  for (const h of entry.checks.flatMap((c) => c.held ?? [])) ctx.out(`held: ${h.criterion} — ${h.need} unmet · ${h.satisfy}`)
   const findings = (entry.verdicts ?? []).flatMap((rv) =>
     rv.findings.map((f) => ({
       reviewer: rv.reviewer, blocking: String(f.blocking),
@@ -247,7 +253,7 @@ async function judge(
     return owed !== undefined && !owed.manual
   }
   const canon = loadCanon(root)
-  const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
+  const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target, { autonomous })
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const input = inputR.value
   // Resolved once for every render this run performs — the entry renderers stay pure
@@ -339,8 +345,11 @@ async function judge(
   // A check trust kept from running and one that ran and failed are both `ok: false`, but they
   // are different judgments: granting the command flips the first into the second, and without
   // this term the gate resumed the blocked round forever while the policy re-ran it (F3).
+  // A hold that lifts or lands is a new judgment too (row 179): the lane may stay green while
+  // the set of criteria it did not run changes, and a resumed round would re-render a stale `held:`.
   const checkOk = (cs: GateCheck[]) =>
-    cs.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}`).sort().join('|')
+    cs.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}:${
+      (c.held ?? []).map((h) => h.criterion).sort().join('+')}`).sort().join('|')
   if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') &&
       checkOk(kind.entry.checks) !== checkOk(input.checks) &&
       kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {

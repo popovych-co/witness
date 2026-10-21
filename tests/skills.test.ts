@@ -266,8 +266,36 @@ describe('one autonomy conditional per skill (A8)', () => {
     expect(read('witness-ship')).toContain('`merged:`');
     expect(read('witness-ship')).toContain('Never merge');
     expect(read('witness-design')).toContain('the kept stop `design look`');
-    expect(read('witness-brainstorm')).toContain('the confirmation is theirs');
+    expect(read('witness-brainstorm')).toContain('there is no interview and no confirmation');
     expect(read('witness-ship')).toContain('Any other `merge: held`');
     expect(read('witness-ship')).toContain('ship <plan-id>    # append --manual when the run asked for it');
   });
 });
+
+describe('witness-design under autonomy (A6)', () => {
+  it('authors without the conversation and never opens the look itself', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    for (const s of ['Skip the directions-and-converge conversation', 'Never run `$WITNESS design <spec-id> --open`',
+      'the kept stop `design look`']) expect(body).toContain(s)
+    expect(body.match(/Under `autonomy: on`/g)).toHaveLength(1)
+    expect(body).not.toContain('The session itself stays a conversation')
+  })
+})
+
+describe('witness-brainstorm under autonomy (A6)', () => {
+  it('drafts from the ask with no interview and writes its assumptions down', () => {
+    const body = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    for (const s of ['there is no interview and no confirmation', '`ask: <id> — <text>`',
+      'Write every assumption down', '--ask <id>', 'the ask is parked', 'Never pass `--manual` yourself']) expect(body).toContain(s)
+    expect(body.match(/Under `autonomy: on`/g)).toHaveLength(1)
+    expect(body.indexOf('Under `autonomy: on`')).toBeLessThan(body.indexOf('## Interview protocol'))
+    expect(body).not.toContain('Nothing in this stage changes yet')
+  })
+})
+describe('witness-decompose needs (A10)', () => {
+  it('documents a need that holds criteria and a need that blocks start', () => {
+    const body = readFileSync(skillPath('witness-decompose'), 'utf8')
+    expect(body).toContain('"holds": ["ac-baseline"]')
+    expect(body).toContain('blocks `witness start`')
+  })
+})

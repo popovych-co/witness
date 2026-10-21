@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { adoptedCommits, lastWitnessed, untrailedCommitsFor } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { canonPaths } from '../config.js'
-import { runCriteria } from '../criteria.js'
+import { runCriteria, type CriterionOutcome } from '../criteria.js'
 import { clearDrift, stampDrift } from '../drift.js'
 import { readDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
@@ -69,7 +69,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const doc = findById(canon, id)
   const isLiveSpec = doc?.meta.type === 'spec' && doc.meta.status === 'live'
-  let reverify: { ok: boolean; criteria: unknown } | undefined
+  let reverify: { ok: boolean; criteria: CriterionOutcome[] } | undefined
   if (isLiveSpec && changed && doc) {
     const lane = await runCriteria(root, ctx, doc)
     if (!lane.ok) { renderRefusal(lane.violations).forEach(ctx.err); return EXIT.REFUSED }
@@ -103,7 +103,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     lock.ok && lock.value()
   }
   ctx.out(kv('adopt', `${id} · ${short(currentSha)} · ${commits.length} commit(s) absolved${unreviewed ? ' · unreviewed-amendment' : ''}`))
-  if (reverify) ctx.out(kv('reverify', reverify.ok ? 'lane green — stays live' : 'lane RED — drift stamped immediately (hand-edit, no debounce)'))
+  const held = reverify ? reverify.criteria.filter((c) => c.held !== undefined).length : 0
+  if (reverify) ctx.out(kv('reverify', reverify.ok ? `lane green${held > 0 ? ` · ${held} held` : ''} — stays live` : 'lane RED — drift stamped immediately (hand-edit, no debounce)'))
   ctx.out('help: history: witness log ' + id)
   return reverify && !reverify.ok ? EXIT.FINDINGS : EXIT.OK
 }

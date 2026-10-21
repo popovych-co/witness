@@ -41,6 +41,18 @@ describe('witness dashboard (no-arg)', () => {
     expect(res.stdout).toContain('auth-hardening,feature,2,0')
   })
 
+  it('lists unmet needs with their satisfy command and calls no spec need blocked (A10)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', {
+      needs: [{ id: 'prod', manual: 'production access granted', satisfied: false, holds: ['ac-prod'] }],
+      criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd: 'true' }],
+    })
+    const res = await repo.cli([])
+    expect(res.stdout).toContain('needs[1]{doc,need,effect,satisfy}:')
+    expect(res.stdout).toContain('  auth-refresh,prod,holds ac-prod,witness satisfy auth-refresh --need prod')
+    expect(res.stdout).not.toContain('production access granted unsatisfied')
+  })
+
   it('banners a pending transaction above everything', async () => {
     const repo = await seededRepo()
     repo.write('.witness/txn.json', JSON.stringify({ op: 'write(x)', files: ['specs/x.md'] }))

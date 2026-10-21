@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { EXIT, version, type Ctx } from '../cli.js'
+import { ASK_STREAM, RECAP_CHECK_BOUND, askQueue, askText, type AskStatus } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { departedStreams } from '../departure.js'
 import { designArtifactCurrent, designPending } from '../design.js'
@@ -8,6 +9,7 @@ import { divergence, primaryRoot } from '../gitio.js'
 import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
 import { modelFloorLines } from '../model.js'
+import { unmetNeeds } from '../needs.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { openDeferrals } from '../deferral.js'
@@ -37,13 +39,30 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
       if (!target) out.push({ doc: id, why: `depends: ${dep} (missing)` })
       else if (target.meta.status !== 'live') out.push({ doc: id, why: `depends: ${dep} (${String(target.meta.status)})` })
     }
+    // Row 179. A manual need's one home is the `needs` table (unmetNeeds): a spec's never blocks.
     const needs = Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : []
     for (const n of needs) {
       if (typeof n.env === 'string' && !ctx.env[n.env]) out.push({ doc: id, why: `needs: ${n.env} unset` })
-      if (typeof n.manual === 'string' && n.satisfied !== true) out.push({ doc: id, why: `needs: ${n.manual} unsatisfied` })
     }
   }
   return out
+}
+
+// Row 176. The open part of the ask queue: what `next` may still route, or what waits on a
+// human. Answered and withdrawn asks are history, readable through `witness log asks`.
+export function askRows(root: string): Array<{ id: string; state: string; text: string }> {
+  return askQueue(root)
+    .filter((a) => a.state === 'unanswered' || a.state === 'parked')
+    .map((a) => {
+      const text = askText(a.text)
+      return { id: a.id, state: askState(a), text: text.length > 80 ? `${text.slice(0, 80)}…` : text }
+    })
+}
+
+function askState(a: AskStatus): string {
+  if (a.parked === 'malformed') return 'parked — the arbiter answered malformed twice'
+  if (a.parked === 'bound') return `parked — ${a.checks} of ${RECAP_CHECK_BOUND} recap checks rejected`
+  return a.reason !== undefined ? `queued — recap check ${a.checks} of ${RECAP_CHECK_BOUND} rejected` : 'queued'
 }
 
 // D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
@@ -134,7 +153,8 @@ export function autonomousRows(root: string, canon: Canon): {
   counts: { policy: number; arbiter: number }
   recent: Array<{ target: string; gate: string; round: number; decision: string; by: string; rule: string }>
 } {
-  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id))])
+  // Row 177: a recap check is an arbiter decision too, journaled on the ask queue (A5).
+  const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id)), ASK_STREAM])
   const counts = { policy: 0, arbiter: 0 }
   const latest = new Map<string, DecisionEntry>()
   for (const id of streams) {
@@ -232,6 +252,8 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (effortRows.length) {
     rows('efforts', ['slug', 'class', 'specs', 'plans'], effortRows as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
+  const asks = askRows(root)
+  if (asks.length) rows('asks', ['id', 'state', 'text'], asks).forEach(ctx.out)
   // D124. `next` stops offering a gate a human stopped; this is the surface that keeps it
   // from disappearing instead. High on the screen on purpose — a parked flow is orientation,
   // not a footnote, and `reopen` is the act that brings it back.
@@ -293,6 +315,11 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   }
   const blocked = blockedRows(canon, ctx)
   if (blocked.length) rows('blocked', ['doc', 'why'], blocked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  const unmet = unmetNeeds(canon).map((u) => ({
+    doc: u.doc, need: u.need, satisfy: u.satisfy,
+    effect: u.blocks === 'start' ? 'blocks start' : u.holds.length > 0 ? `holds ${u.holds.join(' · ')}` : 'holds nothing',
+  }))
+  if (unmet.length) rows('needs', ['doc', 'need', 'effect', 'satisfy'], unmet).forEach(ctx.out)
   const reconcile = reconcileRows(root, canon)
   if (reconcile.length) {
     rows('reconcile', ['spec', 'why', 'detail'], reconcile as unknown as Array<Record<string, unknown>>).forEach(ctx.out)

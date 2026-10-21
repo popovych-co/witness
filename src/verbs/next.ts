@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
+import { RECAP_CHECK_BOUND, askQueue, askText, nextAsk } from '../ask.js'
+import { unmetNeeds } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
@@ -214,6 +216,7 @@ export interface NextAction {
   // Printed after the contiguous next:/stage:/target:/note: unit the stage skills read
   // verbatim, so it adds a screen rather than changing one.
   block?: string[]
+  ask?: { id: string; text: string }   // row 176: the ask a brainstorm action answers
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
@@ -643,7 +646,29 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     }
   }
 
+  // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
+  // never waits for other efforts' decompose, design, plan and start rungs. No `target`: it
+  // would have withDeferralNote read a stream named like the ask id.
+  const ask = nextAsk(root, cfg.autonomy)
+  if (ask !== undefined) {
+    // Row 177. A draft the check sent back carries its reason to the next draft.
+    const rejected = ask.reason !== undefined
+      ? { note: `recap check ${ask.checks} of ${RECAP_CHECK_BOUND} rejected — ${ask.reason}${ask.note ? ` · ${ask.note}` : ''}` }
+      : {}
+    return {
+      line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm',
+      ask: { id: ask.id, text: ask.text }, ...rejected,
+    }
+  }
   if (efforts.length === 0) {
+    // Under autonomy nobody is there to interview, so with no ask there is nothing to build —
+    // unless an ask waits for a human, which must be named rather than called absent.
+    if (cfg.autonomy) {
+      const parked = askQueue(root).find((a) => a.state === 'parked')
+      return parked !== undefined
+        ? { line: 'witness check', note: `${parked.id} is parked — a human answers it with witness recap --file <recap.json> --ask ${parked.id} --manual · or withdraws it with witness ask --withdraw ${parked.id}` }
+        : { line: 'witness check', note: 'nothing to build — no unanswered ask is queued · a human queues one with witness ask <text>' }
+    }
     return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   }
   for (const e of efforts) {
@@ -708,7 +733,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     }
     // Registered but unshown is the normal state right after --file. Ask for the show
     // step by name; routing to the gate here would refuse design-unseen every time.
-    return designUnseen(root, cfg.paths, id) !== undefined
+    // Under autonomy the gate needs no sight (row 178): opening the look is the human's act,
+    // at the kept stop, never the session's.
+    return !cfg.autonomy && designUnseen(root, cfg.paths, id) !== undefined
       ? { line: `witness design ${id} --open`, stage: 'design', target: id }
       : { line: `witness gate design ${id}`, target: id,
           ...noteOf(judgeNote(readStream(root, id), 'design', judge)) }
@@ -781,10 +808,27 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
 
   // Starting a flow is tier 3, not tier 1: an approved-but-unstarted plan is new work,
   // and every in-flight flow was already offered above.
-  for (const plan of plans) {
-    if (String(plan.meta.status) === 'approved') {
-      return { line: `witness start ${String(plan.meta.id)}`, target: String(plan.meta.id) }
+  //
+  // Row 179. A plan waiting on a need must not starve the rest: start the first one no unmet
+  // manual or env need blocks. Only when every approved plan waits does the rung route to a
+  // blocked start, whose refusal is the human's stop. Cmd needs are start's to judge — `next`
+  // never executes a command (a recorded residual); an env need is a read of the environment.
+  const approved = plans.filter((p) => String(p.meta.status) === 'approved')
+  if (approved.length > 0) {
+    const manual = unmetNeeds(canon).filter((u) => u.blocks === 'start')
+    const waitsOn = (p: CanonDoc): string[] => {
+      const id = String(p.meta.id)
+      const needs = Array.isArray(p.meta.needs) ? (p.meta.needs as Array<Record<string, unknown>>) : []
+      return [
+        ...manual.filter((u) => u.doc === id).map((u) => `a human runs ${u.satisfy}`),
+        ...needs.flatMap((n) => (typeof n.env === 'string' && !ctx.env[n.env] ? [`${n.env} unset`] : [])),
+      ]
     }
+    const free = approved.find((p) => waitsOn(p).length === 0)
+    if (free !== undefined) return { line: `witness start ${String(free.meta.id)}`, target: String(free.meta.id) }
+    const first = approved[0]!
+    const id = String(first.meta.id)
+    return { line: `witness start ${id}`, target: id, note: `${id} waits on an unmet need — ${waitsOn(first).join(' · ')}` }
   }
   // Rule B — the ladder is exhausted. Same line as rule A (canon errors, the early
   // return above) but a different state; the note is what tells them apart on screen
@@ -898,6 +942,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
+  if (action.ask) ctx.out(kv('ask', `${action.ask.id} — ${askText(action.ask.text)}`))
   if (action.note) ctx.out(kv('note', action.note))
   if (action.block) action.block.forEach((l) => ctx.out(l))
   // Whether this session is already in `home:` is a fact the CLI holds both halves of, so

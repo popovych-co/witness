@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
+import { reservedId } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { ID_RE } from '../dsl.js'
 import { writeDoc } from '../fm.js'
@@ -35,8 +36,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('id', 'unknown-id', oldId, 'an existing canon doc')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
+  // Final review F7: a doc squatting a reserved id shares witness's stream, and a rename moves
+  // the stream — so it would carry the ask queue (or the floor pins) away with the doc.
+  const squatted = reservedId(oldId)
+  if (squatted !== undefined) {
+    renderRefusal([v('id', 'reserved', oldId, `${oldId} is ${squatted} — renaming would move it · edit the doc's id by hand then witness adopt it`)]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   if (!ID_RE.test(newId)) {
     renderRefusal([v('id', 'id-charset', newId, 'ids match ^[a-z0-9-]+$')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  const reserved = reservedId(newId)
+  if (reserved !== undefined) {
+    renderRefusal([v('id', 'id-taken', newId, `a new id — ${newId} is ${reserved}`)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   if (findById(canon, newId) || streamExists(root, newId)) {

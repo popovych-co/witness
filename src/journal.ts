@@ -17,6 +17,11 @@ export type EntryType =
   // its flow ends, retyped when the pattern turns out to be a lens problem, and closed by
   // evidence (discharged) or by an explicit human cause (dismissed).
   | 'deferral' | 'deferral-moved' | 'deferral-retyped' | 'deferral-discharged' | 'deferral-dismissed'
+  // Row 176. The human's ask, queued on witness's own `asks` stream, and its withdrawal.
+  | 'ask' | 'ask-withdrawn'
+  // Row 179. A human's assertion that a manual need is met: journaled, never a frontmatter
+  // rewrite, so no content sha moves when the world changes.
+  | 'need-satisfied'
 
 export interface Entry {
   v: 1
@@ -32,6 +37,7 @@ export interface RecapEntry extends Entry {
   non_goals: Array<{ id: string; text: string }>
   constraints: Array<{ id: string; text: string }>
   slices: string[]
+  ask?: string   // row 176: the ask this recap answers
 }
 
 export type StatusCause = 'gate-approve' | 'start' | 'ship' | 'merge' | 'abandon' | 'supersede'

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { EXIT } from './cli.js'
 import { loadConfig, loadLocalConfig } from './config.js'
-import { runCriteria, type CriteriaResult } from './criteria.js'
+import { criterionMark, runCriteria, type CriteriaResult, type CriterionOutcome } from './criteria.js'
 import { serializeDoc, writeDoc } from './fm.js'
 import { acquireLock } from './lock.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
@@ -29,8 +29,19 @@ export function driftEntry(run: CriteriaResult, runId: string): { t: 'drift-chec
     artifact_sha: run.sha,
     ok: run.ok,
     tags: run.tagCount,
-    criteria: run.criteria.map((c) => ({ id: c.id, kind: c.kind, ok: c.ok, detail: c.detail })),
+    criteria: run.criteria.map(criterionRecord),
   }
+}
+
+// Row 179: the journaled record of one criterion carries its hold, so a reader of the drift
+// history sees what was not run rather than an unexplained `ok: false` on a passing spec.
+const criterionRecord = (c: CriterionOutcome) =>
+  ({ id: c.id, kind: c.kind, ok: c.ok, detail: c.detail, ...(c.held !== undefined ? { held: c.held } : {}) })
+
+// ` · <n> held` for a summary line, or nothing when the sweep held nothing.
+const heldSuffix = (runs: CriteriaResult[]): string => {
+  const n = runs.reduce((k, r) => k + r.criteria.filter((c) => c.held !== undefined).length, 0)
+  return n > 0 ? ` · ${n} held` : ''
 }
 
 export function trailingFails(entries: Entry[]): number {
@@ -129,7 +140,7 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   // reproduces the exact misdiagnosed 400 this release exists to kill.
   const localR = loadLocalConfig(root)
   if (!localR.ok) { renderRefusal(localR.violations).forEach(ctx.err); return EXIT.REFUSED }
-  const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${c.ok ? 'ok' : 'fail'}`).join(' · ') : 'unrunnable'})\n`
+  const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${criterionMark(c)}`).join(' · ') : 'unrunnable'})\n`
   const invoked = invokeReviewer(ctx, hxR.value.harness, {
     cwd: root, prompt,
     timeoutMs: cfgR.ok ? cfgR.value.gates.reviewerTimeoutMs : undefined,
@@ -145,7 +156,7 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
     v: 1 as const, t: 'drift-check' as const, run_id: newRunId(), artifact: specId,
     artifact_sha: lane.ok ? lane.value.sha : canonicalSha(doc.meta, doc.body),
     ok: lane.ok && lane.value.ok, tags: lane.ok ? lane.value.tagCount : 0,
-    criteria: lane.ok ? lane.value.criteria.map((c) => ({ id: c.id, kind: c.kind, ok: c.ok, detail: c.detail })) : [],
+    criteria: lane.ok ? lane.value.criteria.map(criterionRecord) : [],
     deep: true,
     ...(violations.length === 0 && parsed.ok ? { verdict: parsed.value } : { malformed: violations }),
   }
@@ -213,7 +224,7 @@ export async function runDrift(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   if (readonly) {
-    ctx.out(kv('drift-summary', `${failing.length}/${runs.length} failing · mode read-only`))
+    ctx.out(kv('drift-summary', `${failing.length}/${runs.length} failing${heldSuffix(runs)} · mode read-only`))
     ctx.out('help: read-only run — the next local check --drift journals and stamps')
     return failing.length ? EXIT.FINDINGS : EXIT.OK
   }
@@ -254,7 +265,7 @@ export async function runDrift(ctx: Ctx, argv: string[]): Promise<number> {
     const stamped = actions.filter((a) => a.stamp).length
     const cleared = actions.filter((a) => a.clear).length
     const suffix = `${stamped ? ` · stamped ${stamped}` : ''}${cleared ? ` · cleared ${cleared}` : ''}`
-    ctx.out(kv('drift-summary', `${failing.length}/${runs.length} failing · mode local${suffix}`))
+    ctx.out(kv('drift-summary', `${failing.length}/${runs.length} failing${heldSuffix(runs)} · mode local${suffix}`))
   } finally {
     lock.ok && lock.value()
   }

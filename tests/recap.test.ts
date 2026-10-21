@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { latestRecap, readStream } from '../src/journal.js'
+import { askQueue } from '../src/ask.js'
+import { appendEntry, latestRecap, readStream } from '../src/journal.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
 
 const RECAP = {
@@ -84,5 +85,48 @@ describe('witness recap', () => {
     expect(res.code).toBe(0)
     expect(readStream(repo.root, 'auth-hardening')).toHaveLength(2)
     expect(latestRecap(repo.root, 'auth-hardening')?.goals).toHaveLength(2)
+  })
+})
+
+describe('recap --ask (A9)', () => {
+  it('records the ask a recap answers', async () => {
+    const repo = await initialized()
+    await repo.cli(['ask', 'Refresh tokens rotate before expiry'])
+    const res = await repo.cli(['recap', '--file', withRecap(repo, RECAP), '--ask', 'a1'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('ask: a1 — answered')
+    expect(latestRecap(repo.root, 'auth-hardening')?.ask).toBe('a1')
+    expect(askQueue(repo.root)[0]).toMatchObject({ id: 'a1', state: 'answered', effort: 'auth-hardening' })
+    expect(repo.git('log', '-1', '--format=%s')).toBe('recap(auth-hardening): feature · ask a1')
+  })
+
+  it('refuses an unknown answered or withdrawn ask and --ask with --amend', async () => {
+    const repo = await initialized()
+    await repo.cli(['ask', 'one'])
+    await repo.cli(['ask', 'two'])
+    expect((await repo.cli(['recap', '--file', withRecap(repo, RECAP), '--ask', 'a9'])).stderr).toContain('unknown-ask')
+    await repo.cli(['recap', '--file', withRecap(repo, RECAP), '--ask', 'a1'])
+    const twice = await repo.cli(['recap', '--file', withRecap(repo, { ...RECAP, effort: 'other' }), '--ask', 'a1'])
+    expect(twice.code).toBe(2)
+    expect(twice.stderr).toContain('ask-answered')
+    expect(twice.stderr).toContain('auth-hardening')
+    await repo.cli(['ask', '--withdraw', 'a2'])
+    expect((await repo.cli(['recap', '--file', withRecap(repo, { ...RECAP, effort: 'other' }), '--ask', 'a2'])).stderr)
+      .toContain('ask-withdrawn')
+    expect((await repo.cli(['recap', '--amend', '--file', withRecap(repo, RECAP), '--ask', 'a2'])).stderr).toContain('ask-amend')
+  })
+
+  it('an answered ask cannot be withdrawn and stays answered when its effort is abandoned', async () => {
+    const repo = await initialized()
+    await repo.cli(['ask', 'one'])
+    await repo.cli(['recap', '--file', withRecap(repo, RECAP), '--ask', 'a1'])
+    const w = await repo.cli(['ask', '--withdraw', 'a1'])
+    expect(w.code).toBe(2)
+    expect(w.stderr).toContain('ask-answered')
+    expect(w.stderr).toContain('witness abandon auth-hardening')
+    appendEntry(repo.root, 'auth-hardening', {
+      v: 1, t: 'human-decision', gate: 'effort', artifact: 'auth-hardening', round: 0, decision: 'abandon-effort',
+    })
+    expect(askQueue(repo.root)[0]!.state).toBe('answered')
   })
 })

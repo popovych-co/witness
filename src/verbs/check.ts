@@ -12,7 +12,7 @@ import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
-import { FLOOR_STREAM } from '../floor.js'
+import { ASK_STREAM, reservedId } from '../ask.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { contentAtSha } from '../history.js'
@@ -215,7 +215,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   for (const doc of canon.docs) {
     const needs = Array.isArray(doc.meta.needs) ? doc.meta.needs : []
     if (needs.length === 0) continue
-    for (const r of await evaluateNeeds(root, ctx, needs)) {
+    for (const r of await evaluateNeeds(root, ctx, needs, doc)) {
       if (r.status === 'ok') continue
       const rule = r.status === 'unmet' ? 'need-unmet' : `need-${r.status}`
       findings.push(f('warn', 'needs', `${doc.rel}: ${r.label}`, rule, r.detail))
@@ -240,7 +240,11 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (!file.endsWith('.jsonl')) continue
       const id = file.slice(0, -'.jsonl'.length)
       const entries = readStream(root, id)
-      if (entries[0]?.t === 'recap' || id === FLOOR_STREAM) continue
+      if (id === ASK_STREAM && entries[0] !== undefined && entries[0].t !== 'ask') {
+        findings.push(f('error', 'journal', file, 'reserved-stream-taken', `witness's ask queue is held by a ${entries[0].t} history — witness ask refuses until it moves`))
+        continue
+      }
+      if (entries[0]?.t === 'recap' || reservedId(id) !== undefined) continue
       if (findById(canon, id)) continue
       // D166. A departed spec's stream is not an orphan — it is lineage by construction, what a
       // finished plan's parent and `log --lineage` resolve against. It speaks only while it

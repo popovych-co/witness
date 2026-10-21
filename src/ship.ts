@@ -6,6 +6,7 @@ import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
+import { liftedHolds, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
@@ -23,7 +24,7 @@ import { settleStop, settledCode } from './settle.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
 
-export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, baseMoved = false): ShipPhase {
+export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, baseMoved = false, holdLifted = false): ShipPhase {
   // A PR exists, but the watch is only legitimate while the verdict still describes both
   // this tree AND this base. Either one moving re-arms the gate — otherwise a rebase (or
   // any post-approval edit) merges a tree no battery ever read, and re-running
@@ -33,7 +34,9 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
   // detect the moved base forever and never rebase — only the gate phase rebases, and it
   // is the rebase that finally moves the tree.
   if (plan.meta.pr !== undefined) {
-    return gateSettled(entries, 'ship', treeSha) && !baseMoved ? 'watch' : 'gate'
+    // Final review F1: a hold lifted since the ship gate ran is a verdict that never ran a
+    // criterion now owed, so it re-gates exactly as a moved tree does.
+    return gateSettled(entries, 'ship', treeSha) && !baseMoved && !holdLifted ? 'watch' : 'gate'
   }
   const last = lastGateRun(entries, 'ship')
   if (!last) return 'gate'
@@ -47,7 +50,7 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
   if (decision.decision !== 'approve') return 'gate'
   // An approval is against a base as well as a tree — opening the PR on a base that has
   // since moved is the same stale-review bug one step earlier.
-  return baseMoved ? 'gate' : 'pr'
+  return baseMoved || holdLifted ? 'gate' : 'pr'
 }
 
 function gh(ctx: Ctx, cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string } {
@@ -73,7 +76,16 @@ export function existingPr(ctx: Ctx, root: string, branch: string): number | und
   }
 }
 
-export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string): Result<number> {
+// Row 179. A PR shipped while a need held criteria says what was not verified, so the human
+// reading the PR is not told the spec was proven where it was not.
+function prBody(plan: CanonDoc, held: HeldRow[]): string {
+  const head = `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`
+  if (held.length === 0) return head
+  return [head, '', 'Held — not verified while a need is unmet:',
+    ...held.map((h) => `- ${h.criterion}: ${h.need} unmet — ${h.satisfy}`)].join('\n')
+}
+
+export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string, held: HeldRow[] = []): Result<number> {
   const branch = branchName(String(plan.meta.id))
   if (!tryGit(root, 'remote', 'get-url', 'origin').ok) {
     return refuse([v('origin', 'no-remote', '(none)', 'an origin remote — gh pr create needs one')])
@@ -90,7 +102,7 @@ export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, par
   if (found !== undefined) return ok(found)
   const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
     '--title', `${String(plan.meta.id)}: ${parentSummary}`,
-    '--body', `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`])
+    '--body', prBody(plan, held)])
   if (!created.ok) {
     return refuse([v('gh', 'pr-create-failed', created.out.slice(0, 200),
       'gh authenticated with push access — witness check probes gh auth status')])
@@ -354,8 +366,14 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
   const moved = baseMoved(wt, root, shipBranch)
   const baseR = diffBase(wt, cfgR.value)
   let reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
-  let phase = shipPhase(plan, entries, reviewedSha, moved)
+  const lifted = (): string[] =>
+    liftedHolds(criteriaOwner(loadCanon(root), planId), lastGateRun(readStream(root, planId), 'ship'))
+  const liftedNow = lifted()
+  let phase = shipPhase(plan, entries, reviewedSha, moved, liftedNow.length > 0)
   if (moved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
+  if (liftedNow.length > 0 && phase === 'gate') {
+    ctx.out(kv('ship', `${liftedNow.join(' · ')} no longer held — re-running the ship gate so it runs`))
+  }
   // Row 174. Under autonomy an approval settled in this run carries straight on to the PR,
   // so the phase is derived again from the world as it now stands — the gate phase may
   // just have rebased, which moves both the tree and the base terms.
@@ -365,7 +383,7 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
     entries = readStream(root, planId)
     const b = diffBase(wt, cfgR.value)
     reviewedSha = b.ok ? diffReviewedSha(wt, b.value) : undefined
-    return shipPhase(plan, entries, reviewedSha, baseMoved(wt, root, shipBranch))
+    return shipPhase(plan, entries, reviewedSha, baseMoved(wt, root, shipBranch), lifted().length > 0)
   }
 
   if (phase === 'gate') {
@@ -419,7 +437,7 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
     const up = gateSpec('ship')?.upstreamOf?.(root, canon, planId)
     // D154. The ship gate runs criteria too, so its approve carries the same two prices.
     const untrustedCmds = untrustedCmdsFor(root, criteriaOwner(canon, planId))
-    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale: false, untrustedCmds })
+    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale: liftedNow.length > 0, untrustedCmds })
     if (d) renderDecision(d).forEach((l) => ctx.out(l))
     else ctx.out(cmd('help', liveExits('ship', planId, entries, false, up)))
     return EXIT.FINDINGS
@@ -438,7 +456,9 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
       }
       ctx.out(kv('commit', `${planId}: ${parentSummary}`))
     }
-    const created = createPr(ctx, wt, root, plan!, parentSummary)
+    // What the approved run did not run, from its own record — the one derivation (row 179).
+    const held = (lastGateRun(entries, 'ship')?.checks ?? []).flatMap((c) => c.held ?? [])
+    const created = createPr(ctx, wt, root, plan!, parentSummary, held)
     if (!created.ok) { renderRefusal(created.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const stamped = stampPr(ctx, root, planId, created.value)
     if (!stamped.ok) { renderRefusal(stamped.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
