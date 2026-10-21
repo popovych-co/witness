@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { cpSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it, beforeAll } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, putVerdict,
   seededRepo, singleConfig, TOKEN_BROKEN, TOKEN_FIXED, witnessDesign, writeDesign, writePlan, writeSpec,
@@ -59,10 +59,6 @@ function treeClean(worktree: string) {
   const files = [...new Set([...tracked.split('\n'), ...untracked.split('\n')].filter(Boolean))]
   return { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] }
 }
-
-beforeAll(() => {
-  spawnSync('npm', ['run', 'build'], { cwd: pkgRoot, stdio: 'ignore' })
-}, 120_000)
 
 describe('the design lens, end to end', () => {
   it('approved design → capture → design-reviewer blocks → revise → green, and converges through a crash', async () => {

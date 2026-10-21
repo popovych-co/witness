@@ -71,7 +71,6 @@ function withCrash(point: string, args: string[], opts: { cwd?: string; expect?:
 }
 
 beforeAll(() => {
-  execFileSync('npm', ['run', 'build'], { cwd: resolve(import.meta.dirname, '../..') })
   root = fakeScenario()                                     // reuse the tmp-dir maker
   scenario = fakeScenario()
   env = {
