@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ok, refuse, v, type Result } from './refusal.js'
 
@@ -27,9 +27,13 @@ export function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
+// A symlink at the lock path is never a holder: `wx` refuses it (EEXIST) while a read
+// follows it, so a dangling one would read `absent` forever. It counts as unreadable and is
+// replaced after the grace — the link itself, never what it points at.
 function readHolder(p: string): number | 'absent' | 'unreadable' {
   let text: string
   try {
+    if (lstatSync(p).isSymbolicLink()) return 'unreadable'
     text = readFileSync(p, 'utf8')
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable'
@@ -42,38 +46,58 @@ function readHolder(p: string): number | 'absent' | 'unreadable' {
   }
 }
 
+// `unlinkSync`, not `rmSync`: Node's `rmSync({ force })` follows a dangling symlink, meets
+// ENOENT and silently leaves the link in place. A lock path that is a directory fails here,
+// and the caller refuses instead of looping.
+const steal = (p: string): boolean => {
+  try {
+    unlinkSync(p)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+  }
+}
+
 export function acquireLock(root: string, pid = process.pid, waitMs = LOCK_WAIT_MS): Result<() => void> {
   mkdirSync(join(root, '.witness'), { recursive: true })
   const p = lockPath(root)
   const release = () => rmSync(p, { force: true })
+  const unwritable = (why: string): Result<() => void> => refuse([v('.witness/lock', 'lock-unwritable', why,
+    'a writable .witness directory — witness writes its lock there before any state write')])
   const t0 = Date.now()
   let unreadableSince: number | undefined
   for (;;) {
     try {
       writeFileSync(p, JSON.stringify({ pid }), { flag: 'wx' })
       return ok(release)
-    } catch { /* held */ }
+    } catch (e) {
+      // Only an existing file is a holder. Anything else (a read-only dir, a full disk) would
+      // read back `absent` and spin: no wait can fix it, so it refuses now.
+      const code = (e as NodeJS.ErrnoException).code
+      if (code !== 'EEXIST') return unwritable(code ?? String(e))
+    }
     const holder = readHolder(p)
-    if (holder === 'absent') continue                       // released between our write and our read
     if (holder === pid) return ok(release)
     if (holder === 'unreadable') {
       unreadableSince ??= Date.now()
       if (Date.now() - unreadableSince >= UNREADABLE_GRACE_MS) {
-        rmSync(p, { force: true })
+        if (!steal(p)) return unwritable('the unreadable lock could not be removed')
         unreadableSince = undefined
         continue
       }
-    } else if (!isAlive(holder)) {
-      rmSync(p, { force: true })
+    } else if (typeof holder === 'number' && !isAlive(holder)) {
+      if (!steal(p)) return unwritable(`the dead holder's lock could not be removed`)
       continue
-    } else {
+    } else if (typeof holder === 'number') {
       unreadableSince = undefined
     }
+    // `absent` (released between our write and our read) retries at once — but under the
+    // same deadline, so no shape of the lock path can spin past the wait.
     if (Date.now() - t0 >= waitMs) {
-      const by = holder === 'unreadable' ? 'a write in progress' : `pid ${holder}`
+      const by = typeof holder === 'number' ? `pid ${holder}` : 'a write in progress'
       return refuse([v('.witness/lock', 'locked', `held by ${by} · waited ${waitMs}ms`,
         'one clone one writer — the other witness invocation held it past the wait · run this again when it finishes')])
     }
-    pause(POLL_MS)
+    if (holder !== 'absent') pause(POLL_MS)
   }
 }

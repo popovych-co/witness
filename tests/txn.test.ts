@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireLock } from '../src/lock.js'
 import { completeTxn, guardTxn, pendingTxn, rollbackTxn, withTxn } from '../src/txn.js'
@@ -67,6 +67,34 @@ describe('acquireLock waits (B3)', () => {
     expect(!r.ok && r.violations[0]!.got).toBe(`held by pid ${holder.pid} · waited 300ms`)
     holder.kill()
   }, 15_000)
+
+  it('a lock it cannot write refuses at once instead of spinning', () => {
+    const repo = seeded()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    chmodSync(join(repo.root, '.witness'), 0o555)
+    try {
+      const t0 = Date.now()
+      const r = acquireLock(repo.root, process.pid, 5_000)
+      expect(!r.ok && r.violations[0]!.rule).toBe('lock-unwritable')
+      expect(Date.now() - t0).toBeLessThan(1_000)
+    } finally {
+      chmodSync(join(repo.root, '.witness'), 0o755)
+    }
+  })
+
+  it('a dangling symlink at the lock path is unreadable · taken after the grace and replaced by a file', () => {
+    const repo = seeded()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    symlinkSync(join(repo.root, 'nowhere'), join(repo.root, '.witness', 'lock'))
+    const t0 = Date.now()
+    const r = acquireLock(repo.root, process.pid, 5_000)
+    expect(r.ok).toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
+    expect(Date.now() - t0).toBeLessThan(4_000)
+    expect(lstatSync(join(repo.root, '.witness', 'lock')).isSymbolicLink()).toBe(false)
+    expect(existsSync(join(repo.root, 'nowhere'))).toBe(false)
+    if (r.ok) r.value()
+  })
 
   it('reads an unreadable lock as a write in progress and takes it after a grace', () => {
     const repo = seeded()
