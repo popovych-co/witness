@@ -3,4 +3,4 @@
 # context). Silent everywhere that isn't a witness repo; failures swallowed:
 # session start must never hang or die on this.
 [ -f witness.config.yaml ] || exit 0
-${WITNESS_BIN:-npx -y @popovych.co/witness@0.17.0} 2>/dev/null || true
+${WITNESS_BIN:-npx -y @popovych.co/witness@0.18.0} 2>/dev/null || true
