@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
+import { askText, nextAsk } from '../ask.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
@@ -214,6 +215,7 @@ export interface NextAction {
   // Printed after the contiguous next:/stage:/target:/note: unit the stage skills read
   // verbatim, so it adds a screen rather than changing one.
   block?: string[]
+  ask?: { id: string; text: string }   // row 176: the ask a brainstorm action answers
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
@@ -643,7 +645,21 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config): 
     }
   }
 
+  // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
+  // never waits for other efforts' decompose, design, plan and start rungs. No `target`: it
+  // would have withDeferralNote read a stream named like the ask id.
+  const ask = nextAsk(root, cfg.autonomy)
+  if (ask !== undefined) {
+    return {
+      line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm',
+      ask: { id: ask.id, text: ask.text },
+    }
+  }
   if (efforts.length === 0) {
+    // Under autonomy nobody is there to interview, so with no ask there is nothing to build.
+    if (cfg.autonomy) {
+      return { line: 'witness check', note: 'nothing to build — no unanswered ask is queued · a human queues one with witness ask <text>' }
+    }
     return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   }
   for (const e of efforts) {
@@ -898,6 +914,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
+  if (action.ask) ctx.out(kv('ask', `${action.ask.id} — ${askText(action.ask.text)}`))
   if (action.note) ctx.out(kv('note', action.note))
   if (action.block) action.block.forEach((l) => ctx.out(l))
   // Whether this session is already in `home:` is a fact the CLI holds both halves of, so

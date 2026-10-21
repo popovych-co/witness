@@ -111,3 +111,10 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
     lock.value()
   }
 }
+
+// The one derivation of which ask is routed next: the oldest still open. A parked ask waits
+// for a human, so it is routable whenever a human interviews and skipped under autonomy,
+// where re-offering it would repeat a command `recap` refuses.
+export function nextAsk(root: string, autonomous: boolean): AskStatus | undefined {
+  return askQueue(root).find((a) => a.state === 'unanswered' || (a.state === 'parked' && !autonomous))
+}

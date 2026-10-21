@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { EXIT, version, type Ctx } from '../cli.js'
+import { askQueue, askText } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { departedStreams } from '../departure.js'
 import { designArtifactCurrent, designPending } from '../design.js'
@@ -44,6 +45,17 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
     }
   }
   return out
+}
+
+// Row 176. The open part of the ask queue: what `next` may still route, or what waits on a
+// human. Answered and withdrawn asks are history, readable through `witness log asks`.
+export function askRows(root: string): Array<{ id: string; state: string; text: string }> {
+  return askQueue(root)
+    .filter((a) => a.state === 'unanswered' || a.state === 'parked')
+    .map((a) => {
+      const text = askText(a.text)
+      return { id: a.id, state: 'queued', text: text.length > 80 ? `${text.slice(0, 80)}…` : text }
+    })
 }
 
 // D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
@@ -232,6 +244,8 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (effortRows.length) {
     rows('efforts', ['slug', 'class', 'specs', 'plans'], effortRows as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }
+  const asks = askRows(root)
+  if (asks.length) rows('asks', ['id', 'state', 'text'], asks).forEach(ctx.out)
   // D124. `next` stops offering a gate a human stopped; this is the surface that keeps it
   // from disappearing instead. High on the screen on purpose — a parked flow is orientation,
   // not a footnote, and `reopen` is the act that brings it back.
