@@ -17,7 +17,7 @@ import { loadMatrix, resolveModel } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { anchorMenu, type Reviewed } from './verdict.js'
-import { basisSha } from './delta.js'
+import { basisSha, deltaBlock, planDelta } from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -134,6 +134,7 @@ export function renderGateRun(
   ctx.out(kv('round', `${entry.round} of ${budget}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
   ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
   ctx.out(kv('model', `${entry.model} · calibration: ${entry.calibration}${entry.cached ? ' · cached' : ''}`))
+  if (entry.delta) ctx.out(kv('review', `delta since round ${entry.delta.round}`))
   if (entry.skipped?.length) ctx.out(kv('skipped', entry.skipped.join(' · ')))
   if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
   if (entry.rerolled?.length) ctx.out(kv('rerolled', entry.rerolled.join(' · ')))
@@ -316,12 +317,23 @@ async function judge(
   // below spent three releases never firing.
   const pin = chain[0]!
   const basis = basisSha(lenses, input.snapshot?.context ?? '', pin, harness.name)
-  const key: GateKey = {
-    reviewed_sha: input.reviewedSha, gate: spec.gate,
-    prompts_sha: promptsSha(lenses, [pinsText, deferralsText].filter((t) => t !== '').join('') || undefined),
-    pin, witness: version(),
+  const setupText = [pinsText, deferralsText].filter((t) => t !== '').join('')
+  const setupSha = promptsSha(lenses, setupText || undefined)          // the full-review prompts_sha
+  const fullKey: GateKey = {
+    reviewed_sha: input.reviewedSha, gate: spec.gate, prompts_sha: setupSha, pin, witness: version(),
     harness: harness.name,
   }
+  // Row 185. A lens that reads an override (the design-reviewer's captures) always reviews in
+  // full: its content has no tree, and the base's findings from it mean nothing to the others.
+  const inDelta = (lens: string) => input.lensOverrides?.[lens]?.reviewed === undefined
+  // Full review first. A full verdict for exactly this content and setup is resumed or replayed
+  // as before; only a fresh full key plans a delta. The delta block joins `prompts_sha`, and
+  // `deltaBase` never picks a same-content round, so a re-gate of what a delta round read
+  // renders the same block and lands on that round's key.
+  const delta = !flags.fresh && appendKind(entries, spec.gate, fullKey).kind !== 'fresh' ? undefined
+    : planDelta(root, entries, spec.gate, { reviewedSha: input.reviewedSha, snapshot: input.snapshot, basis, reviewed: input.reviewed, inDelta })
+  const block = delta ? deltaBlock(delta) : ''
+  const key: GateKey = { ...fullKey, prompts_sha: delta ? promptsSha(lenses, setupText + block) : setupSha }
   // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
   // Content moving is a legitimate, self-explaining reason. A flag is not — `--fresh`
   // discarded a human decision with nothing printed and nothing journaled about it, and
@@ -416,8 +428,10 @@ async function judge(
     // unreliable battery from re-running for free forever instead. Row 106: "same setup"
     // always meant the same PIN, and comparing the answering rung meant two malformed
     // fallen-back rounds never matched, which is the one thing this exists to stop.
+    // Row 185: the SETUP, not the prompt — two delta rounds over changing content carry
+    // different blocks under one setup, and comparing prompts_sha would never fire on them.
     const sameSetup = (r: GateRunEntry) =>
-      r.outcome === 'malformed' && samePin(r) && r.prompts_sha === key.prompts_sha
+      r.outcome === 'malformed' && samePin(r) && (r.setup_sha ?? r.prompts_sha) === setupSha
     if (tail.length === 2 && tail.every(sameSetup)) {
       renderRefusal([v('reviewers', 'malformed-streak',
         `${tail.length} consecutive malformed rounds on ${tail[1]!.model}`,
@@ -452,7 +466,7 @@ async function judge(
       const menu = anchorMenu(reviewed)
       return {
         name: lens.name, reviewed,
-        prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
+        prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${delta && inDelta(lens.name) ? block : ''}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
       }
     })
     const ranR = await runBattery(ctx, harness, chain, composed, { cwd: root, ...extras })
@@ -503,6 +517,9 @@ async function judge(
       return EXIT.BLOCKED
     }
 
+    // A replayed round carries the mark of the round it replays; a judged one, the base it was judged against.
+    const deltaMark = kind.kind === 'cached' ? kind.from.delta
+      : delta ? { round: delta.baseRound, run: delta.base.run_id } : undefined
     const entry: GateRunEntry = {
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
@@ -518,6 +535,8 @@ async function judge(
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
       ...(input.snapshot ? { reviewed_tree: input.snapshot.tree, basis_sha: basis } : {}),
+      ...(key.prompts_sha !== setupSha ? { setup_sha: setupSha } : {}),
+      ...(deltaMark ? { delta: deltaMark } : {}),
       checks: input.checks,
       ...(verdicts.length ? { verdicts } : {}),
       ...(malformed.length ? { malformed } : {}),

@@ -61,6 +61,11 @@ export interface GateRunEntry {
   // Optional because every entry before C3 lacks them — such a round is never a delta base.
   reviewed_tree?: string
   basis_sha?: string
+  // Row 185. `prompts_sha` without the delta block, written only when the two differ — the
+  // malformed-streak brake compares setups, and two delta rounds over changing content carry
+  // different blocks under one setup. `delta` names the round this one was judged against.
+  setup_sha?: string
+  delta?: { round: number; run: string }
   checks: GateCheck[]
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
