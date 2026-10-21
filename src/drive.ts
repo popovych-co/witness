@@ -9,7 +9,7 @@ import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
 import { computeNext, type NextAction } from './verbs/next.js'
-import { DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
+import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
@@ -163,6 +163,7 @@ export async function spawnSession(
   // Row 180: the marker is the child's target and its recursion guard in one.
   const run = resolveSpawn(bin, args, {
     ...ctx.env, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
+    [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
   })
   if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `

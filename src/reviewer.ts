@@ -9,7 +9,7 @@ import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { resolveSpawn } from './spawn.js'
-import { driveChild } from './drive-presence.js'
+import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
 
 export const PROMPT_NAMES = [
@@ -119,6 +119,8 @@ export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; 
 // attended gate must never block silently for hours.
 export const REVIEWER_WAIT_MAX_MS = SINGLE_WAIT_MAX_MS
 const OUTSIDE_DRIVE_WANT = 'wait for the reset — witness drive waits it out on its own'
+// How long before its session's deadline a reviewer stops waiting: room to journal and exit.
+const SESSION_MARGIN_MS = 60_000
 
 const REVIEWER_TIMEOUT_MS = 600_000
 // One stalled call must not cost a whole run: a full calibration battery is ~200
@@ -244,9 +246,12 @@ export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: Invo
     if (!limit) return c
     // A wait spends no timeout retry: the same rung is asked again after the reset.
     const wait = waitFor(limit, streak, clock.now())
-    if (!inDrive || waited + wait > REVIEWER_WAIT_MAX_MS) {
+    // Inside a drive session the wait must also end before drive kills the session (F14).
+    const deadline = Number(ctx.env[DRIVE_DEADLINE_ENV])
+    const outlives = Number.isFinite(deadline) && clock.now() + wait + SESSION_MARGIN_MS > deadline
+    if (!inDrive || waited + wait > REVIEWER_WAIT_MAX_MS || outlives) {
       return refuse([v(p.cmd, 'usage-limit', limit.text, inDrive
-        ? 'a reset inside the 6h reviewer wait — re-run the gate after it'
+        ? 'a reset inside the 6h reviewer wait and this session\'s time — re-run the gate after it'
         : OUTSIDE_DRIVE_WANT)])
     }
     ctx.err(`reviewer: usage limit — waiting ${duration(wait)} · ${limit.text}`)

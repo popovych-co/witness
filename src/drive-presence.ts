@@ -8,6 +8,9 @@ import { ok, refuse, v, type Result } from './refusal.js'
 // `witness drive` refuses) and the child's scope (its `next` answers for that target alone).
 export const DRIVE_ENV = 'WITNESS_DRIVE'
 export const TARGETLESS = '-'     // the marker's value for work with no target
+// Final review F14: when drive will kill this session (epoch ms). A reviewer inside it never
+// waits past that — a wait drive kills mid-way leaves an orphaned gate and a stuck target.
+export const DRIVE_DEADLINE_ENV = 'WITNESS_DRIVE_DEADLINE'
 
 // unset → undefined · '-' → { target: undefined } · else → { target: <value> }
 export function driveChild(env: Record<string, string | undefined>): { target: string | undefined } | undefined {

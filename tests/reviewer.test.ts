@@ -386,3 +386,31 @@ describe('usage limits on the claude harness (B4)', () => {
     expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['usage-limit', LIMIT])
   })
 })
+
+// Final review F14. drive kills a session at drive.sessionTimeoutMs; a reviewer inside it
+// that waits past that is killed mid-wait and leaves an orphaned gate. Drive hands each
+// session its deadline, and a wait that cannot end before it refuses instead.
+describe('a reviewer wait fits its session (B4)', () => {
+  const LIMIT = "You've hit your session limit · resets 2pm (America/Los_Angeles)"   // 1h31m away
+  const START = Date.parse('2026-10-19T19:30:00Z')
+  const setup = async (deadline: number) => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    writeFileSync(join(scenario, 'pi-error'), LIMIT)
+    writeFileSync(join(scenario, 'pi-error-calls'), '1')
+    const ctx = fakeCtx(repo.root, { env: { ...gateEnv(scenario), WITNESS_DRIVE: 'p1', WITNESS_DRIVE_DEADLINE: String(deadline) } })
+    return { repo, ctx, clock: fakeClock(START) }
+  }
+  it('refuses a wait that outlives the session', async () => {
+    const { repo, ctx, clock } = await setup(START + 30 * 60_000)
+    const r = await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })
+    expect(!r.ok && r.violations[0]!.rule).toBe('usage-limit')
+    expect(clock.slept).toEqual([])
+  })
+  it('waits when the reset comes inside the session', async () => {
+    const { repo, ctx, clock } = await setup(START + 3 * 3_600_000)
+    expect((await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })).ok).toBe(true)
+    expect(clock.slept).toEqual([5_460_000])
+  })
+})

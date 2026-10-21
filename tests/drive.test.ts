@@ -405,6 +405,17 @@ describe('sessions carry their target (B1 · B3)', () => {
     expect(end.ms).toBeGreaterThan(0)
   }, 20000)
 
+  it('hands the child its deadline (F14)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo "deadline=$WITNESS_DRIVE_DEADLINE"') }, out: (l) => lines.push(l) })
+    const t0 = Date.now()
+    await spawnSession({ kind: 'spawn', home: repo.root, target: 'p1' }, cfgOf(repo), ctx, 1)
+    const deadline = Number(/deadline=(\d+)/.exec(lines.join('\n'))?.[1])
+    expect(deadline).toBeGreaterThanOrEqual(t0 + cfgOf(repo).drive.sessionTimeoutMs)
+    expect(deadline).toBeLessThan(t0 + cfgOf(repo).drive.sessionTimeoutMs + 10_000)
+  }, 20000)
+
   it('prompts a --manual session with /witness --manual', async () => {
     const repo = await seededRepo()
     const lines: string[] = []
