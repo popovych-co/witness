@@ -271,3 +271,13 @@ describe('one autonomy conditional per skill (A8)', () => {
     expect(read('witness-ship')).toContain('ship <plan-id>    # append --manual when the run asked for it');
   });
 });
+
+describe('witness-design under autonomy (A6)', () => {
+  it('authors without the conversation and never opens the look itself', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    for (const s of ['Skip the directions-and-converge conversation', 'Never run `$WITNESS design <spec-id> --open`',
+      'the kept stop `design look`']) expect(body).toContain(s)
+    expect(body.match(/Under `autonomy: on`/g)).toHaveLength(1)
+    expect(body).not.toContain('The session itself stays a conversation')
+  })
+})

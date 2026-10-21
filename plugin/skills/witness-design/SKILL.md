@@ -36,6 +36,15 @@ The `/witness` loop invokes you for a `ui`-flagged spec in a **feature** effort 
 - **New screen** — `$WITNESS read <spec-id> --design` refuses `no-design`: there is no living look yet. Design from the spec.
 - **Amend a living look** — the file exists but the spec was amended. Read the current look first; propose the *smallest* change that re-serves the (changed) behavior. If there is genuinely no visual delta, tell the human to run `witness design <spec-id> --reconfirm` (re-stamps, no session).
 
+## Under `autonomy: on`
+
+When the CLI prints `autonomy: on` and this run is not `--manual`, the look is yours to author and the human's to approve. Nobody converses with you:
+
+- **New screen.** Skip the directions-and-converge conversation. Weigh 2–3 structural directions yourself, take the one that best serves the screen's one job under the design canon, and state the pick and its why in one line before you author it.
+- **Amend.** Make the smallest change that re-serves the amended behavior. Never run `$WITNESS design <spec-id> --reconfirm`: a re-armed look is the human's kept stop even when you see no visual delta.
+- **Never run `$WITNESS design <spec-id> --open`.** Opening the look is the human's act. Under autonomy the gate runs the critic without it, and `witness decide design <spec-id> --approve` refuses until the human has opened the current bytes.
+- **Gate, then follow the CLI.** Run `$WITNESS gate design <spec-id>`. The CLI settles the critic's rounds itself and prints `decided: … → revise` with a revise-context: re-author from it and re-gate, without asking. When the critic is clean the CLI stops at the kept stop `design look` and prints its `kept-stop:` line: render the gate output and END YOUR TURN. A human's `--revise --note "…"` starts the next round, and that round is autonomous again.
+
 ## Inputs (rebuild them, never remember them)
 
 ```bash
@@ -86,4 +95,3 @@ $WITNESS gate design <spec-id>    # append --manual when the run asked for it
 - **Re-entered after `--revise`** → `witness decide design <spec-id> --show` reconstructs the verdict + note (findings anchor to `design#<id>` or `<spec-id> > ## Heading`). Re-author the HTML, re-run `witness design`, re-gate. The 3-round bound is the CLI's — surface it, never fight it. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **slicing** (the spec is wrong, not the look)? Tell the human `witness decide design <spec-id> --revise --upstream <effort>` reopens decompose (scope-level changes chain to `recap --amend`).
 - On approve the CLI stamps `design: {sha, spec}` on the spec; the plan stage then requires that pin. You are done — hand back to `/witness`.
-- **Under `autonomy: on`** (printed by `gate`; not on a `--manual` run): the critic's rounds are the CLI's — a stop with blocking findings or failed checks prints `decided: … → revise`; re-author, register and show the new look as above, and re-gate without asking whether to. The clean stop is the kept stop `design look` (`kept-stop:`): render the gate output and END YOUR TURN — the look is the human's. The session itself stays a conversation.
