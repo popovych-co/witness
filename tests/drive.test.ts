@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
@@ -805,6 +805,18 @@ describe('one command (B1)', () => {
     // released after the report and the notification, which print after the stopped line
     await expect.poll(() => existsSync(join(repo.root, '.witness', 'drive.lock')), { timeout: 15_000 }).toBe(false)
   }, 90000)
+
+  it('--detach never writes through a symlinked log', async () => {
+    const repo = await autonomous()
+    const outside = join(fakeScenario(), 'rc')
+    writeFileSync(outside, 'export SAFE=1\n')
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    symlinkSync(outside, join(repo.root, '.witness', 'drive.log'))
+    const r = await repo.cli(['drive', '--detach'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('drive-log-unsafe')
+    expect(readFileSync(outside, 'utf8')).toBe('export SAFE=1\n')
+  })
 
   it('--ask queues the ask before the first session', async () => {
     const repo = await autonomous()

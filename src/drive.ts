@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { appendFileSync, closeSync, mkdirSync, openSync } from 'node:fs'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
@@ -556,11 +556,25 @@ export async function driveLoop(
 export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Result<{ pid: number; log: string }> {
   const log = join(root, DRIVE_LOG)
   mkdirSync(dirname(log), { recursive: true })
-  appendFileSync(log, `--- witness drive ${new Date().toISOString()} ---\n`)
+  // The log is opened without following a symlink and must be a regular file: a link
+  // planted at .witness/drive.log (a committed one, say) would otherwise have every session's
+  // output — text an agent wrote — appended to whatever it points at, a shell rc included.
+  let fd: number
+  try {
+    fd = openSync(log, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o644)
+  } catch (e) {
+    return refuse([v(DRIVE_LOG, 'drive-log-unsafe', (e as NodeJS.ErrnoException).code ?? String(e),
+      'a regular file at .witness/drive.log — remove whatever is there and run this again')])
+  }
+  if (!fstatSync(fd).isFile()) {
+    closeSync(fd)
+    return refuse([v(DRIVE_LOG, 'drive-log-unsafe', 'not a regular file',
+      'a regular file at .witness/drive.log — remove whatever is there and run this again')])
+  }
+  writeSync(fd, `--- witness drive ${new Date().toISOString()} ---\n`)
   const [file, argv] = ctx.env.WITNESS_BIN !== undefined
     ? ['/bin/sh', ['-c', `exec ${ctx.env.WITNESS_BIN} "$@"`, 'witness', 'drive', ...args]]
     : [process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'bin.js'), 'drive', ...args]]
-  const fd = openSync(log, 'a')
   try {
     const child = spawn(file, argv as string[], {
       cwd: root, detached: true, stdio: ['ignore', fd, fd],
