@@ -40,4 +40,13 @@ describe('witness satisfy', () => {
     expect(bad.code).toBe(2)
     expect(bad.stderr).toContain('unknown-manual-need')
   })
+
+  it('flips a need by its id and lists ids when nothing matches (A10)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ...SPEC_META, needs: [{ id: 'sbx', manual: 'Stripe sandbox account created', satisfied: false }] })
+    const bad = await repo.cli(['satisfy', 'auth-refresh', '--need', 'nope'])
+    expect(bad.stderr).toContain('1=sbx')
+    expect((await repo.cli(['satisfy', 'auth-refresh', '--need', 'sbx'])).code).toBe(0)
+    // where the satisfaction is recorded is Task 6b's: the journal, never the frontmatter
+  })
 })

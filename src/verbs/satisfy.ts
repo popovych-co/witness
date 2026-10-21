@@ -17,7 +17,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   })
   const id = positionals[0]
   if (!id || !values.need) {
-    renderRefusal([v('usage', 'required', 'missing id or --need', 'witness satisfy <doc-id> --need <text | index>')]).forEach(ctx.err)
+    renderRefusal([v('usage', 'required', 'missing id or --need', 'witness satisfy <doc-id> --need <id | index | text>')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const rootRes = primaryRoot(ctx.cwd)
@@ -32,10 +32,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const needs = Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : []
   const manuals = needs.filter((n) => typeof n.manual === 'string')
+  // Row 179. An id first — it is what a held criterion and `status` name the need by — then the
+  // 1-based index among the doc's manual needs, then the manual text.
+  const byId = manuals.find((n) => n.id === values.need)
   const byIndex = /^[0-9]+$/.test(values.need) ? manuals[Number(values.need) - 1] : undefined
-  const target = byIndex ?? manuals.find((n) => n.manual === values.need)
+  const target = byId ?? byIndex ?? manuals.find((n) => n.manual === values.need)
   if (!target) {
-    renderRefusal([v('--need', 'unknown-manual-need', values.need, `one of: ${manuals.map((m, i) => `${i + 1}='${m.manual}'`).join(' · ') || '(no manual needs)'}`)]).forEach(ctx.err)
+    const listed = manuals.map((m, i) => (typeof m.id === 'string' ? `${i + 1}=${m.id}` : `${i + 1}='${m.manual}'`))
+    renderRefusal([v('--need', 'unknown-manual-need', values.need, `one of: ${listed.join(' · ') || '(no manual needs)'}`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   if (target.satisfied === true) {

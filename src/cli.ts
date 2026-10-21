@@ -86,7 +86,7 @@ const VERB_USAGE: Record<string, string> = {
   recap: 'witness recap --file <recap.json> [--ask <id>] [--amend] [--manual]',
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
-  satisfy: 'witness satisfy <doc-id> --need <text | index>',
+  satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',
