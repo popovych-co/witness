@@ -13,6 +13,7 @@ import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
 import { kv } from './toon.js'
 import { withTxn } from './txn.js'
+import { acquireLock } from './lock.js'
 
 export function isTestPath(rel: string): boolean {
   if (/\.(test|spec)\./.test(rel)) return true
@@ -107,10 +108,19 @@ export function journalEvidence(
     files: [journalRel(planId)],
     journalMulti: [{ stream: planId, line: entryLine(entry) }],
   }
-  return withTxn(stateRoot, marker, () => {
-    appendEntry(stateRoot, planId, entry)
-    return stateCommit(stateRoot, marker.files, marker.op)
-  })
+  // Row 181 · D76: the lock wraps the write window only. The suite ran before this call,
+  // unlocked, in the plan's own worktree — under parallel flows a lock held across it would
+  // make every other flow's write wait out a whole suite.
+  const lock = acquireLock(stateRoot)
+  if (!lock.ok) return lock
+  try {
+    return withTxn(stateRoot, marker, () => {
+      appendEntry(stateRoot, planId, entry)
+      return stateCommit(stateRoot, marker.files, marker.op)
+    })
+  } finally {
+    lock.value()
+  }
 }
 
 export async function recordEvidence(

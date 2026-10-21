@@ -6,7 +6,11 @@ import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { kv } from '../toon.js'
 import { guardTxn } from '../txn.js'
-import { acquireLock } from '../lock.js'
+import type { Violation } from '../refusal.js'
+
+// The lock is taken inside, for the journal write alone (row 181). Its refusal is still
+// the one a caller may retry: exit 3, as when it wrapped the whole run.
+const exitOf = (violations: Violation[]) => (violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED)
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [planId] = argv.filter((a) => !a.startsWith('--'))
@@ -32,25 +36,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const parentId = String(plan.meta.parent)
 
-  const lock = acquireLock(stateRoot)
-  if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
-  try {
-    const probe = await recordEvidence(runRootRes.value, stateRoot, ctx, planId, parentId, phase)
-    if (!probe.ok) { renderRefusal(probe.violations).forEach(ctx.err); return EXIT.REFUSED }
-    const { allOk, tests } = probe.value
-    ctx.out(kv('test-evidence', `${planId} · ${phase} · ${tests.length} outcome(s) · ${allOk ? 'all green' : 'red present'}`))
-    if (phase === 'red' && allOk) {
-      ctx.err('vacuous: tests pass before implementation — the test may assert nothing, or the behavior already exists')
-      return EXIT.FINDINGS
-    }
-    if (phase === 'green' && !allOk) {
-      ctx.err('not green — fix the implementation and re-run')
-      return EXIT.FINDINGS
-    }
-    return EXIT.OK
-  } finally {
-    lock.ok && lock.value()
+  const probe = await recordEvidence(runRootRes.value, stateRoot, ctx, planId, parentId, phase)
+  if (!probe.ok) { renderRefusal(probe.violations).forEach(ctx.err); return exitOf(probe.violations) }
+  const { allOk, tests } = probe.value
+  ctx.out(kv('test-evidence', `${planId} · ${phase} · ${tests.length} outcome(s) · ${allOk ? 'all green' : 'red present'}`))
+  if (phase === 'red' && allOk) {
+    ctx.err('vacuous: tests pass before implementation — the test may assert nothing, or the behavior already exists')
+    return EXIT.FINDINGS
   }
+  if (phase === 'green' && !allOk) {
+    ctx.err('not green — fix the implementation and re-run')
+    return EXIT.FINDINGS
+  }
+  return EXIT.OK
 }
 
 export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
@@ -79,23 +77,17 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
   const base = diffBase(runRootRes.value, cfg.value, baseArg)
   if (!base.ok) { renderRefusal(base.violations).forEach(ctx.err); return EXIT.REFUSED }
 
-  const lock = acquireLock(stateRoot)
-  if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
-  try {
-    const res = await verifyRed(runRootRes.value, stateRoot, ctx, planId, String(plan.meta.parent), base.value)
-    if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
-    const { redOk, greenOk, vacuous } = res.value
-    ctx.out(kv('verify-red', `red ${redOk ? 'observed' : 'NOT observed'} · green ${greenOk ? 'confirmed' : 'NOT confirmed'}`))
-    if (vacuous) {
-      ctx.err('vacuous: tests pass against base — the test may assert nothing, or the behavior already existed')
-      return EXIT.FINDINGS
-    }
-    if (!greenOk) {
-      ctx.err('suite not green after restore — repository state was restored; investigate before trusting this diff')
-      return EXIT.FINDINGS
-    }
-    return EXIT.OK
-  } finally {
-    lock.ok && lock.value()
+  const res = await verifyRed(runRootRes.value, stateRoot, ctx, planId, String(plan.meta.parent), base.value)
+  if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return exitOf(res.violations) }
+  const { redOk, greenOk, vacuous } = res.value
+  ctx.out(kv('verify-red', `red ${redOk ? 'observed' : 'NOT observed'} · green ${greenOk ? 'confirmed' : 'NOT confirmed'}`))
+  if (vacuous) {
+    ctx.err('vacuous: tests pass against base — the test may assert nothing, or the behavior already existed')
+    return EXIT.FINDINGS
   }
+  if (!greenOk) {
+    ctx.err('suite not green after restore — repository state was restored; investigate before trusting this diff')
+    return EXIT.FINDINGS
+  }
+  return EXIT.OK
 }
