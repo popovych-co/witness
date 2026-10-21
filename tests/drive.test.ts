@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
@@ -12,8 +12,8 @@ import { effortReviewedSha } from '../src/reviewed.js'
 import { loadCanon } from '../src/scan.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  approve, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, seededRepo, writePlan, writeSpec,
-  type TestRepo,
+  approve, autonomyOn, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, putVerdict, seededRepo,
+  writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -43,6 +43,30 @@ const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
     tty: true, answers, out: (l) => out.push(l),
     env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent() }),
   })
+
+// n started flows, one spec each. A fresh worktree owes its first red, so every flow sits
+// at `witness test-evidence <plan> --phase red` (rank 1). `shipping` gets a pr (rank 3).
+async function startedFlows(specs: string[], opts: { shipping?: string } = {}): Promise<TestRepo> {
+  const repo = await seededRepo()
+  for (const s of specs) {
+    await writeSpec(repo, s, { criteria: [{ id: `ac-${s}`, test: `@spec:${s}` }] })
+    approve(repo, s)
+    await writePlan(repo, `${s}-plan-1`, { parent: s, steps: [{ id: 's1', title: s, criteria: [`ac-${s}`] }] })
+    approve(repo, `${s}-plan-1`)
+    await repo.cli(['start', `${s}-plan-1`])
+  }
+  if (opts.shipping) repo.setMeta(`${opts.shipping}-plan-1`, { pr: 7 })
+  autonomyOn(repo)
+  writeLocalConfig(repo.root, { notify: noopOpener() })
+  return repo
+}
+const autoCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
+  fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+const script = (body: string): string => {
+  const bin = join(fakeScenario(), 'agent')
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  return bin
+}
 
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
@@ -413,4 +437,45 @@ describe('classifyAction under autonomy (B2)', () => {
     expect(classifyAction({ line: 'witness decide ship p1 --show', target: 'p1' }, root, auto))
       .toEqual({ kind: 'decision', gate: 'ship', target: 'p1' })
   })
+})
+
+describe('side by side (B3)', () => {
+  it('runs two targets at once, most advanced first, never two on one target (Review Focus 2)', async () => {
+    const repo = await startedFlows(['a', 'b', 'c'], { shipping: 'c' })
+    const log = join(fakeScenario(), 'log')
+    const agent = script(`echo hi\necho "$WITNESS_DRIVE start" >> "${log}"\nsleep 1\necho "$WITNESS_DRIVE end" >> "${log}"`)
+    const out: string[] = []
+    const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(out).toContain('[1 ship/c-plan-1] hi')                    // the ladder's own order (D73)
+    expect(out).toContain('[2 implement/a-plan-1] hi')
+    expect(out).toContain('[3 implement/b-plan-1] hi')
+    const lines = readFileSync(log, 'utf8').trim().split('\n')
+    expect(lines.slice(0, 2).sort()).toEqual(['a-plan-1 start', 'c-plan-1 start'])      // both ran at once
+    expect(lines.indexOf('b-plan-1 start')).toBeGreaterThan(Math.min(lines.indexOf('c-plan-1 end'), lines.indexOf('a-plan-1 end')))
+    for (const t of ['a-plan-1', 'b-plan-1', 'c-plan-1']) expect(lines.filter((l) => l === `${t} start`)).toHaveLength(1)
+    expect(code).toBe(1)                               // all three made no progress
+  }, 60000)
+
+  it('catches a stalled target while another target journals every spawn (Review Focus 1)', async () => {
+    const repo = await startedFlows(['a', 'b'])
+    const agent = script(`echo tick\ncase "$WITNESS_DRIVE" in a-plan-1) exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0 ;; *) exit 0 ;; esac`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
+    const all = out.join('\n')
+    expect(all).toContain('drive: no progress — witness test-evidence b-plan-1 --phase red')
+    expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
+    expect(all).toMatch(/drive: spawn ceiling reached \(6\)/)
+  }, 90000)
+
+  it('with autonomy off a standing decision no longer ends the run', async () => {
+    const repo = await gatedEffort()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['', ''], out), { maxSpawns: 1 })
+    expect(out.join('\n')).toMatch(/drive: decision stands/)
+    expect(out.join('\n')).toMatch(/\[1 drive\/auth-mfa-plan-1\]/)       // the start ran after it
+  }, 60000)
 })

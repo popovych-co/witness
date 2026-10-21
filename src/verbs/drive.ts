@@ -4,6 +4,8 @@ import { loadConfig } from '../config.js'
 import { DEFAULT_MAX_SPAWNS, driveLoop } from '../drive.js'
 import { primaryRoot } from '../gitio.js'
 import { renderRefusal, v } from '../refusal.js'
+import { loadCanon } from '../scan.js'
+import { resolveFlow } from './next.js'
 
 // D145. Drive is a human's foreground verb: TTY-only, which is also what makes
 // drive-inside-drive structurally impossible (an agent's Bash has no TTY, so a spawned
@@ -36,5 +38,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
     maxSpawns = n
   }
-  return await driveLoop(root, cfgR.value, ctx, { flow: values.flow, maxSpawns })
+  // `--flow` is a claim, and a false claim refuses at the door — the loop only scopes to it.
+  if (values.flow !== undefined) {
+    const flowR = resolveFlow(loadCanon(root), values.flow)
+    if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  }
+  return await driveLoop(root, cfgR.value, ctx, { flow: values.flow, maxSpawns: values['max-spawns'] !== undefined ? maxSpawns : undefined })
 }

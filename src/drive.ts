@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
@@ -8,8 +7,14 @@ import { resolveJudge } from './harness.js'
 import { renderRefusal } from './refusal.js'
 import { loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
-import { computeNext, flowAction, resolveFlow, type NextAction } from './verbs/next.js'
+import { computeNext, type NextAction } from './verbs/next.js'
 import { DRIVE_ENV, TARGETLESS } from './drive-presence.js'
+import { ASK_STREAM } from './ask.js'
+import type { KeptStop } from './autonomy.js'
+import { effortStreams, readStream } from './journal.js'
+import { effortOf } from './reviewed.js'
+import { pendingTxn } from './txn.js'
+import { realClock, type Clock } from './usage.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -217,114 +222,173 @@ export async function spawnSession(
   })
 }
 
-export interface DriveFlags { flow?: string; maxSpawns?: number }
+export interface DriveFlags { flow?: string; maxSpawns?: number; manual?: boolean }
 
 // Twenty sessions per invocation, held in MEMORY and nowhere else (north star 2): a
 // ceiling that persisted would be state drive must clean up, and re-running is how a
 // human says "keep going". It is a runaway guard, not a budget — the no-progress check
 // below is what catches the common case long before this does.
 export const DEFAULT_MAX_SPAWNS = 20
+// Row 183. Under autonomy the per-target caps are the bound and this ceiling is a backstop
+// against accounting bugs: 200 is the 203 sessions fewhats ran in the whole 33-day evidence
+// window (design §2).
+export const AUTONOMY_MAX_SPAWNS = 200
 
-// Did anything happen? Every act a session performs appends to a journal stream, so the
-// total line count is the cheapest honest answer — derived, never stored, and blind to
-// which stream grew, which is right: any growth anywhere means the repo moved.
-function journalTotal(root: string): number {
-  const dir = join(root, '.witness', 'journal')
-  if (!existsSync(dir)) return 0
-  let total = 0
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith('.jsonl')) continue
-    total += readFileSync(join(dir, f), 'utf8').split('\n').filter((l) => l !== '').length
-  }
-  return total
-}
+// Row 180. A target drive stops working on for the rest of the run — none of these ends
+// the run. Held in memory and never journaled (D145): the report reads them at the end.
+export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
+export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop }
 
 const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
+
+const streamLines = (root: string, id: string): number => readStream(root, id).length
+
+// Row 181. Did anything happen for THIS target? A whole-journal count is satisfied by any
+// other lane's progress, so a stalled flow beside a busy one would spawn until the ceiling.
+// A target's key is its line, its stream and its owning effort's stream; target-less work
+// (brainstorm, the recovery fork) keys on the effort count and the asks stream, because a
+// rejected recap check grows the asks and an accepted one births an effort.
+function progressKey(root: string, action: NextAction): string {
+  if (action.target === undefined) {
+    return [action.line, effortStreams(root).length, streamLines(root, ASK_STREAM)].join('\u0000')
+  }
+  const effort = effortOf(root, action.target)
+  return [action.line, streamLines(root, action.target), effort ? streamLines(root, effort) : 0].join('\u0000')
+}
+
+interface Lane { action: NextAction; end: Promise<SessionEnd>; merged?: string }
 
 // The loop. Derive, classify, spawn, re-derive — and every turn reads the repo from disk,
 // so nothing drive believed a moment ago can outlive a child that changed it.
 //
+// Row 181. Up to `drive.parallel` sessions at once, one per target: each fill asks the same
+// ladder with the busy and set-aside targets filtered out, so D73's most-advanced-first
+// order is the ladder's own. Serial whenever a human may be asked (autonomy off, --manual)
+// or a flow is claimed (--flow): the decide> prompt and a claimed flow are one conversation.
+//
 // Deliberately no lazy merge-stamp here (`next` does one): drive journals nothing (§9).
 // The spawned session runs `witness next` in its own home and stamps there, so a merged
 // PR is observed on the very next derivation — by the CLI that owns that act.
-export async function driveLoop(root: string, cfg: Config, ctx: Ctx, flags: DriveFlags): Promise<number> {
-  const maxSpawns = flags.maxSpawns ?? DEFAULT_MAX_SPAWNS
+export async function driveLoop(
+  root: string, cfg: Config, ctx: Ctx, flags: DriveFlags, clock: Clock = realClock,
+): Promise<number> {
+  const autonomous = cfg.autonomy && !flags.manual
+  const parallel = autonomous && flags.flow === undefined ? cfg.drive.parallel : 1
+  const ceiling = flags.maxSpawns ?? (autonomous ? AUTONOMY_MAX_SPAWNS : DEFAULT_MAX_SPAWNS)
+  const lanes = new Map<string, Lane>()
+  const aside = new Map<string, Aside>()
+  const progress = new Map<string, string>()
   let spawns = 0
-  let acted = false
-  let prev: { line: string; journal: number } | undefined
-  for (;;) {
-    const canon = loadCanon(root)
-    let action: NextAction
-    if (flags.flow !== undefined) {
-      const flowR = resolveFlow(canon, flags.flow)
-      // `--flow` is a claim, and a false claim refuses — but only as a claim, at the door.
-      // A flow that reached `done` UNDER drive is the loop succeeding: the merge stamp its
-      // own child wrote is what made resolveFlow refuse, and reporting that as
-      // `terminal-status` would end a completed run with a violations table.
-      if (!flowR.ok) {
-        if (acted && flowR.violations.some((x) => x.rule === 'terminal-status')) {
-          ctx.out(`drive: flow finished — ${flags.flow}`)
-          return EXIT.OK
-        }
-        renderRefusal(flowR.violations).forEach((l) => ctx.err(l))
-        return EXIT.REFUSED
-      }
-      const judgeR = resolveJudge(ctx.env, cfg.raw)
-      action = flowAction(root, cfg, flowR.value, judgeR.ok ? judgeR.value.harness.name : undefined)
-        ?? { line: 'witness check', target: flags.flow }
-    } else {
-      action = computeNext(root, ctx, canon, cfg)
-    }
-    const step = classifyAction(action, root)
+  let stop: 'ceiling' | 'spawn-failed' | undefined
+  let idle: string | undefined
+  const pausedUntil = 0
+
+  const admits = (t: string | undefined): boolean => {
+    const k = t ?? TARGETLESS
+    return !lanes.has(k) && !aside.has(k) && (flags.flow === undefined || t === flags.flow)
+  }
+  const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
+  const stuck = (key: string, action: NextAction) => {
+    ctx.out(`drive: no progress — ${action.line}`)
+    ctx.out(`help: ${action.target ?? 'untargeted work'} is set aside for this run — read its stream above`)
+    setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}` })
+  }
+  // A decision is an act too, and it gets the same convergence guard as a spawn: a decision
+  // that executes and journals nothing would otherwise re-render its own block forever.
+  const unmoved = (key: string, action: NextAction): boolean => {
+    const pk = progressKey(root, action)
+    if (pendingTxn(root) === undefined && progress.get(key) === pk) { stuck(key, action); return true }
+    progress.set(key, pk)
+    return false
+  }
+
+  const standAside = async (step: Exclude<DriveStep, { kind: 'spawn' | 'idle' }>, action: NextAction, key: string) => {
     if (step.kind === 'conversation') {
       ctx.out(`drive: conversation — ${step.line}`)
       ctx.out('help: this stage is an exchange with a human — run it in a chat session, then re-run witness drive')
-      return EXIT.OK
+      setAside(key, { kind: 'conversation', line: step.line, why: 'an exchange with a human' })
+      return
     }
-    if (step.kind === 'merge') { ctx.out(`drive: merge — ${step.line}`); return EXIT.OK }
-    if (step.kind === 'idle') { ctx.out(`drive: idle — ${action.line}`); return EXIT.OK }
-    const journal = journalTotal(root)
-    // The convergence check, and the reason a crashed drive is safe to re-run: the same
-    // action twice with nothing journalled in between means the session could not do what
-    // the CLI asked. Spawning a third is how a loop burns a human's tokens all night.
-    if (prev?.line === action.line && prev.journal === journal) {
-      ctx.out(`drive: no progress — ${action.line}`)
-      ctx.out('help: the last act left the repo where it found it — read the stream above, then act on that line yourself')
-      return EXIT.FINDINGS
+    if (step.kind === 'merge') {
+      ctx.out(`drive: merge — ${step.line}`)
+      setAside(key, { kind: 'merge', line: step.line, why: 'the merge is a human\'s' })
+      return
     }
-    // A decision is an act too, and it gets the same convergence guard: a decision that
-    // executes and journals nothing would otherwise re-render its own block forever.
-    if (step.kind === 'decision') {
-      prev = { line: action.line, journal }
-      acted = true
-      const settled = await resolveDecision(step, action, ctx)
-      if (settled !== undefined) return settled
-      continue
+    // Task 9 settles an autonomous decision in front of the fill. Until then it waits.
+    if (autonomous) {
+      setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
+      return
     }
-    if (spawns >= maxSpawns) {
-      ctx.out(`drive: spawn ceiling reached (${maxSpawns}) — ${action.line}`)
-      ctx.out('help: re-run witness drive to continue, or raise --max-spawns')
-      return EXIT.FINDINGS
-    }
-    prev = { line: action.line, journal }
-    spawns += 1
-    acted = true
-    // The merge is announced by the SHIP SESSION's own output (ship.ts:277), not by a
-    // routing row — a flow whose PR is open routes to `witness ship` forever, and only
-    // the child knows it printed "merge PR". Sniffing the stream is what turns that into
-    // a clean exit instead of a no-progress stop.
-    let merged: string | undefined
+    if (unmoved(key, action)) return
+    const r = await resolveDecision(step, action, ctx)
+    if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
+    if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}` })
+  }
+
+  const launch = (step: SpawnStep, action: NextAction, n: number): Lane => {
+    const lane: Lane = { action, end: Promise.resolve(undefined as unknown as SessionEnd) }
+    // The merge is announced by the SHIP SESSION's own output (ship.ts), not by a routing
+    // row — a flow whose PR is open routes to `witness ship` forever, and only the child
+    // knows it printed "merge PR". `mergeOwnPr` prints it only when it leaves the merge to a
+    // human, so under autonomy this fires only where a human merges.
     const childCtx: Ctx = {
       ...ctx,
-      out: (l) => { if (l.includes('merge PR')) merged = l.replace(STREAM_PREFIX, ''); ctx.out(l) },
+      out: (l) => { if (l.includes('merge PR')) lane.merged = l.replace(STREAM_PREFIX, ''); ctx.out(l) },
     }
-    const { outcome } = await spawnSession(step, cfg, childCtx, spawns)
-    if (outcome !== 'exited') {
-      ctx.out(`drive: spawn-${outcome === 'timeout' ? 'timeout' : 'failed'} — ${action.line}`)
-      return EXIT.FINDINGS
-    }
-    if (merged !== undefined) { ctx.out(`drive: merge — ${merged}`); return EXIT.OK }
+    lane.end = spawnSession(step, cfg, childCtx, n, { manual: flags.manual })
+    return lane
   }
+
+  const settle = (key: string, lane: Lane, end: SessionEnd) => {
+    if (end.outcome === 'timeout') {
+      ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
+      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}` })
+      return
+    }
+    if (end.outcome === 'spawn-failed') {
+      ctx.out(`drive: spawn-failed — ${lane.action.line}`)
+      stop ??= 'spawn-failed'                            // this machine can spawn nothing
+      return
+    }
+    if (lane.merged !== undefined) {
+      ctx.out(`drive: merge — ${lane.merged}`)
+      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s' })
+    }
+  }
+
+  for (;;) {
+    // Task 9's settle pass runs here under autonomy: A1's settleOwed over what `admits` covers
+    while (!stop && lanes.size < parallel && clock.now() >= pausedUntil) {
+      const action = computeNext(root, ctx, loadCanon(root), cfg, { scope: admits })
+      const key = action.target ?? TARGETLESS
+      if (lanes.has(key) || aside.has(key)) break         // a global rung, already in hand
+      const step = classifyAction(action, root, { autonomy: autonomous })
+      if (step.kind === 'idle') { idle = action.line; break }
+      idle = undefined
+      if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
+      if (spawns >= ceiling) {
+        stop = 'ceiling'
+        ctx.out(`drive: spawn ceiling reached (${ceiling}) — ${action.line}`)
+        ctx.out('help: re-run witness drive to continue, or raise --max-spawns')
+        break
+      }
+      // Task 9's waiting-need check, then Task 10's caps, go here: a cap outranks a stall in the report
+      if (unmoved(key, action)) continue
+      spawns += 1
+      lanes.set(key, launch(step, action, spawns))
+    }
+    if (lanes.size === 0) {
+      if (!stop && pausedUntil > clock.now()) { await clock.sleep(pausedUntil - clock.now()); continue }
+      break
+    }
+    const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
+    settle(key, lanes.get(key)!, end)                     // Task 11 reads limits here
+    lanes.delete(key)
+  }
+
+  if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
+  const failed = [...aside.values()].some((a) => a.kind === 'stuck' || a.kind === 'capped')
+  return failed || stop !== undefined ? EXIT.FINDINGS : EXIT.OK
 }
 
 export interface BlockOption {
@@ -429,11 +493,11 @@ const ASK_LIMIT = 3
 // verb's `--show` so the block a human reads here is byte-identical to the one they would
 // read in a chat session — D143 is one rule across surfaces, not two implementations.
 //
-// Returns undefined when the loop should continue (the decision executed), or the exit
-// code drive should stop with.
+// `executed` when the decision ran (the loop derives again), `stands` when the human left it
+// standing, `refused` when the render or the chosen command refused.
 async function resolveDecision(
   step: Extract<DriveStep, { kind: 'decision' }>, action: NextAction, ctx: Ctx,
-): Promise<number | undefined> {
+): Promise<'executed' | 'stands' | 'refused'> {
   const rendered: string[] = []
   const echo: Ctx = {
     ...ctx,
@@ -444,7 +508,7 @@ async function resolveDecision(
     step.block.forEach((l) => echo.out(l))
   } else if (step.gate !== undefined && step.target !== undefined) {
     const code = await main(echo, ['decide', step.gate, step.target, '--show'])
-    if (code !== EXIT.OK) return EXIT.FINDINGS
+    if (code !== EXIT.OK) return 'refused'
   } else {
     ctx.out(`drive: decision — ${action.line}`)
   }
@@ -464,10 +528,10 @@ async function resolveDecision(
     const code = await main(ctx, splitArgv(pick.command).slice(1))
     if (code !== EXIT.OK) {
       ctx.out(`drive: decision refused — ${pick.command}`)
-      return EXIT.FINDINGS
+      return 'refused'
     }
-    return undefined
+    return 'executed'
   }
   ctx.out(`drive: decision stands — ${action.line}`)
-  return EXIT.OK
+  return 'stands'
 }
