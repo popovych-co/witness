@@ -18,13 +18,13 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
-import { kv, rows } from '../toon.js'
+import { cmd, kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, policyFor } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
-import { driveChild } from '../drive-presence.js'
+import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -992,6 +992,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
+  }
+  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
+  // the background and ends its turn, or says where to watch the one already running. Last,
+  // so it never splits the routing unit, and raw, because both lines are commands (D120).
+  if (cfgR.value.autonomy && marked === undefined && action.line !== 'witness check') {
+    const holder = driveHolder(root)
+    ctx.out(holder !== undefined ? cmd('watch', watchLine(holder)) : cmd('launch', 'witness drive --detach'))
   }
   return EXIT.OK
 }

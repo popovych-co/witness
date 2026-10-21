@@ -74,3 +74,13 @@ describe('the engine under autonomy (A8)', () => {
     expect(/^---\n([\s\S]*?)\n---/.exec(body())![1]).toContain('[what to build]')
   })
 });
+
+describe('drive handoff rows (B1)', () => {
+  it('hands an autonomous run to drive before any other row (B1)', () => {
+    const b = body()
+    for (const s of ['`launch:` is printed and this session is not `--manual`-armed', '`watch:` is printed and no `launch:`', '`drive: done` is printed']) {
+      expect(b).toContain(s)
+    }
+    expect(b.indexOf('`launch:` is printed')).toBeLessThan(b.indexOf('A `choose:` block is printed'))
+  })
+})

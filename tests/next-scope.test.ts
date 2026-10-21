@@ -1,3 +1,6 @@
+import { spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 import { appendEntry, readStream } from '../src/journal.js'
@@ -78,5 +81,30 @@ describe('computeNext scope (B3)', () => {
     const repo = await flowAndDraft()
     const out = await nextLine(repo, { env: { ...repo.env, WITNESS_DRIVE: 'auth-refresh' } })
     expect(out).toContain('drive: done — nothing more is owed for auth-refresh')
+  })
+})
+
+describe('next hands an autonomous chat session to drive (B1)', () => {
+  it('prints launch: under autonomy when no drive runs', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    expect(await nextLine(repo)).toContain('launch: witness drive --detach')
+  })
+  it('prints watch: while a drive runs', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    const holder = spawn('sleep', ['30'])
+    const log = join(repo.root, '.witness', 'drive.log')
+    writeFileSync(join(repo.root, '.witness', 'drive.lock'), JSON.stringify({ pid: holder.pid, log }))
+    const out = await nextLine(repo)
+    expect(out).toContain(`watch: tail -f ${log} · stop it: kill ${holder.pid}`)
+    expect(out).not.toContain('launch:')
+    holder.kill()
+  })
+  it('prints neither to a drive session · or with autonomy off', async () => {
+    const auto = await seededRepo()
+    autonomyOn(auto)
+    expect(await nextLine(auto, { env: { WITNESS_DRIVE: auto.effort } })).not.toMatch(/^(launch|watch):/m)
+    expect(await nextLine(await seededRepo())).not.toMatch(/^(launch|watch):/m)
   })
 })
