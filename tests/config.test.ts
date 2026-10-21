@@ -220,3 +220,22 @@ describe('loadLocalConfig — .witness/config.local.yaml', () => {
     expect(loadLocalConfig(root).ok).toBe(false)
   })
 })
+
+describe('autonomy (A1)', () => {
+  it('is off unless the repo says on', () => {
+    const repo = tmpRepo()
+    for (const [line, want] of [['', false], ['autonomy: on\n', true], ['autonomy: off\n', false]] as const) {
+      repo.write('witness.config.yaml', `schema: 1\n${line}`)
+      const r = loadConfig(repo.root)
+      expect(r.ok && r.value.autonomy).toBe(want)
+    }
+  })
+  it('refuses anything but on or off', () => {
+    const repo = tmpRepo()
+    for (const bad of ['true', 'yes', '1', '""', '~']) {
+      repo.write('witness.config.yaml', `schema: 1\nautonomy: ${bad}\n`)
+      const r = loadConfig(repo.root)
+      expect(!r.ok && r.violations[0]).toMatchObject({ field: 'autonomy', rule: 'invalid', want: 'on | off' })
+    }
+  })
+})

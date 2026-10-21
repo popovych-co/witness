@@ -25,6 +25,7 @@ export interface Config {
   implement: ImplementConfig
   gates: GatesConfig
   drive: DriveConfig
+  autonomy: boolean
   warning?: string
 }
 
@@ -175,6 +176,18 @@ export function resolveGates(raw: Record<string, unknown>): Result<GatesConfig> 
   return ok({ reviewerTimeoutMs: val })
 }
 
+// Rows 171-175. Whether the CLI settles its own stops is a REPO fact — committed, read by
+// every teammate's CLI alike — so it lives here and never in config.local.yaml. Spelled as
+// the strings `on | off` and nothing else: YAML 1.1 reads `yes`/`on` as booleans and 1.2
+// does not, so accepting booleans would make the same file mean two things across parsers.
+export function resolveAutonomy(raw: Record<string, unknown>): Result<boolean> {
+  const val = raw.autonomy
+  if (val === undefined) return ok(false)
+  if (val === 'on') return ok(true)
+  if (val === 'off') return ok(false)
+  return refuse([v('autonomy', 'invalid', String(val), 'on | off')])
+}
+
 // Machine facts live in ONE gitignored file with a closed key set (row 90): a key in
 // the wrong home refuses, so no repo↔local precedence rule can exist. Deliberately
 // NOT wired into loadConfig — same doctrine as harness resolution (row 87): an
@@ -278,6 +291,8 @@ export function loadConfig(root: string): Result<Config> {
   if (!gates.ok) return refuse(gates.violations)
   const drive = resolveDrive(obj)
   if (!drive.ok) return refuse(drive.violations)
+  const autonomy = resolveAutonomy(obj)
+  if (!autonomy.ok) return refuse(autonomy.violations)
   return ok({
     schema,
     raw: obj,
@@ -286,6 +301,7 @@ export function loadConfig(root: string): Result<Config> {
     implement: implement.value,
     gates: gates.value,
     drive: drive.value,
+    autonomy: autonomy.value,
     warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)` : undefined,
   })
 }

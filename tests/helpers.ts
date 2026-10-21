@@ -435,6 +435,13 @@ export function addOrigin(repo: TestRepo): void {
   repo.git('push', '-u', 'origin', 'main')
 }
 
+// Rows 171-175: opt the repo into autonomy, as a committed repo fact.
+export function autonomyOn(repo: TestRepo): void {
+  repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}autonomy: on\n`)
+  repo.git('add', 'witness.config.yaml')
+  repo.git('commit', '-m', 'autonomy: on')
+}
+
 export const VERDICT_CONTRACT_MARKER = '## Verdict contract'
 export const VERDICT_CONTRACT_SNIPPETS = [
   'Respond with ONLY a JSON object',

@@ -10,6 +10,7 @@ import { findById, loadCanon } from '../scan.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
+import { autonomyLines } from '../autonomy.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { branchName, createWorktree, worktreePath } from '../worktree.js'
@@ -26,6 +27,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (blocked !== undefined) return blocked
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
   const canon = loadCanon(root)
   const plan = findById(canon, planId)
   if (!plan || plan.meta.type !== 'plan') {

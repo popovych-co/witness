@@ -26,6 +26,7 @@ export { liveExits } from './rounds.js'
 import { gateSettled } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
+import { autonomyLines } from './autonomy.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
 export type ChangeClass = 'feature' | 'fix' | 'chore'
@@ -214,6 +215,9 @@ export async function runGate(
   }
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  // `--manual` keeps this run's stop for a human, so for this run autonomy is off and the
+  // CLI does not claim otherwise.
+  if (!flags.manual) autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
   const canon = loadCanon(root)
   const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }

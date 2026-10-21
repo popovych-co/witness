@@ -7,6 +7,7 @@ import '../gates/index.js'
 import { gateSpec, liveExits, renderGateRun } from '../gate.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
 import { recommend, renderDecision } from '../recommend.js'
+import { autonomyLines } from '../autonomy.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -95,6 +96,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const upstreamId = spec.upstreamOf?.(root, canon, target)
 
   if (argv.includes('--show')) {
+    autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
     if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
     const reopen = openReopen(entries, gate)
     const decisionsAfter = entries

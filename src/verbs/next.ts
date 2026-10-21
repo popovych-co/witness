@@ -20,6 +20,7 @@ import { kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
+import { autonomyLines } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry } from '../rounds.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
@@ -780,6 +781,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootR.value
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
   const hxR = resolveDriver(ctx.env, cfgR.value.raw)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
