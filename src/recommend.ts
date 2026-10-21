@@ -98,7 +98,9 @@ function withTrustVariants(d: Decision, untrusted: string[]): Decision {
       tradeoff: [o.tradeoff, `the listed commands stay blocked at headless gates: ${listed}`]
         .filter(Boolean).join(' · '),
     }
-    options.push(opt(`${o.command} --trust-cmds`, 'root', {
+    // The twin is the same stamp plus a grant, so it carries the stamp's depth: next to a
+    // deferral approve (checks-failed) it is a deferral too, never a root fix.
+    options.push(opt(`${o.command} --trust-cmds`, o.depth, {
       when: 'you have read these commands and accept them running unattended at every later gate',
       tradeoff: `grants them repo-wide in .witness/allow.json (machine-local): ${listed}`,
       note: 'a bare affirmation never grants trust — this form must be named (D143)',
@@ -330,6 +332,21 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   // reviewer's opinion, so the fix comes first and approving over it is the deferral.
   if (checksFailed.length > 0) {
     const names = checksFailed.map((c) => c.name)
+    // amendment-ack is the one check an approve clears: approving IS the acknowledgement it
+    // asks for (gates/decompose.ts). Alone, approve leads; beside any other failure, the fix
+    // still comes first and the ack rides the approve that follows it.
+    if (names.every((n) => n === 'amendment-ack')) {
+      return {
+        key: 'decide', rule: 'checks-failed',
+        options: [
+          opt(`${d} --approve`, 'root', { why: `the one failed check is amendment-ack — a spec was amended under in-progress plans · approving is the acknowledgement it asks for; ${rounds}` }),
+          opt(note, 'root', { when: 'the amendment should not land under the in-progress plans as it stands', tradeoff: `costs ${rounds}; the gate re-runs on your edit` }),
+          ...upAlt('what should change is the amendment the stage above made',
+            'reopens the parent stage and resets this budget'),
+          stopOpt,
+        ],
+      }
+    }
     return {
       key: 'decide', rule: 'checks-failed',
       options: [

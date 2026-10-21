@@ -119,6 +119,9 @@ const REVIEWER_TIMEOUT_MS = 600_000
 const TIMEOUT_RETRIES = 2
 const MAX_OUTPUT = 64 * 1024 * 1024
 const TERM_GRACE_MS = 5_000
+// setTimeout clamps a delay above 2^31-1 ms to 1 ms, which would turn a "never time out"
+// config into an instant timeout on every call. spawnSync has no such ceiling.
+const MAX_TIMER_MS = 2 ** 31 - 1
 const EXIT_GRACE_MS = 2_000
 
 interface Prepared {
@@ -229,6 +232,7 @@ function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
     const out: string[] = []
     const err: string[] = []
     let outBytes = 0
+    let epipe = false
     let timedOut = false
     let error: Error | undefined
     let status: number | null = null
@@ -243,13 +247,18 @@ function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
       clearTimeout(grace)
       child.stdout.destroy()
       child.stderr.destroy()
+      // Exit 0 after closing its stdin early means the reviewer answered without reading the
+      // whole prompt — a verdict on content it never saw, so it fails closed, as sync does.
+      if (epipe && status === 0 && !timedOut && error === undefined) {
+        error = new Error('exited 0 before reading the whole prompt (EPIPE)')
+      }
       resolve({ timedOut, error, status, stdout: out.join(''), stderr: err.join('') })
     }
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGTERM')
       killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
-    }, p.timeout)
+    }, Math.min(p.timeout, MAX_TIMER_MS))
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (c: string) => {
@@ -262,9 +271,12 @@ function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
       out.push(c)
     })
     child.stderr.on('data', (c: string) => { err.push(c) })
-    // A reviewer that exits before reading its whole prompt closes the pipe under us;
-    // its exit status is the answer, not the EPIPE.
-    child.stdin.on('error', (e: NodeJS.ErrnoException) => { if (e.code !== 'EPIPE' && error === undefined) error = e })
+    // A reviewer that exits before reading its whole prompt closes the pipe under us: a
+    // nonzero exit is the answer, and exit 0 is refused at settle.
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code === 'EPIPE') epipe = true
+      else if (error === undefined) error = e
+    })
     child.stdin.end(opts.prompt)
     child.on('error', (e) => { error = e; settle() })
     child.on('exit', (code) => {

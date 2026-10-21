@@ -264,6 +264,32 @@ describe('the rule table is ordered and total', () => {
     expect(recommend({ ...ctxFor([r]), gate: 'ship' })!.rule).toBe('checks-failed')
   })
 
+  it('checks-failed: amendment-ack alone leads with approve — approving is the ack', () => {
+    const r = failedRun({ gate: 'decompose', checks: [{ name: 'amendment-ack', ok: false,
+      detail: 'amended under in-progress plans (approve = explicit ack): p9' }] })
+    const d = recommend({ ...ctxFor([r]), gate: 'decompose' })!
+    expect(d.rule).toBe('checks-failed')
+    expect(d.options[0]!.command).toBe('witness decide decompose p1 --approve')
+    expect(d.options[0]!.depth).toBe('root')
+    expect(d.options[0]!.why).toContain('amendment-ack')
+    expect(d.options[0]!.why).not.toContain(',')
+    expect(d.options.some((o) => o.command.startsWith('witness decide decompose p1 --revise --note'))).toBe(true)
+  })
+
+  it('checks-failed: amendment-ack beside another failed check still leads with revise', () => {
+    const r = failedRun({ gate: 'decompose', checks: [
+      { name: 'amendment-ack', ok: false, detail: 'amended under in-progress plans (approve = explicit ack): p9' },
+      { name: 'goal-coverage', ok: false, detail: 'g1 uncovered' }] })
+    const d = recommend({ ...ctxFor([r]), gate: 'decompose' })!
+    expect(d.options[0]!.command).toMatch(/--revise --note/)
+  })
+
+  it('the trust twin of a deferral approve is a deferral too', () => {
+    const d = recommend({ ...ctxFor([failedRun()]), untrustedCmds: ['pnpm verify:baseline'] })!
+    const twin = d.options.find((o) => o.command === 'witness decide plan p1 --approve --trust-cmds')!
+    expect(twin.depth).toBe('deferral')
+  })
+
   it('manual-stop: green, no standing stop, stopped anyway', () => {
     const r = run(1, 'a', 'S')
     const raw = r as unknown as { verdicts: Array<{ findings: unknown[] }>; manual: boolean }

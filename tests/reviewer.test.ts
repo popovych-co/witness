@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadHarness } from '../src/harness.js'
 import { invokeReviewer, invokeReviewerAsync, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
@@ -272,5 +273,30 @@ describe('invokeReviewerAsync', () => {
     const r = await invokeReviewerAsync(ctx, claudeHarness, { cwd: repo.root, prompt: 'x' })
     expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
     expect(!r.ok && r.violations[0]!.got).toContain('exit 1')
+  })
+})
+
+describe('invokeReviewerAsync fails closed', () => {
+  it('a timeout past setTimeout\'s 2^31-1 ms ceiling is a long timeout, not an instant one', async () => {
+    const repo = tmpRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = await invokeReviewerAsync(ctx, claudeHarness, { cwd: repo.root, prompt: 'x', timeoutMs: 3_000_000_000 })
+    expect(r.ok).toBe(true)
+  })
+
+  it('a reviewer that exits 0 without reading the whole prompt is refused', async () => {
+    const repo = tmpRepo()
+    // a claude that reads 64 KiB of its prompt, then answers clean and exits 0
+    const bin = mkdtempSync(join(tmpdir(), 'witness-partial-'))
+    writeFileSync(join(bin, 'claude'),
+      '#!/bin/sh\nhead -c 65536 > /dev/null\nprintf \'%s\' \'{"type":"result","subtype":"success","result":"{\\"coverage\\":[],\\"findings\\":[]}"}\'\n')
+    chmodSync(join(bin, 'claude'), 0o755)
+    const ctx = fakeCtx(repo.root, { env: { ...gateEnv(fakeScenario()), PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` } })
+    const prompt = `${'x'.repeat(4 * 1024 * 1024)}\nTAIL-THE-REVIEWER-NEVER-SAW\n`
+    const r = await invokeReviewerAsync(ctx, claudeHarness, { cwd: repo.root, prompt })
+    expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
+    expect(!r.ok && r.violations[0]!.got).toContain('before reading the whole prompt')
   })
 })
