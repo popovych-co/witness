@@ -27,7 +27,7 @@
 - Commit trailer, on every commit: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - DESIGN.md rows are **176–179**. 168 stays reserved; 169–175 belong to wave 1 and A1.
 - Release with `pnpm release minor`, which produces `0.17.0`. Both pushes, main and then the tag, are the human's.
-- Never edit consumer canon: in fewhats.com, know-your-customer-mvp and hear-your-customer-mvp, never touch `docs/specs/**`, `docs/plans/**` or `docs/designs/**`.
+- This plan changes only the witness repo. fewhats.com and every other consumer are read-only evidence; the release check runs against a throwaway clone.
 - Never edit `src/drive.ts` or `src/verbs/drive.ts`. Plan B makes drive pass `--ask` text through `queueAsk` and treat brainstorm and design as non-conversations.
 - Line numbers below are `main` at `3dcb9a2`. A1 shifts some of them; find each site by the code quoted beside it.
 - **Taken from A1** (`docs/superpowers/plans/2026-10-19-autopilot-A1-decisions.md`, its "Shared contract", fixed for this plan). This plan calls these and never re-implements them:
@@ -1735,7 +1735,7 @@ git commit -m "docs(design): rows 176-179 -- the ask is state · the recap check
 
 ---
 
-### Task 13: Verify, review, release 0.17.0, upgrade the consumers
+### Task 13: Verify, review, release 0.17.0
 
 - [ ] **Step 1: Full suite and typecheck**
 
@@ -1746,7 +1746,7 @@ Expected: the passed count is at or above main's (after A1), plus this plan's ne
 
 As wave 1's Task 7 Step 2:
 1. Build `main` in a temporary worktree and this branch in place.
-2. From `~/x/personal/fewhats.com`, run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, `index`, and `decide <gate> <target> --show` for every pending decision `status` lists. Save each output and `diff` the two sets.
+2. In a throwaway clone (`C=$(mktemp -d)/fewhats && git clone --local ~/x/personal/fewhats.com "$C"`, so the real repo is never touched), run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, `index`, and `decide <gate> <target> --show` for every pending decision `status` lists. Save each output and `diff` the two sets.
 3. Remove the worktree.
 
 Expected: identical output, except that `status` gains `needs[3]{doc,need,effect,satisfy}` with `ses-prod`, `stripe-live` and `installer-checks`, each `holds nothing`. `blocked` is unchanged, because all three needs sit on live specs and today's `blocked` rows skip live docs. fewhats's canon gains no violation.
@@ -1766,16 +1766,7 @@ Open a PR (`gh pr create`). After the human merges it, on `main`:
 1. Run `pnpm release minor`. Expected: a release commit and tag `v0.17.0`.
 2. The human pushes `main`, then the tag. Wait for `release.yml` to pass, then for `npm view @popovych.co/witness version` to print `0.17.0`.
 
-- [ ] **Step 5: Upgrade the skills and fewhats.com**
-
-```bash
-npx -y skills@latest add -g -y https://registry.npmjs.org/@popovych.co/witness/-/witness-0.17.0.tgz
-cd ~/x/personal/fewhats.com && npx -y @popovych.co/witness@0.17.0 init --agent pi && CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.17.0 check
-```
-
-Expected: all three skill homes read 0.17.0, `init` commits a 2-line pin bump on main and in each live worktree, and `check` reports `0 errors`.
-
-Holding `ac-baseline` under `ses-prod` is a spec amendment, so it is the human's call through `witness write`. This plan never edits consumer canon. KYC stays pinned at 0.14.4.
+Upgrading the skills and any consumer repo to this release is a separate step, outside this plan.
 
 ---
 

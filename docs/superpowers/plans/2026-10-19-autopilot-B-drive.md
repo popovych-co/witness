@@ -30,7 +30,7 @@
 - Commit trailer, on every commit: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - DESIGN.md rows are **180–184**. 168 stays reserved. 169–179 belong to wave 1, A1 and A2.
 - Release with `pnpm release minor`, which produces `0.18.0`. Both pushes, main and then the tag, are the human's.
-- Never edit consumer canon. In fewhats.com, never touch `docs/specs/**`, `docs/plans/**` or `docs/designs/**`.
+- This plan changes only the witness repo. fewhats.com and every other consumer are read-only evidence; the release check runs against a throwaway clone.
 - This plan owns every change to `src/drive.ts` and `src/verbs/drive.ts`. In `plugin/commands/witness.md` it adds to A1's autonomy conditional and A2's ask sentence and contradicts neither.
 - Drive journals nothing of its own (D145). Set-asides, spawn counts, session time and waits live in memory. Every journaled act is a verb's, cap parks included.
 - No autonomous `abandon`, and no new abandon path (§6, D168).
@@ -2148,7 +2148,7 @@ git commit -m "docs(design): rows 180-184 -- drive runs everything · side by si
 
 ---
 
-### Task 16: Verify, review, release 0.18.0, upgrade fewhats
+### Task 16: Verify, review, release 0.18.0
 
 - [ ] **Step 1: Full suite and typecheck**
 
@@ -2159,7 +2159,7 @@ Expected: the passed count is at or above `main`'s (after A2), plus this plan's 
 
 As wave 1's Task 7 Step 2:
 1. Build `main` in a temporary worktree, and this branch in place.
-2. From `~/x/personal/fewhats.com`, run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, and `decide <gate> <target> --show` for every pending decision. Save each output and `diff` the two sets.
+2. In a throwaway clone (`C=$(mktemp -d)/fewhats && git clone --local ~/x/personal/fewhats.com "$C"`, so the real repo is never touched), run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, and `decide <gate> <target> --show` for every pending decision. Save each output and `diff` the two sets.
 3. Remove the worktree.
 
 Expected: identical output, except that under `autonomy: on` `next` gains its last line, `launch: witness drive --detach`.
@@ -2179,26 +2179,7 @@ Open a PR (`gh pr create`). After the human merges it, on `main`:
 1. Run `pnpm release minor`. Expected: a release commit and tag `v0.18.0`.
 2. The human pushes `main`, then the tag. Wait for `release.yml` to pass, then for `npm view @popovych.co/witness version` to print `0.18.0`.
 
-- [ ] **Step 5: Upgrade the skills and fewhats.com**
-
-```bash
-npx -y skills@latest add -g -y https://registry.npmjs.org/@popovych.co/witness/-/witness-0.18.0.tgz
-cd ~/x/personal/fewhats.com && npx -y @popovych.co/witness@0.18.0 init --agent pi && CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.18.0 check
-```
-
-Expected:
-- all three skill homes read 0.18.0;
-- `init` commits a pin bump on main and in each live worktree, and re-installs the engine;
-- `check` reports `0 errors`.
-
-`init` writes `.gitignore` once (`init.ts:122`), so append the two drive lines to fewhats's block by hand:
-
-```bash
-printf '.witness/drive.lock\n.witness/drive.log\n' >> .gitignore
-git add .gitignore && git commit -m "chore(witness): ignore drive's lock and log" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-```
-
-Starting the first unattended run in fewhats is the human's call. KYC stays pinned at 0.14.4.
+Upgrading the skills and any consumer repo to this release is a separate step, outside this plan.
 
 ---
 

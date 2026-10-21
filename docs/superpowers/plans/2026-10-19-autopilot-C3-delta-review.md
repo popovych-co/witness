@@ -57,7 +57,7 @@
   - row **168** stays reserved;
   - rows 169–184 belong to wave 1, A1, A2 and B.
 - Release with `pnpm release minor`, which produces `0.19.0`. Both pushes, `main` and then the tag, are the human's.
-- Never edit consumer canon: no `docs/specs/**`, `docs/plans/**` or `docs/designs/**` in fewhats.com or any other consumer.
+- This plan changes only the witness repo. fewhats.com and every other consumer are read-only evidence; the release check runs against a throwaway clone.
 - Scope:
   - this applies to every repo, and no code in this plan reads the autonomy setting;
   - do not touch the decision policy (the rules in `src/recommend.ts`, or A2's dispatch) or drive.
@@ -1866,7 +1866,7 @@ git commit -m "docs(design): rows 185-187 -- delta review from round 2 and the d
 
 ---
 
-### Task 11: Verify, review, release 0.19.0, upgrade the consumers
+### Task 11: Verify, review, release 0.19.0
 
 - [ ] **Step 1: Full suite and typecheck**
 
@@ -1882,7 +1882,7 @@ A test that gates a real gate across rounds and newly sees a finding demoted nee
 
 1. Build `main` in a temporary worktree: `git worktree add ../witness-main main && (cd ../witness-main && pnpm install --frozen-lockfile && pnpm run build)`.
 2. Build this branch in place: `pnpm run build`.
-3. From `~/x/personal/fewhats.com`, run each build with `CI=1 WITNESS_REGISTRY=off`:
+3. In a throwaway clone (`C=$(mktemp -d)/fewhats && git clone --local ~/x/personal/fewhats.com "$C"`, so the real repo is never touched), run each build with `CI=1 WITNESS_REGISTRY=off`:
    - `check`, `next` and `status`;
    - `log` for each in-flight plan;
    - `decide <gate> <target> --show` for every pending decision `status` lists.
@@ -1915,19 +1915,7 @@ Open a PR (`gh pr create`). After the human merges it, on `main`:
 2. The human pushes `main`, then the tag.
 3. Wait for `release.yml` to pass, then for `npm view @popovych.co/witness version` to print `0.19.0`.
 
-- [ ] **Step 6: Upgrade the skills and fewhats.com**
-
-```bash
-npx -y skills@latest add -g -y https://registry.npmjs.org/@popovych.co/witness/-/witness-0.19.0.tgz
-cd ~/x/personal/fewhats.com && npx -y @popovych.co/witness@0.19.0 init --agent pi && CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.19.0 check
-```
-
-Expected:
-- all three skill homes read 0.19.0;
-- `init` commits a 2-line pin bump on `main` and in each live worktree;
-- `check` reports `0 errors`.
-
-KYC is not touched; it stays pinned at 0.14.4 by the user's choice.
+Upgrading the skills and any consumer repo to this release is a separate step, outside this plan.
 
 ---
 

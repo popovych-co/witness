@@ -2,8 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship build steps 1–2 of the autopilot design:
-- fewhats.com evidence runs one spec's tests instead of the whole suite (C1);
+**Goal:** Ship the first witness release of the autopilot design:
 - the gate runs its reviewer lenses at once (C2);
 - a gate whose deterministic checks failed is recommended `revise`, never `approve` (the `checks-failed` rule);
 - the deferral block stops telling reviewers the opposite of what the gate does (Task 5b).
@@ -11,7 +10,6 @@
 Release them as witness 0.15.0.
 
 **Architecture:**
-- **C1** is a config change in the consumer repo (fewhats.com), plus one human trust grant.
 - **C2:**
   - adds an async reviewer invocation next to the sync one, sharing its preparation and result mapping;
   - moves the battery loop out of `src/gate.ts` into a new `src/battery.ts`, which runs every lens concurrently and aggregates in lens order;
@@ -20,7 +18,7 @@ Release them as witness 0.15.0.
 
 **Tech Stack:** TypeScript (ESM, Node ≥ 20), vitest 3, pnpm 10, POSIX `sh` fakes in `fixtures/fakebin/`.
 
-**Spec:** `docs/superpowers/specs/2026-10-19-autopilot-design.md` (§7 C1, C2 and A2's failed-checks paragraph; §8 steps 1–2).
+**Spec:** `docs/superpowers/specs/2026-10-19-autopilot-design.md` (§7 C2, A2's failed-checks paragraph, and the deferral-block fix in §8).
 
 ## Global Constraints
 
@@ -29,12 +27,11 @@ Release them as witness 0.15.0.
 - Judge `pnpm test` by its AssertionError count, which must be 0, not by its exit code. A few worker-RPC timeouts make it exit 1 with every test green.
 - No commas in new CLI output text. Use `·` and `—`.
 - Commit trailer, on every commit: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- In fewhats.com, touch only `witness.config.yaml`. Never touch `docs/specs/**`, `docs/plans/**` or `docs/designs/**`.
+- This plan changes only the witness repo. fewhats.com and every other consumer are read-only evidence; the release check runs against a throwaway clone.
 - DESIGN.md:
   - the new rows are **169** (parallel battery) and **170** (`checks-failed`);
   - **168 stays reserved** for the owed pin-resolution fix.
 - Release with `pnpm release minor`, which produces `0.15.0`. Both pushes, main and then the tag, are the human's.
-- fewhats's runner template, verbatim: `pnpm test -t "@spec:{id}($|[^a-z0-9-])"`.
 
 ## Review Focus
 
@@ -70,96 +67,9 @@ git commit -m "docs(autopilot): design and its five plans" -m "Co-Authored-By: C
 
 ---
 
-### Task 1: fewhats.com runs one spec's tests per evidence run (C1)
+### Task 1: (moved out of this plan)
 
-This task runs in `/Users/home/x/personal/fewhats.com` and is independent of the witness release.
-
-**Two facts drive the order of its steps:**
-- Evidence reads the runner config from the **checkout it runs in** (`src/evidence.ts:49-55` → `loadConfig(runRoot)`).
-- The drift lane and the trust list resolve at the **primary root** (`src/criteria.ts:31-36`).
-
-So the edit lands on main and in each live worktree. Trust must be granted before any pi session gates on the new template, or that session's drift lane fails as `untrusted-blocked`.
-
-**Files:**
-- Modify: `fewhats.com/witness.config.yaml`, the `criteria:` block.
-- Modify, only when unmodified there: `.witness/worktrees/{reply-send-plan-1,thread-mirror-tap-plan-1}/witness.config.yaml`
-
-- [ ] **Step 1: Preconditions**
-
-Run: `cd /Users/home/x/personal/fewhats.com && git status --short witness.config.yaml && pgrep -fl "pi .*-p|vitest" || true`
-Expected: no output. The config is clean, and no headless pi session or vitest run is in flight. If something is in flight, wait for it.
-
-- [ ] **Step 2: Refresh main's install**
-
-The 2026-10-19 probe hit `Cannot find package '@repo/logger'` in main.
-
-Run: `pnpm install --frozen-lockfile`
-Expected: exit 0.
-
-- [ ] **Step 3: Replace the runner lines and their comment**
-
-The current comment says criteria are counted from the report. In filtered mode the drift lane judges by exit code, so that sentence would become false. Replace it with this block:
-
-```yaml
-criteria:
-  exclude: [docs/superpowers/**]
-  # One spec per evidence run: `-t` filters vitest by test NAME, and the pattern
-  # is anchored — `($|[^a-z0-9-])` — so `thread-mirror` never also runs
-  # `thread-mirror-tap`'s tests. That matters beyond speed: witness judges a
-  # filtered criterion by the run's exit code, so an over-match would fail the
-  # wrong spec's lane. Measured 2026-10-19: 13–48 s per run against ~9 min for
-  # the whole suite. The whole suite still runs once per ship gate (ship.test).
-  # The report stays: evidence counts a spec's tests from it by exact tag. An
-  # exact path, not a ** glob, so no foreign report merges in.
-  runner: 'pnpm test -t "@spec:{id}($|[^a-z0-9-])"'
-  report: "junit:reports/junit.xml"
-```
-
-Keep the existing `exclude` comment lines above `exclude:`.
-
-- [ ] **Step 4: Config validates**
-
-Run: `CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.14.8 check`
-Expected: `0 errors`. The warnings stay as before: `ahead` and 3 `need-unmet`.
-
-- [ ] **Step 5: HUMAN, grant trust (a kept stop)**
-
-Stop and ask the human to run this in their own terminal (it needs a TTY):
-
-```bash
-cd ~/x/personal/fewhats.com && CI=1 npx -y @popovych.co/witness@0.14.8 check --drift
-```
-
-- They answer `y` to `trust this command?` for `pnpm test -t "@spec:{id}($|[^a-z0-9-])"`.
-- `CI=1` keeps the sweep read-only: it appends no journal entries and stamps nothing.
-
-Expected:
-- `.witness/allow.json` lists the template;
-- a `drift` row per live spec;
-- a summary line ending `mode read-only`.
-
-`ac-baseline` stays red (no production credentials), as it was before.
-
-- [ ] **Step 6: Re-run headless to prove the grant took**
-
-Run: `CI=1 npx -y @popovych.co/witness@0.14.8 check --drift 2>&1 | grep -c untrusted || true`
-Expected: `0`.
-
-- [ ] **Step 7: Commit on main**
-
-```bash
-git add witness.config.yaml
-git commit -m "chore(witness): filtered criteria runner — one spec's tests per evidence run" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-```
-
-- [ ] **Step 8: Same edit in each live worktree whose config is unmodified**
-
-For each `wt` in `.witness/worktrees/reply-send-plan-1` and `.witness/worktrees/thread-mirror-tap-plan-1`:
-1. Run `git -C "$wt" diff --quiet -- witness.config.yaml`.
-2. If that exits 0, apply Step 3's block.
-3. Then run `git -C "$wt" commit -m "chore(witness): filtered criteria runner" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- witness.config.yaml`.
-
-Expected: each commit lists exactly one file. The session work left uncommitted in the worktree is untouched (`git -C "$wt" status --short` shows the same paths as before).
+fewhats's switch to a filtered test runner (design C1) is a setting in fewhats, not witness code, so no witness plan makes it. The numbering of the tasks below is kept.
 
 ---
 
@@ -691,7 +601,7 @@ git commit -m "docs(design): rows 169-170 and row 122 amended -- the battery run
 
 ---
 
-### Task 7: Verify, review, release 0.15.0, upgrade the consumers
+### Task 7: Verify, review, release 0.15.0
 
 - [ ] **Step 1: Full suite and typecheck**
 
@@ -702,7 +612,7 @@ Expected: the passed count is at or above main's 1223, with 0 AssertionError and
 
 1. Build `main` in a temporary worktree: `git worktree add ../witness-main main && (cd ../witness-main && pnpm install --frozen-lockfile && pnpm run build)`.
 2. Build this branch in place: `pnpm run build`.
-3. From `~/x/personal/fewhats.com`, run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, and `decide <gate> <target> --show` for every pending decision that `status` lists. Save each output and `diff` the two sets.
+3. In a throwaway clone (`C=$(mktemp -d)/fewhats && git clone --local ~/x/personal/fewhats.com "$C"`, so the real repo is never touched), run each build with `CI=1 WITNESS_REGISTRY=off`: `check`, `next`, `status`, and `decide <gate> <target> --show` for every pending decision that `status` lists. Save each output and `diff` the two sets.
 4. Remove the temporary worktree: `git worktree remove ../witness-main`.
 
 Expected: identical output, except that a decision block whose last run failed a check now says `checks-failed` and recommends `--revise`.
@@ -721,16 +631,4 @@ Open a PR (`gh pr create`). After the human merges it, on `main`:
 1. Run `pnpm release minor`. Expected: release commit and tag `v0.15.0`.
 2. The human pushes `main`, then the tag. Wait for `release.yml` to pass, then for `npm view @popovych.co/witness version` to print `0.15.0`. The registry takes about 2 minutes.
 
-- [ ] **Step 5: Upgrade the skills and fewhats.com**
-
-```bash
-npx -y skills@latest add -g -y https://registry.npmjs.org/@popovych.co/witness/-/witness-0.15.0.tgz
-cd ~/x/personal/fewhats.com && npx -y @popovych.co/witness@0.15.0 init --agent pi && CI=1 WITNESS_REGISTRY=off npx -y @popovych.co/witness@0.15.0 check
-```
-
-Expected:
-- all three skill homes read 0.15.0 (the `PromptScript` errors are the known, ignorable target);
-- `init` commits a 2-line pin bump on main and in each live worktree;
-- `check` reports `0 errors`.
-
-KYC is not touched; it stays pinned at 0.14.4 by the user's choice.
+Upgrading the skills and any consumer repo to this release is a separate step, outside this plan.

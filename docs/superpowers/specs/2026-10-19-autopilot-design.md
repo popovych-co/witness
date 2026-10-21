@@ -420,7 +420,7 @@ Any of these would be a failure, even if the result technically works.
 
 Part C applies to every repo, because it is gate mechanics, not a mood. The `checks-failed` recommender fix in A2 also applies to every repo. Parts A and B are opt-in.
 
-**C1. fewhats switches to the filtered runner.**
+**C1. fewhats switches to the filtered runner.** This one is a consumer setting, outside the witness build: no witness plan touches fewhats. It is a one-line change in fewhats's `witness.config.yaml`, plus one trust grant, made whenever the user chooses.
 - The new setting is `criteria.runner: 'pnpm test -t "@spec:{id}($|[^a-z0-9-])"'`, keeping `report: "junit:reports/junit.xml"`.
   - The pattern is anchored so that a spec id never matches a longer id that starts with it: thread-mirror versus thread-mirror-tap (E6).
   - The residual, recorded in DESIGN.md: filtered-mode criteria are judged by exit code, so a template that over-matches would fail the wrong spec's lane.
@@ -458,12 +458,13 @@ Part C applies to every repo, because it is gate mechanics, not a mood. The `che
 
 Each step is its own plan and release.
 
-1. **C1:** the fewhats config change, verified there. It takes minutes and is the biggest single time win per step.
-2. **C2 and the `checks-failed` recommender fix:** parallel reviewers, plus the fix that stops recommending approve over a failed check. Both are small, self-contained witness changes.
-3. **A1:** autonomy's decisions, the merge and the prompts (A1–A5, A7, A8). It removes most stops even in chat sessions, before drive changes at all.
-4. **A2:** autonomy's intake (A6, A9, A10): the ask, the recap check, design without the interview, needs `holds`, and the satisfy fix.
-5. **B:** drive as autopilot. It builds on A1 and A2.
-6. **C3:** delta review. It changes gate semantics and needs calibration fixtures, so it gets its own rows.
+C1 is not a build step: it is fewhats's own setting (see C1), and the plans touch only witness.
+
+1. **Wave 1, C2 and the `checks-failed` recommender fix:** parallel reviewers, plus the fix that stops recommending approve over a failed check. Both are small, self-contained witness changes.
+2. **A1:** autonomy's decisions, the merge and the prompts (A1–A5, A7, A8). It removes most stops even in chat sessions, before drive changes at all.
+3. **A2:** autonomy's intake (A6, A9, A10): the ask, the recap check, design without the interview, needs `holds`, and the satisfy fix.
+4. **B:** drive as autopilot. It builds on A1 and A2.
+5. **C3:** delta review. It changes gate semantics and needs calibration fixtures, so it gets its own rows.
 
 Wave 1 also carries a pre-existing fix found while planning C3. The deferral block told reviewers that silence reads as "still present", while the gate discharges on silence (`src/deferral.ts:55`). The block now states the gate's rule.
 
@@ -504,7 +505,7 @@ Plans: `docs/superpowers/plans/2026-10-19-autopilot-{wave-1,A1-decisions,A2-inta
 4. Design authoring runs without the directions interview. The human sees the finished look once per round.
 5. The parallel default is 2 flows.
 6. Bigger session slices were dropped (E7), although the user liked the idea in chat.
-7. C1 is a fewhats config change, not witness code.
+7. C1 is a fewhats config change, not witness code. It is left to the user, and the plans never modify fewhats: they only read it, through a throwaway clone, for the release check.
 8. The build order in §8.
 9. The success target: a plan start-to-merge median under 4 h on fewhats.
 10. A failed deterministic check is never approved by the policy, and never overridden by the arbiter. Such a flow is fixed, re-planned, or parked.
