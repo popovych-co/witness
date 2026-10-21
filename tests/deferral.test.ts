@@ -63,6 +63,19 @@ describe('deferralsBlock is the inverse of a pin', () => {
   it('is empty for no obligations', () => {
     expect(deferralsBlock([])).toBe('')
   })
+
+  it('says silence is read as fixed — the rule the gate applies', () => {
+    const text = deferralsBlock([mint('d-1') as unknown as DeferralEntry])
+    expect(text).toContain('Silence is read as fixed')
+    expect(text).not.toContain('still present"')
+  })
+
+  it('renders an omission obligation as the anchor object a verdict can carry', () => {
+    const text = deferralsBlock([mint('d-2', { anchor: 'omission:tests/' }) as unknown as DeferralEntry])
+    expect(text).toContain('omission · scope tests/')
+    expect(text).toContain('"anchor": { "kind": "omission", "scope": "tests/" }')
+    expect(text).not.toContain('omission:tests/')
+  })
 })
 
 const BLOCKING = {
@@ -147,7 +160,7 @@ describe('open obligations reach the battery', () => {
     const prompt = ['argv', 'stdin'].map((f) => readFileSync(join(last, f), 'utf8')).join('\n')
     expect(prompt).toContain('Open deferrals')
     expect(prompt).toContain('auth-refresh-plan-1 > ## Step: s1')
-    expect(prompt).toMatch(/Silence is read as "still present"/)
+    expect(prompt).toMatch(/Silence is read as fixed/)
   })
 })
 
