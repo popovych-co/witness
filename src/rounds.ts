@@ -55,6 +55,17 @@ export interface GateRunEntry {
   // (`next.ts`'s `lapseNote`) falls back to naming both shas, which is the honest answer
   // for a record that cannot say.
   diff_sha?: string
+  // Row 186. The artifact exactly as this battery read it, as a git tree object (src/snapshot.ts),
+  // and what a delta may not span: the lens prompts and docs, the gate's context, the pin and
+  // the harness. A later round diffs against the tree only while the basis is the same.
+  // Optional because every entry before C3 lacks them — such a round is never a delta base.
+  reviewed_tree?: string
+  basis_sha?: string
+  // Row 185. `prompts_sha` without the delta block, written only when the two differ — the
+  // malformed-streak brake compares setups, and two delta rounds over changing content carry
+  // different blocks under one setup. `delta` names the round this one was judged against.
+  setup_sha?: string
+  delta?: { round: number; run: string }
   checks: GateCheck[]
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
@@ -118,9 +129,13 @@ const isDecision = (e: Entry | undefined, gate: string): e is DecisionEntry & En
   e !== undefined && e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate
 
 export function keyOf(run: GateRunEntry): GateKey {
-  const { reviewed_sha, gate, prompts_sha, witness } = run
+  const { reviewed_sha, gate, witness } = run
   return {
-    reviewed_sha, gate, prompts_sha, witness,
+    // Row 185: a run is identified by what it read and who read it — the SETUP — never by its
+    // delta block, which is how a round reviewed. A pass or an approve resets the window the
+    // delta base lives in, so a key carrying the block could not be rebuilt after one, and the
+    // content a settled delta round read would have run a fresh battery and un-settled the gate.
+    reviewed_sha, gate, prompts_sha: run.setup_sha ?? run.prompts_sha, witness,
     pin: run.pin ?? run.model,
     harness: run.harness ?? 'claude-code',
   }
@@ -176,6 +191,21 @@ function lastResetIndex(entries: Entry[], gate: string): number {
 // 107 specifies — refused the next legitimate run over rounds already disposed of.
 export function runsSinceReset(entries: Entry[], gate: string): GateRunEntry[] {
   return gateRuns(entries.slice(lastResetIndex(entries, gate) + 1), gate)
+}
+
+// Row 185. The round a delta review compares against: the last run in the budget window that
+// judged something (not malformed, not fallen back, carrying verdicts) and read OTHER content.
+// Skipping same-content rounds is what keeps the delta key stable: a re-gate of the content a
+// delta round already read picks that round's own base again, renders the same block, and
+// resumes it — a delta round is never its own re-run's base.
+export function deltaBase(entries: Entry[], gate: string, reviewedSha: string): GateRunEntry | undefined {
+  const runs = runsSinceReset(entries, gate)
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const r = runs[i]!
+    if (r.outcome === 'malformed' || fellBack(r) || !(r.verdicts?.length) || r.reviewed_sha === reviewedSha) continue
+    return r
+  }
+  return undefined
 }
 
 export function roundsSinceApprove(entries: Entry[], gate: string): number {

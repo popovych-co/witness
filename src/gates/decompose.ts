@@ -1,6 +1,8 @@
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { serializeDoc } from '../fm.js'
 import { canonicalJson, canonicalSha } from '../sha.js'
+import { contextDigest } from '../delta.js'
+import { snapshotFiles } from '../snapshot.js'
 import { latestRecap, streamExists } from '../journal.js'
 import { findCycle, findById, type CanonDoc } from '../scan.js'
 import { effortReviewedSha, effortSpecs, effortWrites } from '../reviewed.js'
@@ -83,9 +85,11 @@ registerGate({
     ].join('\n\n')
 
     const { sha } = effortReviewedSha(root, canon, effort)
+    const tree = snapshotFiles(root, docs.map((d) => ({ name: `${String(d.meta.id)}.md`, content: serializeDoc({ meta: d.meta, body: d.body }) })))
     return ok<GateInput>({
       class: (recap.class ?? 'feature') as GateInput['class'],
       reviewedSha: sha,
+      ...(tree ? { snapshot: { tree, context: contextDigest(canonicalJson(recap), coverageTable) } } : {}),
       reviewed: { kind: 'docs', docs: docs.map((d) => ({ id: String(d.meta.id), body: d.body })) },
       promptBody,
       checks,

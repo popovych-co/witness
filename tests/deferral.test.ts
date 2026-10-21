@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { deferralsBlock, newDeferralId, openDeferrals, type DeferralEntry } from '../src/deferral.js'
 import { readStream, type Entry } from '../src/journal.js'
+import type { GateRunEntry } from '../src/rounds.js'
 import {
   approve, fakeScenario, gateEnv, ghState, putVerdict, seededRepo, writePlan, writeSpec,
 } from './helpers.js'
@@ -349,5 +350,60 @@ describe('an obligation follows its spec to the successor (D166)', () => {
     expect(s.stdout).toContain(id)
     expect(s.stdout).toContain('moved from auth-refresh')
     expect((await repo.cli(['check'])).stdout).not.toContain('stranded-deferral')
+  })
+})
+
+const S1 = 'auth-refresh-plan-1 > ## Step: s1'
+const S2 = 'auth-refresh-plan-1 > ## Step: s2'
+const STEPS2 = { steps: [{ id: 's1', title: 'rotate', criteria: ['ac-rotate'] }, { id: 's2', title: 'wire', scaffolding: true }] }
+const two = (s1: string, s2 = 'Stable wiring.') => `## Step: s1\n${s1}\n\n## Step: s2\n${s2}\n`
+const say = (...fs: Array<{ anchor: string; blocking: boolean }>) =>
+  ({ coverage: BLOCKING.coverage, findings: fs.map((f) => ({ ...f, claim: 'x' })) })
+
+// three blocking rounds at s1 → --approve --override: the obligation on s1 opens and the window resets
+async function overriddenTwoSteps() {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh'); approve(repo, 'auth-refresh')
+  const scenario = fakeScenario(); putVerdict(scenario, BLOCKING)
+  for (let i = 1; i <= 3; i++) {
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS2, two(`Attempt ${i}.`))
+    await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
+  }
+  await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'])
+  const gate = async (planBody: string, verdict: unknown) => {
+    await writePlan(repo, 'auth-refresh-plan-1', STEPS2, planBody)
+    const s = fakeScenario(); putVerdict(s, verdict)
+    return repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(s) })
+  }
+  return { repo, gate }
+}
+const open = (root: string) => openDeferrals(readStream(root, 'auth-refresh-plan-1'))
+
+describe('a delta round discharges only what it was shown (C3)', () => {
+  // Review Focus 3
+  it('silence leaves an obligation in an unchanged section open', async () => {
+    const { repo, gate } = await overriddenTwoSteps()
+    await gate(two('After override.'), say({ anchor: S1, blocking: true }))           // round 1, full: still there
+    const g = await gate(two('After override.', 'Rewired.'), say())                    // round 2, delta: s1 untouched
+    expect(g.stdout).toContain('review: delta since round 1')
+    expect(g.stdout).not.toContain('discharged')
+    expect(open(repo.root)).toHaveLength(1)
+  })
+
+  it('guard: silence still discharges an obligation whose section changed', async () => {
+    const { repo, gate } = await overriddenTwoSteps()
+    await gate(two('After override.'), say({ anchor: S1, blocking: true }))
+    const g = await gate(two('Fixed with a test first.'), say())
+    expect(g.stdout).toContain('discharged')
+    expect(open(repo.root)).toHaveLength(0)
+  })
+
+  it('guard: a reported non-blocking finding at the anchor keeps the obligation open in a delta round', async () => {
+    const { repo, gate } = await overriddenTwoSteps()
+    await gate(two('After override.'), say({ anchor: S1, blocking: false }, { anchor: S2, blocking: true }))
+    await gate(two('Fixed.', 'Rewired.'), say({ anchor: S1, blocking: false }))
+    const r2 = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'gate-run').at(-1) as unknown as GateRunEntry
+    expect(r2.delta).toBeDefined()
+    expect(open(repo.root)).toHaveLength(1)
   })
 })

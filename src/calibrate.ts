@@ -17,11 +17,23 @@ import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
 import { anchorMenu, parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 import { createWorktree } from './worktree.js'
+import { deltaBlock, deltaView, demote, reportedBy, type PriorFinding } from './delta.js'
+import { snapshotTree, treeDiff } from './snapshot.js'
 
 export interface CalSeed { id: string; overlay: string; defect: string }
-export interface ReviewerSuite { reviewer: string; kind: 'docs' | 'tree' | 'screens'; dir: string; seeds: CalSeed[]; injects: CalSeed[] }
+// Row 185. A delta-mode seed: round1/ is what round 1 read over base, overlay/ the change since.
+// `block` wants the defect in the change caught; `demote` wants the defect in untouched code
+// demoted in the delta round AND caught by the full twin that stands in for ship round 1.
+export interface DeltaSeed {
+  id: string; round1?: string; overlay: string
+  defect: string; expect: 'block' | 'demote'; site: string; findings: PriorFinding[]
+}
+export interface ReviewerSuite {
+  reviewer: string; kind: 'docs' | 'tree' | 'screens'; dir: string; seeds: CalSeed[]; injects: CalSeed[]
+  deltas: DeltaSeed[]   // tree suites only; empty elsewhere
+}
 export interface SideScore { ok: number; total: number }
-export interface ReviewerScore { reviewer: string; catches: SideScore; clean: SideScore; inject: SideScore; pass: boolean }
+export interface ReviewerScore { reviewer: string; catches: SideScore; clean: SideScore; inject: SideScore; delta: SideScore; pass: boolean }
 export interface SkillScore { skill: string; metric: string; ok: number; total: number; pass: boolean }
 export interface CalReport { model: string; reviewers: ReviewerScore[]; skills: SkillScore[] }
 
@@ -44,17 +56,37 @@ function seedList(group: string): (dir: string) => CalSeed[] {
   }
 }
 
+function deltaSeeds(dir: string): DeltaSeed[] {
+  const g = join(dir, 'delta')
+  if (!existsSync(g)) return []
+  return readdirSync(g)
+    .filter((n) => statSync(join(g, n)).isDirectory())
+    .sort()
+    .map((id) => {
+      const want = JSON.parse(readFileSync(join(g, id, 'expect.json'), 'utf8')) as Omit<DeltaSeed, 'id' | 'round1' | 'overlay'>
+      const round1 = join(g, id, 'round1')
+      return {
+        id, overlay: join(g, id, 'overlay'), ...(existsSync(round1) ? { round1 } : {}),
+        defect: want.defect, expect: want.expect, site: want.site, findings: want.findings,
+      }
+    })
+}
+
 export function loadReviewerSuite(reviewer: string): Result<ReviewerSuite> {
   const dir = join(calibrationDir(), 'reviewers', reviewer)
   if (!existsSync(join(dir, 'suite.json'))) {
     return refuse([v('reviewer', 'unknown-suite', reviewer, `one of: ${PROMPT_NAMES.join(' ')}`)])
   }
   const kind = (JSON.parse(readFileSync(join(dir, 'suite.json'), 'utf8')) as { kind: 'docs' | 'tree' | 'screens' }).kind
-  return ok({ reviewer, kind, dir, seeds: seedList('seeds')(dir), injects: seedList('inject')(dir) })
+  return ok({
+    reviewer, kind, dir, seeds: seedList('seeds')(dir), injects: seedList('inject')(dir),
+    deltas: kind === 'tree' ? deltaSeeds(dir) : [],
+  })
 }
 
 function walkRel(root: string, prefix = ''): string[] {
   return readdirSync(root)
+    .filter((name) => name !== '.git')   // a delta sample's scratch dir is its own repo
     .sort()
     .flatMap((name) => {
       const p = join(root, name)
@@ -130,6 +162,32 @@ export function distribute(samples: number, buckets: number): number[] {
 export const threshold = (samples: number): number => Math.ceil(0.9 * samples)
 export const injectSamples = (samples: number): number => Math.max(2, Math.ceil(samples / 5))
 
+// A delta sample's scratch repo: base plus round1/ committed as what round 1 read, then the
+// overlay on top. Both trees come from the gate's own snapshot code, so the diff a lens is
+// shown here is the diff production renders.
+export function materializeDelta(
+  suite: ReviewerSuite, seed: DeltaSeed,
+): Result<{ dir: string; files: string[]; from: string; to: string }> {
+  const dir = mkdtempSync(join(tmpdir(), `cal-${suite.reviewer}-delta-`))
+  try {
+    cpSync(join(suite.dir, 'base'), dir, { recursive: true })
+    if (seed.round1 !== undefined) cpSync(seed.round1, dir, { recursive: true, force: true })
+    git(dir, 'init', '-b', 'main')
+    git(dir, 'config', 'user.name', 'witness-calibration')
+    git(dir, 'config', 'user.email', 'calibration@witness.invalid')
+    git(dir, 'config', 'commit.gpgsign', 'false')
+    git(dir, 'add', '-A')
+    git(dir, 'commit', '-q', '-m', 'round 1')
+    const from = git(dir, 'rev-parse', 'HEAD^{tree}')
+    cpSync(seed.overlay, dir, { recursive: true, force: true })
+    const to = snapshotTree(dir, 'HEAD', changedFiles(dir, 'HEAD'))
+    if (to === undefined) return refuse([v(`delta/${seed.id}`, 'snapshot-failed', dir, 'a writable scratch repo for the delta sample')])
+    return ok({ dir, files: walkRel(dir), from, to })
+  } catch (e) {
+    return refuse([v(`delta/${seed.id}`, 'materialize-failed', String((e as Error).message).slice(0, 200), 'a delta seed git can commit')])
+  }
+}
+
 export function runSample(
   ctx: Ctx,
   harness: Harness,
@@ -140,6 +198,13 @@ export function runSample(
   extras?: InvokeExtras,
 ): Result<{ valid: boolean; blocking: number; why: string }> {
   const { dir, files } = materialize(suite, overlay)
+  return runSampleAt(ctx, harness, model, lens, suite, dir, files, extras)
+}
+
+export function runSampleAt(
+  ctx: Ctx, harness: Harness, model: string, lens: string, suite: ReviewerSuite,
+  dir: string, files: string[], extras?: InvokeExtras,
+): Result<{ valid: boolean; blocking: number; why: string }> {
   const { reviewed, context } = composeReviewed(suite, dir, files)
   // same anchor-menu injection as the gate path — calibration must measure the
   // prompt condition production reviewers actually see
@@ -157,6 +222,34 @@ export function runSample(
   return ok({ valid: true, blocking, why: blocking > 0 ? 'blocking findings' : 'clean' })
 }
 
+// The delta call: the prompt a delta-mode lens gets at the gate (the same block, the same
+// menu), then the gate's own demotion over the answer. `block` passes on a blocking finding
+// that survives demotion; `demote` passes when nothing blocks.
+export function runDeltaSample(
+  ctx: Ctx, harness: Harness, model: string, lens: string, suite: ReviewerSuite, seed: DeltaSeed,
+  m: { dir: string; files: string[]; from: string; to: string }, extras?: InvokeExtras,
+): Result<{ ok: boolean; why: string }> {
+  const { reviewed } = composeReviewed(suite, m.dir, m.files)
+  const menu = anchorMenu(reviewed)
+  const block = deltaBlock({ baseRound: 1, prior: seed.findings, diff: treeDiff(m.dir, m.from, m.to) })
+  const prompt = `${lens}\n\n${block}${menu ? `${menu}\n\n` : ''}${renderReviewed(reviewed, '')}\n`
+  const invoked = invokeReviewer(ctx, harness, { cwd: m.dir, prompt, model, ...extras })
+  if (!invoked.ok) return invoked
+  const raw = parseVerdictText(invoked.value.text)
+  if (!raw.ok) return ok({ ok: false, why: 'verdict-unparseable' })
+  const verdict = parseVerdict(raw.value)
+  if (!verdict.ok) return ok({ ok: false, why: 'verdict-shape' })
+  const violations = verdictViolations(verdict.value, reviewed)
+  if (violations.length > 0) return ok({ ok: false, why: `malformed: ${violations[0]!.rule}` })
+  const [judged] = demote([{ reviewer: suite.reviewer, coverage: verdict.value.coverage, findings: verdict.value.findings }], {
+    baseRound: 1, reported: reportedBy(seed.findings.map((f) => f.anchor), true), view: deltaView(m.dir, reviewed, m.from, m.to),
+  }, () => true)
+  const blocking = judged!.findings.filter((f) => f.blocking).length
+  return ok(seed.expect === 'block'
+    ? { ok: blocking > 0, why: blocking > 0 ? 'blocked' : 'nothing blocked' }
+    : { ok: blocking === 0, why: blocking === 0 ? 'demoted' : 'still blocking' })
+}
+
 function side(): SideScore {
   return { ok: 0, total: 0 }
 }
@@ -171,8 +264,10 @@ export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string
   const catches = side()
   const clean = side()
   const inject = side()
+  const delta = side()
   // Deterministic call order (fake-reviewer scripting relies on it):
-  // defect seeds (sorted, round-robin) → injects (sorted, injectSamples each) → clean runs.
+  // defect seeds (sorted, round-robin) → injects (sorted, injectSamples each) → clean runs →
+  // delta seeds (sorted, round-robin), a `demote` seed's full twin straight after its delta call.
   const perSeed = distribute(samples, suite.seeds.length)
   for (const [i, seed] of suite.seeds.entries()) {
     for (let n = 0; n < perSeed[i]!; n += 1) {
@@ -196,8 +291,26 @@ export async function runReviewerSuite(ctx: Ctx, harness: Harness, model: string
     clean.total += 1
     if (s.value.valid && s.value.blocking === 0) clean.ok += 1
   }
-  const pass = catches.ok >= threshold(catches.total) && clean.ok >= threshold(clean.total) && inject.ok === inject.total
-  return ok({ reviewer, catches, clean, inject, pass })
+  const perDelta = suite.deltas.length > 0 ? distribute(samples, suite.deltas.length) : []
+  for (const [i, seed] of suite.deltas.entries()) {
+    for (let n = 0; n < perDelta[i]!; n += 1) {
+      const m = materializeDelta(suite, seed)
+      if (!m.ok) return m
+      const s = runDeltaSample(ctx, harness, model, lens, suite, seed, m.value, extras)
+      if (!s.ok) return s
+      delta.total += 1
+      if (s.value.ok) delta.ok += 1
+      if (seed.expect !== 'demote') continue
+      // The full twin is ship round 1, the backstop: the same content with no delta block must block.
+      const twin = runSampleAt(ctx, harness, model, lens, suite, m.value.dir, m.value.files, extras)
+      if (!twin.ok) return twin
+      delta.total += 1
+      if (twin.value.valid && twin.value.blocking > 0) delta.ok += 1
+    }
+  }
+  const pass = catches.ok >= threshold(catches.total) && clean.ok >= threshold(clean.total) && inject.ok === inject.total &&
+    delta.ok >= threshold(delta.total)
+  return ok({ reviewer, catches, clean, inject, delta, pass })
 }
 
 export async function runReviewerSuites(ctx: Ctx, harness: Harness, model: string, samples: number, only?: string, extras?: InvokeExtras): Promise<Result<ReviewerScore[]>> {
@@ -218,8 +331,8 @@ export function aggregate(r: CalReport): number {
   let okCount = 0
   let total = 0
   for (const s of r.reviewers) {
-    okCount += s.catches.ok + s.clean.ok + s.inject.ok
-    total += s.catches.total + s.clean.total + s.inject.total
+    okCount += s.catches.ok + s.clean.ok + s.inject.ok + s.delta.ok
+    total += s.catches.total + s.clean.total + s.inject.total + s.delta.total
   }
   for (const s of r.skills) {
     okCount += s.ok

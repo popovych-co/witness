@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs'
 import { stateDirs } from '../gitio.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
-import { canonicalSha } from '../sha.js'
+import { canonicalSha, planContentSha } from '../sha.js'
+import { contextDigest } from '../delta.js'
+import { snapshotTree } from '../snapshot.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
 import { findById } from '../scan.js'
 import { changedFiles, diffBase } from '../evidence.js'
@@ -29,6 +31,8 @@ async function commandLane(
 registerGate({
   gate: 'ship',
   targetKind: 'plan',
+  demotes: true,
+  backstops: 'implement',
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)
@@ -87,10 +91,13 @@ registerGate({
 
     const effort = effortOf(root, planId)
     const recap = effort ? latestRecap(root, effort) : undefined
+    const tree = snapshotTree(wt, base, files)
+    const context = contextDigest(base, canonicalSha(parent.meta, parent.body), planContentSha(plan.meta, plan.body))
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: diffReviewedSha(wt, base),
+      ...(tree ? { snapshot: { tree, context } } : {}),
       artifactSha: canonicalSha(plan.meta, plan.body),
       // D151. The primary root is where canon lives; a reviewer may cite the plan it judges.
       reviewed: { kind: 'tree', root: wt, files, canonRoot: root, canonDirs: stateDirs(root) },

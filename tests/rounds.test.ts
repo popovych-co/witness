@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, fellBack, keyOf, pendingDecision, repairGranted, roundBudget,
+  ROUND_BOUND, appendKind, boundReached, deltaBase, fellBack, keyOf, pendingDecision, repairGranted, roundBudget,
   roundsSinceApprove,
   runsSinceReset, sameKey, type GateRunEntry,
 } from '../src/rounds.js'
@@ -271,5 +271,25 @@ describe('the repair grant (row 109)', () => {
 
   it('a plain revise is not a grant', () => {
     expect(repairGranted([...three, revise(3)], 'plan')).toBe(false)
+  })
+})
+
+describe('deltaBase (C3)', () => {
+  it('is the last round in the window that judged other content', () => {
+    const e = [run('a', 'stopped', 1), run('b', 'stopped', 2)]
+    expect(deltaBase(e, 'plan', 'c')!.reviewed_sha).toBe('b')
+    expect(deltaBase(e, 'plan', 'b')!.reviewed_sha).toBe('a')        // a re-run of b compares with a, as b did
+  })
+  it('never picks a malformed, fallen-back or verdict-less round', () => {
+    const e = [run('a', 'stopped', 1), run('b', 'malformed', 2), run('c', 'stopped', 2, { pin: 'other' }),
+      run('d', 'stopped', 2, { verdicts: [] })]
+    expect(deltaBase(e, 'plan', 'e')!.reviewed_sha).toBe('a')
+  })
+  it('has nothing at round 1 — an empty window, a reset, this content only, or another gate', () => {
+    expect(deltaBase([], 'plan', 'a')).toBeUndefined()
+    expect(deltaBase([run('a', 'stopped', 1)], 'plan', 'a')).toBeUndefined()
+    expect(deltaBase([run('a', 'stopped', 1), approve(1)], 'plan', 'b')).toBeUndefined()
+    expect(deltaBase([run('a', 'passed', 1)], 'plan', 'b')).toBeUndefined()
+    expect(deltaBase([run('a', 'stopped', 1)], 'ship', 'b')).toBeUndefined()
   })
 })

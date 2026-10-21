@@ -22,6 +22,15 @@ function tree(): Reviewed {
 }
 
 describe('parseVerdict', () => {
+  it('keeps only the schema fields of a finding, so a model never writes demoted', () => {
+    const r = parseVerdict({ coverage: [], findings: [
+      { blocking: true, anchor: 'a', claim: 'c', demoted: 1, extra: 'x' },
+      { blocking: true, anchor: 'b', claim: 'c', contradicts_pin: 2 }] })
+    expect(r.ok && r.value.findings).toEqual([
+      { blocking: true, anchor: 'a', claim: 'c' },
+      { blocking: true, anchor: 'b', claim: 'c', contradicts_pin: 2 }])
+  })
+
   it('refuses missing coverage and malformed findings', () => {
     expect(parseVerdict({ findings: [] }).ok).toBe(false)
     expect(parseVerdict({ coverage: [], findings: [{ anchor: '## X' }] }).ok).toBe(false)

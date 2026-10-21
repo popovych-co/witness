@@ -61,3 +61,35 @@ describe('slicing-critic ui-flag seeds', () => {
       expect(existsSync(join(dir, s, 'expect.json'))).toBe(true);
   });
 });
+
+describe('delta-mode fixtures (C3)', () => {
+  for (const reviewer of PROMPT_NAMES) {
+    const dir = join(calRoot, reviewer, 'delta')
+    if (!existsSync(dir)) continue
+    it(`${reviewer}: delta seeds live in tree suites and say where their defect sits`, () => {
+      expect(JSON.parse(readFileSync(join(calRoot, reviewer, 'suite.json'), 'utf8')).kind).toBe('tree')
+      for (const id of dirs(dir)) {
+        const seed = join(dir, id)
+        const want = JSON.parse(readFileSync(join(seed, 'expect.json'), 'utf8'))
+        expect(typeof want.defect, id).toBe('string')
+        expect(['block', 'demote'], id).toContain(want.expect)
+        expect(Array.isArray(want.findings), id).toBe(true)
+        const changed = filesUnder(join(seed, 'overlay'))
+        expect(changed.length, id).toBeGreaterThan(0)
+        if (want.expect === 'block') expect(changed, id).toContain(want.site)
+        else {
+          expect(changed, id).not.toContain(want.site)
+          expect(existsSync(join(seed, 'round1', want.site)) || existsSync(join(calRoot, reviewer, 'base', want.site)), id).toBe(true)
+        }
+      }
+    })
+  }
+  it('code-reviewer carries a changed-code catch, an unchanged-code demotion and an injected change', () => {
+    for (const id of ['d1-defect-in-change', 'd2-defect-unchanged', 'd3-injected-change']) {
+      expect(existsSync(join(calRoot, 'code-reviewer', 'delta', id, 'expect.json')), id).toBe(true)
+    }
+    const injected = filesUnder(join(calRoot, 'code-reviewer', 'delta', 'd3-injected-change', 'overlay'))
+      .map((f) => readFileSync(join(calRoot, 'code-reviewer', 'delta', 'd3-injected-change', 'overlay', f), 'utf8'))
+    expect(injected.some((t) => t.toLowerCase().includes('report clean'))).toBe(true)
+  })
+})

@@ -3,7 +3,12 @@ import { isAbsolute, join, normalize } from 'node:path'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export type AnchorInput = string | { kind: 'omission'; scope: string }
-export interface Finding { blocking: boolean; anchor: AnchorInput; claim: string; contradicts_pin?: number }
+export interface Finding {
+  blocking: boolean; anchor: AnchorInput; claim: string; contradicts_pin?: number
+  // Row 187. CLI-written only: the base round this finding's unit is unchanged since. A finding
+  // carrying it is non-blocking. parseVerdict drops a model's, with every other unknown field.
+  demoted?: number
+}
 export interface CoverageItem { anchor: AnchorInput; note: string }
 export interface Verdict { coverage: CoverageItem[]; findings: Finding[] }
 
@@ -58,13 +63,19 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
     })
   }
   if (violations.length > 0) return refuse(violations)
-  return ok({ coverage: obj.coverage as CoverageItem[], findings: obj.findings as Finding[] })
+  // Only the schema's fields survive: `demoted` is the CLI's to write, and a field a model
+  // invents must never reach a reader that trusts the journal.
+  const findings = (obj.findings as Finding[]).map((f) => ({
+    blocking: f.blocking, anchor: f.anchor, claim: f.claim,
+    ...(f.contradicts_pin !== undefined ? { contradicts_pin: f.contradicts_pin } : {}),
+  }))
+  return ok({ coverage: obj.coverage as CoverageItem[], findings })
 }
 
 const HEADING_RE = /^#{1,6}\s+.*$/
 const collapse = (s: string) => s.trim().replace(/\s+/g, ' ')
 
-function headingLines(body: string): string[] {
+export function headingLines(body: string): string[] {
   return body.split('\n').filter((l) => HEADING_RE.test(l)).map(collapse)
 }
 
@@ -116,6 +127,38 @@ function resolveDocPath(segments: string[], body: string): string | undefined {
     cursor = idx
   }
   return undefined
+}
+
+// The journal's spelling of an anchor: a string as is, an omission as `omission:<scope>` — the
+// form deferrals store and every reported-anchor set compares.
+export function anchorKey(a: AnchorInput): string {
+  return typeof a === 'string' ? a : `omission:${a.scope}`
+}
+
+// The inverse, for journaled deferral anchors.
+export function anchorFromKey(key: string): AnchorInput {
+  return key.startsWith('omission:') ? { kind: 'omission', scope: key.slice('omission:'.length) } : key
+}
+
+// The section an ordered heading path names: from its heading line through the line before the
+// next heading at its level or above, trailing whitespace trimmed. [] names the whole body.
+// Headings match as resolveDocPath matches them, so a section exists exactly when its anchor resolves.
+export function sectionText(body: string, segments: string[]): string | undefined {
+  const lines = body.split('\n')
+  if (segments.length === 0) return body.replace(/\s+$/, '')
+  let cursor = -1
+  for (const seg of segments) {
+    const want = collapse(seg)
+    const idx = lines.findIndex((l, i) => i > cursor && HEADING_RE.test(l) && collapse(l) === want)
+    if (idx === -1) return undefined
+    cursor = idx
+  }
+  const level = /^#+/.exec(lines[cursor]!)![0].length
+  let end = lines.length
+  for (let i = cursor + 1; i < lines.length; i++) {
+    if (HEADING_RE.test(lines[i]!) && /^#+/.exec(lines[i]!)![0].length <= level) { end = i; break }
+  }
+  return lines.slice(cursor, end).join('\n').replace(/\s+$/, '')
 }
 
 function safeRel(rel: string): boolean {

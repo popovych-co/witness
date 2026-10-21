@@ -9,6 +9,8 @@ import { effortOf } from '../reviewed.js'
 import type { GateCheck } from '../rounds.js'
 import { findById, type CanonDoc } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
+import { contextDigest } from '../delta.js'
+import { snapshotFiles } from '../snapshot.js'
 
 // What this gate judges: the artifact PAIRED with the spec it realizes. With no artifact
 // the spec alone is the sha, so a re-authored spec still lapses a prior verdict. Shared
@@ -64,9 +66,12 @@ registerGate({
       `### Parent spec: ${specId}`, serializeDoc({ meta: spec.meta, body: spec.body }),
     ].join('\n\n')
 
+    const tree = html !== undefined ? snapshotFiles(root, [{ name: 'design.html', content: html }]) : undefined
+
     return ok<GateInput>({
       class: (recap?.class ?? 'feature') as GateInput['class'],
       reviewedSha: reviewedShaOf(html, spec),
+      ...(tree ? { snapshot: { tree, context: contextDigest(canonicalSha(spec.meta, spec.body)) } } : {}),
       artifactSha: html !== undefined ? htmlSha(html) : undefined,
       reviewed: { kind: 'design', artifact: { ids }, spec: { id: specId, body: spec.body } },
       promptBody,

@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { serializeDoc } from '../fm.js'
-import { canonicalSha } from '../sha.js'
+import { canonicalSha, planContentSha } from '../sha.js'
+import { contextDigest } from '../delta.js'
+import { snapshotTree } from '../snapshot.js'
 import { designRel } from '../design.js'
 import { git, stateDirs } from '../gitio.js'
 import { latestRecap, readStream } from '../journal.js'
@@ -74,6 +76,7 @@ function screensPromptBody(caps: Array<{ name: string; path: string }>): string 
 registerGate({
   gate: 'implement',
   targetKind: 'plan',
+  demotes: true,
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)
@@ -154,10 +157,12 @@ registerGate({
 
     const effort = effortOf(root, planId)
     const recap = effort ? latestRecap(root, effort) : undefined
+    const tree = snapshotTree(wt, base, files)
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: implementReviewedSha(wt, base, plan),
+      ...(tree ? { snapshot: { tree, context: contextDigest(base, planContentSha(plan.meta, plan.body)) } } : {}),
       // the diff term of the line above, so a lapse can attribute itself (row 135)
       diffSha: diffReviewedSha(wt, base),
       artifactSha: canonicalSha(plan.meta, plan.body),
