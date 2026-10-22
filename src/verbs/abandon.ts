@@ -5,9 +5,9 @@ import { findById, loadCanon } from '../scan.js'
 import { effortAbandoned, latestRecap, readStream, streamExists } from '../journal.js'
 import { effortWrites } from '../reviewed.js'
 import { canonicalSha } from '../sha.js'
-import { renderRefusal, v, type Violation } from '../refusal.js'
+import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
-import { abandonLines, executeAbandon, planItems, returnCollisions, specRevertFor, type AbandonItem, type SpecKeep } from '../abandon.js'
+import { abandonLines, executeAbandon, planItems, returnCollisions, specRevertFor, takenBackAlready, writeAct, type AbandonItem, type SpecKeep } from '../abandon.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const target = argv.find((a) => !a.startsWith('--'))
@@ -55,11 +55,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     for (const [id, w] of writes) {
       const artifact = findById(canon, id)
       if (!artifact || artifact.meta.type !== 'spec') continue
-      if (canonicalSha(artifact.meta, artifact.body) !== w.sha) {
-        problems.push(v('spec', 'stacked-amendment', id, 'the effort\'s write is no longer the newest'))
+      // D168. The effort's write is what this abandon takes back only while it is the act the
+      // spec's content is — the same bytes written again later are the later effort's. A write
+      // an earlier abandon already took back (`abandon <plan>`) leaves nothing here to take.
+      const current = canonicalSha(artifact.meta, artifact.body)
+      const act = writeAct(root, id, current)
+      if (current !== w.sha || act?.effort !== target) {
+        if (takenBackAlready(root, target, id, artifact.rel, w.sha)) continue
+        problems.push(current === w.sha && act === undefined
+          ? humanCall(v('spec', 'pin-unresolvable', id, `${target}'s journaled write of this content — the journal's history is unreadable here · a human's call`))
+          : v('spec', 'stacked-amendment', id, 'the effort\'s write is no longer the newest'))
         continue
       }
-      const revertR = specRevertFor(root, canon, artifact, w.sha, abandonSet, target)
+      const revertR = specRevertFor(root, canon, artifact, w.sha, abandonSet, act, target)
       if (!revertR.ok) { problems.push(...revertR.violations); continue }
       const outcome = revertR.value
       if (outcome?.action === 'keep') {

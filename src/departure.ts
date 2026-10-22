@@ -4,7 +4,7 @@ import type { CanonPaths } from './config.js'
 import { deferralMoves } from './deferral.js'
 import { designRel } from './design.js'
 import { reservedId } from './ask.js'
-import { splitDoc } from './fm.js'
+import { splitDoc, type RawDoc } from './fm.js'
 import { adoptedCommits, lastWitnessed } from './adopt.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
@@ -62,15 +62,79 @@ export interface Return {
   files: string[]         // its spec file, its design when it had one, its stream
   restore: () => void     // writes the departed bytes back
   moves: Array<{ stream: string; entry: { t: EntryType; [k: string]: unknown } }>   // its debts, home again
-  unwound: StatusEntry[]  // specs taken back on the way, because an abandoned effort created them
   rel: string             // the spec path it lands on: the path it left from
   by: string              // the successor its departure named: the re-slice this return takes back
 }
 
-// Whether an abandoned effort — or the one being abandoned — wrote this content of a spec (as it
-// stands at revision `at`), and if so the commit that established it. The policy is the caller's
-// (abandon.ts); the walk is here.
-export type TakenBack = (id: string, sha: string, rel: string, at: string) => string | undefined
+// D168. What the way back does: the specs it brings back, and the specs it takes back past
+// their create on the way. Apart, because a create with nothing under it brings nothing back,
+// and its spec must still be journaled out of canon.
+export interface Way {
+  returns: Return[]
+  unwound: StatusEntry[]  // superseded → removed: an abandoned effort created them
+}
+
+// D168. One write, found by its journal entry: the commit that appended the line, and whether
+// it created the artifact. A write is an act, and content is not one — a return or another
+// abandon's restore can bring the same content back later, under a commit that is not the write.
+export interface WriteAct { effort: string; commit: string; created: boolean }
+
+// Whether this content of a spec (as it stands at revision `at` on `rel`) is the act of an effort
+// the way back takes back — an abandoned one, or the one being abandoned — and if so that write.
+// The policy is the caller's (abandon.ts); the walk is here.
+export type TakenBack = (id: string, sha: string, rel: string, at: string) => WriteAct | undefined
+
+// The content a spec stood at when this write was made: none, when the entry says the write
+// created it; lost, when the entry says amendment but the path held nothing then — moved by
+// hand, or history cut — which is never read as a create.
+function before(root: string, rel: string, act: WriteAct): { src: string; blob: Buffer } | 'create' | 'lost' {
+  if (act.created) return 'create'
+  const src = `${act.commit}^`
+  const blob = gitBlob(root, src, rel)
+  return blob === undefined ? 'lost' : { src, blob }
+}
+
+export interface At { src: string; blob: Buffer; doc: RawDoc }
+export type Walked =
+  | ({ end: 'content'; passed: WriteAct[] } & At)
+  | { end: 'create'; act: WriteAct; passed: WriteAct[] }
+  | { end: 'lost'; act: WriteAct; passed: WriteAct[]; at?: At }   // `at`: where it stood when `act` could not be gone past
+
+// D168. From content at `src`, back past every write `takenBack` names, each found by its own
+// journal entry: to the content before the last of them, or to a create, past which the spec
+// has no content to stand at. `passed` is every write taken back on the way, oldest last.
+export function walkBack(root: string, rel: string, id: string, at: At, takenBack: TakenBack, seen: Set<string>): Walked {
+  let { src, blob, doc } = at
+  const passed: WriteAct[] = []
+  for (;;) {
+    const back = takenBack(id, canonicalSha(doc.meta, doc.body), rel, src)
+    if (back === undefined || seen.has(back.commit)) return { end: 'content', src, blob, doc, passed }
+    seen.add(back.commit)
+    const prior = before(root, rel, back)
+    if (prior === 'create') return { end: 'create', act: back, passed: [...passed, back] }
+    if (prior === 'lost') return { end: 'lost', act: back, passed, at: { src, blob, doc } }
+    const parsed = splitDoc(prior.blob.toString('utf8'))
+    if (!parsed.ok) return { end: 'content', src, blob, doc, passed }   // kept: nothing readable before it
+    passed.push(back)
+    ;({ src, blob } = prior)
+    doc = parsed.value
+  }
+}
+
+// D168. Taking back one write: the content before it, walked back past every write `takenBack`
+// names — or the create, when the write or a write before it created the spec. An unreadable
+// prior is restored as it stands, which is all the walk could do with it.
+export function takeBack(
+  root: string, rel: string, id: string, act: WriteAct, takenBack: TakenBack,
+): Walked | { end: 'unreadable'; src: string; blob: Buffer; passed: WriteAct[] } {
+  const prior = before(root, rel, act)
+  if (prior === 'create') return { end: 'create', act, passed: [act] }
+  if (prior === 'lost') return { end: 'lost', act, passed: [] }
+  const parsed = splitDoc(prior.blob.toString('utf8'))
+  if (!parsed.ok) return { end: 'unreadable', ...prior, passed: [act] }
+  const walked = walkBack(root, rel, id, { ...prior, doc: parsed.value }, takenBack, new Set([act.commit]))
+  return { ...walked, passed: [act, ...walked.passed] }
+}
 
 // The way back. Row 29 unwinds a write by selectively reverting its state commit, and a
 // re-slice's commit did two things: it wrote the successor and departed its predecessor.
@@ -86,63 +150,62 @@ export type TakenBack = (id: string, sha: string, rel: string, at: string) => st
 // work no live effort owns. The walk goes back past each such write — to the content before an
 // amendment, or, past a create, to whatever that create had departed in its turn — so canon
 // ends where it stood before every abandoned write, whatever order the efforts went in.
-export function prepareReturns(root: string, paths: CanonPaths, commit: string, successor: string, takenBack: TakenBack = () => undefined): Return[] {
-  return returnsThrough(root, paths, commit, [successor], [], takenBack, new Set([commit]))
+export function prepareReturns(root: string, paths: CanonPaths, commit: string, successor: string, takenBack: TakenBack = () => undefined): Way {
+  return returnsThrough(root, paths, commit, [successor], takenBack, new Set([commit]))
 }
 
 function returnsThrough(
-  root: string, paths: CanonPaths, commit: string, chain: string[], unwound: StatusEntry[], takenBack: TakenBack, seen: Set<string>,
-): Return[] {
+  root: string, paths: CanonPaths, commit: string, chain: string[], takenBack: TakenBack, seen: Set<string>,
+): Way {
   const successor = chain.at(-1)!
   const shown = tryGit(root, 'show', '--no-renames', '--name-status', '--format=', commit)
-  if (!shown.ok) return []
+  if (!shown.ok) return { returns: [], unwound: [] }
   const deleted = shown.out.split('\n').filter((l) => l.startsWith('D\t')).map((l) => l.slice(2))
-  return deleted.flatMap((rel): Return[] => {
-    if (!rel.startsWith(`${paths.specs}/`) || !rel.endsWith('.md')) return []
-    let src = `${commit}^`
-    let blob = gitBlob(root, src, rel)
-    if (blob === undefined) return []
-    let parsed = splitDoc(blob.toString('utf8'))
-    if (!parsed.ok) return []
+  const ways = deleted.map((rel): Way => {
+    const none: Way = { returns: [], unwound: [] }
+    if (!rel.startsWith(`${paths.specs}/`) || !rel.endsWith('.md')) return none
+    const src = `${commit}^`
+    const blob = gitBlob(root, src, rel)
+    if (blob === undefined) return none
+    const parsed = splitDoc(blob.toString('utf8'))
+    if (!parsed.ok) return none
     const id = String(parsed.value.meta.id)
     const exit = canonExit(readStream(root, id))
-    if (exit?.to !== 'superseded' || exit.by !== successor) return []
-    let status = exit.from
-    for (;;) {
-      const back = takenBack(id, canonicalSha(parsed.value.meta, parsed.value.body), rel, src)
-      if (back === undefined || seen.has(back)) break
-      seen.add(back)
-      const before = gitBlob(root, `${back}^`, rel)
-      if (before === undefined) {
-        // That write created it: it stays out, and what it had departed comes back instead.
-        const gone: StatusEntry = { v: 1, t: 'status', artifact: id, from: 'superseded', to: 'removed', cause: 'abandon' }
-        return returnsThrough(root, paths, back, [...chain, id], [...unwound, gone], takenBack, seen)
-      }
-      const prior = splitDoc(before.toString('utf8'))
-      if (!prior.ok) break
-      src = `${back}^`; blob = before; parsed = prior; status = String(prior.value.meta.status)
+    if (exit?.to !== 'superseded' || exit.by !== successor) return none
+    const reached = walkBack(root, rel, id, { src, blob, doc: parsed.value }, takenBack, seen)
+    // A write the walk cannot go past leaves the return where it stood before that write.
+    const walked = reached.end === 'lost' ? { ...reached, ...reached.at!, end: 'content' as const } : reached
+    if (walked.end === 'create') {
+      // That write created it: it stays out — journaled so whether or not anything lies under
+      // the create — and what it had departed comes back instead.
+      const gone: StatusEntry = { v: 1, t: 'status', artifact: id, from: 'superseded', to: 'removed', cause: 'abandon' }
+      const under = returnsThrough(root, paths, walked.act.commit, [...chain, id], takenBack, seen)
+      return { returns: under.returns, unwound: [gone, ...under.unwound] }
     }
-    const bytes = blob
+    const status = walked.passed.length > 0 ? String(walked.doc.meta.status) : exit.from
     const design = designRel(paths, id)
-    const designBlob = deleted.includes(design) ? gitBlob(root, src, design) : undefined
+    const designBlob = deleted.includes(design) ? gitBlob(root, walked.src, design) : undefined
     const put = (r: string, b: Buffer): void => {
       mkdirSync(dirname(join(root, r)), { recursive: true })   // git keeps no empty directory: a fresh clone may lack it
       writeFileSync(join(root, r), b)
     }
-    return [{
-      entry: { v: 1, t: 'status', artifact: id, from: 'superseded', to: status, cause: 'abandon' },
-      files: [rel, ...(designBlob === undefined ? [] : [design]), journalRel(id)],
-      restore: () => {
-        put(rel, bytes)
-        if (designBlob !== undefined) put(design, designBlob)
-      },
-      // Each link of the chain hands home the debts that came to it from the next one down.
-      moves: chain.flatMap((s, k) => deferralMoves(readStream(root, s), s, id, (d) => d.moved_from === (chain[k + 1] ?? id))),
-      unwound,
-      rel,
-      by: successor,
-    }]
+    return {
+      returns: [{
+        entry: { v: 1, t: 'status', artifact: id, from: 'superseded', to: status, cause: 'abandon' },
+        files: [rel, ...(designBlob === undefined ? [] : [design]), journalRel(id)],
+        restore: () => {
+          put(rel, walked.blob)
+          if (designBlob !== undefined) put(design, designBlob)
+        },
+        // Each link of the chain hands home the debts that came to it from the next one down.
+        moves: chain.flatMap((s, k) => deferralMoves(readStream(root, s), s, id, (d) => d.moved_from === (chain[k + 1] ?? id))),
+        rel,
+        by: successor,
+      }],
+      unwound: [],
+    }
   })
+  return { returns: ways.flatMap((w) => w.returns), unwound: ways.flatMap((w) => w.unwound) }
 }
 
 // Whether a NEW artifact may take this id. An id names one artifact for the life of the repo,

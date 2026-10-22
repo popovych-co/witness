@@ -532,3 +532,45 @@ describe('the way back takes no doc\'s place (D167)', () => {
     expect(findById(canon, 'setup-second')).toBeDefined()
   })
 })
+
+// D168. The walk finds each write it passes by its journal entry, so content a return brought
+// back is still that write's; and what it takes back past a create is journaled whether or not
+// anything lies under the create.
+describe('the way back finds the act (D168)', () => {
+  const NEXT = { criteria: [{ id: 'ac-next', test: '@spec:setup-next' }] }
+  const specs = (repo: Awaited<ReturnType<typeof seededRepo>>): string =>
+    loadCanon(repo.root).docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)).sort().join(' ')
+
+  it('the walk past an amendment that came back with a return gives back what shipped', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    const shipped = repo.read('specs/auth-refresh.md')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'amended by auth-hardening' })).code).toBe(0)
+    await recapEffort(repo, 'second')
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD }, undefined, 'second')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'second'])).code).toBe(0)                // auth-refresh back, amended
+    await recapEffort(repo, 'third')
+    expect((await writeSpec(repo, 'setup-next', { supersedes: 'auth-refresh', ...NEXT }, undefined, 'third')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)        // its spec already left
+    const r = await repo.cli(['abandon', 'third'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('returned: auth-refresh — back in canon as live · the re-slice into setup-next is taken back')
+    expect(specs(repo)).toBe('auth-refresh')
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('a create the walk takes back with nothing under it leaves canon journaled, and its id is free', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'setup-card', SETUP_CARD)).code).toBe(0)
+    await recapEffort(repo, 'second')
+    expect((await writeSpec(repo, 'setup-next', { supersedes: 'setup-card', ...NEXT }, undefined, 'second')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)        // its spec already left
+    const r = await repo.cli(['abandon', 'second'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('unwound: setup-card — stays out of canon · an abandoned effort created it')
+    expect(canonExit(readStream(repo.root, 'setup-card'))).toMatchObject({ to: 'removed', from: 'superseded' })
+    expect(specs(repo)).toBe('')
+    await recapEffort(repo, 'again')
+    expect((await writeSpec(repo, 'setup-card', SETUP_CARD, undefined, 'again')).code).toBe(0)
+  })
+})
