@@ -4,8 +4,9 @@ import { loadConfig } from '../config.js'
 import { primaryRoot } from '../gitio.js'
 import { readStream } from '../journal.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
-import { findById, loadCanon } from '../scan.js'
-import { checkStep } from '../steps.js'
+import { findById, loadCanon, type CanonDoc } from '../scan.js'
+import { reportStepClose } from '../slice.js'
+import { checkStep, closedAt, stepProgress } from '../steps.js'
 import { kv } from '../toon.js'
 import { guardTxn } from '../txn.js'
 import type { Violation } from '../refusal.js'
@@ -31,6 +32,14 @@ function stepArg(argv: string[], usage: string): Result<string | undefined> {
   if (at === -1) return ok(undefined)
   const value = argv[at + 1]
   return value === undefined || value.startsWith('--') ? refuse([v('--step', 'required', 'absent', usage)]) : ok(value)
+}
+
+// Row 191 §4.4. The green just journaled is the stream's last line, and whether it closed a step
+// is the plan's progress to say: a step's first passing green after its red does, a re-record or
+// a fix round does not.
+function reportGreen(ctx: Ctx, stateRoot: string, plan: CanonDoc, passingGreen: boolean): void {
+  const entries = readStream(stateRoot, String(plan.meta.id))
+  reportStepClose(ctx, stateRoot, plan, { closed: closedAt(stepProgress(plan, entries), entries.length - 1), passingGreen })
 }
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
@@ -68,6 +77,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (!probe.ok) { renderRefusal(probe.violations).forEach(ctx.err); return exitOf(probe.violations) }
   const { allOk, tests } = probe.value
   ctx.out(kv('test-evidence', `${planId} · ${phase} · ${tests.length} outcome(s) · ${allOk ? 'all green' : 'red present'}`))
+  if (phase === 'green') reportGreen(ctx, stateRoot, plan, allOk)
   if (phase === 'red' && allOk) {
     ctx.err('vacuous: tests pass before implementation — the test may assert nothing, or the behavior already exists')
     return EXIT.FINDINGS
@@ -115,6 +125,10 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
   if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return exitOf(res.violations) }
   const { redOk, greenOk, vacuous } = res.value
   ctx.out(kv('verify-red', `red ${redOk ? 'observed' : 'NOT observed'} · green ${greenOk ? 'confirmed' : 'NOT confirmed'}`))
+  // Reported once, after the green. A vacuous reconstruction is a finding, not a cycle, so its
+  // passing green stands in for no step's close, not even on a legacy plan. A step it does close
+  // (a red tagged earlier opened the cycle) is still a close.
+  reportGreen(ctx, stateRoot, plan, greenOk && !vacuous)
   if (vacuous) {
     ctx.err('vacuous: tests pass against base — the test may assert nothing, or the behavior already existed')
     return EXIT.FINDINGS

@@ -4,6 +4,7 @@ import { guardTxn, withTxn } from '../txn.js'
 import { appendEntry, entryLine, journalRel, readStream } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { findById, loadCanon } from '../scan.js'
+import { reportStepClose } from '../slice.js'
 import { checkStep, closingIndex } from '../steps.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
@@ -57,8 +58,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     })
     if (!txn.ok) { renderRefusal(txn.violations).forEach(ctx.err); return EXIT.REFUSED }
     ctx.out(kv('step-close', `${planId} · ${step} closed`))
-    return EXIT.OK
   } finally {
     lock.value()
   }
+  // Row 191 §4.4: a scaffolding close is a step close, so the slice is decided here too. It is
+  // named, not read from progress: a legacy plan hides its criteria closes, never this one. Read
+  // after the lock is released, since the report writes nothing.
+  reportStepClose(ctx, root, plan, { closed: step, passingGreen: false })
+  return EXIT.OK
 }
