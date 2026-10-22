@@ -77,39 +77,6 @@ function stoodAtAbandon(root: string, effort: string, rel: string, sha: string):
 export const effortWrite = (root: string, effort: string, id: string, sha?: string): { commit: string } | undefined =>
   journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
 
-// D188. `rename` moves an id with its stream and journals nothing, so its commit subject is the
-// record. The renames made after `since`, oldest first — of any doc on `rel`, when given.
-const RENAME = /^rename\((.+) → (.+)\)$/
-function renamesAfter(root: string, since: string, rel?: string): Array<{ from: string; to: string }> {
-  const log = tryGit(root, 'log', '--reverse', '--format=%s', `${since}..HEAD`, ...(rel === undefined ? [] : ['--', rel]))
-  if (!log.ok) return []
-  return log.out.split('\n').flatMap((s) => {
-    const m = RENAME.exec(s)
-    return m ? [{ from: m[1]!, to: m[2]! }] : []
-  })
-}
-
-// The id `id` goes by now, through every rename after `since`.
-const nameNow = (root: string, since: string, id: string): string =>
-  renamesAfter(root, since).reduce((cur, r) => (r.from === cur ? r.to : cur), id)
-
-// D188. An abandon takes a write back under the id it was written as: following `rename` would
-// mean reading every pin, restore and reference through it, and no repo has run one. So a doc a
-// rename moved or rewrote after `who` wrote it refuses, naming the rename back — a human's call,
-// since the rename was one — where it walked nothing and said so as if done, or refused a stacked
-// amendment nobody made. `subject` is the doc that refuses; the rename may be of another doc it
-// points at.
-export function renamedSince(root: string, since: string, subject: string, rel: string | undefined, who: string): Violation | undefined {
-  const moved = rel === undefined
-    ? renamesAfter(root, since).find((r) => r.from === subject)
-    : renamesAfter(root, since, rel).at(-1)
-  if (moved === undefined) return undefined
-  const now = nameNow(root, since, moved.from)
-  return humanCall(v('spec', 'renamed-since',
-    moved.from === subject ? `${subject} → ${now} after ${who} wrote it` : `${subject} — rewritten by ${moved.from} → ${now} after ${who} wrote it`,
-    `witness rename ${now} ${moved.from} first — an abandon takes a write back under the id it was written as · then abandon again · a human's call`))
-}
-
 // D168 (review). Whether an earlier abandon already took this effort's newest write of a spec
 // back — `abandon <plan>` does, before the effort's own abandon: a status entry the abandon
 // journaled on the spec after that write, which is not a return, made where the spec stood at
@@ -232,10 +199,13 @@ export function specRevertFor(
   // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
   // good when a plan shipped it — and then so does this keep, since nothing can take the
   // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
-  // D188: and a slice whose own write departed nothing, because the first slice's took the
-  // predecessor out — taking back the second slice alone left the split half described.
+  // D188: on the plan path, also a slice whose own write departed nothing — another slice's
+  // write took the predecessor out. Its effort is still live, and its own abandon is the act that
+  // takes the split back together; deleting the slice now left the split half described. The
+  // effort path is that last act, and there a slice another effort cut cannot go back together
+  // with this one: holding it would leave two efforts' abandons each refusing for the other's.
   const from = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
-  const slice = back.end === 'create' && from !== undefined && canonExit(readStream(root, from))?.to === 'superseded' ? [from] : []
+  const slice = effort === undefined && back.end === 'create' && from !== undefined && canonExit(readStream(root, from))?.to === 'superseded' ? [from] : []
   const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
   const slices = canon.docs
     .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
@@ -331,6 +301,28 @@ export function landingEdges(root: string, canon: Canon, items: AbandonItem[]): 
       return humanCall(v('spec', 'dangling-depends', `${id} depends on ${dep}`,
         `${dep} in canon when ${id} comes back — ${why} · a human's call`))
     }))
+}
+
+// D188 (review). A spec kept for good stays in canon with what it depends on: a dependency this
+// abandon would delete is kept beside it, and for good with it. `waiting-dependents` reads only
+// docs outside the abandon set, and a kept one is inside it, so the delete left `check` red after
+// the abandon exited 0; refusing instead would hold the effort for good behind a shipped plan.
+export function keepDependencies(items: AbandonItem[], kept: SpecKeep[]): { items: AbandonItem[]; kept: SpecKeep[] } {
+  let walked = items
+  const held = [...kept]
+  for (let grew = true; grew;) {
+    grew = false
+    walked = walked.filter((item) => {
+      if (item.revert?.action !== 'delete') return true
+      const id = String(item.revert.doc.meta.id)
+      const on = held.filter((k) => ((k.doc.meta.depends ?? []) as unknown[]).map(String).includes(id))
+      if (on.length === 0) return true
+      held.push({ doc: item.revert.doc, action: 'keep', standing: on.map((k) => String(k.doc.meta.id)), shipped: on.some((k) => k.shipped) })
+      grew = true
+      return false
+    })
+  }
+  return { items: walked, kept: held }
 }
 
 export function executeAbandon(
@@ -468,14 +460,7 @@ export function planItems(
     const pin = String(plan.meta['derives-from'])
     const writers = effortStreams(root).filter((e) => readStream(root, e).some((x) => isWrite(x, planId)))
     const act = writeAct(root, parentId, pin)
-    const paired = act !== undefined && writers.includes(act.effort)
-    // D188. A rename after the plan was written rewrote its parent's id, so neither the pin nor
-    // the write can be found under it: say so rather than unwind nothing or claim a stacking.
-    const written = writers.map((e) => effortWrite(root, e, planId))
-      .reduce<{ commit: string } | undefined>((a, b) => (b === undefined || (a !== undefined && !isAncestor(root, a.commit, b.commit)) ? a : b), undefined)
-    const renamed = !paired && written !== undefined ? renamedSince(root, written.commit, planId, parent.rel, writers.join(' ')) : undefined
-    if (renamed) return refuse([renamed])
-    if (paired && act !== undefined) {
+    if (act !== undefined && writers.includes(act.effort)) {
       const revertR = specRevertFor(root, canon, parent, pin, abandonSet, act)
       if (!revertR.ok) return revertR
       const outcome = revertR.value

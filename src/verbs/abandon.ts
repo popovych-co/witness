@@ -7,7 +7,7 @@ import { effortWrites } from '../reviewed.js'
 import { canonicalSha } from '../sha.js'
 import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
-import { abandonLines, effortWrite, executeAbandon, landingEdges, planItems, renamedSince, returnCollisions, specRevertFor, takenBackAlready, writeAct, type AbandonItem, type SpecKeep } from '../abandon.js'
+import { abandonLines, executeAbandon, keepDependencies, landingEdges, planItems, returnCollisions, specRevertFor, takenBackAlready, writeAct, type AbandonItem, type SpecKeep } from '../abandon.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const target = argv.find((a) => !a.startsWith('--'))
@@ -41,15 +41,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const items: AbandonItem[] = []
     const problems: Violation[] = []
     const kept: SpecKeep[] = []
-    // D188. A doc this effort wrote that canon no longer holds under that id either left (a
-    // re-slice, an earlier abandon) or was renamed — and a rename is the one that would walk
-    // nothing and say so as if done.
-    for (const [id, w] of writes) {
-      if (findById(canon, id)) continue
-      const at = effortWrite(root, target, id, w.sha)
-      const renamed = at === undefined ? undefined : renamedSince(root, at.commit, id, undefined, target)
-      if (renamed) problems.push(renamed)
-    }
     for (const id of writes.keys()) {
       const artifact = findById(canon, id)
       if (!artifact) continue                               // already gone (re-slice, earlier abandon)
@@ -71,11 +62,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       const act = writeAct(root, id, current)
       if (current !== w.sha || act?.effort !== target) {
         if (takenBackAlready(root, target, id, artifact.rel, w.sha)) continue
-        // D188. Content no write made, on a path a rename rewrote after this effort's write: the
-        // rename made it. A later write on top is a real stacking, refused as one.
-        const at = act === undefined ? effortWrite(root, target, id, w.sha) : undefined
-        const renamed = at === undefined ? undefined : renamedSince(root, at.commit, id, artifact.rel, target)
-        if (renamed) { problems.push(renamed); continue }
         problems.push(current === w.sha && act === undefined
           ? humanCall(v('spec', 'pin-unresolvable', id, `${target}'s journaled write of this content — the journal's history is unreadable here · a human's call`))
           : v('spec', 'stacked-amendment', id, 'the effort\'s write is no longer the newest'))
@@ -97,12 +83,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         kept.push(outcome)
       } else if (outcome) items.push({ revert: outcome })
     }
-    problems.push(...returnCollisions(root, canon, items), ...landingEdges(root, canon, items))
+    const held = keepDependencies(items, kept)
+    problems.push(...returnCollisions(root, canon, held.items), ...landingEdges(root, canon, held.items))
     if (problems.length > 0) { renderRefusal(problems).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    const done = executeAbandon(root, ctx, items, { effort: target }, `abandon(${target})`)
+    const done = executeAbandon(root, ctx, held.items, { effort: target }, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    ctx.out(kv('abandoned', `effort ${target} — ${items.length} artifacts walked · journal remembers the attempt`))
-    abandonLines(items, kept).forEach((l) => ctx.out(l))
+    ctx.out(kv('abandoned', `effort ${target} — ${held.items.length} artifacts walked · journal remembers the attempt`))
+    abandonLines(held.items, held.kept).forEach((l) => ctx.out(l))
     return EXIT.OK
   }
 

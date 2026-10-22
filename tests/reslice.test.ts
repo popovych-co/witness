@@ -575,9 +575,9 @@ describe('the way back finds the act (D168)', () => {
   })
 })
 
-// D188. The way back lands canon whole: a split goes back together whichever slice is taken back
-// first, a spec comes back only beside what it depends on, and a write is taken back under the id
-// it was written as.
+// D188. The way back lands canon whole: a split goes back together whichever slice a plan's
+// abandon takes back first, a spec comes back only beside what it depends on, and a kept spec
+// keeps what it depends on.
 describe('the way back keeps canon whole (D188)', () => {
   const TOK = { criteria: [{ id: 'ac-tok', test: '@spec:setup-tok' }] }
   const STORE = { criteria: [{ id: 'ac-store', test: '@spec:token-store' }] }
@@ -599,17 +599,52 @@ describe('the way back keeps canon whole (D188)', () => {
     expect(specs(repo)).toBe('setup-card setup-tok')
   })
 
-  it('an effort that cut only the second slice cannot leave the split half described either', async () => {
+  it('two efforts that each cut one slice of a split can be abandoned — the predecessor comes back whole', async () => {
     const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    const shipped = repo.read('specs/auth-refresh.md')
     expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
     await recapEffort(repo, 'other')
     expect((await writeSpec(repo, 'setup-tok', { supersedes: 'auth-refresh', ...TOK }, undefined, 'other')).code).toBe(0)
-    const r = await repo.cli(['abandon', 'other'])
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('still-standing')
-    expect(specs(repo)).toBe('setup-card setup-tok')
-    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(2)      // the first slice is held the same way
-    expect(specs(repo)).toBe('setup-card setup-tok')
+    expect((await repo.cli(['abandon', 'auth-hardening'])).stderr).toContain('still-standing')   // the slice that departed it waits
+    expect((await repo.cli(['abandon', 'other'])).code).toBe(0)                                   // the other slice goes
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)                          // never refused for good
+    expect(specs(repo)).toBe('auth-refresh')
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('a slice added later to a shipped split is taken back by its effort, never kept for good', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
+    approve(repo, 'setup-card')
+    await recapEffort(repo, 'ship')
+    expect((await writePlan(repo, 'setup-card-plan-1', {
+      parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }],
+    }, PLAN_BODY, 'ship')).code).toBe(0)
+    repo.flipStatus('setup-card-plan-1', 'done')
+    stampLive(repo, 'setup-card')
+    await recapEffort(repo, 'later')
+    expect((await writeSpec(repo, 'setup-tok', { supersedes: 'auth-refresh', ...TOK }, undefined, 'later')).code).toBe(0)
+    const r = await repo.cli(['abandon', 'later'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('reverted: setup-tok (delete) — journal untouched')
+    expect(specs(repo)).toBe('setup-card')
+  })
+
+  it('a spec kept for good keeps what it depends on — never left depending on a spec the abandon deletes', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'token-store', STORE)).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh', { depends: ['token-store'] })).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    await recapEffort(repo, 'ship')
+    expect((await writePlan(repo, 'auth-refresh-plan-1', {}, PLAN_BODY, 'ship')).code).toBe(0)
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const r = await repo.cli(['abandon', 'auth-hardening'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('kept: token-store — not unwound · still standing on it: auth-refresh')
+    expect(specs(repo)).toBe('auth-refresh token-store')
+    expect((await repo.cli(['check'])).code).toBe(0)
   })
 
   it('a return whose depends left canon refuses — a human brings the dependency back first', async () => {
@@ -647,32 +682,4 @@ describe('the way back keeps canon whole (D188)', () => {
     expect(String(findById(loadCanon(repo.root), 'auth-refresh')!.meta.summary)).toBe('no longer on the store')
   })
 
-  it('a renamed spec refuses its effort\'s abandon and names the way back — the id it was written as', async () => {
-    const repo = await seededRepo()
-    expect((await writeSpec(repo, 'setup-card', SETUP_CARD)).code).toBe(0)
-    expect((await repo.cli(['rename', 'setup-card', 'setup-tile'])).code).toBe(0)
-    const r = await repo.cli(['abandon', 'auth-hardening'])
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('renamed-since')
-    expect(r.stderr).toContain('witness rename setup-tile setup-card')
-    expect(specs(repo)).toBe('setup-tile')
-    expect((await repo.cli(['rename', 'setup-tile', 'setup-card'])).code).toBe(0)
-    const again = await repo.cli(['abandon', 'auth-hardening'])
-    expect(again.code).toBe(0)
-    expect(again.stdout).toContain('reverted: setup-card (delete) — journal untouched')
-    expect(specs(repo)).toBe('')
-  })
-
-  it('a renamed parent refuses the plan\'s abandon the same way, never a false stacked amendment', async () => {
-    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
-    expect((await writeSpec(repo, 'auth-refresh', { summary: 'amended by auth-hardening' })).code).toBe(0)
-    approve(repo, 'auth-refresh')
-    expect((await writePlan(repo, 'auth-refresh-plan-1')).code).toBe(0)
-    expect((await repo.cli(['rename', 'auth-refresh', 'token-refresh'])).code).toBe(0)
-    const r = await repo.cli(['abandon', 'auth-refresh-plan-1'])
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('renamed-since')
-    expect(r.stderr).not.toContain('stacked-amendment')
-    expect(r.stderr).toContain('witness rename token-refresh auth-refresh')
-  })
 })
