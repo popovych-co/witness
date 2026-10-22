@@ -152,9 +152,10 @@ const actedYet = (root: string, env: Ctx['env']): boolean => {
 // session, at a ship exit, and at `next`. The work continues in this same home, so the relay
 // carries no `run:`. Only the fill decides here: other stages have no repeated unit to project
 // a next act from (§4.5). Unmeasured, nothing hands over, which is the behavior before row 191
-// (§4.7). `guard` is the act guard: at `next` it keeps a fresh session from handing over before
-// it has done anything, and at a revise or a ship exit the run itself was the act (Plan's call
-// 7). A driver that will not resolve has no relay to name, so nothing prints.
+// (§4.7). `guard` is the act guard: at `next` and at a ship exit it keeps a session from
+// handing over before it has done anything, since neither always follows an act. At a revise
+// the decision itself was the act (Plan's call 7). A driver that will not resolve has no relay
+// to name, so nothing prints.
 export function reportHandover(ctx: Ctx, root: string, cfg: Config, opts: { guard: boolean }): boolean {
   const fill = readFill(ctx.env)
   const limit = cfg.session.contextLimit

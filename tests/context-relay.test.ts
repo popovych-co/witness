@@ -163,7 +163,8 @@ describe('the rule at a step close', () => {
 
 const PLAN = 'auth-refresh-plan-1'
 const RELAY = 'relay: /clear then /witness'
-const WARN_26 = 'warn: this session opens at 26% of 1M — over the 20% limit before any work; each slice will be one step'
+const warnAt = (pct: number) =>
+  `warn: this session opens at ${pct}% of 1M — over the 20% limit before any work; each slice will be one step`
 
 // One genuine red, journaled under the session `env` names: stage work that session made, which
 // leaves the step's cycle open.
@@ -252,12 +253,12 @@ describe('the hand-overs', () => {
     const started = await repo.cli(['start', PLAN], { env: s2 })
     expect(started.code).toBe(0)
     expect(lines(started)).toContain('context: 26% of 1M · limit 20%')
-    expect(lines(started)).toContain(WARN_26)
+    expect(lines(started)).toContain(warnAt(26))
     const r = await repo.cli(['next'], { cwd: wt, env: s2 })
     expect(r.code).toBe(0)
     expect(relays(r)).toEqual([])
-    expect(lines(r).indexOf(WARN_26)).toBeGreaterThanOrEqual(0)
-    expect(lines(r).indexOf(WARN_26)).toBeLessThan(lines(r).findIndex((l) => l.startsWith('next: ')))
+    expect(lines(r).indexOf(warnAt(26))).toBeGreaterThanOrEqual(0)
+    expect(lines(r).indexOf(warnAt(26))).toBeLessThan(lines(r).findIndex((l) => l.startsWith('next: ')))
   })
 
   it('bookkeeping is not an act', async () => {
@@ -342,5 +343,25 @@ describe('the hand-overs', () => {
     expect(r.code).toBe(1)
     expect(r.stdout).toContain(`decided: ship ${PLAN} → revise`)
     expect(relays(r)).toEqual([RELAY])
+  })
+
+  // Not every ship exit follows an act: `revise owed` returns having journaled nothing. Without
+  // the act guard, a session that opens over the limit would relay there, and so would every
+  // fresh session after it, none of them making the edit.
+  it('a ship exit that did nothing hands nothing over', async () => {
+    const { repo, scenario } = await atShipGate()
+    putVerdict(scenario, { ...SHIP_CLEAN, findings: [{ blocking: true, anchor: 'src/token.ts', claim: 'rotation never fires' }] })
+    // Autonomy off: the ship gate stops and a human revises, both outside any harness session.
+    expect((await repo.cli(['ship', PLAN], { env: gateEnv(scenario) })).code).toBe(1)
+    expect((await repo.cli(['decide', 'ship', PLAN, '--revise', '--note', 'x'], { env: gateEnv(scenario) })).code).toBe(0)
+    const s9 = { ...gateEnv(scenario), ...measuredEnv('S9', 220_000, 1_000_000) }
+    const routed = await repo.cli(['next'], { env: s9 })
+    expect(lines(routed)).toContain(`next: witness ship ${PLAN}`)
+    expect(lines(routed)).toContain(warnAt(22))
+    expect(relays(routed)).toEqual([])
+    const r = await repo.cli(['ship', PLAN], { env: s9 })
+    expect(r.code).toBe(1)
+    expect(lines(r)).toContain(`ship: ${PLAN} — revise owed`)
+    expect(relays(r)).toEqual([])
   })
 })

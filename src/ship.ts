@@ -342,14 +342,18 @@ async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number): Pr
 
 // Row 191 §4.4. A ship run's exit is where the next pass is decided: with the fill at the limit,
 // it runs in a fresh session. Once per run, whatever the gate's tail settled inside it, so the
-// gate is told not to hand over itself (Plan's call 7). A refused or blocked run completed no
-// pass, so it hands nothing over.
+// gate is told not to hand over itself (Plan's call 7). With the act guard, unlike a revise:
+// not every exit follows an act. `revise owed`, a textual conflict and a decision still awaited
+// each return having journaled nothing, so a session that opened over the limit would relay at
+// them, and so would every fresh session after it, none of them doing the work. A pass that ran
+// the gate journaled its run under this session. A refused or blocked run completed no pass,
+// so it hands nothing over.
 export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean } = {}): Promise<number> {
   const code = await shipPass(ctx, planId, opts)
   if (code !== EXIT.OK && code !== EXIT.FINDINGS) return code
   const rootR = primaryRoot(ctx.cwd)
   const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
-  if (rootR.ok && cfgR?.ok) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
+  if (rootR.ok && cfgR?.ok) reportHandover(ctx, rootR.value, cfgR.value, { guard: true })
   return code
 }
 
