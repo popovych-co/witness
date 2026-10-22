@@ -70,17 +70,21 @@ export function stoodAtAbandon(root: string, effort: string, rel: string, sha: s
 export const effortWrite = (root: string, effort: string, id: string, sha?: string): { commit: string } | undefined =>
   journalActs(root, effort, 'HEAD').filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
 
-// D190 (review). The effort outside `efforts` whose write of a spec lies over this effort's
-// newest write of it and still stands (an abandon has not taken it back), if any.
-export function writtenOver(root: string, id: string, rel: string, effort: string, efforts: string[]): string | undefined {
-  const mine = effortWrite(root, effort, id)
-  if (mine === undefined) return undefined
-  for (const other of effortStreams(root)) {
-    if (efforts.includes(other)) continue
-    const theirs = journalActs(root, other, 'HEAD').filter(({ entry }) => isWrite(entry, id)).at(-1)
-    if (theirs === undefined || theirs.commit === mine.commit || !isAncestor(root, mine.commit, theirs.commit)) continue
-    const sha = String((theirs.entry as unknown as { sha?: string }).sha)
-    if (!takenBackAlready(root, other, id, rel, sha)) return other
+// D190 (review). The effort whose standing write a take-back stopped at, over some write of
+// `effort` that the take-back neither went past nor found already taken back — the write would
+// stay in canon with its effort abandoned. A write under content that stands for good (shipped by
+// a plan outside the set, or left standing by its own effort's abandon) has nothing left to take.
+export function leftUnder(root: string, canon: Canon, spec: CanonDoc, effort: string, walk: Walk, abandonSet: Set<string>): string | undefined {
+  const id = String(spec.meta.id)
+  const stop = walk.stop === undefined ? undefined : writeAct(root, id, walk.stop.sha, walk.stop.src)
+  const forGood = walk.stop !== undefined && (
+    plansOn(canon, id, { exclude: abandonSet, pin: walk.stop.sha }).some((p) => String(p.meta.status) === 'done') ||
+    (stop !== undefined && effortAbandoned(readStream(root, stop.effort)) && stoodAtAbandon(root, stop.effort, spec.rel, walk.stop.sha)))
+  for (const { entry, commit } of journalActs(root, effort, 'HEAD')) {
+    if (!isWrite(entry, id) || walk.passed.includes(commit)) continue
+    if (takenBackAlready(root, effort, id, spec.rel, String((entry as unknown as { sha?: string }).sha))) continue
+    if (forGood) continue
+    return stop?.effort ?? 'another write'
   }
   return undefined
 }
@@ -99,9 +103,11 @@ export function takenBackAlready(root: string, effort: string, id: string, rel: 
   })
 }
 
+// `walk`: the writes the take-back went past, and — for a restore — the content it stopped at.
+export interface Walk { passed: string[]; stop?: { src: string; sha: string } }
 export type SpecRevert =
-  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined }; returns: Return[]; unwound: StatusEntry[] }
-  | { doc: CanonDoc; action: 'delete'; departure: Departure; returns: Return[]; unwound: StatusEntry[] }
+  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined }; returns: Return[]; unwound: StatusEntry[]; walk: Walk }
+  | { doc: CanonDoc; action: 'delete'; departure: Departure; returns: Return[]; unwound: StatusEntry[]; walk: Walk }
 
 // D166. The unwind that does not happen. Abandoning a plan takes back the spec content it was
 // paired with — the whole spec when its effort created it (row 29), else the amendment. But a
@@ -241,7 +247,7 @@ export function specRevertFor(
     // D166. The unwind departs the spec through the same door the re-slice uses, so
     // everything that leaves canon with a spec — its design included — leaves here too.
     return ok({
-      doc: spec, action: 'delete', returns, unwound,
+      doc: spec, action: 'delete', returns, unwound, walk: { passed: back.passed.map((w) => w.commit) },
       departure: prepareDeparture(root, canon.paths, spec, {
         v: 1, t: 'status', artifact: id, from: String(spec.meta.status), to: 'removed', cause: 'abandon',
       }),
@@ -253,7 +259,9 @@ export function specRevertFor(
   const designR = designRel(canon.paths, id)
   const priorDesign = gitBlob(root, back.src, designR)
   const design = priorDesign !== undefined || existsSync(join(root, designR)) ? { rel: designR, prior: priorDesign } : undefined
-  return ok({ doc: spec, action: 'restore', content: back.blob.toString('utf8'), toStatus, design, returns, unwound })
+  const stopSha = back.end === 'content' ? canonicalSha(back.doc.meta, back.doc.body) : undefined
+  const walk: Walk = { passed: back.passed.map((w) => w.commit), ...(stopSha === undefined ? {} : { stop: { src: back.src, sha: stopSha } }) }
+  return ok({ doc: spec, action: 'restore', content: back.blob.toString('utf8'), toStatus, design, returns, unwound, walk })
 }
 
 export interface AbandonItem {
@@ -300,7 +308,7 @@ export function landingEdges(root: string, canon: Canon, items: AbandonItem[], a
   // earlier abandon already took back — stays in canon, so what it depends on may not leave:
   // `waiting-dependents` reads only docs outside the set, and the act deleted the dependency.
   const stays = canon.docs
-    .filter((d) => abandonSet.has(String(d.meta.id)) && !leaving.has(String(d.meta.id)) && !restored.has(String(d.meta.id)))
+    .filter((d) => d.meta.type === 'spec' && abandonSet.has(String(d.meta.id)) && !leaving.has(String(d.meta.id)) && !restored.has(String(d.meta.id)))
     .flatMap((d) => ((d.meta.depends ?? []) as unknown[]).map(String)
       .filter((dep) => leaving.has(dep) && !coming.has(dep))
       .map((dep) => v('spec', 'waiting-dependents', `${String(d.meta.id)} depends on ${dep}`,

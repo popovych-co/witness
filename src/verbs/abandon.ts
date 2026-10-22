@@ -7,7 +7,7 @@ import { effortWrites } from '../reviewed.js'
 import { canonicalSha } from '../sha.js'
 import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
-import { abandonLines, executeAbandon, keepDependencies, landingEdges, planItems, returnCollisions, specRevertFor, stoodAtAbandon, takenBackAlready, writeAct, writtenOver, type AbandonItem, type SpecKeep } from '../abandon.js'
+import { abandonLines, executeAbandon, keepDependencies, landingEdges, planItems, returnCollisions, specRevertFor, leftUnder, stoodAtAbandon, takenBackAlready, writeAct, type AbandonItem, type SpecKeep } from '../abandon.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const targets = argv.filter((a) => !a.startsWith('--'))
@@ -104,18 +104,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         }
         continue
       }
-      // A listed effort's write under another effort's standing write is not in this take-back:
-      // the walk stops at that other write, and the listed effort would end abandoned with its
-      // write still in canon.
-      const buried = writers.filter((e) => e !== act.effort).flatMap((e) => {
-        const over = writtenOver(root, id, artifact.rel, e, efforts)
-        return over === undefined ? [] : [v('spec', 'stacked-amendment', `${id} — ${e}'s write`,
-          `abandon newest-first — the effort's write is no longer the newest · ${over} wrote on top of it`)]
-      })
-      if (buried.length > 0) { problems.push(...buried); continue }
       const revertR = specRevertFor(root, canon, artifact, current, abandonSet, act, efforts)
       if (!revertR.ok) { problems.push(...revertR.violations); continue }
       const outcome = revertR.value
+      // A take-back that stopped at another effort's standing write leaves every listed write
+      // under it in canon: that effort would end abandoned with its write still there.
+      if (outcome !== undefined && outcome.action !== 'keep') {
+        const buried = writers.flatMap((e) => {
+          const over = leftUnder(root, canon, artifact, e, outcome.walk, abandonSet)
+          return over === undefined ? [] : [v('spec', 'stacked-amendment', `${id} — ${e}'s write`,
+            `abandon newest-first — the effort's write is no longer the newest · ${over} wrote on top of it`)]
+        })
+        if (buried.length > 0) { problems.push(...buried); continue }
+      }
       if (outcome?.action === 'keep') {
         // D166. This abandon is the effort's last act, so a keep here must be one nothing has
         // to take back later: a shipped plan makes it so — canon describes built behavior. A

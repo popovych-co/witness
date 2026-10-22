@@ -626,6 +626,78 @@ describe('abandon several efforts as one act (D190)', () => {
     expect((await repo.cli(['check'])).code).toBe(0)
   })
 
+  it('a write over this one that an earlier act took back does not hold the act', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    const shipped = repo.read('specs/auth-refresh.md')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'L amend' })).code).toBe(0)
+    await recapEffort(repo, 'u')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'u amend' }, undefined, 'u')).code).toBe(0)
+    await recapEffort(repo, 'x')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'x amend' }, undefined, 'x')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'u', 'x'])).code).toBe(0)                 // back to L's amendment
+    await recapEffort(repo, 'w')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'w amend' }, undefined, 'w')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening', 'w'])).code).toBe(0)
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+  })
+
+  it('a listed write a plan abandon already took back does not hold the act', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    const shipped = repo.read('specs/auth-refresh.md')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'L amend' })).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    expect((await writePlan(repo, 'auth-refresh-plan-1')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-1'])).code).toBe(0)    // L's amendment taken back
+    await recapEffort(repo, 'u')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'u amend' }, undefined, 'u')).code).toBe(0)
+    const u = repo.read('specs/auth-refresh.md')
+    await recapEffort(repo, 'w')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'w amend' }, undefined, 'w')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening', 'w'])).code).toBe(0)
+    expect(repo.read('specs/auth-refresh.md').replace(/^status: .*$/m, '')).toBe(u.replace(/^status: .*$/m, ''))
+    expect(repo.read('specs/auth-refresh.md')).not.toBe(shipped)
+  })
+
+  it('a listed write under shipped content has nothing left to take back', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'L amend' })).code).toBe(0)
+    await recapEffort(repo, 'u')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'u amend' }, undefined, 'u')).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    await recapEffort(repo, 'v')
+    expect((await writePlan(repo, 'auth-refresh-plan-1', {}, PLAN_BODY, 'v')).code).toBe(0)
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    await recapEffort(repo, 'w')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'w amend' }, undefined, 'w')).code).toBe(0)
+    expect((await repo.cli(['abandon', 'auth-hardening', 'w'])).code).toBe(0)
+    expect(String(findById(loadCanon(repo.root), 'auth-refresh')!.meta.summary)).toBe('u amend')
+  })
+
+  it('an older round of a listed effort under another effort\'s write refuses, even when its newer round is on top', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'L1' })).code).toBe(0)
+    await recapEffort(repo, 'u')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'u amend' }, undefined, 'u')).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'L2' })).code).toBe(0)
+    const r = await repo.cli(['abandon', 'auth-hardening'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('stacked-amendment')
+    expect(r.stderr).toContain('u wrote on top of it')
+    expect(String(findById(loadCanon(repo.root), 'auth-refresh')!.meta.summary)).toBe('L2')
+  })
+
+  it('a plan the act abandons may depend on a spec the act deletes', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'token-store', { criteria: [{ id: 'ac-store', test: '@spec:token-store' }] })).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh')).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    expect((await writePlan(repo, 'auth-refresh-plan-1', { depends: ['token-store'] })).code).toBe(0)
+    const r = await repo.cli(['abandon', 'auth-hardening'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('reverted: token-store (delete)')
+  })
+
   it('an effort already abandoned is said so and the rest go', async () => {
     const repo = await seededRepo()
     expect((await writeSpec(repo, 'setup-card', { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] })).code).toBe(0)
