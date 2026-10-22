@@ -536,3 +536,70 @@ describe('abandon, the remaining edges (D189)', () => {
 })
 
 const SETUP_CARD_D189 = { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] }
+
+// D190. Several efforts abandoned as one act: every hold that ties one effort's abandon to
+// another's has this as its way out.
+describe('abandon several efforts as one act (D190)', () => {
+  it('two efforts that amended one spec go back together to what shipped', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    const shipped = repo.read('specs/auth-refresh.md')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'amended by auth-hardening' })).code).toBe(0)
+    await recapEffort(repo, 'second')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'amended by second' }, undefined, 'second')).code).toBe(0)
+    const alone = await repo.cli(['abandon', 'auth-hardening'])
+    expect(alone.code).toBe(2)
+    expect(alone.stderr).toContain('stacked-amendment')
+    expect(alone.stderr).toContain('witness abandon auth-hardening second')
+    const r = await repo.cli(['abandon', 'auth-hardening', 'second'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('reverted: auth-refresh (restore) — journal untouched')
+    expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+    expect((await repo.cli(['check'])).code).toBe(0)
+  })
+
+  it('a spec another effort\'s moving plan stands on goes back with that effort', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'setup-card', { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] })).code).toBe(0)
+    approve(repo, 'setup-card')
+    await recapEffort(repo, 'build')
+    expect((await writePlan(repo, 'setup-card-plan-1', {
+      parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }],
+    }, PLAN_BODY, 'build')).code).toBe(0)
+    const alone = await repo.cli(['abandon', 'auth-hardening'])
+    expect(alone.code).toBe(2)
+    expect(alone.stderr).toContain('still-standing')
+    expect(alone.stderr).toContain('witness abandon auth-hardening build')
+    const r = await repo.cli(['abandon', 'auth-hardening', 'build'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('reverted: setup-card (delete) — journal untouched')
+    expect(findById(loadCanon(repo.root), 'setup-card-plan-1')!.meta.status).toBe('abandoned')
+    expect(loadCanon(repo.root).docs.filter((d) => d.meta.type === 'spec')).toHaveLength(0)
+  })
+
+  it('an effort already abandoned is said so and the rest go', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'setup-card', { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] })).code).toBe(0)
+    await recapEffort(repo, 'other')
+    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)
+    const r = await repo.cli(['abandon', 'auth-hardening', 'other'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('abandon: auth-hardening already abandoned')
+    expect(r.stdout).toContain('abandoned: effort other — 0 artifacts walked')
+  })
+
+  it('a plan is abandoned alone, and an unknown target among efforts is named', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'setup-card', { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] })).code).toBe(0)
+    approve(repo, 'setup-card')
+    expect((await writePlan(repo, 'setup-card-plan-1', {
+      parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }],
+    })).code).toBe(0)
+    const two = await repo.cli(['abandon', 'setup-card-plan-1', 'auth-hardening'])
+    expect(two.code).toBe(2)
+    expect(two.stderr).toContain('one-plan')
+    const unknown = await repo.cli(['abandon', 'auth-hardening', 'no-such-effort'])
+    expect(unknown.code).toBe(2)
+    expect(unknown.stderr).toContain('no-such-effort')
+    expect(findById(loadCanon(repo.root), 'setup-card')).toBeDefined()           // nothing walked
+  })
+})

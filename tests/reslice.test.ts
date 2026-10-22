@@ -599,21 +599,29 @@ describe('the way back keeps canon whole (D188)', () => {
     expect(specs(repo)).toBe('setup-card setup-tok')
   })
 
-  it('two efforts that each cut one slice of a split can be abandoned — the predecessor comes back whole', async () => {
+  it('two efforts that each cut one slice of a split go back together, as one act', async () => {
     const repo = await seededRepo({ preexisting: ['auth-refresh'] })
     const shipped = repo.read('specs/auth-refresh.md')
     expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
     await recapEffort(repo, 'other')
     expect((await writeSpec(repo, 'setup-tok', { supersedes: 'auth-refresh', ...TOK }, undefined, 'other')).code).toBe(0)
-    expect((await repo.cli(['abandon', 'auth-hardening'])).stderr).toContain('still-standing')   // the slice that departed it waits
-    expect((await repo.cli(['abandon', 'other'])).code).toBe(0)                                   // the other slice goes
-    expect((await repo.cli(['abandon', 'auth-hardening'])).code).toBe(0)                          // never refused for good
+    const alone = await repo.cli(['abandon', 'other'])                                       // half the split refuses…
+    expect(alone.code).toBe(2)
+    expect(alone.stderr).toContain('still-standing')
+    expect(alone.stderr).toContain('witness abandon other auth-hardening')                   // …and names its way out
+    expect((await repo.cli(['abandon', 'auth-hardening'])).stderr).toContain('witness abandon auth-hardening other')
+    const r = await repo.cli(['abandon', 'other', 'auth-hardening'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('abandoned: efforts other · auth-hardening — 2 artifacts walked')
     expect(specs(repo)).toBe('auth-refresh')
     expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+    for (const e of ['other', 'auth-hardening']) {
+      expect(readStream(repo.root, e).at(-1)).toMatchObject({ t: 'human-decision', decision: 'abandon-effort' })
+    }
     expect((await repo.cli(['check'])).code).toBe(0)
   })
 
-  it('a slice added later to a shipped split is taken back by its effort, never kept for good', async () => {
+  it('a slice added later to a shipped split is kept with it — the split stands for good', async () => {
     const repo = await seededRepo({ preexisting: ['auth-refresh'] })
     expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD })).code).toBe(0)
     approve(repo, 'setup-card')
@@ -627,8 +635,20 @@ describe('the way back keeps canon whole (D188)', () => {
     expect((await writeSpec(repo, 'setup-tok', { supersedes: 'auth-refresh', ...TOK }, undefined, 'later')).code).toBe(0)
     const r = await repo.cli(['abandon', 'later'])
     expect(r.code).toBe(0)
-    expect(r.stdout).toContain('reverted: setup-tok (delete) — journal untouched')
-    expect(specs(repo)).toBe('setup-card')
+    expect(r.stdout).toContain('kept: setup-tok — not unwound · still standing on it: setup-card')
+    expect(specs(repo)).toBe('setup-card setup-tok')
+  })
+
+  it('a live slice with no plan on file is shipped behavior — it holds a sibling for good, never forever refused', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    await recapEffort(repo, 'base')
+    expect((await writeSpec(repo, 'setup-card', { supersedes: 'auth-refresh', ...SETUP_CARD }, undefined, 'base')).code).toBe(0)
+    stampLive(repo, 'setup-card')                                                // live, no plan on file
+    await recapEffort(repo, 'later')
+    expect((await writeSpec(repo, 'setup-tok', { supersedes: 'auth-refresh', ...TOK }, undefined, 'later')).code).toBe(0)
+    const r = await repo.cli(['abandon', 'later'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('kept: setup-tok — not unwound · still standing on it: setup-card')
   })
 
   it('a spec kept for good keeps what it depends on — never left depending on a spec the abandon deletes', async () => {

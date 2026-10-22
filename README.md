@@ -200,7 +200,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `ship <plan-id> [--manual]` | lanes → ship gate → PR → CI watch → under autonomy: merge on green · `--manual` keeps that run's stop and merge for a human |
 | `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
 | `adopt <path>` | absolve a finished hand-edit into the journal |
-| `abandon <plan-id \| effort-slug>` | wind a plan/effort down; reverts only specs that effort itself wrote |
+| `abandon <plan-id \| effort-slug…>` | wind a plan/effort down; reverts only specs that effort itself wrote — several efforts go as one act, so a split or an amendment they share goes back together |
 | `dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n>` | journal a session slice's telemetry |
 | `rename <old> <new>` | id rename across canon, refs, journal |
 | `clean` | reap stale worktrees |

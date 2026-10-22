@@ -119,9 +119,10 @@ export function abandonLines(items: AbandonItem[], kept: SpecKeep[]): string[] {
 
 // D166 (review). The efforts whose writes the way back takes back besides this abandon's own
 // targets: every effort already abandoned — whose abandon skipped a spec a later re-slice had
-// departed — and the effort being abandoned now (`effort`, absent on the plan path).
-const goneEfforts = (root: string, effort: string | undefined): string[] =>
-  effortStreams(root).filter((e) => e === effort || effortAbandoned(readStream(root, e)))
+// departed — and the efforts being abandoned now (`efforts`, absent on the plan path; D190:
+// several, when they are abandoned as one act).
+const goneEfforts = (root: string, efforts: string[] | undefined): string[] =>
+  effortStreams(root).filter((e) => (efforts ?? []).includes(e) || effortAbandoned(readStream(root, e)))
 
 // Content whose act is a write of one of `efforts` never comes back into canon on its own —
 // unless a plan outside the abandon set stands on it (the keep rule, which never takes shipped
@@ -135,9 +136,9 @@ function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort
 }
 
 // `act`: the write of `pin` this abandon takes back — the effort's own on the effort path, the
-// write the plan is paired with on the plan path. `effort`: the effort being abandoned, if any.
+// write the plan is paired with on the plan path. `efforts`: the efforts being abandoned, if any.
 export function specRevertFor(
-  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, act: WriteAct, effort?: string,
+  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, act: WriteAct, efforts?: string[],
 ): Result<SpecRevert | SpecKeep | undefined> {
   const current = canonicalSha(spec.meta, spec.body)
   if (current !== pin) {
@@ -160,7 +161,7 @@ export function specRevertFor(
   // this spec it made: a revise round re-writes, and taking back only the last write left the
   // effort's own first draft in canon. The walk goes back past those and past every abandoned
   // effort's write, and stops at content a plan stands on.
-  const gone = goneEfforts(root, effort)
+  const gone = goneEfforts(root, efforts)
   const walking = [...new Set([...gone, act.effort])]
   const back = takeBack(root, spec.rel, id, act, takenBackBy(root, canon, abandonSet, walking))
   if (back.end === 'lost') {
@@ -171,7 +172,7 @@ export function specRevertFor(
   // another plan still building stands on it, is a keep of that effort's content: the same keep
   // the first round alone would have been, and refused for the same reason — this abandon is the
   // last act that could take it back. Once a plan shipped it, it stands for good.
-  if (effort !== undefined && back.end === 'content') {
+  if (efforts !== undefined && back.end === 'content') {
     const sha = canonicalSha(back.doc.meta, back.doc.body)
     const on = plansOn(canon, id, { exclude: abandonSet, pin: sha })
     const owner = on.length > 0 ? writeAct(root, id, sha, back.src) : undefined
@@ -192,13 +193,11 @@ export function specRevertFor(
   // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
   // good when a plan shipped it — and then so does this keep, since nothing can take the
   // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
-  // D188: on the plan path, also a slice whose own write departed nothing — another slice's
-  // write took the predecessor out. Its effort is still live, and its own abandon is the act that
-  // takes the split back together; deleting the slice now left the split half described. The
-  // effort path is that last act, and there a slice another effort cut cannot go back together
-  // with this one: holding it would leave two efforts' abandons each refusing for the other's.
+  // D188: and a slice whose own write departed nothing — another slice's write took the
+  // predecessor out; deleting it alone left the split half described. D190: on both paths, now
+  // that a hold always has a way out — the efforts that cut the split abandoned as one act.
   const own = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
-  const slice = effort === undefined && back.end === 'create' && own !== undefined && canonExit(readStream(root, own))?.to === 'superseded' ? [own] : []
+  const slice = back.end === 'create' && own !== undefined && canonExit(readStream(root, own))?.to === 'superseded' ? [own] : []
   const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
   const slices = canon.docs
     .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== id)
@@ -206,7 +205,8 @@ export function specRevertFor(
       const id = String(d.meta.id)
       const leaving = abandonSet.has(id)
       const on = plansOn(canon, id, leaving ? { exclude: abandonSet, pin: canonicalSha(d.meta, d.body) } : { exclude: abandonSet })
-      return leaving && on.length === 0 ? [] : [{ id, shipped: on.some((p) => String(p.meta.status) === 'done') }]
+      // D190: a slice stamped live is shipped behavior whether or not a plan of it is on file.
+      return leaving && on.length === 0 ? [] : [{ id, shipped: String(d.meta.status) === 'live' || on.some((p) => String(p.meta.status) === 'done') }]
     })
   if (slices.length > 0) {
     return ok({ doc: spec, action: 'keep', standing: slices.map((s) => s.id), shipped: slices.some((s) => s.shipped) })
@@ -319,7 +319,7 @@ export function keepDependencies(items: AbandonItem[], kept: SpecKeep[]): { item
 }
 
 export function executeAbandon(
-  root: string, ctx: Ctx, items: AbandonItem[], effortEntry: { effort: string } | undefined, subject: string,
+  root: string, ctx: Ctx, items: AbandonItem[], efforts: string[], subject: string,
 ): Result<{ sha: string }> {
   const files = new Set<string>()
   const journalMulti: Array<{ stream: string; line: string }> = []
@@ -360,16 +360,17 @@ export function executeAbandon(
       returnEntries.push(...lines)
     }
   }
-  let effortLine: { stream: string; line: string } | undefined
-  if (effortEntry) {
+  // D190. Each effort the act abandons ends in the same transaction: one terminal entry each.
+  const effortLines = efforts.map((effort) => {
     const entry = {
-      v: 1 as const, t: 'human-decision' as const, gate: 'effort', artifact: effortEntry.effort,
+      v: 1 as const, t: 'human-decision' as const, gate: 'effort', artifact: effort,
       round: 0, decision: 'abandon-effort' as const,
     }
-    effortLine = { stream: effortEntry.effort, line: entryLine(entry as unknown as { t: 'human-decision'; [k: string]: unknown }) }
-    files.add(journalRel(effortEntry.effort))
-    journalMulti.push(effortLine)
-  }
+    const line = { stream: effort, line: entryLine(entry as unknown as { t: 'human-decision'; [k: string]: unknown }) }
+    files.add(journalRel(effort))
+    journalMulti.push(line)
+    return line
+  })
 
   const lockR = acquireLock(root)
   if (!lockR.ok) return lockR
@@ -393,9 +394,7 @@ export function executeAbandon(
       for (const s of stamps) writeStamp(root, s)
       for (const se of specEntries) appendEntry(root, se.stream, se.entry as unknown as { t: 'status'; [k: string]: unknown })
       for (const re of returnEntries) appendEntry(root, re.stream, re.entry)
-      if (effortLine) {
-        appendEntry(root, effortLine.stream, JSON.parse(effortLine.line))
-      }
+      for (const l of effortLines) appendEntry(root, l.stream, JSON.parse(l.line))
       crashPoint(ctx.env, 'abandon-commit')
       const r = stateCommit(root, [...files], subject)
       // D141. `abandon` runs from wherever the human typed it, which may be the very
