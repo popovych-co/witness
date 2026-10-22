@@ -50,7 +50,7 @@ const askCtx = (repo: TestRepo, answers: string[], out: string[]): Ctx =>
   })
 
 // n started flows, one spec each. A fresh worktree owes its first red, so every flow sits
-// at `witness test-evidence <plan> --phase red` (rank 1). `shipping` gets a pr (rank 3).
+// at `witness test-evidence <plan> --phase red --step s1` (rank 1). `shipping` gets a pr (rank 3).
 async function startedFlows(specs: string[], opts: { shipping?: string } = {}): Promise<TestRepo> {
   const repo = await seededRepo()
   for (const s of specs) {
@@ -501,7 +501,7 @@ describe('side by side (B3)', () => {
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
     const all = out.join('\n')
-    expect(all).toContain('drive: no progress — witness test-evidence b-plan-1 --phase red')
+    expect(all).toContain('drive: no progress — witness test-evidence b-plan-1 --phase red --step s1')
     expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
     expect(all).toMatch(/drive: spawn ceiling reached \(6\)/)
   }, 90000)

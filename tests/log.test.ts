@@ -1,9 +1,8 @@
-import { appendFileSync, cpSync } from 'node:fs'
+import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, evidenceCycle, fixturePath, seededRepo, threeStepPlan, writeSpec } from './helpers.js'
+import { SPEC_META, evidenceCycle, seededRepo, startedThreeStepPlan, writeSpec } from './helpers.js'
 
 describe('witness log', () => {
   it('renders recap, write, and write-refused entries in order', async () => {
@@ -34,11 +33,7 @@ describe('witness log', () => {
 // Row 191 §4.3. A plan's log ends with where it stands, and each row names the step it closes.
 describe('witness log reads plan steps', () => {
   it('prints steps: after a plan\'s rows and names each row\'s step', async () => {
-    const P = 'auth-refresh-plan-1'
-    const repo = await threeStepPlan()
-    await repo.cli(['start', P])
-    const wt = worktreePath(repo.root, P)
-    cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+    const { repo, wt, planId: P } = await startedThreeStepPlan()
     expect((await evidenceCycle(repo, wt, P, 's1')).code).toBe(0)
 
     const one = (await repo.cli(['log', P])).stdout.split('\n')

@@ -97,7 +97,16 @@ export function checkStep(plan: CanonDoc, entries: Entry[], step: string | undef
   const id = String(plan.meta.id)
   const steps = manifest(plan)
   if (step === undefined) {
-    if (verb === 'evidence') return []
+    if (verb === 'evidence') {
+      // Plan's call 4: owed where the CLI can tell it is. Before the first implement gate every
+      // cycle on a plan whose progress is known is a step's, and one forgotten flag would turn
+      // that knowledge off for good. After the gate an untagged cycle is a fix round, and a
+      // legacy plan's evidence never named its steps.
+      const p = stepProgress(plan, entries)
+      return p.known && !implementGated(entries)
+        ? [v('--step', 'step-required', 'absent', `--step <id> — every cycle before the first implement gate is a plan step's · steps ${stepsLine(p)}`)]
+        : []
+    }
     const scaffolding = steps.filter((s) => s.kind === 'scaffolding').map((s) => s.id).join(' · ')
     return [v('--step', 'required', 'absent', `witness step-close ${id} --step <id> — a scaffolding step of ${id}: ${scaffolding || '(none)'}`)]
   }

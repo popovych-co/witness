@@ -93,7 +93,7 @@ describe('implement gate', () => {
     // post-dates the red.
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     execFileSync('git', ['add', '-A'], { cwd: wt })
-    const red = await repo.cli(['test-evidence', planId, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+    const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     expect(red.code).toBe(0)
     const scenario = fakeScenario()
     putVerdict(scenario, treeClean(['src/token.ts']))

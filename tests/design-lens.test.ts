@@ -29,7 +29,7 @@ describe('capture convention', () => {
     writeFileSync(join(dir, 'stale.png'), Buffer.from('OLD'))
     writeFileSync(join(wt, 'tests/capture.test.ts'), CAPTURE_TEST)
     execFileSync('git', ['add', '-A'], { cwd: wt })
-    await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+    await repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     expect(existsSync(join(dir, 'initial.png'))).toBe(true)
     expect(existsSync(join(dir, 'stale.png'))).toBe(false)      // cleared
     expect(readFileSync(join(dir, 'initial.png'), 'utf8')).toBe('PNGBYTES-v1')
@@ -48,7 +48,7 @@ describe('witnessed capture shas', () => {
     const { repo, wt, planId } = await shippableRepo()
     writeFileSync(join(wt, 'tests/capture.test.ts'), CAPTURE_TEST)
     execFileSync('git', ['add', '-A'], { cwd: wt })
-    await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+    await repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     const evid = readStream(repo.root, planId).filter((e) => e.t === 'test-evidence' && e.phase === 'green')
     const captures = (evid.at(-1) as { captures?: Array<{ name: string; sha: string }> }).captures ?? []
     expect(captures.map((c) => c.name)).toEqual(['initial.png'])
@@ -58,7 +58,7 @@ describe('witnessed capture shas', () => {
 
   it('records no captures field when the suite screenshots nothing', async () => {
     const { repo, wt, planId } = await shippableRepo()   // token.test.ts only — no capture test
-    await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+    await repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     const evid = readStream(repo.root, planId).filter((e) => e.t === 'test-evidence' && e.phase === 'green')
     expect((evid.at(-1) as { captures?: unknown }).captures).toBeUndefined()
   })
@@ -84,7 +84,7 @@ describe('implement gate — capture preconditions', () => {
     const { repo, wt, planId } = await shippableRepo()
     writeFileSync(join(wt, 'tests/capture.test.ts'), CAPTURE_TEST)  // writes initial.png = "PNGBYTES-v1"
     execFileSync('git', ['add', '-A'], { cwd: wt })
-    await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+    await repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     repo.setMeta(planId, { 'design-from': 'a'.repeat(64) })
     // swap the bytes AFTER witnessing — the adversary CLI-witnessing exists for
     writeFileSync(join(screensDir(wt, planId), 'initial.png'), Buffer.from('DOCTORED'))
@@ -110,7 +110,7 @@ async function uiPlanRepo() {
   const { repo, wt, planId, specId } = await shippableRepo()
   writeFileSync(join(wt, 'tests/capture.test.ts'), CAPTURE_TEST)   // initial.png
   execFileSync('git', ['add', '-A'], { cwd: wt })
-  await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+  await repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
   // design canon (registered) + living design artifact + the pin
   repo.write('docs/design.md', 'Every screen opens with a Bookings eyebrow; primary action is a sticky save bar.')
   const cfgPath = join(repo.root, 'witness.config.yaml')

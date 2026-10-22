@@ -13,6 +13,7 @@ import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites
 import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
+import { implementGated, openRed, stepProgress, stepsLine, type StepState } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -184,14 +185,18 @@ function judgeNote(entries: Entry[], gate: string, judge: string | undefined): s
 // `verify-red` is preferred where a plain red probe is guaranteed vacuous: with the
 // implementation already written the suite passes as it stands, so the reconstructing
 // verb is the only one that can witness a genuine red.
+//
+// `step` is set before the first implement gate on a plan whose progress is known, where
+// `test-evidence` refuses a cycle that names none (row 191).
 function evidenceRow(
   id: string, parentTag: string, files: string[], report: EvidenceReport | undefined,
-  seat: { home: string; model?: string },
+  seat: { home: string; model?: string }, step?: string,
 ): NextAction {
   const base = { stage: 'implement' as const, target: id, ...seat }
+  const stepFlag = step === undefined ? '' : ` --step ${step}`
   if (report === undefined) {
     return {
-      line: `witness test-evidence ${id} --phase red`, ...base,
+      line: `witness test-evidence ${id} --phase red${stepFlag}`, ...base,
       note: 'nothing changed yet — write the failing test first',
     }
   }
@@ -202,9 +207,21 @@ function evidenceRow(
   const parent = report.required.find((r) => r.tag === parentTag)
   const liveRed = parent !== undefined && parent.red && !parent.vacuous
   const line = !liveRed && files.some((f) => !isTestPath(f))
-    ? `witness verify-red ${id}`
-    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}`
+    ? `witness verify-red ${id}${stepFlag}`
+    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}${stepFlag}`
   return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
+}
+
+// The step an evidence row names once every step is closed: that of the latest red naming a
+// criteria step of the plan as it stands. Never a scaffolding step or one an amend removed,
+// both of which `test-evidence` refuses. One exists whenever the plan has a criteria step,
+// since none closes without a red tagged with it.
+function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined {
+  const criteria = new Set(steps.filter((s) => s.kind === 'criteria').map((s) => s.id))
+  const red = entries
+    .filter((e) => e.t === 'test-evidence' && e.phase === 'red' && typeof e.step === 'string' && criteria.has(e.step))
+    .at(-1)
+  return red === undefined ? undefined : String(red.step)
 }
 
 export interface NextAction {
@@ -276,12 +293,29 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   if (gateSettled(entries, 'implement', diffSha)) {
     return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
   }
+  // Row 191 · Plan's call 5. The evidence below is the parent tag's and knows nothing of the
+  // plan's steps: one red→green pair satisfied it, so a three-step plan was routed to `gate
+  // implement` after its first step and every mid-plan relay's fresh session gated early.
+  // While the plan's progress is known and no implement gate has run, the next unfinished
+  // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
+  const progress = stepProgress(plan, entries)
+  const stepped = progress.known && !implementGated(entries) ? progress : undefined
+  if (stepped?.next !== undefined) {
+    const s = stepped.next
+    return {
+      line: s.kind === 'scaffolding'
+        ? `witness step-close ${id} --step ${s.id}`
+        : `witness test-evidence ${id} --phase ${openRed(entries, s.id) ? 'green' : 'red'} --step ${s.id}`,
+      stage: 'implement', target: id, ...inWorktree, note: `steps ${stepsLine(stepped)}`,
+    }
+  }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
-    return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree)
+    return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree,
+      stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined)
   }
   // D94: with the content unchanged the gate answers `changed-nothing` and appends
   // nothing, so routing there returns this same line every turn. The revise asked for an

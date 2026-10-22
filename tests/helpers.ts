@@ -7,7 +7,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, type Ctx } from '../src/cli.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
-import { appendEntry, journalRel } from '../src/journal.js'
+import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
@@ -438,14 +438,14 @@ export async function shippableRepo(
     execFileSync('git', ['add', '-A'], { cwd: wt })
     execFileSync('git', ['commit', '-m', 'wip: tagged tests + stub'], { cwd: wt })
   }
-  let r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+  let r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`red phase: ${r.stdout}\n${r.stderr}`)
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
   if (commit) {
     execFileSync('git', ['add', '-A'], { cwd: wt })
     execFileSync('git', ['commit', '-m', 'feat: rotate token'], { cwd: wt })
   }
-  r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+  r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`green phase: ${r.stdout}\n${r.stderr}`)
   return { repo, wt, planId: 'auth-refresh-plan-1', specId: 'auth-refresh' }
 }
@@ -471,6 +471,37 @@ export async function threeStepPlan(extraYaml = ''): Promise<TestRepo> {
   await writePlan(repo, 'auth-refresh-plan-1', THREE_STEPS, THREE_STEP_BODY)
   repo.flipStatus('auth-refresh-plan-1', 'approved')
   return repo
+}
+
+// `threeStepPlan`, started, with the vitest-single fixture copied into its worktree: where a test
+// of the plan's steps begins.
+export async function startedThreeStepPlan(extraYaml = ''): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await threeStepPlan(extraYaml)
+  const planId = 'auth-refresh-plan-1'
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+  return { repo, wt, planId }
+}
+
+// A journal line committed as a state commit (flipStatus's trailer): history the current CLI
+// will not write itself, such as an older CLI's untagged evidence.
+export function commitEntry(repo: TestRepo, stream: string, entry: { t: EntryType; [k: string]: unknown }): void {
+  appendEntry(repo.root, stream, entry)
+  repo.git('add', journalRel(stream))
+  repo.git('commit', '-m', `journal: ${stream}`, '-m', 'Witness-State: 1')
+}
+
+// Row 191 §4.3. A red as a CLI older than `--step` journaled it. Naming no step, it leaves the
+// plan's progress unknown: a legacy plan. `vacuous` is a red that passed, as one recorded after
+// the implementation does.
+export function untaggedRed(planId: string, vacuous = false): { t: EntryType; [k: string]: unknown } {
+  return {
+    t: 'test-evidence', artifact: planId, phase: 'red', runner: 'filtered',
+    tests: [{ name: 'rotates token before expiry @spec:auth-refresh', ok: vacuous }],
+    ...(vacuous ? { vacuous: true } : {}),
+  }
 }
 
 // One plan step's witnessed red→green in the worktree `wt`, tagged with the step: the broken

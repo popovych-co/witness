@@ -135,11 +135,11 @@ describe('the whole pipeline, killed and resumed at every boundary', () => {
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     execFileSync('git', ['-C', wt, 'add', '-A'])
     execFileSync('git', ['-C', wt, 'commit', '-m', 'tests first'])
-    cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt })
+    cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { cwd: wt })
     cpSync(join(fixturePath('vitest-single'), 'src/token.ts'), join(wt, 'src/token.ts'))
     execFileSync('git', ['-C', wt, 'add', '-A'])
     execFileSync('git', ['-C', wt, 'commit', '-m', 'green'])
-    cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt })
+    cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green', '--step', 's1'], { cwd: wt })
 
     putVerdict(scenario, treeClean(wt))
     cli(['gate', 'implement', 'auth-refresh-plan-1'])       // exit 0: green path

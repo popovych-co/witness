@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import type { CanonDoc } from '../src/scan.js'
-import { checkStep, closedAt, implementGated, openRed, stepProgress, stepsLine } from '../src/steps.js'
+import { checkStep, closedAt, closingIndex, implementGated, openRed, stepProgress, stepsLine } from '../src/steps.js'
 
 const planDoc = (steps: Array<Record<string, unknown>>): CanonDoc =>
   ({ rel: 'plans/p.md', meta: { id: 'p', type: 'plan', parent: 'x', steps }, body: '', violations: [], satisfiedNeeds: [] })
@@ -59,5 +59,22 @@ describe('step progress (row 191 §4.3)', () => {
     ['s1', 'close', 'criteria-step'], [undefined, 'close', 'required'],
   ])('checkStep(%s, %s) refuses %s', (step, verb, rule) => {
     expect(checkStep(plan, [], step, verb as 'evidence' | 'close')[0]).toMatchObject({ field: '--step', rule })
+  })
+  // Plan's call 4: owed only where the CLI can tell. After the first implement gate an untagged
+  // cycle is a fix round, and a legacy plan's evidence never named its steps.
+  it('checkStep requires a step for evidence while progress is known and no implement gate has run', () => {
+    expect(checkStep(plan, [red('s1'), green('s1')] as Entry[], undefined, 'evidence')).toEqual([{
+      field: '--step', rule: 'step-required', got: 'absent',
+      want: "--step <id> — every cycle before the first implement gate is a plan step's · steps 1/3 done · next s2",
+    }])
+    expect(checkStep(plan, [red('s1'), green('s1'), { v: 1, t: 'gate-run', gate: 'implement' }] as Entry[], undefined, 'evidence')).toEqual([])
+    expect(checkStep(plan, [red(), green()] as Entry[], undefined, 'evidence')).toEqual([])
+  })
+  // step-close's already-closed check reads the step alone (Plan's call 6): a close stays found
+  // where a legacy plan's untagged evidence leaves the progress unknown.
+  it('closingIndex finds a scaffolding close on a legacy plan', () => {
+    const entries = [red(), green(), close('s3')] as Entry[]
+    expect(stepProgress(plan, entries)).toEqual({ known: false })
+    expect(closingIndex({ id: 's3', kind: 'scaffolding' }, entries)).toBe(2)
   })
 })

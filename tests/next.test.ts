@@ -4,8 +4,9 @@ import { cpSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { worktreePath } from '../src/worktree.js'
 import {
-  SPEC_META, TOKEN_FIXED, approve, autonomyOn, fakeScenario, fixturePath, gateEnv, nextLine, putVerdict, seededRepo,
-  shippableRepo, singleConfig, stampLive, witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
+  SPEC_META, TOKEN_BROKEN, TOKEN_FIXED, approve, autonomyOn, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, fixturePath,
+  gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, singleConfig, stampLive, startedThreeStepPlan, untaggedRed,
+  witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
 } from './helpers.js'
 
 describe('witness next — the ladder', () => {
@@ -186,6 +187,11 @@ describe('design stage routing', () => {
 // placeholder is honest only where the CLI cannot know the answer). `--phase red|green`
 // was not runnable, and an agent following `next` faithfully never learned that `ship`
 // had been available all along.
+//
+// Row 191: a plan whose progress is known routes by step until every step is closed (the block
+// below), so these tests pin the evidence row on a legacy plan, whose rows are today's. Its flow
+// carries a red an older CLI journaled: untagged, and vacuous, as a red recorded after the
+// implementation is.
 describe('the evidence row names the phase it wants', () => {
   async function startedFlow(): Promise<{ repo: TestRepo; wt: string }> {
     const repo = await seededRepo()
@@ -196,6 +202,7 @@ describe('the evidence row names the phase it wants', () => {
     await writePlan(repo, 'auth-refresh-plan-1')
     repo.flipStatus('auth-refresh-plan-1', 'approved')
     await repo.cli(['start', 'auth-refresh-plan-1'])
+    commitEntry(repo, 'auth-refresh-plan-1', untaggedRed('auth-refresh-plan-1', true))
     return { repo, wt: worktreePath(repo.root, 'auth-refresh-plan-1') }
   }
 
@@ -220,6 +227,70 @@ describe('the evidence row names the phase it wants', () => {
     cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
     expect(await nextLine(repo)).toContain('evidence owed: auth-refresh')
+  })
+})
+
+// Row 191 · Plan's call 5. With no step input, `next` routed a three-step plan to `gate implement`
+// once the parent tag had one red→green pair, so every mid-plan relay's fresh session gated
+// early. While the plan's progress is known and no implement gate has run, the work is the next
+// unfinished step.
+describe('next routes the next unfinished plan step', () => {
+  const lines = async (repo: TestRepo, wt: string): Promise<string[]> => (await nextLine(repo, { cwd: wt })).split('\n')
+
+  it('routes a fresh known plan to its first step', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    const out = await lines(repo, wt)
+    expect(out).toContain(`next: witness test-evidence ${planId} --phase red --step s1`)
+    expect(out).toContain('stage: implement')
+    expect(out).toContain('note: steps 0/3 done · next s1')
+  })
+
+  it('routes the green of an open red', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
+    expect(red.code).toBe(0)
+    expect(await lines(repo, wt)).toContain(`next: witness test-evidence ${planId} --phase green --step s1`)
+  })
+
+  it('routes a scaffolding step to step-close', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, planId, 's2')).code).toBe(0)
+    const out = await lines(repo, wt)
+    expect(out).toContain(`next: witness step-close ${planId} --step s3`)
+    expect(out).toContain('note: steps 2/3 done · next s3')
+  })
+
+  it('routes to the implement gate once every step is closed', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, planId, 's2')).code).toBe(0)
+    expect((await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt })).code).toBe(0)
+    expect(await lines(repo, wt)).toContain(`next: witness gate implement ${planId}`)
+  })
+
+  // Every step closed, then a red re-recorded for s1: the evidence owed before the first implement
+  // gate is still a step's, so the row names the latest tagged red's step, not the last step's.
+  it("names the latest tagged red's step on the evidence row once every step is closed", async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, planId, 's2')).code).toBe(0)
+    expect((await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt })).code).toBe(0)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
+    expect(red.code).toBe(0)
+    const out = await lines(repo, wt)
+    expect(out).toContain(`next: witness test-evidence ${planId} --phase green --step s1`)
+    expect(out).toContain('note: evidence owed: auth-refresh green')
+  })
+
+  it("keeps today's rows for a legacy plan", async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    commitEntry(repo, planId, untaggedRed(planId))
+    const out = await lines(repo, wt)
+    expect(out).toContain(`next: witness test-evidence ${planId} --phase green`)
+    expect(out).toContain('note: evidence owed: auth-refresh green')
   })
 })
 

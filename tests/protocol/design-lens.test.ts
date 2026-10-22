@@ -96,12 +96,12 @@ describe('the design lens, end to end', () => {
     writeFileSync(join(wt, 'tests/capture.test.ts'), CAPTURE_TEST)
     execFileSync('git', ['-C', wt, 'add', '-A'])
     execFileSync('git', ['-C', wt, 'commit', '-m', 'tests first'])
-    let ev = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+    let ev = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     expect(ev.code).toBe(0)
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
     execFileSync('git', ['-C', wt, 'add', '-A'])
     execFileSync('git', ['-C', wt, 'commit', '-m', 'green'])
-    ev = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+    ev = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     expect(ev.code).toBe(0)
 
     // implement gate: 4 tree lenses clean, design-reviewer blocks a planted violation
