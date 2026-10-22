@@ -28,6 +28,8 @@ export interface Harness {
   // standing invitation to re-derive the flag from it and restore bug B2.
   defaultProvider?: string
   relay: string
+  // Row 191 §4.1: the env var naming this harness's session, read by src/context.ts.
+  session: string
   settings?: string
   // Does ONE native install deliver skills AND engine AND guard? Claude Code's
   // marketplace plugin does, out of band of every directory check can probe — so an
@@ -129,6 +131,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     name: 'claude-code',
     launch: 'claude',
     relay: '/clear',
+    session: 'CLAUDE_CODE_SESSION_ID',
     settings: '.claude/settings.json',
     bundled: true,
     payload: [
@@ -168,6 +171,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     launch: 'pi',
     defaultProvider: 'anthropic',
     relay: '/new',
+    session: 'PI_SESSION_ID',
     bundled: false,
     payload: [
       { from: 'plugin/commands/witness.md', to: '.pi/prompts/witness.md' },

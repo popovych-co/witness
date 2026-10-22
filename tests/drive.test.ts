@@ -193,6 +193,17 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).outcome).toBe('spawn-failed')
   }, 20000)
 
+  it('strips WITNESS_CONTEXT from the child (row 191 §4.9)', async () => {
+    const repo = await seededRepo()
+    const bin = fakeAgent('echo "ctx=${WITNESS_CONTEXT-unset}"')
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      env: { WITNESS_DRIVE_AGENT_BIN: bin, WITNESS_CONTEXT: '{"session":"chat"}' }, out: (l) => lines.push(l),
+    })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(lines).toContain('[1 implement/p1] ctx=unset')
+  }, 20000)
+
   it('builds the headless session command per harness, carrying the stage pin', async () => {
     const claude = loadHarness('claude-code')
     const pi = loadHarness('pi')

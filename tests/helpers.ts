@@ -67,6 +67,10 @@ export function tmpRepo(): TestRepo {
       // It is a test seam, not a config key — see the note in src/registry.ts.
       env: {
         ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined,
+        // the suite may run inside a measured session (row 191): its reading and session id
+        // would stamp every line a test journals and decide its relays. A test that wants a
+        // measured session says so through opts.env (measuredEnv below).
+        WITNESS_CONTEXT: undefined, CLAUDE_CODE_SESSION_ID: undefined, PI_SESSION_ID: undefined,
         // a suite run inside a drive session or a runner turn must not inherit either:
         // the marker would scope every `next` and refuse every `drive` (row 180)
         WITNESS_DRIVE: undefined, WITNESS_RUNNER_TURN: undefined,
@@ -247,6 +251,13 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
     CI: '',
     ...extra,
   }
+}
+
+// Row 191 §4.1. What a shell command in a measured Claude Code session carries: the harness's
+// session variable, and the adapter's reading naming that same session. Leaving `tokens` out
+// is Claude Code before the session's first response (P7).
+export function measuredEnv(session: string, tokens: number | undefined, window: number): Record<string, string> {
+  return { CLAUDE_CODE_SESSION_ID: session, WITNESS_CONTEXT: JSON.stringify({ session, tokens, window }) }
 }
 
 export function fakeBinDir(): string {

@@ -58,6 +58,10 @@ export interface StatusEntry {
   note?: string
 }
 
+// Row 191 §4.8. The session a line was written in, as a hash (the journal is committed, so
+// never the raw id), and the harness's reading beside it when that reading was trusted.
+export interface JournalCtx { session: string; tokens?: number; window?: number }
+
 const dir = (root: string) => join(root, '.witness', 'journal')
 
 export const journalRel = (id: string) => `.witness/journal/${id}.jsonl`

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -324,5 +324,29 @@ describe('claude envelope errors (B4)', () => {
     const h = loadHarness('claude-code')
     const r = h.ok && h.value.reviewer.parseEnvelope(JSON.stringify({ type: 'result', is_error: true, result: 'boom' }))
     expect(r && !r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['reviewer-invocation', 'boom'])
+  })
+})
+
+describe('the session facet (row 191 §4.1)', () => {
+  it('names the variable each harness puts on every shell command', () => {
+    expect(hx('claude-code').session).toBe('CLAUDE_CODE_SESSION_ID')
+    expect(hx('pi').session).toBe('PI_SESSION_ID')
+  })
+
+  // The reading is trusted only when its session matches the harness's own variable. A
+  // variable spelled anywhere but the registry is a second answer to which one that is.
+  it('names session variables only in the registry', () => {
+    const src = join(import.meta.dirname, '..', 'src')
+    const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+      const p = join(dir, name)
+      return statSync(p).isDirectory() ? walk(p) : [p]
+    })
+    const files = walk(src).filter((f) => f.endsWith('.ts'))
+    expect(files).toContain(join(src, 'harness.ts'))
+    const hits = files
+      .filter((f) => f !== join(src, 'harness.ts'))
+      .filter((f) => /CLAUDE_CODE_SESSION_ID|PI_SESSION_ID/.test(readFileSync(f, 'utf8')))
+      .map((f) => f.slice(src.length + 1))
+    expect(hits).toEqual([])
   })
 })
