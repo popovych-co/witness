@@ -61,6 +61,17 @@ describe('decompose gate', () => {
     expect(findById(loadCanon(amendRepo.root), 'auth-refresh')!.meta.status).toBe('approved')
   })
 
+  it('fix class still stops on a created spec once a revise round re-wrote it (D168)', async () => {
+    const repo = await seededRepo({ class: 'fix', slug: 'quick-fix' })
+    await writeSpec(repo, 'auth-refresh')                                   // created under a fix
+    await writeSpec(repo, 'auth-refresh', { summary: 'revised after round 1' })   // the effort's own revision
+    const scenario = fakeScenario()
+    putVerdict(scenario, cover(['auth-refresh']))
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    expect(await runGate(ctx, 'decompose', 'quick-fix', { fresh: false, manual: false })).toBe(1)
+    expect(runsOf(repo, 'quick-fix')[0]!.standing).toContain('misroute')
+  })
+
   it('recap --amend re-arms the stop with a fresh round', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')

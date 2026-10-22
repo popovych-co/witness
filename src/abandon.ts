@@ -1,44 +1,53 @@
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
-import { prepareDeparture, prepareReturns, type Departure, type Return, type TakenBack } from './departure.js'
+import { prepareDeparture, prepareReturns, takeBack, type Departure, type Return, type TakenBack, type WriteAct } from './departure.js'
 import { designRel } from './design.js'
-import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
 import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, withTxn } from './txn.js'
-import { appendEntry, effortAbandoned, effortStreams, entryLine, journalRel, readStream, type EntryType, type StatusEntry } from './journal.js'
+import { appendEntry, effortAbandoned, effortStreams, entryLine, journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
 import { findById, plansOn, type Canon, type CanonDoc } from './scan.js'
-import { effortOf, effortWrites } from './reviewed.js'
 import { humanCall, ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { kv } from './toon.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 
-export function pinCommit(root: string, rel: string, pin: string, from?: string): string | undefined {
-  // `from`: walk history from that revision instead of HEAD — for a file a later commit deleted
-  const log = tryGit(root, 'log', '--format=%H', ...(from === undefined ? [] : [from]), '--', rel)
-  if (!log.ok) return undefined
-  // Status-only touch-ups (approve, stampLive, a gate's writeStamp) commit the same
-  // canonical sha under a new commit, since status is a volatile field excluded from
-  // it. Walking newest-first and stopping at the first non-match — rather than
-  // returning the first match — lands on the OLDEST commit that established this
-  // content, so its parent is the true prior (different-content) version.
-  let found: string | undefined
-  for (const sha of log.out.split('\n').filter(Boolean)) {
-    const show = tryGit(root, 'show', `${sha}:${rel}`)
-    if (!show.ok) break
-    const doc = splitDoc(show.out)
-    if (!doc.ok || canonicalSha(doc.value.meta, doc.value.body) !== pin) break
-    found = sha
+const isWrite = (e: Entry, id: string, sha: string): boolean => {
+  const w = e as unknown as { t: string; artifact?: string; sha?: string }
+  return w.t === 'write' && w.artifact === id && w.sha === sha
+}
+
+// D168. The write that made this content of a spec, among `efforts`' writes, as history stood at
+// `at`: the commit that appended its journal line, which `git blame` names because the journal
+// is append-only. Rows 29 and 84 resolved a pin by walking the spec's path for matching content,
+// and content is not an act: a return or another abandon's restore brings the same content back
+// under a later commit, whose parent was never the write's — so an amendment read as a create
+// and was deleted, and a create restored another effort's abandoned amendment. Newest wins.
+export function writeAct(root: string, efforts: string[], id: string, sha: string, at = 'HEAD'): WriteAct | undefined {
+  let found: WriteAct | undefined
+  for (const effort of efforts) {
+    if (!readStream(root, effort).some((e) => isWrite(e, id, sha))) continue
+    const blame = tryGit(root, 'blame', '--line-porcelain', at, '--', journalRel(effort))
+    if (!blame.ok) continue
+    let commit = ''
+    for (const line of blame.out.split('\n')) {
+      if (/^[0-9a-f]{40} \d+ \d+/.test(line)) { commit = line.slice(0, 40); continue }
+      if (!line.startsWith('\t')) continue
+      const e = JSON.parse(line.slice(1)) as Entry
+      if (!isWrite(e, id, sha)) continue
+      if (found === undefined || tryGit(root, 'merge-base', '--is-ancestor', found.commit, commit).ok) {
+        found = { effort, commit, created: (e as unknown as { created?: boolean }).created === true }
+      }
+    }
   }
   return found
 }
 
 export type SpecRevert =
-  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined }; returns: Return[] }
-  | { doc: CanonDoc; action: 'delete'; departure: Departure; returns: Return[] }
+  | { doc: CanonDoc; action: 'restore'; content: string; toStatus: string; design?: { rel: string; prior: Buffer | undefined }; returns: Return[]; unwound: StatusEntry[] }
+  | { doc: CanonDoc; action: 'delete'; departure: Departure; returns: Return[]; unwound: StatusEntry[] }
 
 // D166. The unwind that does not happen. Abandoning a plan takes back the spec content it was
 // paired with — the whole spec when its effort created it (row 29), else the amendment. But a
@@ -59,32 +68,32 @@ export function abandonLines(items: AbandonItem[], kept: SpecKeep[]): string[] {
   return [
     ...items.flatMap((item) => [
       ...(item.revert ? [kv('reverted', `${String(item.revert.doc.meta.id)} (${item.revert.action}) — journal untouched`)] : []),
-      ...(item.revert?.returns ?? []).flatMap((r) => [
-        kv('returned', `${r.entry.artifact} — back in canon as ${r.entry.to} · the re-slice into ${r.by} is taken back`),
-        ...r.unwound.map((u) => kv('unwound', `${u.artifact} — stays out of canon · an abandoned effort created it`)),
-      ]),
+      ...(item.revert?.returns ?? []).map((r) =>
+        kv('returned', `${r.entry.artifact} — back in canon as ${r.entry.to} · the re-slice into ${r.by} is taken back`)),
+      ...(item.revert?.unwound ?? []).map((u) => kv('unwound', `${u.artifact} — stays out of canon · an abandoned effort created it`)),
       ...(item.kept ? [kv('kept', keptLine(item.kept))] : []),
     ]),
     ...kept.map((k) => kv('kept', keptLine(k))),
   ]
 }
 
-// D166 (review). The writes the way back takes back besides this abandon's own targets: every
-// write of an effort already abandoned — whose abandon skipped a spec a later re-slice had
-// departed — and every write of the effort being abandoned now (`effort`, absent on the plan
-// path). Content one of them wrote never comes back into canon on its own — unless a plan
-// outside the abandon set stands on it: the keep rule, which never takes shipped content back.
-function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort: string | undefined): TakenBack {
-  const gone = effortStreams(root).filter((e) => e === effort || effortAbandoned(readStream(root, e)))
-  return (id, sha, rel, at) =>
-    plansOn(canon, id, { exclude: abandonSet, pin: sha }).length === 0 &&
-    gone.some((e) => readStream(root, e).some((x) => x.t === 'write' && x.artifact === id && x.sha === sha))
-      ? pinCommit(root, rel, sha, at)
-      : undefined
+// D166 (review). The efforts whose writes the way back takes back besides this abandon's own
+// targets: every effort already abandoned — whose abandon skipped a spec a later re-slice had
+// departed — and the effort being abandoned now (`effort`, absent on the plan path).
+const goneEfforts = (root: string, effort: string | undefined): string[] =>
+  effortStreams(root).filter((e) => e === effort || effortAbandoned(readStream(root, e)))
+
+// Content one of `efforts` wrote never comes back into canon on its own — unless a plan outside
+// the abandon set stands on it: the keep rule, which never takes shipped content back.
+function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, efforts: string[]): TakenBack {
+  return (id, sha, at) =>
+    plansOn(canon, id, { exclude: abandonSet, pin: sha }).length === 0 ? writeAct(root, efforts, id, sha, at) : undefined
 }
 
+// `writer`: the effort whose write of `pin` this abandon takes back — the effort itself on the
+// effort path, the effort the plan is paired with on the plan path.
 export function specRevertFor(
-  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, effort?: string,
+  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, writer: string, effort?: string,
 ): Result<SpecRevert | SpecKeep | undefined> {
   const current = canonicalSha(spec.meta, spec.body)
   if (current !== pin) {
@@ -102,20 +111,31 @@ export function specRevertFor(
       shipped: standing.some((p) => String(p.meta.status) === 'done'),
     })
   }
-  const commit = pinCommit(root, spec.rel, pin)
-  if (!commit) {
-    return refuse([v('spec', 'pin-unresolvable', pin.slice(0, 7), 'a committed version matching the pin')])
+  const id = String(spec.meta.id)
+  const act = writeAct(root, [writer], id, pin)
+  if (!act) {
+    return refuse([v('spec', 'pin-unresolvable', pin.slice(0, 7), `${writer}'s journaled write of this content`)])
   }
-  // D166. The way back: the write being taken back may have departed a predecessor (a
-  // re-slice), which then returns with it. A re-slice can cut one spec into several slices, and
-  // taking back one while another still stands would leave the predecessor half-described, so
-  // that write is kept until its siblings go too — together, through the effort that made them.
-  const returns = prepareReturns(root, canon.paths, commit, String(spec.meta.id), takenBackBy(root, canon, abandonSet, effort))
+  // D168. The write being taken back is one act of `writer`, and so is every earlier write of
+  // this spec it made: a revise round re-writes, and taking back only the last write left the
+  // effort's own first draft in canon. The walk goes back past those and past every abandoned
+  // effort's write, and stops at content a plan stands on.
+  const gone = goneEfforts(root, effort)
+  const back = takeBack(root, spec.rel, id, act, takenBackBy(root, canon, abandonSet, [...new Set([...gone, writer])]))
+  // D166. The way back: a write being taken back may have departed a predecessor (a re-slice),
+  // which then returns with it. A re-slice can cut one spec into several slices, and taking
+  // back one while another still stands would leave the predecessor half-described, so that
+  // write is kept until its siblings go too — together, through the effort that made them.
+  // D168: every write the walk takes back, not only the last — the create that re-sliced, or
+  // an amendment that folded another spec in, may lie under a revision.
+  const ways = back.passed.map((w) => prepareReturns(root, canon.paths, w.commit, id, takenBackBy(root, canon, abandonSet, gone)))
+  const returns = ways.flatMap((w) => w.returns)
+  const unwound = ways.flatMap((w) => w.unwound)
   // D166 (review). A sibling slice stands when this abandon leaves it in canon: it is outside the
   // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
   // good when a plan shipped it — and then so does this keep, since nothing can take the
   // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
-  const cut = new Set(returns.flatMap((r) => [r.entry.artifact, ...r.unwound.map((u) => u.artifact)]))
+  const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact)])
   const slices = canon.docs
     .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
     .flatMap((d) => {
@@ -127,8 +147,7 @@ export function specRevertFor(
   if (slices.length > 0) {
     return ok({ doc: spec, action: 'keep', standing: slices.map((s) => s.id), shipped: slices.some((s) => s.shipped) })
   }
-  const prior = tryGit(root, 'show', `${commit}^:${spec.rel}`)
-  if (!prior.ok) {
+  if (back.end === 'create') {
     const dependents = canon.docs
       .filter((d) => !abandonSet.has(String(d.meta.id)))
       .filter((d) => ((d.meta.depends ?? []) as string[]).includes(String(spec.meta.id)))
@@ -140,20 +159,19 @@ export function specRevertFor(
     // D166. The unwind departs the spec through the same door the re-slice uses, so
     // everything that leaves canon with a spec — its design included — leaves here too.
     return ok({
-      doc: spec, action: 'delete', returns,
+      doc: spec, action: 'delete', returns, unwound,
       departure: prepareDeparture(root, canon.paths, spec, {
-        v: 1, t: 'status', artifact: String(spec.meta.id), from: String(spec.meta.status), to: 'removed', cause: 'abandon',
+        v: 1, t: 'status', artifact: id, from: String(spec.meta.status), to: 'removed', cause: 'abandon',
       }),
     })
   }
-  const parsed = splitDoc(prior.out)
-  const toStatus = parsed.ok ? String(parsed.value.meta.status) : 'draft'
-  // D166. The look goes back with the content it was drawn for: the design as it stood before
-  // the commit being taken back, byte for byte — or none, if there was none then.
-  const designR = designRel(canon.paths, String(spec.meta.id))
-  const priorDesign = gitBlob(root, `${commit}^`, designR)
+  const toStatus = back.end === 'content' ? String(back.doc.meta.status) : 'draft'
+  // D166. The look goes back with the content it was drawn for: the design as it stood where the
+  // walk stopped, byte for byte — or none, if there was none then.
+  const designR = designRel(canon.paths, id)
+  const priorDesign = gitBlob(root, back.src, designR)
   const design = priorDesign !== undefined || existsSync(join(root, designR)) ? { rel: designR, prior: priorDesign } : undefined
-  return ok({ doc: spec, action: 'restore', content: prior.out, toStatus, design, returns })
+  return ok({ doc: spec, action: 'restore', content: back.blob.toString('utf8'), toStatus, design, returns, unwound })
 }
 
 export interface AbandonItem {
@@ -214,19 +232,19 @@ export function executeAbandon(
         : [spec.rel, journalRel(id), ...(item.revert.design ? [item.revert.design.rel] : [])]
       for (const f of touched) files.add(f)
       journalMulti.push({ stream: id, line: entryLine(entry as unknown as { t: 'status'; [k: string]: unknown }) })
-      // D166. A spec this write had departed comes back in the same state commit.
-      for (const r of item.revert.returns) {
-        const lines = [
-          ...[r.entry, ...r.unwound].map((e) => ({ stream: e.artifact, entry: e as unknown as { t: EntryType; [k: string]: unknown } })),
-          ...r.moves,
-        ]
-        for (const f of r.files) files.add(f)
-        for (const l of lines) {
-          files.add(journalRel(l.stream))
-          journalMulti.push({ stream: l.stream, line: entryLine(l.entry) })
-        }
-        returnEntries.push(...lines)
+      // D166. A spec this write had departed comes back in the same state commit — and, D168,
+      // a spec the walk took back past its create leaves canon's record in it too.
+      const asLine = (e: StatusEntry) => ({ stream: e.artifact, entry: e as unknown as { t: EntryType; [k: string]: unknown } })
+      const lines = [
+        ...item.revert.returns.flatMap((r) => [asLine(r.entry), ...r.moves]),
+        ...item.revert.unwound.map(asLine),
+      ]
+      for (const r of item.revert.returns) for (const f of r.files) files.add(f)
+      for (const l of lines) {
+        files.add(journalRel(l.stream))
+        journalMulti.push({ stream: l.stream, line: entryLine(l.entry) })
       }
+      returnEntries.push(...lines)
     }
   }
   let effortLine: { stream: string; line: string } | undefined
@@ -311,13 +329,18 @@ export function planItems(
     planId,
   }
   if (pairing === 'stamp-only') return ok(item)
-  const effort = effortOf(root, planId)
+  // D168. Paired by the act: an effort that wrote this plan also made the write of the parent the
+  // plan derives from. Deriving the owner through effortOf tie-broke alphabetically across every
+  // effort that wrote the plan, and pairing on "wrote the parent at all" reverted content another
+  // effort wrote whenever the plan was derived from it.
   const parentId = String(plan.meta.parent)
-  const paired = effort !== undefined && effortWrites(root, effort).has(parentId)
-  if (paired) {
-    const parent = findById(canon, parentId)
-    if (parent) {
-      const revertR = specRevertFor(root, canon, parent, String(plan.meta['derives-from']), abandonSet)
+  const parent = findById(canon, parentId)
+  if (parent) {
+    const pin = String(plan.meta['derives-from'])
+    const writers = effortStreams(root).filter((e) => readStream(root, e).some((x) => x.t === 'write' && x.artifact === planId))
+    const act = writeAct(root, writers, parentId, pin)
+    if (act) {
+      const revertR = specRevertFor(root, canon, parent, pin, abandonSet, act.effort)
       if (!revertR.ok) return revertR
       const outcome = revertR.value
       if (outcome?.action === 'keep') item.kept = outcome

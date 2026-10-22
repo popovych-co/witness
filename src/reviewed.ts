@@ -78,7 +78,9 @@ export function effortWrites(root: string, effort: string): Map<string, WriteInf
   for (const e of readStream(root, effort)) {
     if (e.t !== 'write') continue
     const w = e as unknown as { artifact: string; sha: string; covers?: string[]; created?: boolean }
-    out.set(w.artifact, { sha: w.sha, covers: w.covers, created: w.created })
+    // D168. Latest write wins for sha and covers, but a revision does not un-create: the effort
+    // created the artifact if any of its writes did.
+    out.set(w.artifact, { sha: w.sha, covers: w.covers, created: w.created ?? out.get(w.artifact)?.created })
   }
   return out
 }
