@@ -134,29 +134,6 @@ function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort
   }
 }
 
-// D189. What each spec was cut from: its own `supersedes` while canon holds it, else the
-// `supersedes` its write journaled — a departed spec is no longer in canon to say.
-function cutFrom(root: string, canon: Canon): Map<string, string> {
-  const from = new Map<string, string>()
-  for (const e of effortStreams(root)) {
-    for (const x of readStream(root, e)) {
-      const w = x as unknown as { t: string; artifact?: string; supersedes?: string }
-      if (w.t === 'write' && w.artifact !== undefined && w.supersedes !== undefined) from.set(w.artifact, w.supersedes)
-    }
-  }
-  for (const d of canon.docs) if (d.meta.supersedes !== undefined) from.set(String(d.meta.id), String(d.meta.supersedes))
-  return from
-}
-
-const descendsFrom = (from: Map<string, string>, id: string, cut: Set<string>): boolean => {
-  const seen = new Set<string>([id])
-  for (let up = from.get(id); up !== undefined && !seen.has(up); up = from.get(up)) {
-    if (cut.has(up)) return true
-    seen.add(up)
-  }
-  return false
-}
-
 // `act`: the write of `pin` this abandon takes back — the effort's own on the effort path, the
 // write the plan is paired with on the plan path. `effort`: the effort being abandoned, if any.
 export function specRevertFor(
@@ -223,11 +200,8 @@ export function specRevertFor(
   const own = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
   const slice = effort === undefined && back.end === 'create' && own !== undefined && canonExit(readStream(root, own))?.to === 'superseded' ? [own] : []
   const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
-  // D189: a split is the whole tree of what was cut from the predecessor — a slice re-sliced
-  // again stands through its own slices.
-  const from = cutFrom(root, canon)
   const slices = canon.docs
-    .filter((d) => d.meta.type === 'spec' && String(d.meta.id) !== id && descendsFrom(from, String(d.meta.id), cut))
+    .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== id)
     .flatMap((d) => {
       const id = String(d.meta.id)
       const leaving = abandonSet.has(id)
