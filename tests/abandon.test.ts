@@ -481,3 +481,58 @@ describe('abandon takes back the act, not the content (D168)', () => {
     expect(specs(repo)).toBe('')
   })
 })
+
+// D189. The minors rows 168 and 188 deferred: a SHA-256 repository, writes on parallel branches,
+// and a plan an earlier abandon already withdrew.
+describe('abandon, the remaining edges (D189)', () => {
+  it('a SHA-256 repository resolves a write the same way', async () => {
+    const prior = process.env.GIT_DEFAULT_HASH
+    process.env.GIT_DEFAULT_HASH = 'sha256'
+    try {
+      const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+      expect(repo.git('rev-parse', 'HEAD')).toHaveLength(64)
+      const shipped = repo.read('specs/auth-refresh.md')
+      expect((await writeSpec(repo, 'auth-refresh', { summary: 'amended' })).code).toBe(0)
+      const r = await repo.cli(['abandon', 'auth-hardening'])
+      expect(r.code).toBe(0)
+      expect(r.stdout).toContain('reverted: auth-refresh (restore) — journal untouched')
+      expect(repo.read('specs/auth-refresh.md')).toBe(shipped)
+    } finally {
+      if (prior === undefined) delete process.env.GIT_DEFAULT_HASH
+      else process.env.GIT_DEFAULT_HASH = prior
+    }
+  })
+
+  it('of two writes of the same content on parallel branches, the later one is the act', async () => {
+    const { writeAct } = await import('../src/abandon.js')
+    const { canonicalSha } = await import('../src/sha.js')
+    const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+    await recapEffort(repo, 'second')
+    repo.git('switch', '-q', '-c', 'side')
+    repo.git('switch', '-q', 'main')
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'same bytes' })).code).toBe(0)      // auth-hardening, earlier
+    repo.git('switch', '-q', 'side')
+    await new Promise((done) => setTimeout(done, 1100))                                       // commit times are seconds
+    expect((await writeSpec(repo, 'auth-refresh', { summary: 'same bytes' }, undefined, 'second')).code).toBe(0)
+    repo.git('switch', '-q', 'main')
+    repo.git('merge', '-q', '--no-edit', '-m', 'merge side', '-m', 'Witness-State: 1', 'side')
+    const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+    expect(writeAct(repo.root, 'auth-refresh', canonicalSha(doc.meta, doc.body))?.effort).toBe('second')
+  })
+
+  it('an effort\'s abandon leaves a plan an earlier abandon withdrew as it was', async () => {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'setup-card', SETUP_CARD_D189)).code).toBe(0)
+    approve(repo, 'setup-card')
+    expect((await writePlan(repo, 'setup-card-plan-1', {
+      parent: 'setup-card', steps: [{ id: 's1', title: 'card', criteria: ['ac-setup'] }],
+    })).code).toBe(0)
+    expect((await repo.cli(['abandon', 'setup-card-plan-1'])).code).toBe(0)
+    const r = await repo.cli(['abandon', 'auth-hardening'])
+    expect(r.code).toBe(0)
+    expect(readStream(repo.root, 'setup-card-plan-1').filter((e) => e.t === 'status' && (e as unknown as StatusEntry).to === 'abandoned')).toHaveLength(1)
+    expect(repo.git('show', '--name-only', '--format=', 'HEAD')).not.toContain('plans/setup-card-plan-1.md')
+  })
+})
+
+const SETUP_CARD_D189 = { criteria: [{ id: 'ac-setup', test: '@spec:setup-card' }] }

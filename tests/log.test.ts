@@ -1,3 +1,5 @@
+import { appendFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
 import { SPEC_META, seededRepo, writeSpec } from './helpers.js'
@@ -39,5 +41,31 @@ describe('witness log says who decided (A5)', () => {
     const out = (await repo.cli(['log', repo.effort])).stdout
     expect(out).toContain('decompose: approve · arbiter · test-model-1')
     expect(out).toMatch(/decompose: revise$/m)
+  })
+})
+
+// D189. `log --all` orders every journal line by the commit that appended it, read by the same
+// blame abandon reads (`journalActs`): a dotfile's blame config or a blank line must not reorder it.
+describe('log --all reads each line\'s commit (D189)', () => {
+  it('a blame config the repo cannot satisfy does not reorder the journal', async () => {
+    const repo = await seededRepo({ slug: 'zeta' })                       // the effort's stream sorts last
+    await writeSpec(repo, 'auth-tokens', { criteria: [{ id: 'ac-tokens', test: '@spec:auth-tokens' }] })
+    await writeSpec(repo, 'token-rotation', { supersedes: 'auth-tokens', criteria: [{ id: 'ac-rotation', test: '@spec:token-rotation' }] })
+    repo.git('config', 'blame.ignoreRevsFile', '.git-blame-ignore-revs')   // absent here
+    const all = await repo.cli(['log', '--all'])
+    expect(all.code).toBe(0)
+    expect(all.stdout.indexOf('superseded')).toBeGreaterThanOrEqual(0)
+    expect(all.stdout.indexOf('recap')).toBeLessThan(all.stdout.indexOf('superseded'))   // commit order, not stream name
+  })
+
+  it('a blank journal line does not shift the lines after it onto the wrong commit', async () => {
+    const { journalActs } = await import('../src/journal.js')
+    const repo = await seededRepo()
+    appendFileSync(join(repo.root, '.witness/journal/auth-hardening.jsonl'), '\n')
+    repo.git('add', '.witness/journal/auth-hardening.jsonl')
+    repo.git('commit', '-q', '-m', 'a blank line', '-m', 'Witness-State: 1')
+    await writeSpec(repo, 'auth-refresh')
+    const write = journalActs(repo.root, 'auth-hardening').find(({ entry }) => entry.t === 'write')!
+    expect(write.commit).toBe(repo.git('rev-parse', 'HEAD'))               // the write's own commit
   })
 })

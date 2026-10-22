@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { tryGit } from './gitio.js'
 import { version } from './version.js'
 
 export type EntryType =
@@ -87,6 +88,24 @@ export function readStream(root: string, id: string): Entry[] {
     .split('\n')
     .filter(Boolean)
     .map((l) => JSON.parse(l) as Entry)
+}
+
+// D168, D189. Each line of a stream with the commit that appended it — `git blame` names it,
+// since the journal is append-only — as history stood at `at`, or as the file stands now when
+// `at` is absent (a line not yet committed carries git's all-zero id). `--no-ignore-revs-file`: a
+// dotfile's `blame.ignoreRevsFile` re-attributes lines, or fails blame outright in a repo that
+// lacks the file. A blank line is skipped, as `readStream` skips it. SHA-1 or SHA-256 ids.
+export function journalActs(root: string, stream: string, at?: string): Array<{ entry: Entry; commit: string }> {
+  const blame = tryGit(root, 'blame', '--line-porcelain', '--no-ignore-revs-file', ...(at === undefined ? [] : [at]), '--', journalRel(stream))
+  if (!blame.ok) return []
+  const out: Array<{ entry: Entry; commit: string }> = []
+  let commit = ''
+  for (const line of blame.out.split('\n')) {
+    const head = /^([0-9a-f]{40}(?:[0-9a-f]{24})?) \d+ \d+/.exec(line)
+    if (head) { commit = head[1]!; continue }
+    if (line.startsWith('\t') && line.trim() !== '') out.push({ entry: JSON.parse(line.slice(1)) as Entry, commit })
+  }
+  return out
 }
 
 export function latestRecap(root: string, effort: string): RecapEntry | undefined {

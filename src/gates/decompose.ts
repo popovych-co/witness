@@ -68,7 +68,8 @@ registerGate({
         ? `amended under in-progress plans (approve = explicit ack): ${staleChildren.join(' ')}`
         : '' })
 
-    const created = [...writes.values()].some((w) => w.created === true)
+    // D189. A spec the effort created — a plan it created is no misroute.
+    const created = docs.some((d) => writes.get(String(d.meta.id))?.created === true)
     const standingStop =
       recap.class === 'feature' ? 'feature scope approval — scope is approved as its concrete slicing'
       : recap.class === 'fix' && created
