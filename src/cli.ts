@@ -65,7 +65,7 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
 // answered centrally so no verb can crash on --help (several parse argv
 // strictly); each line mirrors the verb's own usage refusal where one exists
 const VERB_USAGE: Record<string, string> = {
-  abandon: 'witness abandon <plan-id | effort-slug>',
+  abandon: 'witness abandon <plan-id | effort-slug…>',
   adopt: 'witness adopt <specs/... | plans/...>.md',
   ask: 'witness ask <text> | --withdraw <id> [--note <why>]',
   calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
