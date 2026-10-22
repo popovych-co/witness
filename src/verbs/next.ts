@@ -210,16 +210,21 @@ function evidenceRow(
   const line = !liveRed && files.some((f) => !isTestPath(f))
     ? `witness verify-red ${id}${stepFlag}`
     : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}${stepFlag}`
-  return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
+  // Unsatisfied with a live red, the parent tag's red has no green after it: this green is
+  // routed mid-red.
+  return {
+    line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`),
+    ...(liveRed ? { midRed: true as const } : {}),
+  }
 }
 
 // The run that works a plan's next unfinished step. A step whose latest red came back vacuous
 // gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
 // again and `next` would answer with the same line twice. An open cycle outranks that, since
 // its red was genuine and the green is what is owed.
-function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
+function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string; midRed?: true } {
   if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
-  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
+  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}`, midRed: true }
   if (lastRedVacuous(entries, s.id)) {
     return { line: `witness verify-red ${id} --step ${s.id}`, why: 'its red was vacuous — verify-red reconstructs it against the base' }
   }
@@ -252,6 +257,10 @@ export interface NextAction {
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
+  // Row 191 §1–§2. The green of a red still open: the session it is routed to is mid-red, and
+  // a session never relays there. The point after it decides instead (§4.4): the green's close
+  // for a plan step, the re-gate for a fix round.
+  midRed?: true
 }
 
 // One list for both readers. `flowAction` needs it to name an effort that can carry a plan
@@ -315,8 +324,11 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   const progress = stepProgress(plan, entries)
   const stepped = progress.known && !implementGated(entries) ? progress : undefined
   if (stepped?.next !== undefined) {
-    const { line, why } = stepLine(id, stepped.next, entries)
-    return { line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, why) }
+    const { line, why, midRed } = stepLine(id, stepped.next, entries)
+    return {
+      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, why),
+      ...(midRed ? { midRed } : {}),
+    }
   }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
@@ -1066,10 +1078,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // has done stage work and its fill reached the limit, with a same-home `relay:` and no `run:`.
   // Outside the `run:` branch because a `run:` already hands the work to a session of its own,
   // in another home. Not where this session's turn ends anyway: at a decision left for a human,
-  // with nothing owed, or with the run handed to drive.
-  if (!elsewhere && !toDrive && !action.line.startsWith('witness decide ') && action.line !== 'witness check') {
-    reportHandover(ctx, root, cfgR.value, { guard: true })
-  }
+  // with nothing owed, or with the run handed to drive. And never mid-red (`midRed`).
+  const turnEnds = toDrive || action.line.startsWith('witness decide ') || action.line === 'witness check'
+  if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
   }

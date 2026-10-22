@@ -165,10 +165,11 @@ const PLAN = 'auth-refresh-plan-1'
 const RELAY = 'relay: /clear then /witness'
 const WARN_26 = 'warn: this session opens at 26% of 1M — over the 20% limit before any work; each slice will be one step'
 
-// One genuine red for s1, journaled under the session `env` names: stage work that session made.
-async function redIn(repo: TestRepo, wt: string, env: Record<string, string>): Promise<void> {
+// One genuine red, journaled under the session `env` names: stage work that session made, which
+// leaves the step's cycle open.
+async function redIn(repo: TestRepo, wt: string, step: string, env: Record<string, string>): Promise<void> {
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
-  const red = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...env } })
+  const red = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', step], { cwd: wt, env: { ...fixtureEnv(), ...env } })
   expect(red.code).toBe(0)
 }
 
@@ -207,12 +208,40 @@ const relays = (r: CliResult) => lines(r).filter((l) => l.startsWith('relay:'))
 describe('the hand-overs', () => {
   it('next at home hands over once this session has acted and the fill reached the limit', async () => {
     const { repo, wt } = await startedThreeStepPlan()
-    await redIn(repo, wt, at(100_000))
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
     const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
     expect(r.code).toBe(0)
+    expect(lines(r)).toContain(`next: witness test-evidence ${PLAN} --phase red --step s2`)
     expect(r.stdout).not.toMatch(/^run: /m)
     // Right after the routing unit the stage skills read verbatim.
     expect(lines(r).slice(-3)).toEqual([`home: ${wt}`, 'context: 21% of 1M · limit 20%', RELAY])
+  })
+
+  // §1: a session never relays mid-red. The green's close decides instead (rule 2 at a step
+  // close), so nothing is lost by waiting for it.
+  it('next does not hand over mid-red', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    await redIn(repo, wt, 's2', at(150_000))
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain(`next: witness test-evidence ${PLAN} --phase green --step s2`)
+    expect(relays(r)).toEqual([])
+    expect(r.stdout).not.toContain('context:')
+  })
+
+  // A legacy plan's steps are not the CLI's to see (§4.3), so its open red comes from the
+  // evidence report rather than a step: the same rule holds.
+  it('next does not hand over mid-red on a legacy plan', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    commitEntry(repo, PLAN, untaggedRed(PLAN))
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const red = await repo.cli(['test-evidence', PLAN, '--phase', 'red'], { cwd: wt, env: { ...fixtureEnv(), ...at(100_000) } })
+    expect(red.code).toBe(0)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain(`next: witness test-evidence ${PLAN} --phase green`)
+    expect(relays(r)).toEqual([])
   })
 
   // §4.5 "Before any work": the guard keeps a fresh session from handing over before it has
@@ -261,7 +290,7 @@ describe('the hand-overs', () => {
 
   it('under the limit nothing hands over', async () => {
     const { repo, wt } = await startedThreeStepPlan()
-    await redIn(repo, wt, at(100_000))
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
     const r = await repo.cli(['next'], { cwd: wt, env: at(150_000) })
     expect(r.code).toBe(0)
     expect(relays(r)).toEqual([])
