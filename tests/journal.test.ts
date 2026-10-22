@@ -62,6 +62,18 @@ describe('ctx stamp (row 191 §4.8, extends 116)', () => {
     expect(entryLine({ t: 'sync' })).not.toContain('"ctx"')
   })
 
+  // D122's moves journal a deferral read back from its old stream again, with every field it
+  // was read with: the new line is its mover's, so it carries the mover's stamp or none.
+  it('stamps the writer, never a ctx the entry carries', () => {
+    const moved = { t: 'deferral' as const, id: 'd-1', artifact: 's', kind: 'later',
+      ctx: { session: 'aaaaaaaaaaaa', tokens: 170000, window: 1000000 }, moved_from: 'p' }
+    expect(entryLine(moved)).not.toContain('"ctx"')
+    expect(withJournalCtx(undefined, () => entryLine(moved))).not.toContain('"ctx"')
+    const line = JSON.parse(withJournalCtx({ session: 'bbbbbbbbbbbb' }, () => entryLine(moved))) as Record<string, unknown>
+    expect(line.ctx).toEqual({ session: 'bbbbbbbbbbbb' })
+    expect(Object.keys(line).at(-1)).toBe('ctx')
+  })
+
   it('a verb run in a measured session stamps the hash, never the raw id', async () => {
     const repo = await seededRepo()
     expect((await repo.cli(['ask', 'do a thing'], { env: measuredEnv('raw-session-1', 170000, 1000000) })).code).toBe(0)

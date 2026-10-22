@@ -89,11 +89,14 @@ export function withJournalCtx<T>(c: JournalCtx | undefined, fn: () => T): T {
 // consulting any payload file, which is the guard row 102 structurally could not be.
 //
 // Row 191 stamps `ctx` here for the same reason: every kind carries the session it was
-// written in, and the reading when there was one, with no per-kind case to forget. It goes
-// last, after the content, and only inside a session: outside one the line is what it was.
+// written in, and the reading when there was one, with no per-kind case to forget. The stamp
+// is the writer's alone. A `ctx` the entry carries is dropped, since a line read back and
+// journaled again (a deferral moving home, D122) is written by its mover; the writer's own
+// goes last, after the content, and only when the writer runs in a session.
 export const entryLine = (entry: { t: EntryType; [k: string]: unknown }): string => {
+  const { ctx: _carried, ...content } = entry
   const ctx = journalCtx.getStore()
-  return JSON.stringify({ v: 1, w: version(), ...entry, ...(ctx !== undefined ? { ctx } : {}) })
+  return JSON.stringify({ v: 1, w: version(), ...content, ...(ctx !== undefined ? { ctx } : {}) })
 }
 
 export function appendEntry(root: string, id: string, entry: { t: EntryType; [k: string]: unknown }): string {
