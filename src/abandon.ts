@@ -1,7 +1,7 @@
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
-import { prepareDeparture, prepareReturns, takeBack, type Departure, type Return, type TakenBack, type WriteAct } from './departure.js'
+import { canonExit, prepareDeparture, prepareReturns, takeBack, type Departure, type Return, type TakenBack, type WriteAct } from './departure.js'
 import { designRel } from './design.js'
 import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
@@ -73,12 +73,49 @@ function stoodAtAbandon(root: string, effort: string, rel: string, sha: string):
   return at !== undefined && shaAt(root, at.commit, rel) === sha
 }
 
+// This effort's newest write of an artifact (of this content, when `sha` is given).
+export const effortWrite = (root: string, effort: string, id: string, sha?: string): { commit: string } | undefined =>
+  journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+
+// D188. `rename` moves an id with its stream and journals nothing, so its commit subject is the
+// record. The renames made after `since`, oldest first — of any doc on `rel`, when given.
+const RENAME = /^rename\((.+) → (.+)\)$/
+function renamesAfter(root: string, since: string, rel?: string): Array<{ from: string; to: string }> {
+  const log = tryGit(root, 'log', '--reverse', '--format=%s', `${since}..HEAD`, ...(rel === undefined ? [] : ['--', rel]))
+  if (!log.ok) return []
+  return log.out.split('\n').flatMap((s) => {
+    const m = RENAME.exec(s)
+    return m ? [{ from: m[1]!, to: m[2]! }] : []
+  })
+}
+
+// The id `id` goes by now, through every rename after `since`.
+const nameNow = (root: string, since: string, id: string): string =>
+  renamesAfter(root, since).reduce((cur, r) => (r.from === cur ? r.to : cur), id)
+
+// D188. An abandon takes a write back under the id it was written as: following `rename` would
+// mean reading every pin, restore and reference through it, and no repo has run one. So a doc a
+// rename moved or rewrote after `who` wrote it refuses, naming the rename back — a human's call,
+// since the rename was one — where it walked nothing and said so as if done, or refused a stacked
+// amendment nobody made. `subject` is the doc that refuses; the rename may be of another doc it
+// points at.
+export function renamedSince(root: string, since: string, subject: string, rel: string | undefined, who: string): Violation | undefined {
+  const moved = rel === undefined
+    ? renamesAfter(root, since).find((r) => r.from === subject)
+    : renamesAfter(root, since, rel).at(-1)
+  if (moved === undefined) return undefined
+  const now = nameNow(root, since, moved.from)
+  return humanCall(v('spec', 'renamed-since',
+    moved.from === subject ? `${subject} → ${now} after ${who} wrote it` : `${subject} — rewritten by ${moved.from} → ${now} after ${who} wrote it`,
+    `witness rename ${now} ${moved.from} first — an abandon takes a write back under the id it was written as · then abandon again · a human's call`))
+}
+
 // D168 (review). Whether an earlier abandon already took this effort's newest write of a spec
 // back — `abandon <plan>` does, before the effort's own abandon: a status entry the abandon
 // journaled on the spec after that write, which is not a return, made where the spec stood at
 // the write's content. Then the effort's abandon has nothing of its own left there to take back.
 export function takenBackAlready(root: string, effort: string, id: string, rel: string, sha: string): boolean {
-  const write = journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+  const write = effortWrite(root, effort, id, sha)
   if (write === undefined) return false
   return journalActs(root, id).some(({ entry, commit }) => {
     const s = entry as unknown as { t: string; cause?: string; from?: string; to?: string }
@@ -195,7 +232,11 @@ export function specRevertFor(
   // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
   // good when a plan shipped it — and then so does this keep, since nothing can take the
   // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
-  const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact)])
+  // D188: and a slice whose own write departed nothing, because the first slice's took the
+  // predecessor out — taking back the second slice alone left the split half described.
+  const from = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
+  const slice = back.end === 'create' && from !== undefined && canonExit(readStream(root, from))?.to === 'superseded' ? [from] : []
+  const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
   const slices = canon.docs
     .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
     .flatMap((d) => {
@@ -264,6 +305,32 @@ export function returnCollisions(root: string, canon: Canon, items: AbandonItem[
     ...[...landing].filter(([, ids]) => ids.length > 1).map(([rel, ids]) => humanCall(v('spec', 'path-taken',
       `${rel} takes ${ids.join(' and ')}`, `one return per path — each left from it · which one comes back is a human's call`))),
   ]
+}
+
+// D188. What an abandon lands — a restore's older content, a return's departed bytes — comes
+// back only beside what it depends on: a dependency in canon that this abandon does not take
+// out, or one it brings back. `write` refuses a dangling `depends`, and an abandon landing one
+// left `check` red after it exited 0. Bringing the dependency back first is a human's call.
+export function landingEdges(root: string, canon: Canon, items: AbandonItem[]): Violation[] {
+  const leaving = new Set(items.flatMap((i) => (i.revert?.action === 'delete' ? [String(i.revert.doc.meta.id)] : [])))
+  const coming = new Set(items.flatMap((i) => (i.revert?.returns ?? []).map((r) => r.entry.artifact)))
+  const lands = items.flatMap((i): Array<{ id: string; depends: string[] }> => {
+    if (!i.revert) return []
+    const restored = i.revert.action === 'restore' ? splitDoc(i.revert.content) : undefined
+    return [
+      ...(restored?.ok ? [{ id: String(i.revert.doc.meta.id), depends: ((restored.value.meta.depends ?? []) as unknown[]).map(String) }] : []),
+      ...i.revert.returns.map((r) => ({ id: r.entry.artifact, depends: r.depends })),
+    ]
+  })
+  return lands.flatMap(({ id, depends }) => depends
+    .filter((dep) => !coming.has(dep) && (leaving.has(dep) || findById(canon, dep) === undefined))
+    .map((dep) => {
+      const exit = canonExit(readStream(root, dep))
+      const why = leaving.has(dep) ? 'it leaves with this abandon'
+        : exit?.to === 'superseded' ? `it left superseded by ${exit.by ?? 'a successor'}` : 'it left canon'
+      return humanCall(v('spec', 'dangling-depends', `${id} depends on ${dep}`,
+        `${dep} in canon when ${id} comes back — ${why} · a human's call`))
+    }))
 }
 
 export function executeAbandon(
@@ -401,7 +468,14 @@ export function planItems(
     const pin = String(plan.meta['derives-from'])
     const writers = effortStreams(root).filter((e) => readStream(root, e).some((x) => isWrite(x, planId)))
     const act = writeAct(root, parentId, pin)
-    if (act !== undefined && writers.includes(act.effort)) {
+    const paired = act !== undefined && writers.includes(act.effort)
+    // D188. A rename after the plan was written rewrote its parent's id, so neither the pin nor
+    // the write can be found under it: say so rather than unwind nothing or claim a stacking.
+    const written = writers.map((e) => effortWrite(root, e, planId))
+      .reduce<{ commit: string } | undefined>((a, b) => (b === undefined || (a !== undefined && !isAncestor(root, a.commit, b.commit)) ? a : b), undefined)
+    const renamed = !paired && written !== undefined ? renamedSince(root, written.commit, planId, parent.rel, writers.join(' ')) : undefined
+    if (renamed) return refuse([renamed])
+    if (paired && act !== undefined) {
       const revertR = specRevertFor(root, canon, parent, pin, abandonSet, act)
       if (!revertR.ok) return revertR
       const outcome = revertR.value
