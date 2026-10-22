@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { prepareDeparture, prepareReturns, takeBack, type Departure, type Return, type TakenBack, type WriteAct } from './departure.js'
 import { designRel } from './design.js'
+import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
 import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
@@ -14,35 +15,76 @@ import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { kv } from './toon.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 
-const isWrite = (e: Entry, id: string, sha: string): boolean => {
+const isWrite = (e: Entry, id: string, sha?: string): boolean => {
   const w = e as unknown as { t: string; artifact?: string; sha?: string }
-  return w.t === 'write' && w.artifact === id && w.sha === sha
+  return w.t === 'write' && w.artifact === id && (sha === undefined || w.sha === sha)
+}
+const isAncestor = (root: string, a: string, b: string): boolean => tryGit(root, 'merge-base', '--is-ancestor', a, b).ok
+
+// D168. Each line of a stream as history stood at `at`, with the commit that appended it — which
+// `git blame` names because the journal is append-only. `--no-ignore-revs-file`: a blame config
+// (a dotfile's `blame.ignoreRevsFile`) re-attributes lines, or makes blame fail outright in a repo
+// that lacks the file. A blank line is skipped, as `readStream` skips it.
+function journalActs(root: string, stream: string, at = 'HEAD'): Array<{ entry: Entry; commit: string }> {
+  const blame = tryGit(root, 'blame', '--line-porcelain', '--no-ignore-revs-file', at, '--', journalRel(stream))
+  if (!blame.ok) return []
+  const out: Array<{ entry: Entry; commit: string }> = []
+  let commit = ''
+  for (const line of blame.out.split('\n')) {
+    if (/^[0-9a-f]{40} \d+ \d+/.test(line)) { commit = line.slice(0, 40); continue }
+    if (line.startsWith('\t') && line.trim() !== '') out.push({ entry: JSON.parse(line.slice(1)) as Entry, commit })
+  }
+  return out
 }
 
-// D168. The write that made this content of a spec, among `efforts`' writes, as history stood at
-// `at`: the commit that appended its journal line, which `git blame` names because the journal
-// is append-only. Rows 29 and 84 resolved a pin by walking the spec's path for matching content,
-// and content is not an act: a return or another abandon's restore brings the same content back
-// under a later commit, whose parent was never the write's — so an amendment read as a create
-// and was deleted, and a create restored another effort's abandoned amendment. Newest wins.
-export function writeAct(root: string, efforts: string[], id: string, sha: string, at = 'HEAD'): WriteAct | undefined {
+// D168. The act this content of a spec is, as history stood at `at`: the newest write of it, by
+// whichever effort made it. Rows 29 and 84 resolved a pin by walking the spec's path for matching
+// content, and content is not an act: a return or another abandon's restore brings the same content
+// back under a later commit, whose parent was never the write's — so an amendment read as a create
+// and was deleted, and a create restored another effort's abandoned amendment. And the same bytes
+// written again later, by another effort, are that effort's: who may take them back is the
+// caller's question, asked of this answer.
+export function writeAct(root: string, id: string, sha: string, at = 'HEAD'): WriteAct | undefined {
   let found: WriteAct | undefined
-  for (const effort of efforts) {
+  for (const effort of effortStreams(root)) {
     if (!readStream(root, effort).some((e) => isWrite(e, id, sha))) continue
-    const blame = tryGit(root, 'blame', '--line-porcelain', at, '--', journalRel(effort))
-    if (!blame.ok) continue
-    let commit = ''
-    for (const line of blame.out.split('\n')) {
-      if (/^[0-9a-f]{40} \d+ \d+/.test(line)) { commit = line.slice(0, 40); continue }
-      if (!line.startsWith('\t')) continue
-      const e = JSON.parse(line.slice(1)) as Entry
-      if (!isWrite(e, id, sha)) continue
-      if (found === undefined || tryGit(root, 'merge-base', '--is-ancestor', found.commit, commit).ok) {
-        found = { effort, commit, created: (e as unknown as { created?: boolean }).created === true }
+    for (const { entry, commit } of journalActs(root, effort, at)) {
+      if (!isWrite(entry, id, sha)) continue
+      if (found === undefined || isAncestor(root, found.commit, commit)) {
+        found = { effort, commit, created: (entry as unknown as { created?: boolean }).created === true }
       }
     }
   }
   return found
+}
+
+const shaAt = (root: string, rev: string, rel: string): string | undefined => {
+  const blob = gitBlob(root, rev, rel)
+  const doc = blob === undefined ? undefined : splitDoc(blob.toString('utf8'))
+  return doc?.ok ? canonicalSha(doc.value.meta, doc.value.body) : undefined
+}
+
+// D168 (review). Whether this effort's abandon left its write standing — kept, because a plan
+// stood on it or on a sibling slice, or the walk stopped at it. That content is canon of record:
+// no later walk goes past it, or an amendment on top of it took the keep with it.
+function stoodAtAbandon(root: string, effort: string, rel: string, sha: string): boolean {
+  const at = journalActs(root, effort).find(({ entry }) =>
+    entry.t === 'human-decision' && (entry as unknown as { decision?: string }).decision === 'abandon-effort')
+  return at !== undefined && shaAt(root, at.commit, rel) === sha
+}
+
+// D168 (review). Whether an earlier abandon already took this effort's newest write of a spec
+// back — `abandon <plan>` does, before the effort's own abandon: a status entry the abandon
+// journaled on the spec after that write, which is not a return, made where the spec stood at
+// the write's content. Then the effort's abandon has nothing of its own left there to take back.
+export function takenBackAlready(root: string, effort: string, id: string, rel: string, sha: string): boolean {
+  const write = journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+  if (write === undefined) return false
+  return journalActs(root, id).some(({ entry, commit }) => {
+    const s = entry as unknown as { t: string; cause?: string; from?: string; to?: string }
+    const takes = s.t === 'status' && s.cause === 'abandon' && !(s.from === 'superseded' && s.to !== 'removed')
+    return takes && commit !== write.commit && isAncestor(root, write.commit, commit) && shaAt(root, `${commit}^`, rel) === sha
+  })
 }
 
 export type SpecRevert =
@@ -72,6 +114,7 @@ export function abandonLines(items: AbandonItem[], kept: SpecKeep[]): string[] {
         kv('returned', `${r.entry.artifact} — back in canon as ${r.entry.to} · the re-slice into ${r.by} is taken back`)),
       ...(item.revert?.unwound ?? []).map((u) => kv('unwound', `${u.artifact} — stays out of canon · an abandoned effort created it`)),
       ...(item.kept ? [kv('kept', keptLine(item.kept))] : []),
+      ...(item.note ? [kv('note', item.note)] : []),
     ]),
     ...kept.map((k) => kv('kept', keptLine(k))),
   ]
@@ -83,17 +126,21 @@ export function abandonLines(items: AbandonItem[], kept: SpecKeep[]): string[] {
 const goneEfforts = (root: string, effort: string | undefined): string[] =>
   effortStreams(root).filter((e) => e === effort || effortAbandoned(readStream(root, e)))
 
-// Content one of `efforts` wrote never comes back into canon on its own — unless a plan outside
-// the abandon set stands on it: the keep rule, which never takes shipped content back.
+// Content whose act is a write of one of `efforts` never comes back into canon on its own —
+// unless a plan outside the abandon set stands on it (the keep rule, which never takes shipped
+// content back), or that effort's own abandon left it standing.
 function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, efforts: string[]): TakenBack {
-  return (id, sha, at) =>
-    plansOn(canon, id, { exclude: abandonSet, pin: sha }).length === 0 ? writeAct(root, efforts, id, sha, at) : undefined
+  return (id, sha, rel, at) => {
+    if (plansOn(canon, id, { exclude: abandonSet, pin: sha }).length > 0) return undefined
+    const act = writeAct(root, id, sha, at)
+    return act !== undefined && efforts.includes(act.effort) && !stoodAtAbandon(root, act.effort, rel, sha) ? act : undefined
+  }
 }
 
-// `writer`: the effort whose write of `pin` this abandon takes back — the effort itself on the
-// effort path, the effort the plan is paired with on the plan path.
+// `act`: the write of `pin` this abandon takes back — the effort's own on the effort path, the
+// write the plan is paired with on the plan path. `effort`: the effort being abandoned, if any.
 export function specRevertFor(
-  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, writer: string, effort?: string,
+  root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, act: WriteAct, effort?: string,
 ): Result<SpecRevert | SpecKeep | undefined> {
   const current = canonicalSha(spec.meta, spec.body)
   if (current !== pin) {
@@ -112,16 +159,29 @@ export function specRevertFor(
     })
   }
   const id = String(spec.meta.id)
-  const act = writeAct(root, [writer], id, pin)
-  if (!act) {
-    return refuse([v('spec', 'pin-unresolvable', pin.slice(0, 7), `${writer}'s journaled write of this content`)])
-  }
-  // D168. The write being taken back is one act of `writer`, and so is every earlier write of
+  // D168. The write being taken back is one act of its effort, and so is every earlier write of
   // this spec it made: a revise round re-writes, and taking back only the last write left the
   // effort's own first draft in canon. The walk goes back past those and past every abandoned
   // effort's write, and stops at content a plan stands on.
   const gone = goneEfforts(root, effort)
-  const back = takeBack(root, spec.rel, id, act, takenBackBy(root, canon, abandonSet, [...new Set([...gone, writer])]))
+  const walking = [...new Set([...gone, act.effort])]
+  const back = takeBack(root, spec.rel, id, act, takenBackBy(root, canon, abandonSet, walking))
+  if (back.end === 'lost') {
+    return refuse([humanCall(v('spec', 'pin-unresolvable', `${id}: no content at ${spec.rel} before ${back.act.effort}'s write ${back.act.commit.slice(0, 7)}`,
+      'that write to read as an amendment of what stood on this path — the spec was moved by hand or history was cut · a human\'s call'))])
+  }
+  // D168 (review). The walk stopping at an earlier round of the effort being abandoned, because
+  // another plan still building stands on it, is a keep of that effort's content: the same keep
+  // the first round alone would have been, and refused for the same reason — this abandon is the
+  // last act that could take it back. Once a plan shipped it, it stands for good.
+  if (effort !== undefined && back.end === 'content') {
+    const sha = canonicalSha(back.doc.meta, back.doc.body)
+    const on = plansOn(canon, id, { exclude: abandonSet, pin: sha })
+    const owner = on.length > 0 ? writeAct(root, id, sha, back.src) : undefined
+    if (owner !== undefined && walking.includes(owner.effort) && !on.some((p) => String(p.meta.status) === 'done')) {
+      return ok({ doc: spec, action: 'keep', standing: on.map((p) => String(p.meta.id)), shipped: false })
+    }
+  }
   // D166. The way back: a write being taken back may have departed a predecessor (a re-slice),
   // which then returns with it. A re-slice can cut one spec into several slices, and taking
   // back one while another still stands would leave the predecessor half-described, so that
@@ -179,6 +239,7 @@ export interface AbandonItem {
   planId?: string
   revert?: SpecRevert
   kept?: SpecKeep
+  note?: string
 }
 
 // D167. A return lands on the path its spec left from, and `rename` moves an id but leaves its
@@ -303,17 +364,18 @@ export function executeAbandon(
 
 // Whether this plan's parent spec is this function's business.
 //
-// `pair-parent` — `abandon <plan-id>`. No effort was named, so the owner is derived,
-// and the pin is the plan's own `derives-from`: unwind exactly the amendment this
-// plan was paired with, refusing if the spec has moved since.
+// `pair-parent` — `abandon <plan-id>`. No effort was named, so the pairing is derived
+// from the act: the write that made the plan's `derives-from` content, when an effort that
+// wrote the plan made it (D168). That write is unwound — with that effort's earlier writes
+// of the spec, its revise rounds — refusing if the spec has moved since.
 //
 // `stamp-only` — `abandon <effort-slug>`. The caller reverts every spec the effort
-// itself wrote, pinned on that effort's own write sha, so a second revert here would
-// be duplicate mechanism — and a WRONG one: it must re-derive the owner via effortOf,
-// which tie-breaks alphabetically across every effort that wrote the plan. A plan
-// rewritten by a later effort therefore resolved to a SIBLING effort whose writes did
-// include the parent, and abandon destroyed an approved amendment the abandoned effort
-// never made, walking the spec back past its own write boundary.
+// itself wrote, from that effort's own write, so a second revert here would be duplicate
+// mechanism — and, before D168, a WRONG one: it re-derived the owner via effortOf, which
+// tie-breaks alphabetically across every effort that wrote the plan. A plan rewritten by a
+// later effort therefore resolved to a SIBLING effort whose writes did include the parent,
+// and abandon destroyed an approved amendment the abandoned effort never made, walking the
+// spec back past its own write boundary.
 export type Pairing = 'pair-parent' | 'stamp-only'
 
 export function planItems(
@@ -337,14 +399,19 @@ export function planItems(
   const parent = findById(canon, parentId)
   if (parent) {
     const pin = String(plan.meta['derives-from'])
-    const writers = effortStreams(root).filter((e) => readStream(root, e).some((x) => x.t === 'write' && x.artifact === planId))
-    const act = writeAct(root, writers, parentId, pin)
-    if (act) {
-      const revertR = specRevertFor(root, canon, parent, pin, abandonSet, act.effort)
+    const writers = effortStreams(root).filter((e) => readStream(root, e).some((x) => isWrite(x, planId)))
+    const act = writeAct(root, parentId, pin)
+    if (act !== undefined && writers.includes(act.effort)) {
+      const revertR = specRevertFor(root, canon, parent, pin, abandonSet, act)
       if (!revertR.ok) return revertR
       const outcome = revertR.value
       if (outcome?.action === 'keep') item.kept = outcome
       else item.revert = outcome
+    } else if (act === undefined && writers.some((e) => readStream(root, e).some((x) => isWrite(x, parentId)))) {
+      // The plan's effort wrote this spec, but no journaled write made the content the plan
+      // derives from (a hand edit, an adopt): there is no act to pair with, and saying so is
+      // what keeps a spec left standing from looking unwound.
+      item.note = `${parentId} — not unwound · no journaled write made the content ${planId} derives from`
     }
   }
   return ok(item)

@@ -79,37 +79,40 @@ export interface Way {
 // abandon's restore can bring the same content back later, under a commit that is not the write.
 export interface WriteAct { effort: string; commit: string; created: boolean }
 
-// Whether an abandoned effort — or the one being abandoned — wrote this content of a spec (as it
-// stands at revision `at`), and if so that write. The policy is the caller's (abandon.ts); the
-// walk is here.
-export type TakenBack = (id: string, sha: string, at: string) => WriteAct | undefined
+// Whether this content of a spec (as it stands at revision `at` on `rel`) is the act of an effort
+// the way back takes back — an abandoned one, or the one being abandoned — and if so that write.
+// The policy is the caller's (abandon.ts); the walk is here.
+export type TakenBack = (id: string, sha: string, rel: string, at: string) => WriteAct | undefined
 
-// The content a spec stood at when this write was made: nothing, when the write created it.
-function before(root: string, rel: string, act: WriteAct): { src: string; blob: Buffer } | undefined {
-  if (act.created) return undefined
+// The content a spec stood at when this write was made: none, when the entry says the write
+// created it; lost, when the entry says amendment but the path held nothing then — moved by
+// hand, or history cut — which is never read as a create.
+function before(root: string, rel: string, act: WriteAct): { src: string; blob: Buffer } | 'create' | 'lost' {
+  if (act.created) return 'create'
   const src = `${act.commit}^`
   const blob = gitBlob(root, src, rel)
-  return blob === undefined ? undefined : { src, blob }
+  return blob === undefined ? 'lost' : { src, blob }
 }
 
+export interface At { src: string; blob: Buffer; doc: RawDoc }
 export type Walked =
-  | { end: 'content'; src: string; blob: Buffer; doc: RawDoc; passed: WriteAct[] }
+  | ({ end: 'content'; passed: WriteAct[] } & At)
   | { end: 'create'; act: WriteAct; passed: WriteAct[] }
+  | { end: 'lost'; act: WriteAct; passed: WriteAct[]; at?: At }   // `at`: where it stood when `act` could not be gone past
 
 // D168. From content at `src`, back past every write `takenBack` names, each found by its own
 // journal entry: to the content before the last of them, or to a create, past which the spec
 // has no content to stand at. `passed` is every write taken back on the way, oldest last.
-export function walkBack(
-  root: string, rel: string, id: string, at: { src: string; blob: Buffer; doc: RawDoc }, takenBack: TakenBack, seen: Set<string>,
-): Walked {
+export function walkBack(root: string, rel: string, id: string, at: At, takenBack: TakenBack, seen: Set<string>): Walked {
   let { src, blob, doc } = at
   const passed: WriteAct[] = []
   for (;;) {
-    const back = takenBack(id, canonicalSha(doc.meta, doc.body), src)
+    const back = takenBack(id, canonicalSha(doc.meta, doc.body), rel, src)
     if (back === undefined || seen.has(back.commit)) return { end: 'content', src, blob, doc, passed }
     seen.add(back.commit)
     const prior = before(root, rel, back)
-    if (prior === undefined) return { end: 'create', act: back, passed: [...passed, back] }
+    if (prior === 'create') return { end: 'create', act: back, passed: [...passed, back] }
+    if (prior === 'lost') return { end: 'lost', act: back, passed, at: { src, blob, doc } }
     const parsed = splitDoc(prior.blob.toString('utf8'))
     if (!parsed.ok) return { end: 'content', src, blob, doc, passed }   // kept: nothing readable before it
     passed.push(back)
@@ -125,7 +128,8 @@ export function takeBack(
   root: string, rel: string, id: string, act: WriteAct, takenBack: TakenBack,
 ): Walked | { end: 'unreadable'; src: string; blob: Buffer; passed: WriteAct[] } {
   const prior = before(root, rel, act)
-  if (prior === undefined) return { end: 'create', act, passed: [act] }
+  if (prior === 'create') return { end: 'create', act, passed: [act] }
+  if (prior === 'lost') return { end: 'lost', act, passed: [] }
   const parsed = splitDoc(prior.blob.toString('utf8'))
   if (!parsed.ok) return { end: 'unreadable', ...prior, passed: [act] }
   const walked = walkBack(root, rel, id, { ...prior, doc: parsed.value }, takenBack, new Set([act.commit]))
@@ -168,7 +172,9 @@ function returnsThrough(
     const id = String(parsed.value.meta.id)
     const exit = canonExit(readStream(root, id))
     if (exit?.to !== 'superseded' || exit.by !== successor) return none
-    const walked = walkBack(root, rel, id, { src, blob, doc: parsed.value }, takenBack, seen)
+    const reached = walkBack(root, rel, id, { src, blob, doc: parsed.value }, takenBack, seen)
+    // A write the walk cannot go past leaves the return where it stood before that write.
+    const walked = reached.end === 'lost' ? { ...reached, ...reached.at!, end: 'content' as const } : reached
     if (walked.end === 'create') {
       // That write created it: it stays out — journaled so whether or not anything lies under
       // the create — and what it had departed comes back instead.
