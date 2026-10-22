@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
 import { loadConfig, loadLocalConfig, type Config } from './config.js'
-import { CONTEXT_ENV } from './context.js'
+import { withoutSession } from './context.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
@@ -164,14 +164,15 @@ export async function spawnSession(
   // binary chosen by ambient env is exactly the identity confusion row 90 removed.
   const bin = ctx.env.WITNESS_DRIVE_AGENT_BIN ?? cmd
   // Row 180: the marker is the child's target and its recursion guard in one.
+  //
+  // Row 191 §4.9: a drive started from a chat session's shell inherits that session's reading
+  // and session variable, and the child is a session of its own that its harness names itself.
+  // The session check already makes a stale reading harmless; leaving both out is the second
+  // guard. The verb drops them on entry too; this holds for any other caller.
   const childEnv: Record<string, string | undefined> = {
-    ...ctx.env, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
+    ...withoutSession(ctx.env), ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
   }
-  // Row 191 §4.1: a drive started from a chat session's shell inherits that session's
-  // reading, which is stale in the child. The session check already makes it harmless;
-  // taking it out of the child's environment is the second guard.
-  delete childEnv[CONTEXT_ENV]
   // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
   const run = resolveSpawn(bin, args, childEnv)
   if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }

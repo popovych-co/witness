@@ -48,7 +48,8 @@ function detail(e: Entry): string {
       return `${s.from} → ${s.to} (${s.cause})`
     }
     default: {
-      const { v: _v, t: _t, ...rest } = e
+      // Row 191 §4.8: `ctx` is about the session that wrote the line, not what the line says.
+      const { v: _v, t: _t, ctx: _ctx, ...rest } = e
       return JSON.stringify(rest).slice(0, 100)
     }
   }

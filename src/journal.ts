@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tryGit } from './gitio.js'
@@ -70,14 +71,30 @@ export function streamExists(root: string, id: string): boolean {
   return existsSync(join(root, journalRel(id)))
 }
 
+// Row 191 §4.8. The stamp of the invocation that is writing. `main` opens the scope once per
+// command, and it is async-local rather than a module variable, so two invocations overlapping
+// in one process (a test's racing CLIs, a decision drive runs in process) each write their own
+// session, never the other's.
+const journalCtx = new AsyncLocalStorage<JournalCtx | undefined>()
+
+export function withJournalCtx<T>(c: JournalCtx | undefined, fn: () => T): T {
+  return journalCtx.run(c, fn)
+}
+
 // Row 116. `w` is the CLI that wrote this line. Stamped HERE because entryLine is the
 // single funnel every state write passes through, so one edit covers fourteen entry types
 // and every verb without a widened signature to disagree over. It is what lets the state
 // name its own floor (floor.ts) instead of a stored number that drifts from the entries it
 // summarises — and it is why a repo can refuse a CLI older than its own history without
 // consulting any payload file, which is the guard row 102 structurally could not be.
-export const entryLine = (entry: { t: EntryType; [k: string]: unknown }): string =>
-  JSON.stringify({ v: 1, w: version(), ...entry })
+//
+// Row 191 stamps `ctx` here for the same reason: every kind carries the session it was
+// written in, and the reading when there was one, with no per-kind case to forget. It goes
+// last, after the content, and only inside a session: outside one the line is what it was.
+export const entryLine = (entry: { t: EntryType; [k: string]: unknown }): string => {
+  const ctx = journalCtx.getStore()
+  return JSON.stringify({ v: 1, w: version(), ...entry, ...(ctx !== undefined ? { ctx } : {}) })
+}
 
 export function appendEntry(root: string, id: string, entry: { t: EntryType; [k: string]: unknown }): string {
   mkdirSync(dir(root), { recursive: true })

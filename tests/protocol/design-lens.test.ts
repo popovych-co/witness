@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, putVerdict,
+  approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, hermeticEnv, putVerdict,
   seededRepo, singleConfig, TOKEN_BROKEN, TOKEN_FIXED, witnessDesign, writeDesign, writePlan, writeSpec,
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
@@ -16,7 +16,7 @@ const bin = join(pkgRoot, 'dist', 'bin.js')
 // a genuine subprocess is required for crash-injection (WITNESS_CRASH_AFTER + exit 9) —
 // repo.cli() below calls main() in-process and can't be killed mid-transaction.
 function spawnCli(root: string, args: string[], env: Record<string, string> = {}) {
-  const res = spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, ...env } })
+  const res = spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', env: hermeticEnv(env) })
   return { code: res.status ?? -1, stdout: res.stdout, stderr: res.stderr }
 }
 

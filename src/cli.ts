@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs'
 import { configPath } from './config.js'
+import { journalStamp } from './context.js'
 import { stateFloor } from './floor.js'
 import { primaryRoot } from './gitio.js'
+import { withJournalCtx } from './journal.js'
 import { renderRefusal, v } from './refusal.js'
 import { NPX_LATEST, compareTriple, version } from './version.js'
 
@@ -152,11 +154,15 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
       }
     }
   }
+  // Row 191 §4.8. Every line this command journals carries the session it runs in, read once
+  // from this invocation's own env: an in-process `main` (drive's decisions, a test's CLI) is
+  // an invocation of its own, with its own env and so its own stamp.
+  const stamp = journalStamp(ctx.env)
   if (!verb || verb === 'help' || verb === '--help') {
     if (!verb) {
       const rootRes = primaryRoot(ctx.cwd)
       if (rootRes.ok && existsSync(configPath(rootRes.value))) {
-        return (await import('./verbs/dashboard.js')).run(ctx, [])
+        return withJournalCtx(stamp, async () => (await import('./verbs/dashboard.js')).run(ctx, []))
       }
     }
     ctx.out(usage())
@@ -173,7 +179,7 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   try {
-    return await (await load()).run(ctx, rest)
+    return await withJournalCtx(stamp, async () => (await load()).run(ctx, rest))
   } catch (e) {
     // Row 113. Eight verbs parse argv with node's strict `parseArgs`, which THROWS on a
     // stray positional or a mistyped flag. bin.ts's crash net then rendered a typo as

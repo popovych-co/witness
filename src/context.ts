@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { resolveDriver } from './harness.js'
+import { HARNESSES, loadHarness, resolveDriver } from './harness.js'
 import type { JournalCtx } from './journal.js'
 
 type Env = Record<string, string | undefined>
@@ -70,6 +70,21 @@ export function journalStamp(env: Env): JournalCtx | undefined {
   const session = sessionHash(id)
   const fill = readFill(env)
   return fill.measured ? { session, tokens: fill.reading.tokens, window: fill.reading.window } : { session }
+}
+
+// Row 191 §4.9. Drive is a scheduler, not a session. Started from a chat session's shell, it
+// inherits that session's reading and the harness's session variable, and neither is a fact
+// about drive or about the sessions it spawns: each harness names its own session on its own
+// commands (P1, and pi's bash tool). Every harness's variable goes, whichever drive spawns,
+// read from the registry so none is spelled here.
+export function withoutSession(env: Env): Env {
+  const out = { ...env }
+  delete out[CONTEXT_ENV]
+  for (const name of HARNESSES) {
+    const harness = loadHarness(name)
+    if (harness.ok) delete out[harness.value.session]
+  }
+  return out
 }
 
 // Row 191 §4.5. The decision is `reached`, in integer tokens; the display is floored, so the

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { journalStamp, pctOf, readFill, reached, sessionHash, sessionIdOf, windowLabel } from '../src/context.js'
+import { journalStamp, pctOf, readFill, reached, sessionHash, sessionIdOf, windowLabel, withoutSession } from '../src/context.js'
 import { measuredEnv } from './helpers.js'
 
 const S = 'ce2ad214-aaaa'
@@ -54,6 +54,15 @@ describe('the journal stamp (row 191 §4.8)', () => {
     expect(journalStamp({ CLAUDE_CODE_SESSION_ID: S })).toEqual({ session: sessionHash(S) })
     expect(journalStamp(env({ session: S, tokens: 5, window: 100 }))).toEqual({ session: sessionHash(S), tokens: 5, window: 100 })
     expect(journalStamp({})).toBeUndefined()
+  })
+})
+
+describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
+  it('withoutSession drops the reading and every harness session variable, and nothing else', () => {
+    const env = { CLAUDE_CODE_SESSION_ID: S, PI_SESSION_ID: 'p1', WITNESS_CONTEXT: '{}', CLAUDECODE: '1', PATH: '/bin' }
+    expect(withoutSession(env)).toEqual({ CLAUDECODE: '1', PATH: '/bin' })
+    expect(env).toHaveProperty('CLAUDE_CODE_SESSION_ID', S)          // a copy: the caller's env stands
+    expect(journalStamp(withoutSession(measuredEnv('S1', 5, 100)))).toBeUndefined()
   })
 })
 

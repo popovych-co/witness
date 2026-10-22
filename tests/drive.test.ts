@@ -16,7 +16,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -193,15 +193,17 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).outcome).toBe('spawn-failed')
   }, 20000)
 
-  it('strips WITNESS_CONTEXT from the child (row 191 §4.9)', async () => {
+  // Each harness names its own session on its own shell commands (P1, and pi's bash tool), so
+  // the chat session drive was started from is no fact about the child.
+  it('strips WITNESS_CONTEXT and the session variables from the child (row 191 §4.9)', async () => {
     const repo = await seededRepo()
-    const bin = fakeAgent('echo "ctx=${WITNESS_CONTEXT-unset}"')
+    const bin = fakeAgent('echo "ctx=${WITNESS_CONTEXT-unset} claude=${CLAUDE_CODE_SESSION_ID-unset} pi=${PI_SESSION_ID-unset}"')
     const lines: string[] = []
     const ctx = fakeCtx(repo.root, {
-      env: { WITNESS_DRIVE_AGENT_BIN: bin, WITNESS_CONTEXT: '{"session":"chat"}' }, out: (l) => lines.push(l),
+      env: { WITNESS_DRIVE_AGENT_BIN: bin, ...measuredEnv('chat', 170000, 1000000), PI_SESSION_ID: 'chat' }, out: (l) => lines.push(l),
     })
     await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
-    expect(lines).toContain('[1 implement/p1] ctx=unset')
+    expect(lines).toContain('[1 implement/p1] ctx=unset claude=unset pi=unset')
   }, 20000)
 
   it('builds the headless session command per harness, carrying the stage pin', async () => {
@@ -618,11 +620,11 @@ describe('autonomy in the loop (B2)', () => {
 
 // `witness next` in a process of its own: two of them are two settlers, which two
 // in-process calls (one pid, one lock re-entry) could never be.
-function nextChild(root: string, env: Record<string, string>): Promise<{ code: number | null; stdout: string }> {
+function nextChild(root: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string }> {
   const repo = resolve(import.meta.dirname, '..')
   return new Promise((done) => {
     const child = spawn(join(repo, 'node_modules', '.bin', 'tsx'), [join(repo, 'src', 'bin.ts'), 'next'],
-      { cwd: root, env: env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'ignore'] })
+      { cwd: root, env, stdio: ['ignore', 'pipe', 'ignore'] })
     let stdout = ''
     child.stdout!.on('data', (d) => { stdout += String(d) })
     child.on('close', (code) => done({ code, stdout }))
@@ -637,7 +639,7 @@ describe('one decision per stop (B3)', () => {
     putVerdict(scenario, PLAN_BLOCKING)
     await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
     autonomyOn(repo)
-    const env = { ...process.env, ...gateEnv(scenario) } as Record<string, string>
+    const env = hermeticEnv(gateEnv(scenario))
     const [x, y] = await Promise.all([nextChild(repo.root, env), nextChild(repo.root, env)])
     const decided = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'human-decision')
     expect(decided).toHaveLength(1)
@@ -872,6 +874,36 @@ describe('one command (B1)', () => {
     const r = await repo.cli(['drive', '--ask', 'add dark mode', '--max-spawns', '1'], { env: { ...quiet, WITNESS_DRIVE_AGENT_BIN: agent } })
     expect(r.stdout).toMatch(/ask: a\d+ — queued/)
     expect(r.stdout).toContain('] ask-seen')
+  }, 60000)
+})
+
+// Row 191 §4.9. `witness drive` typed in a chat session's shell inherits that session's reading
+// and session variable. Through the verb, so `main` has opened the chat session's stamp first.
+describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
+  const chat = measuredEnv('chat-1', 170000, 1000000)
+  const decisionOf = (repo: TestRepo) =>
+    readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1)
+
+  it('a decision drive settles is stamped by no session · the session it spawns inherits none', async () => {
+    const repo = await gatedEffort()                    // stopped on a blocking finding while autonomy was off
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const seen = join(fakeScenario(), 'seen')
+    const agent = script(`echo "\${WITNESS_CONTEXT-unset} \${CLAUDE_CODE_SESSION_ID-unset}" >> "${seen}"`)
+    const r = await repo.cli(['drive', '--max-spawns', '1'],
+      { env: { ...chat, WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
+    expect(r.stdout).toContain(`decided: decompose ${repo.effort} → revise · policy · blocking-here`)
+    expect(decisionOf(repo)).toMatchObject({ decision: 'revise', selected: 'policy' })
+    expect(decisionOf(repo)).not.toHaveProperty('ctx')
+    expect(readFileSync(seen, 'utf8').trim()).toBe('unset unset')
+  }, 60000)
+
+  it('a decision taken at drive\'s prompt is stamped by no session', async () => {
+    const repo = await gatedEffort()
+    await repo.cli(['drive', '--max-spawns', '1'],
+      { answers: ['1'], env: { ...chat, WITNESS_DRIVE_AGENT_BIN: idleAgent(), WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
+    expect(decisionOf(repo)).toMatchObject({ decision: 'revise' })
+    expect(decisionOf(repo)).not.toHaveProperty('ctx')
   }, 60000)
 })
 

@@ -34,6 +34,12 @@ export interface TestRepo {
   setMeta: (id: string, patch: Record<string, unknown>) => void
 }
 
+// Row 191. The suite may run inside a measured session (dogfooding, or `pnpm test` from a chat
+// session): its reading and session id would stamp every line a test journals and decide its
+// relays. So no CLI a test runs starts with them: in process through tmpRepo's scrub, spawned
+// through hermeticEnv. A test that wants a measured session says so (measuredEnv below).
+const NO_SESSION = { WITNESS_CONTEXT: undefined, CLAUDE_CODE_SESSION_ID: undefined, PI_SESSION_ID: undefined }
+
 export function tmpRepo(): TestRepo {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'witness-')))
   const git = (...args: string[]) =>
@@ -67,10 +73,8 @@ export function tmpRepo(): TestRepo {
       // It is a test seam, not a config key — see the note in src/registry.ts.
       env: {
         ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined,
-        // the suite may run inside a measured session (row 191): its reading and session id
-        // would stamp every line a test journals and decide its relays. A test that wants a
-        // measured session says so through opts.env (measuredEnv below).
-        WITNESS_CONTEXT: undefined, CLAUDE_CODE_SESSION_ID: undefined, PI_SESSION_ID: undefined,
+        // the session the suite runs in (row 191, NO_SESSION above); opts.env may name one
+        ...NO_SESSION,
         // a suite run inside a drive session or a runner turn must not inherit either:
         // the marker would scope every `next` and refuse every `drive` (row 180)
         WITNESS_DRIVE: undefined, WITNESS_RUNNER_TURN: undefined,
@@ -258,6 +262,12 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
 // is Claude Code before the session's first response (P7).
 export function measuredEnv(session: string, tokens: number | undefined, window: number): Record<string, string> {
   return { CLAUDE_CODE_SESSION_ID: session, WITNESS_CONTEXT: JSON.stringify({ session, tokens, window }) }
+}
+
+// The env for a CLI a test spawns as a process of its own, which tmpRepo's scrub never reaches:
+// this process's env without the session it runs in (NO_SESSION above), plus `extra`.
+export function hermeticEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return { ...process.env, ...NO_SESSION, ...extra }
 }
 
 export function fakeBinDir(): string {
