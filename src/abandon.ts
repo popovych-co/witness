@@ -8,7 +8,7 @@ import { canonicalSha } from './sha.js'
 import { gitBlob, tryGit, stateCommit } from './gitio.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, withTxn } from './txn.js'
-import { appendEntry, effortAbandoned, effortStreams, entryLine, journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
+import { appendEntry, effortAbandoned, effortStreams, entryLine, journalActs, journalRel, readStream, type Entry, type EntryType, type StatusEntry } from './journal.js'
 import { findById, plansOn, type Canon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
@@ -21,20 +21,13 @@ const isWrite = (e: Entry, id: string, sha?: string): boolean => {
 }
 const isAncestor = (root: string, a: string, b: string): boolean => tryGit(root, 'merge-base', '--is-ancestor', a, b).ok
 
-// D168. Each line of a stream as history stood at `at`, with the commit that appended it — which
-// `git blame` names because the journal is append-only. `--no-ignore-revs-file`: a blame config
-// (a dotfile's `blame.ignoreRevsFile`) re-attributes lines, or makes blame fail outright in a repo
-// that lacks the file. A blank line is skipped, as `readStream` skips it.
-function journalActs(root: string, stream: string, at = 'HEAD'): Array<{ entry: Entry; commit: string }> {
-  const blame = tryGit(root, 'blame', '--line-porcelain', '--no-ignore-revs-file', at, '--', journalRel(stream))
-  if (!blame.ok) return []
-  const out: Array<{ entry: Entry; commit: string }> = []
-  let commit = ''
-  for (const line of blame.out.split('\n')) {
-    if (/^[0-9a-f]{40} \d+ \d+/.test(line)) { commit = line.slice(0, 40); continue }
-    if (line.startsWith('\t') && line.trim() !== '') out.push({ entry: JSON.parse(line.slice(1)) as Entry, commit })
-  }
-  return out
+// D189. Of two commits, the later: by ancestry, and on parallel branches — where neither is an
+// ancestor, as after a merge of two clones' journals — by commit time.
+function later(root: string, a: string, b: string): string {
+  if (isAncestor(root, a, b)) return b
+  if (isAncestor(root, b, a)) return a
+  const time = (c: string): number => Number(tryGit(root, 'log', '-1', '--format=%ct', c).out) || 0
+  return time(b) > time(a) ? b : a
 }
 
 // D168. The act this content of a spec is, as history stood at `at`: the newest write of it, by
@@ -50,7 +43,7 @@ export function writeAct(root: string, id: string, sha: string, at = 'HEAD'): Wr
     if (!readStream(root, effort).some((e) => isWrite(e, id, sha))) continue
     for (const { entry, commit } of journalActs(root, effort, at)) {
       if (!isWrite(entry, id, sha)) continue
-      if (found === undefined || isAncestor(root, found.commit, commit)) {
+      if (found === undefined || later(root, found.commit, commit) === commit) {
         found = { effort, commit, created: (entry as unknown as { created?: boolean }).created === true }
       }
     }
@@ -68,14 +61,14 @@ const shaAt = (root: string, rev: string, rel: string): string | undefined => {
 // stood on it or on a sibling slice, or the walk stopped at it. That content is canon of record:
 // no later walk goes past it, or an amendment on top of it took the keep with it.
 function stoodAtAbandon(root: string, effort: string, rel: string, sha: string): boolean {
-  const at = journalActs(root, effort).find(({ entry }) =>
+  const at = journalActs(root, effort, 'HEAD').find(({ entry }) =>
     entry.t === 'human-decision' && (entry as unknown as { decision?: string }).decision === 'abandon-effort')
   return at !== undefined && shaAt(root, at.commit, rel) === sha
 }
 
 // This effort's newest write of an artifact (of this content, when `sha` is given).
 export const effortWrite = (root: string, effort: string, id: string, sha?: string): { commit: string } | undefined =>
-  journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+  journalActs(root, effort, 'HEAD').filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
 
 // D168 (review). Whether an earlier abandon already took this effort's newest write of a spec
 // back — `abandon <plan>` does, before the effort's own abandon: a status entry the abandon
@@ -84,7 +77,7 @@ export const effortWrite = (root: string, effort: string, id: string, sha?: stri
 export function takenBackAlready(root: string, effort: string, id: string, rel: string, sha: string): boolean {
   const write = effortWrite(root, effort, id, sha)
   if (write === undefined) return false
-  return journalActs(root, id).some(({ entry, commit }) => {
+  return journalActs(root, id, 'HEAD').some(({ entry, commit }) => {
     const s = entry as unknown as { t: string; cause?: string; from?: string; to?: string }
     const takes = s.t === 'status' && s.cause === 'abandon' && !(s.from === 'superseded' && s.to !== 'removed')
     return takes && commit !== write.commit && isAncestor(root, write.commit, commit) && shaAt(root, `${commit}^`, rel) === sha
@@ -139,6 +132,29 @@ function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort
     const act = writeAct(root, id, sha, at)
     return act !== undefined && efforts.includes(act.effort) && !stoodAtAbandon(root, act.effort, rel, sha) ? act : undefined
   }
+}
+
+// D189. What each spec was cut from: its own `supersedes` while canon holds it, else the
+// `supersedes` its write journaled — a departed spec is no longer in canon to say.
+function cutFrom(root: string, canon: Canon): Map<string, string> {
+  const from = new Map<string, string>()
+  for (const e of effortStreams(root)) {
+    for (const x of readStream(root, e)) {
+      const w = x as unknown as { t: string; artifact?: string; supersedes?: string }
+      if (w.t === 'write' && w.artifact !== undefined && w.supersedes !== undefined) from.set(w.artifact, w.supersedes)
+    }
+  }
+  for (const d of canon.docs) if (d.meta.supersedes !== undefined) from.set(String(d.meta.id), String(d.meta.supersedes))
+  return from
+}
+
+const descendsFrom = (from: Map<string, string>, id: string, cut: Set<string>): boolean => {
+  const seen = new Set<string>([id])
+  for (let up = from.get(id); up !== undefined && !seen.has(up); up = from.get(up)) {
+    if (cut.has(up)) return true
+    seen.add(up)
+  }
+  return false
 }
 
 // `act`: the write of `pin` this abandon takes back — the effort's own on the effort path, the
@@ -204,11 +220,14 @@ export function specRevertFor(
   // takes the split back together; deleting the slice now left the split half described. The
   // effort path is that last act, and there a slice another effort cut cannot go back together
   // with this one: holding it would leave two efforts' abandons each refusing for the other's.
-  const from = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
-  const slice = effort === undefined && back.end === 'create' && from !== undefined && canonExit(readStream(root, from))?.to === 'superseded' ? [from] : []
+  const own = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
+  const slice = effort === undefined && back.end === 'create' && own !== undefined && canonExit(readStream(root, own))?.to === 'superseded' ? [own] : []
   const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
+  // D189: a split is the whole tree of what was cut from the predecessor — a slice re-sliced
+  // again stands through its own slices.
+  const from = cutFrom(root, canon)
   const slices = canon.docs
-    .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
+    .filter((d) => d.meta.type === 'spec' && String(d.meta.id) !== id && descendsFrom(from, String(d.meta.id), cut))
     .flatMap((d) => {
       const id = String(d.meta.id)
       const leaving = abandonSet.has(id)

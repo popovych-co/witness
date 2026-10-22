@@ -72,6 +72,18 @@ describe('decompose gate', () => {
     expect(runsOf(repo, 'quick-fix')[0]!.standing).toContain('misroute')
   })
 
+  it('fix class rides the green path when the only created artifact is a plan (D189)', async () => {
+    const repo = await seededRepo({ class: 'fix', slug: 'quick-amend', preexisting: ['auth-refresh'] })
+    await writeSpec(repo, 'auth-refresh')                                   // amendment, not a create
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', {}, undefined, 'quick-amend')  // a plan the fix created
+    const scenario = fakeScenario()
+    putVerdict(scenario, cover(['auth-refresh']))
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    expect(await runGate(ctx, 'decompose', 'quick-amend', { fresh: false, manual: false })).toBe(0)
+    expect(runsOf(repo, 'quick-amend').at(-1)!.standing ?? '').not.toContain('misroute')
+  })
+
   it('recap --amend re-arms the stop with a fresh round', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')

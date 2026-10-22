@@ -45,6 +45,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       const artifact = findById(canon, id)
       if (!artifact) continue                               // already gone (re-slice, earlier abandon)
       if (artifact.meta.type !== 'plan') continue
+      if (String(artifact.meta.status) === 'abandoned') continue   // D189: an earlier abandon withdrew it
       // 'stamp-only': the spec loop below is this path's sole spec revert, pinned on
       // THIS effort's write sha. A paired revert here would re-derive the owner and
       // could land on a sibling effort's amendment — see Pairing in abandon.ts.

@@ -5,7 +5,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { askText } from '../ask.js'
 import { git, primaryRoot, tryGit } from '../gitio.js'
 import { canonExit } from '../departure.js'
-import { journalRel, readStream, streamExists, type Entry } from '../journal.js'
+import { journalActs, journalRel, readStream, streamExists, type Entry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { short } from '../sha.js'
 import { rows } from '../toon.js'
@@ -96,22 +96,12 @@ function commitIndex(root: string): Map<string, number> {
   return map
 }
 
-function lineOrigins(root: string, rel: string): string[] {
-  const blame = tryGit(root, 'blame', '--porcelain', '--', rel)
-  if (!blame.ok) return []
-  const shas: string[] = []
-  for (const line of blame.out.split('\n')) {
-    if (/^[0-9a-f]{40} \d+ \d+/.test(line)) shas.push(line.slice(0, 40))
-  }
-  return shas
-}
-
 export function mergedRows(root: string): Array<{ stream: string; entry: Entry }> {
   const order = commitIndex(root)
   const rowsOut: Array<{ stream: string; entry: Entry; idx: number; lineNo: number }> = []
   for (const stream of streamIds(root)) {
     const entries = readStream(root, stream)
-    const origins = lineOrigins(root, journalRel(stream))
+    const origins = journalActs(root, stream).map((a) => a.commit)
     entries.forEach((entry, lineNo) => {
       const sha = origins[lineNo]
       rowsOut.push({ stream, entry, lineNo, idx: sha !== undefined ? (order.get(sha) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER })
