@@ -176,12 +176,18 @@ function returnsThrough(
     const reached = walkBack(root, rel, id, { src, blob, doc: parsed.value }, takenBack, seen)
     // A write the walk cannot go past leaves the return where it stood before that write.
     const walked = reached.end === 'lost' ? { ...reached, ...reached.at!, end: 'content' as const } : reached
+    // D190 (review). Every amendment the walk took back on the way brings back what it folded
+    // in (an amendment with `supersedes`): row 168 left that out, and a shipped spec folded into
+    // a predecessor that a later re-slice departed never came back.
+    const amended = walked.passed.filter((w) => walked.end !== 'create' || w !== walked.act)
+    const folds = amended.map((w) => returnsThrough(root, paths, w.commit, [id], takenBack, seen))
+    const folded: Way = { returns: folds.flatMap((f) => f.returns), unwound: folds.flatMap((f) => f.unwound) }
     if (walked.end === 'create') {
       // That write created it: it stays out — journaled so whether or not anything lies under
       // the create — and what it had departed comes back instead.
       const gone: StatusEntry = { v: 1, t: 'status', artifact: id, from: 'superseded', to: 'removed', cause: 'abandon' }
       const under = returnsThrough(root, paths, walked.act.commit, [...chain, id], takenBack, seen)
-      return { returns: under.returns, unwound: [gone, ...under.unwound] }
+      return { returns: [...under.returns, ...folded.returns], unwound: [gone, ...under.unwound, ...folded.unwound] }
     }
     const status = walked.passed.length > 0 ? String(walked.doc.meta.status) : exit.from
     const design = designRel(paths, id)
@@ -203,8 +209,8 @@ function returnsThrough(
         rel,
         by: successor,
         depends: ((walked.doc.meta.depends ?? []) as unknown[]).map(String),
-      }],
-      unwound: [],
+      }, ...folded.returns],
+      unwound: folded.unwound,
     }
   })
   return { returns: ways.flatMap((w) => w.returns), unwound: ways.flatMap((w) => w.unwound) }

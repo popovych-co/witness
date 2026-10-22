@@ -60,7 +60,7 @@ const shaAt = (root: string, rev: string, rel: string): string | undefined => {
 // D168 (review). Whether this effort's abandon left its write standing — kept, because a plan
 // stood on it or on a sibling slice, or the walk stopped at it. That content is canon of record:
 // no later walk goes past it, or an amendment on top of it took the keep with it.
-function stoodAtAbandon(root: string, effort: string, rel: string, sha: string): boolean {
+export function stoodAtAbandon(root: string, effort: string, rel: string, sha: string): boolean {
   const at = journalActs(root, effort, 'HEAD').find(({ entry }) =>
     entry.t === 'human-decision' && (entry as unknown as { decision?: string }).decision === 'abandon-effort')
   return at !== undefined && shaAt(root, at.commit, rel) === sha
@@ -69,6 +69,21 @@ function stoodAtAbandon(root: string, effort: string, rel: string, sha: string):
 // This effort's newest write of an artifact (of this content, when `sha` is given).
 export const effortWrite = (root: string, effort: string, id: string, sha?: string): { commit: string } | undefined =>
   journalActs(root, effort, 'HEAD').filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+
+// D190 (review). The effort outside `efforts` whose write of a spec lies over this effort's
+// newest write of it and still stands (an abandon has not taken it back), if any.
+export function writtenOver(root: string, id: string, rel: string, effort: string, efforts: string[]): string | undefined {
+  const mine = effortWrite(root, effort, id)
+  if (mine === undefined) return undefined
+  for (const other of effortStreams(root)) {
+    if (efforts.includes(other)) continue
+    const theirs = journalActs(root, other, 'HEAD').filter(({ entry }) => isWrite(entry, id)).at(-1)
+    if (theirs === undefined || theirs.commit === mine.commit || !isAncestor(root, mine.commit, theirs.commit)) continue
+    const sha = String((theirs.entry as unknown as { sha?: string }).sha)
+    if (!takenBackAlready(root, other, id, rel, sha)) return other
+  }
+  return undefined
+}
 
 // D168 (review). Whether an earlier abandon already took this effort's newest write of a spec
 // back — `abandon <plan>` does, before the effort's own abandon: a status entry the abandon
@@ -135,8 +150,9 @@ function takenBackBy(root: string, canon: Canon, abandonSet: Set<string>, effort
   }
 }
 
-// `act`: the write of `pin` this abandon takes back — the effort's own on the effort path, the
-// write the plan is paired with on the plan path. `efforts`: the efforts being abandoned, if any.
+// `act`: the write of `pin` this abandon takes back — on the effort path the write that is the
+// spec's content, by one of the efforts being abandoned (`efforts`); on the plan path the write
+// the plan is paired with.
 export function specRevertFor(
   root: string, canon: Canon, spec: CanonDoc, pin: string, abandonSet: Set<string>, act: WriteAct, efforts?: string[],
 ): Result<SpecRevert | SpecKeep | undefined> {
@@ -193,11 +209,13 @@ export function specRevertFor(
   // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
   // good when a plan shipped it — and then so does this keep, since nothing can take the
   // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
-  // D188: and a slice whose own write departed nothing — another slice's write took the
-  // predecessor out; deleting it alone left the split half described. D190: on both paths, now
-  // that a hold always has a way out — the efforts that cut the split abandoned as one act.
+  // D188: on the plan path, also a slice whose own write departed nothing — another slice's
+  // write took the predecessor out. Its effort is still live, and that effort's abandon is the act
+  // that takes the split back together. On the effort path a hold would tie this abandon to the
+  // other slices' efforts, and row 190's review found that no single act frees every such hold
+  // (an effort with shipped work cannot be abandoned; an adopted slice has no effort at all).
   const own = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
-  const slice = back.end === 'create' && own !== undefined && canonExit(readStream(root, own))?.to === 'superseded' ? [own] : []
+  const slice = efforts === undefined && back.end === 'create' && own !== undefined && canonExit(readStream(root, own))?.to === 'superseded' ? [own] : []
   const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
   const slices = canon.docs
     .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== id)
@@ -274,9 +292,19 @@ export function returnCollisions(root: string, canon: Canon, items: AbandonItem[
 // back only beside what it depends on: a dependency in canon that this abandon does not take
 // out, or one it brings back. `write` refuses a dangling `depends`, and an abandon landing one
 // left `check` red after it exited 0. Bringing the dependency back first is a human's call.
-export function landingEdges(root: string, canon: Canon, items: AbandonItem[]): Violation[] {
+export function landingEdges(root: string, canon: Canon, items: AbandonItem[], abandonSet = new Set<string>()): Violation[] {
   const leaving = new Set(items.flatMap((i) => (i.revert?.action === 'delete' ? [String(i.revert.doc.meta.id)] : [])))
   const coming = new Set(items.flatMap((i) => (i.revert?.returns ?? []).map((r) => r.entry.artifact)))
+  const restored = new Set(items.flatMap((i) => (i.revert?.action === 'restore' ? [String(i.revert.doc.meta.id)] : [])))
+  // D190 (review). A doc of the abandon set that this act leaves as it is — kept, or a write an
+  // earlier abandon already took back — stays in canon, so what it depends on may not leave:
+  // `waiting-dependents` reads only docs outside the set, and the act deleted the dependency.
+  const stays = canon.docs
+    .filter((d) => abandonSet.has(String(d.meta.id)) && !leaving.has(String(d.meta.id)) && !restored.has(String(d.meta.id)))
+    .flatMap((d) => ((d.meta.depends ?? []) as unknown[]).map(String)
+      .filter((dep) => leaving.has(dep) && !coming.has(dep))
+      .map((dep) => v('spec', 'waiting-dependents', `${String(d.meta.id)} depends on ${dep}`,
+        `${dep} kept while ${String(d.meta.id)} stays in canon — no doc this abandon leaves standing may depend on a spec it deletes`)))
   const lands = items.flatMap((i): Array<{ id: string; depends: string[] }> => {
     if (!i.revert) return []
     const restored = i.revert.action === 'restore' ? splitDoc(i.revert.content) : undefined
@@ -293,7 +321,7 @@ export function landingEdges(root: string, canon: Canon, items: AbandonItem[]): 
         : exit?.to === 'superseded' ? `it left superseded by ${exit.by ?? 'a successor'}` : 'it left canon'
       return humanCall(v('spec', 'dangling-depends', `${id} depends on ${dep}`,
         `${dep} in canon when ${id} comes back — ${why} · a human's call`))
-    }))
+    })).concat(stays)
 }
 
 // D188 (review). A spec kept for good stays in canon with what it depends on: a dependency this
@@ -421,7 +449,7 @@ export function executeAbandon(
 // of the spec, its revise rounds — refusing if the spec has moved since.
 //
 // `stamp-only` — `abandon <effort-slug>`. The caller reverts every spec the effort
-// itself wrote, from that effort's own write, so a second revert here would be duplicate
+// itself wrote, from the write that is the spec's content, so a second revert here would be duplicate
 // mechanism — and, before D168, a WRONG one: it re-derived the owner via effortOf, which
 // tie-breaks alphabetically across every effort that wrote the plan. A plan rewritten by a
 // later effort therefore resolved to a SIBLING effort whose writes did include the parent,
