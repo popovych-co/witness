@@ -26,6 +26,7 @@ import {
   roundsSinceApprove, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
+import { reportHandover } from '../slice.js'
 
 
 // D154. The untrusted `cmd:` list for a block, resolved from the ctx alone — `renderBound`
@@ -157,7 +158,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (argv.includes('--show')) return show(ctx, spec, gate, target)
   const act = decisionAct(argv)
   if (!act.ok) { renderRefusal(act.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  return applyDecision(ctx, act.value)
+  const code = await applyDecision(ctx, act.value)
+  // Row 191 §4.4. A revise typed in chat is handed to this session, so this is where a session
+  // at its limit hands it to a fresh one. Here and not in `applyDecision`: the gate's tail and
+  // `next` settle through that door too, and each hands over at its own point.
+  if (code !== EXIT.OK || act.value.decision !== 'revise') return code
+  const rootR = primaryRoot(ctx.cwd)
+  const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
+  if (rootR.ok && cfgR?.ok) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
+  return code
 }
 
 function show(ctx: Ctx, spec: GateSpec, gate: string, target: string): number {

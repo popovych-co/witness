@@ -4,27 +4,36 @@ import { join } from 'node:path'
 import { fakeScenario, gateEnv, putVerdict, threeStepPlan } from './helpers.js'
 import { readStream } from '../src/journal.js'
 
-describe('start surfaces the dispatch budget (row 79)', () => {
-  it('prints dispatch-budget and the arithmetic on a fresh start', async () => {
+// Row 79, amended by row 191 §4.10. Under a measured harness the number of slices cannot be
+// known in advance, so the run's shape is the rule that cuts it: the limit, and the step budget
+// an unmeasured session falls back to.
+describe('start surfaces the slice shape (rows 79 · 191)', () => {
+  it('start prints slices, steps and the opening context', async () => {
     const repo = await threeStepPlan()
     const r = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(r.code).toBe(0)
-    expect(r.stdout).toContain('dispatch-budget: 3')
-    expect(r.stdout).toContain('dispatches: 3 step(s) ≈ 1 dispatch(es) at budget 3')
+    expect(r.stdout).toContain('slices: by context — relay at 20% (step budget 3 if unmeasured)')
+    expect(r.stdout).toContain('steps: 0/3 done · next s1')
+    expect(r.stdout).toContain('context: unmeasured (no adapter) — step budget 3')
+    expect(r.stdout).toContain('help: implement inside the worktree; witness test-evidence auth-refresh-plan-1 --phase red|green --step <id> as you go')
+    expect(r.stdout).not.toContain('dispatch-budget:')
+    expect(r.stdout).not.toContain('dispatches:')
   })
 
-  it('honors a configured budget and re-prints on re-attach', async () => {
-    const repo = await threeStepPlan('implement:\n  stepsPerDispatch: 2\n')
-    await repo.cli(['start', 'auth-refresh-plan-1'])
+  it('a configured budget and limit show in slices', async () => {
+    const repo = await threeStepPlan('session:\n  contextLimit: 15\nimplement:\n  stepsPerDispatch: 2\n')
+    const first = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(first.code).toBe(0)
+    expect(first.stdout).toContain('slices: by context — relay at 15% (step budget 2 if unmeasured)')
     const again = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(again.code).toBe(0)
-    expect(again.stdout).toContain('dispatch-budget: 2')
-    expect(again.stdout).toContain('dispatches: 3 step(s) ≈ 2 dispatch(es) at budget 2')
+    expect(again.stdout).toContain('slices: by context — relay at 15% (step budget 2 if unmeasured)')
+    expect(again.stdout).not.toContain('dispatch-budget:')
   })
 })
 
-describe('plan gate surfaces the dispatch arithmetic (row 79)', () => {
-  it('prints the dispatches line on a plan gate run', async () => {
+describe('plan gate surfaces the slice shape (rows 79 · 191)', () => {
+  it('the plan gate prints slices', async () => {
     const repo = await threeStepPlan()
     const scenario = fakeScenario()
     putVerdict(scenario, {
@@ -32,7 +41,8 @@ describe('plan gate surfaces the dispatch arithmetic (row 79)', () => {
       coverage: [{ anchor: '## Step: s1', note: 'read' }, { anchor: '## Step: s2', note: 'read' }],
     })
     const r = await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })
-    expect(r.stdout).toContain('dispatches: 3 step(s) ≈ 1 dispatch(es) at budget 3')
+    expect(r.stdout).toContain('slices: by context — relay at 20% (step budget 3 if unmeasured)')
+    expect(r.stdout).not.toContain('dispatches:')
   })
 })
 

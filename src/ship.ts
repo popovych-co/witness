@@ -18,6 +18,7 @@ import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
+import { reportHandover } from './slice.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { settleStop, settledCode } from './settle.js'
@@ -339,7 +340,20 @@ async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number): Pr
   }
 }
 
+// Row 191 §4.4. A ship run's exit is where the next pass is decided: with the fill at the limit,
+// it runs in a fresh session. Once per run, whatever the gate's tail settled inside it, so the
+// gate is told not to hand over itself (Plan's call 7). A refused or blocked run completed no
+// pass, so it hands nothing over.
 export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean } = {}): Promise<number> {
+  const code = await shipPass(ctx, planId, opts)
+  if (code !== EXIT.OK && code !== EXIT.FINDINGS) return code
+  const rootR = primaryRoot(ctx.cwd)
+  const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
+  if (rootR.ok && cfgR?.ok) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
+  return code
+}
+
+async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value
@@ -408,7 +422,7 @@ export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean
       return rebase.violations.some((x) => x.rule === 'textual-conflict') ? EXIT.FINDINGS : EXIT.REFUSED
     }
     if (rebase.value === 'rebased') ctx.out(kv('rebase', `${shipBranch} moved — rebased before the battery`))
-    const code = await runGate(ctx, 'ship', planId, { fresh: false, manual })
+    const code = await runGate(ctx, 'ship', planId, { fresh: false, manual, handover: false })
     if (code !== EXIT.FINDINGS && code !== EXIT.OK) return code
     // No second exits line here: the gate's own render already printed the complete set
     // through liveExits. An approve-only line directly beneath it is two answers to one

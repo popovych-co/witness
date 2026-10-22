@@ -26,6 +26,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, policyFor } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
+import { reportHandover, reportOpening } from '../slice.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -1029,6 +1030,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (ambientFlow) ctx.out(kv('flow', `${ambientFlow} — inferred from cwd`))
   const assigned = marked ? (marked.target ?? 'untargeted work') : undefined
   if (assigned !== undefined && values.flow === undefined) ctx.out(kv('drive', `${assigned} — assigned by witness drive`))
+  // Row 191 §4.5 "Before any work". Above the routing block, for the same reason as the lines
+  // above it.
+  reportOpening(ctx, root, cfgR.value)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
@@ -1045,22 +1049,32 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // version-skew diagnosis owned by `check`. This withholds no knowledge and changes no
   // routing answer: the stage, the target and the home are identical either way, and only
   // the instruction to a session that is already there stops being printed.
+  const elsewhere = action.home ? !atHome(ctx.cwd, action.home) : false
   if (action.home) {
     ctx.out(kv('home', action.home))
-    if (!atHome(ctx.cwd, action.home)) {
+    if (elsewhere) {
       ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
       ctx.out(kv('relay', relayLine(harness)))
     }
   }
+  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
+  // the background and ends its turn, or says where to watch the one already running.
+  // Only when drive has work beyond the stops that wait for the human (F8): with nothing
+  // else, a launched drive would set the stop aside and exit, and the chat would never show it.
+  const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)
+  // Row 191 §4.4–§4.6. A session already at `home:` hands over before the next action once it
+  // has done stage work and its fill reached the limit, with a same-home `relay:` and no `run:`.
+  // Outside the `run:` branch because a `run:` already hands the work to a session of its own,
+  // in another home. Not where this session's turn ends anyway: at a decision left for a human,
+  // with nothing owed, or with the run handed to drive.
+  if (!elsewhere && !toDrive && !action.line.startsWith('witness decide ') && action.line !== 'witness check') {
+    reportHandover(ctx, root, cfgR.value, { guard: true })
+  }
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
   }
-  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
-  // the background and ends its turn, or says where to watch the one already running. Last,
-  // so it never splits the routing unit, and raw, because both lines are commands (D120).
-  // Only when drive has work beyond the stops that wait for the human (F8): with nothing
-  // else, a launched drive would set the stop aside and exit, and the chat would never show it.
-  if (cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)) {
+  // Last, so it never splits the routing unit, and raw, because both lines are commands (D120).
+  if (toDrive) {
     const holder = driveHolder(root)
     ctx.out(holder !== undefined ? cmd('watch', watchLine(holder)) : cmd('launch', 'witness drive --detach'))
   }

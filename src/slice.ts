@@ -1,8 +1,9 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
-import { loadConfig } from './config.js'
+import { loadConfig, type Config } from './config.js'
 import { pctOf, reached, readFill, sessionHash, sessionIdOf, windowLabel, type Fill } from './context.js'
+import { relayLine, resolveDriver } from './harness.js'
 import { readStream, type Entry, type EntryType, type JournalCtx } from './journal.js'
 import type { CanonDoc } from './scan.js'
 import { implementGated, stepProgress, stepsLine, type Progress } from './steps.js'
@@ -131,4 +132,50 @@ export function reportStepClose(ctx: Ctx, root: string, plan: CanonDoc, opts: { 
   const closedHere = id === undefined ? undefined : closedThisSession(entries, progress, sessionHash(id))
   ctx.out(kv('steps', stepsLine(progress)))
   ctx.out(kv('slice', sliceLine(stepCloseVerdict({ fill, limit, budget, progress, growth, closedHere }))))
+}
+
+// Row 191 §4.10 (amends row 79). Under a measured harness how many slices a plan takes cannot be
+// known in advance, so the run's shape is the rule that will cut it, beside the step budget an
+// unmeasured session counts against instead.
+export function slicesLine(cfg: Config): string {
+  return `by context — relay at ${cfg.session.contextLimit}% (step budget ${cfg.implement.stepsPerDispatch} if unmeasured)`
+}
+
+// Row 191 §4.8. A measured fill names its session (readFill checks it against the harness's), so
+// a session whose fill reached the limit always has one to look for.
+const actedYet = (root: string, env: Ctx['env']): boolean => {
+  const id = sessionIdOf(env)
+  return id !== undefined && sessionActed(root, sessionHash(id))
+}
+
+// Row 191 §4.4–§4.6. The hand-overs outside a step close: after a revise is handed to the
+// session, at a ship exit, and at `next`. The work continues in this same home, so the relay
+// carries no `run:`. Only the fill decides here: other stages have no repeated unit to project
+// a next act from (§4.5). Unmeasured, nothing hands over, which is the behavior before row 191
+// (§4.7). `guard` is the act guard: at `next` it keeps a fresh session from handing over before
+// it has done anything, and at a revise or a ship exit the run itself was the act (Plan's call
+// 7). A driver that will not resolve has no relay to name, so nothing prints.
+export function reportHandover(ctx: Ctx, root: string, cfg: Config, opts: { guard: boolean }): boolean {
+  const fill = readFill(ctx.env)
+  const limit = cfg.session.contextLimit
+  if (!fill.measured || !reached(fill.reading.tokens, fill.reading.window, limit)) return false
+  if (opts.guard && !actedYet(root, ctx.env)) return false
+  const driver = resolveDriver(ctx.env, cfg.raw)
+  if (!driver.ok) return false
+  ctx.out(kv('context', contextLine(fill, limit, cfg.implement.stepsPerDispatch)))
+  ctx.out(kv('relay', relayLine(driver.value.harness)))
+  return true
+}
+
+// Row 191 §4.5 "Before any work". A session already at the limit when it opens cannot hand over
+// (it has done nothing yet), and with no first-step exemption at a step close each of its slices
+// will be one step, so the CLI says so where the session begins. Deterministic, so a fresh
+// session's second `next` repeats it (Plan's call 9).
+export function reportOpening(ctx: Ctx, root: string, cfg: Config): void {
+  const fill = readFill(ctx.env)
+  const limit = cfg.session.contextLimit
+  if (!fill.measured) return
+  const { tokens, window } = fill.reading
+  if (!reached(tokens, window, limit) || actedYet(root, ctx.env)) return
+  ctx.out(kv('warn', `this session opens at ${pctOf(tokens, window)}% of ${windowLabel(window)} — over the ${limit}% limit before any work; each slice will be one step`))
 }
