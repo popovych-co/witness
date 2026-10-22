@@ -24,6 +24,7 @@ export interface Config {
   paths: CanonPaths
   docs: DocsRegistry
   implement: ImplementConfig
+  session: SessionConfig
   gates: GatesConfig
   drive: DriveConfig
   autonomy: boolean
@@ -127,6 +128,30 @@ export function resolveImplement(raw: Record<string, unknown>): Result<Implement
       'an integer >= 1 — steps handed to each fresh implement agent')])
   }
   return ok({ stepsPerDispatch: val })
+}
+
+// Row 191 §4.2. The default 20 is the row's premise (§1): once a session's context is more
+// than about 20% full, its output gets worse. A repo decision, so its one home is
+// witness.config.yaml, never config.local.yaml (row 90).
+export const DEFAULT_CONTEXT_LIMIT = 20
+
+export interface SessionConfig {
+  contextLimit: number
+}
+
+export function resolveSession(raw: Record<string, unknown>): Result<SessionConfig> {
+  const conf = raw.session
+  if (conf === undefined) return ok({ contextLimit: DEFAULT_CONTEXT_LIMIT })
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) {
+    return refuse([v('session', 'invalid', String(conf), 'a map of session settings')])
+  }
+  const val = (conf as Record<string, unknown>).contextLimit
+  if (val === undefined) return ok({ contextLimit: DEFAULT_CONTEXT_LIMIT })
+  if (typeof val !== 'number' || !Number.isInteger(val) || val < 1 || val > 100) {
+    return refuse([v('session.contextLimit', 'invalid', String(val),
+      'an integer from 1 to 100 — % of the session\'s context window at which witness hands over to a fresh session')])
+  }
+  return ok({ contextLimit: val })
 }
 
 // D145. One hour. An implement slice is ~25 minutes at the default budget of 3 steps,
@@ -407,6 +432,8 @@ export function loadConfig(root: string): Result<Config> {
   if (!docs.ok) return refuse(docs.violations)
   const implement = resolveImplement(obj)
   if (!implement.ok) return refuse(implement.violations)
+  const session = resolveSession(obj)
+  if (!session.ok) return refuse(session.violations)
   const gates = resolveGates(obj)
   if (!gates.ok) return refuse(gates.violations)
   const drive = resolveDrive(obj)
@@ -422,6 +449,7 @@ export function loadConfig(root: string): Result<Config> {
     paths: paths.value,
     docs: docs.value,
     implement: implement.value,
+    session: session.value,
     gates: gates.value,
     drive: drive.value,
     autonomy: autonomy.value && !uncommitted,

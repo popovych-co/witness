@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveGates,
+  DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveGates, resolveSession,
 } from '../src/config.js'
 import { seededRepo, tmpRepo, writeLocalConfig } from './helpers.js'
 
@@ -154,6 +154,35 @@ describe('resolveImplement (implement.stepsPerDispatch)', () => {
     repo.write('witness.config.yaml', 'schema: 1\nimplement: nope\n')
     const res = loadConfig(repo.root)
     expect(!res.ok && res.violations[0]?.field).toBe('implement')
+  })
+})
+
+describe('session.contextLimit (row 191)', () => {
+  it('defaults to 20 when session or the key is absent', () => {
+    expect(resolveSession({})).toMatchObject({ ok: true, value: { contextLimit: 20 } })
+    expect(resolveSession({ session: {} })).toMatchObject({ ok: true, value: { contextLimit: 20 } })
+  })
+  it('accepts the bounds', () => {
+    expect(resolveSession({ session: { contextLimit: 1 } })).toMatchObject({ ok: true, value: { contextLimit: 1 } })
+    expect(resolveSession({ session: { contextLimit: 100 } })).toMatchObject({ ok: true, value: { contextLimit: 100 } })
+  })
+  it.each([0, 101, 20.5, '20', null, -5])('refuses contextLimit %s', (bad) => {
+    const r = resolveSession({ session: { contextLimit: bad } })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'session.contextLimit', rule: 'invalid' })
+  })
+  it('refuses a session value that is not a map', () => {
+    expect(resolveSession({ session: 20 })).toMatchObject({ ok: false })
+  })
+  it('loadConfig carries the value, and a bad one refuses the whole config', () => {
+    const root = mkdtempSync(join(tmpdir(), 'witness-session-'))
+    writeFileSync(join(root, 'witness.config.yaml'), 'schema: 1\nsession:\n  contextLimit: 15\n')
+    const good = loadConfig(root)
+    expect(good.ok && good.value.session.contextLimit).toBe(15)
+    writeFileSync(join(root, 'witness.config.yaml'), 'schema: 1\nsession:\n  contextLimit: 0\n')
+    const bad = loadConfig(root)
+    expect(bad.ok).toBe(false)
+    expect(!bad.ok && bad.violations[0]?.field).toBe('session.contextLimit')
   })
 })
 
