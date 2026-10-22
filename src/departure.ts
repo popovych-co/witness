@@ -64,6 +64,7 @@ export interface Return {
   moves: Array<{ stream: string; entry: { t: EntryType; [k: string]: unknown } }>   // its debts, home again
   rel: string             // the spec path it lands on: the path it left from
   by: string              // the successor its departure named: the re-slice this return takes back
+  depends: string[]       // what the content it lands depends on (D188)
 }
 
 // D168. What the way back does: the specs it brings back, and the specs it takes back past
@@ -201,6 +202,7 @@ function returnsThrough(
         moves: chain.flatMap((s, k) => deferralMoves(readStream(root, s), s, id, (d) => d.moved_from === (chain[k + 1] ?? id))),
         rel,
         by: successor,
+        depends: ((walked.doc.meta.depends ?? []) as unknown[]).map(String),
       }],
       unwound: [],
     }

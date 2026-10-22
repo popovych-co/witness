@@ -1,7 +1,7 @@
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
-import { prepareDeparture, prepareReturns, takeBack, type Departure, type Return, type TakenBack, type WriteAct } from './departure.js'
+import { canonExit, prepareDeparture, prepareReturns, takeBack, type Departure, type Return, type TakenBack, type WriteAct } from './departure.js'
 import { designRel } from './design.js'
 import { splitDoc } from './fm.js'
 import { canonicalSha } from './sha.js'
@@ -73,12 +73,16 @@ function stoodAtAbandon(root: string, effort: string, rel: string, sha: string):
   return at !== undefined && shaAt(root, at.commit, rel) === sha
 }
 
+// This effort's newest write of an artifact (of this content, when `sha` is given).
+export const effortWrite = (root: string, effort: string, id: string, sha?: string): { commit: string } | undefined =>
+  journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+
 // D168 (review). Whether an earlier abandon already took this effort's newest write of a spec
 // back — `abandon <plan>` does, before the effort's own abandon: a status entry the abandon
 // journaled on the spec after that write, which is not a return, made where the spec stood at
 // the write's content. Then the effort's abandon has nothing of its own left there to take back.
 export function takenBackAlready(root: string, effort: string, id: string, rel: string, sha: string): boolean {
-  const write = journalActs(root, effort).filter(({ entry }) => isWrite(entry, id, sha)).at(-1)
+  const write = effortWrite(root, effort, id, sha)
   if (write === undefined) return false
   return journalActs(root, id).some(({ entry, commit }) => {
     const s = entry as unknown as { t: string; cause?: string; from?: string; to?: string }
@@ -195,7 +199,14 @@ export function specRevertFor(
   // abandon set, or inside it but kept because a plan outside the set stands on it. It stands for
   // good when a plan shipped it — and then so does this keep, since nothing can take the
   // sibling back. Every spec the walk passes through counts: each was a re-slice being taken back.
-  const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact)])
+  // D188: on the plan path, also a slice whose own write departed nothing — another slice's
+  // write took the predecessor out. Its effort is still live, and its own abandon is the act that
+  // takes the split back together; deleting the slice now left the split half described. The
+  // effort path is that last act, and there a slice another effort cut cannot go back together
+  // with this one: holding it would leave two efforts' abandons each refusing for the other's.
+  const from = spec.meta.supersedes === undefined ? undefined : String(spec.meta.supersedes)
+  const slice = effort === undefined && back.end === 'create' && from !== undefined && canonExit(readStream(root, from))?.to === 'superseded' ? [from] : []
+  const cut = new Set([...returns.map((r) => r.entry.artifact), ...unwound.map((u) => u.artifact), ...slice])
   const slices = canon.docs
     .filter((d) => d.meta.type === 'spec' && cut.has(String(d.meta.supersedes)) && String(d.meta.id) !== String(spec.meta.id))
     .flatMap((d) => {
@@ -264,6 +275,54 @@ export function returnCollisions(root: string, canon: Canon, items: AbandonItem[
     ...[...landing].filter(([, ids]) => ids.length > 1).map(([rel, ids]) => humanCall(v('spec', 'path-taken',
       `${rel} takes ${ids.join(' and ')}`, `one return per path — each left from it · which one comes back is a human's call`))),
   ]
+}
+
+// D188. What an abandon lands — a restore's older content, a return's departed bytes — comes
+// back only beside what it depends on: a dependency in canon that this abandon does not take
+// out, or one it brings back. `write` refuses a dangling `depends`, and an abandon landing one
+// left `check` red after it exited 0. Bringing the dependency back first is a human's call.
+export function landingEdges(root: string, canon: Canon, items: AbandonItem[]): Violation[] {
+  const leaving = new Set(items.flatMap((i) => (i.revert?.action === 'delete' ? [String(i.revert.doc.meta.id)] : [])))
+  const coming = new Set(items.flatMap((i) => (i.revert?.returns ?? []).map((r) => r.entry.artifact)))
+  const lands = items.flatMap((i): Array<{ id: string; depends: string[] }> => {
+    if (!i.revert) return []
+    const restored = i.revert.action === 'restore' ? splitDoc(i.revert.content) : undefined
+    return [
+      ...(restored?.ok ? [{ id: String(i.revert.doc.meta.id), depends: ((restored.value.meta.depends ?? []) as unknown[]).map(String) }] : []),
+      ...i.revert.returns.map((r) => ({ id: r.entry.artifact, depends: r.depends })),
+    ]
+  })
+  return lands.flatMap(({ id, depends }) => depends
+    .filter((dep) => !coming.has(dep) && (leaving.has(dep) || findById(canon, dep) === undefined))
+    .map((dep) => {
+      const exit = canonExit(readStream(root, dep))
+      const why = leaving.has(dep) ? 'it leaves with this abandon'
+        : exit?.to === 'superseded' ? `it left superseded by ${exit.by ?? 'a successor'}` : 'it left canon'
+      return humanCall(v('spec', 'dangling-depends', `${id} depends on ${dep}`,
+        `${dep} in canon when ${id} comes back — ${why} · a human's call`))
+    }))
+}
+
+// D188 (review). A spec kept for good stays in canon with what it depends on: a dependency this
+// abandon would delete is kept beside it, and for good with it. `waiting-dependents` reads only
+// docs outside the abandon set, and a kept one is inside it, so the delete left `check` red after
+// the abandon exited 0; refusing instead would hold the effort for good behind a shipped plan.
+export function keepDependencies(items: AbandonItem[], kept: SpecKeep[]): { items: AbandonItem[]; kept: SpecKeep[] } {
+  let walked = items
+  const held = [...kept]
+  for (let grew = true; grew;) {
+    grew = false
+    walked = walked.filter((item) => {
+      if (item.revert?.action !== 'delete') return true
+      const id = String(item.revert.doc.meta.id)
+      const on = held.filter((k) => ((k.doc.meta.depends ?? []) as unknown[]).map(String).includes(id))
+      if (on.length === 0) return true
+      held.push({ doc: item.revert.doc, action: 'keep', standing: on.map((k) => String(k.doc.meta.id)), shipped: on.some((k) => k.shipped) })
+      grew = true
+      return false
+    })
+  }
+  return { items: walked, kept: held }
 }
 
 export function executeAbandon(

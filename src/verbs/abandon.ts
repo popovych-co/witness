@@ -7,7 +7,7 @@ import { effortWrites } from '../reviewed.js'
 import { canonicalSha } from '../sha.js'
 import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
-import { abandonLines, executeAbandon, planItems, returnCollisions, specRevertFor, takenBackAlready, writeAct, type AbandonItem, type SpecKeep } from '../abandon.js'
+import { abandonLines, executeAbandon, keepDependencies, landingEdges, planItems, returnCollisions, specRevertFor, takenBackAlready, writeAct, type AbandonItem, type SpecKeep } from '../abandon.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const target = argv.find((a) => !a.startsWith('--'))
@@ -24,7 +24,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (String(doc.meta.status) === 'abandoned') { ctx.out(kv('abandon', `${target} already abandoned`)); return EXIT.OK }
     const itemR = planItems(root, canon, doc, new Set([target]), 'pair-parent')
     if (!itemR.ok) { renderRefusal(itemR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    const taken = returnCollisions(root, canon, [itemR.value])
+    const taken = [...returnCollisions(root, canon, [itemR.value]), ...landingEdges(root, canon, [itemR.value])]
     if (taken.length > 0) { renderRefusal(taken).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     const done = executeAbandon(root, ctx, [itemR.value], undefined, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -83,12 +83,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         kept.push(outcome)
       } else if (outcome) items.push({ revert: outcome })
     }
-    problems.push(...returnCollisions(root, canon, items))
+    const held = keepDependencies(items, kept)
+    problems.push(...returnCollisions(root, canon, held.items), ...landingEdges(root, canon, held.items))
     if (problems.length > 0) { renderRefusal(problems).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    const done = executeAbandon(root, ctx, items, { effort: target }, `abandon(${target})`)
+    const done = executeAbandon(root, ctx, held.items, { effort: target }, `abandon(${target})`)
     if (!done.ok) { renderRefusal(done.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    ctx.out(kv('abandoned', `effort ${target} — ${items.length} artifacts walked · journal remembers the attempt`))
-    abandonLines(items, kept).forEach((l) => ctx.out(l))
+    ctx.out(kv('abandoned', `effort ${target} — ${held.items.length} artifacts walked · journal remembers the attempt`))
+    abandonLines(held.items, held.kept).forEach((l) => ctx.out(l))
     return EXIT.OK
   }
 
