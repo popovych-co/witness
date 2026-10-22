@@ -1,0 +1,113 @@
+import type { Entry } from './journal.js'
+import { v, type Violation } from './refusal.js'
+import type { CanonDoc } from './scan.js'
+
+// Row 191 §4.3. The relay lands on step boundaries, so where a plan stands is a CLI fact read
+// from its stream, not the agent's inference: a criteria step closes at its witnessed red→green,
+// a scaffolding step at its `step-close`. `closedAt` is the index, in the plan's stream, of the
+// entry that closed the step.
+export type StepKind = 'criteria' | 'scaffolding'
+export interface StepState { id: string; kind: StepKind; closedAt?: number }
+export type Progress = { known: true; steps: StepState[]; done: number; next?: StepState } | { known: false }
+
+const manifest = (plan: CanonDoc): StepState[] =>
+  (Array.isArray(plan.meta.steps) ? (plan.meta.steps as unknown[]) : [])
+    .filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null)
+    .map((s) => ({ id: String(s.id), kind: s.scaffolding === true ? 'scaffolding' : 'criteria' }))
+
+const outcomes = (e: Entry): Array<{ ok: boolean }> => (Array.isArray(e.tests) ? (e.tests as Array<{ ok: boolean }>) : [])
+
+// Plan's call 3: a vacuous red opens no cycle. It needs a failing test, as `evidenceForDiff`'s
+// `!vacuous` does. A green with no outcome at all observed nothing, so it closes nothing.
+const opensCycle = (e: Entry): boolean =>
+  e.t === 'test-evidence' && e.phase === 'red' && e.vacuous !== true && outcomes(e).some((t) => !t.ok)
+const closesCycle = (e: Entry): boolean =>
+  e.t === 'test-evidence' && e.phase === 'green' && outcomes(e).length > 0 && outcomes(e).every((t) => t.ok)
+
+// The first passing green tagged with the step that follows a failing red tagged with it, or the
+// step's first `step-close`. What is recorded for the step afterwards (a re-recorded green, a
+// second cycle) changes nothing. It reads the step alone, whether or not the plan's progress is
+// known: `step-close` asks it directly, since a legacy plan's untagged evidence hides its
+// criteria closes but never a scaffolding one.
+export function closingIndex(step: Pick<StepState, 'id' | 'kind'>, entries: Entry[]): number | undefined {
+  let opened = false
+  for (const [i, e] of entries.entries()) {
+    if (e.step !== step.id) continue
+    if (step.kind === 'scaffolding') {
+      if (e.t === 'step-close') return i
+    } else if (opensCycle(e)) {
+      opened = true
+    } else if (opened && closesCycle(e)) {
+      return i
+    }
+  }
+  return undefined
+}
+
+const isImplementGateRun = (e: Entry): boolean => e.t === 'gate-run' && e.gate === 'implement'
+
+export function implementGated(entries: Entry[]): boolean {
+  return entries.some(isImplementGateRun)
+}
+
+// Row 191 §4.3, legacy plans. Evidence naming no step before the first implement gate run comes
+// from a CLI older than `--step`, and it may have closed any criteria step, so none can be
+// counted. After that gate an untagged cycle is a fix round, which closes no step.
+function predatesTags(entries: Entry[]): boolean {
+  const gate = entries.findIndex(isImplementGateRun)
+  return (gate === -1 ? entries : entries.slice(0, gate))
+    .some((e) => e.t === 'test-evidence' && typeof e.step !== 'string')
+}
+
+export function stepProgress(plan: CanonDoc, entries: Entry[]): Progress {
+  if (predatesTags(entries)) return { known: false }
+  const steps = manifest(plan).map((s) => {
+    const at = closingIndex(s, entries)
+    return at === undefined ? s : { ...s, closedAt: at }
+  })
+  const next = steps.find((s) => s.closedAt === undefined)
+  return { known: true, steps, done: steps.filter((s) => s.closedAt !== undefined).length, ...(next ? { next } : {}) }
+}
+
+// The step the entry at `index` closed, if it closed one: what tells a closing green from a
+// re-record or a fix round.
+export function closedAt(p: Progress, index: number): string | undefined {
+  return p.known ? p.steps.find((s) => s.closedAt === index)?.id : undefined
+}
+
+// A cycle is open on the step while its latest failing red has no passing green after it.
+export function openRed(entries: Entry[], stepId: string): boolean {
+  let open = false
+  for (const e of entries) {
+    if (e.step !== stepId) continue
+    if (opensCycle(e)) open = true
+    else if (closesCycle(e)) open = false
+  }
+  return open
+}
+
+export function stepsLine(p: Progress): string {
+  if (!p.known) return 'unknown (evidence predates step tags)'
+  return `${p.done}/${p.steps.length} done${p.next ? ` · next ${p.next.id}` : ''}`
+}
+
+// `--step` names a step of this plan, of the kind the verb closes: evidence closes a criteria
+// step, `step-close` a scaffolding one, and a close always names its step.
+export function checkStep(plan: CanonDoc, entries: Entry[], step: string | undefined, verb: 'evidence' | 'close'): Violation[] {
+  const id = String(plan.meta.id)
+  const steps = manifest(plan)
+  if (step === undefined) {
+    if (verb === 'evidence') return []
+    const scaffolding = steps.filter((s) => s.kind === 'scaffolding').map((s) => s.id).join(' · ')
+    return [v('--step', 'required', 'absent', `witness step-close ${id} --step <id> — a scaffolding step of ${id}: ${scaffolding || '(none)'}`)]
+  }
+  const s = steps.find((x) => x.id === step)
+  if (s === undefined) return [v('--step', 'unknown-step', step, `a step of ${id}: ${steps.map((x) => x.id).join(' · ')}`)]
+  if (verb === 'evidence' && s.kind === 'scaffolding') {
+    return [v('--step', 'scaffolding-step', step, `witness step-close ${id} --step ${step} — a scaffolding step closes without evidence`)]
+  }
+  if (verb === 'close' && s.kind === 'criteria') {
+    return [v('--step', 'criteria-step', step, `witness test-evidence ${id} --phase red --step ${step} — a criteria step closes at its red→green`)]
+  }
+  return []
+}

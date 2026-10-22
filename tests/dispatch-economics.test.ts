@@ -1,35 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { approve, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { fakeScenario, gateEnv, putVerdict, threeStepPlan } from './helpers.js'
 import { readStream } from '../src/journal.js'
-
-const THREE_STEPS = {
-  steps: [
-    { id: 's1', title: 'first', criteria: ['ac-rotate'] },
-    { id: 's2', title: 'second', criteria: ['ac-rotate'] },
-    { id: 's3', title: 'third', scaffolding: true },
-  ],
-}
-const THREE_STEP_BODY = '## Step: s1\nA.\n\n## Step: s2\nB.\n\n## Step: s3\nC.\n'
-
-async function planReady(budgetYaml = '') {
-  const repo = await seededRepo()
-  if (budgetYaml) {
-    repo.write('witness.config.yaml', repo.read('witness.config.yaml') + budgetYaml)
-    repo.git('add', 'witness.config.yaml')
-    repo.git('commit', '-m', 'budget config', '-m', 'Witness-State: 1')
-  }
-  await writeSpec(repo, 'auth-refresh')
-  approve(repo, 'auth-refresh')
-  await writePlan(repo, 'auth-refresh-plan-1', THREE_STEPS, THREE_STEP_BODY)
-  repo.flipStatus('auth-refresh-plan-1', 'approved')
-  return repo
-}
 
 describe('start surfaces the dispatch budget (row 79)', () => {
   it('prints dispatch-budget and the arithmetic on a fresh start', async () => {
-    const repo = await planReady()
+    const repo = await threeStepPlan()
     const r = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(r.code).toBe(0)
     expect(r.stdout).toContain('dispatch-budget: 3')
@@ -37,7 +14,7 @@ describe('start surfaces the dispatch budget (row 79)', () => {
   })
 
   it('honors a configured budget and re-prints on re-attach', async () => {
-    const repo = await planReady('implement:\n  stepsPerDispatch: 2\n')
+    const repo = await threeStepPlan('implement:\n  stepsPerDispatch: 2\n')
     await repo.cli(['start', 'auth-refresh-plan-1'])
     const again = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(again.code).toBe(0)
@@ -48,7 +25,7 @@ describe('start surfaces the dispatch budget (row 79)', () => {
 
 describe('plan gate surfaces the dispatch arithmetic (row 79)', () => {
   it('prints the dispatches line on a plan gate run', async () => {
-    const repo = await planReady()
+    const repo = await threeStepPlan()
     const scenario = fakeScenario()
     putVerdict(scenario, {
       findings: [],
@@ -61,7 +38,7 @@ describe('plan gate surfaces the dispatch arithmetic (row 79)', () => {
 
 describe('dispatch-report journals telemetry (row 81)', () => {
   it('appends a dispatch entry with a derived ordinal', async () => {
-    const repo = await planReady()
+    const repo = await threeStepPlan()
     await repo.cli(['start', 'auth-refresh-plan-1'])
     const r1 = await repo.cli(['dispatch-report', 'auth-refresh-plan-1',
       '--steps-assigned', '3', '--steps-completed', '3',
@@ -83,7 +60,7 @@ describe('dispatch-report journals telemetry (row 81)', () => {
   })
 
   it('refuses an unknown plan and malformed counts', async () => {
-    const repo = await planReady()
+    const repo = await threeStepPlan()
     const unknown = await repo.cli(['dispatch-report', 'nope', '--steps-assigned', '1', '--steps-completed', '0'])
     expect(unknown.code).toBe(2)
     const bad = await repo.cli(['dispatch-report', 'auth-refresh-plan-1', '--steps-assigned', '-1', '--steps-completed', '0'])

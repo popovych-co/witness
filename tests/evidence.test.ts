@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { main } from '../src/cli.js'
-import { isTestPath } from '../src/evidence.js'
+import { isTestPath, screensDir } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
 import { worktreePath } from '../src/worktree.js'
 import type { TestRepo } from './helpers.js'
 import {
   TOKEN_BROKEN, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
-  approve, breakSingleFixture, copyFixture, fakeCtx, fakeScenario, fixSingleFixture, fixtureEnv, seededRepo,
-  singleConfig, stampLive, vitestBin, writePlan, writeSpec,
+  approve, breakSingleFixture, copyFixture, evidenceCycle, fakeCtx, fakeScenario, fixSingleFixture, fixtureEnv,
+  fixturePath, seededRepo, singleConfig, stampLive, threeStepPlan, vitestBin, writePlan, writeSpec,
 } from './helpers.js'
 
 async function planRepo(): Promise<TestRepo> {
@@ -116,6 +116,63 @@ describe('witness test-evidence', () => {
     const entries = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'test-evidence')
     expect(entries).toHaveLength(1)
     repo.git('worktree', 'remove', '--force', wt)
+  })
+})
+
+// Row 191 §4.3. A cycle names the plan step it closes, checked against the manifest before
+// anything runs.
+describe('test-evidence --step', () => {
+  const P = 'auth-refresh-plan-1'
+  const started = async (): Promise<{ repo: TestRepo; wt: string }> => {
+    const repo = await threeStepPlan()
+    await repo.cli(['start', P])
+    const wt = worktreePath(repo.root, P)
+    cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+    return { repo, wt }
+  }
+  const evidence = (repo: TestRepo) => readStream(repo.root, P).filter((e) => e.t === 'test-evidence')
+
+  it('refuses an unknown step before running the suite', async () => {
+    const { repo, wt } = await started()
+    const r = await repo.cli(['test-evidence', P, '--phase', 'red', '--step', 'nope'], { cwd: wt, env: fixtureEnv() })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown-step')
+    expect(r.stderr).toContain(`a step of ${P}: s1 · s2 · s3`)
+    expect(existsSync(screensDir(wt, P))).toBe(false)
+    expect(evidence(repo)).toEqual([])
+  })
+
+  it('refuses a scaffolding step', async () => {
+    const { repo, wt } = await started()
+    const r = await repo.cli(['test-evidence', P, '--phase', 'red', '--step', 's3'], { cwd: wt, env: fixtureEnv() })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('scaffolding-step')
+    expect(r.stderr).toContain(`witness step-close ${P} --step s3`)
+    expect(evidence(repo)).toEqual([])
+  })
+
+  it('refuses --step with no value rather than running untagged', async () => {
+    const { repo, wt } = await started()
+    const r = await repo.cli(['test-evidence', P, '--phase', 'red', '--step'], { cwd: wt, env: fixtureEnv() })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('required')
+    expect(r.stderr).toContain('witness test-evidence <plan-id> --phase red|green [--step <id>]')
+    expect(evidence(repo)).toEqual([])
+  })
+
+  it('never reads a flag value as the plan id', async () => {
+    const { repo, wt } = await started()
+    const r = await repo.cli(['test-evidence', '--step', 'nope', P, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown-step')
+    expect(r.stderr).not.toContain('unknown-plan')
+  })
+
+  it('journals the step on the entry', async () => {
+    const { repo, wt } = await started()
+    const green = await evidenceCycle(repo, wt, P, 's1')
+    expect(green.code).toBe(0)
+    expect(evidence(repo)).toMatchObject([{ phase: 'red', step: 's1' }, { phase: 'green', step: 's1' }])
   })
 })
 

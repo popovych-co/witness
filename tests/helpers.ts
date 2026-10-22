@@ -450,6 +450,43 @@ export async function shippableRepo(
   return { repo, wt, planId: 'auth-refresh-plan-1', specId: 'auth-refresh' }
 }
 
+export const THREE_STEPS = {
+  steps: [
+    { id: 's1', title: 'first', criteria: ['ac-rotate'] },
+    { id: 's2', title: 'second', criteria: ['ac-rotate'] },
+    { id: 's3', title: 'third', scaffolding: true },
+  ],
+}
+export const THREE_STEP_BODY = '## Step: s1\nA.\n\n## Step: s2\nB.\n\n## Step: s3\nC.\n'
+
+// Row 191 §4.3. A plan of two criteria steps and a scaffolding one, approved and not started, in
+// a repo whose runner runs the vitest-single fixture, so a test can witness each step's cycle.
+// `extraYaml` extends the committed config (a step budget, a context limit).
+export async function threeStepPlan(extraYaml = ''): Promise<TestRepo> {
+  const repo = await seededRepo()
+  writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered') + extraYaml)
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1', THREE_STEPS, THREE_STEP_BODY)
+  repo.flipStatus('auth-refresh-plan-1', 'approved')
+  return repo
+}
+
+// One plan step's witnessed red→green in the worktree `wt`, tagged with the step: the broken
+// implementation recorded red, the fixed one green. The vitest-single fixture must already be in
+// `wt`. Returns the green's result; a red that fails to record throws with its output.
+export async function evidenceCycle(
+  repo: TestRepo, wt: string, planId: string, step: string, env: Record<string, string> = {},
+): Promise<CliResult> {
+  const opts = { cwd: wt, env: { ...fixtureEnv(), ...env } }
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+  const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', step], opts)
+  if (red.code !== 0) throw new Error(`red phase (${step}): ${red.stdout}\n${red.stderr}`)
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  return repo.cli(['test-evidence', planId, '--phase', 'green', '--step', step], opts)
+}
+
 // `witness next` answers with exactly one line-set; every read-path test wants the
 // stdout and an implicit exit-0 assertion, so this lives here rather than in one file.
 export async function nextLine(

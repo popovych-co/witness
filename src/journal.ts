@@ -24,6 +24,9 @@ export type EntryType =
   // Row 179. A human's assertion that a manual need is met: journaled, never a frontmatter
   // rewrite, so no content sha moves when the world changes.
   | 'need-satisfied'
+  // Row 191 §4.3. A scaffolding step's close. Such a step has no red→green to witness, and
+  // until now it left no trace, so the CLI could not tell where a plan stood.
+  | 'step-close'
 
 export interface Entry {
   v: 1

@@ -3,10 +3,11 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
-import { appendEntry, journalRel } from '../journal.js'
+import { appendEntry, journalRel, readStream } from '../journal.js'
 import { primaryRoot, resolveStartBase, stateCommit } from '../gitio.js'
 import { autoSync } from './sync.js'
 import { findById, loadCanon } from '../scan.js'
+import { stepProgress, stepsLine } from '../steps.js'
 import { evaluateNeeds, unmetNeeds } from '../needs.js'
 import { humanCall, renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
@@ -61,6 +62,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const budget = cfgR.value.implement.stepsPerDispatch
   const stepCount = ((plan.meta.steps ?? []) as unknown[]).length
   const dispatchLine = `${stepCount} step(s) ≈ ${Math.ceil(stepCount / budget)} dispatch(es) at budget ${budget}`
+  // Row 191 §4.3. Where the plan stands, so a session opening mid-plan reads it from the CLI
+  // instead of reconstructing it from the journal.
+  const position = stepsLine(stepProgress(plan, readStream(root, planId)))
 
   if (status === 'in-progress') {
     const had = existsSync(worktreePath(root, planId))
@@ -75,6 +79,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('agent-model', agentModel))
     ctx.out(kv('dispatch-budget', String(budget)))
     ctx.out(kv('dispatches', dispatchLine))
+    ctx.out(kv('steps', position))
     return EXIT.OK
   }
   if (status !== 'approved') {
@@ -143,6 +148,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('agent-model', agentModel))
   ctx.out(kv('dispatch-budget', String(budget)))
   ctx.out(kv('dispatches', dispatchLine))
+  ctx.out(kv('steps', position))
   ctx.out(`help: implement inside the worktree; witness test-evidence ${planId} --phase red|green as you go`)
   return EXIT.OK
 }

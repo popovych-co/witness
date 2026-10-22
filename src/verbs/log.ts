@@ -7,8 +7,10 @@ import { git, primaryRoot } from '../gitio.js'
 import { canonExit } from '../departure.js'
 import { journalActs, readStream, streamExists, type Entry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
+import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
-import { rows } from '../toon.js'
+import { stepProgress, stepsLine } from '../steps.js'
+import { kv, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
@@ -41,6 +43,15 @@ function detail(e: Entry): string {
       const by = d.selected !== undefined ? ` · ${decidedBy(d)}` : ''
       return `${d.gate}: ${d.decision}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
     }
+    case 'test-evidence': {
+      // Row 191 §4.3: a cycle names the plan step it closes; a fix round names none.
+      const tests = Array.isArray(e.tests) ? (e.tests as Array<{ ok: boolean }>) : []
+      const step = typeof e.step === 'string' ? ` step=${e.step}` : ''
+      return `phase=${String(e.phase)}${step} tests=${tests.length} failed=${tests.filter((t) => !t.ok).length}` +
+        `${e.vacuous === true ? ' vacuous' : ''}${e.reconstructed === true ? ' reconstructed' : ''}`
+    }
+    case 'step-close':
+      return `step=${String(e.step)}`
     case 'ask':
       return `${String(e.id)} — ${askText(String(e.text))}`
     case 'status': {
@@ -154,5 +165,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const entries = readStream(root, id!)
   rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: e.t, detail: detail(e) })))
     .forEach(ctx.out)
+  // Row 191 §4.3. A plan's stream ends with where the plan stands; an effort has no steps.
+  const plan = findById(loadCanon(root), id!)
+  if (plan?.meta.type === 'plan') ctx.out(kv('steps', stepsLine(stepProgress(plan, entries))))
   return EXIT.OK
 }

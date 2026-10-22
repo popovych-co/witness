@@ -39,6 +39,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   'test-evidence': () => import('./verbs/evidence.js'),
   'verify-red': () => import('./verbs/evidence.js').then((m) => ({ run: m.runVerifyRed })),
   'dispatch-report': () => import('./verbs/dispatch.js'),
+  // Row 191 §4.3. The close of a scaffolding step, the one plan step with no evidence to witness.
+  'step-close': () => import('./verbs/step-close.js'),
   adopt: () => import('./verbs/adopt.js'),
   gate: () => import('./verbs/gate.js'),
   decide: () => import('./verbs/decide.js'),
@@ -93,10 +95,11 @@ const VERB_USAGE: Record<string, string> = {
   ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',
   status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
+  'step-close': 'witness step-close <plan-id> --step <id>',
   sync: 'witness sync',
   trust: 'witness trust <artifact-id> [--yes]',
-  'test-evidence': 'witness test-evidence <plan-id> --phase red|green',
-  'verify-red': 'witness verify-red <plan-id> [--base <ref>]',
+  'test-evidence': 'witness test-evidence <plan-id> --phase red|green [--step <id>]',
+  'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
 }
 
 // Row 116 moved the body to version.ts, which journal.ts can import without closing a

@@ -101,6 +101,37 @@ describe('witness verify-red', () => {
     expect(res.code).toBe(2)
   })
 
+  // Row 191 §4.3. A reconstructed cycle closes a plan step like a witnessed one, so both of
+  // its entries name the step.
+  it('carries the step on both entries', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'implement rotation')
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(phases(repo)).toMatchObject([
+      { phase: 'red', reconstructed: true, step: 's1' },
+      { phase: 'green', reconstructed: true, step: 's1' },
+    ])
+  })
+
+  // Refused before the stash/checkout cycle: a mistyped step must not churn the tree.
+  it('refuses an unknown step before touching the tree', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.git('commit', '-m', 'tagged tests')
+    repo.write('src/token.ts', TOKEN_FIXED) // dirty, never committed
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 'nope'], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('unknown-step')
+    expect(res.stdout).not.toContain('stale-reads')
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(phases(repo)).toEqual([])
+  })
+
   it('honors --base over ship.branch', async () => {
     const repo = await tddRepo()
     const base = repo.git('rev-parse', 'HEAD').trim()
