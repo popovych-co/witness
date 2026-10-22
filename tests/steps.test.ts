@@ -78,6 +78,17 @@ describe('step progress (row 191 §4.3)', () => {
     expect(checkStep(plan, [red('s1'), green('s1'), { v: 1, t: 'gate-run', gate: 'implement' }] as Entry[], undefined, 'evidence')).toEqual([])
     expect(checkStep(plan, [red(), green()] as Entry[], undefined, 'evidence')).toEqual([])
   })
+  // A plan with no criteria step (its spec's criteria delta was empty) has no step a cycle could
+  // be: its evidence is asked for no step, and untagged evidence leaves its progress known.
+  const chore = planDoc([{ id: 's1', scaffolding: true }])
+  it('checkStep owes no --step on a plan with no criteria step', () => {
+    expect(checkStep(chore, [], undefined, 'evidence')).toEqual([])
+    expect(checkStep(chore, [close('s1')] as Entry[], undefined, 'evidence')).toEqual([])
+  })
+  it('untagged evidence leaves a plan with no criteria step known', () => {
+    expect(stepsLine(stepProgress(chore, [red(), green()] as Entry[]))).toBe('0/1 done · next s1')
+    expect(stepsLine(stepProgress(chore, [close('s1'), red(), green()] as Entry[]))).toBe('1/1 done')
+  })
   // step-close's already-closed check reads the step alone (Plan's call 6): a close stays found
   // where a legacy plan's untagged evidence leaves the progress unknown.
   it('closingIndex finds a scaffolding close on a legacy plan', () => {

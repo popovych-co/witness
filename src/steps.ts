@@ -15,6 +15,11 @@ const manifest = (plan: CanonDoc): StepState[] =>
     .filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null)
     .map((s) => ({ id: String(s.id), kind: s.scaffolding === true ? 'scaffolding' : 'criteria' }))
 
+// A cycle can be a plan step's only where the plan has a criteria step for it to name. A plan
+// whose spec's criteria an earlier plan realized has none (an empty criteria delta), so none of
+// its evidence is a step's: it owes no `--step`, and its untagged evidence hides no step's close.
+const hasCriteriaStep = (plan: CanonDoc): boolean => manifest(plan).some((s) => s.kind === 'criteria')
+
 const outcomes = (e: Entry): Array<{ ok: boolean }> => (Array.isArray(e.tests) ? (e.tests as Array<{ ok: boolean }>) : [])
 
 // Plan's call 3: a vacuous red opens no cycle. It needs a failing test, as `evidenceForDiff`'s
@@ -52,15 +57,17 @@ export function implementGated(entries: Entry[]): boolean {
 
 // Row 191 §4.3, legacy plans. Evidence naming no step before the first implement gate run comes
 // from a CLI older than `--step`, and it may have closed any criteria step, so none can be
-// counted. After that gate an untagged cycle is a fix round, which closes no step.
-function predatesTags(entries: Entry[]): boolean {
+// counted. After that gate an untagged cycle is a fix round, which closes no step. On a plan with
+// no criteria step there is nothing such evidence could have closed, so it leaves that plan known.
+function predatesTags(plan: CanonDoc, entries: Entry[]): boolean {
+  if (!hasCriteriaStep(plan)) return false
   const gate = entries.findIndex(isImplementGateRun)
   return (gate === -1 ? entries : entries.slice(0, gate))
     .some((e) => e.t === 'test-evidence' && typeof e.step !== 'string')
 }
 
 export function stepProgress(plan: CanonDoc, entries: Entry[]): Progress {
-  if (predatesTags(entries)) return { known: false }
+  if (predatesTags(plan, entries)) return { known: false }
   const steps = manifest(plan).map((s) => {
     const at = closingIndex(s, entries)
     return at === undefined ? s : { ...s, closedAt: at }
@@ -106,10 +113,12 @@ export function checkStep(plan: CanonDoc, entries: Entry[], step: string | undef
     if (verb === 'evidence') {
       // Plan's call 4: owed where the CLI can tell it is. Before the first implement gate every
       // cycle on a plan whose progress is known is a step's, and one forgotten flag would turn
-      // that knowledge off for good. After the gate an untagged cycle is a fix round, and a
-      // legacy plan's evidence never named its steps.
+      // that knowledge off for good. After the gate an untagged cycle is a fix round, a legacy
+      // plan's evidence never named its steps, and a plan with no criteria step has no step a
+      // cycle could be.
+      if (!hasCriteriaStep(plan) || implementGated(entries)) return []
       const p = stepProgress(plan, entries)
-      return p.known && !implementGated(entries)
+      return p.known
         ? [v('--step', 'step-required', 'absent', `--step <id> — every cycle before the first implement gate is a plan step's · steps ${stepsLine(p)}`)]
         : []
     }

@@ -186,8 +186,8 @@ function judgeNote(entries: Entry[], gate: string, judge: string | undefined): s
 // implementation already written the suite passes as it stands, so the reconstructing
 // verb is the only one that can witness a genuine red.
 //
-// `step` is set before the first implement gate on a plan whose progress is known, where
-// `test-evidence` refuses a cycle that names none (row 191).
+// `step` is set where `test-evidence` refuses a cycle that names none (row 191): before the
+// first implement gate, on a plan whose progress is known and that has a criteria step.
 function evidenceRow(
   id: string, parentTag: string, files: string[], report: EvidenceReport | undefined,
   seat: { home: string; model?: string }, step?: string,
@@ -228,7 +228,7 @@ function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; w
 // The step an evidence row names once every step is closed: that of the latest red naming a
 // criteria step of the plan as it stands. Never a scaffolding step or one an amend removed,
 // both of which `test-evidence` refuses. One exists whenever the plan has a criteria step,
-// since none closes without a red tagged with it.
+// since none closes without a red tagged with it, and a plan with none is owed no step.
 function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined {
   const criteria = new Set(steps.filter((s) => s.kind === 'criteria').map((s) => s.id))
   const red = entries

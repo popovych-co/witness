@@ -306,6 +306,34 @@ describe('next routes the next unfinished plan step', () => {
     expect(out).toContain('note: evidence owed: auth-refresh green')
   })
 
+  // A plan whose spec's criteria an earlier plan already realized carries no criteria step, so
+  // no cycle of it is a step's: the evidence its diff owes runs untagged, and the CLI takes it.
+  it('takes a plan with no criteria step through untagged evidence to the implement gate', async () => {
+    const repo = await seededRepo()
+    writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered'))
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const P = 'auth-refresh-plan-2'
+    const w = await writePlan(repo, P, { steps: [{ id: 's1', title: 'tidy', scaffolding: true }] }, '## Step: s1\nTidy.\n')
+    expect(w.code, w.stderr).toBe(0)
+    repo.flipStatus(P, 'approved')
+    expect((await repo.cli(['start', P])).code).toBe(0)
+    const wt = worktreePath(repo.root, P)
+    cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+
+    expect(await lines(repo, wt)).toContain(`next: witness step-close ${P} --step s1`)
+    expect((await repo.cli(['step-close', P, '--step', 's1'], { cwd: wt })).code).toBe(0)
+    const routed = (await lines(repo, wt)).find((l) => l.startsWith('next: '))
+    expect(routed).toBe(`next: witness verify-red ${P}`)
+    const run = await repo.cli(['verify-red', P], { cwd: wt, env: fixtureEnv() })   // the routed line
+    expect(run.code, run.stderr).toBe(0)
+    expect(await lines(repo, wt)).toContain(`next: witness gate implement ${P}`)
+  })
+
   it("keeps today's rows for a legacy plan", async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     commitEntry(repo, planId, untaggedRed(planId))
