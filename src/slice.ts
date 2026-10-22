@@ -122,7 +122,8 @@ export function reportStepClose(ctx: Ctx, root: string, plan: CanonDoc, opts: { 
   const entries = readStream(root, String(plan.meta.id))
   const progress = stepProgress(plan, entries)
   const fill = readFill(ctx.env)
-  const growth = largestGrowth(entries, progress)
+  // §4.5's `g` is the size of the next step, so once every step is closed there is none to project.
+  const growth = progress.known && progress.next !== undefined ? largestGrowth(entries, progress) : undefined
   ctx.out(kv('context', contextLine(fill, limit, budget, growth)))
   const decides = opts.closed !== undefined || (opts.passingGreen && !progress.known && !implementGated(entries))
   if (!decides) return

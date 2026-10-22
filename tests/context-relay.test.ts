@@ -57,16 +57,18 @@ describe('the rule at a step close', () => {
     ])
   })
 
-  // Rule 1: with no step left the session goes to the gate. A re-run close journals nothing
-  // (Plan's call 6), so it decides nothing either.
+  // Rule 1: with no step left the session goes to the gate. The plan has recorded a growth
+  // (s1→s2: +50k), but no step remains to carry it, so nothing is projected. A re-run close
+  // journals nothing (Plan's call 6), so it decides nothing either.
   it('the last close says gate', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     await evidenceCycle(repo, wt, planId, 's1', at(100_000))
-    await evidenceCycle(repo, wt, planId, 's2', at(100_000))
-    const r = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(100_000) })
+    await evidenceCycle(repo, wt, planId, 's2', at(150_000))
+    const r = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(150_000) })
     expect(r.code).toBe(0)
-    expect(report(r)).toEqual(['context: 10% of 1M · limit 20%', 'steps: 3/3 done', 'slice: gate — no steps remain'])
-    const again = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(100_000) })
+    expect(report(r)).toEqual(['context: 15% of 1M · limit 20%', 'steps: 3/3 done', 'slice: gate — no steps remain'])
+    expect(r.stdout).not.toContain('next step')
+    const again = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(150_000) })
     expect(again.stdout).toBe(`step-close: ${planId} · s3 already closed`)
   })
 
