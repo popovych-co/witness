@@ -13,7 +13,7 @@ import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites
 import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
-import { implementGated, openRed, stepProgress, stepsLine, type StepState } from '../steps.js'
+import { implementGated, lastRedVacuous, openRed, stepProgress, stepsLine, type StepState } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -212,6 +212,19 @@ function evidenceRow(
   return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
 }
 
+// The run that works a plan's next unfinished step. A step whose latest red came back vacuous
+// gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
+// again and `next` would answer with the same line twice. An open cycle outranks that, since
+// its red was genuine and the green is what is owed.
+function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
+  if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
+  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
+  if (lastRedVacuous(entries, s.id)) {
+    return { line: `witness verify-red ${id} --step ${s.id}`, why: 'its red was vacuous — verify-red reconstructs it against the base' }
+  }
+  return { line: `witness test-evidence ${id} --phase red --step ${s.id}` }
+}
+
 // The step an evidence row names once every step is closed: that of the latest red naming a
 // criteria step of the plan as it stands. Never a scaffolding step or one an amend removed,
 // both of which `test-evidence` refuses. One exists whenever the plan has a criteria step,
@@ -301,13 +314,8 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   const progress = stepProgress(plan, entries)
   const stepped = progress.known && !implementGated(entries) ? progress : undefined
   if (stepped?.next !== undefined) {
-    const s = stepped.next
-    return {
-      line: s.kind === 'scaffolding'
-        ? `witness step-close ${id} --step ${s.id}`
-        : `witness test-evidence ${id} --phase ${openRed(entries, s.id) ? 'green' : 'red'} --step ${s.id}`,
-      stage: 'implement', target: id, ...inWorktree, note: `steps ${stepsLine(stepped)}`,
-    }
+    const { line, why } = stepLine(id, stepped.next, entries)
+    return { line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, why) }
   }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the

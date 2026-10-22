@@ -86,6 +86,12 @@ export function openRed(entries: Entry[], stepId: string): boolean {
   return open
 }
 
+// The step's latest red passed: the behavior it asserts already exists, as when the
+// implementation was written first, so a plain red on it can only come back vacuous again.
+export function lastRedVacuous(entries: Entry[], stepId: string): boolean {
+  return entries.filter((e) => e.t === 'test-evidence' && e.phase === 'red' && e.step === stepId).at(-1)?.vacuous === true
+}
+
 export function stepsLine(p: Progress): string {
   if (!p.known) return 'unknown (evidence predates step tags)'
   return `${p.done}/${p.steps.length} done${p.next ? ` · next ${p.next.id}` : ''}`

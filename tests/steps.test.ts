@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import type { CanonDoc } from '../src/scan.js'
-import { checkStep, closedAt, closingIndex, implementGated, openRed, stepProgress, stepsLine } from '../src/steps.js'
+import { checkStep, closedAt, closingIndex, implementGated, lastRedVacuous, openRed, stepProgress, stepsLine } from '../src/steps.js'
 
 const planDoc = (steps: Array<Record<string, unknown>>): CanonDoc =>
   ({ rel: 'plans/p.md', meta: { id: 'p', type: 'plan', parent: 'x', steps }, body: '', violations: [], satisfiedNeeds: [] })
@@ -53,6 +53,14 @@ describe('step progress (row 191 §4.3)', () => {
   it('openRed holds between a tagged red and its closing green', () => {
     expect(openRed([red('s1')] as Entry[], 's1')).toBe(true)
     expect(openRed([red('s1'), green('s1')] as Entry[], 's1')).toBe(false)
+  })
+  it('lastRedVacuous reads the latest red tagged with the step', () => {
+    const vacuous = red('s2', { vacuous: true, tests: [{ name: 'a @spec:x', ok: true }] })
+    expect(lastRedVacuous([red('s1'), green('s1'), vacuous] as Entry[], 's2')).toBe(true)
+    expect(lastRedVacuous([vacuous, green('s2')] as Entry[], 's2')).toBe(true)
+    expect(lastRedVacuous([vacuous, red('s2')] as Entry[], 's2')).toBe(false)
+    expect(lastRedVacuous([vacuous] as Entry[], 's1')).toBe(false)
+    expect(lastRedVacuous([] as Entry[], 's2')).toBe(false)
   })
   it.each([
     ['nope', 'evidence', 'unknown-step'], ['s3', 'evidence', 'scaffolding-step'],

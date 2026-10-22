@@ -253,6 +253,27 @@ describe('next routes the next unfinished plan step', () => {
     expect(await lines(repo, wt)).toContain(`next: witness test-evidence ${planId} --phase green --step s1`)
   })
 
+  // The implementation written first, a plain red only comes back vacuous again, and `next`
+  // would answer with the same line twice. A genuine red then opens the cycle, and the green row
+  // stands even if a later red comes back vacuous.
+  it('routes a step whose red came back vacuous to verify-red until a genuine red opens its cycle', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    const red = (s: string) => repo.cli(['test-evidence', planId, '--phase', 'red', '--step', s], { cwd: wt, env: fixtureEnv() })
+    expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
+    expect((await red('s2')).code).toBe(1)                       // TOKEN_FIXED still in place
+    const out = await lines(repo, wt)
+    expect(out).toContain(`next: witness verify-red ${planId} --step s2`)
+    expect(out).toContain('stage: implement')
+    expect(out).toContain('note: steps 1/3 done · next s2 · its red was vacuous — verify-red reconstructs it against the base')
+
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    expect((await red('s2')).code).toBe(0)
+    expect(await lines(repo, wt)).toContain(`next: witness test-evidence ${planId} --phase green --step s2`)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    expect((await red('s2')).code).toBe(1)
+    expect(await lines(repo, wt)).toContain(`next: witness test-evidence ${planId} --phase green --step s2`)
+  })
+
   it('routes a scaffolding step to step-close', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
