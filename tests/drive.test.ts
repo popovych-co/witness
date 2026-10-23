@@ -206,6 +206,22 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect(lines).toContain('[1 implement/p1] ctx=unset claude=unset pi=unset')
   }, 20000)
 
+  // Final review minor 5. Each harness sets its own detection variable on the commands it runs, so
+  // a child inherits none: a claude child of a drive typed in a Pi chat detected Pi, read its own
+  // reading as stale, journaled no session and relayed with /new. Drive itself still detects: with
+  // no `harness:` declared, the chat's harness is the judge whose worker it spawns (pi's flags).
+  it('drops every harness detection variable from the child, never from drive (row 191 §4.9)', async () => {
+    const repo = await seededRepo()
+    const bin = fakeAgent('echo "args=$* pi=${PI_CODING_AGENT-unset} claude=${CLAUDECODE-unset}"')
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      env: { WITNESS_DRIVE_AGENT_BIN: bin, PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, out: (l) => lines.push(l),
+    })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(lines).toEqual(['[1 implement/p1] args=-p /witness --no-session pi=unset claude=unset'])
+    expect(ctx.env).toMatchObject({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' })
+  }, 20000)
+
   it('builds the headless session command per harness, carrying the stage pin', async () => {
     const claude = loadHarness('claude-code')
     const pi = loadHarness('pi')

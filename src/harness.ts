@@ -241,11 +241,22 @@ export function loadHarness(name: string): Result<Harness> {
 interface Rung { source: HarnessSource; name: string }
 
 // Detection tests PRESENCE: neither CLAUDECODE=1 nor PI_CODING_AGENT=true is a documented
-// value contract.
+// value contract. Each harness sets its variable on the commands it runs; read in this order.
+const DETECTION: ReadonlyArray<{ variable: string; name: HarnessName }> = [
+  { variable: 'PI_CODING_AGENT', name: 'pi' },
+  { variable: 'CLAUDECODE', name: 'claude-code' },
+]
+
 function detectedRung(env: Record<string, string | undefined>): Rung | undefined {
-  if (env.PI_CODING_AGENT !== undefined) return { source: 'detected', name: 'pi' }
-  if (env.CLAUDECODE !== undefined) return { source: 'detected', name: 'claude-code' }
-  return undefined
+  const hit = DETECTION.find((d) => env[d.variable] !== undefined)
+  return hit === undefined ? undefined : { source: 'detected', name: hit.name }
+}
+
+// Row 191 §4.9 (final review minor 5). Every harness's detection variable: what a session drive
+// spawns must not inherit, since its own harness sets its own on the commands it runs, and one
+// inherited from the chat drive was typed in would name that chat's harness to a child of another.
+export function detectionVariables(): string[] {
+  return DETECTION.map((d) => d.variable)
 }
 
 function declaredRung(raw: Record<string, unknown>): Rung | undefined {

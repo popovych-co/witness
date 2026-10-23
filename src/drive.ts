@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
 import { loadConfig, loadLocalConfig, type Config } from './config.js'
 import { withoutSession } from './context.js'
-import { resolveJudge } from './harness.js'
+import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
@@ -170,8 +170,15 @@ export async function spawnSession(
   // and session variable, and the child is a session of its own that its harness names itself.
   // The session check already makes a stale reading harmless; leaving both out is the second
   // guard. The verb drops them on entry too; this holds for any other caller.
+  //
+  // Every harness's detection variable goes too, from the child alone (final review minor 5): its
+  // harness sets its own, and an inherited one named the chat's harness to a child of another — a
+  // claude child of a drive typed in a Pi chat detected Pi, read its own reading as stale and
+  // relayed with /new. Drive keeps them: the judge above, whose worker this is, may be detection's.
+  const inherited = withoutSession(ctx.env)
+  for (const variable of detectionVariables()) delete inherited[variable]
   const childEnv: Record<string, string | undefined> = {
-    ...withoutSession(ctx.env), ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
+    ...inherited, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
   }
   // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
