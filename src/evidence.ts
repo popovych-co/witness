@@ -152,8 +152,7 @@ export function diffBase(runRoot: string, cfg: Config, override?: string): Resul
     if (!res.ok) return refuse([v('--base', 'no-base', override, 'a resolvable commit-ish')])
     return ok(res.out.trim())
   }
-  const ship = (cfg.raw.ship ?? {}) as Record<string, unknown>
-  const branch = typeof ship.branch === 'string' ? ship.branch : 'main'
+  const branch = cfg.ship.branch
   // D142. The true cut point is the DESCENDANT of the two merge-bases. Exact in all three
   // shapes: a legacy branch cut from a state-carrying local main (local is later — origin
   // alone would put its inherited .witness/journal/* into the reviewed diff, reproduced by

@@ -92,7 +92,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     // `auto` is the one value that consults the detection rungs; a named agent is a
     // claim and refuses when false, listing the harnesses that exist (row 90: no env
     // impersonation — a name resolves through the registry directly).
-    const hxR = agent === 'auto' ? resolveDriver(ctx.env, {}) : loadHarness(agent)
+    const hxR = agent === 'auto' ? resolveDriver(ctx.env, undefined) : loadHarness(agent)
     if (!hxR.ok) {
       renderRefusal(hxR.violations.map((x) => ({ ...x, field: '--agent' }))).forEach(ctx.err)
       return EXIT.REFUSED

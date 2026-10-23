@@ -81,7 +81,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // was already journalled, so an unresolvable harness simply omits the line and the
     // skill stops for the human.
     const cfgR = loadConfig(root)
-    const hxR = resolveDriver(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+    const hxR = resolveDriver(ctx.env, cfgR.ok ? cfgR.value.harness : undefined)
     if (hxR.ok) ctx.out(kv('relay', relayLine(hxR.value.harness)))
     return EXIT.OK
   } finally {

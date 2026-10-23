@@ -684,7 +684,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // about to be typed at), and the JUDGE here feeds the judge-changed note (which binary
   // will spend the round). A reader who has internalised "one lane per verb" will
   // otherwise read this as a mistake.
-  const judgeR = resolveJudge(ctx.env, cfg.raw)
+  const judgeR = resolveJudge(ctx.env, cfg.harness)
   const judge = judgeR.ok ? judgeR.value.harness.name : undefined
 
   const efforts = liveEfforts(root)
@@ -976,13 +976,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
-  const hxR = resolveDriver(ctx.env, cfgR.value.raw)
+  const hxR = resolveDriver(ctx.env, cfgR.value.harness)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
   // The judge for the two flowAction calls below, so `--flow` and a worktree cwd answer
   // with the SAME derivation computeNext does — flowAction's own contract. Diverging the
   // arguments is how a re-derived shorthand creeps back in.
-  const judgeR = resolveJudge(ctx.env, cfgR.value.raw)
+  const judgeR = resolveJudge(ctx.env, cfgR.value.harness)
   const judge = judgeR.ok ? judgeR.value.harness.name : undefined
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)

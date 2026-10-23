@@ -5,6 +5,14 @@ import { loadConfig } from '../src/config.js'
 import { loadMatrix, resolveModel, stagePin, SESSION_DEFAULT } from '../src/model.js'
 import { seededRepo } from './helpers.js'
 
+async function refusalOf(gatesYaml: string) {
+  const repo = await seededRepo()
+  writeFileSync(join(repo.root, 'witness.config.yaml'), `schema: 1\n${gatesYaml}`)
+  const cfg = loadConfig(repo.root)
+  if (cfg.ok) throw new Error('config must refuse')
+  return cfg.violations[0]!
+}
+
 async function cfgWith(gatesYaml: string) {
   const repo = await seededRepo()
   const cfgPath = join(repo.root, 'witness.config.yaml')
@@ -15,16 +23,17 @@ async function cfgWith(gatesYaml: string) {
 }
 
 describe('resolveModel', () => {
-  it('refuses alias pins', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  model: opus\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.violations[0].rule).toBe('alias-refused')
+  // Row 193: a pin is checked when the file loads, and again where it is used.
+  it('refuses alias pins, at load under their own name and at use', async () => {
+    expect(await refusalOf('gates:\n  model: opus\n')).toMatchObject({ field: 'gates.model', rule: 'alias-refused' })
+    const { repo, cfg } = await cfgWith('')
+    const r = resolveModel({ ...cfg, arbiter: { model: 'opus' } }, loadMatrix(repo.root, 'claude-code'), 'arbiter')
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'alias-refused' })
   })
 
   it('pins first; an empty matrix warns as such (nothing is calibrated yet)', async () => {
     const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
+    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.chain[0]).toBe('test-model-1')
@@ -38,7 +47,7 @@ describe('resolveModel', () => {
     const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
     mkdirSync(join(repo.root, '.witness'), { recursive: true })
     writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
+    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.warning).toContain('below the model floor')
@@ -48,7 +57,7 @@ describe('resolveModel', () => {
     const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
     mkdirSync(join(repo.root, '.witness'), { recursive: true })
     writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
+    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.chain).toEqual(['test-model-1', 'test-model-2', SESSION_DEFAULT])
@@ -64,18 +73,16 @@ describe('resolveModel', () => {
   })
 
   it('refuses an alias in a per-gate pin, naming the gate field', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  ship: { model: opus }\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'ship')
-    expect(r.ok).toBe(false)
-    if (!r.ok) {
-      expect(r.violations[0].rule).toBe('alias-refused')
-      expect(r.violations[0].field).toBe('gates.ship.model')
-    }
+    expect(await refusalOf('gates:\n  ship: { model: opus }\n')).toMatchObject({ field: 'gates.ship.model', rule: 'alias-refused' })
+    const { repo, cfg } = await cfgWith('')
+    const r = resolveModel({ ...cfg, gates: { ...cfg.gates, ship: { ...cfg.gates.ship, model: 'opus' } } },
+      loadMatrix(repo.root, 'claude-code'), 'ship')
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'gates.ship.model', rule: 'alias-refused' })
   })
 
   it('unpinned: chain is calibrated ids then session default, no refusal', async () => {
     const { repo, cfg } = await cfgWith('')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'))
+    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.chain).toEqual([SESSION_DEFAULT])
@@ -96,18 +103,14 @@ describe('per-harness matrix', () => {
 
 describe('stagePin grammar', () => {
   it('refuses aliases in the model segment and unknown thinking levels', async () => {
-    const aliased = await cfgWith('gates:\n  model: anthropic/opus:low\n')
-    const aliasedR = stagePin(aliased.cfg)
-    expect(aliasedR.ok).toBe(false)
-    if (!aliasedR.ok) expect(aliasedR.violations[0]!.rule).toBe('alias-refused')
-
-    const lvl = await cfgWith('gates:\n  model: claude-fable-5:turbo\n')
-    const lvlR = stagePin(lvl.cfg)
-    expect(lvlR.ok).toBe(false)
-    if (!lvlR.ok) expect(lvlR.violations[0]!.rule).toBe('unknown-thinking-level')
+    expect((await refusalOf('gates:\n  model: anthropic/opus:low\n')).rule).toBe('alias-refused')
+    expect((await refusalOf('gates:\n  model: claude-fable-5:turbo\n')).rule).toBe('unknown-thinking-level')
+    const { cfg } = await cfgWith('')
+    const lvlR = stagePin({ ...cfg, arbiter: { model: 'claude-fable-5:turbo' } }, 'arbiter')
+    expect(!lvlR.ok && lvlR.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'unknown-thinking-level' })
 
     const good = await cfgWith('gates:\n  model: google/gemini-3.6-pro:low\n')
-    const goodR = stagePin(good.cfg)
+    const goodR = stagePin(good.cfg, 'arbiter')
     expect(goodR.ok).toBe(true)
     if (goodR.ok) expect(goodR.value).toBe('google/gemini-3.6-pro:low')
   })

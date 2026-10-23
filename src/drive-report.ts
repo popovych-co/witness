@@ -71,7 +71,7 @@ export function driveReport(
     if (named.has(o.target)) continue
     wait(o.target, [`wait: decision · ${o.gate} ${o.target}`, `  run: witness decide ${o.gate} ${o.target} --show`])
   }
-  const driver = resolveDriver(ctx.env, cfg.raw)
+  const driver = resolveDriver(ctx.env, cfg.harness)
   for (const a of aside.filter((x) => x.kind === 'conversation' || x.kind === 'merge')) {
     if (named.has(a.target)) continue
     if (a.kind === 'conversation') {

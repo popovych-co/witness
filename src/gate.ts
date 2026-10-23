@@ -30,7 +30,7 @@ import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
 import { reportHandover, slicesLine } from './slice.js'
 
-import { DEFAULT_BATTERIES, type ChangeClass, type GateName } from './settings.js'
+import type { ChangeClass, GateName } from './settings.js'
 export type { ChangeClass, GateName } from './settings.js'
 
 export interface Stamp { artifact: string; to: string }
@@ -104,15 +104,12 @@ const GATES = new Map<string, GateSpec>()
 export function registerGate(spec: GateSpec): void { GATES.set(spec.gate, spec) }
 export function gateSpec(name: string): GateSpec | undefined { return GATES.get(name) }
 
+// The gate's own reviewers for this class. Their shape — a non-empty list, or a map naming
+// every class — is refused when the file loads (row 13, amended by 193), so nothing is left
+// to refuse here.
 export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Result<string[]> {
-  const gates = (cfg.raw.gates ?? {}) as Record<string, { reviewers?: unknown } | undefined>
-  const raw = gates[gate]?.reviewers ?? DEFAULT_BATTERIES[gate]
-  const picked = Array.isArray(raw) ? raw : (raw as Record<string, unknown>)[cls]
-  if (!Array.isArray(picked) || picked.length === 0 || !picked.every((x) => typeof x === 'string')) {
-    return refuse([v(`gates.${gate}.reviewers`, 'battery-shape', JSON.stringify(raw),
-      'a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer]')])
-  }
-  return ok(picked as string[])
+  const battery = cfg.gates[gate].reviewers
+  return ok(Array.isArray(battery) ? battery : battery[cls])
 }
 
 // `entries` is the stream AS OF AFTER this entry: without it the renderer cannot tell the
@@ -299,7 +296,7 @@ async function judge(
     if (docs.length) lens.docs = docs
     lenses.push(lens)
   }
-  const hxR = resolveJudge(ctx.env, cfgR.value.raw)
+  const hxR = resolveJudge(ctx.env, cfgR.value.harness)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
   const localR = loadLocalConfig(root)

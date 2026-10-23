@@ -12,43 +12,29 @@ export type RunnerConfig =
   | { mode: 'filtered'; template: string; reportGlob?: string }
   | { mode: 'full-suite'; reportGlob: string; suiteCmd: string }
 
+// The values' own shapes (a runner with {id}, a junit: report) are refused when the file loads
+// (row 193); what is left is what only a combination says, and what an older file never set.
 export function runnerConfig(cfg: Config): Result<RunnerConfig> {
-  const crit = (cfg.raw.criteria ?? {}) as Record<string, unknown>
-  const runner = crit.runner
-  if (typeof runner !== 'string' || runner.length === 0) {
-    return refuse([v('criteria.runner', 'required', String(runner ?? 'absent'), 'a filtered template containing {id}, or full-suite')])
+  const { runner, report } = cfg.criteria
+  if (runner === undefined) {
+    return refuse([v('criteria.runner', 'required', 'absent', 'a filtered template containing {id}, or full-suite')])
   }
   if (runner === 'full-suite') {
-    const report = crit.report
-    if (typeof report !== 'string') {
+    if (report === undefined) {
       return refuse([v('criteria.report', 'required', 'absent', 'junit:<glob> — full-suite mode reads merged junit reports')])
     }
-    if (!report.startsWith('junit:')) {
-      return refuse([v('criteria.report', 'report-format', report, 'junit:<glob> (only junit is supported)')])
-    }
-    const ship = (cfg.raw.ship ?? {}) as Record<string, unknown>
-    if (typeof ship.test !== 'string' || ship.test.length === 0) {
+    if (cfg.ship.test === undefined) {
       return refuse([v('ship.test', 'required', 'absent', 'the suite command full-suite mode executes')])
     }
-    return ok({ mode: 'full-suite', reportGlob: report.slice('junit:'.length), suiteCmd: ship.test })
+    return ok({ mode: 'full-suite', reportGlob: report.slice('junit:'.length), suiteCmd: cfg.ship.test })
   }
-  if (!runner.includes('{id}')) {
-    return refuse([v('criteria.runner', 'no-id-placeholder', runner, 'template must interpolate {id} (or use full-suite)')])
-  }
-  const report = crit.report
-  if (report !== undefined) {
-    if (typeof report !== 'string' || !report.startsWith('junit:')) {
-      return refuse([v('criteria.report', 'report-format', String(report), 'junit:<glob> (only junit is supported)')])
-    }
-    return ok({ mode: 'filtered', template: runner, reportGlob: report.slice('junit:'.length) })
-  }
-  return ok({ mode: 'filtered', template: runner })
+  return report === undefined
+    ? ok({ mode: 'filtered', template: runner })
+    : ok({ mode: 'filtered', template: runner, reportGlob: report.slice('junit:'.length) })
 }
 
 export function criteriaExcludes(cfg: Config): string[] {
-  const crit = (cfg.raw.criteria ?? {}) as Record<string, unknown>
-  const extra = Array.isArray(crit.exclude) ? (crit.exclude as string[]).filter((g) => typeof g === 'string') : []
-  return [`${cfg.paths.specs}/**`, `${cfg.paths.plans}/**`, '.witness/**', ...extra]
+  return [`${cfg.paths.specs}/**`, `${cfg.paths.plans}/**`, '.witness/**', ...cfg.criteria.exclude]
 }
 
 export interface RunOutcome {

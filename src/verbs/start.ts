@@ -38,8 +38,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   const status = String(plan.meta.status)
-  const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
-  const base = ship.branch ?? 'main'
+  const base = cfgR.value.ship.branch
   // D138. The second natural moment: about to cut a branch, so local main had better be
   // level with origin first. Its failure NEVER blocks the cut — D137's decoupling clause
   // is what makes that row a root fix rather than one more discipline, so a dirty tree or

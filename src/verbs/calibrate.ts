@@ -72,7 +72,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Decision 88: calibration measures the (harness, model) pair — the same spawn the
   // gate battery will use. Resolved once, threaded into every suite and the overlay.
   const cfgR = loadConfig(rootR.value)
-  const hxR = resolveJudge(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+  const hxR = resolveJudge(ctx.env, cfgR.ok ? cfgR.value.harness : undefined)
   if (!hxR.ok) {
     for (const line of renderRefusal(hxR.violations)) ctx.err(line)
     return EXIT.REFUSED

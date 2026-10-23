@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveGates, resolveSession,
+  DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
 import { seededRepo, tmpRepo, writeLocalConfig } from './helpers.js'
 
@@ -14,14 +14,15 @@ describe('loadConfig', () => {
     expect(!res.ok && res.violations[0]?.rule).toBe('missing')
   })
 
-  it('loads schema 1 and preserves unknown keys', () => {
+  it('loads schema 1 and ignores unknown keys', () => {
     const repo = tmpRepo()
-    repo.write('witness.config.yaml', 'schema: 1\nship: { test: "npm test" }\n')
+    repo.write('witness.config.yaml', 'schema: 1\nship: { test: "npm test", tset: 1 }\nbogus: true\n')
     const res = loadConfig(repo.root)
     expect(res.ok).toBe(true)
     if (!res.ok) return
     expect(res.value.schema).toBe(1)
-    expect((res.value.raw.ship as Record<string, unknown>).test).toBe('npm test')
+    expect(res.value).not.toHaveProperty('raw')
+    expect(res.value.ship.test).toBe('npm test')
     expect(res.value.warning).toBeUndefined()
   })
 
@@ -69,10 +70,11 @@ describe('resolveDocs (docs registry)', () => {
     expect(!res.ok && res.violations[0]?.want).toContain('conventions')
   })
 
-  it('refuses empty lists, non-lists, traversal and .witness paths', () => {
+  it('accepts empty lists as none; refuses non-lists, traversal and .witness paths', () => {
     const repo = tmpRepo()
     repo.write('witness.config.yaml', 'schema: 1\ndocs:\n  conventions: []\n')
-    expect(loadConfig(repo.root).ok).toBe(false)
+    const none = loadConfig(repo.root)
+    expect(none.ok && none.value.docs).toEqual({})
     repo.write('witness.config.yaml', 'schema: 1\ndocs:\n  conventions: CLAUDE.md\n')
     expect(loadConfig(repo.root).ok).toBe(false)
     repo.write('witness.config.yaml', 'schema: 1\ndocs:\n  conventions: [../escape.md]\n')
@@ -186,26 +188,29 @@ describe('session.contextLimit (row 191)', () => {
   })
 })
 
-describe('resolveGates — reviewerTimeoutMs', () => {
+describe('gates.reviewerTimeoutMs', () => {
+  const load = (yaml: string) => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', `schema: 1\n${yaml}`)
+    return loadConfig(repo.root)
+  }
+
   it('defaults when absent', () => {
-    const r = resolveGates({})
-    expect(r.ok).toBe(true)
-    if (r.ok) expect(r.value.reviewerTimeoutMs).toBe(DEFAULT_REVIEWER_TIMEOUT_MS)
-    const r2 = resolveGates({ gates: { model: 'claude-fable-5' } })
-    if (r2.ok) expect(r2.value.reviewerTimeoutMs).toBe(DEFAULT_REVIEWER_TIMEOUT_MS)
+    const r = load('')
+    expect(r.ok && r.value.gates.reviewerTimeoutMs).toBe(DEFAULT_REVIEWER_TIMEOUT_MS)
+    const r2 = load('gates: { model: claude-fable-5 }\n')
+    expect(r2.ok && r2.value.gates.reviewerTimeoutMs).toBe(DEFAULT_REVIEWER_TIMEOUT_MS)
   })
 
   it('accepts an integer >= 1', () => {
-    const r = resolveGates({ gates: { reviewerTimeoutMs: 120000 } })
-    expect(r.ok).toBe(true)
-    if (r.ok) expect(r.value.reviewerTimeoutMs).toBe(120000)
+    const r = load('gates: { reviewerTimeoutMs: 120000 }\n')
+    expect(r.ok && r.value.gates.reviewerTimeoutMs).toBe(120000)
   })
 
   it('refuses non-integer values', () => {
-    for (const bad of ['600000', 0, -1, 1.5]) {
-      const r = resolveGates({ gates: { reviewerTimeoutMs: bad } })
-      expect(r.ok).toBe(false)
-      if (!r.ok) expect(r.violations[0]).toMatchObject({ field: 'gates.reviewerTimeoutMs', rule: 'invalid' })
+    for (const bad of ['"600000"', '0', '-1', '1.5']) {
+      const r = load(`gates: { reviewerTimeoutMs: ${bad} }\n`)
+      expect(!r.ok && r.violations[0]).toMatchObject({ field: 'gates.reviewerTimeoutMs', rule: 'invalid' })
     }
   })
 })
