@@ -74,13 +74,14 @@ describe('the rule at a step close', () => {
   })
 
   // The close is journaled before the report runs, so a config that will not load costs the
-  // report and never the verb's exit.
+  // report and never the verb's exit. D192: the CLI says why the report is missing, on stderr.
   it('a config that will not load costs the report, not the close', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     patchConfig(repo, { session: { contextLimit: 0 } })
     const r = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(250_000) })
     expect(r.code).toBe(0)
     expect(r.stdout).toBe(`step-close: ${planId} · s3 closed`)
+    expect(r.stderr).toBe('warn: no context line — witness.config.yaml did not load (invalid)')
     expect(readStream(repo.root, planId).filter((e) => e.t === 'step-close')).toHaveLength(1)
   })
 

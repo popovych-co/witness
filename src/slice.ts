@@ -128,11 +128,15 @@ export function sliceLine(v: SliceVerdict): string {
 // green that closes no step (a re-record, a fix round) only reports the fill. A legacy plan's
 // closes are not the CLI's to see (§4.3), so until its implement gate every passing green
 // decides. The close is journaled before this runs, so a config that will not load costs the
-// report and never the verb's exit: dispatch-report's relay line keeps the same doctrine.
+// report and never the verb's exit: dispatch-report's relay line keeps the same doctrine. It says
+// so on stderr (D192), so the missing report is never silent.
 export function reportStepClose(ctx: Ctx, root: string, plan: CanonDoc, opts: { closed?: string; passingGreen: boolean }): void {
   if (opts.closed === undefined && !opts.passingGreen) return
   const cfg = loadConfig(root)
-  if (!cfg.ok) return
+  if (!cfg.ok) {
+    ctx.err(`warn: no context line — witness.config.yaml did not load (${cfg.violations[0]!.rule})`)
+    return
+  }
   const limit = cfg.value.session.contextLimit
   const budget = cfg.value.implement.stepsPerDispatch
   const entries = readStream(root, String(plan.meta.id))
