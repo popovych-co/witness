@@ -430,3 +430,28 @@ describe('a red open on any step', () => {
     expect(slice(r)).toBe('slice: continue')
   })
 })
+
+// Final review I2. A legacy plan's steps are the skill's to count (§4.3), so `next` cannot tell
+// whether any remain. Its gate row names the implement stage until its implement gate: the router
+// hands it to the implement skill, whose own count decides, rather than running the gate verbatim
+// — a fresh session after a relay would otherwise gate with steps left.
+describe('a legacy plan after a relay', () => {
+  it('routes its gate through the implement stage until its implement gate', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    commitEntry(repo, PLAN, untaggedRed(PLAN))           // an older CLI's untagged red: legacy
+    const s1 = await evidenceCycle(repo, wt, PLAN, 's1', measuredEnv('S1', 42_000, 200_000))
+    expect(lines(s1)).toContain('slice: end — 21% reached the 20% limit')
+    const fresh = await repo.cli(['next'], { cwd: wt, env: measuredEnv('S2', 52_000, 200_000) })
+    expect(fresh.code).toBe(0)
+    expect(lines(fresh)).toContain(`next: witness gate implement ${PLAN}`)
+    expect(lines(fresh)).toContain('stage: implement')
+    // After its implement gate the plan's steps are behind it: a re-gate is the gate's own row.
+    commitEntry(repo, PLAN, {
+      t: 'gate-run', gate: 'implement', artifact: PLAN, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
+      prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+    })
+    const after = await repo.cli(['next'], { cwd: wt, env: measuredEnv('S2', 52_000, 200_000) })
+    expect(lines(after)).toContain(`next: witness gate implement ${PLAN}`)
+    expect(after.stdout).not.toContain('stage:')
+  })
+})

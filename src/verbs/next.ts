@@ -360,8 +360,13 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
       ...inFlight,
     }
   }
+  // Final review I2. A legacy plan's steps are the skill's to count (§4.3), so whether any remain
+  // is not the CLI's to say: until its implement gate the row names the stage, and the router
+  // hands it to the implement skill, whose own count decides. Run verbatim, the gate came first
+  // whatever that count said, and a fresh session after a relay gated with steps left.
+  const uncounted = !progress.known && !implementGated(entries) ? { stage: 'implement' as const } : {}
   return {
-    line: `witness gate implement ${id}`, target: id, ...inWorktree, ...inFlight,
+    line: `witness gate implement ${id}`, ...uncounted, target: id, ...inWorktree, ...inFlight,
     ...noteOf(
       lapseNote(entries, 'implement', diffSha,
         // `files` is the list flowAction already computed above — the cause costs one
