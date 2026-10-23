@@ -26,7 +26,7 @@ import {
   roundsSinceApprove, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
-import { reportHandover } from '../slice.js'
+import { handOverIfDue } from '../slice.js'
 
 
 // D154. The untrusted `cmd:` list for a block, resolved from the ctx alone — `renderBound`
@@ -163,9 +163,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // at its limit hands it to a fresh one. Here and not in `applyDecision`: the gate's tail and
   // `next` settle through that door too, and each hands over at its own point.
   if (code !== EXIT.OK || act.value.decision !== 'revise') return code
-  const rootR = primaryRoot(ctx.cwd)
-  const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
-  if (rootR.ok && cfgR?.ok) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
+  handOverIfDue(ctx, { guard: false })
   return code
 }
 

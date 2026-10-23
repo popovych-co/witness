@@ -1,10 +1,9 @@
-import { existsSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { loadConfig, type Config } from './config.js'
 import { pctOf, reached, readFill, sessionHash, sessionIdOf, windowLabel, type Fill } from './context.js'
+import { primaryRoot } from './gitio.js'
 import { relayLine, resolveDriver } from './harness.js'
-import { readStream, type Entry, type EntryType, type JournalCtx } from './journal.js'
+import { readStream, streamIds, type Entry, type EntryType, type JournalCtx } from './journal.js'
 import type { CanonDoc } from './scan.js'
 import { implementGated, redInFlight, stepProgress, stepsLine, vacuousEvidence, type Progress } from './steps.js'
 import { kv } from './toon.js'
@@ -27,11 +26,8 @@ const stampOf = (e: Entry): Partial<JournalCtx> =>
 // review I3): it observed the behavior already there, so a session opened over the limit that only
 // re-ran one would hand over, and so would every fresh session after it.
 export function sessionActed(root: string, hash: string): boolean {
-  const dir = join(root, '.witness', 'journal')
-  if (!existsSync(dir)) return false
-  return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).some((f) =>
-    readStream(root, f.slice(0, -'.jsonl'.length))
-      .some((e) => ACT_KINDS.has(e.t) && !vacuousEvidence(e) && stampOf(e).session === hash))
+  return streamIds(root).some((id) =>
+    readStream(root, id).some((e) => ACT_KINDS.has(e.t) && !vacuousEvidence(e) && stampOf(e).session === hash))
 }
 
 // The entries that closed a step, in stream order. A legacy plan's closes are not the CLI's to
@@ -129,8 +125,11 @@ export function sliceLine(v: SliceVerdict): string {
 // closes are not the CLI's to see (§4.3), so until its implement gate every passing green
 // decides. The close is journaled before this runs, so a config that will not load costs the
 // report and never the verb's exit: dispatch-report's relay line keeps the same doctrine. It says
-// so on stderr (D192), so the missing report is never silent.
-export function reportStepClose(ctx: Ctx, root: string, plan: CanonDoc, opts: { closed?: string; passingGreen: boolean }): void {
+// so on stderr (D192), so the missing report is never silent. `entries` is the stream as the
+// caller read it to name the step closed, so the report decides from that same read (D192).
+export function reportStepClose(
+  ctx: Ctx, root: string, plan: CanonDoc, opts: { closed?: string; passingGreen: boolean; entries?: Entry[] },
+): void {
   if (opts.closed === undefined && !opts.passingGreen) return
   const cfg = loadConfig(root)
   if (!cfg.ok) {
@@ -139,7 +138,7 @@ export function reportStepClose(ctx: Ctx, root: string, plan: CanonDoc, opts: { 
   }
   const limit = cfg.value.session.contextLimit
   const budget = cfg.value.implement.stepsPerDispatch
-  const entries = readStream(root, String(plan.meta.id))
+  const entries = opts.entries ?? readStream(root, String(plan.meta.id))
   const progress = stepProgress(plan, entries)
   const fill = readFill(ctx.env)
   // §4.5's `g` is the size of the next step, so once every step is closed there is none to project.
@@ -186,6 +185,16 @@ export function reportHandover(ctx: Ctx, root: string, cfg: Config, opts: { guar
   ctx.out(kv('context', contextLine(fill, limit, cfg.implement.stepsPerDispatch)))
   ctx.out(kv('relay', relayLine(driver.value.harness)))
   return true
+}
+
+// Row 191 §4.4. `reportHandover` at the exit of a verb that holds no root or config there (a
+// `decide --revise`, a ship run): both are read again from the cwd. One that will not resolve
+// hands nothing over, and the verb's own exit stands.
+export function handOverIfDue(ctx: Ctx, opts: { guard: boolean }): boolean {
+  const rootR = primaryRoot(ctx.cwd)
+  if (!rootR.ok) return false
+  const cfgR = loadConfig(rootR.value)
+  return cfgR.ok && reportHandover(ctx, rootR.value, cfgR.value, opts)
 }
 
 // Row 191 §4.5 "Before any work". A session already at the limit when it opens cannot hand over

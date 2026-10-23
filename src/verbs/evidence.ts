@@ -19,27 +19,33 @@ const EVIDENCE_USAGE = 'witness test-evidence <plan-id> --phase red|green [--ste
 const VERIFY_USAGE = 'witness verify-red <plan-id> [--base <ref>] [--step <id>]'
 
 // The plan id is the first token that is neither a flag nor a flag's value, so `--step s1`
-// written before the id never reads as the plan.
+// written before the id never reads as the plan. `step-close` reads its id here too (D192).
 const VALUED = new Set(['--phase', '--step', '--base'])
-const planIdOf = (argv: string[]): string | undefined =>
+export const planIdOf = (argv: string[]): string | undefined =>
   argv.find((a, i) => !a.startsWith('--') && !VALUED.has(argv[i - 1] ?? ''))
 
-// Row 191 §4.3. `--step` named with no value is refused rather than read as no step: an
-// untagged cycle is another claim (a fix round), not a typo's default. A flag where the value
-// belongs is no value.
-function stepArg(argv: string[], usage: string): Result<string | undefined> {
+// Row 191 §4.3. The step `--step` names, if it names one: a flag where the value belongs is no
+// value. Each verb says what no step means, so `step-close` reads it here too (D192).
+export function stepOf(argv: string[]): string | undefined {
   const at = argv.indexOf('--step')
-  if (at === -1) return ok(undefined)
-  const value = argv[at + 1]
-  return value === undefined || value.startsWith('--') ? refuse([v('--step', 'required', 'absent', usage)]) : ok(value)
+  const value = at === -1 ? undefined : argv[at + 1]
+  return value === undefined || value.startsWith('--') ? undefined : value
+}
+
+// `--step` named with no value is refused rather than read as no step: an untagged cycle is
+// another claim (a fix round), not a typo's default.
+function stepArg(argv: string[], usage: string): Result<string | undefined> {
+  const step = stepOf(argv)
+  return argv.includes('--step') && step === undefined ? refuse([v('--step', 'required', 'absent', usage)]) : ok(step)
 }
 
 // Row 191 §4.4. The green just journaled is the stream's last line, and whether it closed a step
 // is the plan's progress to say: a step's first passing green after its red does, a re-record or
-// a fix round does not.
+// a fix round does not. The report reads the same entries (D192): one read names the step closed
+// and decides the slice.
 function reportGreen(ctx: Ctx, stateRoot: string, plan: CanonDoc, passingGreen: boolean): void {
   const entries = readStream(stateRoot, String(plan.meta.id))
-  reportStepClose(ctx, stateRoot, plan, { closed: closedAt(stepProgress(plan, entries), entries.length - 1), passingGreen })
+  reportStepClose(ctx, stateRoot, plan, { closed: closedAt(stepProgress(plan, entries), entries.length - 1), passingGreen, entries })
 }
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {

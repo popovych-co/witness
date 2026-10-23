@@ -1,11 +1,9 @@
-import { existsSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { askText } from '../ask.js'
 import { git, primaryRoot } from '../gitio.js'
 import { canonExit } from '../departure.js'
-import { journalActs, readStream, streamExists, type Entry } from '../journal.js'
+import { journalActs, readStream, streamExists, streamIds, type Entry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
@@ -64,15 +62,6 @@ function detail(e: Entry): string {
       return JSON.stringify(rest).slice(0, 100)
     }
   }
-}
-
-const streamIds = (root: string): string[] => {
-  const dir = join(root, '.witness', 'journal')
-  if (!existsSync(dir)) return []
-  return readdirSync(dir)
-    .filter((f) => f.endsWith('.jsonl'))
-    .map((f) => f.slice(0, -'.jsonl'.length))
-    .sort()
 }
 
 // D166. Read through `canonExit`, the one reading of a departure: a re-slice that was taken
