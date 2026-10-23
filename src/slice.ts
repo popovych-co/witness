@@ -6,7 +6,7 @@ import { pctOf, reached, readFill, sessionHash, sessionIdOf, windowLabel, type F
 import { relayLine, resolveDriver } from './harness.js'
 import { readStream, type Entry, type EntryType, type JournalCtx } from './journal.js'
 import type { CanonDoc } from './scan.js'
-import { implementGated, redOpenStep, stepProgress, stepsLine, type Progress } from './steps.js'
+import { implementGated, redOpenStep, stepProgress, stepsLine, vacuousEvidence, type Progress } from './steps.js'
 import { kv } from './toon.js'
 
 // Plan's call 8 (row 191 §4.8). An act is the session's own stage work. What the CLI writes on a
@@ -23,12 +23,15 @@ const stampOf = (e: Entry): Partial<JournalCtx> =>
   typeof e.ctx === 'object' && e.ctx !== null ? (e.ctx as Partial<JournalCtx>) : {}
 
 // Row 191 §4.5. Whether this session has done stage work yet, in any stream: the guard that keeps
-// a fresh session from handing over before it has done anything.
+// a fresh session from handing over before it has done anything. A vacuous red is no act (final
+// review I3): it observed the behavior already there, so a session opened over the limit that only
+// re-ran one would hand over, and so would every fresh session after it.
 export function sessionActed(root: string, hash: string): boolean {
   const dir = join(root, '.witness', 'journal')
   if (!existsSync(dir)) return false
   return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).some((f) =>
-    readStream(root, f.slice(0, -'.jsonl'.length)).some((e) => ACT_KINDS.has(e.t) && stampOf(e).session === hash))
+    readStream(root, f.slice(0, -'.jsonl'.length))
+      .some((e) => ACT_KINDS.has(e.t) && !vacuousEvidence(e) && stampOf(e).session === hash))
 }
 
 // The entries that closed a step, in stream order. A legacy plan's closes are not the CLI's to

@@ -497,6 +497,27 @@ export async function startedThreeStepPlan(
   return { repo, wt, planId }
 }
 
+// `threeStepPlan`, started, where s1's behavior predates the plan: main already holds it under an
+// untagged test, and the worktree adds the tagged tests alone. Every red on s1 passes, a red
+// `verify-red` reconstructs against the base included.
+export async function behaviorOnMain(extraYaml = ''): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await threeStepPlan(extraYaml)
+  const planId = 'auth-refresh-plan-1'
+  repo.write('package.json', readFileSync(join(fixturePath('vitest-single'), 'package.json'), 'utf8'))
+  repo.write('src/token.ts', TOKEN_FIXED)
+  repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)
+  // The runner's cache lands under node_modules/ in the worktree; ignored, as the fixture's own
+  // .gitignore has it, so verify-red's stash never holds a file the red run writes again.
+  repo.write('.gitignore', `${repo.read('.gitignore')}node_modules/\n`)
+  repo.git('add', 'package.json', 'src/token.ts', 'tests/token.test.ts', '.gitignore')
+  repo.git('commit', '-m', 'existing behavior')
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  writeFileSync(join(wt, 'tests/token.test.ts'), TOKEN_TESTS_TAGGED)
+  return { repo, wt, planId }
+}
+
 // A journal line committed as a state commit (flipStatus's trailer): history the current CLI
 // will not write itself, such as an older CLI's untagged evidence.
 export function commitEntry(repo: TestRepo, stream: string, entry: { t: EntryType; [k: string]: unknown }): void {

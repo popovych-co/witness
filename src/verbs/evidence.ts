@@ -125,10 +125,10 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
   if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return exitOf(res.violations) }
   const { redOk, greenOk, vacuous } = res.value
   ctx.out(kv('verify-red', `red ${redOk ? 'observed' : 'NOT observed'} · green ${greenOk ? 'confirmed' : 'NOT confirmed'}`))
-  // Reported once, after the green. A vacuous reconstruction is a finding, not a cycle, so its
-  // passing green stands in for no step's close, not even on a legacy plan. A step it does close
-  // (a red tagged earlier opened the cycle) is still a close.
-  reportGreen(ctx, stateRoot, plan, greenOk && !vacuous)
+  // Reported once, after the green. A vacuous reconstruction is a finding, not a cycle: its green
+  // only confirmed the restore and journaled nothing (final review I3), so it closed no step and
+  // decides no slice, not even on a legacy plan.
+  if (!vacuous) reportGreen(ctx, stateRoot, plan, greenOk)
   if (vacuous) {
     ctx.err('vacuous: tests pass against base — the test may assert nothing, or the behavior already existed')
     return EXIT.FINDINGS

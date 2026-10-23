@@ -16,7 +16,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -905,6 +905,27 @@ describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
     expect(decisionOf(repo)).toMatchObject({ decision: 'revise' })
     expect(decisionOf(repo)).not.toHaveProperty('ctx')
   }, 60000)
+})
+
+// Final review I3 (behavior attack, probe p10). s1's behavior predates the plan, so the session
+// drive spawns for it re-runs a vacuous verify-red: one vacuous red, and a green that confirms the
+// restore and journals nothing. A vacuous red moves nothing, so the target is set aside after that
+// one session; counted, it read as progress and drive respawned it until drive.caps.spawns.
+describe('a vacuous red is no progress (row 191)', () => {
+  it('sets aside a target whose session only re-runs a vacuous verify-red', async () => {
+    const { repo, wt, planId } = await behaviorOnMain('drive:\n  caps:\n    spawns: 4\n')
+    const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
+    expect(red.code).toBe(1)
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const agent = script(`echo tick\n${witnessCli()} verify-red ${planId} --step s1\nexit 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(out.filter((l) => / tick$/.test(l))).toHaveLength(1)
+    expect(out).toContain(`[1 implement/${planId}] verify-red: red NOT observed · green confirmed`)
+    expect(out).toContain(`drive: no progress — witness verify-red ${planId} --step s1`)
+    expect(readStream(repo.root, planId).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red'])
+  }, 120000)
 })
 
 // Final review F4. A crashed transaction no session resolves answered every fill with the same

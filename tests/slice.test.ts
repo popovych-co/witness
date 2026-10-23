@@ -111,4 +111,16 @@ describe('what this session did (row 191 §4.5 · §4.7 · §4.8)', () => {
     expect(sessionActed(root, 'h')).toBe(true)
     expect(sessionActed(root, 'other')).toBe(false)
   })
+  // Final review I3. A vacuous red observed the behavior already there: no act, so a session
+  // that only re-runs one cannot hand over. A genuine red is one.
+  it('sessionActed does not count a vacuous red', () => {
+    const root = mkdtempSync(join(tmpdir(), 'witness-slice-'))
+    const dir = join(root, '.witness', 'journal')
+    mkdirSync(dir, { recursive: true })
+    const line = (e: Record<string, unknown>) => appendFileSync(join(dir, 'p.jsonl'), JSON.stringify({ v: 1, ...e }) + '\n')
+    line({ t: 'test-evidence', phase: 'red', step: 's1', reconstructed: true, vacuous: true, tests: [{ name: 'a', ok: true }], ctx: { session: 'v' } })
+    expect(sessionActed(root, 'v')).toBe(false)
+    line({ t: 'test-evidence', phase: 'red', step: 's1', tests: [{ name: 'a', ok: false }], ctx: { session: 'v' } })
+    expect(sessionActed(root, 'v')).toBe(true)
+  })
 })

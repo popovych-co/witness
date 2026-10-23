@@ -6,8 +6,8 @@ import { sessionHash } from '../src/context.js'
 import { readStream } from '../src/journal.js'
 import {
   PLAN_BLOCKING, SCAFFOLDING_FIRST, TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED, addOrigin, autonomyOn,
-  commitEntry, evidenceCycle, fakeScenario, fixtureEnv, gateEnv, measuredEnv, plannedRepo, putVerdict, shippableRepo,
-  startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo,
+  behaviorOnMain, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, gateEnv, measuredEnv, plannedRepo, putVerdict,
+  shippableRepo, startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo,
 } from './helpers.js'
 
 const at = (tokens: number) => measuredEnv('S1', tokens, 1_000_000)
@@ -453,5 +453,35 @@ describe('a legacy plan after a relay', () => {
     const after = await repo.cli(['next'], { cwd: wt, env: measuredEnv('S2', 52_000, 200_000) })
     expect(lines(after)).toContain(`next: witness gate implement ${PLAN}`)
     expect(after.stdout).not.toContain('stage:')
+  })
+})
+
+// Final review I3, the spec's own anti-goal (§2: a session that opens over the limit and relays
+// forever). s1's behavior predates the plan, so its red passes and `next` routes verify-red, whose
+// red passes against the base too. A vacuous red is no act, and the green verify-red runs after it
+// only confirms the restore: it journals nothing. So a session that does nothing else gets the same
+// `next:` line back with no relay, and the router's same-line-twice stop ends the loop where a
+// fresh session would otherwise re-run it forever.
+describe('a vacuous red is no act', () => {
+  const routed = (r: CliResult) => lines(r).find((l) => l.startsWith('next: '))
+
+  it('a session that only re-runs a vacuous verify-red hands nothing over', async () => {
+    const { repo, wt } = await behaviorOnMain()
+    const over = (session: string) => ({ ...fixtureEnv(), ...measuredEnv(session, 52_000, 200_000) })   // 26%
+    const red = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', 's1'], { cwd: wt, env: over('A') })
+    expect(red.code).toBe(1)
+    const a = await repo.cli(['next'], { cwd: wt, env: over('A') })
+    expect(routed(a)).toBe(`next: witness verify-red ${PLAN} --step s1`)
+    expect(relays(a)).toEqual([])
+    // The session a relay would have opened next, running the routed line.
+    const first = await repo.cli(['next'], { cwd: wt, env: over('B') })
+    const verified = await repo.cli(['verify-red', PLAN, '--step', 's1'], { cwd: wt, env: over('B') })
+    expect(verified.code).toBe(1)
+    expect(verified.stdout).toContain('verify-red: red NOT observed · green confirmed')
+    const again = await repo.cli(['next'], { cwd: wt, env: over('B') })
+    expect(routed(again)).toBe(routed(first))
+    expect(relays(first)).toEqual([])
+    expect(relays(again)).toEqual([])
+    expect(readStream(repo.root, PLAN).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red'])
   })
 })

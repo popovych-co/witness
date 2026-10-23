@@ -249,7 +249,14 @@ export async function verifyRed(
       `${shown.join(' · ')}${more} — changed on disk during red verification — re-read before editing`))
   }
   if (!red.ok) return red
-  const green = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', extra)
+  // Final review I3. A vacuous red is a finding, not a cycle: the green still runs, since it is
+  // what confirms the restore, but journals nothing. Journaled, it read as an act of the session
+  // and as drive's progress, so a session that opened over the limit and only re-ran this handed
+  // over forever, and drive respawned it to its cap. A step an earlier genuine red opened is
+  // closed by the green `next` routes for that open red, never by this reconstruction.
+  const green = red.value.allOk
+    ? await runSpecTests(runRoot, ctx, parentId, stateRoot)
+    : await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', extra)
   if (!green.ok) return green
   return ok({ redOk: !red.value.allOk, greenOk: green.value.allOk, vacuous: red.value.allOk })
 }

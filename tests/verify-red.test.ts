@@ -88,8 +88,11 @@ describe('witness verify-red', () => {
     repo.git('commit', '-m', 'test asserting existing behavior')
     const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(1)
-    const red = phases(repo).find((e) => e.phase === 'red')
-    expect(red?.vacuous).toBe(true)
+    expect(res.stdout).toContain('verify-red: red NOT observed · green confirmed')
+    // Final review I3: a vacuous red is a finding, not a cycle. The green still runs, to confirm
+    // the restore, and journals nothing: journaled, it read as the session's act and as drive's
+    // progress, so a session that only re-ran this handed over without end.
+    expect(phases(repo)).toMatchObject([{ phase: 'red', reconstructed: true, vacuous: true, step: 's1' }])
   })
 
   it('refuses when the diff touches no test files', async () => {

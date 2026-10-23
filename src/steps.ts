@@ -22,6 +22,11 @@ const hasCriteriaStep = (plan: CanonDoc): boolean => manifest(plan).some((s) => 
 
 const outcomes = (e: Entry): Array<{ ok: boolean }> => (Array.isArray(e.tests) ? (e.tests as Array<{ ok: boolean }>) : [])
 
+// A red that passed observed nothing missing: the behavior it asserts was already there. It opens
+// no cycle (Plan's call 3), it is no act of the session's, and drive counts it as no progress
+// (final review I3): a session that only re-runs one has done nothing, and must not read as busy.
+export const vacuousEvidence = (e: Entry): boolean => e.t === 'test-evidence' && e.vacuous === true
+
 // Plan's call 3: a vacuous red opens no cycle. It needs a failing test, as `evidenceForDiff`'s
 // `!vacuous` does. A green with no outcome at all observed nothing, so it closes nothing.
 const opensCycle = (e: Entry): boolean =>
