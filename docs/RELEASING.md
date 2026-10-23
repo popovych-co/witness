@@ -15,12 +15,14 @@ That is the whole procedure. The script performs the bump, the stamp, the commit
 
 | Step | Fact it asserts |
 |---|---|
-| `pnpm run sync-versions` + `git diff --exit-code` | every plugin pin and `plugin.json` already match `package.json` |
+| `pnpm run sync-versions` + `git diff --exit-code` | every plugin pin, `plugin/.claude-plugin/plugin.json` and `plugin-context/.claude-plugin/plugin.json` already match `package.json`, and `plugin-context/hooks/context-core.mjs` is already a byte-identical copy of `plugin/hooks/context-core.mjs` |
 | `node scripts/release-gate.mjs` | the tag equals `v${package.json.version}`, and a 1.x release ships a calibration matrix |
 
 Both are properties of the tagged commit. So the bump and the stamp must be **inside** that commit — a tag pushed before them names a tree that can never pass, no matter how many times CI is re-run. `scripts/release.mjs` derives the tag from `package.json`, which makes the two unable to disagree.
 
 Skills carry `npx -y @popovych.co/witness@<version>` pins, so the stamp is not cosmetic: the CLI a repo actually runs is the one its skills name. `sync-versions` is what keeps that true, and the `git diff --exit-code` step is what stops an unsynced tag from shipping.
+
+The copy matters just as much. Claude Code loads the context reading from the `witness-context` plugin alone, and installs a marketplace plugin as a copy of its own folder, so that plugin carries its own copy of the context core, which `sync-versions` refreshes from `plugin/hooks/` (DESIGN.md row 191). A stale copy fails the same diff check.
 
 ## If the tag was pushed too early
 

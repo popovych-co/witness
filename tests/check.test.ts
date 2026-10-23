@@ -398,34 +398,49 @@ describe('witness check — harness findings', () => {
 // never by Claude Code's own files: the plugin that carries it is installed per machine, outside
 // the repo, and only the session check runs in can say whether its reading arrived.
 describe('witness check — the context adapter', () => {
+  // The whole line, so a remedy that should not be there cannot hide after the expected text.
+  const adapterOf = (stdout: string) => stdout.split('\n').find((l) => l.startsWith('adapter:'))
+
   it('states a reading seen in this session, and its fill', async () => {
     const repo = await seededRepo()
     const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', ...measuredEnv('S', 170000, 1000000) } })
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain('adapter: claude-code — reading seen · 17% of 1M')
+    expect(adapterOf(res.stdout)).toBe('adapter: claude-code — reading seen · 17% of 1M')
   })
 
-  it('names the reason and the one-time install in a Claude Code session with no reading', async () => {
+  // `no adapter` alone means nothing wrote the variable, so only then is an install the remedy.
+  it('names the one-time install in a Claude Code session no adapter wrote a reading for', async () => {
     const repo = await seededRepo()
     const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'S' } })
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain('adapter: claude-code — no reading in this session (no adapter) · install once per machine: claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness')
+    expect(adapterOf(res.stdout)).toBe('adapter: claude-code — no reading in this session (no adapter) · install once per machine: claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness')
   })
 
-  // Pi before its first response sends tokens 0 (P7): the reason is the reading's own.
-  it('names the reason and the payload install in a Pi session with no reading', async () => {
+  it('names the payload install in a Pi session no adapter wrote a reading for', async () => {
     const repo = await seededRepo()
-    const reading = JSON.stringify({ session: 'P', tokens: 0, window: 200000 })
-    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P', WITNESS_CONTEXT: reading } })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P' } })
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain(`adapter: pi — no reading in this session (no reading yet) · run ${NPX_LATEST} init --agent pi`)
+    expect(adapterOf(res.stdout)).toBe(`adapter: pi — no reading in this session (no adapter) · run ${NPX_LATEST} init --agent pi`)
+  })
+
+  // Any other reason means an adapter is loaded and wrote the variable: an install would change
+  // nothing, so the line names the reason and no remedy.
+  it('names the reason alone when an adapter wrote a reading this session cannot use', async () => {
+    const repo = await seededRepo()
+    const stale = await repo.cli(['check'], { env: { CLAUDECODE: '1', ...measuredEnv('S1', 170000, 1000000), CLAUDE_CODE_SESSION_ID: 'S2' } })
+    expect(stale.code).toBe(0)
+    expect(adapterOf(stale.stdout)).toBe('adapter: claude-code — reading not trusted in this session (stale)')
+    // Pi before its first response sends tokens 0 (P7)
+    const reading = JSON.stringify({ session: 'P', tokens: 0, window: 200000 })
+    const early = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P', WITNESS_CONTEXT: reading } })
+    expect(adapterOf(early.stdout)).toBe('adapter: pi — no reading yet in this session')
   })
 
   it('says it cannot tell outside a harness session', async () => {
     const repo = await seededRepo()
     const res = await repo.cli(['check'])
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain('adapter: not checkable outside a harness session — run witness check from a Claude Code or Pi session')
+    expect(adapterOf(res.stdout)).toBe('adapter: not checkable outside a harness session — run witness check from a Claude Code or Pi session')
   })
 })
 
