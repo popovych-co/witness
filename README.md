@@ -259,7 +259,7 @@ after `implement.stepsPerDispatch` steps instead; nothing else hands over.
 Operator notes, non-load-bearing — the design depends on none of them:
 
 - **Mind the window.** The limit is a share, so one warm-up weighs differently by model:
-  51k tokens is 5% of a 1M window and 26% of a 200k one. A session that opens over the
+  51k tokens is 5% of a 1M window and 25% of a 200k one. A session that opens over the
   limit is warned (`warn: this session opens at …`) and works one step per slice; on a
   small window, raise `session.contextLimit` or accept a warm-up per step.
 - **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt

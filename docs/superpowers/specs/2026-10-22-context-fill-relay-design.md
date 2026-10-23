@@ -127,7 +127,7 @@ WITNESS_CONTEXT={"session":"<harness session id>","tokens":31627,"window":100000
   Otherwise the reading is **unmeasured**, with a named reason: `no adapter`, `stale` (session mismatch), `malformed`, or `no reading yet`.
 - **`no reading yet`** covers `tokens` absent (Claude Code before the first response) and `tokens: 0` (Pi before the first response), per P7.
 - The Pi adapter maps Pi's `contextWindow` to the contract's `window`. Each harness's `tokens` keeps its own meaning (§3).
-- The session check is what makes stale values harmless. A drive process launched from a chat session's Bash inherits that chat session's `WITNESS_CONTEXT`. Drive also strips the variable from every child's environment, as a second guard. *(Amended during the build, 2026-10-22: not for drive, see §4.9.)*
+- The session check is what makes stale values harmless. A drive process launched from a chat session's Bash inherits that chat session's `WITNESS_CONTEXT`. Drive also strips the variable from every child's environment, as a second guard. *(Amended during the build, 2026-10-22: the session check does not cover drive's own process — see §4.9.)*
 - The CLI computes the percentage itself from `tokens / window`. The adapter's `percent` is display only, so the two harnesses can't round differently.
 
 ### 4.2 The limit
