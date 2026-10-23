@@ -46,9 +46,10 @@ const f = (level: Finding['level'], area: string, field: string, rule: string, d
   ({ level, area, field, rule, detail })
 
 // Row 191 §4.11. What gives a harness's sessions the reading: on Claude Code the witness-context
-// plugin, installed per machine; on Pi the extension the payload installs.
+// plugin, installed per machine, which a fresh session loads and a running one does not (P9, P10);
+// on Pi the extension the payload installs.
 const ADAPTER_REMEDY: Record<HarnessName, string> = {
-  'claude-code': `install once per machine: ${CONTEXT_INSTALL}`,
+  'claude-code': `install once per machine: ${CONTEXT_INSTALL} then start a new session`,
   pi: `run ${NPX_LATEST} init --agent pi`,
 }
 
@@ -58,9 +59,11 @@ const ADAPTER_REMEDY: Record<HarnessName, string> = {
 // arrived. Whether check runs in a harness session is the detection rung's answer, since each
 // harness names itself on every command it runs. A driver that will not resolve had no detection
 // rung behind it (a detected harness always resolves), so there is no session to speak for, and
-// `check` reports the unreadable `harness:` itself. Only `no adapter` means nothing wrote the
-// variable, so only then is an install the remedy: under any other reason an adapter is loaded,
-// and its reading is one this session cannot trust or one not taken yet.
+// `check` reports the unreadable `harness:` itself. A loaded adapter writes this session's reading
+// before every command or clears the variable, so under `no adapter` nothing wrote it, and under
+// `stale` this session's adapter wrote nothing either: the reading was inherited from an outer
+// session. Both take the install as the remedy. Under `malformed` and `no reading yet` an adapter
+// is loaded, and an install would change nothing.
 function adapterLine(env: Ctx['env'], raw: Record<string, unknown>): string {
   const outside = 'not checkable outside a harness session — run witness check from a Claude Code or Pi session'
   const driver = resolveDriver(env, raw)
@@ -74,8 +77,8 @@ function adapterLine(env: Ctx['env'], raw: Record<string, unknown>): string {
   if (source !== 'detected') return outside
   switch (fill.reason) {
     case 'no adapter': return `${harness.name} — no reading in this session (no adapter) · ${ADAPTER_REMEDY[harness.name]}`
-    case 'stale':
-    case 'malformed': return `${harness.name} — reading not trusted in this session (${fill.reason})`
+    case 'stale': return `${harness.name} — a reading from another session — none from this session's adapter · ${ADAPTER_REMEDY[harness.name]}`
+    case 'malformed': return `${harness.name} — reading not trusted in this session (malformed)`
     case 'no reading yet': return `${harness.name} — no reading yet in this session`
   }
 }
