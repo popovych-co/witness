@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
 import { loadConfig, loadLocalConfig, type Config } from './config.js'
-import { resolveJudge } from './harness.js'
+import { withoutSession } from './context.js'
+import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
@@ -14,8 +15,9 @@ import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
-import { effortStreams, readStream } from './journal.js'
+import { effortStreams, readStream, type Entry } from './journal.js'
 import { effortOf } from './reviewed.js'
+import { vacuousEvidence } from './steps.js'
 import { pendingTxn } from './txn.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
@@ -162,12 +164,25 @@ export async function spawnSession(
   // a scripted fake that performs real CLI acts. Never documented for users — a spawn
   // binary chosen by ambient env is exactly the identity confusion row 90 removed.
   const bin = ctx.env.WITNESS_DRIVE_AGENT_BIN ?? cmd
-  // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
   // Row 180: the marker is the child's target and its recursion guard in one.
-  const run = resolveSpawn(bin, args, {
-    ...ctx.env, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
+  //
+  // Row 191 §4.9: a drive started from a chat session's shell inherits that session's reading
+  // and session variable, and the child is a session of its own that its harness names itself.
+  // The session check already makes a stale reading harmless; leaving both out is the second
+  // guard. The verb drops them on entry too; this holds for any other caller.
+  //
+  // Every harness's detection variable goes too, from the child alone (final review minor 5): its
+  // harness sets its own, and an inherited one named the chat's harness to a child of another — a
+  // claude child of a drive typed in a Pi chat detected Pi, read its own reading as stale and
+  // relayed with /new. Drive keeps them: the judge above, whose worker this is, may be detection's.
+  const inherited = withoutSession(ctx.env)
+  for (const variable of detectionVariables()) delete inherited[variable]
+  const childEnv: Record<string, string | undefined> = {
+    ...inherited, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
-  })
+  }
+  // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
+  const run = resolveSpawn(bin, args, childEnv)
   if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `
   const tail: string[] = []
@@ -273,8 +288,10 @@ const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
 
 const streamLines = (root: string, id: string): number => readStream(root, id).length
 
-// A refused write is the CLI saying no: it moves nothing (F5).
-const moved = (e: { t: string }) => e.t !== 'write-refused'
+// A refused write is the CLI saying no: it moves nothing (F5). Nor does a vacuous red (row 191,
+// final review I3): a session that only re-runs one has done nothing, and counted, it read as
+// progress, so the target was respawned until its spawn cap.
+const moved = (e: Entry) => e.t !== 'write-refused' && !vacuousEvidence(e)
 
 // Row 181. Did anything happen for THIS target? A whole-journal count is satisfied by any
 // other lane's progress, so a stalled flow beside a busy one would spawn until the ceiling.

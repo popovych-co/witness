@@ -28,6 +28,7 @@ import { gateSettled, owedRun } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
+import { reportHandover, slicesLine } from './slice.js'
 
 export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
 export type ChangeClass = 'feature' | 'fix' | 'chore'
@@ -194,7 +195,7 @@ function renderChoices(
   stale = false,
 ): void {
   // D154. Resolved here rather than threaded through four call sites, on this file's own
-  // precedent (`printDispatchArithmetic` loads canon itself so the entry-renderers stay
+  // precedent (`printSliceShape` loads canon itself so the entry-renderers stay
   // pure formatters). Best-effort: a root that will not resolve costs the trust variants,
   // never the block.
   const rootR = primaryRoot(ctx.cwd)
@@ -206,25 +207,24 @@ function renderChoices(
   else ctx.out(cmd('help', liveExits(gate, target, entries, stale, upstream)))
 }
 
-// Row 79: the human approving a plan sees the run's shape before it starts.
-// Display only — no lens, no threshold; loads config/canon itself so the
+// Row 79: the human approving a plan sees the run's shape before it starts. Row 191 §4.10:
+// under a measured harness that shape is the rule that will cut the run into slices, not a
+// count of them. Display only — no lens, no threshold; loads config/canon itself so the
 // entry-renderers stay pure formatters.
-export function printDispatchArithmetic(ctx: Ctx, root: string, gateName: string, target: string): void {
+export function printSliceShape(ctx: Ctx, root: string, gateName: string, target: string): void {
   if (gateName !== 'plan') return
   const cfg = loadConfig(root)
   if (!cfg.ok) return
   const doc = findById(loadCanon(root), target)
   if (!doc || doc.meta.type !== 'plan') return
-  const budget = cfg.value.implement.stepsPerDispatch
-  const steps = ((doc.meta.steps ?? []) as unknown[]).length
-  ctx.out(kv('dispatches', `${steps} step(s) ≈ ${Math.ceil(steps / budget)} dispatch(es) at budget ${budget}`))
+  ctx.out(kv('slices', slicesLine(cfg.value)))
 }
 
 // Row 173. The gate, then — under `autonomy: on` and not a `--manual` run — the settling of
 // the stop it produced or re-showed, in the same invocation, so a chat session and drive
 // meet one rule. Below that line nothing changes: with autonomy off this is `judge` alone.
 export async function runGate(
-  ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean },
+  ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean; handover?: boolean },
 ): Promise<number> {
   const code = await judge(ctx, gateName, target, flags)
   if (code !== EXIT.FINDINGS && code !== EXIT.BLOCKED) return code
@@ -236,7 +236,13 @@ export async function runGate(
   // A dynamic import: settle.ts reaches decide.ts, whose gates/index.js import would close a
   // static cycle through this module — each gate's registerGate would run before GATES exists.
   const { settleStop, settledCode } = await import('./settle.js')
-  return settledCode(code, await settleStop(ctx, rootR.value, cfgR.value, gateName, target))
+  const settled = await settleStop(ctx, rootR.value, cfgR.value, gateName, target)
+  // Row 191 §4.4. A revise settled here is handed to the session that ran the gate, so this is
+  // where a session at its limit hands it to a fresh one. Ship passes `handover: false`: its run
+  // hands over once, at its own exit (Plan's call 7).
+  const revised = settled.kind === 'decided' && (settled.decision === 'revise' || settled.decision === 'revise-upstream')
+  if (revised && flags.handover !== false) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
+  return settledCode(code, settled)
 }
 
 async function judge(
@@ -392,7 +398,7 @@ async function judge(
       entries, upstream: upstreamId,
       ...(kind.entry.outcome === 'stopped' && leftToTail(entries) ? { help: false } : {}),
     })
-    printDispatchArithmetic(ctx, root, spec.gate, target)
+    printSliceShape(ctx, root, spec.gate, target)
     return kind.entry.outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
   }
   if (kind.kind === 'changed-nothing') {
@@ -622,7 +628,7 @@ async function judge(
       entries: after, upstream: upstreamId,
       ...(entry.outcome === 'stopped' && leftToTail(after) ? { help: false } : {}),
     })
-    printDispatchArithmetic(ctx, root, spec.gate, target)
+    printSliceShape(ctx, root, spec.gate, target)
     for (const d of discharged) ctx.out(kv('discharged', `${d.id} — no longer reported by this round`))
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS

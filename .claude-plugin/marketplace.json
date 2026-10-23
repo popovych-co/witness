@@ -6,6 +6,11 @@
       "name": "witness",
       "source": "./plugin",
       "description": "Spec-driven development with evidence gates: brainstorm → PR through six stages and five gates. Stage skills, /witness engine, state-write guard, dashboard on session start."
+    },
+    {
+      "name": "witness-context",
+      "source": "./plugin-context",
+      "description": "The live context reading behind witness's context-fill relay: puts the session's fill into every Bash command and warns once per session at the configured limit. Install once per machine, beside the witness plugin or init --agent claude-code."
     }
   ]
 }

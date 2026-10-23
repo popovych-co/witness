@@ -73,7 +73,7 @@ describe('runFiltered', () => {
 const REPO = resolve(import.meta.dirname, '..')
 function evidenceChild(cwd: string, plan: string): Promise<{ code: number | null; stderr: string }> {
   return new Promise((done) => {
-    const child = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'test-evidence', plan, '--phase', 'red'],
+    const child = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'test-evidence', plan, '--phase', 'red', '--step', 's1'],
       { cwd, env: fixtureEnv() as NodeJS.ProcessEnv, stdio: ['ignore', 'ignore', 'pipe'] })
     let stderr = ''
     child.stderr!.on('data', (d) => { stderr += String(d) })

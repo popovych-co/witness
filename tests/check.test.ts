@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, approve, fakeScenario, gateEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -391,6 +391,71 @@ describe('witness check — harness findings', () => {
     repo.write('.witness/config.local.yaml', "opener: '/usr/bin/true'\n")
     const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.stdout).toContain('local-config-unignored')
+  })
+})
+
+// Row 191 §4.11. The adapter is judged by the reading itself, the signal the relay depends on,
+// never by Claude Code's own files: the plugin that carries it is installed per machine, outside
+// the repo, and only the session check runs in can say whether its reading arrived.
+describe('witness check — the context adapter', () => {
+  // The whole line, so a remedy that should not be there cannot hide after the expected text.
+  const adapterOf = (stdout: string) => stdout.split('\n').find((l) => l.startsWith('adapter:'))
+
+  it('states a reading seen in this session, and its fill', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', ...measuredEnv('S', 170000, 1000000) } })
+    expect(res.code).toBe(0)
+    expect(adapterOf(res.stdout)).toBe('adapter: claude-code — reading seen · 17% of 1M')
+  })
+
+  // A fresh session loads the plugin and a running one does not (P9, P10), so the remedy says so.
+  // The follow-up is set off from the command, so copying the command takes nothing else with it.
+  const INSTALL = 'install once per machine: claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness — then start a new session'
+
+  it('names the one-time install in a Claude Code session no adapter wrote a reading for', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'S' } })
+    expect(res.code).toBe(0)
+    expect(adapterOf(res.stdout)).toBe(`adapter: claude-code — no reading in this session (no adapter) · ${INSTALL}`)
+  })
+
+  it('names the payload install in a Pi session no adapter wrote a reading for', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P' } })
+    expect(res.code).toBe(0)
+    expect(adapterOf(res.stdout)).toBe(`adapter: pi — no reading in this session (no adapter) · run ${NPX_LATEST} init --agent pi`)
+  })
+
+  // A loaded adapter writes this session's reading before every command or clears the variable,
+  // so a reading naming another session was inherited from an outer one: this session's adapter
+  // wrote nothing, and the install is the remedy, as under `no adapter`.
+  it('names the install where the only reading is another session\'s', async () => {
+    const repo = await seededRepo()
+    const stale = await repo.cli(['check'], { env: { CLAUDECODE: '1', ...measuredEnv('S1', 170000, 1000000), CLAUDE_CODE_SESSION_ID: 'S2' } })
+    expect(stale.code).toBe(0)
+    expect(adapterOf(stale.stdout)).toBe(`adapter: claude-code — a reading from another session — none from this session's adapter · ${INSTALL}`)
+    const pi = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P2', ...measuredEnv('P1', 170000, 1000000) } })
+    expect(adapterOf(pi.stdout)).toBe(`adapter: pi — a reading from another session — none from this session's adapter · run ${NPX_LATEST} init --agent pi`)
+  })
+
+  // A malformed reading, or none taken yet, means an adapter is loaded and wrote the variable: an
+  // install would change nothing, so the line names the reason and no remedy.
+  it('names the reason alone when a loaded adapter wrote a reading this session cannot use', async () => {
+    const repo = await seededRepo()
+    const broken = await repo.cli(['check'], { env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'S', WITNESS_CONTEXT: '{"session":"S"' } })
+    expect(broken.code).toBe(0)
+    expect(adapterOf(broken.stdout)).toBe('adapter: claude-code — reading not trusted in this session (malformed)')
+    // Pi before its first response sends tokens 0 (P7)
+    const reading = JSON.stringify({ session: 'P', tokens: 0, window: 200000 })
+    const early = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P', WITNESS_CONTEXT: reading } })
+    expect(adapterOf(early.stdout)).toBe('adapter: pi — no reading yet in this session')
+  })
+
+  it('says it cannot tell outside a harness session', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(0)
+    expect(adapterOf(res.stdout)).toBe('adapter: not checkable outside a harness session — run witness check from a Claude Code or Pi session')
   })
 })
 

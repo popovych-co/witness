@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs'
 import { configPath } from './config.js'
+import { journalStamp } from './context.js'
 import { stateFloor } from './floor.js'
 import { primaryRoot } from './gitio.js'
+import { withJournalCtx } from './journal.js'
 import { renderRefusal, v } from './refusal.js'
 import { NPX_LATEST, compareTriple, version } from './version.js'
 
@@ -37,6 +39,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   'test-evidence': () => import('./verbs/evidence.js'),
   'verify-red': () => import('./verbs/evidence.js').then((m) => ({ run: m.runVerifyRed })),
   'dispatch-report': () => import('./verbs/dispatch.js'),
+  // Row 191 §4.3. The close of a scaffolding step, the one plan step with no evidence to witness.
+  'step-close': () => import('./verbs/step-close.js'),
   adopt: () => import('./verbs/adopt.js'),
   gate: () => import('./verbs/gate.js'),
   decide: () => import('./verbs/decide.js'),
@@ -91,10 +95,11 @@ const VERB_USAGE: Record<string, string> = {
   ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',
   status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
+  'step-close': 'witness step-close <plan-id> --step <id>',
   sync: 'witness sync',
   trust: 'witness trust <artifact-id> [--yes]',
-  'test-evidence': 'witness test-evidence <plan-id> --phase red|green',
-  'verify-red': 'witness verify-red <plan-id> [--base <ref>]',
+  'test-evidence': 'witness test-evidence <plan-id> --phase red|green [--step <id>]',
+  'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
 }
 
 // Row 116 moved the body to version.ts, which journal.ts can import without closing a
@@ -152,11 +157,15 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
       }
     }
   }
+  // Row 191 §4.8. Every line this command journals carries the session it runs in, read once
+  // from this invocation's own env: an in-process `main` (drive's decisions, a test's CLI) is
+  // an invocation of its own, with its own env and so its own stamp.
+  const stamp = journalStamp(ctx.env)
   if (!verb || verb === 'help' || verb === '--help') {
     if (!verb) {
       const rootRes = primaryRoot(ctx.cwd)
       if (rootRes.ok && existsSync(configPath(rootRes.value))) {
-        return (await import('./verbs/dashboard.js')).run(ctx, [])
+        return withJournalCtx(stamp, async () => (await import('./verbs/dashboard.js')).run(ctx, []))
       }
     }
     ctx.out(usage())
@@ -173,7 +182,7 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   try {
-    return await (await load()).run(ctx, rest)
+    return await withJournalCtx(stamp, async () => (await load()).run(ctx, rest))
   } catch (e) {
     // Row 113. Eight verbs parse argv with node's strict `parseArgs`, which THROWS on a
     // stray positional or a mistyped flag. bin.ts's crash net then rendered a typo as

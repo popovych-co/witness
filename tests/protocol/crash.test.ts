@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  DESIGN_HTML, SPEC_META, approve, fakeScenario, gateEnv, putVerdict,
+  DESIGN_HTML, SPEC_META, approve, fakeScenario, gateEnv, hermeticEnv, putVerdict,
   seededRepo, witnessDesign, writeDesign, writePlan, writeSpec,
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
@@ -20,7 +20,7 @@ function spawnCli(root: string, args: string[], env: Record<string, string> = {}
   const res = spawnSync(process.execPath, [bin, ...args], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: hermeticEnv(env),
   })
   return { code: res.status ?? -1, stdout: res.stdout, stderr: res.stderr }
 }

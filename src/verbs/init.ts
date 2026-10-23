@@ -7,7 +7,7 @@ import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { loadHarness, resolveDriver, type Harness } from '../harness.js'
 import {
-  installAllHomes, mergeSettings, preflightPayload, readIfExists, recordHarness,
+  CONTEXT_INSTALL, installAllHomes, mergeSettings, preflightPayload, readIfExists, recordHarness,
   writeSettings, type SyncResult,
 } from '../install.js'
 import { probe } from '../probe.js'
@@ -211,6 +211,14 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       // is the parent commit's, because row 87 commits the payload.
       if (synced && synced.overwritten.length > 0) {
         ctx.out(kv('payload-overwritten', `${synced.overwritten.join(' · ')} — replaced with what ${version()} ships; the previous content is one git revert away`))
+      }
+      // Row 191 §4.11. The settings now declare the context plugin, but a declaration alone
+      // loads nothing headless (P9), and whether this machine installed it is Claude Code's to
+      // know, not the repo's: so say it every time, at the one moment the human is installing.
+      // A fresh session loads the installed plugin and a running one does not (P9, P10); the dash
+      // keeps that follow-up out of the command a human copies.
+      if (harness.name === 'claude-code') {
+        ctx.out(kv('adapter', `install once per machine — ${CONTEXT_INSTALL} — then start a new session`))
       }
       // Revision 4: surface the prerequisite at the one moment the human can act on it
       // cheaply. A note, not a refusal — a machine may legitimately author without ever

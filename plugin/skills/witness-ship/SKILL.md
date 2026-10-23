@@ -27,6 +27,7 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.19.4}"
 - **Refusal repair loop:** a `witness` verb exiting 2 prints structured violations (`field · rule · got · want`). Fix your input and retry — **3 total attempts** per artifact, then stop, show the human the violation list verbatim, and end your turn.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
 - **Re-entrancy:** derive position from CLI output (`$WITNESS next`, the dashboard, `log`, `index`) — never from conversation memory. Killed and re-run, you must converge.
+- **A `witness: context …` line is addressed to you.** Once per session, when this session's context has filled to the configured limit, it follows a command's result. Finish the act you are in (here: a fix, through the `witness ship` run that carries it). The hand-over is the CLI's: it happens only when the CLI prints a `relay:` line with no `run:`. When none prints, keep working.
 
 ## Drive the phase machine
 
@@ -38,7 +39,7 @@ You are the ship session — spawned fresh at the primary root via the `run:` ha
 $WITNESS ship <plan-id>    # append --manual when the run asked for it
 ```
 
-The CLI derives the phase from world state (`pr:` field, journal, PR head) — killed anywhere, re-running converges. Your job per outcome:
+The CLI derives the phase from world state (`pr:` field, journal, PR head) — killed anywhere, re-running converges. **A run that ends with a `relay:` line** has reached this session's context limit, whatever its outcome: render what it printed above that line, print the `relay:` line verbatim, and END YOUR TURN — the next ship pass runs in a fresh session. That holds in the CI loop too: after a relay, never fix and re-run ship here. Otherwise, your job per outcome:
 
 - **Gate ran and stopped** (it *always stops* — the ship gate is a standing stop): render the checks (tests · lint · drift lane), the reviewer findings, and its ranked options verbatim and in full, then END YOUR TURN. The two-lane drift check ran inside: deterministic lane fail-closed, drift-reviewer advisory.
 - **After the human approves** → run `$WITNESS ship <plan-id>` again: it commits the worktree (the sole code commit — implement leaves everything uncommitted), pushes the branch, opens the PR (`pr:` stamped), rebases if main moved, and watches CI.

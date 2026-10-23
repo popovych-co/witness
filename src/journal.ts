@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tryGit } from './gitio.js'
@@ -23,6 +24,9 @@ export type EntryType =
   // Row 179. A human's assertion that a manual need is met: journaled, never a frontmatter
   // rewrite, so no content sha moves when the world changes.
   | 'need-satisfied'
+  // Row 191 §4.3. A scaffolding step's close. Such a step has no red→green to witness, and
+  // until now it left no trace, so the CLI could not tell where a plan stood.
+  | 'step-close'
 
 export interface Entry {
   v: 1
@@ -58,6 +62,10 @@ export interface StatusEntry {
   note?: string
 }
 
+// Row 191 §4.8. The session a line was written in, as a hash (the journal is committed, so
+// never the raw id), and the harness's reading beside it when that reading was trusted.
+export interface JournalCtx { session: string; tokens?: number; window?: number }
+
 const dir = (root: string) => join(root, '.witness', 'journal')
 
 export const journalRel = (id: string) => `.witness/journal/${id}.jsonl`
@@ -66,14 +74,33 @@ export function streamExists(root: string, id: string): boolean {
   return existsSync(join(root, journalRel(id)))
 }
 
+// Row 191 §4.8. The stamp of the invocation that is writing. `main` opens the scope once per
+// command, and it is async-local rather than a module variable, so two invocations overlapping
+// in one process (a test's racing CLIs, a decision drive runs in process) each write their own
+// session, never the other's.
+const journalCtx = new AsyncLocalStorage<JournalCtx | undefined>()
+
+export function withJournalCtx<T>(c: JournalCtx | undefined, fn: () => T): T {
+  return journalCtx.run(c, fn)
+}
+
 // Row 116. `w` is the CLI that wrote this line. Stamped HERE because entryLine is the
 // single funnel every state write passes through, so one edit covers fourteen entry types
 // and every verb without a widened signature to disagree over. It is what lets the state
 // name its own floor (floor.ts) instead of a stored number that drifts from the entries it
 // summarises — and it is why a repo can refuse a CLI older than its own history without
 // consulting any payload file, which is the guard row 102 structurally could not be.
-export const entryLine = (entry: { t: EntryType; [k: string]: unknown }): string =>
-  JSON.stringify({ v: 1, w: version(), ...entry })
+//
+// Row 191 stamps `ctx` here for the same reason: every kind carries the session it was
+// written in, and the reading when there was one, with no per-kind case to forget. The stamp
+// is the writer's alone. A `ctx` the entry carries is dropped, since a line read back and
+// journaled again (a deferral moving home, D122) is written by its mover; the writer's own
+// goes last, after the content, and only when the writer runs in a session.
+export const entryLine = (entry: { t: EntryType; [k: string]: unknown }): string => {
+  const { ctx: _carried, ...content } = entry
+  const ctx = journalCtx.getStore()
+  return JSON.stringify({ v: 1, w: version(), ...content, ...(ctx !== undefined ? { ctx } : {}) })
+}
 
 export function appendEntry(root: string, id: string, entry: { t: EntryType; [k: string]: unknown }): string {
   mkdirSync(dir(root), { recursive: true })

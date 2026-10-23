@@ -162,6 +162,21 @@ describe('invokeReviewer exports the lens', () => {
   })
 })
 
+// Row 191 §4.6. A reviewer is a harness session of its own, and on Claude Code the context
+// adapter loads in it like in any other; the mark is what keeps the adapter's warning out.
+describe('invokeReviewer marks its spawn as a reviewer', () => {
+  for (const [harness, calls] of [[claudeHarness, 'claude-calls'], [piHarness, 'pi-calls']] as const) {
+    it(`a ${harness.name} reviewer runs with WITNESS_REVIEWER=1`, () => {
+      const repo = tmpRepo()
+      const scenario = fakeScenario()
+      putVerdict(scenario, { coverage: [], findings: [] })
+      const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+      expect(invokeReviewer(ctx, harness, { cwd: repo.root, prompt: 'x' }).ok).toBe(true)
+      expect(readFileSync(join(scenario, calls, 'call-1', 'reviewer'), 'utf8')).toBe('1\n')
+    })
+  }
+})
+
 // The async twin the battery fans out on. Same cases, same rows: the two invokers share
 // their preparation and their result mapping, so a drift between them is a bug.
 describe('invokeReviewerAsync', () => {

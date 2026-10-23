@@ -3,8 +3,12 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
-import { DEFAULT_HARNESS, HARNESSES, judgeLine, loadHarness, resolveJudge, resolveSkills, skillPins } from '../harness.js'
-import { packageRoot, payloadHomes } from '../install.js'
+import { pctOf, readFill, windowLabel } from '../context.js'
+import {
+  DEFAULT_HARNESS, HARNESSES, judgeLine, loadHarness, resolveDriver, resolveJudge, resolveSkills, skillPins,
+  type HarnessName,
+} from '../harness.js'
+import { CONTEXT_INSTALL, packageRoot, payloadHomes } from '../install.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
@@ -40,6 +44,45 @@ interface Finding {
 
 const f = (level: Finding['level'], area: string, field: string, rule: string, detail: string): Finding =>
   ({ level, area, field, rule, detail })
+
+// Row 191 §4.11. What gives a harness's sessions the reading: on Claude Code the witness-context
+// plugin, installed per machine, which a fresh session loads and a running one does not (P9, P10),
+// the follow-up set off by a dash so the command copies on its own; on Pi the extension the payload
+// installs.
+const ADAPTER_REMEDY: Record<HarnessName, string> = {
+  'claude-code': `install once per machine: ${CONTEXT_INSTALL} — then start a new session`,
+  pi: `run ${NPX_LATEST} init --agent pi`,
+}
+
+// Row 191 §4.11. The adapter of the harness driving this session, judged by the reading itself,
+// the signal the relay depends on, and never by Claude Code's own files: the plugin is installed
+// per machine, outside the repo, and only the session check runs in can say whether its reading
+// arrived. Whether check runs in a harness session is the detection rung's answer, since each
+// harness names itself on every command it runs. A driver that will not resolve had no detection
+// rung behind it (a detected harness always resolves), so there is no session to speak for, and
+// `check` reports the unreadable `harness:` itself. A loaded adapter writes this session's reading
+// before every command or clears the variable, so under `no adapter` nothing wrote it, and under
+// `stale` this session's adapter wrote nothing either: the reading was inherited from an outer
+// session. Both take the install as the remedy. Under `malformed` and `no reading yet` an adapter
+// is loaded, and an install would change nothing.
+function adapterLine(env: Ctx['env'], raw: Record<string, unknown>): string {
+  const outside = 'not checkable outside a harness session — run witness check from a Claude Code or Pi session'
+  const driver = resolveDriver(env, raw)
+  if (!driver.ok) return outside
+  const { harness, source } = driver.value
+  const fill = readFill(env)
+  if (fill.measured) {
+    const { tokens, window } = fill.reading
+    return `${harness.name} — reading seen · ${pctOf(tokens, window)}% of ${windowLabel(window)}`
+  }
+  if (source !== 'detected') return outside
+  switch (fill.reason) {
+    case 'no adapter': return `${harness.name} — no reading in this session (no adapter) · ${ADAPTER_REMEDY[harness.name]}`
+    case 'stale': return `${harness.name} — a reading from another session — none from this session's adapter · ${ADAPTER_REMEDY[harness.name]}`
+    case 'malformed': return `${harness.name} — reading not trusted in this session (malformed)`
+    case 'no reading yet': return `${harness.name} — no reading yet in this session`
+  }
+}
 
 export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (argv.includes('--drift')) return runDrift(ctx, argv)
@@ -407,6 +450,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   if (skillsAbsent.length === HARNESSES.length) {
     ctx.out(kv('skills', `none visible here (${skillsAbsent.join(' · ')})`))
   }
+  // Every run, stated: a session without the reading is not broken canon, it runs on the step
+  // budget (§4.7), and the line is how the human learns which one this session is on.
+  ctx.out(kv('adapter', adapterLine(ctx.env, cfg.ok ? cfg.value.raw : {})))
   // Judge first, then the floor computed FOR that judge: read top to bottom, the second
   // line is a consequence of the first, and the pair answers "which reviewers will this
   // repo spawn, and are they calibrated". Stated lines, never findings — neither touches

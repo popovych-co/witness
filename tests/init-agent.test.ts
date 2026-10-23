@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { mergeSettings } from '../src/install.js'
 import { tmpRepo } from './helpers.js'
 
 describe('witness init --agent', () => {
@@ -12,6 +13,8 @@ describe('witness init --agent', () => {
     expect(repo.read('.pi/prompts/witness.md')).toContain('# /witness — the engine')
     expect(repo.read('.pi/extensions/witness.ts')).toContain('canonGuard')
     expect(repo.read('.pi/extensions/canon-guard.mjs')).toContain('export function canonGuard')
+    // witness.ts imports it statically: without it the whole extension, guard included, fails to load
+    expect(repo.read('.pi/extensions/context-core.mjs')).toContain('export function contextLimitOf')
     expect(repo.read('.pi/extensions/session-dashboard.sh')).toContain('witness.config.yaml')
     expect(repo.read('witness.config.yaml')).toContain('harness: pi')
     // committed, not just written: pi resolves .pi/extensions cwd-relative with no
@@ -230,6 +233,58 @@ describe('witness init --agent', () => {
     expect(settings.permissions.allow).toContain('Bash(ls *)')          // the user's entry survives
     expect(settings.permissions.deny).toEqual(['Bash(rm -rf *)'])       // untouched
     expect(settings.permissions.allow).not.toContain('Bash(*)')         // scope is the CLI, never Bash
+  })
+
+  // Row 191 §4.11 (P9). The context reading comes from a hooks module, and only a plugin carries
+  // one: the repo declares the witness-context plugin the way Claude Code lets a repo declare a
+  // plugin it needs, and init names the one-time machine install, because a declaration alone
+  // does not load in a headless session. A fresh session loads the installed plugin and a running
+  // one does not (P9, P10), so the line ends there.
+  it('declares the witness-context plugin and names the machine install', async () => {
+    const repo = tmpRepo()
+    const res = await repo.cli(['init', '--agent', 'claude-code'])
+    expect(res.code).toBe(0)
+    const settings = JSON.parse(repo.read('.claude/settings.json'))
+    expect(settings.extraKnownMarketplaces).toEqual({ witness: { source: { source: 'github', repo: 'popovych-co/witness' } } })
+    expect(settings.enabledPlugins).toEqual({ 'witness-context@witness': true })
+    expect(res.stdout.split('\n')).toContain('adapter: install once per machine — claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness — then start a new session')
+    expect(repo.git('status', '--porcelain')).toBe('')
+  })
+
+  // Append-only, as the hooks and the allowlist are: an entry under either key is the human's,
+  // a `false` that turned the plugin off and a `witness` marketplace pointed at a checkout included.
+  it("keeps the user's marketplaces, plugins and an explicit false", async () => {
+    const repo = tmpRepo()
+    const mine = { source: { source: 'github', repo: 'me/mine' } }
+    repo.write('.claude/settings.json', JSON.stringify({
+      extraKnownMarketplaces: { mine },
+      enabledPlugins: { 'x@mine': true, 'witness-context@witness': false },
+    }, null, 2))
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
+    const settings = JSON.parse(repo.read('.claude/settings.json'))
+    expect(settings.extraKnownMarketplaces).toEqual({ mine, witness: { source: { source: 'github', repo: 'popovych-co/witness' } } })
+    expect(settings.enabledPlugins).toEqual({ 'x@mine': true, 'witness-context@witness': false })
+
+    const checkout = { source: { source: 'directory', path: '/src/witness' } }
+    const merged = JSON.parse(mergeSettings(JSON.stringify({ extraKnownMarketplaces: { witness: checkout } })).text)
+    expect(merged.extraKnownMarketplaces).toEqual({ witness: checkout })
+    expect(merged.enabledPlugins).toEqual({ 'witness-context@witness': true })
+  })
+
+  it('a second claude-code init changes nothing', async () => {
+    const repo = tmpRepo()
+    await repo.cli(['init', '--agent', 'claude-code'])
+    expect(mergeSettings(repo.read('.claude/settings.json')).changed).toBe(false)
+    const head = repo.git('rev-parse', 'HEAD')
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+  })
+
+  // Pi's reading comes from its own extension, which the payload installs: nothing to name.
+  it('names no machine install for pi', async () => {
+    const repo = tmpRepo()
+    const res = await repo.cli(['init', '--agent', 'pi'])
+    expect(res.stdout).not.toContain('adapter:')
   })
 
   it('resolves --agent auto from the detection rungs', async () => {

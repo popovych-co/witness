@@ -28,6 +28,8 @@ export interface Harness {
   // standing invitation to re-derive the flag from it and restore bug B2.
   defaultProvider?: string
   relay: string
+  // Row 191 §4.1: the env var naming this harness's session, read by src/context.ts.
+  session: string
   settings?: string
   // Does ONE native install deliver skills AND engine AND guard? Claude Code's
   // marketplace plugin does, out of band of every directory check can probe — so an
@@ -129,6 +131,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     name: 'claude-code',
     launch: 'claude',
     relay: '/clear',
+    session: 'CLAUDE_CODE_SESSION_ID',
     settings: '.claude/settings.json',
     bundled: true,
     payload: [
@@ -168,13 +171,15 @@ const REGISTRY: Record<HarnessName, Harness> = {
     launch: 'pi',
     defaultProvider: 'anthropic',
     relay: '/new',
+    session: 'PI_SESSION_ID',
     bundled: false,
     payload: [
       { from: 'plugin/commands/witness.md', to: '.pi/prompts/witness.md' },
       { from: 'plugin/hooks/canon-guard.mjs', to: '.pi/extensions/canon-guard.mjs' },
-      // Source-tree sibling of canon-guard.mjs, exactly as it is in .pi/extensions/:
-      // the adapter imports the core with ONE static relative specifier, and a
-      // specifier that only resolves after install is a trap no unit test can hold.
+      { from: 'plugin/hooks/context-core.mjs', to: '.pi/extensions/context-core.mjs' },
+      // Source-tree sibling of both cores, exactly as it is in .pi/extensions/: the
+      // adapter imports each with ONE static relative specifier, and a specifier that
+      // only resolves after install is a trap no unit test can hold.
       { from: 'plugin/hooks/witness-pi.ts', to: '.pi/extensions/witness.ts' },
       { from: 'plugin/hooks/session-dashboard.sh', to: '.pi/extensions/session-dashboard.sh' },
     ],
@@ -236,11 +241,22 @@ export function loadHarness(name: string): Result<Harness> {
 interface Rung { source: HarnessSource; name: string }
 
 // Detection tests PRESENCE: neither CLAUDECODE=1 nor PI_CODING_AGENT=true is a documented
-// value contract.
+// value contract. Each harness sets its variable on the commands it runs; read in this order.
+const DETECTION: ReadonlyArray<{ variable: string; name: HarnessName }> = [
+  { variable: 'PI_CODING_AGENT', name: 'pi' },
+  { variable: 'CLAUDECODE', name: 'claude-code' },
+]
+
 function detectedRung(env: Record<string, string | undefined>): Rung | undefined {
-  if (env.PI_CODING_AGENT !== undefined) return { source: 'detected', name: 'pi' }
-  if (env.CLAUDECODE !== undefined) return { source: 'detected', name: 'claude-code' }
-  return undefined
+  const hit = DETECTION.find((d) => env[d.variable] !== undefined)
+  return hit === undefined ? undefined : { source: 'detected', name: hit.name }
+}
+
+// Row 191 §4.9 (final review minor 5). Every harness's detection variable: what a session drive
+// spawns must not inherit, since its own harness sets its own on the commands it runs, and one
+// inherited from the chat drive was typed in would name that chat's harness to a child of another.
+export function detectionVariables(): string[] {
+  return DETECTION.map((d) => d.variable)
 }
 
 function declaredRung(raw: Record<string, unknown>): Rung | undefined {

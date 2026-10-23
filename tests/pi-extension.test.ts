@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import register from '../plugin/hooks/witness-pi.ts';
@@ -8,7 +8,9 @@ type Handler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown;
 
 // A stub ExtensionAPI. Pi cannot be loaded in CI (Tier 1 never loads a harness), so the
 // adapter is exercised against the surface pi documents: pi.on(name, handler), handlers
-// receiving (event, ctx), a blocking return of { block, reason }.
+// receiving (event, ctx), a blocking return of { block, reason }. The context reading comes
+// from ctx.getContextUsage() and the session from ctx.sessionManager (types.d.ts:193-244);
+// `state` is what they answer.
 function stubPi() {
   const handlers = new Map<string, Handler[]>();
   const notes: string[] = [];
@@ -20,16 +22,38 @@ function stubPi() {
     for (const h of handlers.get(name) ?? []) last = await h(event, ctx);
     return last;
   };
-  const ctx = { cwd: '', hasUI: true, ui: { notify: (m: string) => notes.push(m) } };
-  return { pi, fire, ctx, notes };
+  const state = { usage: { tokens: 16523, contextWindow: 1000000, percent: 1.65 } as unknown, session: 'p1' };
+  const ctx = {
+    cwd: '', hasUI: true, ui: { notify: (m: string) => notes.push(m) },
+    getContextUsage: (): unknown => state.usage,
+    sessionManager: { getSessionId: () => state.session },
+  };
+  return { pi, fire, ctx, notes, state };
 }
 
-function witnessRepo(): string {
+function witnessRepo(config = 'schema: 1\n'): string {
   const dir = mkdtempSync(join(tmpdir(), 'piext-'));
-  writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
+  writeFileSync(join(dir, 'witness.config.yaml'), config);
   for (const d of ['specs', 'plans', 'src']) mkdirSync(join(dir, d), { recursive: true });
   return dir;
 }
+
+// Row 191 §4.1: every bash tool_call writes process.env.WITNESS_CONTEXT, which every later bash
+// child inherits, the guard tests' bash calls included; the suite may itself run inside a
+// measured session. So each test in this file starts without the variable or the reviewer mark,
+// and gives back whatever the process had.
+const KEYS = ['WITNESS_CONTEXT', 'WITNESS_REVIEWER'] as const;
+let saved: Record<string, string | undefined> = {};
+beforeEach(() => {
+  saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  for (const k of KEYS) delete process.env[k];
+});
+afterEach(() => {
+  for (const k of KEYS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
+});
 
 describe('pi extension — canon guard', () => {
   it('blocks a write to canon and returns the guard reason to the model', async () => {
@@ -131,5 +155,143 @@ describe('pi extension — dashboard injection', () => {
     } finally {
       delete process.env.WITNESS_DASHBOARD;
     }
+  });
+});
+
+describe('pi extension — the context reading and the warning (row 191 §4.1, §4.6)', () => {
+  const OVER = { tokens: 210000, contextWindow: 1000000, percent: 21 };
+  const LIMIT_20 = 'schema: 1\nsession:\n  contextLimit: 20\n';
+  const bashResult = (text: string) => ({
+    type: 'tool_result', toolName: 'bash', toolCallId: 't1', input: {}, content: [{ type: 'text', text }],
+    isError: false, details: undefined,
+  });
+  // One bash command through both events: what the adapter returned for its result.
+  async function run(s: ReturnType<typeof stubPi>, command: string): Promise<unknown> {
+    await s.fire('tool_call', { toolName: 'bash', input: { command } }, s.ctx);
+    return s.fire('tool_result', bashResult('ok'), s.ctx);
+  }
+  function overTheLimit(config = LIMIT_20) {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo(config);
+    s.state.usage = OVER;
+    return s;
+  }
+
+  it('sets WITNESS_CONTEXT for a bash call', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    expect(await s.fire('tool_call', { toolName: 'read', input: { path: 'src/x.ts' } }, s.ctx)).toBeUndefined();
+    expect(process.env.WITNESS_CONTEXT).toBeUndefined();
+    expect(await s.fire('tool_call', { toolName: 'bash', input: { command: 'ls' } }, s.ctx)).toBeUndefined();
+    expect(JSON.parse(process.env.WITNESS_CONTEXT!)).toMatchObject({ session: 'p1', tokens: 16523, window: 1000000 });
+  });
+
+  it('a canon block still wins', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    const r = await s.fire('tool_call', { toolName: 'bash', input: { command: 'echo x > plans/p.md' } }, s.ctx);
+    expect(r).toMatchObject({ block: true });
+    expect(process.env.WITNESS_CONTEXT).toBeUndefined();
+  });
+
+  it('warns once after the session ran the witness CLI, at or over the limit', async () => {
+    const s = overTheLimit();
+    const r = (await run(s, '$WITNESS next')) as { content: Array<{ type: string; text: string }> };
+    expect(r.content[0]).toEqual({ type: 'text', text: 'ok' });
+    expect(r.content.at(-1)!.text).toMatch(/^witness: context 21% of 1M has reached the 20% limit/);
+    expect(await run(s, 'ls')).toBeUndefined();
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+  });
+
+  it('stays silent before any witness command', async () => {
+    const s = overTheLimit();
+    expect(await run(s, 'ls')).toBeUndefined();
+    expect(await run(s, 'grep -rn "witness next" src')).toBeUndefined();
+  });
+
+  it('stays silent in a reviewer spawn', async () => {
+    const s = overTheLimit();
+    process.env.WITNESS_REVIEWER = '1';
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+  });
+
+  it('stays silent without a witness.config.yaml', async () => {
+    const s = overTheLimit();
+    s.ctx.cwd = mkdtempSync(join(tmpdir(), 'piext-plain-'));
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+  });
+
+  it('stays silent under the limit', async () => {
+    const s = overTheLimit();
+    s.state.usage = { tokens: 190000, contextWindow: 1000000, percent: 19 };
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+  });
+
+  it('a new session id can warn again', async () => {
+    const s = overTheLimit();
+    expect(await run(s, '$WITNESS next')).toBeTruthy();
+    s.state.session = 'p2';
+    expect(await run(s, 'ls')).toBeUndefined();             // p2 has not run witness yet
+    expect(await run(s, '$WITNESS next')).toBeTruthy();
+  });
+
+  // The walk stops at the nearest config that exists, as canon-guard.mjs's does: one that cannot
+  // be read (here a directory by that name) gives no limit, and a parent's never stands in for it.
+  it('stays silent when the nearest config cannot be read, whatever lies above it', async () => {
+    const s = overTheLimit();
+    const sub = join(s.ctx.cwd, 'sub');
+    mkdirSync(join(sub, 'witness.config.yaml'), { recursive: true });
+    s.ctx.cwd = sub;
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    rmSync(join(sub, 'witness.config.yaml'), { recursive: true });
+    expect(await run(s, '$WITNESS next')).toBeTruthy();      // a directory with none: one level up
+  });
+
+  // Final review I2. In a worktree the adapter reads the primary root's config, as the CLI does:
+  // the worktree's copy is the config as it stood when the worktree was cut (here 20%, before the
+  // limit was raised to 30% on main), and a warning from it would contradict the CLI's `context:`.
+  it('reads the primary root\'s limit from inside a worktree', async () => {
+    const s = overTheLimit('schema: 1\nsession:\n  contextLimit: 30\n');
+    const wt = join(s.ctx.cwd, '.witness', 'worktrees', 'p1');
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(wt, 'witness.config.yaml'), LIMIT_20);
+    s.ctx.cwd = join(wt, 'src');
+    s.state.usage = { tokens: 250000, contextWindow: 1000000, percent: 25 };
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    s.state.usage = { tokens: 300000, contextWindow: 1000000, percent: 30 };
+    const r = (await run(s, '$WITNESS next')) as { content: Array<{ text: string }> };
+    expect(r.content.at(-1)!.text).toMatch(/^witness: context 30% of 1M has reached the 30% limit/);
+  });
+
+  // The last reading names this same session, so left standing it would pass the CLI's check as
+  // live for a command it was never taken for.
+  it('clears the last reading when a new one cannot be taken', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_call', { toolName: 'bash', input: { command: 'ls' } }, s.ctx);
+    expect(process.env.WITNESS_CONTEXT).toBeDefined();
+    s.ctx.getContextUsage = () => { throw new Error('no model'); };
+    expect(await s.fire('tool_call', { toolName: 'bash', input: { command: 'ls' } }, s.ctx)).toBeUndefined();
+    expect(process.env.WITNESS_CONTEXT).toBeUndefined();
+  });
+
+  // tool_call is the event pi blocks the tool on when a handler throws (the guard tests above
+  // say why), so a broken context API must cost nothing but the reading. The session latches
+  // under the limit first, so tool_result too gets as far as the throwing call.
+  it('never throws when the context API throws', async () => {
+    const s = overTheLimit();
+    s.state.usage = { tokens: 190000, contextWindow: 1000000, percent: 19 };
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    let calls = 0;
+    s.ctx.getContextUsage = () => { calls++; throw new Error('no model'); };
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    expect(calls).toBe(2);                                   // tool_call's and tool_result's
+    const blocked = await s.fire('tool_call', { toolName: 'write', input: { path: 'specs/a.md' } }, s.ctx);
+    expect(blocked).toMatchObject({ block: true });
+    expect(await s.fire('tool_call', { toolName: 'write', input: { path: 'src/x.ts' } }, s.ctx)).toBeUndefined();
   });
 });

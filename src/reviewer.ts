@@ -165,8 +165,10 @@ function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result
   // prompt rides stdin, so the shim's second parse of the command line never sees it. A
   // reviewer that cannot be started is an invocation failure on every platform: the
   // resolution's own got/want, under the rule a missing binary has always reported.
+  // Row 191 §4.6: a reviewer is a harness session of its own, and on Claude Code the context
+  // adapter loads in it like in any other; WITNESS_REVIEWER keeps its warning out of a review.
   const run = resolveSpawn(cmd, args, {
-    ...ctx.env, ...env, ...(opts.lens !== undefined ? { WITNESS_LENS: opts.lens } : {}),
+    ...ctx.env, ...env, WITNESS_REVIEWER: '1', ...(opts.lens !== undefined ? { WITNESS_LENS: opts.lens } : {}),
   })
   if (!run.ok) return refuse(run.violations.map((x) => ({ ...x, rule: 'reviewer-invocation' })))
   return ok({

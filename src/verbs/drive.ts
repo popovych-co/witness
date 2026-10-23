@@ -2,13 +2,25 @@ import { parseArgs } from 'node:util'
 import { queueAsk } from '../ask.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
+import { withoutSession } from '../context.js'
 import { detachDrive, driveLoop } from '../drive.js'
 import { acquireDriveLock, DRIVE_ENV, DRIVE_LOG_ENV, driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { primaryRoot } from '../gitio.js'
+import { withJournalCtx } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { loadCanon } from '../scan.js'
 import { kv } from '../toon.js'
 import { resolveFlow } from './next.js'
+
+// Row 191 §4.9. Drive is a scheduler, not a session. Typed in a chat session's shell, it
+// inherits that session's reading and session variable: everything it journals (a decision it
+// settles or takes at its prompt, an ask it queues) would read as the chat session's, and every
+// process it starts (a session, a detached drive) would inherit both. So it runs without them,
+// outside the stamp `main` opened for this command. A decision taken at its prompt runs `main`
+// again, from the env without them, so no session stamps it either.
+export async function run(ctx: Ctx, argv: string[]): Promise<number> {
+  return withJournalCtx(undefined, () => drive({ ...ctx, env: withoutSession(ctx.env) }, argv))
+}
 
 // D145, amended by row 180. Drive runs every session itself. Under autonomy it asks no
 // decision question, so it needs no terminal; with autonomy off (or `--manual`) it asks at
@@ -16,7 +28,7 @@ import { resolveFlow } from './next.js'
 // rule but the marker drive sets on every child: agents are what drive spawns, never what
 // spawns drive. That refusal is first — before the root lookup — because "a drive session
 // typed this" is true wherever it was typed.
-export async function run(ctx: Ctx, argv: string[]): Promise<number> {
+async function drive(ctx: Ctx, argv: string[]): Promise<number> {
   const refused = (field: string, rule: string, got: string, want: string): number => {
     renderRefusal([v(field, rule, got, want)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED

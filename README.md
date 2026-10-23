@@ -63,11 +63,29 @@ witness is two halves: **six skills**, distributed through the
 **engine + guard + dashboard**, which no skills installer can place — `witness init
 --agent <name>` writes those and commits them.
 
-**Claude Code** — one step, the native path:
+**Claude Code** — the native path:
 
 ```bash
 /plugin marketplace add popovych-co/witness    # skills, engine, guard and dashboard together
 ```
+
+**Claude Code, on either route** (the marketplace plugin above, or `init --agent claude-code`),
+also needs the `witness-context` plugin, installed once per machine — then start a new session:
+
+```bash
+claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness
+```
+
+It puts the session's live context reading into every Bash command, which is what lets a
+session hand over at `session.contextLimit` (see Run economics below). The reading comes from
+a hooks module, and only a plugin can carry one. `init --agent claude-code` also declares the
+plugin in `.claude/settings.json`, the way a project names a plugin it needs, but the
+declaration alone does not load it in a headless session (`claude -p`, `witness drive`). A
+session loads the plugin when it starts, so one already running when you install it does not:
+start a new one. The install is a copy: after upgrading witness, `claude plugin update
+witness-context@witness` refreshes it, for the sessions started afterwards. Without the plugin
+witness still runs, on the step budget, and says so; `witness check`, run from a session, reports
+whether that session sees the reading.
 
 **Pi** (and any other agent the installer supports):
 
@@ -148,6 +166,8 @@ either.
 |---|---|
 | `harness: claude-code \| pi` | **the judge** — which harness runs this repo's gate reviewers, is measured by `calibrate`, and is probed by `check`. Judgment resolves `harness:` → `PI_CODING_AGENT` → `CLAUDECODE` → `claude-code`; session lines (`next`'s handoff, `dispatch`'s relay, `init --agent auto`) resolve detection first, because those name the CLI you are about to type at. Committed, so it binds every teammate's gates; `witness init --agent` writes it once and never re-points it. Undeclared repos are judged by whichever agent's session is open — `witness check` and `witness status` say so |
 | `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
+| `session.contextLimit` | the share of a session's context window, in percent, at which witness hands the work to a fresh session (integer 1–100, default 20). The harness measures the fill; the CLI decides where the journal carries the position — at a step close, after a revise, at a `witness ship` exit and at `next` — and never mid-red. A session whose fill cannot be read says so (`context: unmeasured (<reason>)`): an implement session then hands over by `implement.stepsPerDispatch`, and nothing else hands over (DESIGN.md row 191) |
+| `implement.stepsPerDispatch` | the step budget: steps an implement session closes before it hands over when its fill cannot be read (default 3) — the fallback for `session.contextLimit` |
 | `drive.sessionTimeoutMs` | milliseconds a `drive`-spawned session may run before SIGTERM (default 3600000) |
 | `drive.parallel` | sessions `witness drive` runs at once under autonomy, one per target (default 2) |
 | `drive.parallelSuites` | `true` lets test runs in two worktrees overlap (default false: they take turns, because suites that boot servers or browsers collide) |
@@ -198,7 +218,8 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `next` | the one next action across every effort |
 | `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] [--ask "<text>"]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log`; `--ask` queues an ask first; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
 | `ship <plan-id> [--manual]` | lanes → ship gate → PR → CI watch → under autonomy: merge on green · `--manual` keeps that run's stop and merge for a human |
-| `test-evidence` / `verify-red` | journal red/green criteria evidence from a worktree |
+| `test-evidence <plan-id> --phase red\|green [--step <id>]` / `verify-red <plan-id> [--base <ref>] [--step <id>]` | journal red/green criteria evidence from a worktree; `--step` names the plan step the cycle closes — required before the plan's first implement gate (on a plan with a criteria step), left off for a fix round after it. A green that closes a step prints `context:`, `steps:` and `slice:` |
+| `step-close <plan-id> --step <id>` | close a scaffolding step, which has no red→green to witness; prints `context:`, `steps:` and `slice:` as a closing green does, and closing it again changes nothing |
 | `adopt <path>` | absolve a finished hand-edit into the journal |
 | `abandon <plan-id \| effort-slug…>` | wind a plan/effort down; reverts only specs that effort itself wrote — several efforts go as one act, so a split or an amendment they share goes back together |
 | `dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n>` | journal a session slice's telemetry |
@@ -236,15 +257,41 @@ Releasing is `node scripts/release.mjs <major|minor|patch|x.y.z>` followed by tw
 
 ## Run economics (operator notes)
 
-Non-load-bearing knobs for the machine that hosts long implement runs — the design
-depends on none of them (DESIGN.md row 79):
+A witness session ends at a configured share of its context window:
+`session.contextLimit`, 20% by default (DESIGN.md row 191). The harness measures the
+fill — the `witness-context` plugin on Claude Code and the witness extension on Pi put the
+live reading into every shell command's environment — and witness counts no tokens of its
+own. The CLI decides only where the journal already carries the position: at a step
+close (`slice: end`), after a revise, at a `witness ship` exit and at `next`, by
+printing a `relay:` line. A session never hands over mid-red. Once per session, at the
+limit, one line follows a command's result, so a long step learns it is over:
 
+```
+witness: context 21% of 1M has reached the 20% limit — finish what you are in (implement: the red→green), then hand over
+```
+
+Where nothing supplies the reading, witness says so —
+`context: unmeasured (no adapter) — step budget 3` — and an implement session hands over
+after `implement.stepsPerDispatch` steps instead; nothing else hands over.
+
+Operator notes, non-load-bearing — the design depends on none of them:
+
+- **Mind the window.** The limit is a share, so one warm-up weighs differently by model:
+  51k tokens is 5% of a 1M window and 25% of a 200k one. A session that opens over the
+  limit is warned (`warn: this session opens at …`) and works one step per slice; on a
+  small window, raise `session.contextLimit` or accept a warm-up per step. `witness drive`'s
+  defaults were set when a slice was three steps: `drive.sessionTimeoutMs` (1 h) and
+  `drive.caps.spawns` (24). A measured slice on a large window can run past an hour, and on a
+  200k window every slice is one step, so a plan takes more sessions; raise either if drive
+  times out or caps a plan that is still moving.
 - **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt
   cache; on wake the full agent context is re-written at cache-write price. On macOS:
   `witness drive` holds `caffeinate -ims` for its own lifetime (a closed lid on battery
   still sleeps); for a chat session, `caffeinate -dims`, or plug in and disable sleep.
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`** (set at CLI launch) lowers the harness's
-  auto-compaction threshold as belt-and-suspenders under the dispatch budget. It is
-  documented for main sessions only — whether subagents honor it is unverified.
-- The designed mechanisms are the dispatch budget (`implement.stepsPerDispatch`),
-  the loop-width protocol, and `dispatch-report` telemetry — see DESIGN.md rows 79–81.
+  auto-compaction threshold, as belt-and-suspenders under the fill relay. Compaction
+  stays the harness's continuity mechanism, never witness's; the variable is documented
+  for main sessions only — whether subagents honor it is unverified.
+- The designed mechanisms are the fill relay (`session.contextLimit`, with
+  `implement.stepsPerDispatch` for sessions it cannot measure), the loop-width protocol,
+  and `dispatch-report` telemetry — see DESIGN.md rows 79–81 and 191.

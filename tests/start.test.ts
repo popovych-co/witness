@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addOrigin, approve, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { addOrigin, approve, seededRepo, threeStepPlan, writePlan, writeSpec } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 
 // Every D137 case needs the same approved plan; the difference is what remote exists.
@@ -122,6 +122,22 @@ describe('start preflights sync without gating the cut (D138/D137)', () => {
     expect(res.code).toBe(0)
     expect(res.stdout).toContain('sync-auto: dirty')
     expect(existsSync(worktreePath(repo.root, 'auth-refresh-plan-1'))).toBe(true)
+    await repo.cli(['clean'])
+  })
+})
+
+// Row 191 §4.3. Where the plan stands is the CLI's answer, printed where a session begins.
+describe('witness start prints steps:', () => {
+  it('on a fresh start and on re-attach', async () => {
+    const repo = await threeStepPlan()
+    const first = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(first.code).toBe(0)
+    expect(first.stdout).toContain('steps: 0/3 done · next s1')
+
+    expect((await repo.cli(['step-close', 'auth-refresh-plan-1', '--step', 's3'])).code).toBe(0)
+    const again = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(again.code).toBe(0)
+    expect(again.stdout).toContain('steps: 1/3 done · next s1')
     await repo.cli(['clean'])
   })
 })

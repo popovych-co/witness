@@ -28,6 +28,7 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.19.4}"
 - **Refusal repair loop:** `witness design` exiting 2 prints structured violations (`field · rule · got · want`). Fix and retry — **3 total attempts**, then stop and show the human the list verbatim.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
 - **Re-entrancy:** derive position from `$WITNESS next` / the dashboard / `log`, never from conversation memory.
+- **A `witness: context …` line is addressed to you.** Once per session, when this session's context has filled to the configured limit, it follows a command's result. Finish the act you are in (here: the look, through `witness design` and its gate) — a session that has done none yet does the one it was routed to — then hand back to /witness, whose `next` hands over to a fresh session.
 
 ## When you run
 
@@ -43,7 +44,7 @@ When the CLI prints `autonomy: on` and this run is not `--manual`, the look is y
 - **New screen.** Skip the directions-and-converge conversation. Weigh 2–3 structural directions yourself, take the one that best serves the screen's one job under the design canon, and state the pick and its why in one line before you author it.
 - **Amend.** Make the smallest change that re-serves the amended behavior. Never run `$WITNESS design <spec-id> --reconfirm`: a re-armed look is the human's kept stop even when you see no visual delta.
 - **Never run `$WITNESS design <spec-id> --open`.** Opening the look is the human's act. Under autonomy the gate runs the critic without it, and `witness decide design <spec-id> --approve` refuses until the human has opened the current bytes.
-- **Gate, then follow the CLI.** Run `$WITNESS gate design <spec-id>`. The CLI settles the critic's rounds itself and prints `decided: … → revise` with a revise-context: re-author from it and re-gate, without asking. When the critic is clean the CLI stops at the kept stop `design look` and prints its `kept-stop:` line: render the gate output and END YOUR TURN. A human's `--revise --note "…"` starts the next round, and that round is autonomous again.
+- **Gate, then follow the CLI.** Run `$WITNESS gate design <spec-id>`. The CLI settles the critic's rounds itself and prints `decided: … → revise` with a revise-context: re-author from it and re-gate, without asking — unless a `relay:` line printed under the decision: this session has reached its context limit, so print that line verbatim and END YOUR TURN — a fresh session takes the revise. When the critic is clean the CLI stops at the kept stop `design look` and prints its `kept-stop:` line: render the gate output and END YOUR TURN. A human's `--revise --note "…"` starts the next round, and that round is autonomous again.
 
 ## Inputs (rebuild them, never remember them)
 

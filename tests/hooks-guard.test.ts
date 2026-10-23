@@ -110,4 +110,15 @@ describe('hooks.json', () => {
       expect(entry.hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/guard-state.mjs');
     }
   });
+
+  // Row 191 §4.11 (P9): the context adapter is a hooks module, which only `modules` loads, and the
+  // witness-context plugin is its one carrier. Without the key every Claude Code session runs
+  // unmeasured, and no other test would notice. A second carrier, or a classic hook beside the
+  // module, would run twice on a machine with both plugins: two latches, two warnings.
+  it('names the context module in the witness-context plugin alone', () => {
+    const context = JSON.parse(readFileSync(join(__dirname, '..', 'plugin-context', 'hooks', 'hooks.json'), 'utf8'));
+    expect(context).toEqual({ modules: ['./context.ts'] });
+    const full = JSON.parse(readFileSync(join(__dirname, '..', 'plugin', 'hooks', 'hooks.json'), 'utf8'));
+    expect(full).not.toHaveProperty('modules');
+  });
 });

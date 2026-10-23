@@ -3,10 +3,13 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
-import { appendEntry, journalRel } from '../journal.js'
+import { appendEntry, journalRel, readStream } from '../journal.js'
 import { primaryRoot, resolveStartBase, stateCommit } from '../gitio.js'
 import { autoSync } from './sync.js'
 import { findById, loadCanon } from '../scan.js'
+import { stepProgress, stepsLine } from '../steps.js'
+import { readFill } from '../context.js'
+import { contextLine, reportOpening, slicesLine } from '../slice.js'
 import { evaluateNeeds, unmetNeeds } from '../needs.js'
 import { humanCall, renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
@@ -56,11 +59,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (!pinR.ok) { renderRefusal(pinR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const agentModel = pinR.value ?? SESSION_DEFAULT
 
-  // Row 79: surface the run's shape so the implement skill reads the dispatch
-  // budget mechanically instead of guessing at relay boundaries.
-  const budget = cfgR.value.implement.stepsPerDispatch
-  const stepCount = ((plan.meta.steps ?? []) as unknown[]).length
-  const dispatchLine = `${stepCount} step(s) ≈ ${Math.ceil(stepCount / budget)} dispatch(es) at budget ${budget}`
+  // Row 79, amended by row 191 §4.10: the run's shape is the rule that cuts it into slices,
+  // since under a measured harness their number cannot be known in advance.
+  const slices = slicesLine(cfgR.value)
+  // Row 191 §4.3. Where the plan stands, so a session opening mid-plan reads it from the CLI
+  // instead of reconstructing it from the journal.
+  const position = stepsLine(stepProgress(plan, readStream(root, planId)))
+  // Row 191 §4.10. The fill this session opens at, or why it cannot be read.
+  const opening = contextLine(readFill(ctx.env), cfgR.value.session.contextLimit, cfgR.value.implement.stepsPerDispatch)
 
   if (status === 'in-progress') {
     const had = existsSync(worktreePath(root, planId))
@@ -73,8 +79,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // what moved them. Only on re-attach: a fresh cut has nothing to invalidate.
     if (had) ctx.out(kv('note', 'worktree re-attach refreshed canon exclusions — re-read files you read before this run'))
     ctx.out(kv('agent-model', agentModel))
-    ctx.out(kv('dispatch-budget', String(budget)))
-    ctx.out(kv('dispatches', dispatchLine))
+    ctx.out(kv('slices', slices))
+    ctx.out(kv('steps', position))
+    ctx.out(kv('context', opening))
+    reportOpening(ctx, root, cfgR.value)
     return EXIT.OK
   }
   if (status !== 'approved') {
@@ -141,8 +149,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('worktree', wt.value.path))
   ctx.out(kv('branch', branchName(planId)))
   ctx.out(kv('agent-model', agentModel))
-  ctx.out(kv('dispatch-budget', String(budget)))
-  ctx.out(kv('dispatches', dispatchLine))
-  ctx.out(`help: implement inside the worktree; witness test-evidence ${planId} --phase red|green as you go`)
+  ctx.out(kv('slices', slices))
+  ctx.out(kv('steps', position))
+  ctx.out(kv('context', opening))
+  reportOpening(ctx, root, cfgR.value)
+  ctx.out(`help: implement inside the worktree; witness test-evidence ${planId} --phase red|green --step <id> as you go`)
   return EXIT.OK
 }

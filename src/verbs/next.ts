@@ -13,6 +13,7 @@ import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites
 import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
+import { implementGated, lastRedVacuous, openRed, redInFlight, redOpenStep, stepProgress, stepsLine, type StepState } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -25,6 +26,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, policyFor } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
+import { reportHandover, reportOpening } from '../slice.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
 // content. `reviewed_sha` is the tree we actually judged; when the caller can compute
@@ -184,14 +186,18 @@ function judgeNote(entries: Entry[], gate: string, judge: string | undefined): s
 // `verify-red` is preferred where a plain red probe is guaranteed vacuous: with the
 // implementation already written the suite passes as it stands, so the reconstructing
 // verb is the only one that can witness a genuine red.
+//
+// `step` is set where `test-evidence` refuses a cycle that names none (row 191): before the
+// first implement gate, on a plan whose progress is known and that has a criteria step.
 function evidenceRow(
   id: string, parentTag: string, files: string[], report: EvidenceReport | undefined,
-  seat: { home: string; model?: string },
+  seat: { home: string; model?: string }, step?: string,
 ): NextAction {
   const base = { stage: 'implement' as const, target: id, ...seat }
+  const stepFlag = step === undefined ? '' : ` --step ${step}`
   if (report === undefined) {
     return {
-      line: `witness test-evidence ${id} --phase red`, ...base,
+      line: `witness test-evidence ${id} --phase red${stepFlag}`, ...base,
       note: 'nothing changed yet — write the failing test first',
     }
   }
@@ -202,9 +208,39 @@ function evidenceRow(
   const parent = report.required.find((r) => r.tag === parentTag)
   const liveRed = parent !== undefined && parent.red && !parent.vacuous
   const line = !liveRed && files.some((f) => !isTestPath(f))
-    ? `witness verify-red ${id}`
-    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}`
-  return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
+    ? `witness verify-red ${id}${stepFlag}`
+    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}${stepFlag}`
+  // Unsatisfied with a live red, the parent tag's red has no green after it: this green is
+  // routed mid-red.
+  return {
+    line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`),
+    ...(liveRed ? { midRed: true as const } : {}),
+  }
+}
+
+// The run that works a plan's next unfinished step. A step whose latest red came back vacuous
+// gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
+// again and `next` would answer with the same line twice. An open cycle outranks that, since
+// its red was genuine and the green is what is owed.
+function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
+  if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
+  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
+  if (lastRedVacuous(entries, s.id)) {
+    return { line: `witness verify-red ${id} --step ${s.id}`, why: 'its red was vacuous — verify-red reconstructs it against the base' }
+  }
+  return { line: `witness test-evidence ${id} --phase red --step ${s.id}` }
+}
+
+// The step an evidence row names once every step is closed: that of the latest red naming a
+// criteria step of the plan as it stands. Never a scaffolding step or one an amend removed,
+// both of which `test-evidence` refuses. One exists whenever the plan has a criteria step,
+// since none closes without a red tagged with it, and a plan with none is owed no step.
+function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined {
+  const criteria = new Set(steps.filter((s) => s.kind === 'criteria').map((s) => s.id))
+  const red = entries
+    .filter((e) => e.t === 'test-evidence' && e.phase === 'red' && typeof e.step === 'string' && criteria.has(e.step))
+    .at(-1)
+  return red === undefined ? undefined : String(red.step)
 }
 
 export interface NextAction {
@@ -221,6 +257,10 @@ export interface NextAction {
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
+  // Row 191 §1–§2. A red still open (steps.ts `redInFlight`, or the parent tag's latest cycle): the
+  // session the action is routed to is mid-red, and a session never relays there. The point after
+  // it decides instead (§4.4): the green's close for a plan step, the re-gate for a fix round.
+  midRed?: true
 }
 
 // One list for both readers. `flowAction` needs it to name an effort that can carry a plan
@@ -276,12 +316,39 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   if (gateSettled(entries, 'implement', diffSha)) {
     return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
   }
+  // Row 191 · Plan's call 5. The evidence below is the parent tag's and knows nothing of the
+  // plan's steps: one red→green pair satisfied it, so a three-step plan was routed to `gate
+  // implement` after its first step and every mid-plan relay's fresh session gated early.
+  // While the plan's progress is known and no implement gate has run, the next unfinished
+  // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
+  const progress = stepProgress(plan, entries)
+  const stepped = progress.known && !implementGated(entries) ? progress : undefined
+  // Final review I1 and its re-review. A red in flight (steps.ts: the latest red that observed a
+  // failure, with no passing green since) is one whatever step it names, or none: recorded out of
+  // order, ahead of a scaffolding step left unclosed, re-opened on a closed step, or a fix round's.
+  // Whatever row follows, the session is mid-red.
+  const inFlight = redInFlight(entries) ? { midRed: true as const } : {}
+  if (stepped?.next !== undefined) {
+    // Its green comes before the first unclosed step: routing that step's red or its close would
+    // leave the open red's green unrouted.
+    const redOpen = redOpenStep(plan, entries)
+    const open = stepped.steps.find((s) => s.id === redOpen)
+    const { line, why } = stepLine(id, open ?? stepped.next, entries)
+    const ahead = open !== undefined && open.id !== stepped.next.id ? `${open.id} has an open red — its green comes first` : why
+    return {
+      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
+    }
+  }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
-    return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree)
+    return {
+      ...evidenceRow(id, String(plan.meta.parent), files, report, inWorktree,
+        stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined),
+      ...inFlight,
+    }
   }
   // D94: with the content unchanged the gate answers `changed-nothing` and appends
   // nothing, so routing there returns this same line every turn. The revise asked for an
@@ -290,10 +357,16 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
     return {
       line: `witness test-evidence ${id} --phase green`, stage: 'implement', target: id, ...inWorktree,
       note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
+      ...inFlight,
     }
   }
+  // Final review I2. A legacy plan's steps are the skill's to count (§4.3), so whether any remain
+  // is not the CLI's to say: until its implement gate the row names the stage, and the router
+  // hands it to the implement skill, whose own count decides. Run verbatim, the gate came first
+  // whatever that count said, and a fresh session after a relay gated with steps left.
+  const uncounted = !progress.known && !implementGated(entries) ? { stage: 'implement' as const } : {}
   return {
-    line: `witness gate implement ${id}`, target: id, ...inWorktree,
+    line: `witness gate implement ${id}`, ...uncounted, target: id, ...inWorktree, ...inFlight,
     ...noteOf(
       lapseNote(entries, 'implement', diffSha,
         // `files` is the list flowAction already computed above — the cause costs one
@@ -987,6 +1060,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (ambientFlow) ctx.out(kv('flow', `${ambientFlow} — inferred from cwd`))
   const assigned = marked ? (marked.target ?? 'untargeted work') : undefined
   if (assigned !== undefined && values.flow === undefined) ctx.out(kv('drive', `${assigned} — assigned by witness drive`))
+  // Row 191 §4.5 "Before any work". Above the routing block, for the same reason as the lines
+  // above it.
+  reportOpening(ctx, root, cfgR.value)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
@@ -1003,22 +1079,32 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // version-skew diagnosis owned by `check`. This withholds no knowledge and changes no
   // routing answer: the stage, the target and the home are identical either way, and only
   // the instruction to a session that is already there stops being printed.
+  const elsewhere = action.home ? !atHome(ctx.cwd, action.home) : false
   if (action.home) {
     ctx.out(kv('home', action.home))
-    if (!atHome(ctx.cwd, action.home)) {
+    if (elsewhere) {
       ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
       ctx.out(kv('relay', relayLine(harness)))
     }
   }
+  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
+  // the background and ends its turn, or says where to watch the one already running.
+  // Only when drive has work beyond the stops that wait for the human (F8): with nothing
+  // else, a launched drive would set the stop aside and exit, and the chat would never show it.
+  const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)
+  // Row 191 §4.4–§4.6. Whenever `next` prints no `run:` (at the action's `home:`, or for an
+  // action with none), a session hands over before the next action once it has done stage work
+  // and its fill reached the limit, with a same-home `relay:`. Outside the `run:` branch because a
+  // `run:` already hands the work to a session of its own, in another home. Not where this
+  // session's turn ends anyway: at a decision left for a human, with nothing owed, or with the run
+  // handed to drive. And never mid-red (`midRed`: a red in flight).
+  const turnEnds = toDrive || action.line.startsWith('witness decide ') || action.line === 'witness check'
+  if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
   }
-  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
-  // the background and ends its turn, or says where to watch the one already running. Last,
-  // so it never splits the routing unit, and raw, because both lines are commands (D120).
-  // Only when drive has work beyond the stops that wait for the human (F8): with nothing
-  // else, a launched drive would set the stop aside and exit, and the chat would never show it.
-  if (cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)) {
+  // Last, so it never splits the routing unit, and raw, because both lines are commands (D120).
+  if (toDrive) {
     const holder = driveHolder(root)
     ctx.out(holder !== undefined ? cmd('watch', watchLine(holder)) : cmd('launch', 'witness drive --detach'))
   }

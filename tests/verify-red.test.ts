@@ -38,7 +38,7 @@ describe('witness verify-red', () => {
     repo.write('src/token.ts', TOKEN_FIXED)
     repo.git('add', '-A')
     repo.git('commit', '-m', 'implement rotation')
-    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1'], { env: fixtureEnv() })
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(0)
     const entries = phases(repo)
     expect(entries.map((e) => e.phase)).toEqual(['red', 'green'])
@@ -58,7 +58,7 @@ describe('witness verify-red', () => {
     repo.git('add', '-A')
     repo.git('commit', '-m', 'implement rotation')
 
-    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1'], { env: fixtureEnv() })
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
 
     expect(res.code).toBe(0)
     expect(res.stdout).toMatch(/^stale-reads: .*src\/token\.ts/m)
@@ -71,7 +71,7 @@ describe('witness verify-red', () => {
     repo.git('add', 'tests/token.test.ts')
     repo.git('commit', '-m', 'tagged tests')
     repo.write('src/token.ts', TOKEN_FIXED) // dirty, never committed
-    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1'], { env: fixtureEnv() })
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(0)
     expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
     expect(phases(repo).map((e) => e.phase)).toEqual(['red', 'green'])
@@ -86,10 +86,13 @@ describe('witness verify-red', () => {
     repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
     repo.git('add', 'tests/token.test.ts')
     repo.git('commit', '-m', 'test asserting existing behavior')
-    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1'], { env: fixtureEnv() })
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(1)
-    const red = phases(repo).find((e) => e.phase === 'red')
-    expect(red?.vacuous).toBe(true)
+    expect(res.stdout).toContain('verify-red: red NOT observed · green confirmed')
+    // Final review I3: a vacuous red is a finding, not a cycle. The green still runs, to confirm
+    // the restore, and journals nothing: journaled, it read as the session's act and as drive's
+    // progress, so a session that only re-ran this handed over without end.
+    expect(phases(repo)).toMatchObject([{ phase: 'red', reconstructed: true, vacuous: true, step: 's1' }])
   })
 
   it('refuses when the diff touches no test files', async () => {
@@ -97,8 +100,39 @@ describe('witness verify-red', () => {
     repo.write('src/token.ts', TOKEN_FIXED)
     repo.git('add', '-A')
     repo.git('commit', '-m', 'impl only')
-    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1'], { env: fixtureEnv() })
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(2)
+  })
+
+  // Row 191 §4.3. A reconstructed cycle closes a plan step like a witnessed one, so both of
+  // its entries name the step.
+  it('carries the step on both entries', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'implement rotation')
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(phases(repo)).toMatchObject([
+      { phase: 'red', reconstructed: true, step: 's1' },
+      { phase: 'green', reconstructed: true, step: 's1' },
+    ])
+  })
+
+  // Refused before the stash/checkout cycle: a mistyped step must not churn the tree.
+  it('refuses an unknown step before touching the tree', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.git('commit', '-m', 'tagged tests')
+    repo.write('src/token.ts', TOKEN_FIXED) // dirty, never committed
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 'nope'], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('unknown-step')
+    expect(res.stdout).not.toContain('stale-reads')
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(phases(repo)).toEqual([])
   })
 
   it('honors --base over ship.branch', async () => {
@@ -108,7 +142,7 @@ describe('witness verify-red', () => {
     repo.write('src/token.ts', TOKEN_FIXED)
     repo.git('add', '-A')
     repo.git('commit', '-m', 'implement rotation')
-    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--base', base], { env: fixtureEnv() })
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--base', base, '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(0)
   })
 })
@@ -119,7 +153,7 @@ describe('witness verify-red', () => {
 describe('verify-red in two worktrees at once (B3)', () => {
   const REPO = resolve(import.meta.dirname, '..')
   const child = (cwd: string, id: string): Promise<number | null> => new Promise((done) => {
-    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', id, '--base', 'HEAD'],
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', id, '--base', 'HEAD', '--step', 's1'],
       { cwd, env: fixtureEnv() as NodeJS.ProcessEnv, stdio: 'ignore' })
     c.on('close', (code) => done(code))
   })

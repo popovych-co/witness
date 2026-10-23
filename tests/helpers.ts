@@ -7,7 +7,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, type Ctx } from '../src/cli.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
-import { appendEntry, journalRel } from '../src/journal.js'
+import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
@@ -33,6 +33,12 @@ export interface TestRepo {
   flipStatus: (id: string, status: string) => void
   setMeta: (id: string, patch: Record<string, unknown>) => void
 }
+
+// Row 191. The suite may run inside a measured session (dogfooding, or `pnpm test` from a chat
+// session): its reading and session id would stamp every line a test journals and decide its
+// relays. So no CLI a test runs starts with them: in process through tmpRepo's scrub, spawned
+// through hermeticEnv. A test that wants a measured session says so (measuredEnv below).
+const NO_SESSION = { WITNESS_CONTEXT: undefined, CLAUDE_CODE_SESSION_ID: undefined, PI_SESSION_ID: undefined }
 
 export function tmpRepo(): TestRepo {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'witness-')))
@@ -67,6 +73,8 @@ export function tmpRepo(): TestRepo {
       // It is a test seam, not a config key — see the note in src/registry.ts.
       env: {
         ...process.env, PI_CODING_AGENT: undefined, CLAUDECODE: undefined,
+        // the session the suite runs in (row 191, NO_SESSION above); opts.env may name one
+        ...NO_SESSION,
         // a suite run inside a drive session or a runner turn must not inherit either:
         // the marker would scope every `next` and refuse every `drive` (row 180)
         WITNESS_DRIVE: undefined, WITNESS_RUNNER_TURN: undefined,
@@ -249,6 +257,19 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
   }
 }
 
+// Row 191 §4.1. What a shell command in a measured Claude Code session carries: the harness's
+// session variable, and the adapter's reading naming that same session. Leaving `tokens` out
+// is Claude Code before the session's first response (P7).
+export function measuredEnv(session: string, tokens: number | undefined, window: number): Record<string, string> {
+  return { CLAUDE_CODE_SESSION_ID: session, WITNESS_CONTEXT: JSON.stringify({ session, tokens, window }) }
+}
+
+// The env for a CLI a test spawns as a process of its own, which tmpRepo's scrub never reaches:
+// this process's env without the session it runs in (NO_SESSION above), plus `extra`.
+export function hermeticEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return { ...process.env, ...NO_SESSION, ...extra }
+}
+
 export function fakeBinDir(): string {
   return resolve(import.meta.dirname, '..', 'fixtures', 'fakebin')
 }
@@ -417,16 +438,117 @@ export async function shippableRepo(
     execFileSync('git', ['add', '-A'], { cwd: wt })
     execFileSync('git', ['commit', '-m', 'wip: tagged tests + stub'], { cwd: wt })
   }
-  let r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+  let r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`red phase: ${r.stdout}\n${r.stderr}`)
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
   if (commit) {
     execFileSync('git', ['add', '-A'], { cwd: wt })
     execFileSync('git', ['commit', '-m', 'feat: rotate token'], { cwd: wt })
   }
-  r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+  r = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
   if (r.code !== 0) throw new Error(`green phase: ${r.stdout}\n${r.stderr}`)
   return { repo, wt, planId: 'auth-refresh-plan-1', specId: 'auth-refresh' }
+}
+
+export const THREE_STEPS = {
+  steps: [
+    { id: 's1', title: 'first', criteria: ['ac-rotate'] },
+    { id: 's2', title: 'second', criteria: ['ac-rotate'] },
+    { id: 's3', title: 'third', scaffolding: true },
+  ],
+}
+export const THREE_STEP_BODY = '## Step: s1\nA.\n\n## Step: s2\nB.\n\n## Step: s3\nC.\n'
+// The same three ids with the scaffolding step first, ahead of the two criteria steps.
+export const SCAFFOLDING_FIRST = {
+  steps: [
+    { id: 's1', title: 'rig', scaffolding: true },
+    { id: 's2', title: 'second', criteria: ['ac-rotate'] },
+    { id: 's3', title: 'third', criteria: ['ac-rotate'] },
+  ],
+}
+
+// Row 191 §4.3. A plan of two criteria steps and a scaffolding one, approved and not started, in
+// a repo whose runner runs the vitest-single fixture, so a test can witness each step's cycle.
+// `extraYaml` extends the committed config (a step budget, a context limit); `manifest` orders the
+// steps otherwise.
+export async function threeStepPlan(extraYaml = '', manifest: Record<string, unknown> = THREE_STEPS): Promise<TestRepo> {
+  const repo = await seededRepo()
+  writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered') + extraYaml)
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  const written = await writePlan(repo, 'auth-refresh-plan-1', manifest, THREE_STEP_BODY)
+  if (written.code !== 0) throw new Error(`write: ${written.stdout}\n${written.stderr}`)
+  repo.flipStatus('auth-refresh-plan-1', 'approved')
+  return repo
+}
+
+// `threeStepPlan`, started, with the vitest-single fixture copied into its worktree: where a test
+// of the plan's steps begins.
+export async function startedThreeStepPlan(
+  extraYaml = '', manifest: Record<string, unknown> = THREE_STEPS,
+): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await threeStepPlan(extraYaml, manifest)
+  const planId = 'auth-refresh-plan-1'
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+  return { repo, wt, planId }
+}
+
+// `threeStepPlan`, started, where s1's behavior predates the plan: main already holds it under an
+// untagged test, and the worktree adds the tagged tests alone. Every red on s1 passes, a red
+// `verify-red` reconstructs against the base included.
+export async function behaviorOnMain(extraYaml = ''): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await threeStepPlan(extraYaml)
+  const planId = 'auth-refresh-plan-1'
+  repo.write('package.json', readFileSync(join(fixturePath('vitest-single'), 'package.json'), 'utf8'))
+  repo.write('src/token.ts', TOKEN_FIXED)
+  repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)
+  // The runner's cache lands under node_modules/ in the worktree; ignored, as the fixture's own
+  // .gitignore has it, so verify-red's stash never holds a file the red run writes again.
+  repo.write('.gitignore', `${repo.read('.gitignore')}node_modules/\n`)
+  repo.git('add', 'package.json', 'src/token.ts', 'tests/token.test.ts', '.gitignore')
+  repo.git('commit', '-m', 'existing behavior')
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  writeFileSync(join(wt, 'tests/token.test.ts'), TOKEN_TESTS_TAGGED)
+  return { repo, wt, planId }
+}
+
+// A journal line committed as a state commit (flipStatus's trailer): history the current CLI
+// will not write itself, such as an older CLI's untagged evidence.
+export function commitEntry(repo: TestRepo, stream: string, entry: { t: EntryType; [k: string]: unknown }): void {
+  appendEntry(repo.root, stream, entry)
+  repo.git('add', journalRel(stream))
+  repo.git('commit', '-m', `journal: ${stream}`, '-m', 'Witness-State: 1')
+}
+
+// Row 191 §4.3. A red as a CLI older than `--step` journaled it. Naming no step, it leaves the
+// plan's progress unknown: a legacy plan. `vacuous` is a red that passed, as one recorded after
+// the implementation does.
+export function untaggedRed(planId: string, vacuous = false): { t: EntryType; [k: string]: unknown } {
+  return {
+    t: 'test-evidence', artifact: planId, phase: 'red', runner: 'filtered',
+    tests: [{ name: 'rotates token before expiry @spec:auth-refresh', ok: vacuous }],
+    ...(vacuous ? { vacuous: true } : {}),
+  }
+}
+
+// One plan step's witnessed red→green in the worktree `wt`, tagged with the step: the broken
+// implementation recorded red, the fixed one green. The vitest-single fixture must already be in
+// `wt`. Returns the green's result; a red that fails to record throws with its output.
+export async function evidenceCycle(
+  repo: TestRepo, wt: string, planId: string, step: string, env: Record<string, string> = {},
+): Promise<CliResult> {
+  const opts = { cwd: wt, env: { ...fixtureEnv(), ...env } }
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+  const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', step], opts)
+  if (red.code !== 0) throw new Error(`red phase (${step}): ${red.stdout}\n${red.stderr}`)
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  return repo.cli(['test-evidence', planId, '--phase', 'green', '--step', step], opts)
 }
 
 // `witness next` answers with exactly one line-set; every read-path test wants the

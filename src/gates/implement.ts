@@ -59,8 +59,10 @@ function resolveDesignCaptures(
     out.push({ name: c.name, path })
   }
   if (out.length === 0) {
+    // Row 191: refusing journals no gate run, so on a plan's first gate the re-run it names is
+    // still a step's cycle, and `test-evidence` requires the step there.
     return refuse([v('screens', 'screens-matched-nothing', `0 verified captures for the latest green cycle of ${planId}`,
-      'a UI plan (design-from pinned) must witness ≥1 screenshot — name captures in the browser test, then re-run: witness test-evidence <plan> --phase green')])
+      'a UI plan (design-from pinned) must witness ≥1 screenshot — name captures in the browser test, then re-run: witness test-evidence <plan> --phase green --step <id>')])
   }
   return ok(out)
 }

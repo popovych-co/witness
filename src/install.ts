@@ -174,6 +174,28 @@ function hasCommand(entries: HookEntry[] | undefined, command: string): boolean 
   return (entries ?? []).some((e) => (e.hooks ?? []).some((h) => h.command === command))
 }
 
+// Row 191 §4.11. The context reading comes from a hooks module, and only a plugin carries one:
+// witness-context, listed in witness's own GitHub marketplace beside the full plugin, which does
+// not carry it (two copies would each latch and warn). P9 (2026-10-22): a headless session
+// skipped a plugin the project's settings declared while its marketplace was not registered on
+// the machine, and loaded one installed at user scope from the registered marketplace, at the
+// root and in a worktree. So every machine installs it once: CONTEXT_INSTALL, which init and
+// check print.
+const WITNESS_REPO = 'popovych-co/witness'
+export const WITNESS_MARKETPLACE = 'witness'
+export const CONTEXT_PLUGIN = `witness-context@${WITNESS_MARKETPLACE}`
+// No comma: check prints it through toon's kv, which quotes a value holding one.
+export const CONTEXT_INSTALL = `claude plugin marketplace add ${WITNESS_REPO} && claude plugin install ${CONTEXT_PLUGIN}`
+
+// The settings map `current` with `name` added, or undefined when it needs nothing: an entry of
+// that name is the human's, and so is a value that is not a map at all — theirs to fix, never
+// ours to replace.
+function withEntry(current: unknown, name: string, value: unknown): Record<string, unknown> | undefined {
+  if (current === undefined) return { [name]: value }
+  if (typeof current !== 'object' || current === null || Array.isArray(current)) return undefined
+  return Object.hasOwn(current, name) ? undefined : { ...current, [name]: value }
+}
+
 // Merge, never replace: .claude/settings.json is the human's file and may already carry
 // their own hooks, model pin and permissions. We append only what is missing, matched
 // by command string, and preserve every other key byte for byte.
@@ -213,9 +235,22 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
   for (const entry of ['Bash(npx -y @popovych.co/witness*)', 'Bash(witness *)']) {
     if (!allow.includes(entry)) { allow.push(entry); changed = true }
   }
+  // Row 191 §4.11. The repo declares the plugin its sessions read the fill from, the way Claude
+  // Code lets a project name a plugin it needs: its marketplace, and the plugin enabled. Headless
+  // the entry is skipped, harmlessly, until the machine has registered the marketplace (P9);
+  // whether a session's trust prompt offers the install from it is unprobed, owed with §6's
+  // chat-mode check. Append-what's-missing, as above: an entry the human has under either name
+  // is theirs — an explicit `false` turns the plugin off on purpose, and their `witness`
+  // marketplace may point at a local checkout.
+  const marketplaces = withEntry(doc.extraKnownMarketplaces, WITNESS_MARKETPLACE,
+    { source: { source: 'github', repo: WITNESS_REPO } })
+  const plugins = withEntry(doc.enabledPlugins, CONTEXT_PLUGIN, true)
+  if (marketplaces !== undefined || plugins !== undefined) changed = true
   if (!changed) return { text: existing ?? '', changed: false }
   doc.hooks = { ...hooks, PreToolUse: pre, SessionStart: start }
   doc.permissions = { ...perms, allow }
+  if (marketplaces !== undefined) doc.extraKnownMarketplaces = marketplaces
+  if (plugins !== undefined) doc.enabledPlugins = plugins
   return { text: `${JSON.stringify(doc, null, 2)}\n`, changed: true }
 }
 

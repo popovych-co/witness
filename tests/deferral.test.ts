@@ -1,11 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sessionHash } from '../src/context.js'
 import { deferralsBlock, newDeferralId, openDeferrals, type DeferralEntry } from '../src/deferral.js'
 import { readStream, type Entry } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import {
-  approve, fakeScenario, gateEnv, ghState, putVerdict, seededRepo, writePlan, writeSpec,
+  approve, fakeScenario, gateEnv, ghState, measuredEnv, putVerdict, seededRepo, writePlan, writeSpec,
 } from './helpers.js'
 
 const mint = (id: string, over: Partial<DeferralEntry> = {}): Entry => ({
@@ -201,6 +202,20 @@ describe('an obligation outlives its flow', () => {
     await repo.cli(['status'], { env: gateEnv(scenario) })
     const minted = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'deferral')
     expect(minted.map((e) => e.id)).toEqual([id])
+  })
+
+  // Row 191 §4.8. The moved line is written by whoever moves it: a debt minted in one session
+  // and re-booked by a CLI outside any session carries no stamp, never the minting session's.
+  it('the moved line carries its mover\'s stamp, not the one it was minted with', async () => {
+    const repo = await atBound()
+    await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve', '--override'], { env: measuredEnv('minter', 170000, 1000000) })
+    expect(readStream(repo.root, 'auth-refresh-plan-1').find((e) => e.t === 'deferral'))
+      .toHaveProperty('ctx.session', sessionHash('minter'))
+    repo.setMeta('auth-refresh-plan-1', { status: 'in-progress', pr: 8 })
+    const scenario = fakeScenario()
+    ghState(scenario, 8, 'MERGED')
+    await repo.cli(['status'], { env: gateEnv(scenario) })            // the merge stamp moves the debt
+    expect(readStream(repo.root, 'auth-refresh').find((e) => e.t === 'deferral')).not.toHaveProperty('ctx')
   })
 })
 

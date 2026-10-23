@@ -102,16 +102,17 @@ describe('implement contract (scripted agent)', () => {
     const wctx = fakeCtx(worktree, { env: ctx.env });
     mkdirSync(join(worktree, 'tests'), { recursive: true });
 
-    async function redGreen(tag: string, testFile: string, testCode: string, implPath: string, implCode: string) {
+    async function redGreen(tag: string, step: string, testFile: string, testCode: string, implPath: string, implCode: string) {
       writeFileSync(join(worktree, 'tests', testFile), testCode);
-      await main(wctx, ['test-evidence', `${tag}-plan-1`, '--phase', 'red']);
+      await main(wctx, ['test-evidence', `${tag}-plan-1`, '--phase', 'red', '--step', step]);
       writeFileSync(join(worktree, implPath), implCode);
-      await main(wctx, ['test-evidence', `${tag}-plan-1`, '--phase', 'green']);
+      await main(wctx, ['test-evidence', `${tag}-plan-1`, '--phase', 'green', '--step', step]);
     }
 
     if (pkg.name === 'cal-implement-s1') {
       await redGreen(
         'clamp-range',
+        's1',
         'cal.test.mjs',
         "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { clamp } from '../src/clamp.mjs';\ntest('clamps into range @spec:clamp-range', () => {\n  assert.equal(clamp(5, 0, 3), 3);\n  assert.equal(clamp(-1, 0, 3), 0);\n  assert.equal(clamp(Number.NaN, 0, 3), 0);\n  assert.throws(() => clamp(1, 3, 0), RangeError);\n});\n",
         'src/clamp.mjs',
@@ -120,6 +121,7 @@ describe('implement contract (scripted agent)', () => {
     } else if (pkg.name === 'cal-implement-s2') {
       await redGreen(
         'slug-trim',
+        's1',
         'cal.test.mjs',
         "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { slugify } from '../src/slug.mjs';\ntest('trims leading/trailing hyphens @spec:slug-trim', () => {\n  assert.equal(slugify(' hello '), 'hello');\n});\n",
         'src/slug.mjs',
@@ -128,6 +130,7 @@ describe('implement contract (scripted agent)', () => {
     } else if (pkg.name === 'cal-implement-s3') {
       await redGreen(
         'pad-strings',
+        's1',
         'cal-left.test.mjs',
         "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { padLeft } from '../src/pad.mjs';\ntest('pads left @spec:pad-strings', () => {\n  assert.equal(padLeft('7', 3, '0'), '007');\n  assert.equal(padLeft('777', 2, '0'), '777');\n});\n",
         'src/pad.mjs',
@@ -135,6 +138,7 @@ describe('implement contract (scripted agent)', () => {
       );
       await redGreen(
         'pad-strings',
+        's2',
         'cal-right.test.mjs',
         "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { padRight } from '../src/pad.mjs';\ntest('pads right @spec:pad-strings', () => {\n  assert.equal(padRight('7', 3, '0'), '700');\n  assert.equal(padRight('777', 2, '0'), '777');\n});\n",
         'src/pad.mjs',

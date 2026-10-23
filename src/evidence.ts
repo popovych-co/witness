@@ -98,9 +98,11 @@ export async function runSpecTests(
   return ok({ runner: 'full-suite', tests, allOk: tests.every((t) => t.ok) })
 }
 
+// Row 191 §4.3. `step` is the plan step this cycle closes; absent on a cycle that is no plan
+// step's (a fix round after a gate).
 export function journalEvidence(
   stateRoot: string, planId: string, phase: 'red' | 'green', run: SpecTestRun,
-  extra: { reconstructed?: boolean; vacuous?: boolean; captures?: Capture[] } = {},
+  extra: { reconstructed?: boolean; vacuous?: boolean; captures?: Capture[]; step?: string } = {},
 ): Result<{ sha: string }> {
   const entry = { t: 'test-evidence' as const, artifact: planId, phase, runner: run.runner, tests: run.tests, ...extra }
   const marker = {
@@ -125,7 +127,7 @@ export function journalEvidence(
 
 export async function recordEvidence(
   runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string,
-  phase: 'red' | 'green', extra: { reconstructed?: boolean } = {},
+  phase: 'red' | 'green', extra: { reconstructed?: boolean; step?: string } = {},
 ): Promise<Result<SpecTestRun>> {
   // latest-cycle by construction: a fresh empty dir per cycle means captures can
   // only be this run's. Browser tests screenshot iff WITNESS_SCREENS_DIR is set,
@@ -185,8 +187,11 @@ const inCommit = (runRoot: string, ref: string, rel: string): boolean =>
   tryGit(runRoot, 'cat-file', '-e', `${ref}:${rel}`).ok
 
 export async function verifyRed(
-  runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string, base: string,
+  runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string, base: string, step?: string,
 ): Promise<Result<{ redOk: boolean; greenOk: boolean; vacuous: boolean }>> {
+  // Row 191 §4.3: a reconstructed cycle closes a plan step as a witnessed one does, so both of
+  // its entries name the step.
+  const extra = { reconstructed: true, ...(step !== undefined ? { step } : {}) }
   const files = changedFiles(runRoot, base)
   if (!files.some(isTestPath)) {
     return refuse([v('diff', 'no-test-changes', `${files.length} changed files, none are tests`, 'a diff that adds or modifies tagged tests')])
@@ -224,7 +229,7 @@ export async function verifyRed(
       if (inCommit(runRoot, base, rel)) git(runRoot, 'checkout', base, '--', rel)
       else if (existsSync(join(runRoot, rel))) rmSync(join(runRoot, rel))
     }
-    red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', { reconstructed: true })
+    red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra)
   } finally {
     for (const rel of trackedNonTest) {
       if (inCommit(runRoot, 'HEAD', rel)) git(runRoot, 'checkout', 'HEAD', '--', rel)
@@ -244,7 +249,14 @@ export async function verifyRed(
       `${shown.join(' · ')}${more} — changed on disk during red verification — re-read before editing`))
   }
   if (!red.ok) return red
-  const green = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', { reconstructed: true })
+  // Final review I3. A vacuous red is a finding, not a cycle: the green still runs, since it is
+  // what confirms the restore, but journals nothing. Journaled, it read as an act of the session
+  // and as drive's progress, so a session that opened over the limit and only re-ran this handed
+  // over forever, and drive respawned it to its cap. A step an earlier genuine red opened is
+  // closed by the green `next` routes for that open red, never by this reconstruction.
+  const green = red.value.allOk
+    ? await runSpecTests(runRoot, ctx, parentId, stateRoot)
+    : await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', extra)
   if (!green.ok) return green
   return ok({ redOk: !red.value.allOk, greenOk: green.value.allOk, vacuous: red.value.allOk })
 }

@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { SPEC_META, seededRepo, writeSpec } from './helpers.js'
+import { SPEC_META, evidenceCycle, seededRepo, startedThreeStepPlan, writeSpec } from './helpers.js'
 
 describe('witness log', () => {
   it('renders recap, write, and write-refused entries in order', async () => {
@@ -27,6 +27,28 @@ describe('witness log', () => {
     const res = await repo.cli(['log', 'ghost'])
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('unknown-stream')
+  })
+})
+
+// Row 191 §4.3. A plan's log ends with where it stands, and each row names the step it closes.
+describe('witness log reads plan steps', () => {
+  it('prints steps: after a plan\'s rows and names each row\'s step', async () => {
+    const { repo, wt, planId: P } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, P, 's1')).code).toBe(0)
+
+    const one = (await repo.cli(['log', P])).stdout.split('\n')
+    expect(one.at(-1)).toBe('steps: 1/3 done · next s2')
+    expect(one.filter((l) => l.includes(',test-evidence,'))).toEqual([
+      expect.stringMatching(/,test-evidence,phase=red step=s1 tests=1 failed=1$/),
+      expect.stringMatching(/,test-evidence,phase=green step=s1 tests=1 failed=0$/),
+    ])
+
+    expect((await repo.cli(['step-close', P, '--step', 's3'])).code).toBe(0)
+    const two = (await repo.cli(['log', P])).stdout.split('\n')
+    expect(two.at(-1)).toBe('steps: 2/3 done · next s2')
+    expect(two.at(-2)).toMatch(/,step-close,step=s3$/)
+
+    expect((await repo.cli(['log', repo.effort])).stdout).not.toContain('steps:')
   })
 })
 
