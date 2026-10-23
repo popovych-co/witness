@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import type { CanonDoc } from '../src/scan.js'
-import { checkStep, closedAt, closingIndex, implementGated, lastRedVacuous, openRed, stepProgress, stepsLine } from '../src/steps.js'
+import { checkStep, closedAt, closingIndex, implementGated, lastRedVacuous, openRed, redOpenStep, stepProgress, stepsLine } from '../src/steps.js'
 
 const planDoc = (steps: Array<Record<string, unknown>>): CanonDoc =>
   ({ rel: 'plans/p.md', meta: { id: 'p', type: 'plan', parent: 'x', steps }, body: '', violations: [], satisfiedNeeds: [] })
@@ -53,6 +53,18 @@ describe('step progress (row 191 §4.3)', () => {
   it('openRed holds between a tagged red and its closing green', () => {
     expect(openRed([red('s1')] as Entry[], 's1')).toBe(true)
     expect(openRed([red('s1'), green('s1')] as Entry[], 's1')).toBe(false)
+  })
+  // Final review I1. A red is in flight wherever it stands: ahead of the first unclosed step, or
+  // re-opened on a closed one. The first in manifest order is named; untagged and vacuous reds
+  // open no step's cycle.
+  it('redOpenStep names the first step whose cycle is open, wherever it stands', () => {
+    expect(redOpenStep(plan, [red('s2')] as Entry[])).toBe('s2')
+    expect(redOpenStep(plan, [red('s1'), green('s1'), red('s1')] as Entry[])).toBe('s1')
+    expect(redOpenStep(plan, [red('s2'), red('s1')] as Entry[])).toBe('s1')
+    expect(redOpenStep(plan, [red('s1'), green('s1')] as Entry[])).toBeUndefined()
+    expect(redOpenStep(plan, [red(), red('s2', { vacuous: true, tests: [{ name: 'a @spec:x', ok: true }] })] as Entry[])).toBeUndefined()
+    // a step an amend removed is no step of the plan, and its red routes nothing
+    expect(redOpenStep(plan, [red('gone')] as Entry[])).toBeUndefined()
   })
   it('lastRedVacuous reads the latest red tagged with the step', () => {
     const vacuous = red('s2', { vacuous: true, tests: [{ name: 'a @spec:x', ok: true }] })

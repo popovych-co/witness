@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { sessionHash } from '../src/context.js'
 import { readStream } from '../src/journal.js'
 import {
-  PLAN_BLOCKING, TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED, addOrigin, autonomyOn, commitEntry,
-  evidenceCycle, fakeScenario, fixtureEnv, gateEnv, measuredEnv, plannedRepo, putVerdict, shippableRepo, startedThreeStepPlan,
-  untaggedRed, type CliResult, type TestRepo,
+  PLAN_BLOCKING, SCAFFOLDING_FIRST, TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED, addOrigin, autonomyOn,
+  commitEntry, evidenceCycle, fakeScenario, fixtureEnv, gateEnv, measuredEnv, plannedRepo, putVerdict, shippableRepo,
+  startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo,
 } from './helpers.js'
 
 const at = (tokens: number) => measuredEnv('S1', tokens, 1_000_000)
@@ -363,5 +363,70 @@ describe('the hand-overs', () => {
     expect(r.code).toBe(1)
     expect(lines(r)).toContain(`ship: ${PLAN} — revise owed`)
     expect(relays(r)).toEqual([])
+  })
+})
+
+// Final review I1. A red open on a step other than the one `next` would route is a red in flight
+// all the same: a scaffolding step left unclosed ahead of it, a red recorded out of order, a red
+// re-opened on a closed step. `next` routes its green first and hands nothing over, and a step
+// close says continue while it is open, so no slice ends mid-red.
+describe('a red open on any step', () => {
+  const routed = (r: CliResult) => lines(r).find((l) => l.startsWith('next: '))
+  const slice = (r: CliResult) => lines(r).find((l) => l.startsWith('slice: '))
+
+  it('ahead of an unclosed scaffolding step: next routes its green and hands nothing over', async () => {
+    const { repo, wt } = await startedThreeStepPlan('', SCAFFOLDING_FIRST)
+    await redIn(repo, wt, 's2', at(150_000))
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s2`)
+    expect(lines(r)).toContain('note: steps 0/3 done · next s1 · s2 has an open red — its green comes first')
+    expect(relays(r)).toEqual([])
+  })
+
+  it('recorded out of order: next routes its green and hands nothing over', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    await redIn(repo, wt, 's2', at(150_000))
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s2`)
+    expect(relays(r)).toEqual([])
+  })
+
+  it('re-opened on a closed step: next routes its green and hands nothing over', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    await redIn(repo, wt, 's1', at(150_000))
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(lines(r)).toContain('note: steps 1/3 done · next s2 · s1 has an open red — its green comes first')
+    expect(relays(r)).toEqual([])
+  })
+
+  it('a step close ahead of it says continue', async () => {
+    const { repo, wt } = await startedThreeStepPlan('', SCAFFOLDING_FIRST)
+    await redIn(repo, wt, 's2', at(150_000))
+    const r = await repo.cli(['step-close', PLAN, '--step', 's1'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(report(r)).toEqual(['context: 21% of 1M · limit 20%', 'steps: 1/3 done · next s2', 'slice: continue'])
+  })
+
+  it('a step close while a red recorded out of order is open says continue', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    await redIn(repo, wt, 's2', at(150_000))
+    const r = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(slice(r)).toBe('slice: continue')
+  })
+
+  it('a step close while a red re-opened on a closed step is open says continue', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    await redIn(repo, wt, 's1', at(150_000))
+    const r = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain('steps: 2/3 done · next s2')
+    expect(slice(r)).toBe('slice: continue')
   })
 })

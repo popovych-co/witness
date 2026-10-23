@@ -19,7 +19,7 @@ const known = (done: number, total: number): Progress => {
   return { known: true, steps, done, ...(next ? { next } : {}) }
 }
 
-type Input = Omit<Parameters<typeof stepCloseVerdict>[0], 'limit' | 'budget'>
+type Input = Omit<Parameters<typeof stepCloseVerdict>[0], 'limit' | 'budget' | 'redOpen'> & { redOpen?: boolean }
 
 describe('the verdict at a step close (row 191 §4.5 · §4.7)', () => {
   it.each<[string, Input, SliceVerdict]>([
@@ -34,7 +34,14 @@ describe('the verdict at a step close (row 191 §4.5 · §4.7)', () => {
     ['unmeasured — session unknown', { fill: un, progress: known(1, 5) }, { kind: 'own-count', budget: 3 }],
     ['legacy — rule 2 still applies', { fill: m(250_000), progress: { known: false } }, { kind: 'end', why: '25% reached the 20% limit' }],
     ['legacy — unmeasured', { fill: un, progress: { known: false }, closedHere: 9 }, { kind: 'own-count', budget: 3 }],
-  ])('%s', (_, input, want) => expect(stepCloseVerdict({ limit: 20, budget: 3, ...input })).toEqual(want))
+    // Final review I1: a red open on any step is work in flight, and a session never relays mid-red.
+    ['an open red — past the limit', { fill: m(260_000), progress: known(1, 3), redOpen: true }, { kind: 'continue' }],
+    ['an open red — past the projection', { fill: m(170_000), progress: known(1, 3), growth: 50_000, redOpen: true }, { kind: 'continue' }],
+    ['an open red — past the step budget', { fill: un, progress: known(3, 5), closedHere: 3, redOpen: true }, { kind: 'continue' }],
+    ['an open red — where the skill counts', { fill: un, progress: { known: false }, redOpen: true }, { kind: 'continue' }],
+    // Re-opened on a closed step once every step has closed: the gate would judge a tree mid-red.
+    ['an open red — though every step closed', { fill: m(900_000), progress: known(3, 3), redOpen: true }, { kind: 'continue' }],
+  ])('%s', (_, input, want) => expect(stepCloseVerdict({ limit: 20, budget: 3, redOpen: false, ...input })).toEqual(want))
 })
 
 const planDoc = (steps: Array<Record<string, unknown>>): CanonDoc =>

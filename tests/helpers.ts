@@ -458,25 +458,37 @@ export const THREE_STEPS = {
   ],
 }
 export const THREE_STEP_BODY = '## Step: s1\nA.\n\n## Step: s2\nB.\n\n## Step: s3\nC.\n'
+// The same three ids with the scaffolding step first, ahead of the two criteria steps.
+export const SCAFFOLDING_FIRST = {
+  steps: [
+    { id: 's1', title: 'rig', scaffolding: true },
+    { id: 's2', title: 'second', criteria: ['ac-rotate'] },
+    { id: 's3', title: 'third', criteria: ['ac-rotate'] },
+  ],
+}
 
 // Row 191 §4.3. A plan of two criteria steps and a scaffolding one, approved and not started, in
 // a repo whose runner runs the vitest-single fixture, so a test can witness each step's cycle.
-// `extraYaml` extends the committed config (a step budget, a context limit).
-export async function threeStepPlan(extraYaml = ''): Promise<TestRepo> {
+// `extraYaml` extends the committed config (a step budget, a context limit); `manifest` orders the
+// steps otherwise.
+export async function threeStepPlan(extraYaml = '', manifest: Record<string, unknown> = THREE_STEPS): Promise<TestRepo> {
   const repo = await seededRepo()
   writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered') + extraYaml)
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
   await writeSpec(repo, 'auth-refresh')
   approve(repo, 'auth-refresh')
-  await writePlan(repo, 'auth-refresh-plan-1', THREE_STEPS, THREE_STEP_BODY)
+  const written = await writePlan(repo, 'auth-refresh-plan-1', manifest, THREE_STEP_BODY)
+  if (written.code !== 0) throw new Error(`write: ${written.stdout}\n${written.stderr}`)
   repo.flipStatus('auth-refresh-plan-1', 'approved')
   return repo
 }
 
 // `threeStepPlan`, started, with the vitest-single fixture copied into its worktree: where a test
 // of the plan's steps begins.
-export async function startedThreeStepPlan(extraYaml = ''): Promise<{ repo: TestRepo; wt: string; planId: string }> {
-  const repo = await threeStepPlan(extraYaml)
+export async function startedThreeStepPlan(
+  extraYaml = '', manifest: Record<string, unknown> = THREE_STEPS,
+): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await threeStepPlan(extraYaml, manifest)
   const planId = 'auth-refresh-plan-1'
   const started = await repo.cli(['start', planId])
   if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)

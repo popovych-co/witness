@@ -13,7 +13,7 @@ import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites
 import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
-import { implementGated, lastRedVacuous, openRed, stepProgress, stepsLine, type StepState } from '../steps.js'
+import { implementGated, lastRedVacuous, openRed, redOpenStep, stepProgress, stepsLine, type StepState } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -257,9 +257,9 @@ export interface NextAction {
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
-  // Row 191 §1–§2. The green of a red still open: the session it is routed to is mid-red, and
-  // a session never relays there. The point after it decides instead (§4.4): the green's close
-  // for a plan step, the re-gate for a fix round.
+  // Row 191 §1–§2. A red still open, the parent tag's or any step's: the session the action is
+  // routed to is mid-red, and a session never relays there. The point after it decides instead
+  // (§4.4): the green's close for a plan step, the re-gate for a fix round.
   midRed?: true
 }
 
@@ -323,10 +323,19 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
   const progress = stepProgress(plan, entries)
   const stepped = progress.known && !implementGated(entries) ? progress : undefined
+  // Final review I1. A red open on any step, not only the next one's, is a red in flight: one
+  // recorded out of order (a scaffolding step left unclosed ahead of it, or an earlier step not
+  // begun) or re-opened on a closed step. Whatever row follows, the session is mid-red.
+  const redOpen = redOpenStep(plan, entries)
+  const inFlight = redOpen === undefined ? {} : { midRed: true as const }
   if (stepped?.next !== undefined) {
-    const { line, why, midRed } = stepLine(id, stepped.next, entries)
+    // Its green comes before the first unclosed step: routing that step's red or its close would
+    // leave the open red's green unrouted, and the session free to hand over with it open.
+    const open = stepped.steps.find((s) => s.id === redOpen)
+    const { line, why, midRed } = stepLine(id, open ?? stepped.next, entries)
+    const ahead = open !== undefined && open.id !== stepped.next.id ? `${open.id} has an open red — its green comes first` : why
     return {
-      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, why),
+      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead),
       ...(midRed ? { midRed } : {}),
     }
   }
@@ -335,8 +344,11 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   // implement-stage hint too, not a premature jump to "gate implement".
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
-    return evidenceRow(id, String(plan.meta.parent), files, report, inWorktree,
-      stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined)
+    return {
+      ...evidenceRow(id, String(plan.meta.parent), files, report, inWorktree,
+        stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined),
+      ...inFlight,
+    }
   }
   // D94: with the content unchanged the gate answers `changed-nothing` and appends
   // nothing, so routing there returns this same line every turn. The revise asked for an
@@ -345,10 +357,11 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
     return {
       line: `witness test-evidence ${id} --phase green`, stage: 'implement', target: id, ...inWorktree,
       note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
+      ...inFlight,
     }
   }
   return {
-    line: `witness gate implement ${id}`, target: id, ...inWorktree,
+    line: `witness gate implement ${id}`, target: id, ...inWorktree, ...inFlight,
     ...noteOf(
       lapseNote(entries, 'implement', diffSha,
         // `files` is the list flowAction already computed above — the cause costs one

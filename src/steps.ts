@@ -93,6 +93,16 @@ export function openRed(entries: Entry[], stepId: string): boolean {
   return open
 }
 
+// Row 191 §1–§2 (final review I1). The first criteria step, in manifest order, whose cycle is open:
+// recorded out of order ahead of an unclosed step, or re-opened on a closed one, it is a red in
+// flight all the same, and a session never relays mid-red. Read whether or not the plan's progress
+// is known, since a legacy plan's tagged reds open cycles too. A criteria step alone, because
+// `test-evidence` refuses any other a green: a red on a step an amend removed or turned into
+// scaffolding routes nothing.
+export function redOpenStep(plan: CanonDoc, entries: Entry[]): string | undefined {
+  return manifest(plan).find((s) => s.kind === 'criteria' && openRed(entries, s.id))?.id
+}
+
 // The step's latest red passed: the behavior it asserts already exists, as when the
 // implementation was written first, so a plain red on it can only come back vacuous again.
 export function lastRedVacuous(entries: Entry[], stepId: string): boolean {
