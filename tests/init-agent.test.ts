@@ -238,7 +238,8 @@ describe('witness init --agent', () => {
   // Row 191 §4.11 (P9). The context reading comes from a hooks module, and only a plugin carries
   // one: the repo declares the witness-context plugin the way Claude Code lets a repo declare a
   // plugin it needs, and init names the one-time machine install, because a declaration alone
-  // does not load in a headless session.
+  // does not load in a headless session. A fresh session loads the installed plugin and a running
+  // one does not (P9, P10), so the line ends there.
   it('declares the witness-context plugin and names the machine install', async () => {
     const repo = tmpRepo()
     const res = await repo.cli(['init', '--agent', 'claude-code'])
@@ -246,7 +247,7 @@ describe('witness init --agent', () => {
     const settings = JSON.parse(repo.read('.claude/settings.json'))
     expect(settings.extraKnownMarketplaces).toEqual({ witness: { source: { source: 'github', repo: 'popovych-co/witness' } } })
     expect(settings.enabledPlugins).toEqual({ 'witness-context@witness': true })
-    expect(res.stdout).toContain('adapter: install once per machine — claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness')
+    expect(res.stdout.split('\n')).toContain('adapter: install once per machine — claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness then start a new session')
     expect(repo.git('status', '--porcelain')).toBe('')
   })
 
