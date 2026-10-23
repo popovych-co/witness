@@ -30,8 +30,8 @@ import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
 import { reportHandover, slicesLine } from './slice.js'
 
-export type GateName = 'decompose' | 'plan' | 'implement' | 'ship' | 'design'
-export type ChangeClass = 'feature' | 'fix' | 'chore'
+import { DEFAULT_BATTERIES, type ChangeClass, type GateName } from './settings.js'
+export type { ChangeClass, GateName } from './settings.js'
 
 export interface Stamp { artifact: string; to: string }
 export interface MetaStamp { artifact: string; patch: Record<string, unknown>; entryType: string }
@@ -103,18 +103,6 @@ const GATES = new Map<string, GateSpec>()
 
 export function registerGate(spec: GateSpec): void { GATES.set(spec.gate, spec) }
 export function gateSpec(name: string): GateSpec | undefined { return GATES.get(name) }
-
-const DEFAULT_BATTERIES: Record<GateName, string[] | Record<ChangeClass, string[]>> = {
-  decompose: ['slicing-critic'],
-  plan: ['plan-critic'],
-  implement: {
-    feature: ['code-reviewer', 'silent-failure-hunter', 'type-design', 'pr-test', 'design-reviewer'],
-    fix: ['code-reviewer', 'silent-failure-hunter', 'design-reviewer'],
-    chore: ['code-reviewer'],
-  },
-  ship: ['drift-reviewer', 'code-reviewer'],
-  design: ['design-critic'],
-}
 
 export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Result<string[]> {
   const gates = (cfg.raw.gates ?? {}) as Record<string, { reviewers?: unknown } | undefined>

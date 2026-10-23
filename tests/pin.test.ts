@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { CLAUDE_THINKING_BUDGET, parsePin, THINKING_LEVELS } from '../src/pin.js'
+import { CLAUDE_THINKING_BUDGET, checkPin, parsePin, THINKING_LEVELS } from '../src/pin.js'
+
+describe('checkPin', () => {
+  it('checkPin refuses an alias and a malformed pin with today\'s texts', () => {
+    const alias = checkPin('gates.plan.model', 'opus')
+    expect(alias.ok).toBe(false)
+    if (!alias.ok) {
+      expect(alias.violations[0]).toEqual({
+        field: 'gates.plan.model', rule: 'alias-refused', got: 'opus',
+        want: 'an exact model id — aliases re-point under the calibration (Decision 55)',
+      })
+    }
+    const bad = checkPin('arbiter.model', 'google/')
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'pin-malformed', want: '[provider/]model[:thinking]' })
+    expect(checkPin('gates.ship.model', 'claude-opus-5-5:high')).toEqual({ ok: true, value: 'claude-opus-5-5:high' })
+  })
+})
 
 describe('parsePin', () => {
   it('parses a bare model id with thinking defaulting to off', () => {

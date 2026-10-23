@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 import type { Config } from './config.js'
 import type { HarnessName } from './harness.js'
-import { parsePin } from './pin.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { checkPin } from './pin.js'
+import { ok, refuse, type Result } from './refusal.js'
 
-export const MODEL_ALIASES = ['sonnet', 'opus', 'haiku', 'fable', 'default', 'latest']
+export { MODEL_ALIASES } from './pin.js'
 export const SESSION_DEFAULT = 'session-default'
 
 export interface MatrixInfo { shipped: string[]; local: string[] }
@@ -58,12 +58,8 @@ export function stagePin(cfg: Config, gate?: string): Result<string | undefined>
   const pinField = gateBlock?.model !== undefined ? `gates.${gate}.model` : 'gates.model'
   const pin = pinRaw === undefined ? undefined : String(pinRaw)
   if (pin !== undefined) {
-    const parsed = parsePin(pinField, pin)
-    if (!parsed.ok) return refuse(parsed.violations)
-    if (MODEL_ALIASES.includes(parsed.value.model)) {
-      return refuse([v(pinField, 'alias-refused', pin,
-        'an exact model id — aliases re-point under the calibration (Decision 55)')])
-    }
+    const checked = checkPin(pinField, pin)
+    if (!checked.ok) return refuse(checked.violations)
   }
   return ok(pin)
 }

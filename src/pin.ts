@@ -36,3 +36,18 @@ export function parsePin(field: string, raw: string): Result<ParsedPin> {
   }
   return ok({ provider, model, thinking: level as ThinkingLevel })
 }
+
+// Names that re-point when a vendor ships a new model, so a pin naming one is no pin.
+export const MODEL_ALIASES: readonly string[] = ['sonnet', 'opus', 'haiku', 'fable', 'default', 'latest']
+
+// The one pin check (row 193): the grammar, then the alias refusal. Every pinned setting —
+// a gate's model, the arbiter's — runs it where it is read and where it is used.
+export function checkPin(field: string, raw: string): Result<string> {
+  const parsed = parsePin(field, raw)
+  if (!parsed.ok) return refuse(parsed.violations)
+  if (MODEL_ALIASES.includes(parsed.value.model)) {
+    return refuse([v(field, 'alias-refused', raw,
+      'an exact model id — aliases re-point under the calibration (Decision 55)')])
+  }
+  return ok(raw)
+}
