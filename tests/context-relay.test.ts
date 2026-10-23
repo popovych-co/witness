@@ -85,6 +85,29 @@ describe('the rule at a step close', () => {
     expect(readStream(repo.root, planId).filter((e) => e.t === 'step-close')).toHaveLength(1)
   })
 
+  // D192. A passing green reports too, so it says the same: the primary root's config is the one the
+  // report reads, and the worktree's copy, intact, still runs the suite. A failing green reports
+  // nothing, so it has no report to lose.
+  it('a config that will not load costs a passing green its report, and says so', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}session:\n  contextLimit: 0\n`)
+    const warn = 'warn: no context line — witness.config.yaml did not load (invalid)'
+    const passed = `test-evidence: ${planId} · green · 1 outcome(s) · all green`
+    const closing = await evidenceCycle(repo, wt, planId, 's1', at(170_000))
+    expect(closing.code).toBe(0)
+    expect(closing.stdout).toBe(passed)
+    expect(closing.stderr).toBe(warn)
+    const green = () => repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(170_000) } })
+    const again = await green()
+    expect(again.code).toBe(0)
+    expect(again.stdout).toBe(passed)
+    expect(again.stderr).toBe(warn)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const failing = await green()
+    expect(failing.code).toBe(1)
+    expect(failing.stderr).toBe('not green — fix the implementation and re-run')
+  })
+
   // §4.4: a green that closes no step never ends a slice; a failing one reports nothing.
   it('a re-recorded green prints context alone', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
