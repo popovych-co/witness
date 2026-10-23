@@ -899,6 +899,16 @@ describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
   const chat = measuredEnv('chat-1', 170000, 1000000)
   const decisionOf = (repo: TestRepo) =>
     readStream(repo.root, repo.effort).filter((e) => e.t === 'human-decision').at(-1)
+  // Each journal line that carries a session stamp, as `stream: kind`. Nothing the setup wrote ran
+  // in a session, so after the run none may: whatever drive journals, it journals as no session.
+  const stamped = (repo: TestRepo): string[] => {
+    const dir = join(repo.root, '.witness', 'journal')
+    return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).flatMap((f) =>
+      readFileSync(join(dir, f), 'utf8').split('\n').filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((e) => 'ctx' in e)
+        .map((e) => `${f}: ${String(e.t)}`))
+  }
 
   it('a decision drive settles is stamped by no session · the session it spawns inherits none', async () => {
     const repo = await gatedEffort()                    // stopped on a blocking finding while autonomy was off
@@ -913,6 +923,7 @@ describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
     expect(r.stdout).toContain(`decided: decompose ${repo.effort} → revise · policy · blocking-here`)
     expect(decisionOf(repo)).toMatchObject({ decision: 'revise', selected: 'policy' })
     expect(decisionOf(repo)).not.toHaveProperty('ctx')
+    expect(stamped(repo)).toEqual([])
     expect(readFileSync(seen, 'utf8').trim()).toBe('unset unset')
   }, 60000)
 
@@ -922,6 +933,7 @@ describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
       { answers: ['1'], env: { ...chat, WITNESS_DRIVE_AGENT_BIN: idleAgent(), WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
     expect(decisionOf(repo)).toMatchObject({ decision: 'revise' })
     expect(decisionOf(repo)).not.toHaveProperty('ctx')
+    expect(stamped(repo)).toEqual([])
   }, 60000)
 })
 

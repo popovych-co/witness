@@ -346,6 +346,22 @@ describe('next routes the next unfinished plan step', () => {
     expect(await lines(repo, wt)).toContain('note: nothing changed yet — make the change · a chore owes no failing test')
   })
 
+  // Step routing holds until the first implement gate: after it an untagged cycle is a fix round
+  // and the plan's steps are behind it, so a known plan with a step left unclosed gets the rows below
+  // step routing, here the gate's, as before row 191.
+  it('keeps the rows below step routing once an implement gate has run', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
+    commitEntry(repo, planId, {
+      t: 'gate-run', gate: 'implement', artifact: planId, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
+      prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+    })
+    const out = await lines(repo, wt)
+    expect(out.find((l) => l.startsWith('next: '))).toBe(`next: witness gate implement ${planId}`)
+    expect(out).not.toContain('stage: implement')
+    expect(out.filter((l) => l.startsWith('note: steps'))).toEqual([])
+  })
+
   it("keeps today's rows for a legacy plan", async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     commitEntry(repo, planId, untaggedRed(planId))

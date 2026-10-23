@@ -41,6 +41,10 @@ describe('the verdict at a step close (row 191 §4.5 · §4.7)', () => {
     ['an open red — where the skill counts', { fill: un, progress: { known: false }, redOpen: true }, { kind: 'continue' }],
     // Re-opened on a closed step once every step has closed: the gate would judge a tree mid-red.
     ['an open red — though every step closed', { fill: m(900_000), progress: known(3, 3), redOpen: true }, { kind: 'continue' }],
+    // The rules' order: a fill at the limit is reached whatever the next step would add, and the
+    // projection needs steps the CLI can see.
+    ['rule 2 outranks rule 3 — reached, with a growth', { fill: m(200_000), progress: known(1, 3), growth: 50_000 }, { kind: 'end', why: '20% reached the 20% limit' }],
+    ['rule 3 needs known progress — a growth on a legacy plan', { fill: m(170_000), progress: { known: false }, growth: 50_000 }, { kind: 'continue' }],
   ])('%s', (_, input, want) => expect(stepCloseVerdict({ limit: 20, budget: 3, redOpen: false, ...input })).toEqual(want))
 })
 

@@ -29,6 +29,10 @@ describe('step progress (row 191 §4.3)', () => {
     expect(stepProgress(plan, [red('s1', { vacuous: true, tests: [{ name: 'a', ok: true }] }), green('s1')] as Entry[])).toMatchObject({ done: 0 })
     expect(stepProgress(plan, [red('s1'), green('s1', false)] as Entry[])).toMatchObject({ done: 0 })
   })
+  // A green with no outcome observed nothing, so it closes nothing, though none of its tests failed.
+  it('closes nothing on a green with no outcome', () => {
+    expect(stepProgress(plan, [red('s1'), { ...green('s1'), tests: [] }] as Entry[])).toMatchObject({ done: 0, next: { id: 's1' } })
+  })
   it('closes a scaffolding step at its step-close', () => {
     expect(stepProgress(plan, [close('s3')] as Entry[])).toMatchObject({ done: 1, next: { id: 's1' } })
   })

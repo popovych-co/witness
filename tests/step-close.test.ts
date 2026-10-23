@@ -52,6 +52,15 @@ describe('witness step-close', () => {
     expect(closes(repo.root)).toEqual([])
   })
 
+  // The value `--step` takes is never read as the plan.
+  it('refuses a close that names no plan', async () => {
+    const repo = await threeStepPlan()
+    const r = await repo.cli(['step-close', '--step', 's3'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('plan-id,required,absent,witness step-close <plan-id> --step <id>')
+    expect(closes(repo.root)).toEqual([])
+  })
+
   it('refuses an unknown plan', async () => {
     const repo = await threeStepPlan()
     const r = await repo.cli(['step-close', 'nope', '--step', 's3'])

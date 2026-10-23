@@ -202,6 +202,7 @@ async function atShipGate(): Promise<{ repo: TestRepo; scenario: string }> {
 }
 
 const relays = (r: CliResult) => lines(r).filter((l) => l.startsWith('relay:'))
+const contexts = (r: CliResult) => lines(r).filter((l) => l.startsWith('context:'))
 
 // Row 191 §4.4–§4.6. Outside a step close the CLI hands over where the journal already carries
 // the position: after a revise is handed to the session, at a ship exit, and at `next`. Each
@@ -298,6 +299,32 @@ describe('the hand-overs', () => {
     expect(r.stdout).not.toContain('context:')
   })
 
+  // A `run:` already hands the work to a session of its own, in another home: `next` run from the
+  // primary root into a worktree flow prints that relay, and no same-home hand-over beside it.
+  it('next from another home prints only the relay of its run:', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    const r = await repo.cli(['next'], { env: at(210_000) })            // cwd: the primary root
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain(`next: witness test-evidence ${PLAN} --phase red --step s2`)
+    expect(lines(r).filter((l) => l.startsWith('run: '))).toEqual([`run: cd '${wt}' && claude '/witness'`])
+    expect(relays(r)).toEqual([RELAY])
+    expect(contexts(r)).toEqual([])
+  })
+
+  // `witness check` is where the turn ends anyway: the CLI routes it when nothing else can move,
+  // here canon that will not load.
+  it('the witness check row never relays', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    repo.write('plans/broken.md', 'no frontmatter\n')
+    const r = await repo.cli(['next'], { env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain('next: witness check')
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
+  })
+
   // Plan's call 7: at a revise the guard holds by construction, the decision being an act.
   it('decide --revise hands over', async () => {
     const full = await stoppedPlanGate()
@@ -314,6 +341,16 @@ describe('the hand-overs', () => {
     expect(relays(under)).toEqual([])
   })
 
+  // Only a revise hands work back to the session that decided: an approve moves the flow on, and a
+  // stop parks it for the human.
+  it.each(['--approve', '--stop'])('decide %s hands nothing over', async (flag) => {
+    const repo = await stoppedPlanGate()
+    const r = await repo.cli(['decide', 'plan', PLAN, flag, '--note', 'x'], { env: measuredEnv('S4', 220_000, 1_000_000) })
+    expect(r.code, r.stderr).toBe(0)
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
+  })
+
   it('a settled revise under autonomy hands over', async () => {
     const repo = await plannedRepo()
     const scenario = fakeScenario()
@@ -324,6 +361,22 @@ describe('the hand-overs', () => {
     expect(lines(r).slice(-2)).toEqual(['context: 22% of 1M · limit 20%', RELAY])
   })
 
+  // Only the fill decides the hand-over: under the limit there is none, and unmeasured (no adapter)
+  // nothing hands over, as before row 191 (§4.7).
+  it.each([
+    ['under the limit', measuredEnv('S5', 100_000, 1_000_000)],
+    ['unmeasured', { CLAUDE_CODE_SESSION_ID: 'S5' }],
+  ])('a settled revise hands nothing over %s', async (_, env) => {
+    const repo = await plannedRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const r = await repo.cli(['gate', 'plan', PLAN], { env: { ...gateEnv(scenario), ...env } })
+    expect(r.code).toBe(1)
+    expect(r.stdout).toContain(`decided: plan ${PLAN} → revise`)
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
+  })
+
   // The ship gate always stops, so the run exits with its decision owed: the ship exit is the
   // only hand-over point in it.
   it('a ship run prints one relay', async () => {
@@ -331,6 +384,17 @@ describe('the hand-overs', () => {
     const r = await repo.cli(['ship', PLAN], { env: { ...gateEnv(scenario), ...measuredEnv('S6', 220_000, 1_000_000) } })
     expect(r.code).toBe(1)
     expect(relays(r)).toEqual([RELAY])
+  })
+
+  it.each([
+    ['under the limit', measuredEnv('S6', 100_000, 1_000_000)],
+    ['unmeasured', { CLAUDE_CODE_SESSION_ID: 'S6' }],
+  ])('a ship run hands nothing over %s', async (_, env) => {
+    const { repo, scenario } = await atShipGate()
+    const r = await repo.cli(['ship', PLAN], { env: { ...gateEnv(scenario), ...env } })
+    expect(r.code).toBe(1)
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
   })
 
   // Under autonomy the ship gate's own tail settles the revise inside the ship run, and the run

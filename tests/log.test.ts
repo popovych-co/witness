@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { SPEC_META, evidenceCycle, seededRepo, startedThreeStepPlan, writeSpec } from './helpers.js'
+import { SPEC_META, commitEntry, evidenceCycle, seededRepo, startedThreeStepPlan, threeStepPlan, writeSpec } from './helpers.js'
 
 describe('witness log', () => {
   it('renders recap, write, and write-refused entries in order', async () => {
@@ -49,6 +49,26 @@ describe('witness log reads plan steps', () => {
     expect(two.at(-2)).toMatch(/,step-close,step=s3$/)
 
     expect((await repo.cli(['log', repo.effort])).stdout).not.toContain('steps:')
+  })
+
+  // A red that passed is marked vacuous, and one verify-red reconstructed against the base is marked
+  // reconstructed: neither reads as a plain red.
+  it('marks a vacuous red and a reconstructed one', async () => {
+    const repo = await threeStepPlan()
+    const P = 'auth-refresh-plan-1'
+    const red = (ok: boolean, marks: Record<string, true>) => ({
+      t: 'test-evidence' as const, artifact: P, phase: 'red', step: 's1', runner: 'filtered',
+      tests: [{ name: 'rotates token before expiry @spec:auth-refresh', ok }], ...marks,
+    })
+    commitEntry(repo, P, red(true, { vacuous: true }))
+    commitEntry(repo, P, red(false, { reconstructed: true }))
+    commitEntry(repo, P, red(true, { reconstructed: true, vacuous: true }))
+    const rows = (await repo.cli(['log', P])).stdout.split('\n').filter((l) => l.includes(',test-evidence,'))
+    expect(rows).toEqual([
+      expect.stringMatching(/,test-evidence,phase=red step=s1 tests=1 failed=0 vacuous$/),
+      expect.stringMatching(/,test-evidence,phase=red step=s1 tests=1 failed=1 reconstructed$/),
+      expect.stringMatching(/,test-evidence,phase=red step=s1 tests=1 failed=0 vacuous reconstructed$/),
+    ])
   })
 })
 
