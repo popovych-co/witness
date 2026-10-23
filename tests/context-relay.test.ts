@@ -90,7 +90,7 @@ describe('the rule at a step close', () => {
   // nothing, so it has no report to lose.
   it('a config that will not load costs a passing green its report, and says so', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}session:\n  contextLimit: 0\n`)
+    patchConfig(repo, { session: { contextLimit: 0 } })
     const warn = 'warn: no context line — witness.config.yaml did not load (invalid)'
     const passed = `test-evidence: ${planId} · green · 1 outcome(s) · all green`
     const closing = await evidenceCycle(repo, wt, planId, 's1', at(170_000))
@@ -330,7 +330,7 @@ describe('the hand-overs', () => {
     const r = await repo.cli(['next'], { env: at(210_000) })            // cwd: the primary root
     expect(r.code).toBe(0)
     expect(lines(r)).toContain(`next: witness test-evidence ${PLAN} --phase red --step s2`)
-    expect(lines(r).filter((l) => l.startsWith('run: '))).toEqual([`run: cd '${wt}' && claude '/witness'`])
+    expect(lines(r).filter((l) => l.startsWith('run: '))).toEqual([`run: cd '${wt}' && claude --model claude-opus-5-5 '/witness'`])
     expect(relays(r)).toEqual([RELAY])
     expect(contexts(r)).toEqual([])
   })
