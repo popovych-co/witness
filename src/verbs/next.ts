@@ -13,7 +13,7 @@ import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites
 import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
-import { implementGated, lastRedVacuous, openRed, redInFlight, redOpenStep, stepProgress, stepsLine, type StepState } from '../steps.js'
+import { hasCriteriaStep, implementGated, lastRedVacuous, openRed, redInFlight, redOpenStep, stepProgress, stepsLine, type StepState } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -195,16 +195,22 @@ function judgeNote(entries: Entry[], gate: string, judge: string | undefined): s
 // vacuous red after a genuine one routed a second red here while the step row routed the green.
 // The gate's own semantics stay `evidenceForDiff`'s, so the owed note can still name a red the gate
 // wants after that green.
+//
+// D192. A plan with no criteria step (every chore plan, and one whose spec's criteria an earlier
+// plan realized) owes no red→green, so with nothing changed yet its work is the change itself,
+// never a failing test first.
 function evidenceRow(
   id: string, files: string[], report: EvidenceReport | undefined,
-  seat: { home: string; model?: string }, opts: { midRed: boolean; step?: string },
+  seat: { home: string; model?: string }, opts: { midRed: boolean; step?: string; criteria: boolean },
 ): NextAction {
   const base = { stage: 'implement' as const, target: id, ...seat }
   const stepFlag = opts.step === undefined ? '' : ` --step ${opts.step}`
   if (report === undefined) {
     return {
       line: `witness test-evidence ${id} --phase red${stepFlag}`, ...base,
-      note: 'nothing changed yet — write the failing test first',
+      note: opts.criteria
+        ? 'nothing changed yet — write the failing test first'
+        : 'nothing changed yet — make the change · a chore owes no failing test',
     }
   }
   const owed = report.required
@@ -345,8 +351,10 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
     return {
-      ...evidenceRow(id, files, report, inWorktree,
-        { midRed, step: stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined }),
+      ...evidenceRow(id, files, report, inWorktree, {
+        midRed, criteria: hasCriteriaStep(plan),
+        step: stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined,
+      }),
       ...inFlight,
     }
   }

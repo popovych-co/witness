@@ -18,7 +18,7 @@ const manifest = (plan: CanonDoc): StepState[] =>
 // A cycle can be a plan step's only where the plan has a criteria step for it to name. A plan
 // whose spec's criteria an earlier plan realized has none (an empty criteria delta), so none of
 // its evidence is a step's: it owes no `--step`, and its untagged evidence hides no step's close.
-const hasCriteriaStep = (plan: CanonDoc): boolean => manifest(plan).some((s) => s.kind === 'criteria')
+export const hasCriteriaStep = (plan: CanonDoc): boolean => manifest(plan).some((s) => s.kind === 'criteria')
 
 const outcomes = (e: Entry): Array<{ ok: boolean }> => (Array.isArray(e.tests) ? (e.tests as Array<{ ok: boolean }>) : [])
 
