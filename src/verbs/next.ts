@@ -193,15 +193,17 @@ function judgeNote(entries: Entry[], gate: string, judge: string | undefined): s
 // `step` is set where `test-evidence` refuses a cycle that names none (row 191): before the
 // first implement gate, on a plan whose progress is known and that has a criteria step.
 //
-// D192. The phase is the one reading of a red in flight (steps.ts `redInFlight`, `midRed` here):
-// its green while one is, a red otherwise. Read from the parent tag's latest red, as it was, a
-// vacuous red after a genuine one routed a second red here while the step row routed the green.
-// The gate's own semantics stay `evidenceForDiff`'s, so the owed note can still name a red the gate
-// wants after that green.
+// D192. With anything changed, the phase is the one reading of a red in flight (steps.ts
+// `redInFlight`, `midRed` here): its green while one is, a red otherwise. An empty diff routes a red
+// whatever is in flight. Read from the parent tag's latest red, as it was, a vacuous red after a
+// genuine one routed a second red here while the step row routed the green. The gate's own
+// semantics stay `evidenceForDiff`'s, so the owed note can still name a red the gate wants after
+// that green.
 //
-// D192. A plan with no criteria step (every chore plan, and one whose spec's criteria an earlier
-// plan realized) owes no red→green, so with nothing changed yet its work is the change itself,
-// never a failing test first.
+// D192. Every step of a plan with no criteria step (every chore plan, and one whose spec's criteria
+// an earlier plan realized) is scaffolding, so with nothing changed yet its work is the change
+// itself, never a failing test first. The note claims no more (final review): such a plan need not
+// be a chore, and once tagged tests land in its diff the gate can still want their red.
 function evidenceRow(
   id: string, files: string[], report: EvidenceReport | undefined,
   seat: { home: string; model?: string }, opts: { midRed: boolean; step?: string; criteria: boolean },
@@ -213,7 +215,7 @@ function evidenceRow(
       line: `witness test-evidence ${id} --phase red${stepFlag}`, ...base,
       note: opts.criteria
         ? 'nothing changed yet — write the failing test first'
-        : 'nothing changed yet — make the change · a chore owes no failing test',
+        : 'nothing changed yet — make the change · every step of this plan is scaffolding',
     }
   }
   const owed = report.required

@@ -339,11 +339,13 @@ describe('next routes the next unfinished plan step', () => {
     expect(await lines(repo, wt)).toContain(`next: witness gate implement ${P}`)
   })
 
-  // D192. Such a plan owes no failing test, so with nothing changed yet its work is the change.
+  // D192. Every step of such a plan is scaffolding, so with nothing changed yet its work is the
+  // change. The note says nothing of a red: this plan is no chore, and once tagged tests land it can
+  // still owe one (the test above).
   it('tells a plan with no criteria step and nothing changed to make its change', async () => {
     const { repo, wt, P } = await noCriteriaStep()
     expect((await repo.cli(['step-close', P, '--step', 's1'], { cwd: wt })).code).toBe(0)
-    expect(await lines(repo, wt)).toContain('note: nothing changed yet — make the change · a chore owes no failing test')
+    expect(await lines(repo, wt)).toContain('note: nothing changed yet — make the change · every step of this plan is scaffolding')
   })
 
   // Step routing holds until the first implement gate: after it an untagged cycle is a fix round
