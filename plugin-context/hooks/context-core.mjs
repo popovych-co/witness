@@ -120,10 +120,18 @@ export function contextLimitOf(text) {
   return DEFAULT_LIMIT;
 }
 
+// A directory inside `.witness/worktrees/<id>`: a plan's worktree, or a folder within it.
+const WORKTREE = /[\\/]\.witness[\\/]worktrees[\\/][^\\/]+/;
+
 /**
  * The config the limit comes from is the nearest one up from the session's directory, as
  * canon-guard.mjs finds its root. A path, not a walk: each adapter reads with its own harness's
  * calls, the first file found decides, and none at all means silence.
+ *
+ * Inside a plan's worktree the walk starts at the primary root, the directory holding `.witness`
+ * (final review I2). The CLI reads the primary root's config, and the worktree's is a checkout of
+ * it from when the worktree was cut: read first, a limit changed on main since would warn at one
+ * share while the CLI hands over at another.
  *
  * @param {string} cwd an absolute directory, `/` or `\` separated
  * @returns {string[]} witness.config.yaml in cwd and in every directory above it, nearest first
@@ -132,7 +140,8 @@ export function configCandidates(cwd) {
   if (typeof cwd !== 'string' || cwd === '') return [];
   const sep = /[\\/]/.exec(cwd)?.[0] ?? '/';
   const out = [];
-  let dir = cwd.replace(/[\\/]+$/, '');
+  const worktree = WORKTREE.exec(cwd);
+  let dir = (worktree === null ? cwd : cwd.slice(0, worktree.index)).replace(/[\\/]+$/, '');
   for (;;) {
     out.push(`${dir}${sep}${CONFIG}`);
     const cut = Math.max(dir.lastIndexOf('/'), dir.lastIndexOf('\\'));

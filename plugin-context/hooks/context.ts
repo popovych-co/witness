@@ -19,7 +19,8 @@ import { configCandidates, contextLimitOf, invokesWitness, readingJson, warnLine
 
 // Row 191 §4.6: the nearest witness.config.yaml up from the session's directory decides the
 // limit, as canon-guard.mjs finds its root: the walk goes up only past a directory that has none.
-// One that is there but cannot be read gives no limit, and so no warning.
+// In a plan's worktree it starts at the primary root, whose config the CLI reads
+// (configCandidates). One that is there but cannot be read gives no limit, and so no warning.
 async function configuredLimit($: EngineInterface): Promise<number | undefined> {
   for (const path of configCandidates(await $.session.cwd())) {
     if (!(await $.fs.exists(path))) continue;

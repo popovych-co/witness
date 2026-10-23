@@ -45,6 +45,20 @@ describe('the adapter core (row 191 §4.1, §4.6)', () => {
     expect(configCandidates('/')).toEqual(['/witness.config.yaml'])
   })
 
+  // Final review I2. An implement session stands in `.witness/worktrees/<plan>`, whose config is a
+  // checkout from when the worktree was cut, while the CLI reads the primary root's. So the walk
+  // starts at the directory holding `.witness`: no candidate inside the worktree, or in the
+  // `.witness` folders between, can give the adapter a limit the CLI does not use.
+  it('walks from the primary root when the session stands in a worktree', () => {
+    expect(configCandidates('/r/.witness/worktrees/p1/src')).toEqual(['/r/witness.config.yaml', '/witness.config.yaml'])
+    expect(configCandidates('/r/.witness/worktrees/p1')).toEqual(['/r/witness.config.yaml', '/witness.config.yaml'])
+    expect(configCandidates('C:\\r\\.witness\\worktrees\\p1\\src')).toEqual(['C:\\r\\witness.config.yaml', 'C:\\witness.config.yaml'])
+    expect(configCandidates('/.witness/worktrees/p1/src')).toEqual(['/witness.config.yaml'])
+    // Not inside a worktree: the walk is the plain one.
+    expect(configCandidates('/r/.witness/worktrees')[0]).toBe('/r/.witness/worktrees/witness.config.yaml')
+    expect(configCandidates('/r/my.witness/worktrees/p1')[0]).toBe('/r/my.witness/worktrees/p1/witness.config.yaml')
+  })
+
   it.each([
     ['$WITNESS next', true], ['${WITNESS} next', true], ['witness next', true],
     ['npx -y @popovych.co/witness@0.19.4 test-evidence p --phase red --step s1', true],

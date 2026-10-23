@@ -250,6 +250,22 @@ describe('pi extension — the context reading and the warning (row 191 §4.1, �
     expect(await run(s, '$WITNESS next')).toBeTruthy();      // a directory with none: one level up
   });
 
+  // Final review I2. In a worktree the adapter reads the primary root's config, as the CLI does:
+  // the worktree's copy is the config as it stood when the worktree was cut (here 20%, before the
+  // limit was raised to 30% on main), and a warning from it would contradict the CLI's `context:`.
+  it('reads the primary root\'s limit from inside a worktree', async () => {
+    const s = overTheLimit('schema: 1\nsession:\n  contextLimit: 30\n');
+    const wt = join(s.ctx.cwd, '.witness', 'worktrees', 'p1');
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(wt, 'witness.config.yaml'), LIMIT_20);
+    s.ctx.cwd = join(wt, 'src');
+    s.state.usage = { tokens: 250000, contextWindow: 1000000, percent: 25 };
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    s.state.usage = { tokens: 300000, contextWindow: 1000000, percent: 30 };
+    const r = (await run(s, '$WITNESS next')) as { content: Array<{ text: string }> };
+    expect(r.content.at(-1)!.text).toMatch(/^witness: context 30% of 1M has reached the 30% limit/);
+  });
+
   // The last reading names this same session, so left standing it would pass the CLI's check as
   // live for a command it was never taken for.
   it('clears the last reading when a new one cannot be taken', async () => {

@@ -40,7 +40,8 @@ function dashboardText(cwd: string): string {
 }
 
 // Row 191 §4.6: the nearest witness.config.yaml up from the session's directory decides
-// the limit, as canon-guard.mjs finds its root: the walk stops at the first that exists.
+// the limit, as canon-guard.mjs finds its root: the walk stops at the first that exists. In a
+// plan's worktree it starts at the primary root, whose config the CLI reads (configCandidates).
 // One that cannot be read gives no limit, and so no warning; with none, the same.
 function configuredLimit(cwd: string): number | undefined {
   const path = configCandidates(cwd).find((candidate) => existsSync(candidate));
