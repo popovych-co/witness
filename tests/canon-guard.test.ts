@@ -59,6 +59,31 @@ describe('canonGuard — configured canon roots', () => {
     mkdirSync(join(block, 'docs', 'specs'), { recursive: true });
     expect(canonGuard({ tool: 'Write', input: { file_path: join(block, 'docs', 'specs', 'a.md') }, cwd: block })?.block).toBe(true);
   });
+
+  // Row 193, probes P2/P3: the reader matched keys inside comments and gave up on a
+  // commented section line — both read the canon at the wrong place.
+  const guardsDocsOnly = (config: string) => {
+    const repo = witnessRepo(config);
+    mkdirSync(join(repo, 'docs', 'specs'), { recursive: true });
+    expect(canonGuard({ tool: 'Edit', input: { file_path: join(repo, 'docs', 'specs', 'x.md') }, cwd: repo })?.block).toBe(true);
+    expect(canonGuard({ tool: 'Edit', input: { file_path: join(repo, 'specs', 'x.md') }, cwd: repo })).toBeUndefined();
+  };
+
+  it('reads paths under a comment line that names a key (P2)', () => {
+    guardsDocsOnly(
+      'schema: 1\npaths:\n  # repo-relative; for specs: no . or ..\n  specs: docs/specs\n  plans: docs/plans\n  designs: docs/designs\n',
+    );
+  });
+
+  it('reads paths when the section line carries a comment (P3)', () => {
+    guardsDocsOnly('schema: 1\npaths:  # canon roots\n  specs: docs/specs\n  plans: docs/plans\n  designs: docs/designs\n');
+  });
+
+  it('reads paths with end-of-line comments', () => {
+    guardsDocsOnly(
+      'schema: 1\npaths:\n  specs: docs/specs  # where specs live\n  plans: docs/plans  # where plans live\n  designs: docs/designs  # where designs live\n',
+    );
+  });
 });
 
 // Row 133. The old Bash branch blocked when a state path and a writeish token CO-OCCURRED
