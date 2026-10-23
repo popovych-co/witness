@@ -12,6 +12,8 @@ describe('witness init --agent', () => {
     expect(repo.read('.pi/prompts/witness.md')).toContain('# /witness — the engine')
     expect(repo.read('.pi/extensions/witness.ts')).toContain('canonGuard')
     expect(repo.read('.pi/extensions/canon-guard.mjs')).toContain('export function canonGuard')
+    // witness.ts imports it statically: without it the whole extension, guard included, fails to load
+    expect(repo.read('.pi/extensions/context-core.mjs')).toContain('export function contextLimitOf')
     expect(repo.read('.pi/extensions/session-dashboard.sh')).toContain('witness.config.yaml')
     expect(repo.read('witness.config.yaml')).toContain('harness: pi')
     // committed, not just written: pi resolves .pi/extensions cwd-relative with no

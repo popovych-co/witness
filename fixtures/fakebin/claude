@@ -21,6 +21,8 @@ cat > "$call/stdin"
 # the lens this call reviews for — witness exports WITNESS_LENS to every reviewer
 lens="${WITNESS_LENS:-}"
 if [ -n "$lens" ]; then printf '%s\n' "$lens" > "$call/lens"; fi
+# the reviewer mark — witness exports WITNESS_REVIEWER=1 to every reviewer (row 191)
+if [ -n "${WITNESS_REVIEWER:-}" ]; then printf '%s\n' "$WITNESS_REVIEWER" > "$call/reviewer"; fi
 # barrier: hold until N calls exist — only a concurrent battery fills it
 if [ -f "$dir/claude-barrier" ]; then
   want=$(cat "$dir/claude-barrier"); i=0

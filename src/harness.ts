@@ -176,9 +176,10 @@ const REGISTRY: Record<HarnessName, Harness> = {
     payload: [
       { from: 'plugin/commands/witness.md', to: '.pi/prompts/witness.md' },
       { from: 'plugin/hooks/canon-guard.mjs', to: '.pi/extensions/canon-guard.mjs' },
-      // Source-tree sibling of canon-guard.mjs, exactly as it is in .pi/extensions/:
-      // the adapter imports the core with ONE static relative specifier, and a
-      // specifier that only resolves after install is a trap no unit test can hold.
+      { from: 'plugin/hooks/context-core.mjs', to: '.pi/extensions/context-core.mjs' },
+      // Source-tree sibling of both cores, exactly as it is in .pi/extensions/: the
+      // adapter imports each with ONE static relative specifier, and a specifier that
+      // only resolves after install is a trap no unit test can hold.
       { from: 'plugin/hooks/witness-pi.ts', to: '.pi/extensions/witness.ts' },
       { from: 'plugin/hooks/session-dashboard.sh', to: '.pi/extensions/session-dashboard.sh' },
     ],

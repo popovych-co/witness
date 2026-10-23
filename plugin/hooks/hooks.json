@@ -13,5 +13,6 @@
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/session-dashboard.sh\"" }] }
     ]
-  }
+  },
+  "modules": ["./context.ts"]
 }

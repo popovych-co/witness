@@ -75,5 +75,6 @@ describe('the fill arithmetic (row 191 §4.5)', () => {
   it('labels windows', () => {
     expect(windowLabel(1000000)).toBe('1M')
     expect(windowLabel(200000)).toBe('200k')
+    expect(windowLabel(999_999)).toBe('1M')          // rounds to 1000k, which is a million
   })
 })

@@ -90,6 +90,9 @@ export function withoutSession(env: Env): Env {
 // Row 191 §4.5. The decision is `reached`, in integer tokens; the display is floored, so the
 // two agree: a printed 19% never hands over and a printed 20% always does. Rounding would
 // print 20% beside a session that carries on.
+//
+// pctOf and windowLabel have a twin in plugin/hooks/context-core.mjs, for the adapters' warning:
+// the CLI must not import plugin/ at runtime, so tests/context-core.test.ts holds the two equal.
 export function pctOf(tokens: number, window: number): number {
   return Math.floor(tokens * 100 / window)
 }
@@ -100,8 +103,11 @@ export function reached(tokens: number, window: number, limit: number): boolean 
 
 // The window a fill is a share of, the way people say it: 1M, 200k. Display only: a window that
 // is not round reads approximately (1048576 is 1M), and the percentage still uses the exact one.
+// Thousands are rounded first, so a window that rounds up to a thousand of them reads 1M, never
+// 1000k.
 export function windowLabel(window: number): string {
-  if (window >= 1_000_000) return `${Math.round(window / 100_000) / 10}M`
-  if (window >= 1_000) return `${Math.round(window / 1_000)}k`
-  return String(window)
+  if (window < 1_000) return String(window)
+  const thousands = Math.round(window / 1_000)
+  if (thousands < 1_000) return `${thousands}k`
+  return `${Math.round(window / 100_000) / 10}M`
 }
