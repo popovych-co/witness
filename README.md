@@ -69,6 +69,22 @@ witness is two halves: **six skills**, distributed through the
 /plugin marketplace add popovych-co/witness    # skills, engine, guard and dashboard together
 ```
 
+**Claude Code, on either route** (the marketplace plugin above, or `init --agent claude-code`),
+also needs the `witness-context` plugin, installed once per machine:
+
+```bash
+claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness
+```
+
+It puts the session's live context reading into every Bash command, which is what lets a
+session hand over at `session.contextLimit` (see Run economics below). The reading comes from
+a hooks module, and only a plugin can carry one. `init --agent claude-code` also declares the
+plugin in `.claude/settings.json`, the way a project names a plugin it needs, but the
+declaration alone does not load it in a headless session (`claude -p`, `witness drive`). The
+install is a copy: after upgrading witness, `claude plugin update witness-context@witness`
+refreshes it. Without the plugin witness still runs, on the step budget, and says so; `witness
+check`, run from a session, reports whether that session sees the reading.
+
 **Pi** (and any other agent the installer supports):
 
 ```bash
@@ -241,8 +257,8 @@ Releasing is `node scripts/release.mjs <major|minor|patch|x.y.z>` followed by tw
 
 A witness session ends at a configured share of its context window:
 `session.contextLimit`, 20% by default (DESIGN.md row 191). The harness measures the
-fill — the witness plugin on Claude Code and the witness extension on Pi put the live
-reading into every shell command's environment — and witness counts no tokens of its
+fill — the `witness-context` plugin on Claude Code and the witness extension on Pi put the
+live reading into every shell command's environment — and witness counts no tokens of its
 own. The CLI decides only where the journal already carries the position: at a step
 close (`slice: end`), after a revise, at a `witness ship` exit and at `next`, by
 printing a `relay:` line. A session never hands over mid-red. Once per session, at the

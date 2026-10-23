@@ -117,7 +117,7 @@ Before every shell command, each harness adapter puts the live reading into that
 WITNESS_CONTEXT={"session":"<harness session id>","tokens":31627,"window":1000000,"percent":3}
 ```
 
-- **Claude Code.** The witness plugin's `plugin/hooks/hooks.json` gains `"modules": ["./context.ts"]` beside its classic hooks. The module hooks `tool.call` on Bash: it reads `$.session.usage()` and `$.session.id()`, sets `WITNESS_CONTEXT`, then calls `next(e)`. This is exactly P1's module.
+- **Claude Code.** The witness plugin's `plugin/hooks/hooks.json` gains `"modules": ["./context.ts"]` beside its classic hooks. The module hooks `tool.call` on Bash: it reads `$.session.usage()` and `$.session.id()`, sets `WITNESS_CONTEXT`, then calls `next(e)`. This is exactly P1's module. *(Amended during the build, 2026-10-22: the module is the whole of its own plugin, `witness-context`, and the witness plugin no longer names it — see §4.11.)*
 - **Pi.** `witness-pi.ts` gains the same step in its existing `tool_call` handler for bash, using `ctx.getContextUsage()` and the session id. It writes `process.env.WITNESS_CONTEXT`.
 - **The CLI** reads `WITNESS_CONTEXT` and trusts it only if all three hold:
   - it parses;
@@ -263,6 +263,17 @@ There is no first-step exemption at a step close: the step has already finished,
 - **Pi:** the existing extension.
 - `witness check` reports the adapter state: present, reading seen, or absent.
 
+*Amended during the build, 2026-10-22 (probe P9):* the settings-declared route does not load headless.
+- A project's committed settings declaring the plugin (`extraKnownMarketplaces` naming a directory marketplace inside the installed payload, plus `enabledPlugins`) were skipped by a headless session: `Skipping orphaned enabledPlugins entry witness-context@witness-local: marketplace not registered`. That is a registry gate, not workspace trust.
+- The same plugin, installed at user scope from a registered marketplace, loaded headless at the repo root and inside a `.witness/worktrees/<plan>` worktree, and delivered the reading in both. The install is a copy in Claude Code's cache, refreshed by `claude plugin update`.
+
+So the route is:
+- **One carrier.** The module is the whole of the `witness-context` plugin (`plugin-context/`), listed in witness's own GitHub marketplace beside `witness`. Both Claude Code routes need it, installed once per machine at user scope: `claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness`. The full `witness` plugin no longer carries the module, so a machine with both never runs it twice (two copies would each latch and warn).
+- **The core is copied.** Claude Code copies a marketplace plugin whole into its cache, where nothing outside it resolves, so `plugin-context/hooks/` holds a byte-identical copy of `plugin/hooks/context-core.mjs`, the original the Pi payload copies. `sync-versions` makes the copy and stamps the plugin's version; release CI's diff check fails a stale one.
+- **`init --agent claude-code`** still declares the plugin in `.claude/settings.json` (the GitHub marketplace and `enabledPlugins`, appended, never over the human's entry or an explicit `false`): it is the harness-native way a project names a plugin it needs. Headless the declaration loads nothing, so `init` prints the install line. Whether a session's trust prompt offers the install from it is unprobed, owed with the chat-mode check (§6).
+- **`witness check`** reports the adapter from the reading itself, never from Claude Code's files: a reading seen, with its fill; in a harness session with no reading, the reason and the remedy (the install line on Claude Code, `init --agent pi` on Pi); outside a harness session, that it cannot tell.
+- Rejected: `init` running the install, which would write a machine's global configuration from a repo's bootstrap.
+
 ## 5. DESIGN.md rows
 
 - **New row 191.** Context-fill relay: the reading, the limit, the step-aware rule, the hand-over points, and the warning.
@@ -284,10 +295,11 @@ P1 through P8 all ran on 2026-10-22, with the results in §3. What they changed 
 - P6: `witness install` uses the settings-declared plugin, not the skills folder.
 - P7: `no reading yet` covers both harnesses' forms.
 - P8: two exact-shape tests get updated.
+- P9 (run during the build, 2026-10-22): the settings-declared plugin loads nothing headless, so the module moved to a plugin of its own, installed once per machine (§4.11). It replaces P6's consequence above.
 
 Still owed. None of these blocks the plan; they are checks during the build.
 - **Chat-mode confirmation.** The probes ran headless (`-p`, stream-json, and Pi RPC). The first interactive session after the build confirms that the module loads and the warning reaches the model in chat. It is the same engine path: this interactive session runs plugin modules itself, and the plugin-authoring tools here are registered through `$.tool.register`.
-- **Project scope.** `--scope project` (committed settings) instead of P5's `--scope local`.
+- **Project scope.** `--scope project` (committed settings) instead of P5's `--scope local`. *(Moot after P9, 2026-10-22: on a machine that has not registered the marketplace a committed declaration loads nothing headless, so every machine installs the plugin itself, at user scope — §4.11.)*
 - **Every Claude Code upgrade.** The plugin API is early access. `witness check` reports the adapter state, so a release that breaks the module shows up as `no adapter` rather than as a silent miss.
 
 ## 7. Edge cases and residuals
