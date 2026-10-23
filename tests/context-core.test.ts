@@ -31,12 +31,32 @@ const SHAPES = [
   'schema: 1\nsession:\n  nested:\n    contextLimit: 5\n',
   'schema: 1\nsession:\n  contextLimit: 15.0\n',
   'schema: 1\nsession:\n  contextLimit: "15"\n',
+  // D192. A value straight after the key's colon reads only in a flow map. In a block map it is a
+  // YAML error for a quoted key. A plain one makes the whole of `session:` one string when no
+  // `key: value` entry stands beside it, and is a YAML error beside one, before or after it.
+  'schema: 1\nsession:\n  "contextLimit":15\n',
+  'schema: 1\nsession:\n  "contextLimit": 15\n',
+  'schema: 1\nsession:\n  contextLimit:15\n',
+  'schema: 1\nsession:\n  bogus: 1\n  contextLimit:15\n',
+  'schema: 1\nsession:\n  contextLimit:15\n  bogus: 1\n',
 ]
+
+// The limit the CLI reads from a config: none when its YAML parser cannot read the file (loadConfig
+// refuses `yaml-parse`), or when the resolver refuses the value.
+function cliLimit(text: string): number | undefined {
+  let raw: unknown
+  try {
+    raw = parseYaml(text)
+  } catch {
+    return undefined
+  }
+  const cli = resolveSession(raw as Record<string, unknown>)
+  return cli.ok ? cli.value.contextLimit : undefined
+}
 
 describe('the adapter core (row 191 §4.1, §4.6)', () => {
   it.each(SHAPES)('agrees with the CLI resolver on every config shape: %j', (text) => {
-    const cli = resolveSession(parseYaml(text) as Record<string, unknown>)
-    expect(contextLimitOf(text)).toBe(cli.ok ? cli.value.contextLimit : undefined)
+    expect(contextLimitOf(text)).toBe(cliLimit(text))
   })
 
   it('lists config candidates nearest first', () => {

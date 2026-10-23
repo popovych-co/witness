@@ -74,14 +74,38 @@ describe('the rule at a step close', () => {
   })
 
   // The close is journaled before the report runs, so a config that will not load costs the
-  // report and never the verb's exit.
+  // report and never the verb's exit. D192: the CLI says why the report is missing, on stderr.
   it('a config that will not load costs the report, not the close', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     patchConfig(repo, { session: { contextLimit: 0 } })
     const r = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(250_000) })
     expect(r.code).toBe(0)
     expect(r.stdout).toBe(`step-close: ${planId} · s3 closed`)
+    expect(r.stderr).toBe('warn: no context line — witness.config.yaml did not load (invalid)')
     expect(readStream(repo.root, planId).filter((e) => e.t === 'step-close')).toHaveLength(1)
+  })
+
+  // D192. A passing green reports too, so it says the same: the primary root's config is the one the
+  // report reads, and the worktree's copy, intact, still runs the suite. A failing green reports
+  // nothing, so it has no report to lose.
+  it('a config that will not load costs a passing green its report, and says so', async () => {
+    const { repo, wt, planId } = await startedThreeStepPlan()
+    patchConfig(repo, { session: { contextLimit: 0 } })
+    const warn = 'warn: no context line — witness.config.yaml did not load (invalid)'
+    const passed = `test-evidence: ${planId} · green · 1 outcome(s) · all green`
+    const closing = await evidenceCycle(repo, wt, planId, 's1', at(170_000))
+    expect(closing.code).toBe(0)
+    expect(closing.stdout).toBe(passed)
+    expect(closing.stderr).toBe(warn)
+    const green = () => repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(170_000) } })
+    const again = await green()
+    expect(again.code).toBe(0)
+    expect(again.stdout).toBe(passed)
+    expect(again.stderr).toBe(warn)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const failing = await green()
+    expect(failing.code).toBe(1)
+    expect(failing.stderr).toBe('not green — fix the implementation and re-run')
   })
 
   // §4.4: a green that closes no step never ends a slice; a failing one reports nothing.
@@ -201,6 +225,7 @@ async function atShipGate(): Promise<{ repo: TestRepo; scenario: string }> {
 }
 
 const relays = (r: CliResult) => lines(r).filter((l) => l.startsWith('relay:'))
+const contexts = (r: CliResult) => lines(r).filter((l) => l.startsWith('context:'))
 
 // Row 191 §4.4–§4.6. Outside a step close the CLI hands over where the journal already carries
 // the position: after a revise is handed to the session, at a ship exit, and at `next`. Each
@@ -297,6 +322,32 @@ describe('the hand-overs', () => {
     expect(r.stdout).not.toContain('context:')
   })
 
+  // A `run:` already hands the work to a session of its own, in another home: `next` run from the
+  // primary root into a worktree flow prints that relay, and no same-home hand-over beside it.
+  it('next from another home prints only the relay of its run:', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    const r = await repo.cli(['next'], { env: at(210_000) })            // cwd: the primary root
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain(`next: witness test-evidence ${PLAN} --phase red --step s2`)
+    expect(lines(r).filter((l) => l.startsWith('run: '))).toEqual([`run: cd '${wt}' && claude --model claude-opus-5-5 '/witness'`])
+    expect(relays(r)).toEqual([RELAY])
+    expect(contexts(r)).toEqual([])
+  })
+
+  // `witness check` is where the turn ends anyway: the CLI routes it when nothing else can move,
+  // here canon that will not load.
+  it('the witness check row never relays', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    repo.write('plans/broken.md', 'no frontmatter\n')
+    const r = await repo.cli(['next'], { env: at(210_000) })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain('next: witness check')
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
+  })
+
   // Plan's call 7: at a revise the guard holds by construction, the decision being an act.
   it('decide --revise hands over', async () => {
     const full = await stoppedPlanGate()
@@ -313,6 +364,16 @@ describe('the hand-overs', () => {
     expect(relays(under)).toEqual([])
   })
 
+  // Only a revise hands work back to the session that decided: an approve moves the flow on, and a
+  // stop parks it for the human.
+  it.each(['--approve', '--stop'])('decide %s hands nothing over', async (flag) => {
+    const repo = await stoppedPlanGate()
+    const r = await repo.cli(['decide', 'plan', PLAN, flag, '--note', 'x'], { env: measuredEnv('S4', 220_000, 1_000_000) })
+    expect(r.code, r.stderr).toBe(0)
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
+  })
+
   it('a settled revise under autonomy hands over', async () => {
     const repo = await plannedRepo()
     const scenario = fakeScenario()
@@ -323,6 +384,22 @@ describe('the hand-overs', () => {
     expect(lines(r).slice(-2)).toEqual(['context: 22% of 1M · limit 20%', RELAY])
   })
 
+  // Only the fill decides the hand-over: under the limit there is none, and unmeasured (no adapter)
+  // nothing hands over, as before row 191 (§4.7).
+  it.each([
+    ['under the limit', measuredEnv('S5', 100_000, 1_000_000)],
+    ['unmeasured', { CLAUDE_CODE_SESSION_ID: 'S5' }],
+  ])('a settled revise hands nothing over %s', async (_, env) => {
+    const repo = await plannedRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const r = await repo.cli(['gate', 'plan', PLAN], { env: { ...gateEnv(scenario), ...env } })
+    expect(r.code).toBe(1)
+    expect(r.stdout).toContain(`decided: plan ${PLAN} → revise`)
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
+  })
+
   // The ship gate always stops, so the run exits with its decision owed: the ship exit is the
   // only hand-over point in it.
   it('a ship run prints one relay', async () => {
@@ -330,6 +407,17 @@ describe('the hand-overs', () => {
     const r = await repo.cli(['ship', PLAN], { env: { ...gateEnv(scenario), ...measuredEnv('S6', 220_000, 1_000_000) } })
     expect(r.code).toBe(1)
     expect(relays(r)).toEqual([RELAY])
+  })
+
+  it.each([
+    ['under the limit', measuredEnv('S6', 100_000, 1_000_000)],
+    ['unmeasured', { CLAUDE_CODE_SESSION_ID: 'S6' }],
+  ])('a ship run hands nothing over %s', async (_, env) => {
+    const { repo, scenario } = await atShipGate()
+    const r = await repo.cli(['ship', PLAN], { env: { ...gateEnv(scenario), ...env } })
+    expect(r.code).toBe(1)
+    expect(relays(r)).toEqual([])
+    expect(contexts(r)).toEqual([])
   })
 
   // Under autonomy the ship gate's own tail settles the revise inside the ship run, and the run
@@ -534,5 +622,79 @@ describe('an open red closes at any passing green', () => {
     expect(relays(r)).toEqual([])
     const closed = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
     expect(slice(closed)).toBe('slice: continue')
+  })
+})
+
+// D192. One reading of an open red for every reader (steps.ts `redInFlight`): the step row, the
+// evidence row, `next`'s hand-over and the verdict at a step close. Each shape below was open to one
+// reader and closed to another.
+describe('one reading of an open red', () => {
+  const routed = (r: CliResult) => lines(r).find((l) => l.startsWith('next: '))
+  const slice = (r: CliResult) => lines(r).find((l) => l.startsWith('slice: '))
+
+  // The step row and the verdict read it closed (no red after the passing green), the evidence row
+  // open (the latest green failed). The last green failed: open. s1's own cycle closed at its first
+  // green, so the note says what failed rather than an open red s1 does not hold.
+  it('a green that fails after a passing one: next routes its green, and a step close says continue', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const failing = await repo.cli(['test-evidence', PLAN, '--phase', 'green', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(150_000) } })
+    expect(failing.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the last green failed — a passing green comes first')
+    expect(relays(r)).toEqual([])
+    const closed = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
+    expect(slice(closed)).toBe('slice: continue')
+  })
+
+  // The step row read it open (the genuine red, no passing green since), the evidence row closed (the
+  // parent tag's latest red was vacuous) and routed a second red. Every step closed, so the evidence
+  // row answers: it routes the green too.
+  it('a vacuous red after a genuine one: the evidence row routes its green', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, PLAN, 's2', at(110_000))).code).toBe(0)
+    expect((await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(120_000) })).code).toBe(0)
+    await redIn(repo, wt, 's1', at(130_000))
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const vacuous = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(140_000) } })
+    expect(vacuous.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(relays(r)).toEqual([])
+  })
+
+  // The green owed while a red is in flight names the latest genuine red's step, whichever row
+  // routes it: the evidence row read the latest red of any kind, and named the vacuous one's step.
+  it("a vacuous red on another step after a genuine one: the evidence row names the genuine red's step", async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, PLAN, 's2', at(110_000))).code).toBe(0)
+    expect((await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(120_000) })).code).toBe(0)
+    await redIn(repo, wt, 's1', at(130_000))
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const vacuous = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', 's2'], { cwd: wt, env: { ...fixtureEnv(), ...at(140_000) } })
+    expect(vacuous.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(relays(r)).toEqual([])
+  })
+
+  // s1's cycle closed at its green, so the failing green on s2 is what holds the plan in flight: the
+  // green owed still names s1, the latest genuine red's step, and the note says what failed rather
+  // than an open red s1 does not have. A red re-opened on s1 is its own, and keeps the s1 note
+  // (`a red open on any step` above).
+  it("a green that fails after the open step's cycle closed: the note says the last green failed", async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const failing = await repo.cli(['test-evidence', PLAN, '--phase', 'green', '--step', 's2'], { cwd: wt, env: { ...fixtureEnv(), ...at(150_000) } })
+    expect(failing.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the last green failed — a passing green comes first')
+    expect(relays(r)).toEqual([])
   })
 })

@@ -126,6 +126,7 @@ WITNESS_CONTEXT={"session":"<harness session id>","tokens":31627,"window":100000
 
   Otherwise the reading is **unmeasured**, with a named reason: `no adapter`, `stale` (session mismatch), `malformed`, or `no reading yet`.
 - **`no reading yet`** covers `tokens` absent (Claude Code before the first response) and `tokens: 0` (Pi before the first response), per P7.
+  *Amended 2026-10-23 (D192, row 192):* it also covers a reading that names this session and carries no `window` at all: Pi's adapter writes the session alone when `ctx.getContextUsage()` gives nothing. Its `tokens`, if present and not `null`, must still be a non-negative integer. A `window` that is present but not an integer of at least 1, `null` included, stays `malformed`, and a value naming another session is `stale`.
 - The Pi adapter maps Pi's `contextWindow` to the contract's `window`. Each harness's `tokens` keeps its own meaning (§3).
 - The session check is what makes stale values harmless. A drive process launched from a chat session's Bash inherits that chat session's `WITNESS_CONTEXT`. Drive also strips the variable from every child's environment, as a second guard. *(Amended during the build, 2026-10-22: the session check does not cover drive's own process — see §4.9.)*
 - The CLI computes the percentage itself from `tokens / window`. The adapter's `percent` is display only, so the two harnesses can't round differently.
@@ -181,6 +182,8 @@ Write `f` for the fill, `L` for the limit, and `g` for the expected size of the 
 There is no first-step exemption at a step close: the step has already finished, so every slice makes progress. A session that starts over the limit ends after one step.
 
 *Amended during the build, 2026-10-22 (final review):* an open red outranks all four rules: `continue`, since a session never relays mid-red, and with every step closed a gate would judge the tree mid-red. A red is open while the plan's latest red that observed a failure has no passing green after it, whatever step either names or none: every run executes the parent tag's whole suite. Read per step instead, the red the skill tags on a legacy plan never closed under the untagged green `next` routes there (re-review). Recorded out of order, behind an unclosed scaffolding step, or re-opened on a closed one, its green is routed ahead of the first unclosed step, and `next` hands nothing over while it is open.
+
+*Amended 2026-10-23 (D192, row 192):* a red is in flight while the plan's latest run that counts, a non-vacuous `test-evidence` entry with outcomes, saw a failure: a red with a failing test, or a green that did not pass. So a green that fails after a passing one re-opens it, and a vacuous red after a genuine one leaves it open. Its step is the latest genuine red's. The step row, the evidence row, `next`'s hand-over and the verdict at a step close all read it: read from the latest red alone, they disagreed on both shapes.
 
 **At a revise hand-over, a ship exit, or `next`:**
 - Relay when `f ≥ L` and this session has made at least one act (§4.8). There is no projection here. Other stages have no repeated unit to learn a size from, and projecting them is deferred (§7).

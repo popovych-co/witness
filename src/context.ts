@@ -38,6 +38,8 @@ const isInt = (x: unknown): x is number => typeof x === 'number' && Number.isInt
 // harmless: a drive launched from a chat session's shell carries the chat's reading, and its
 // child runs as a session of its own. The order is the reasons' precedence: a broken value is
 // malformed whoever wrote it, and only this session's own value can say it has no reading yet.
+// A value with no window is not a broken one (D192): Pi's adapter writes the session alone when
+// the harness gives no usage at all.
 export function readFill(env: Env): Fill {
   const raw = env[CONTEXT_ENV]
   if (raw === undefined || raw === '') return unmeasured('no adapter')
@@ -50,14 +52,15 @@ export function readFill(env: Env): Fill {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return unmeasured('malformed')
   const { session, tokens, window } = parsed as Record<string, unknown>
   if (typeof session !== 'string' || session === '') return unmeasured('malformed')
-  if (!isInt(window) || window < 1) return unmeasured('malformed')
-  if (tokens !== undefined && tokens !== null && (!isInt(tokens) || tokens < 0 || tokens > window)) {
+  if (window !== undefined && (!isInt(window) || window < 1)) return unmeasured('malformed')
+  if (tokens !== undefined && tokens !== null && (!isInt(tokens) || tokens < 0 || (isInt(window) && tokens > window))) {
     return unmeasured('malformed')
   }
   if (session !== sessionIdOf(env)) return unmeasured('stale')
   // P7: Claude Code sends no `tokens` before the session's first response, Pi sends 0 then,
-  // and Pi sends null right after a compaction. Each is a reading not taken yet.
-  if (!isInt(tokens) || tokens === 0) return unmeasured('no reading yet')
+  // and Pi sends null right after a compaction. Each is a reading not taken yet, and so is Pi's
+  // session alone, with no window.
+  if (!isInt(window) || !isInt(tokens) || tokens === 0) return unmeasured('no reading yet')
   return { measured: true, reading: { session, tokens, window } }
 }
 

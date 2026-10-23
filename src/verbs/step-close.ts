@@ -8,16 +8,15 @@ import { reportStepClose } from '../slice.js'
 import { checkStep, closingIndex } from '../steps.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
+import { planIdOf, stepOf } from './evidence.js'
 
 // Row 191 §4.3. A scaffolding step has no red→green to witness, so its close is journaled on
 // its own and the entry is the whole act. Like `test-evidence` it checks no plan status, and it
 // runs from the primary root or the plan's worktree alike: the journal lives at the primary root.
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
-  // A flag where the value belongs is no value; `checkStep` refuses the close that names none.
-  const at = argv.indexOf('--step')
-  const value = at === -1 ? undefined : argv[at + 1]
-  const step = value === undefined || value.startsWith('--') ? undefined : value
-  const planId = argv.find((a, i) => !a.startsWith('--') && argv[i - 1] !== '--step')
+  // `--step` with no value names no step, and `checkStep` refuses the close that names none.
+  const step = stepOf(argv)
+  const planId = planIdOf(argv)
   if (!planId) {
     renderRefusal([v('plan-id', 'required', 'absent', 'witness step-close <plan-id> --step <id>')]).forEach(ctx.err)
     return EXIT.REFUSED

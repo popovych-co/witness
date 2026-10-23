@@ -18,7 +18,7 @@ import { branchName, worktreePath } from './worktree.js'
 import { authoringOwed, gateSettled } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
-import { reportHandover } from './slice.js'
+import { handOverIfDue } from './slice.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { settleStop, settledCode } from './settle.js'
@@ -351,9 +351,7 @@ async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number): Pr
 export async function runShip(ctx: Ctx, planId: string, opts: { manual?: boolean } = {}): Promise<number> {
   const code = await shipPass(ctx, planId, opts)
   if (code !== EXIT.OK && code !== EXIT.FINDINGS) return code
-  const rootR = primaryRoot(ctx.cwd)
-  const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
-  if (rootR.ok && cfgR?.ok) reportHandover(ctx, rootR.value, cfgR.value, { guard: true })
+  handOverIfDue(ctx, { guard: true })
   return code
 }
 

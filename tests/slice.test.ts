@@ -41,6 +41,10 @@ describe('the verdict at a step close (row 191 §4.5 · §4.7)', () => {
     ['an open red — where the skill counts', { fill: un, progress: { known: false }, redOpen: true }, { kind: 'continue' }],
     // Re-opened on a closed step once every step has closed: the gate would judge a tree mid-red.
     ['an open red — though every step closed', { fill: m(900_000), progress: known(3, 3), redOpen: true }, { kind: 'continue' }],
+    // The rules' order: a fill at the limit is reached whatever the next step would add, and the
+    // projection needs steps the CLI can see.
+    ['rule 2 outranks rule 3 — reached, with a growth', { fill: m(200_000), progress: known(1, 3), growth: 50_000 }, { kind: 'end', why: '20% reached the 20% limit' }],
+    ['rule 3 needs known progress — a growth on a legacy plan', { fill: m(170_000), progress: { known: false }, growth: 50_000 }, { kind: 'continue' }],
   ])('%s', (_, input, want) => expect(stepCloseVerdict({ limit: 20, budget: 3, redOpen: false, ...input })).toEqual(want))
 })
 
@@ -76,6 +80,17 @@ describe('the expected next step (row 191 §4.5)', () => {
       ({ v: 1, t: 'test-evidence', artifact: 'p', phase, step, tests: [{ name: 'a @spec:x', ok: phase === 'green' }], ctx: stamp('A', tokens) })
     const entries = [ev('red', 's1', 50_000), ev('green', 's1', 100_000), ev('green', 's1', 400_000), ev('red', 's2', 120_000), ev('green', 's2', 150_000)]
     expect(largestGrowth(entries, stepProgress(plan, entries))).toBe(50_000)
+  })
+  // D192. The step is the difference of the two floored shares, so it adds up to the projection
+  // the verdict prints beside it: 17% + 3% ≈ 20%, never +4% (30,001 tokens rounded up).
+  it('shows the step its projection adds up to', () => {
+    expect(contextLine(m(170_000), 20, 3, 30_001)).toBe('17% of 1M · limit 20% · next step ≈ +3%')
+    expect(stepCloseVerdict({ fill: m(170_000), limit: 20, budget: 3, progress: known(1, 3), redOpen: false, growth: 30_001 }))
+      .toEqual({ kind: 'end', why: '17% + next step ≈ 20% passes the 20% limit' })
+    // D191's example reads as it did: 17% · +5%, and 22% beside it.
+    expect(contextLine(m(170_000), 20, 3, 50_000)).toBe('17% of 1M · limit 20% · next step ≈ +5%')
+    expect(stepCloseVerdict({ fill: m(170_000), limit: 20, budget: 3, progress: known(1, 3), redOpen: false, growth: 50_000 }))
+      .toEqual({ kind: 'end', why: '17% + next step ≈ 22% passes the 20% limit' })
   })
   it('converts growth with the current window', () => {
     expect(contextLine(m(100_000, 200_000), 20, 3, 30_000)).toBe('50% of 200k · limit 20% · next step ≈ +15%')

@@ -35,8 +35,8 @@ export const DEFAULT_STEPS_PER_DISPATCH: number = listDefault('implement.stepsPe
 export interface ImplementConfig { stepsPerDispatch: number }
 
 // Row 191 §4.2. The default 20 is the row's premise (§1): once a session's context is more
-// than about 20% full, its output gets worse. A repo decision, so its one home is
-// witness.config.yaml, never config.local.yaml (row 90).
+// than about 20% full, its output gets worse. A repo decision, so its home is
+// witness.config.yaml; row 191 deferred a machine-local override (config.local.yaml, row 90).
 export const DEFAULT_CONTEXT_LIMIT: number = listDefault('session.contextLimit')
 export interface SessionConfig { contextLimit: number }
 

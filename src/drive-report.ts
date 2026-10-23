@@ -1,10 +1,9 @@
-import { existsSync, readdirSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename } from 'node:path'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
 import { handoffLine, resolveDriver } from './harness.js'
-import { readStream, type Entry } from './journal.js'
+import { readStream, streamIds, type Entry } from './journal.js'
 import { unmetNeeds } from './needs.js'
 import type { DecisionEntry } from './rounds.js'
 import { findById, loadCanon } from './scan.js'
@@ -18,17 +17,12 @@ import { recoverChoice } from './verbs/recover.js'
 
 export interface RunStart { lines: Map<string, number> }          // stream → entry count when the run began
 
-const journalDir = (root: string) => join(root, '.witness', 'journal')
-const streams = (root: string): string[] => existsSync(journalDir(root))
-  ? readdirSync(journalDir(root)).filter((f) => f.endsWith('.jsonl')).map((f) => f.slice(0, -'.jsonl'.length)).sort()
-  : []
-
 export function runStart(root: string): RunStart {
-  return { lines: new Map(streams(root).map((s) => [s, readStream(root, s).length])) }
+  return { lines: new Map(streamIds(root).map((s) => [s, readStream(root, s).length])) }
 }
 
 export function entriesSince(root: string, start: RunStart): Array<{ stream: string; entry: Entry }> {
-  return streams(root).flatMap((stream) =>
+  return streamIds(root).flatMap((stream) =>
     readStream(root, stream).slice(start.lines.get(stream) ?? 0).map((entry) => ({ stream, entry })))
 }
 

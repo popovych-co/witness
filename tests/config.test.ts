@@ -169,21 +169,31 @@ describe('session.contextLimit (row 191)', () => {
     expect(resolveSession({ session: { contextLimit: 1 } })).toMatchObject({ ok: true, value: { contextLimit: 1 } })
     expect(resolveSession({ session: { contextLimit: 100 } })).toMatchObject({ ok: true, value: { contextLimit: 100 } })
   })
-  it.each([0, 101, 20.5, '20', null, -5])('refuses contextLimit %s', (bad) => {
+  it.each([0, 101, 20.5, '20', null, -5])('refuses contextLimit %j', (bad) => {
     const r = resolveSession({ session: { contextLimit: bad } })
     expect(r.ok).toBe(false)
-    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'session.contextLimit', rule: 'invalid' })
+    expect(!r.ok && r.violations[0]).toMatchObject({
+      field: 'session.contextLimit', rule: 'invalid',
+      want: "an integer from 1 to 100 — % of the session's context window at which witness hands over to a fresh session",
+    })
   })
-  it('refuses a session value that is not a map', () => {
-    expect(resolveSession({ session: 20 })).toMatchObject({ ok: false })
+  // A bare `session:` in YAML is null, so it refuses too.
+  it.each([[20], [null], [[]], ['on']])('refuses a session value that is not a map: %j', (bad) => {
+    const r = resolveSession({ session: bad })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'session', rule: 'invalid', want: 'a map of session settings' })
+  })
+  it('ignores a key it does not know under session', () => {
+    expect(resolveSession({ session: { contextLimit: 15, bogus: 1 } })).toMatchObject({ ok: true, value: { contextLimit: 15 } })
+    expect(resolveSession({ session: { bogus: 1 } })).toMatchObject({ ok: true, value: { contextLimit: 20 } })
   })
   it('loadConfig carries the value, and a bad one refuses the whole config', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-session-'))
-    writeFileSync(join(root, 'witness.config.yaml'), 'schema: 1\nsession:\n  contextLimit: 15\n')
-    const good = loadConfig(root)
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', 'schema: 1\nsession:\n  contextLimit: 15\n')
+    const good = loadConfig(repo.root)
     expect(good.ok && good.value.session.contextLimit).toBe(15)
-    writeFileSync(join(root, 'witness.config.yaml'), 'schema: 1\nsession:\n  contextLimit: 0\n')
-    const bad = loadConfig(root)
+    repo.write('witness.config.yaml', 'schema: 1\nsession:\n  contextLimit: 0\n')
+    const bad = loadConfig(repo.root)
     expect(bad.ok).toBe(false)
     expect(!bad.ok && bad.violations[0]?.field).toBe('session.contextLimit')
   })

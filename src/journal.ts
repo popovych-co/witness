@@ -140,13 +140,17 @@ export function latestRecap(root: string, effort: string): RecapEntry | undefine
   return recaps.at(-1)
 }
 
-export function effortStreams(root: string): string[] {
+// Every stream the journal holds, by id, sorted.
+export function streamIds(root: string): string[] {
   if (!existsSync(dir(root))) return []
   return readdirSync(dir(root))
     .filter((f) => f.endsWith('.jsonl'))
     .map((f) => f.slice(0, -'.jsonl'.length))
-    .filter((id) => readStream(root, id)[0]?.t === 'recap')
     .sort()
+}
+
+export function effortStreams(root: string): string[] {
+  return streamIds(root).filter((id) => readStream(root, id)[0]?.t === 'recap')
 }
 
 export function effortAbandoned(entries: Entry[]): boolean {

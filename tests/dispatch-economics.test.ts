@@ -114,4 +114,33 @@ describe('the same-home relay ends the turn (rows 82 · 191)', () => {
   it('ship runs its next pass in a fresh session', () => {
     expect(skill('witness-ship')).toContain('the next ship pass runs in a fresh session')
   })
+  it('the router stops at a relay: with no run:', () => {
+    expect(router).toContain(
+      "- A `relay:` line printed with no `run:` — by `next`, `gate`, `decide` (a `--revise` the human named included) or `ship`: the session reached its context limit, and the table's row applies.")
+  })
+  // Caution is a per-run mood (row 82), and the fresh session a relay opens is the same run.
+  it('the --manual mood outlives a relay', () => {
+    expect(router).toContain(
+      'The mood outlives a relay: when you print a `relay:` line in an armed session, add that the fresh session starts with `/witness --manual`.')
+  })
+})
+
+// Row 191 §4.6. Every stage skill but implement (its protocol is pinned above) carries the warning
+// as a ground rule: the line is addressed to the session, which finishes the act it is in, while
+// the hand-over stays the CLI's.
+describe('the stage skills act on the context warning (row 191 §4.6)', () => {
+  const BULLET = "- **A `witness: context …` line is addressed to you.** Once per session, when this session's context has filled to the configured limit, it follows a command's result. Finish the act you are in"
+  it.each([
+    ['witness-brainstorm', '(here: the interview, through its `recap`)'],
+    ['witness-decompose', '(here: the specs, through their writes and the gate)'],
+    ['witness-design', '(here: the look, through `witness design` and its gate)'],
+    ['witness-plan', '(here: the plan, through its write and gate)'],
+  ])('%s finishes its act, then hands back to /witness', (name, act) => {
+    expect(skill(name)).toContain(
+      `${BULLET} ${act} — a session that has done none yet does the one it was routed to — then hand back to /witness, whose \`next\` hands over to a fresh session.`)
+  })
+  it('witness-ship keeps working until the CLI prints a relay:', () => {
+    expect(skill('witness-ship')).toContain(
+      `${BULLET} (here: a fix, through the \`witness ship\` run that carries it). The hand-over is the CLI's: it happens only when the CLI prints a \`relay:\` line with no \`run:\`. When none prints, keep working.`)
+  })
 })

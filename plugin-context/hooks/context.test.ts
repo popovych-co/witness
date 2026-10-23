@@ -9,8 +9,9 @@ const WARNING = /^witness: context 21% of 1M has reached the 20% limit/;
 const OVER = { tokens: 210000, percent: 21 };
 
 // What the engine answers, changeable mid-test: a reviewer spawn's mark, a usage call that fails,
-// the config (unreadable where it is nearest, or none anywhere) and a deny for the Bash call.
-type World = { reviewer?: string; usage?: 'fails'; config?: 'unreadable' | 'none'; deny?: string };
+// the config (unreadable where it is nearest, or none anywhere), and a deny or a rejection for the
+// Bash call.
+type World = { reviewer?: string; usage?: 'fails'; config?: 'unreadable' | 'none'; deny?: string; reject?: string };
 type Fill = { tokens: number; percent: number };
 
 // One session at a fill, run in /repo/sub under /repo's witness.config.yaml, so the config is
@@ -35,8 +36,9 @@ function engine(on: On, session: string, fill: Fill, world: World = {}) {
     if (e.name === 'WITNESS_CONTEXT') env = e.value;
     return { value: {} };
   });
-  on('tool.call', () => {
+  on('tool.call', async () => {
     ran.push(env);
+    if (world.reject !== undefined) throw new Error(world.reject);
     return world.deny === undefined ? { result: {} } : { deny: world.deny };
   });
   return ran;
@@ -108,6 +110,17 @@ test('a denied call passes through unchanged and the next call still warns', asy
   engine(on, 'S9', OVER, world);
   expect(await $.tool.call({ tool: 'Bash', command: '$WITNESS next' })).toEqual({ deny: 'blocked' });
   delete world.deny;
+  expect((await $.tool.call({ tool: 'Bash', command: '$WITNESS next' })).context?.at(-1)).toMatch(WARNING);
+});
+
+// D192. A call whose command rejects carries no context either: the claim it took goes back, and
+// the warning waits for the next call, as at a deny. The kit skips a stand-in that rejects and then
+// has nothing to answer the call, so next(e) rejects with its error, not the stand-in's.
+test('a call that rejects hands its warning back to the next call', async ($, on) => {
+  const world: World = { reject: 'the command never ran' };
+  engine(on, 'S12', OVER, world);
+  await expect($.tool.call({ tool: 'Bash', command: '$WITNESS next' })).rejects.toThrow();
+  delete world.reject;
   expect((await $.tool.call({ tool: 'Bash', command: '$WITNESS next' })).context?.at(-1)).toMatch(WARNING);
 });
 
