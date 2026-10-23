@@ -34,33 +34,33 @@ describe('harness registry', () => {
 
 describe('the session lane — resolveDriver, detection first', () => {
   it('WITNESS_HARNESS is dead — row 90: configuration has one home', () => {
-    const r = resolveDriver({ WITNESS_HARNESS: 'pi' }, {})
+    const r = resolveDriver({ WITNESS_HARNESS: 'pi' }, undefined)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.value).toMatchObject({ harness: { name: 'claude-code' }, source: 'default' })
-    const detected = resolveDriver({ WITNESS_HARNESS: 'claude-code', PI_CODING_AGENT: 'true' }, {})
+    const detected = resolveDriver({ WITNESS_HARNESS: 'claude-code', PI_CODING_AGENT: 'true' }, undefined)
     if (detected.ok) expect(detected.value.source).toBe('detected')
   })
 
   it('PI_CODING_AGENT outranks CLAUDECODE, which outranks config', () => {
-    expect(resolveDriver({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' }).ok).toBe(true)
-    const pi = resolveDriver({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, { harness: 'claude-code' })
+    expect(resolveDriver({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, 'claude-code').ok).toBe(true)
+    const pi = resolveDriver({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, 'claude-code')
     expect(pi.ok && pi.value.harness.name).toBe('pi')
-    const cc = resolveDriver({ CLAUDECODE: '1' }, { harness: 'pi' })
+    const cc = resolveDriver({ CLAUDECODE: '1' }, 'pi')
     expect(cc.ok && cc.value.harness.name).toBe('claude-code')
     expect(cc.ok && cc.value.source).toBe('detected')
   })
 
   // presence, not value: CLAUDECODE=1 is not a documented contract
   it('detects on presence even when the value is empty', () => {
-    const r = resolveDriver({ CLAUDECODE: '' }, {})
+    const r = resolveDriver({ CLAUDECODE: '' }, undefined)
     expect(r.ok && r.value.harness.name).toBe('claude-code')
   })
 
   it('falls back to config, then to claude-code', () => {
-    const cfg = resolveDriver({}, { harness: 'pi' })
+    const cfg = resolveDriver({}, 'pi')
     expect(cfg.ok && cfg.value.harness.name).toBe('pi')
     expect(cfg.ok && cfg.value.source).toBe('config')
-    const def = resolveDriver({}, {})
+    const def = resolveDriver({}, undefined)
     expect(def.ok && def.value.harness.name).toBe('claude-code')
     expect(def.ok && def.value.source).toBe('default')
   })
@@ -68,7 +68,7 @@ describe('the session lane — resolveDriver, detection first', () => {
   // B2's shape: a config-authority default in a fresh repo emits a runnable-LOOKING,
   // unrunnable handoff behind a warning that gets scrolled past
   it('refuses an unknown value on whichever rung supplied it', () => {
-    const cfg = resolveDriver({}, { harness: 'nope' })
+    const cfg = resolveDriver({}, 'nope')
     expect(cfg.ok).toBe(false)
     if (!cfg.ok) expect(cfg.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })
   })
@@ -76,7 +76,7 @@ describe('the session lane — resolveDriver, detection first', () => {
   // the config rung is NOT consulted when detection already answered, so a typo in a
   // key nothing reads must not brick every verb (witness check reports it instead)
   it('ignores an unreadable config value when a detection rung answered', () => {
-    const r = resolveDriver({ CLAUDECODE: '1' }, { harness: 'nope' })
+    const r = resolveDriver({ CLAUDECODE: '1' }, 'nope')
     expect(r.ok && r.value.harness.name).toBe('claude-code')
   })
 })
@@ -87,7 +87,7 @@ describe('the judgment lane — resolveJudge, declaration first', () => {
   // committed key binds every teammate's gates, on the same argument that puts
   // gates.model in committed config: the evidence trail is comparable across machines.
   it('a declaration outranks the ambient session', () => {
-    const r = resolveJudge({ CLAUDECODE: '1' }, { harness: 'pi' })
+    const r = resolveJudge({ CLAUDECODE: '1' }, 'pi')
     expect(r.ok && r.value.harness.name).toBe('pi')
     expect(r.ok && r.value.source).toBe('config')
   })
@@ -96,10 +96,10 @@ describe('the judgment lane — resolveJudge, declaration first', () => {
   // judged by whatever terminal is open. Declaration is what the row makes able to win;
   // it does not make declaration mandatory, and `init` writes the key only under --agent.
   it('falls to detection, then to claude-code, when nothing is declared', () => {
-    const detected = resolveJudge({ PI_CODING_AGENT: 'true' }, {})
+    const detected = resolveJudge({ PI_CODING_AGENT: 'true' }, undefined)
     expect(detected.ok && detected.value.harness.name).toBe('pi')
     expect(detected.ok && detected.value.source).toBe('detected')
-    const def = resolveJudge({}, {})
+    const def = resolveJudge({}, undefined)
     expect(def.ok && def.value.harness.name).toBe('claude-code')
     expect(def.ok && def.value.source).toBe('default')
   })
@@ -107,15 +107,15 @@ describe('the judgment lane — resolveJudge, declaration first', () => {
   // The two lanes disagree on exactly one input, and that is the whole release.
   it('the two lanes answer differently on a declared repo in a foreign session', () => {
     const env = { CLAUDECODE: '1' }
-    const raw = { harness: 'pi' }
-    expect(resolveJudge(env, raw).ok && resolveJudge(env, raw).value.harness.name).toBe('pi')
-    expect(resolveDriver(env, raw).ok && resolveDriver(env, raw).value.harness.name).toBe('claude-code')
+    const declared = 'pi'
+    expect(resolveJudge(env, declared).ok && resolveJudge(env, declared).value.harness.name).toBe('pi')
+    expect(resolveDriver(env, declared).ok && resolveDriver(env, declared).value.harness.name).toBe('claude-code')
   })
 
   // The typo is no longer invisible to judgment: the config rung is rung ONE here, so it
   // refuses rather than being skipped. `check` reports it as a finding either way.
   it('refuses an unreadable declaration even when a detection rung could have answered', () => {
-    const r = resolveJudge({ CLAUDECODE: '1' }, { harness: 'nope' })
+    const r = resolveJudge({ CLAUDECODE: '1' }, 'nope')
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.violations[0]).toMatchObject({ field: 'harness', rule: 'unknown-harness' })
   })

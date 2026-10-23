@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PATHS, type Config } from '../src/config.js'
+import { resolveSettings, type Config } from '../src/config.js'
+import { migrateValues } from '../src/migration.js'
 import { criteriaExcludes, runnerConfig } from '../src/runner.js'
 
-const cfg = (raw: Record<string, unknown>): Config => ({ schema: 1, raw, paths: DEFAULT_PATHS })
+// A schema-1 file's values as loadConfig reads them (row 193): the in-memory upgrade, then the
+// lenient resolver. A value's own shape — {id}, junit: — refuses there, at load.
+const resolved = (raw: Record<string, unknown>) => {
+  const m = migrateValues({ schema: 1, ...raw }, 1, { mode: 'memory' })
+  return m.ok ? resolveSettings(m.value.raw, 'lenient') : m
+}
+const cfg = (raw: Record<string, unknown>): Config => {
+  const r = resolved(raw)
+  if (!r.ok) throw new Error(JSON.stringify(r.violations))
+  return { schema: 1, ...r.value }
+}
 
 describe('runnerConfig', () => {
   it('parses a filtered template containing {id}', () => {
@@ -10,8 +21,8 @@ describe('runnerConfig', () => {
     expect(res.ok && res.value).toEqual({ mode: 'filtered', template: 'npm test -- -t "@spec:{id}"' })
   })
 
-  it('refuses a template without the {id} placeholder', () => {
-    const res = runnerConfig(cfg({ criteria: { runner: 'npm test' } }))
+  it('refuses a template without the {id} placeholder, at load', () => {
+    const res = resolved({ criteria: { runner: 'npm test' } })
     expect(!res.ok && res.violations[0]?.rule).toBe('no-id-placeholder')
   })
 
@@ -26,7 +37,7 @@ describe('runnerConfig', () => {
   it('refuses full-suite without a junit report glob', () => {
     const missing = runnerConfig(cfg({ criteria: { runner: 'full-suite' }, ship: { test: 'npm test' } }))
     expect(!missing.ok && missing.violations[0]?.field).toBe('criteria.report')
-    const wrongFormat = runnerConfig(cfg({ criteria: { runner: 'full-suite', report: 'tap:out.tap' }, ship: { test: 'npm test' } }))
+    const wrongFormat = resolved({ criteria: { runner: 'full-suite', report: 'tap:out.tap' }, ship: { test: 'npm test' } })
     expect(!wrongFormat.ok && wrongFormat.violations[0]?.rule).toBe('report-format')
   })
 
@@ -41,7 +52,7 @@ describe('runnerConfig', () => {
   })
 
   it('filtered mode refuses a non-junit report', () => {
-    const r = runnerConfig(cfg({ criteria: { runner: 'run {id}', report: 'tap:foo' } }))
+    const r = resolved({ criteria: { runner: 'run {id}', report: 'tap:foo' } })
     expect(!r.ok && r.violations[0]?.rule).toBe('report-format')
   })
 

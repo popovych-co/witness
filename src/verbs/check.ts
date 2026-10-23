@@ -65,9 +65,9 @@ const ADAPTER_REMEDY: Record<HarnessName, string> = {
 // `stale` this session's adapter wrote nothing either: the reading was inherited from an outer
 // session. Both take the install as the remedy. Under `malformed` and `no reading yet` an adapter
 // is loaded, and an install would change nothing.
-function adapterLine(env: Ctx['env'], raw: Record<string, unknown>): string {
+function adapterLine(env: Ctx['env'], declared: string | undefined): string {
   const outside = 'not checkable outside a harness session — run witness check from a Claude Code or Pi session'
-  const driver = resolveDriver(env, raw)
+  const driver = resolveDriver(env, declared)
   if (!driver.ok) return outside
   const { harness, source } = driver.value
   const fill = readFill(env)
@@ -97,7 +97,8 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const skillsAbsent: string[] = []
 
   const cfg = loadConfig(root)
-  if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, x.got)))
+  // The want rides along: a config refusal says how to fix it (row 193), check's included.
+  if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, `${x.got} — ${x.want}`)))
   else if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
 
   // Machine config is read here as FINDINGS, never a refusal — same doctrine that
@@ -122,7 +123,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   // on purpose: this is a fact about the repo's relationship to origin, not a broken state,
   // and only `error` moves check's exit.
   if (cfg.ok) {
-    const shipBranch = String(((cfg.value.raw.ship ?? {}) as Record<string, unknown>).branch ?? 'main')
+    const shipBranch = cfg.value.ship.branch
     const div = divergence(root, shipBranch)
     if (div && (div.ahead > 0 || div.behind > 0)) {
       const rule = div.ahead > 0 && div.behind > 0 ? 'diverged' : div.ahead > 0 ? 'ahead' : 'behind'
@@ -336,13 +337,13 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   // with a detection var. check is the diagnostic verb: it reports the value regardless
   // of who answered, and it is the ONLY reporter — resolveJudge can fail on exactly this
   // input, so pushing its violations too would say one thing twice.
-  const configuredHarness = cfg.ok ? cfg.value.raw.harness : undefined
+  const configuredHarness = cfg.ok ? cfg.value.harness : undefined
   if (configuredHarness !== undefined && !(HARNESSES as readonly string[]).includes(String(configuredHarness))) {
     findings.push(f('error', 'config', 'harness', 'unknown-harness',
       `${String(configuredHarness)} — expected ${HARNESSES.join(' | ')}`))
   }
 
-  const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.raw : {})
+  const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.harness : undefined)
   if (judgeR.ok) {
     // Row 104/105: the probe asks whether THIS MACHINE can run THIS REPO's reviewers, so
     // it follows the judge — which is why it kept a harness resolution when row 104 took
@@ -452,7 +453,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   }
   // Every run, stated: a session without the reading is not broken canon, it runs on the step
   // budget (§4.7), and the line is how the human learns which one this session is on.
-  ctx.out(kv('adapter', adapterLine(ctx.env, cfg.ok ? cfg.value.raw : {})))
+  ctx.out(kv('adapter', adapterLine(ctx.env, cfg.ok ? cfg.value.harness : undefined)))
   // Judge first, then the floor computed FOR that judge: read top to bottom, the second
   // line is a consequence of the first, and the pair answers "which reviewers will this
   // repo spawn, and are they calibrated". Stated lines, never findings — neither touches

@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, approve, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -83,10 +83,18 @@ describe('witness check', () => {
     expect(res.stdout).toContain('orphan-journal')
   })
 
+  // Final review (re-graded Important): every refusal says how to fix it, check's included.
+  it('a config refusal shows its fix', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { session: { contextLimt: 30, contextLimit: undefined } })
+    const res = await repo.cli(['check'])
+    expect(res.stdout).toContain('did you mean session.contextLimit?')
+    expect(res.stdout).toContain('contextLimit: 20 under session: — or run witness migrate')
+  })
+
   it('flags a configured docs path that does not exist', async () => {
     const repo = await seededRepo()
-    repo.write('witness.config.yaml',
-      repo.read('witness.config.yaml') + 'docs:\n  conventions: [docs/conventions.md]\n')
+    patchConfig(repo, { docs: { conventions: ['docs/conventions.md'] } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'register a doc that does not exist')
     const res = await repo.cli(['check'])
@@ -133,6 +141,7 @@ describe('witness check — harness findings', () => {
 
   it('names the resolved harness binary when THAT binary is the missing one', async () => {
     const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })   // row 193: the judge is declared, never detected
     const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
     const res = await repo.cli(['check'], { env: { PATH: bin, PI_CODING_AGENT: 'true' } })
@@ -280,7 +289,7 @@ describe('witness check — harness findings', () => {
   // answer, which is this release's whole theme.
   it('reports an unreadable harness: exactly once', async () => {
     const repo = await seededRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
+    patchConfig(repo, { harness: 'pikachu' })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'bad harness')
     const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
@@ -292,7 +301,7 @@ describe('witness check — harness findings', () => {
   // Row 105: the judge is a repo fact and it prints unconditionally, declared or not.
   it('names the declared judge and where it was declared', async () => {
     const repo = await seededRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pi\n`)
+    patchConfig(repo, { harness: 'pi' })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
     const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(res.stdout).toContain('judge: pi (declared in witness.config.yaml)')
@@ -300,8 +309,10 @@ describe('witness check — harness findings', () => {
 
   // The residual made actionable: an undeclared repo is still judged by the ambient
   // session, and the nudge is the only thing that closes it.
+  // Only an older file can leave the judge undeclared (row 193): schema 2 requires harness:.
   it('names the nudge when nothing is declared', async () => {
     const repo = await seededRepo()
+    repo.write('witness.config.yaml', 'schema: 1\n')
     const res = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })
     expect(res.stdout).toContain('judge: claude-code (detected — undeclared; set harness: in witness.config.yaml to pin it)')
   })
@@ -310,7 +321,7 @@ describe('witness check — harness findings', () => {
   // machine can run THIS REPO's reviewers, not the caller's.
   it('probes the declared judge, not the session harness', async () => {
     const repo = await seededRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pi\n`)
+    patchConfig(repo, { harness: 'pi' })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
     const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))

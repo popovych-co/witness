@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 import type { Config } from './config.js'
 import type { HarnessName } from './harness.js'
-import { parsePin } from './pin.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { checkPin } from './pin.js'
+import type { GateName } from './settings.js'
+import { ok, refuse, type Result } from './refusal.js'
 
-export const MODEL_ALIASES = ['sonnet', 'opus', 'haiku', 'fable', 'default', 'latest']
+export { MODEL_ALIASES } from './pin.js'
 export const SESSION_DEFAULT = 'session-default'
 
 export interface MatrixInfo { shipped: string[]; local: string[] }
@@ -47,29 +48,18 @@ export interface ModelResolution {
   warningKind?: 'matrix-empty' | 'below-floor'
 }
 
-// the stage's model pin from config — per-gate wins over the global gates.model;
-// the same pin drives that stage's gate reviewers AND its worker agent (implement)
-export function stagePin(cfg: Config, gate?: string): Result<string | undefined> {
-  const gates = (cfg.raw.gates ?? {}) as Record<string, unknown> & { model?: unknown }
-  const gateBlock = gate !== undefined && typeof gates[gate] === 'object' && gates[gate] !== null
-    ? (gates[gate] as { model?: unknown })
-    : undefined
-  const pinRaw = gateBlock?.model ?? gates.model
-  const pinField = gateBlock?.model !== undefined ? `gates.${gate}.model` : 'gates.model'
-  const pin = pinRaw === undefined ? undefined : String(pinRaw)
-  if (pin !== undefined) {
-    const parsed = parsePin(pinField, pin)
-    if (!parsed.ok) return refuse(parsed.violations)
-    if (MODEL_ALIASES.includes(parsed.value.model)) {
-      return refuse([v(pinField, 'alias-refused', pin,
-        'an exact model id — aliases re-point under the calibration (Decision 55)')])
-    }
-  }
-  return ok(pin)
+// A stage's model pin, from its own setting (row 193: nothing inherited). A gate's pin drives
+// its reviewers AND, for implement, its worker agent; the arbiter's is its own (row 172).
+// Undefined only for an older file that never pinned one: the calibration chain decides.
+export function stagePin(cfg: Config, role: GateName | 'arbiter'): Result<string | undefined> {
+  const pin = role === 'arbiter' ? cfg.arbiter.model : cfg.gates[role].model
+  if (pin === undefined) return ok(undefined)
+  const checked = checkPin(role === 'arbiter' ? 'arbiter.model' : `gates.${role}.model`, pin)
+  return checked.ok ? ok(pin) : refuse(checked.violations)
 }
 
-export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Result<ModelResolution> {
-  const pinR = stagePin(cfg, gate)
+export function resolveModel(cfg: Config, matrix: MatrixInfo, role: GateName | 'arbiter'): Result<ModelResolution> {
+  const pinR = stagePin(cfg, role)
   if (!pinR.ok) return refuse(pinR.violations)
   const pin = pinR.value
   const calibrated = [...matrix.shipped, ...matrix.local.filter((m) => !matrix.shipped.includes(m))]
@@ -102,7 +92,7 @@ export function resolveModel(cfg: Config, matrix: MatrixInfo, gate?: string): Re
 export function modelFloorLines(root: string, cfg: Config, harness: HarnessName): string[] {
   const matrix = loadMatrix(root, harness)
   const byWarning = new Map<string, string[]>()
-  for (const gate of ['decompose', 'plan', 'implement', 'ship', 'design']) {
+  for (const gate of ['decompose', 'plan', 'implement', 'ship', 'design'] as const) {
     const r = resolveModel(cfg, matrix, gate)
     if (r.ok && r.value.warning) {
       byWarning.set(r.value.warning, [...(byWarning.get(r.value.warning) ?? []), gate])

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { rmSync } from 'node:fs'
 import {
-  SPEC_META, addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec,
-} from './helpers.js'
+  SPEC_META, addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, tmpRepo, witnessDesign, writeDesign, writePlan, writeSpec, patchConfig} from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 import { appendEntry } from '../src/journal.js'
 
@@ -133,7 +132,7 @@ describe('witness status', () => {
   // which row 105 cites by name.
   it('prints the judge with its provenance, as check does', async () => {
     const repo = await seededRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pi\n`)
+    patchConfig(repo, { harness: 'pi' })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
     const status = await repo.cli(['status'], { env: { CLAUDECODE: '1' } })
     const check = await repo.cli(['check'], { env: { CLAUDECODE: '1' } })

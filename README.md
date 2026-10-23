@@ -162,22 +162,91 @@ either.
 
 ## Configuration keys
 
-| Key | Meaning |
-|---|---|
-| `harness: claude-code \| pi` | **the judge** — which harness runs this repo's gate reviewers, is measured by `calibrate`, and is probed by `check`. Judgment resolves `harness:` → `PI_CODING_AGENT` → `CLAUDECODE` → `claude-code`; session lines (`next`'s handoff, `dispatch`'s relay, `init --agent auto`) resolve detection first, because those name the CLI you are about to type at. Committed, so it binds every teammate's gates; `witness init --agent` writes it once and never re-points it. Undeclared repos are judged by whichever agent's session is open — `witness check` and `witness status` say so |
-| `gates.reviewerTimeoutMs` | milliseconds per reviewer invocation (default 600000) |
-| `session.contextLimit` | the share of a session's context window, in percent, at which witness hands the work to a fresh session (integer 1–100, default 20). The harness measures the fill; the CLI decides where the journal carries the position — at a step close, after a revise, at a `witness ship` exit and at `next` — and never mid-red. A session whose fill cannot be read says so (`context: unmeasured (<reason>)`): an implement session then hands over by `implement.stepsPerDispatch`, and nothing else hands over (DESIGN.md row 191) |
-| `implement.stepsPerDispatch` | the step budget: steps an implement session closes before it hands over when its fill cannot be read (default 3) — the fallback for `session.contextLimit` |
-| `drive.sessionTimeoutMs` | milliseconds a `drive`-spawned session may run before SIGTERM (default 3600000) |
-| `drive.parallel` | sessions `witness drive` runs at once under autonomy, one per target (default 2) |
-| `drive.parallelSuites` | `true` lets test runs in two worktrees overlap (default false: they take turns, because suites that boot servers or browsers collide) |
-| `drive.caps.rounds` | gate rounds one target may run across budget resets (default 16) — the run parks a target that reaches it |
-| `drive.caps.upstream` | upstream resets one target may take (default 6) — the run parks a target that reaches it |
-| `drive.caps.spawns` | sessions one target may take in one drive run (default 24) — the run parks a target that reaches it |
-| `drive.caps.wallClockMs` | milliseconds of session time one target may take in one drive run (default 57600000 · 16 h) — the run parks a target that reaches it |
-| `autonomy: on \| off` | whether the CLI settles its own stops — through its recommendation or the arbiter it launches — and merges its own PRs once CI is green (default off). A committed repo fact: it counts only once HEAD says it, and the merge also needs the ship branch on origin to say it. `--manual` on a gate run keeps that run's stop for a human, and three stops always reach one: the look of a new screen, an unmet plan need and a trust grant |
-| `ship.merge: merge \| squash \| rebase` | how `witness ship` merges its own PR under `autonomy: on` (default merge) — only once the ship gate is approved and CI is green, and never when the approval lapsed or GitHub refuses |
-| `ship.ciSettleMs` | milliseconds a green check set must hold still before `witness ship` merges under autonomy (default 60000, at most 1800000) — gh's watch ends the moment nothing is pending, so a check that registers late would otherwise be missed. Green means at least one check passed and none failed, was cancelled or is pending |
+`witness init` writes every setting into `witness.config.yaml`, each with a comment saying
+what it does and what it accepts, and nothing is inherited: each gate states its own `model`
+and `reviewers`, and the arbiter its own `arbiter.model`. A missing setting, an unknown key and
+an invalid value all refuse, and the refusal says how to fix it. The table is generated from
+the list the CLI reads (`src/settings.ts`).
+
+<!-- settings:start -->
+| Setting | What it does | Default |
+|---|---|---|
+| `harness` | the judge: the agent CLI that runs this repo's gate reviewers and arbiter · claude-code \| pi — accepts: claude-code \| pi — the judge: which agent CLI runs this repo's gate reviewers and arbiter | `claude-code` |
+| `paths.specs` | folder for specs, repo-relative · git mv the docs when you change it — accepts: a repo-relative directory | `specs` |
+| `paths.plans` | folder for plans, repo-relative · git mv the docs when you change it — accepts: a repo-relative directory | `plans` |
+| `paths.designs` | folder for approved designs, repo-relative · git mv the docs when you change it — accepts: a repo-relative directory | `designs` |
+| `docs.conventions` | code docs handed to code-reviewer at implement and ship · file list, [] = none — accepts: a list of repo-relative file paths ([] = none) | `[]` |
+| `docs.design` | design docs handed to design-critic and design-reviewer · file list, [] = none — accepts: a list of repo-relative file paths ([] = none) | `[]` |
+| `criteria.runner` | how a spec's criteria run · a command with {id}, or full-suite — accepts: a filtered template containing {id}, or full-suite | `'npm test -- -t "@spec:{id}"'` |
+| `criteria.report` | the junit report witness reads · junit:<glob>, or none · full-suite needs one — accepts: none, or junit:<glob> (only junit is supported) | `none` |
+| `criteria.exclude` | extra globs never scanned for criteria tags · [] = none — accepts: a list of globs ([] = none) | `[]` |
+| `ship.test` | the suite command ship runs · full-suite criteria run it too — accepts: a shell command | `npm test` |
+| `ship.lint` | the lint command ship runs — accepts: a shell command | `npm run lint` |
+| `ship.branch` | the branch witness ships into — accepts: a branch name | `main` |
+| `ship.merge` | how ship merges its own PR under autonomy · merge \| squash \| rebase — accepts: merge \| squash \| rebase | `merge` |
+| `ship.ciSettleMs` | ms green CI must hold still before an autonomous merge · 0–1800000 — accepts: an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges | `60000` |
+| `autonomy` | on = the CLI settles its own stops and merges green PRs · on \| off · counts once committed — accepts: on \| off | `off` |
+| `arbiter.model` | model for the arbiter that settles stops and checks recaps under autonomy · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `session.contextLimit` | % of the context window at which a session hands over to a fresh one · 1–100 — accepts: an integer from 1 to 100 — % of the session's context window at which witness hands over to a fresh session | `20` |
+| `implement.stepsPerDispatch` | steps an implement session takes when its context fill can't be read · ≥ 1 — accepts: an integer >= 1 — steps handed to each fresh implement agent | `3` |
+| `gates.reviewerTimeoutMs` | ms one reviewer, or the arbiter, may run before it is stopped (10 min) · ≥ 1 — accepts: an integer >= 1 — milliseconds each reviewer invocation may take | `600000` |
+| `gates.decompose.model` | model for this gate's reviewers · exact id, [provider/]id[:thinking], no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `gates.decompose.reviewers` | reviewers this gate runs · one list, or one list per class (feature, fix, chore) — accepts: a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer] — a per-class map names feature, fix and chore | `[slicing-critic]` |
+| `gates.plan.model` | model for this gate's reviewers · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `gates.plan.reviewers` | reviewers this gate runs · one list, or one list per class — accepts: a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer] — a per-class map names feature, fix and chore | `[plan-critic]` |
+| `gates.design.model` | model for this gate's reviewers · runs only on specs marked ui — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `gates.design.reviewers` | reviewers this gate runs · one list, or one list per class — accepts: a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer] — a per-class map names feature, fix and chore | `[design-critic]` |
+| `gates.implement.model` | model for this gate's reviewers AND for the agent that writes the code — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `gates.implement.reviewers` | reviewers this gate runs · one list, or one list per class — accepts: a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer] — a per-class map names feature, fix and chore | `{feature: [code-reviewer, silent-failure-hunter, type-design, pr-test, design-reviewer], fix: [code-reviewer, silent-failure-hunter, design-reviewer], chore: [code-reviewer]}` |
+| `gates.ship.model` | model for this gate's reviewers · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `gates.ship.reviewers` | reviewers this gate runs · one list, or one list per class — accepts: a reviewer list or a per-class map of lists in witness.config.yaml — e.g. reviewers: [code-reviewer] — a per-class map names feature, fix and chore | `[drift-reviewer, code-reviewer]` |
+| `drive.parallel` | sessions drive runs at once, one per target · ≥ 1 — accepts: an integer >= 1 — sessions drive runs at once · one per target | `2` |
+| `drive.parallelSuites` | let test runs in two worktrees overlap · true \| false — accepts: true \| false — whether test runs in two worktrees may overlap | `false` |
+| `drive.sessionTimeoutMs` | ms one spawned session may run before it is stopped (1 h) · ≥ 1 — accepts: an integer >= 1 — milliseconds each spawned session may take before SIGTERM | `3600000` |
+| `drive.caps.rounds` | gate rounds one target may run across budget resets, then it is parked · ≥ 1 — accepts: an integer >= 1 — gate rounds one target may run across budget resets before drive parks it | `16` |
+| `drive.caps.upstream` | upstream resets one target may take, then it is parked · ≥ 1 — accepts: an integer >= 1 — upstream resets one target may take before drive parks it | `6` |
+| `drive.caps.spawns` | sessions one target may take in one run, then it is parked · ≥ 1 — accepts: an integer >= 1 — sessions one target may take in one drive run | `24` |
+| `drive.caps.wallClockMs` | ms of session time one target may take in one run (16 h), then it is parked · ≥ 1 — accepts: an integer >= 1 — milliseconds of session time one target may take in one drive run | `57600000` |
+<!-- settings:end -->
+
+**The judge (`harness`).** Which harness runs this repo's gate reviewers and its arbiter, is
+measured by `calibrate`, and is probed by `check`. It is declared, never detected: `witness
+init` writes the harness `--agent` names, else the one whose session runs `init`, else
+`claude-code`, and says which. Session lines (`next`'s handoff, `dispatch`'s relay, `init
+--agent auto`) resolve detection first, because those name the CLI you are about to type at.
+Committed, so it binds every teammate's gates; `init --agent` never re-points it. An older file
+without `harness:` is judged by whichever agent's session is open until `witness migrate` writes
+it — `witness check` and `witness status` say so.
+
+**The context limit (`session.contextLimit`).** The harness measures the fill; the CLI decides
+where the journal carries the position — at a step close, after a revise, at a `witness ship`
+exit and at `next` — and never mid-red. A session whose fill cannot be read says so (`context:
+unmeasured (<reason>)`): an implement session then hands over by `implement.stepsPerDispatch`,
+and nothing else hands over (DESIGN.md row 191).
+
+**Autonomy (`autonomy`, `ship.merge`, `ship.ciSettleMs`).** Under `autonomy: on` the CLI settles
+its own stops — through its recommendation or the arbiter it launches on `arbiter.model` — and
+merges its own PRs once CI is green. A committed repo fact: it counts only once HEAD says it, and
+the merge also needs the ship branch on origin to say it. `--manual` on a gate run keeps that
+run's stop for a human, and three stops always reach one: the look of a new screen, an unmet plan
+need and a trust grant. `witness ship` merges with `ship.merge` only once the ship gate is
+approved and CI is green — never when the approval lapsed or GitHub refuses — and only after the
+check set has held still for `ship.ciSettleMs`: gh's watch ends the moment nothing is pending, so
+a check that registers late would otherwise be missed. Green means at least one check passed and
+none failed, was cancelled or is pending.
+
+**`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns, because
+suites that boot servers or browsers collide. A target that reaches any `drive.caps.*` bound is
+parked.
+
+### Upgrading
+
+After each witness upgrade, run `witness migrate --dry-run` to see what the new version adds or
+changes, then `witness migrate`: it brings `witness.config.yaml` to the current schema, keeps
+every value you chose and every comment you wrote, names each change, and commits the file. A
+value still at an old default moves to the new one, and the output says so. Until you migrate,
+an older file keeps working: witness reads it as `migrate` would, changes nothing in it, and warns
+(`witness check` shows `older-schema`). A file from a newer witness refuses: upgrade witness.
 
 There is no `provider:` key. `witness gate` spawns the DECLARED harness's headless
 mode for every reviewer (Decisions 88, 105): claude-code renders bare Anthropic ids, pi

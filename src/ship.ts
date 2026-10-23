@@ -210,7 +210,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   cfg = nowR.value
   const entries = readStream(root, planId)
   const wt = worktreePath(root, planId)
-  const shipBranch = ((cfg.raw.ship ?? {}) as { branch?: string }).branch ?? 'main'
+  const shipBranch = cfg.ship.branch
   // `baseMoved` reads a failed fetch as "not moved" so routing degrades offline; here that
   // would merge onto a base nobody could check (F9), so an unreachable remote holds instead.
   if (!tryGit(wt, 'fetch', 'origin', shipBranch).ok) {
@@ -373,8 +373,7 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
   }
   const wt = worktreePath(root, planId)
   let entries = readStream(root, planId)
-  const ship = (cfgR.value.raw.ship ?? {}) as { branch?: string }
-  const shipBranch = ship.branch ?? 'main'
+  const shipBranch = cfgR.value.ship.branch
   // `--manual` keeps this run's stop and its merge for a human, exactly as on `witness gate`.
   const manual = opts.manual === true
   const autonomy = cfgR.value.autonomy && !manual

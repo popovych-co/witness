@@ -1,0 +1,58 @@
+# witness.config.yaml — the whole surface
+schema: 1
+paths: { specs: docs/specs, plans: docs/plans, designs: docs/designs }
+docs:
+  # example prose: the visual canon the design reviewers judge a screen against.
+  #
+  # Dormant until this repo has a UI: both reviewers fire only on a spec
+  # marked ui.
+  design: [docs/ui/design-language.md, docs/ui/primitives.md]
+  # example prose: the code canon handed to the code reviewer.
+  #
+  # Two entries describe a framework this repo does not have; they are kept
+  # so two repos judge code by one standard.
+  conventions:
+    - docs/code/review-scope.md
+    - docs/code/architecture.md
+    - docs/code/server-actions.md
+    - docs/code/errors-logging.md
+    - docs/code/persistence.md
+    - docs/code/ui-mechanics.md
+    - docs/code/typescript.md
+gates:
+  # example prose above the pin: the calibration matrix is still empty, so
+  # every gate reports the reviewer model as uncalibrated. Re-run the
+  # calibration before trusting a verdict.
+  model: claude-opus-5 # reviewer model pin — exact id, aliases refused
+  # any gate block may pin its own model (wins over the global pin), e.g.
+  # decompose: { reviewers: [slicing-critic], model: claude-opus-4-8 }
+  decompose: { reviewers: [slicing-critic] }
+  design: { reviewers: [design-critic] }
+  plan: { reviewers: [plan-critic] }
+  implement:
+    model: claude-opus-5
+    reviewers: # per change class; a plain list = all classes
+      feature:
+        [
+          code-reviewer,
+          silent-failure-hunter,
+          type-design,
+          pr-test,
+          design-reviewer,
+        ]
+      fix: [code-reviewer, silent-failure-hunter, design-reviewer]
+      chore: [code-reviewer]
+  ship: { model: claude-opus-5, reviewers: [drift-reviewer, code-reviewer] }
+criteria:
+  # example prose: the exclusion costs nothing and is correct the moment a
+  # prose folder appears.
+  exclude: [docs/superpowers/**]
+  # example prose: criteria are counted from the suite's own report.
+  #
+  # An exact path, not a loose glob.
+  runner: full-suite
+  report: "junit:reports/junit.xml"
+
+# example prose: lint runs the typecheck sweep too.
+ship: { test: "pnpm test", lint: "pnpm lint && pnpm typecheck", branch: main }
+harness: pi # the judge — which harness runs this repo's gate reviewers; declared wins

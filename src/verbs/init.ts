@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, version, type Ctx } from '../cli.js'
-import { configPath } from '../config.js'
+import { configPath, loadConfig } from '../config.js'
+import { renderConfig } from '../config-file.js'
 import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { loadHarness, resolveDriver, type Harness } from '../harness.js'
@@ -14,31 +15,7 @@ import { probe } from '../probe.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
-
-const DEFAULT_CONFIG = `# witness.config.yaml — the whole surface
-schema: 1
-# paths: { specs: docs/specs, plans: docs/plans }   # optional canon roots (defaults: specs, plans); git mv existing docs when changing
-# docs:                      # repo docs registry — enumerated keys, unknown keys refused
-#   conventions: [docs/code/architecture.md]   # → injected into code-reviewer at implement + ship (cache-keyed)
-# harness: pi               # the judge — which harness runs this repo's gate reviewers;
-                            # declared beats the ambient session (init --agent writes it once)
-gates:
-  model: claude-fable-5      # reviewer model pin — exact id, aliases refused
-  # reviewerTimeoutMs: 600000  # ms per reviewer invocation (machine auth/extension knobs live in .witness/config.local.yaml)
-  # any gate block may pin its own model (wins over the global pin), e.g.
-  # decompose: { reviewers: [slicing-critic], model: claude-opus-4-8 }
-  decompose: { reviewers: [slicing-critic] }
-  plan: { reviewers: [plan-critic] }
-  implement:
-    reviewers:               # per change class; a plain list = all classes
-      feature: [code-reviewer, silent-failure-hunter, type-design, pr-test, design-reviewer]
-      fix: [code-reviewer, silent-failure-hunter, design-reviewer]
-      chore: [code-reviewer]
-  ship: { reviewers: [drift-reviewer, code-reviewer] }
-criteria:
-  runner: 'npm test -- -t "@spec:{id}"'   # or: runner: full-suite + report: junit:**/reports/junit.xml
-ship: { test: "npm test", lint: "npm run lint", branch: main }
-`
+import { defaultValues } from '../settings.js'
 
 const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/lock
@@ -88,16 +65,29 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   }
 
   let harness: Harness | undefined
+  // Row 193 §4.4. The judge `init` writes: the harness `--agent` names, else the session's
+  // own (detected), else the default — and it says which, since the file is the only home.
+  let judge: { name: string; from: string } | undefined
+  if (agent === undefined || agent === 'auto') {
+    const driver = resolveDriver(ctx.env, undefined)
+    if (driver.ok) {
+      judge = {
+        name: driver.value.harness.name,
+        from: driver.value.source === 'detected' ? 'detected from this session' : 'the default',
+      }
+    }
+  }
   if (agent !== undefined) {
     // `auto` is the one value that consults the detection rungs; a named agent is a
     // claim and refuses when false, listing the harnesses that exist (row 90: no env
     // impersonation — a name resolves through the registry directly).
-    const hxR = agent === 'auto' ? resolveDriver(ctx.env, {}) : loadHarness(agent)
+    const hxR = agent === 'auto' ? resolveDriver(ctx.env, undefined) : loadHarness(agent)
     if (!hxR.ok) {
       renderRefusal(hxR.violations.map((x) => ({ ...x, field: '--agent' }))).forEach(ctx.err)
       return EXIT.REFUSED
     }
     harness = 'harness' in hxR.value ? hxR.value.harness : hxR.value
+    if (agent !== 'auto') judge = { name: harness.name, from: 'from --agent' }
     // Revision 6: pre-flight before the lock and before any scaffold write, so a
     // refusal here leaves the repo exactly as it was.
     const pre = preflightPayload(root, harness)
@@ -115,7 +105,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   try {
     const files: string[] = []
     if (!scaffolded) {
-      writeFileSync(configPath(root), DEFAULT_CONFIG)
+      writeFileSync(configPath(root), renderConfig(defaultValues({ harness: judge?.name })))
       mkdirSync(join(root, 'plans'), { recursive: true })
       mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
       writeFileSync(join(root, 'plans', '.gitkeep'), '')
@@ -202,6 +192,12 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (!scaffolded) {
       ctx.out(kv('initialized', root))
       ctx.out(kv('canon', 'specs/principles.md (draft)'))
+      if (judge !== undefined) ctx.out(kv('harness', `${judge.name} · ${judge.from}`))
+    } else {
+      // Row 193 §4.8. `init --agent` is the upgrade command, so an older file says here what
+      // `witness migrate` would bring it.
+      const cfg = loadConfig(root)
+      if (cfg.ok && cfg.value.warning) ctx.err(`warn: ${cfg.value.warning}`)
     }
     if (harness !== undefined) {
       ctx.out(kv('agent', harness.name))

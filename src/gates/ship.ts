@@ -76,9 +76,8 @@ registerGate({
         ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
         : 'implement gate never ran — witness gate implement ' + planId })
 
-    const ship = (cfg.raw.ship ?? {}) as { test?: string; lint?: string }
-    checks.push(await commandLane(wt, root, ctx, 'tests', ship.test))
-    checks.push(await commandLane(wt, root, ctx, 'lint', ship.lint))
+    checks.push(await commandLane(wt, root, ctx, 'tests', cfg.ship.test))
+    checks.push(await commandLane(wt, root, ctx, 'lint', cfg.ship.lint))
 
     // deterministic drift lane: spec content from MAIN, execution in the worktree
     const lane = await runCriteria(wt, ctx, parent, { trustRoot: root })

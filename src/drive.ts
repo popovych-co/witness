@@ -157,7 +157,7 @@ export async function spawnSession(
   const end = (outcome: SpawnOutcome, code: number | null = null, tail: string[] = []): SessionEnd =>
     ({ outcome, code, tail, ms: Math.max(1, Date.now() - t0) })
   if (opts.signal?.aborted) return end('stopped')
-  const hxR = resolveJudge(ctx.env, cfg.raw)
+  const hxR = resolveJudge(ctx.env, cfg.harness)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
   const { cmd, args, env } = hxR.value.harness.worker.spawn(opts.manual ? MANUAL_PROMPT : SESSION_PROMPT, step.model)
   // Test-only seam, on WITNESS_TRUST_CMDS' precedent (decide.ts): the suite points this at

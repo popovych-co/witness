@@ -259,9 +259,8 @@ export function detectionVariables(): string[] {
   return DETECTION.map((d) => d.variable)
 }
 
-function declaredRung(raw: Record<string, unknown>): Rung | undefined {
-  const configured = raw.harness
-  return configured === undefined ? undefined : { source: 'config', name: String(configured) }
+function declaredRung(declared: string | undefined): Rung | undefined {
+  return declared === undefined ? undefined : { source: 'config', name: declared }
 }
 
 function walk(ladder: Array<Rung | undefined>): Result<{ harness: Harness; source: HarnessSource }> {
@@ -276,9 +275,9 @@ function walk(ladder: Array<Rung | undefined>): Result<{ harness: Harness; sourc
 // is a property of the repo's evidence trail and must be comparable across machines; row
 // 88 already said an identity chosen by ambient environment is the opposite of a pin.
 export function resolveJudge(
-  env: Record<string, string | undefined>, raw: Record<string, unknown>,
+  env: Record<string, string | undefined>, declared: string | undefined,
 ): Result<{ harness: Harness; source: HarnessSource }> {
-  return walk([declaredRung(raw), detectedRung(env)])
+  return walk([declaredRung(declared), detectedRung(env)])
 }
 
 // THE DRIVER — which CLI is about to be typed at. Detection wins, because a launch or
@@ -286,9 +285,9 @@ export function resolveJudge(
 // in a fresh repo emits a runnable-LOOKING, unrunnable handoff behind a warning that gets
 // scrolled past — bug B2's exact shape.
 export function resolveDriver(
-  env: Record<string, string | undefined>, raw: Record<string, unknown>,
+  env: Record<string, string | undefined>, declared: string | undefined,
 ): Result<{ harness: Harness; source: HarnessSource }> {
-  return walk([detectedRung(env), declaredRung(raw)])
+  return walk([detectedRung(env), declaredRung(declared)])
 }
 
 // One renderer for both orientation surfaces, on modelFloorLines' precedent: the judge

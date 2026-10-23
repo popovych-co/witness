@@ -1,0 +1,52 @@
+# witness.config.yaml — the whole surface
+schema: 1
+paths: { specs: docs/specs, plans: docs/plans, designs: docs/designs }
+docs:
+  # example prose: the visual canon the design reviewers judge a screen against
+  design: [docs/ui/design-language.md, docs/ui/primitives.md]
+  # example prose: the code canon handed to the code reviewer. List order is
+  # prompt order.
+  conventions:
+    - docs/code/review-scope.md
+    - docs/code/architecture.md
+    - docs/code/server-actions.md
+    - docs/code/errors-logging.md
+    - docs/code/persistence.md
+    - docs/code/ui-mechanics.md
+    - docs/code/typescript.md
+gates:
+  model: claude-opus-5 # reviewer model pin — exact id, aliases refused
+  # example prose below the pin: this id is the only entry in the local
+  # calibration matrix, so it is the only pin that clears the model floor.
+  # Re-pin only after calibrating another id.
+  # any gate block may pin its own model (wins over the global pin), e.g.
+  # decompose: { reviewers: [slicing-critic], model: claude-opus-4-8 }
+  decompose: { reviewers: [slicing-critic] }
+  design: { reviewers: [design-critic] }
+  plan: { reviewers: [plan-critic] }
+  implement:
+    model: claude-opus-5
+    reviewers: # per change class; a plain list = all classes
+      feature:
+        [
+          code-reviewer,
+          silent-failure-hunter,
+          type-design,
+          pr-test,
+          design-reviewer,
+        ]
+      fix: [code-reviewer, silent-failure-hunter, design-reviewer]
+      chore: [code-reviewer]
+  ship: { model: claude-opus-5, reviewers: [drift-reviewer, code-reviewer] }
+criteria:
+  # example prose: a prose folder quotes criteria blocks verbatim, so it is
+  # kept out of the tag scan.
+  exclude: [docs/superpowers/**]
+  # example prose: criteria are counted from the suite's own report.
+  #
+  # A tag counts only in a test's name.
+  runner: full-suite
+  report: "junit:reports/junit.xml"
+
+ship: { test: "pnpm test", lint: "pnpm lint", branch: main }
+harness: pi # the judge — which harness runs this repo's gate reviewers; declared wins

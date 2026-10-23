@@ -173,7 +173,7 @@ export function reportHandover(ctx: Ctx, root: string, cfg: Config, opts: { guar
   const limit = cfg.session.contextLimit
   if (!fill.measured || !reached(fill.reading.tokens, fill.reading.window, limit)) return false
   if (opts.guard && !actedYet(root, ctx.env)) return false
-  const driver = resolveDriver(ctx.env, cfg.raw)
+  const driver = resolveDriver(ctx.env, cfg.harness)
   if (!driver.ok) return false
   ctx.out(kv('context', contextLine(fill, limit, cfg.implement.stepsPerDispatch)))
   ctx.out(kv('relay', relayLine(driver.value.harness)))

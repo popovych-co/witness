@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { docKeysFor, docsBlock, loadLensDocs, promptsSha, type Lens } from '../src/reviewer.js'
-import { tmpRepo } from './helpers.js'
+import { tmpRepo, patchConfig } from './helpers.js'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ok } from '../src/refusal.js'
@@ -80,8 +80,7 @@ async function shipRepo() {
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   repo.write('docs/conventions.md', 'Every module exposes one public entry.')
-  const cfgPath = join(repo.root, 'witness.config.yaml')
-  writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8') + 'docs:\n  conventions: [docs/conventions.md]\n')
+  patchConfig(repo, { docs: { conventions: ['docs/conventions.md'] } })
   repo.git('add', 'docs/conventions.md', 'witness.config.yaml')
   repo.git('commit', '-m', 'conventions doc + registry')
   const scenario = fakeScenario()

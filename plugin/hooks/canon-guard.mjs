@@ -26,11 +26,22 @@ function configRoot(startDir) {
   }
 }
 
+// A comment opens at a `#` that starts the line or follows whitespace; inside a word it is
+// text — context-core.mjs's rule. Stripped before matching (row 193): a comment line naming
+// `specs:` was read as the key (P2), and a comment on the `paths:` line hid the block (P3).
+// A line left blank goes too, so a comment or blank line inside the block does not end it.
+const uncommented = (text) =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/(^|\s)#.*$/, '').replace(/\s+$/, ''))
+    .filter((line) => line !== '')
+    .join('\n');
+
 // Canon roots from the repo's `paths:` config key (flow or block style), extracted
 // without a YAML dependency. Anything unparseable falls back to the defaults.
 function canonDirs(root) {
   try {
-    const text = readFileSync(join(root, 'witness.config.yaml'), 'utf8');
+    const text = uncommented(readFileSync(join(root, 'witness.config.yaml'), 'utf8'));
     const flow = text.match(/^paths:[ \t]*\{([^}]*)\}/m);
     const section = flow ? flow[1] : (text.match(/^paths:[ \t]*\n((?:[ \t]+\S.*\n?)*)/m) || [])[1] || '';
     const dir = (key) => {

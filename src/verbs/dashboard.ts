@@ -236,7 +236,7 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   //
   // Resolved ABOVE the config guard because the flows table below needs it too, and
   // resolving it twice is how one screen's two answers drift apart.
-  const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.raw : {})
+  const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.harness : undefined)
   if (cfg.ok) {
     ctx.out(kv('judge', judgeLine(judgeR)))
     // One line per distinct warning, labelled with the gates it applies to — per-gate
@@ -253,7 +253,7 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   // D139. `check`'s finding and this line are ONE computation (`divergence`) with two
   // renderers — the D101 boundary. Re-deriving it here is how the two surfaces drift apart.
   if (cfg.ok) {
-    const shipBranch = String(((cfg.value.raw.ship ?? {}) as Record<string, unknown>).branch ?? 'main')
+    const shipBranch = cfg.value.ship.branch
     const div = divergence(root, shipBranch)
     if (div && (div.ahead > 0 || div.behind > 0)) {
       ctx.out(kv('sync', `local ${shipBranch} ${div.ahead} ahead · ${div.behind} behind origin/${shipBranch} — witness sync`))

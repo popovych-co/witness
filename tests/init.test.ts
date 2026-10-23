@@ -6,7 +6,7 @@ describe('witness init', () => {
     const repo = tmpRepo()
     const res = await repo.cli(['init'])
     expect(res.code).toBe(0)
-    expect(repo.read('witness.config.yaml')).toContain('schema: 1')
+    expect(repo.read('witness.config.yaml')).toContain('schema: 2 ')
     expect(repo.read('witness.config.yaml')).toContain('gates:')
     expect(repo.read('specs/principles.md')).toContain('type: principles')
     expect(repo.read('specs/principles.md')).toContain('status: draft')

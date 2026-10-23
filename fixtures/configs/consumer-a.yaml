@@ -1,0 +1,62 @@
+# witness.config.yaml — the whole surface
+schema: 1
+paths: { specs: docs/specs, plans: docs/plans, designs: docs/designs }
+docs:
+  # example prose standing in for a consumer's note: the visual canon the
+  # design reviewers judge a screen against. Neutral text for a public
+  # fixture; the shape is what matters — a block comment above a list
+  # inside a section.
+  design: [docs/ui/design-language.md, docs/ui/primitives.md]
+  # example prose: the code canon handed to the code reviewer. List order is
+  # prompt order.
+  #
+  # A second paragraph after an empty comment line, as real notes have.
+  conventions:
+    - docs/code/review-scope.md
+    - docs/code/architecture.md
+    - docs/code/api.md
+    - docs/code/errors-logging.md
+    - docs/code/persistence.md
+    - docs/code/ui-mechanics.md
+    - docs/code/typescript.md
+gates:
+  # example prose about the pin: this repo's calibration matrix is empty,
+  # so every gate reports the reviewer model as uncalibrated. Calibrate
+  # before trusting a verdict as more than advice.
+  model: claude-opus-5-5 # reviewer model pin — exact id, aliases refused
+  decompose: { reviewers: [slicing-critic] }
+  design: { reviewers: [design-critic] }
+  plan: { reviewers: [plan-critic] }
+  implement:
+    model: claude-opus-5-5
+    reviewers: # per change class; a plain list = all classes
+      feature:
+        [
+          code-reviewer,
+          silent-failure-hunter,
+          type-design,
+          pr-test,
+          design-reviewer,
+        ]
+      fix: [code-reviewer, silent-failure-hunter, design-reviewer]
+      chore: [code-reviewer]
+  ship: { model: claude-opus-5-5, reviewers: [drift-reviewer, code-reviewer] }
+criteria:
+  # example prose: a prose folder quotes criteria blocks verbatim, so it is
+  # kept out of the tag scan.
+  exclude: [docs/superpowers/**]
+  # example prose: criteria are counted from the suite's own report of what
+  # it executed. The suite runs once and writes one report.
+  #
+  # An exact path, not a loose glob.
+  runner: full-suite
+  report: "junit:reports/junit.xml"
+
+# example prose: lint runs the typecheck too — a criterion no lane runs is a
+# criterion nothing enforces.
+ship: { test: "pnpm test", lint: "pnpm lint && pnpm typecheck", branch: main }
+harness: pi # the judge — which harness runs this repo's gate reviewers; declared wins
+
+# example prose: who decides is a repo fact; under autonomy the CLI settles
+# its own stops, and merges ride green CI.
+autonomy: on

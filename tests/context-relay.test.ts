@@ -7,8 +7,7 @@ import { readStream } from '../src/journal.js'
 import {
   PLAN_BLOCKING, SCAFFOLDING_FIRST, TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED, addOrigin, autonomyOn,
   behaviorOnMain, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, gateEnv, measuredEnv, plannedRepo, putVerdict,
-  shippableRepo, startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo,
-} from './helpers.js'
+  shippableRepo, startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo, patchConfig} from './helpers.js'
 
 const at = (tokens: number) => measuredEnv('S1', tokens, 1_000_000)
 const lines = (r: CliResult) => r.stdout.split('\n')
@@ -78,7 +77,7 @@ describe('the rule at a step close', () => {
   // report and never the verb's exit.
   it('a config that will not load costs the report, not the close', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}session:\n  contextLimit: 0\n`)
+    patchConfig(repo, { session: { contextLimit: 0 } })
     const r = await repo.cli(['step-close', planId, '--step', 's3'], { cwd: wt, env: at(250_000) })
     expect(r.code).toBe(0)
     expect(r.stdout).toBe(`step-close: ${planId} · s3 closed`)
@@ -103,7 +102,7 @@ describe('the rule at a step close', () => {
 
   // §4.7. s3 stays unfinished, so rule 1 does not fire.
   it('unmeasured counts steps per session against the budget', async () => {
-    const { repo, wt, planId } = await startedThreeStepPlan('implement:\n  stepsPerDispatch: 2\n')
+    const { repo, wt, planId } = await startedThreeStepPlan({ implement: { stepsPerDispatch: 2 } })
     const s9 = { CLAUDE_CODE_SESSION_ID: 'S9' }
     const first = await evidenceCycle(repo, wt, planId, 's1', s9)
     expect(report(first)).toEqual(['context: unmeasured (no adapter) — step budget 2', 'steps: 1/3 done · next s2', 'slice: continue'])
@@ -375,7 +374,7 @@ describe('a red open on any step', () => {
   const slice = (r: CliResult) => lines(r).find((l) => l.startsWith('slice: '))
 
   it('ahead of an unclosed scaffolding step: next routes its green and hands nothing over', async () => {
-    const { repo, wt } = await startedThreeStepPlan('', SCAFFOLDING_FIRST)
+    const { repo, wt } = await startedThreeStepPlan({}, SCAFFOLDING_FIRST)
     await redIn(repo, wt, 's2', at(150_000))
     const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
     expect(r.code).toBe(0)
@@ -405,7 +404,7 @@ describe('a red open on any step', () => {
   })
 
   it('a step close ahead of it says continue', async () => {
-    const { repo, wt } = await startedThreeStepPlan('', SCAFFOLDING_FIRST)
+    const { repo, wt } = await startedThreeStepPlan({}, SCAFFOLDING_FIRST)
     await redIn(repo, wt, 's2', at(150_000))
     const r = await repo.cli(['step-close', PLAN, '--step', 's1'], { cwd: wt, env: at(210_000) })
     expect(r.code).toBe(0)

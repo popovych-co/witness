@@ -19,7 +19,7 @@ export type Fill = { measured: true; reading: Reading } | { measured: false; rea
 // comes from the driver ladder without the config rung: detection, else the default harness.
 // The variable is the registry's `session` facet, never spelled here.
 export function sessionIdOf(env: Env): string | undefined {
-  const driver = resolveDriver(env, {})
+  const driver = resolveDriver(env, undefined)
   if (!driver.ok) return undefined
   const id = env[driver.value.harness.session]
   return id === undefined || id === '' ? undefined : id

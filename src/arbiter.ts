@@ -76,12 +76,12 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
   const lensR = resolvePrompt(PROMPT_OF[req.mode])
   if (!lensR.ok) return lensR
   const lens = lensR.value
-  const hxR = resolveJudge(ctx.env, cfg.raw)
+  const hxR = resolveJudge(ctx.env, cfg.harness)
   if (!hxR.ok) return refuse(hxR.violations)
   const harness = hxR.value.harness
   const localR = loadLocalConfig(root)
   if (!localR.ok) return localR
-  const modelR = resolveModel(cfg, loadMatrix(root, harness.name))
+  const modelR = resolveModel(cfg, loadMatrix(root, harness.name), 'arbiter')
   if (!modelR.ok) return refuse(modelR.violations)
   const chain = modelR.value.chain
 

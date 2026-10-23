@@ -1,4 +1,6 @@
 import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { parse, stringify } from 'yaml'
+import { withValues } from '../../src/settings.js'
 import { cpSync, existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -86,7 +88,7 @@ beforeAll(() => {
   // ship gate's command lanes (tests/lint) need something configured — trivial always-green
   // commands, same choice as helpers.ts's shippableRepo, since the fixture's own suite isn't
   // what's under test here.
-  writeFileSync(join(root, 'witness.config.yaml'), `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n`)
+  writeFileSync(join(root, 'witness.config.yaml'), stringify(withValues(parse(singleConfig('filtered')) as Record<string, unknown>, { ship: { test: 'true', lint: 'true' } })))
   execFileSync('git', ['-C', root, 'add', '-A'])
   execFileSync('git', ['-C', root, 'commit', '-m', 'runner config'])
   const bare = `${root}-origin.git`

@@ -133,7 +133,7 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   // like every other. A silent claude fallback here would swap the reviewer identity
   // for pure-pi users on the one check that judges live specs.
   const cfgR = loadConfig(root)
-  const hxR = resolveJudge(ctx.env, cfgR.ok ? cfgR.value.raw : {})
+  const hxR = resolveJudge(ctx.env, cfgR.ok ? cfgR.value.harness : undefined)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach(ctx.err); return EXIT.REFUSED }
   // Repo config may be broken here by design — the timeout falls to the default. A
   // broken LOCAL file refuses instead: silently dropping declared extensions
