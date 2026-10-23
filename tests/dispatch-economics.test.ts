@@ -80,22 +80,38 @@ describe('dispatch-report journals telemetry (row 81)', () => {
   })
 })
 
-describe('implement skill carries the economics protocol (rows 79–80)', () => {
-  const skill = readFileSync(
-    join(import.meta.dirname, '..', 'plugin', 'skills', 'witness-implement', 'SKILL.md'), 'utf8')
+const skill = (name: string): string =>
+  readFileSync(join(import.meta.dirname, '..', 'plugin', 'skills', name, 'SKILL.md'), 'utf8')
+const implement = skill('witness-implement')
+const router = readFileSync(join(import.meta.dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
 
+// Row 191 §4.6 (amends rows 79–80). The CLI decides where a slice ends; the skill is how the
+// session acts on what it prints. The step budget's count and the ~15-iteration trigger are
+// retired: the first by `slice:`, the second by the adapter's measured warning. The scope
+// trigger stays, since it is about scope, not size.
+describe('implement skill carries the context-fill protocol (rows 79–80, 191)', () => {
   it.each([
-    'dispatch-budget',                       // budget read from start output
-    'at most the next',                      // ≤N steps per dispatch
-    'never stop mid-red',                    // relay only at evidence-cycle boundaries
-    '~15 inner-loop iterations',             // early-exit countable trigger
-    'finish the red→green you are in',       // early-exit exit ramp
-    'dispatch-report',                       // telemetry call at the slice boundary
-    "the test's own name, never the spec tag", // loop width: exact test
-    'only inside the witnessed evidence cycle', // suite runs at step close only
-    'never whole into your context',         // fat artifacts read by section, not whole
-    'keep the app server alive',             // D66 guidance line
-  ])('mentions %s', (snippet) => {
-    expect(skill).toContain(snippet)
+    '--step <step-id>', 'step-close', 'slices:', 'steps:', 'context:',
+    'slice: continue', 'slice: end', 'slice: gate', 'slice: own count', 'steps: unknown',
+    'witness: context', 'never stop mid-red', 'finish the red→green you are in',
+    "left the step's scope to fight infrastructure", 'dispatch-report',
+    "the test's own name, never the spec tag", 'only inside the witnessed evidence cycle',
+    'never whole into your context', 'keep the app server alive',
+  ])('mentions %s', (s) => expect(implement).toContain(s))
+  it.each(['~15 inner-loop iterations', 'dispatch-budget', 'at most the next'])('no longer says %s', (s) => expect(implement).not.toContain(s))
+})
+
+// Row 191 §4.6 (amends row 82). At a revise, a ship exit and `next`, the hand-over is a
+// `relay:` with no `run:`: the work continues in this same home, so every surface that can
+// meet one must end the turn on it rather than act on.
+describe('the same-home relay ends the turn (rows 82 · 191)', () => {
+  it('the router ends the turn on a relay: with no run:', () => {
+    expect(router).toMatch(/`relay:` line is printed with no `run:`/)
+  })
+  it.each(['witness-implement', 'witness-plan', 'witness-decompose', 'witness-design'])('%s hands a settled revise to a fresh session', (s) => {
+    expect(skill(s)).toContain('a fresh session takes the revise')
+  })
+  it('ship runs its next pass in a fresh session', () => {
+    expect(skill('witness-ship')).toContain('the next ship pass runs in a fresh session')
   })
 })
