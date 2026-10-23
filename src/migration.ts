@@ -62,6 +62,18 @@ function fillable(raw: Raw, path: string): boolean {
 
 const PIN_WANT = '[provider/]model[:thinking]'
 
+// Lists by position, maps by key set: a reviewer list equal to the old built-in one is at the
+// default whatever order the file wrote its map keys in (§4.7).
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => deepEqual(x, b[i]))
+  }
+  if (!isMap(a) || !isMap(b)) return false
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((k) => k in b && deepEqual(a[k], b[k]))
+}
+
 // 1 → 2 (§4.3): nothing inherited. Each gate keeps its own pin, else takes `gates.model`; the
 // arbiter, which read `gates.model` alone (row 172), takes it as `arbiter.model`; `gates.model`
 // goes. An invalid `gates.model` refuses under its own name, before anything is copied from it.
@@ -93,7 +105,7 @@ const STEPS: Record<number, (raw: Raw, changes: Change[]) => Result<Raw>> = {
 export function migrateValues(raw: Raw, from: number, opts: {
   mode: 'memory' | 'write'; to?: number; settings?: readonly Setting[]; harness?: string
 }): Result<{ raw: Raw; changes: Change[] }> {
-  if (opts.mode === 'write') throw new Error('migrateValues: write mode is not yet built')
+  const write = opts.mode === 'write'
   const list = opts.settings ?? SETTINGS
   const to = opts.to ?? newestSchema()
   const changes: Change[] = []
@@ -105,13 +117,33 @@ export function migrateValues(raw: Raw, from: number, opts: {
     if (!r.ok) return refuse(r.violations)
     out = r.value
   }
+  // §4.7. A value still equal to the default of the schema it was written under was never a
+  // choice: each step moves it to the next default. A different value is a choice, and stays.
+  // Only a write moves anything — in memory a move would change behavior with no diff (§4.8).
+  if (write) {
+    for (let s = Math.max(from, oldestSchema()); s < to; s++) {
+      for (const st of list) {
+        const val = getIn(out, st.path)
+        const was = defaultAt(st, s)
+        const next = defaultAt(st, s + 1)
+        if (val === undefined || was === undefined || next === undefined || deepEqual(was, next) || !deepEqual(val, was)) continue
+        out = withValues(out, nest(st.path, next))
+        changes.push({ kind: 'moved', path: st.path, from: val, to: next })
+      }
+    }
+  }
+  // What is missing takes the current default. An ambient setting meant something else while
+  // absent (the judge ladder, the model chain, "not configured"), so only a write fills it —
+  // the judge with the session's own harness — and names it `filled`.
   for (const s of list) {
-    if (s.since > to || s.ambient || getIn(out, s.path) !== undefined || !fillable(out, s.path)) continue
-    const d = defaultAt(s, to)
+    if (s.since > to || getIn(out, s.path) !== undefined || !fillable(out, s.path)) continue
+    if (s.ambient && !write) continue
+    const d = write && s.path === 'harness' && opts.harness !== undefined ? opts.harness : defaultAt(s, to)
     if (d === undefined) continue
     out = withValues(out, nest(s.path, d))
-    changes.push({ kind: 'added', path: s.path, to: d })
+    changes.push({ kind: s.ambient ? 'filled' : 'added', path: s.path, to: d })
   }
+  if (write) out = { ...out, schema: to }
   return ok({ raw: out, changes })
 }
 

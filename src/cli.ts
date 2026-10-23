@@ -23,6 +23,8 @@ type Verb = (ctx: Ctx, argv: string[]) => Promise<number>
 const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   recover: () => import('./verbs/recover.js'),
   init: () => import('./verbs/init.js'),
+  // Row 193 §4.6. Brings witness.config.yaml to this CLI's schema, naming every change.
+  migrate: () => import('./verbs/migrate.js'),
   recap: () => import('./verbs/recap.js'),
   // Row 176. The human's ask, queued as state so `next` routes it and no session can lose it.
   ask: () => import('./verbs/ask.js'),
@@ -84,6 +86,7 @@ const VERB_USAGE: Record<string, string> = {
   gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
   index: 'witness index',
   init: 'witness init [--agent claude-code|pi|auto]',
+  migrate: 'witness migrate [--dry-run]',
   log: 'witness log <stream> [--all] [--lineage]',
   next: 'witness next',
   read: 'witness read <id> [--design] [--outline] [--lines <a>-<b>]',

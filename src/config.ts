@@ -266,6 +266,12 @@ function walkKeys(raw: Raw, known: ReadonlySet<string>, mode: 'strict' | 'lenien
   return { violations, broken }
 }
 
+// Keys `schema` never knew, and sections that are not maps — what `witness migrate` refuses to
+// carry forward, since it drops nothing a human wrote (§4.6).
+export function keyViolations(raw: Raw, schema: number): Violation[] {
+  return walkKeys(raw, knownAt(schema), 'strict').violations
+}
+
 // Row 193 §4.2. The line that restores a missing setting, in the file's own words.
 function missing(s: Setting): Violation {
   const parent = s.path.includes('.') ? s.path.slice(0, s.path.lastIndexOf('.')) : undefined
