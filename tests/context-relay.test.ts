@@ -485,3 +485,55 @@ describe('a vacuous red is no act', () => {
     expect(readStream(repo.root, PLAN).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red'])
   })
 })
+
+// Re-review. A red is open until any passing green, whatever step that green names: every run
+// executes the parent tag's whole suite. Read per step, the red the skill tags on a legacy plan
+// stayed open for good once the agent ran the untagged green `next` routes there, and an open red
+// outranks every verdict and every hand-over, so the plan's slice cut and `next`'s relay were off
+// for the rest of it.
+describe('an open red closes at any passing green', () => {
+  const routed = (r: CliResult) => lines(r).find((l) => l.startsWith('next: '))
+  const slice = (r: CliResult) => lines(r).find((l) => l.startsWith('slice: '))
+
+  it("a legacy plan's routed untagged green closes the red the skill tagged", async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    commitEntry(repo, PLAN, untaggedRed(PLAN))           // an older CLI's untagged red: legacy
+    await redIn(repo, wt, 's1', at(100_000))              // the skill names the step on its red
+    const owed = await repo.cli(['next'], { cwd: wt, env: at(100_000) })
+    expect(routed(owed)).toBe(`next: witness test-evidence ${PLAN} --phase green`)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const green = await repo.cli(['test-evidence', PLAN, '--phase', 'green'], { cwd: wt, env: { ...fixtureEnv(), ...at(210_000) } })
+    expect(green.code).toBe(0)
+    expect(slice(green)).toBe('slice: end — 21% reached the 20% limit')
+    // This session has acted, so `next` hands over where it stands.
+    const after = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(after)).toBe(`next: witness gate implement ${PLAN}`)
+    expect(relays(after)).toEqual([RELAY])
+  })
+
+  it('unmeasured, that green leaves the count to the skill', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    commitEntry(repo, PLAN, untaggedRed(PLAN))
+    const unmeasured = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'U1' }
+    await redIn(repo, wt, 's1', unmeasured)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const green = await repo.cli(['test-evidence', PLAN, '--phase', 'green'], { cwd: wt, env: { ...fixtureEnv(), ...unmeasured } })
+    expect(green.code).toBe(0)
+    expect(slice(green)).toBe("slice: own count — the CLI cannot count this session's steps · end after 3 step(s) by your own count")
+  })
+
+  // A passing green after s2's genuine red cannot be recorded while that red stands (the run
+  // includes s2's failing test), so the boundary pinned here is the other one: a failing green,
+  // whatever step it names, leaves the red open.
+  it('a failing green leaves the red open', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    await redIn(repo, wt, 's2', at(150_000))              // TOKEN_BROKEN stays in place
+    const failing = await repo.cli(['test-evidence', PLAN, '--phase', 'green', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(160_000) } })
+    expect(failing.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s2`)
+    expect(relays(r)).toEqual([])
+    const closed = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
+    expect(slice(closed)).toBe('slice: continue')
+  })
+})

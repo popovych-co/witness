@@ -13,7 +13,7 @@ import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites
 import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
-import { implementGated, lastRedVacuous, openRed, redOpenStep, stepProgress, stepsLine, type StepState } from '../steps.js'
+import { implementGated, lastRedVacuous, openRed, redInFlight, redOpenStep, stepProgress, stepsLine, type StepState } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -222,9 +222,9 @@ function evidenceRow(
 // gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
 // again and `next` would answer with the same line twice. An open cycle outranks that, since
 // its red was genuine and the green is what is owed.
-function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string; midRed?: true } {
+function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
   if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
-  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}`, midRed: true }
+  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
   if (lastRedVacuous(entries, s.id)) {
     return { line: `witness verify-red ${id} --step ${s.id}`, why: 'its red was vacuous — verify-red reconstructs it against the base' }
   }
@@ -257,9 +257,9 @@ export interface NextAction {
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
-  // Row 191 §1–§2. A red still open, the parent tag's or any step's: the session the action is
-  // routed to is mid-red, and a session never relays there. The point after it decides instead
-  // (§4.4): the green's close for a plan step, the re-gate for a fix round.
+  // Row 191 §1–§2. A red still open (steps.ts `redInFlight`, or the parent tag's latest cycle): the
+  // session the action is routed to is mid-red, and a session never relays there. The point after
+  // it decides instead (§4.4): the green's close for a plan step, the re-gate for a fix round.
   midRed?: true
 }
 
@@ -323,20 +323,20 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
   const progress = stepProgress(plan, entries)
   const stepped = progress.known && !implementGated(entries) ? progress : undefined
-  // Final review I1. A red open on any step, not only the next one's, is a red in flight: one
-  // recorded out of order (a scaffolding step left unclosed ahead of it, or an earlier step not
-  // begun) or re-opened on a closed step. Whatever row follows, the session is mid-red.
-  const redOpen = redOpenStep(plan, entries)
-  const inFlight = redOpen === undefined ? {} : { midRed: true as const }
+  // Final review I1 and its re-review. A red in flight (steps.ts: the latest red that observed a
+  // failure, with no passing green since) is one whatever step it names, or none: recorded out of
+  // order, ahead of a scaffolding step left unclosed, re-opened on a closed step, or a fix round's.
+  // Whatever row follows, the session is mid-red.
+  const inFlight = redInFlight(entries) ? { midRed: true as const } : {}
   if (stepped?.next !== undefined) {
     // Its green comes before the first unclosed step: routing that step's red or its close would
-    // leave the open red's green unrouted, and the session free to hand over with it open.
+    // leave the open red's green unrouted.
+    const redOpen = redOpenStep(plan, entries)
     const open = stepped.steps.find((s) => s.id === redOpen)
-    const { line, why, midRed } = stepLine(id, open ?? stepped.next, entries)
+    const { line, why } = stepLine(id, open ?? stepped.next, entries)
     const ahead = open !== undefined && open.id !== stepped.next.id ? `${open.id} has an open red — its green comes first` : why
     return {
-      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead),
-      ...(midRed ? { midRed } : {}),
+      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
     }
   }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
@@ -1097,7 +1097,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // and its fill reached the limit, with a same-home `relay:`. Outside the `run:` branch because a
   // `run:` already hands the work to a session of its own, in another home. Not where this
   // session's turn ends anyway: at a decision left for a human, with nothing owed, or with the run
-  // handed to drive. And never mid-red (`midRed`: a red open on the parent tag or any step).
+  // handed to drive. And never mid-red (`midRed`: a red in flight).
   const turnEnds = toDrive || action.line.startsWith('witness decide ') || action.line === 'witness check'
   if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {

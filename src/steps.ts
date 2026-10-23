@@ -87,25 +87,42 @@ export function closedAt(p: Progress, index: number): string | undefined {
   return p.known ? p.steps.find((s) => s.closedAt === index)?.id : undefined
 }
 
-// A cycle is open on the step while its latest failing red has no passing green after it.
-export function openRed(entries: Entry[], stepId: string): boolean {
-  let open = false
+// Row 191 §1–§2. The red in flight: the plan's latest red that observed a failure, while no passing
+// green has followed it. Every evidence run executes the parent tag's whole suite, so a passing
+// green means no red is open any more, whatever step it names or none, and a failing green or a
+// vacuous red changes nothing. Read per step, the red the skill tags on a legacy plan, whose routed
+// green names no step, stayed open for good and switched the plan's slice cut off (re-review). One
+// red is open at a time, so its step, when it names one, is the open step. Which steps are closed is
+// another question (closingIndex): a criteria step closes only at a green tagged with it after its
+// own red.
+function redInFlightEntry(entries: Entry[]): Entry | undefined {
+  let open: Entry | undefined
   for (const e of entries) {
-    if (e.step !== stepId) continue
-    if (opensCycle(e)) open = true
-    else if (closesCycle(e)) open = false
+    if (opensCycle(e)) open = e
+    else if (closesCycle(e)) open = undefined
   }
   return open
 }
 
-// Row 191 §1–§2 (final review I1). The first criteria step, in manifest order, whose cycle is open:
-// recorded out of order ahead of an unclosed step, or re-opened on a closed one, it is a red in
-// flight all the same, and a session never relays mid-red. Read whether or not the plan's progress
-// is known, since a legacy plan's tagged reds open cycles too. A criteria step alone, because
-// `test-evidence` refuses any other a green: a red on a step an amend removed or turned into
-// scaffolding routes nothing.
+// Whether a red is open, whatever step it names, or none (a fix round's, a legacy cycle's): what
+// keeps `next` from handing over, and a step close from ending the slice, mid-red.
+export function redInFlight(entries: Entry[]): boolean {
+  return redInFlightEntry(entries) !== undefined
+}
+
+// A cycle is open on the step while the red in flight is its own.
+export function openRed(entries: Entry[], stepId: string): boolean {
+  return redInFlightEntry(entries)?.step === stepId
+}
+
+// Row 191 §1–§2 (final review I1). The step of the red in flight, when it names a criteria step of
+// the plan: recorded out of order ahead of an unclosed step, or re-opened on a closed one, its green
+// is owed before anything else. Read whether or not the plan's progress is known. A criteria step
+// alone, because `test-evidence` refuses any other a green: a red on a step an amend removed or
+// turned into scaffolding routes nothing.
 export function redOpenStep(plan: CanonDoc, entries: Entry[]): string | undefined {
-  return manifest(plan).find((s) => s.kind === 'criteria' && openRed(entries, s.id))?.id
+  const step = redInFlightEntry(entries)?.step
+  return manifest(plan).find((s) => s.kind === 'criteria' && s.id === step)?.id
 }
 
 // The step's latest red passed: the behavior it asserts already exists, as when the

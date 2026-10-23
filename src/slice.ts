@@ -6,7 +6,7 @@ import { pctOf, reached, readFill, sessionHash, sessionIdOf, windowLabel, type F
 import { relayLine, resolveDriver } from './harness.js'
 import { readStream, type Entry, type EntryType, type JournalCtx } from './journal.js'
 import type { CanonDoc } from './scan.js'
-import { implementGated, redOpenStep, stepProgress, stepsLine, vacuousEvidence, type Progress } from './steps.js'
+import { implementGated, redInFlight, stepProgress, stepsLine, vacuousEvidence, type Progress } from './steps.js'
 import { kv } from './toon.js'
 
 // Plan's call 8 (row 191 §4.8). An act is the session's own stage work. What the CLI writes on a
@@ -74,10 +74,12 @@ export type SliceVerdict = { kind: 'gate' } | { kind: 'continue' } | { kind: 'en
 // session's closes against the step budget where it can see both; where it cannot, the skill
 // keeps its own count, as before row 191.
 //
-// `redOpen` (final review I1): a red open on any step, recorded out of order or re-opened on a
-// closed step, is work in flight, and a session never relays mid-red, so the slice goes on until
-// its green. It outranks rule 1 too: a red re-opened once every step has closed would send the
-// session to a gate whose evidence check fails on it, spending a round on a tree mid-red.
+// `redOpen` (final review I1): a red in flight (steps.ts `redInFlight`: the latest red that
+// observed a failure, with no passing green since, whatever step it names or none) is work the
+// session is in the middle of, and a session never relays mid-red, so the slice goes on until its
+// green. A closing green clears it, so this answers a close made while a red stands: a `step-close`.
+// It outranks rule 1 too: a red re-opened once every step has closed would send the session to a
+// gate whose evidence check fails on it, spending a round on a tree mid-red.
 export function stepCloseVerdict(i: {
   fill: Fill; limit: number; budget: number; progress: Progress; redOpen: boolean; growth?: number; closedHere?: number
 }): SliceVerdict {
@@ -139,7 +141,7 @@ export function reportStepClose(ctx: Ctx, root: string, plan: CanonDoc, opts: { 
   if (!decides) return
   const id = sessionIdOf(ctx.env)
   const closedHere = id === undefined ? undefined : closedThisSession(entries, progress, sessionHash(id))
-  const redOpen = redOpenStep(plan, entries) !== undefined
+  const redOpen = redInFlight(entries)
   ctx.out(kv('steps', stepsLine(progress)))
   ctx.out(kv('slice', sliceLine(stepCloseVerdict({ fill, limit, budget, progress, redOpen, growth, closedHere }))))
 }
