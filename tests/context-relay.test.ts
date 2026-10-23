@@ -473,7 +473,7 @@ describe('a vacuous red is no act', () => {
     const a = await repo.cli(['next'], { cwd: wt, env: over('A') })
     expect(routed(a)).toBe(`next: witness verify-red ${PLAN} --step s1`)
     expect(relays(a)).toEqual([])
-    // The session a relay would have opened next, running the routed line.
+    // A fresh session runs the routed line, as each turn of the probe's loop opened one to.
     const first = await repo.cli(['next'], { cwd: wt, env: over('B') })
     const verified = await repo.cli(['verify-red', PLAN, '--step', 's1'], { cwd: wt, env: over('B') })
     expect(verified.code).toBe(1)
