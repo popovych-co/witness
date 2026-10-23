@@ -79,7 +79,15 @@ export const register: Register = (on) => {
         else warning = { session, line };
       }
     }
-    const r = await next(e);
+    // A call that rejects, or a next(e) that throws, carries no context either (D192): the claim goes
+    // back before the error does, as at a deny, or the session would never be warned.
+    let r: Awaited<ReturnType<typeof next>>;
+    try {
+      r = await next(e);
+    } catch (err) {
+      if (warning !== undefined) warned.delete(warning.session);
+      throw err;
+    }
     if (warning === undefined) return r;
     if (r.deny !== undefined) {
       warned.delete(warning.session);       // a deny carries no context: the warning waits for the next call
