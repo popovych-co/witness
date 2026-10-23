@@ -63,14 +63,14 @@ witness is two halves: **six skills**, distributed through the
 **engine + guard + dashboard**, which no skills installer can place — `witness init
 --agent <name>` writes those and commits them.
 
-**Claude Code** — one step, the native path:
+**Claude Code** — the native path:
 
 ```bash
 /plugin marketplace add popovych-co/witness    # skills, engine, guard and dashboard together
 ```
 
 **Claude Code, on either route** (the marketplace plugin above, or `init --agent claude-code`),
-also needs the `witness-context` plugin, installed once per machine:
+also needs the `witness-context` plugin, installed once per machine — then start a new session:
 
 ```bash
 claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness
@@ -80,10 +80,12 @@ It puts the session's live context reading into every Bash command, which is wha
 session hand over at `session.contextLimit` (see Run economics below). The reading comes from
 a hooks module, and only a plugin can carry one. `init --agent claude-code` also declares the
 plugin in `.claude/settings.json`, the way a project names a plugin it needs, but the
-declaration alone does not load it in a headless session (`claude -p`, `witness drive`). The
-install is a copy: after upgrading witness, `claude plugin update witness-context@witness`
-refreshes it. Without the plugin witness still runs, on the step budget, and says so; `witness
-check`, run from a session, reports whether that session sees the reading.
+declaration alone does not load it in a headless session (`claude -p`, `witness drive`). A
+session loads the plugin when it starts, so one already running when you install it does not:
+start a new one. The install is a copy: after upgrading witness, `claude plugin update
+witness-context@witness` refreshes it, for the sessions started afterwards. Without the plugin
+witness still runs, on the step budget, and says so; `witness check`, run from a session, reports
+whether that session sees the reading.
 
 **Pi** (and any other agent the installer supports):
 
@@ -277,7 +279,11 @@ Operator notes, non-load-bearing — the design depends on none of them:
 - **Mind the window.** The limit is a share, so one warm-up weighs differently by model:
   51k tokens is 5% of a 1M window and 25% of a 200k one. A session that opens over the
   limit is warned (`warn: this session opens at …`) and works one step per slice; on a
-  small window, raise `session.contextLimit` or accept a warm-up per step.
+  small window, raise `session.contextLimit` or accept a warm-up per step. `witness drive`'s
+  defaults were set when a slice was three steps: `drive.sessionTimeoutMs` (1 h) and
+  `drive.caps.spawns` (24). A measured slice on a large window can run past an hour, and on a
+  200k window every slice is one step, so a plan takes more sessions; raise either if drive
+  times out or caps a plan that is still moving.
 - **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt
   cache; on wake the full agent context is re-written at cache-write price. On macOS:
   `witness drive` holds `caffeinate -ims` for its own lifetime (a closed lid on battery
