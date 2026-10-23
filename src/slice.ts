@@ -101,12 +101,16 @@ export function stepCloseVerdict(i: {
   return { kind: 'continue' }
 }
 
-// Row 191 §4.6 and §4.7. The fill is floored, as `reached` decides (Plan's call 2). The next step
-// rounds up, so a step that grew the context at all never reads +0%.
+// Row 191 §4.6 and §4.7. The fill is floored, as `reached` decides (Plan's call 2). The next step is
+// the difference of the two floored shares, so it adds up to the projection the verdict prints
+// beside it (D192: rounded up on its own, 30,001 tokens read +4% beside 17% + next step ≈ 20%), and
+// a step that grew the context at all never reads +0%.
 export function contextLine(fill: Fill, limit: number, budget: number, growth?: number): string {
   if (!fill.measured) return `unmeasured (${fill.reason}) — step budget ${budget}`
   const { tokens, window } = fill.reading
-  const next = growth === undefined ? '' : ` · next step ≈ +${Math.ceil(growth * 100 / window)}%`
+  const next = growth === undefined
+    ? ''
+    : ` · next step ≈ +${Math.max(pctOf(tokens + growth, window) - pctOf(tokens, window), 1)}%`
   return `${pctOf(tokens, window)}% of ${windowLabel(window)} · limit ${limit}%${next}`
 }
 
