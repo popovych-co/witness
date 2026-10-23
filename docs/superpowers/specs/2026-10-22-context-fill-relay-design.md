@@ -1,6 +1,6 @@
 # Context-fill relay: a session ends at a configured share of its context window
 
-Date: 2026-10-22 · Status: draft for approval · Evidence: probes P1–P8 run 2026-10-22 against Claude Code 2.1.307/2.1.308 and Pi 0.85.1 (§3, §6) · Builder check: done, four questions folded in (§4.3, §4.5, §4.8)
+Date: 2026-10-22 · Status: approved 2026-10-22; built on `context-fill-relay`, with dated build notes · Evidence: probes P1–P8 run 2026-10-22 against Claude Code 2.1.307/2.1.308 and Pi 0.85.1 (§3, §6), P9 and P10 during the build (§4.11, §6) · Builder check: done, four questions folded in (§4.3, §4.5, §4.8)
 
 ## 1. Why
 
@@ -151,7 +151,7 @@ The relay lands on step boundaries, so the CLI has to know where they are. Today
   - A criteria step is done at its first passing green tagged with it that follows a red tagged with it. The protocol is one red→green cycle per step (`SKILL.md:45-50`), so that green closes it. A re-recorded green changes nothing.
   - A scaffolding step is done at its close.
 - **Position as a CLI answer.** `start` and `log` print `steps: 2/5 done · next s3`, and the CLI answers "steps remain?". The implement skill's "derive which steps remain from the journal" becomes "read `steps:`".
-- **Legacy plans.** A plan already in progress whose evidence predates `--step` gets `steps: unknown (evidence predates step tags)`. For that plan, the skill keeps its own bookkeeping, exactly as today. The fill rule (§4.5) still applies at its passing greens, and rule 1 stays with the skill.
+- **Legacy plans.** A plan already in progress whose evidence predates `--step` gets `steps: unknown (evidence predates step tags)`. For that plan, the skill keeps its own bookkeeping, exactly as today. The fill rule (§4.5) still applies at its passing greens, and rule 1 stays with the skill. *(Amended during the build, 2026-10-22, final review: until its implement gate, `next`'s gate row for such a plan names `stage: implement`, so the router hands it to the skill, whose count decides. Run verbatim, it sent a fresh session after a relay to the gate with steps left.)*
 - **Journal.** `test-evidence` entries gain `step`. The scaffolding close is a new entry kind.
 
 ### 4.4 Where the decision is made
@@ -179,6 +179,8 @@ Write `f` for the fill, `L` for the limit, and `g` for the expected size of the 
 4. Otherwise, continue.
 
 There is no first-step exemption at a step close: the step has already finished, so every slice makes progress. A session that starts over the limit ends after one step.
+
+*Amended during the build, 2026-10-22 (final review):* a red open on any step — recorded out of order, behind an unclosed scaffolding step, or re-opened on a closed one — outranks all four rules: `continue`, since a session never relays mid-red, and with every step closed a gate would judge the tree mid-red. `next` routes that red's green ahead of the first unclosed step, and hands nothing over while it is open.
 
 **At a revise hand-over, a ship exit, or `next`:**
 - Relay when `f ≥ L` and this session has made at least one act (§4.8). There is no projection here. Other stages have no repeated unit to learn a size from, and projecting them is deferred (§7).
@@ -218,7 +220,7 @@ There is no first-step exemption at a step close: the step has already finished,
     On Claude Code this is the `tool.call` result's `context`, which must be an array: `context: [line]` (P3). On Pi it is an extra text block from `tool_result`.
   - It fires once per session *(my call)*.
   - It fires only in sessions that have run the witness CLI (the adapter latches on the first command that invokes it) and never in gate-reviewer spawns. Witness's reviewer spawn sets `WITNESS_REVIEWER=1`, and the adapter stays silent when it is set.
-  - The adapter reads the limit with the same plain config reader style as `canon-guard.mjs`. It looks for `witness.config.yaml` up from the cwd and stays silent when there is none.
+  - The adapter reads the limit with the same plain config reader style as `canon-guard.mjs`. It looks for `witness.config.yaml` up from the cwd and stays silent when there is none. *(Amended during the build, 2026-10-22, final review: from inside a `.witness/worktrees/<plan>` worktree the walk starts at the primary root, whose config the CLI reads; the worktree's copy is the config as it stood when the worktree was cut.)*
   - This warning is how a long mid-step excursion learns it is over. The decision itself stays the CLI's.
 
 ### 4.7 When the fill cannot be read
@@ -238,6 +240,8 @@ There is no first-step exemption at a step close: the step has already finished,
   - `recap`, `write`, `design-write`, `gate-run`, `human-decision`, `test-evidence`, the scaffolding close, `dispatch`, and ship's pass entries.
 
   Bookkeeping the CLI writes on the session's behalf never counts: `status` (the lazy merge stamp), `sync` (start's auto-sync), `ask` (queued by `/witness <words>` before the first `next`), `ask-withdrawn`, the `deferral-*` kinds, `trust`, `policy-pin`, `need-satisfied`. So a session can't relay before it has done any stage work. *(my call)* The builder confirms the list against the kinds in the code.
+
+  *Amended during the build, 2026-10-22 (final review):* a vacuous red is no act — it observed the behavior already there — and `verify-red` journals no green after one; the green still runs, to confirm the restore. Counted, a session that opened over the limit and only re-ran a vacuous `verify-red` relayed forever, the anti-goal of §2.
 - The numbers come from the harness and remain telemetry under row 81's fence: no gate consumes them. The relay decision does consume them, and row 81 is amended to say that the fence is about gates, which it always was.
 - Every journal reader must accept the new optional fields (§6, P8).
 - `dispatch-report --tokens` becomes redundant on measured sessions. It stays for the fallback.
@@ -245,9 +249,9 @@ There is no first-step exemption at a step close: the step has already finished,
 ### 4.9 Drive
 
 - Drive changes only in one respect: it strips `WITNESS_CONTEXT` from children.
-  *Amended during the build, 2026-10-22:* drive also inherits the chat session's session variable, which names the same session as the inherited reading, so §4.1's session check cannot tell that reading from drive's own; and a child of the other harness would inherit a variable its own harness never overwrites. Drive runs session-less instead: it drops `WITNESS_CONTEXT` and every registry session variable for its own process and everything it starts, and what it journals carries no session (DESIGN row 191).
+  *Amended during the build, 2026-10-22:* drive also inherits the chat session's session variable, which names the same session as the inherited reading, so §4.1's session check cannot tell that reading from drive's own; and a child of the other harness would inherit a variable its own harness never overwrites. Drive runs session-less instead: it drops `WITNESS_CONTEXT` and every registry session variable for its own process and everything it starts, and what it journals carries no session (DESIGN row 191). Its children also drop every harness's detection variable, which each harness sets on its own commands: one inherited from a Pi chat made a claude child detect Pi (final review). Drive keeps them, since the judge whose worker it spawns may be detection's.
 - A child ends its turn on a relay and exits. Drive runs `next` again and spawns a fresh child: the child that relayed after a settled revise is followed by one that picks up `revise owed`. This is already how slices work under drive (row 145).
-- Drive's no-progress check still holds. Every slice closes at least one step, and every other hand-over follows an act.
+- Drive's no-progress check still holds. Every slice closes at least one step, and every other hand-over follows an act. *(Amended during the build, 2026-10-22, final review: a vacuous red moves nothing, so a child that only re-runs a vacuous `verify-red` is set aside rather than respawned to its cap.)*
 
 ### 4.10 Display lines
 
@@ -268,10 +272,10 @@ There is no first-step exemption at a step close: the step has already finished,
 - The same plugin, installed at user scope from a registered marketplace, loaded headless at the repo root and inside a `.witness/worktrees/<plan>` worktree, and delivered the reading in both. The install is a copy in Claude Code's cache, refreshed by `claude plugin update`.
 
 So the route is:
-- **One carrier.** The module is the whole of the `witness-context` plugin (`plugin-context/`), listed in witness's own GitHub marketplace beside `witness`. Both Claude Code routes need it, installed once per machine at user scope: `claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness`. The full `witness` plugin no longer carries the module, so a machine with both never runs it twice (two copies would each latch and warn).
+- **One carrier.** The module is the whole of the `witness-context` plugin (`plugin-context/`), listed in witness's own GitHub marketplace beside `witness`. Both Claude Code routes need it, installed once per machine at user scope: `claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness`, then a new session, since a session loads the plugin when it starts (P10). The full `witness` plugin no longer carries the module, so a machine with both never runs it twice (two copies would each latch and warn).
 - **The core is copied.** Claude Code copies a marketplace plugin whole into its cache, where nothing outside it resolves, so `plugin-context/hooks/` holds a byte-identical copy of `plugin/hooks/context-core.mjs`, the original the Pi payload copies. `sync-versions` makes the copy and stamps the plugin's version; release CI's diff check fails a stale one.
 - **`init --agent claude-code`** still declares the plugin in `.claude/settings.json` (the GitHub marketplace and `enabledPlugins`, appended, never over the human's entry or an explicit `false`): it is the harness-native way a project names a plugin it needs. Headless the declaration loads nothing, so `init` prints the install line. Whether a session's trust prompt offers the install from it is unprobed, owed with the chat-mode check (§6).
-- **`witness check`** reports the adapter from the reading itself, never from Claude Code's files: a reading seen, with its fill; in a harness session with no trusted reading, the reason; outside a harness session, that it cannot tell. The remedy (the install line on Claude Code, `init --agent pi` on Pi) follows only `no adapter`, where nothing wrote the variable. Any other reason means an adapter is loaded and wrote it, so an install would change nothing.
+- **`witness check`** reports the adapter from the reading itself, never from Claude Code's files: a reading seen, with its fill; in a harness session with no trusted reading, the reason; outside a harness session, that it cannot tell. The remedy (the install line and a new session on Claude Code, `init --agent pi` on Pi) follows `no adapter` and `stale`: a loaded adapter writes this session's reading before every command or clears the variable, so under either this session's adapter wrote nothing, and a `stale` reading was inherited from an outer session. `no reading yet` and `malformed` mean an adapter is loaded and wrote it, so an install would change nothing.
 - Rejected: `init` running the install, which would write a machine's global configuration from a repo's bootstrap.
 
 ## 5. DESIGN.md rows
@@ -296,6 +300,7 @@ P1 through P8 all ran on 2026-10-22, with the results in §3. What they changed 
 - P7: `no reading yet` covers both harnesses' forms.
 - P8: two exact-shape tests get updated.
 - P9 (run during the build, 2026-10-22): the settings-declared plugin loads nothing headless, so the module moved to a plugin of its own, installed once per machine (§4.11). It replaces P6's consequence above.
+- P10 (run during the build, 2026-10-22): the shipped route, `witness-context@witness` installed at user scope from the repo's marketplace, loads headless at the repo root and in a `.witness/worktrees/<plan>` worktree; the reading arrives, its `session` the session's own id; the warning arrives as hook context after `witness next`. It ran headless too, so the chat-mode confirmation below stays owed.
 
 Still owed. None of these blocks the plan; they are checks during the build.
 - **Chat-mode confirmation.** The probes ran headless (`-p`, stream-json, and Pi RPC). The first interactive session after the build confirms that the module loads and the warning reaches the model in chat. It is the same engine path: this interactive session runs plugin modules itself, and the plugin-authoring tools here are registered through `$.tool.register`.

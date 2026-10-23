@@ -1092,11 +1092,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Only when drive has work beyond the stops that wait for the human (F8): with nothing
   // else, a launched drive would set the stop aside and exit, and the chat would never show it.
   const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)
-  // Row 191 §4.4–§4.6. A session already at `home:` hands over before the next action once it
-  // has done stage work and its fill reached the limit, with a same-home `relay:` and no `run:`.
-  // Outside the `run:` branch because a `run:` already hands the work to a session of its own,
-  // in another home. Not where this session's turn ends anyway: at a decision left for a human,
-  // with nothing owed, or with the run handed to drive. And never mid-red (`midRed`).
+  // Row 191 §4.4–§4.6. Whenever `next` prints no `run:` (at the action's `home:`, or for an
+  // action with none), a session hands over before the next action once it has done stage work
+  // and its fill reached the limit, with a same-home `relay:`. Outside the `run:` branch because a
+  // `run:` already hands the work to a session of its own, in another home. Not where this
+  // session's turn ends anyway: at a decision left for a human, with nothing owed, or with the run
+  // handed to drive. And never mid-red (`midRed`: a red open on the parent tag or any step).
   const turnEnds = toDrive || action.line.startsWith('witness decide ') || action.line === 'witness check'
   if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
