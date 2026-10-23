@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import { parse, stringify } from 'yaml'
+import { withValues } from '../src/settings.js'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
@@ -26,8 +28,13 @@ const lastRun = (repo: TestRepo, stream: string, gate: string) =>
 
 // The config commit moves origin/main past the worktree's cut, so the gate phase rebases
 // first — which is what exercises the re-derivation after the arbiter approves.
-const shipConfig = (merge?: string, autonomy = true) =>
-  `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n  ciSettleMs: 0\n${merge ? `  merge: ${merge}\n` : ''}${autonomy ? 'autonomy: on\n' : ''}`
+const shipConfig = (merge?: string, autonomy = true) => {
+  const base = parse(singleConfig('filtered')) as Record<string, unknown>
+  return stringify(withValues(base, {
+    ship: { test: 'true', lint: 'true', ciSettleMs: 0, ...(merge ? { merge } : {}) },
+    ...(autonomy ? { autonomy: 'on' } : {}),
+  }))
+}
 async function autonomousShip(merge?: string) {
   const seed = await shippableRepo()
   seed.repo.write('witness.config.yaml', shipConfig(merge))
@@ -211,7 +218,7 @@ it('holds when the PR targets a branch other than ship.branch — authority is t
 it('reads the merge authority from what the remote holds, never a local tracking ref (security)', async () => {
   const s = await autonomousShip()
   const before = s.repo.git('rev-parse', `${s.repo.git('log', '-1', '--format=%H', '--', 'witness.config.yaml')}~1`)   // before autonomy: on
-  expect(s.repo.git('show', `${before}:witness.config.yaml`)).not.toContain('autonomy')
+  expect(s.repo.git('show', `${before}:witness.config.yaml`)).not.toMatch(/^autonomy: on/m)
   writeFileSync(join(s.scenario, 'gh-checks-hook'),
     `cd "${s.repo.root}" && git config remote.origin.fetch '+refs/heads/none:refs/remotes/origin/none' && git update-ref refs/remotes/origin/main ${before}\n`)
   expect(await runShip(s.ctx, s.planId)).toBe(0)

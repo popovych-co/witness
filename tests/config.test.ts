@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
-import { seededRepo, tmpRepo, writeLocalConfig } from './helpers.js'
+import { seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
 
 describe('loadConfig', () => {
   it('refuses when the config is missing', () => {
@@ -23,16 +24,16 @@ describe('loadConfig', () => {
     expect(res.value.schema).toBe(1)
     expect(res.value).not.toHaveProperty('raw')
     expect(res.value.ship.test).toBe('npm test')
-    expect(res.value.warning).toBeUndefined()
+    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(2\) — witness migrate adds/)
   })
 
   it('refuses a newer schema and warns on an older one', () => {
     const repo = tmpRepo()
-    repo.write('witness.config.yaml', 'schema: 2\n')
+    repo.write('witness.config.yaml', 'schema: 3\n')
     const newer = loadConfig(repo.root)
     expect(!newer.ok && newer.violations[0]?.rule).toBe('newer-than-cli')
     expect(!newer.ok && newer.violations[0]?.want).toContain('upgrade witness')
-    repo.write('witness.config.yaml', 'schema: 0\n')
+    repo.write('witness.config.yaml', 'schema: 1\n')
     const older = loadConfig(repo.root)
     expect(older.ok && older.value.warning).toContain('witness migrate')
   })
@@ -320,7 +321,7 @@ describe('ship.ciSettleMs (row 174)', () => {
 describe('drive settings (B3 · B5)', () => {
   const withDrive = async (yaml: string) => {
     const repo = await seededRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n${yaml}`)
+    patchConfig(repo, parse(`drive:\n${yaml}`) as Record<string, unknown>)
     return loadConfig(repo.root)
   }
 

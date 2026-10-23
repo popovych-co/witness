@@ -10,6 +10,8 @@ import { changedFiles, diffBase, evidenceForDiff } from './evidence.js'
 import { readDoc, splitDoc, writeDoc } from './fm.js'
 import { git, stateCommit } from './gitio.js'
 import type { Harness, HarnessName } from './harness.js'
+import { renderConfig } from './config-file.js'
+import { defaultValues, withValues } from './settings.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { PROMPT_NAMES, invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
 import type { InvokeExtras } from './reviewer.js'
@@ -421,7 +423,7 @@ function captureCtx(cwd: string, env: Record<string, string | undefined>): { ctx
   return { ctx, out: () => outs.join('\n'), err: () => errs.join('\n') }
 }
 
-export function seedScratchRepo(prefix: string): { root: string } {
+export function seedScratchRepo(prefix: string, harness: HarnessName): { root: string } {
   const root = mkdtempSync(join(tmpdir(), `cal-${prefix}-`))
   git(root, 'init', '-b', 'main')
   git(root, 'config', 'user.name', 'witness-calibration')
@@ -433,8 +435,12 @@ export function seedScratchRepo(prefix: string): { root: string } {
     // `tests/` arg is resolved as a module path on Node 24, and a glob is taken literally
     // on Node 20 ("Could not find 'tests/**/*.test.mjs'": glob args landed in Node 21),
     // which silently scores every implement sample 0. Node's default discovery already
-    // walks the repo for *.test.mjs and skips node_modules.
-    'schema: 1\ncriteria:\n  runner: \'node --test --test-name-pattern "@spec:{id}"\'\n',
+    // walks the repo for *.test.mjs and skips node_modules. A full current file (row 193), so
+    // no calibration run prints the older-schema warning; every reviewer here is handed its
+    // model explicitly, so the prefilled pins change nothing.
+    renderConfig(withValues(defaultValues({ harness }), {
+      criteria: { runner: 'node --test --test-name-pattern "@spec:{id}"' },
+    })),
   )
   writeFileSync(
     join(root, '.gitignore'),
@@ -470,7 +476,7 @@ function firstCriterionTag(meta: { criteria?: unknown }): string {
 }
 
 export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed, extras?: InvokeExtras): Promise<Result<{ ok: boolean; why: string }>> {
-  const { root } = seedScratchRepo(`decompose-${seed.id}`)
+  const { root } = seedScratchRepo(`decompose-${seed.id}`, harness.name)
   const canonDir = join(seed.dir, 'canon')
   if (existsSync(canonDir)) {
     for (const f of readdirSync(canonDir)) seedCanonDoc(root, f.replace(/\.md$/, ''), readFileSync(join(canonDir, f), 'utf8'))
@@ -559,7 +565,7 @@ export async function runDecomposeSeed(ctx: Ctx, harness: Harness, model: string
 }
 
 export async function runPlanSeed(ctx: Ctx, harness: Harness, model: string, seed: SkillSeed, extras?: InvokeExtras): Promise<Result<{ ok: boolean; why: string }>> {
-  const { root } = seedScratchRepo(`plan-${seed.id}`)
+  const { root } = seedScratchRepo(`plan-${seed.id}`, harness.name)
 
   const recapText = readFileSync(join(seed.dir, 'recap.json'), 'utf8')
   const recap = JSON.parse(recapText) as { effort: string }
@@ -642,7 +648,7 @@ export async function defaultAgent(ctx: Ctx, harness: Harness, worktree: string,
 }
 
 export async function runImplementSeed(ctx: Ctx, harness: Harness, seed: SkillSeed, agent: AgentRunner): Promise<Result<{ ok: boolean; why: string }>> {
-  const { root } = seedScratchRepo(`implement-${seed.id}`)
+  const { root } = seedScratchRepo(`implement-${seed.id}`, harness.name)
   cpSync(join(seed.dir, 'repo'), root, { recursive: true })
   git(root, 'add', '-A')
   git(root, 'commit', '-m', 'seed: repo')

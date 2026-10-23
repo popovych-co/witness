@@ -7,7 +7,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { screensDir } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
-import { callCount, callFor, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { callCount, callFor, fakeCtx, fakeScenario, fixtureEnv, gateEnv, putVerdict, shippableRepo, patchConfig } from './helpers.js'
 
 // A vitest test that, when WITNESS_SCREENS_DIR is set, writes a PNG there — the
 // stand-in for a Puppeteer capture. Tagged so the criteria runner reaches it.
@@ -113,8 +113,7 @@ async function uiPlanRepo() {
   await repo.cli(['test-evidence', planId, '--phase', 'green', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
   // design canon (registered) + living design artifact + the pin
   repo.write('docs/design.md', 'Every screen opens with a Bookings eyebrow; primary action is a sticky save bar.')
-  const cfgPath = join(repo.root, 'witness.config.yaml')
-  writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8') + 'docs:\n  design: [docs/design.md]\n')
+  patchConfig(repo, { docs: { design: ['docs/design.md'] } })
   repo.write('designs/auth-refresh.html', '<section id="hero"><h1>New service</h1></section>')
   repo.git('add', 'docs/design.md', 'witness.config.yaml', 'designs/auth-refresh.html')
   repo.git('commit', '-m', 'design canon + living design')

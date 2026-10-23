@@ -7,7 +7,7 @@ import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { changedFiles, diffBase } from '../src/evidence.js'
 import { loadConfig } from '../src/config.js'
-import { callCount, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
+import { callCount, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo, patchConfig } from './helpers.js'
 
 // Row 169: the battery launches every lens at once, and the journal must not be able to tell.
 // A feature plan on a non-ui spec: the battery is code-reviewer · silent-failure-hunter ·
@@ -60,7 +60,7 @@ describe('the battery runs its lenses at once', () => {
   it('one lens failing on the pin makes a fallback round', async () => {
     const { repo, planId, scenario, ctx } = await batteryRepo()
     // two-rung chain · code-reviewer fails on the pin only
-    appendFileSync(join(repo.root, 'witness.config.yaml'), 'gates:\n  model: test-model-1\n')
+    patchConfig(repo, { gates: { implement: { model: 'test-model-1' } } })
     writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
     writeFileSync(join(scenario, 'claude-fail-code-reviewer'), 'test-model-1')
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(1)

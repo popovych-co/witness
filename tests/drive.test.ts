@@ -17,8 +17,7 @@ import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
   PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
-  seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo,
-} from './helpers.js'
+  seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
   const r = loadConfig(repo.root)
@@ -91,7 +90,7 @@ describe('witness drive skeleton (D145)', () => {
   it('refuses a non-integer drive.sessionTimeoutMs', async () => {
     const { loadConfig } = await import('../src/config.js')
     const repo = await seededRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  sessionTimeoutMs: 0\n`)
+    patchConfig(repo, { drive: { sessionTimeoutMs: 0 } })
     const cfg = loadConfig(repo.root)
     expect(cfg.ok).toBe(false)
     expect(!cfg.ok && cfg.violations[0]?.field).toBe('drive.sessionTimeoutMs')
@@ -212,6 +211,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
   // no `harness:` declared, the chat's harness is the judge whose worker it spawns (pi's flags).
   it('drops every harness detection variable from the child, never from drive (row 191 §4.9)', async () => {
     const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })   // row 193: the judge is declared; drive spawns on it
     const bin = fakeAgent('echo "args=$* pi=${PI_CODING_AGENT-unset} claude=${CLAUDECODE-unset}"')
     const lines: string[] = []
     const ctx = fakeCtx(repo.root, {
@@ -673,7 +673,7 @@ describe('caps (B5)', () => {
       appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'human-decision', gate: 'implement', artifact: 'a-plan-1', round, decision: 'revise' })
     }
     writeFileSync(join(worktreePath(repo.root, 'a-plan-1'), 'moved.txt'), 'the author kept working\n')
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    rounds: 2\n`)
+    patchConfig(repo, { drive: { caps: { rounds: 2 } } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'caps')
     const out: string[] = []
@@ -691,7 +691,7 @@ describe('caps (B5)', () => {
     appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round: 1,
       run_id: 'ri1', reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
       calibration: 'none', checks: [], outcome: 'passed' })
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)
+    patchConfig(repo, { drive: { caps: { spawns: 1 } } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'caps')
     const agent = script(`exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
@@ -704,7 +704,7 @@ describe('caps (B5)', () => {
 
   it('a target with no gate run to park on is set aside and named', async () => {
     const repo = await startedFlows(['a'])
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}drive:\n  caps:\n    spawns: 1\n`)
+    patchConfig(repo, { drive: { caps: { spawns: 1 } } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'caps')
     const agent = script(`exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
@@ -931,7 +931,7 @@ describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
 // one session; counted, it read as progress and drive respawned it until drive.caps.spawns.
 describe('a vacuous red is no progress (row 191)', () => {
   it('sets aside a target whose session only re-runs a vacuous verify-red', async () => {
-    const { repo, wt, planId } = await behaviorOnMain('drive:\n  caps:\n    spawns: 4\n')
+    const { repo, wt, planId } = await behaviorOnMain({ drive: { caps: { spawns: 4 } } })
     const red = await repo.cli(['test-evidence', planId, '--phase', 'red', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
     expect(red.code).toBe(1)
     autonomyOn(repo)
@@ -1050,7 +1050,7 @@ describe('autonomy turned off mid-run (B2)', () => {
     const scenario = fakeScenario()
     putVerdict(scenario, PLAN_BLOCKING)
     const agent = script(`cd "${repo.root}"
-perl -pi -e 's/^autonomy: on$/autonomy: off/' witness.config.yaml && git add witness.config.yaml && git commit -qm 'autonomy: off'
+perl -pi -e 's/^autonomy: on\\b/autonomy: off/' witness.config.yaml && git add witness.config.yaml && git commit -qm 'autonomy: off'
 ${witnessCli()} gate plan auth-refresh-plan-1 >/dev/null 2>&1
 echo gated`)
     const out: string[] = []

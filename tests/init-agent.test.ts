@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mergeSettings } from '../src/install.js'
 import { tmpRepo } from './helpers.js'
@@ -328,9 +328,12 @@ describe('witness init --agent', () => {
   // as a declaration — `recordHarness` anchors on /^harness:/m for exactly this reason,
   // and relaxing that regex would silently turn documentation into a permanent, write-once
   // declaration on every repo.
+  // An older file (the 0.20.0 template) documents harness: in a comment; row 193's files
+  // always declare it, so the anchor matters only there.
   it('the documented harness: line is not a declaration', async () => {
     const repo = tmpRepo()
-    await repo.cli(['init'])
+    repo.write('witness.config.yaml', readFileSync(join(__dirname, '..', 'fixtures', 'configs', 'init-0.20.0.yaml'), 'utf8'))
+    repo.git('add', '-A'); repo.git('commit', '-m', 'an older scaffold')
     expect(repo.read('witness.config.yaml')).toContain('# harness: pi')
     const check = await repo.cli(['check'])
     expect(check.stdout).toContain('undeclared')
@@ -340,10 +343,15 @@ describe('witness init --agent', () => {
 
   // Row 105: the auto-written trailer said something that is now false.
   it('the written trailer names the judge, not a fallback', async () => {
-    const repo = tmpRepo()
-    await repo.cli(['init', '--agent', 'pi'])
-    const cfg = repo.read('witness.config.yaml')
+    const fresh = tmpRepo()
+    await fresh.cli(['init', '--agent', 'pi'])
+    const cfg = fresh.read('witness.config.yaml')
     expect(cfg).not.toContain('detection wins')
-    expect(cfg).toContain('# the judge — which harness runs this repo\'s gate reviewers; declared wins')
+    expect(cfg).toMatch(/^harness: pi +# the judge: the agent CLI that runs this repo's gate reviewers and arbiter/m)
+    const older = tmpRepo()
+    older.write('witness.config.yaml', 'schema: 1\n')
+    older.git('add', '-A'); older.git('commit', '-m', 'an older scaffold')
+    await older.cli(['init', '--agent', 'pi'])
+    expect(older.read('witness.config.yaml')).toContain('# the judge — which harness runs this repo\'s gate reviewers; declared wins')
   })
 })

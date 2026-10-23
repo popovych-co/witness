@@ -25,12 +25,12 @@ const withComment = (content: string, comment: string): string =>
 
 const classComment = (cls: string) => `for a ${cls}`
 
-// Quoted only where YAML needs it, except that a command holding double quotes is written in
-// single ones, as §4.5 writes the runner: shell quoting reads plainly inside them.
-function scalar(val: unknown): string {
+// A value as one line of the file. Quoted only where YAML needs it, except that a command
+// holding double quotes is written in single ones, as §4.5 writes the runner: shell quoting
+// reads plainly inside them. Collections are flow style (`[a, b]`, `{k: [a]}`).
+export function inlineValue(val: unknown): string {
   if (typeof val === 'string' && val.includes('"') && !val.includes("'")) return `'${val}'`
-  if (Array.isArray(val)) return stringify(val, { collectionStyle: 'flow', flowCollectionPadding: false, lineWidth: 0 }).trimEnd()
-  return stringify(val, { lineWidth: 0 }).trimEnd()
+  return stringify(val, { collectionStyle: 'flow', flowCollectionPadding: false, lineWidth: 0 }).trimEnd()
 }
 
 // Every map in block style, every list in flow style, sections in SECTION_ORDER (which the
@@ -68,12 +68,12 @@ export function renderConfig(values: Record<string, unknown>, comments: HumanCom
       out.push(`${indent}${key}:`)
       for (const cls of CHANGE_CLASSES) {
         above(`${s.path}.${cls}`, depth + 1)
-        out.push(withComment(`${indent}  ${cls}: ${scalar((val as Record<string, unknown>)[cls])}`, classComment(cls)))
+        out.push(withComment(`${indent}  ${cls}: ${inlineValue((val as Record<string, unknown>)[cls])}`, classComment(cls)))
       }
     } else {
       // A per-class comment whose map became a plain list sits above the list's line.
       if (s.shape.kind === 'battery') for (const cls of CHANGE_CLASSES) above(`${s.path}.${cls}`, depth)
-      out.push(withComment(`${indent}${key}: ${scalar(val)}`, s.comment))
+      out.push(withComment(`${indent}${key}: ${inlineValue(val)}`, s.comment))
     }
   }
   // Nothing a human wrote is dropped: a line filed under a path this file no longer prints

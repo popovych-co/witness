@@ -7,7 +7,7 @@ import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import { roundsSinceApprove, type GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { loadCanon, findById } from '../src/scan.js'
-import { SPEC_META, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec } from './helpers.js'
+import { SPEC_META, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, patchConfig } from './helpers.js'
 
 const CLEAN = (doc: string) => ({
   coverage: [{ anchor: `${doc} > ## Behavior`, note: 'read' }], findings: [],
@@ -88,6 +88,7 @@ describe('gate engine', () => {
 
   it('runs the battery through pi when the resolved harness is pi', async () => {
     const { repo, scenario, ctx } = await gateRepo({ PI_CODING_AGENT: 'true' })
+    patchConfig(repo, { harness: 'pi' })   // row 193: the judge is declared, never detected
     putVerdict(scenario, CLEAN('auth-refresh'))
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
     const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
@@ -100,6 +101,7 @@ describe('gate engine', () => {
 
   it('declared reviewerExtensions reach the pi argv and the gate-run journal entry', async () => {
     const { repo, scenario, ctx } = await gateRepo({ PI_CODING_AGENT: 'true' })
+    patchConfig(repo, { harness: 'pi' })
     putVerdict(scenario, CLEAN('auth-refresh'))
     repo.write('.witness/config.local.yaml', "reviewerExtensions: ['/opt/pi/oauth-adapter']\n")
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
@@ -124,11 +126,8 @@ describe('gate engine', () => {
 
   it('a per-gate model pin reaches the reviewer invocation and the journal', async () => {
     const { repo, scenario, ctx } = await gateRepo()
-    // init's config already pins a global gates.model — the per-gate pin must beat it
-    const cfgPath = join(repo.root, 'witness.config.yaml')
-    writeFileSync(cfgPath, readFileSync(cfgPath, 'utf8').replace(
-      'plan: { reviewers: [plan-critic] }',
-      'plan: { reviewers: [plan-critic], model: test-plan-model }'))
+    // init's config pins every gate (row 193) — the plan gate's own pin is the one that runs
+    patchConfig(repo, { gates: { plan: { model: 'test-plan-model' } } })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'pin plan model')
     putVerdict(scenario, CLEAN('auth-refresh'))
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)

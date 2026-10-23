@@ -32,7 +32,7 @@ describe('the recap check (A9 · autonomy)', () => {
       gate: 'recap', artifact: 'a1', round: 1, decision: 'approve', selected: 'arbiter', rule: 'recap-check',
       effort: 'auth-hardening', class: 'feature', decided: 'feature',
       reason: 'class feature — card payment is new checkout behavior',
-      arbiter: { model: 'claude-fable-5', prompts_sha: expect.stringMatching(/^[0-9a-f]{64}$/) },   // init's gates.model pin
+      arbiter: { model: 'claude-opus-5-5', prompts_sha: expect.stringMatching(/^[0-9a-f]{64}$/) },   // init's arbiter.model pin
     }])
     const call = callFor(scenario, 'arbiter')!
     const stdin = readFileSync(join(call, 'stdin'), 'utf8')

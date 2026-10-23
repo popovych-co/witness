@@ -6,7 +6,7 @@ import '../src/gates/index.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec, patchConfig } from './helpers.js'
 
 const PLAN = 'auth-refresh-plan-1'
 const S1 = `${PLAN} > ## Step: s1`
@@ -125,8 +125,7 @@ describe('round 2 reviews the change (C3)', () => {
   it('a re-pinned model is a new reviewer — round 2 is a full review', async () => {
     const t = await planRounds()
     putVerdict(t.scenario, verdict({ anchor: S1 }), 1); await t.gate()
-    const cfg = join(t.repo.root, 'witness.config.yaml')
-    writeFileSync(cfg, readFileSync(cfg, 'utf8').replace('plan: { reviewers: [plan-critic] }', 'plan: { reviewers: [plan-critic], model: test-plan-model }'))
+    patchConfig(t.repo, { gates: { plan: { model: 'test-plan-model' } } })
     t.repo.git('add', 'witness.config.yaml'); t.repo.git('commit', '-m', 'pin plan model')
     await t.edit('Attempt 2.')
     putVerdict(t.scenario, verdict({ anchor: S1 }), 2)

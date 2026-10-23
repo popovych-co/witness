@@ -6,8 +6,7 @@ import { worktreePath } from '../src/worktree.js'
 import {
   SPEC_META, TOKEN_BROKEN, TOKEN_FIXED, approve, autonomyOn, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, fixturePath,
   gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, singleConfig, stampLive, startedThreeStepPlan, untaggedRed,
-  witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo,
-} from './helpers.js'
+  witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo, patchConfig} from './helpers.js'
 
 describe('witness next — the ladder', () => {
   it('walks recap → write → gate decompose → decide → plan-stage', async () => {
@@ -53,7 +52,8 @@ describe('witness next — the ladder', () => {
     const out = await nextLine(repo)
     expect(out).toContain(`gate implement ${planId}`)
     expect(out).toContain(`home: ${repo.root}/.witness/worktrees/${planId}`)
-    expect(out).toContain(`run: cd '${repo.root}/.witness/worktrees/${planId}' && claude '/witness'`)
+    // row 193: the implement gate states its model, and that pin drives the worker it hands off to
+    expect(out).toContain(`run: cd '${repo.root}/.witness/worktrees/${planId}' && claude --model claude-opus-5-5 '/witness'`)
   })
 
   it('renders the handoff and relay for the resolved harness', async () => {
@@ -61,18 +61,17 @@ describe('witness next — the ladder', () => {
     const wt = `${repo.root}/.witness/worktrees/${planId}`
 
     const cc = await nextLine(repo, { env: { CLAUDECODE: '1' } })
-    expect(cc).toContain(`run: cd '${wt}' && claude '/witness'`)
+    expect(cc).toContain(`run: cd '${wt}' && claude --model claude-opus-5-5 '/witness'`)
     expect(cc).toContain('relay: /clear then /witness')
 
     const pi = await nextLine(repo, { env: { PI_CODING_AGENT: 'true' } })
-    expect(pi).toContain(`run: cd '${wt}' && pi '/witness'`)
+    expect(pi).toContain(`run: cd '${wt}' && pi --model anthropic/claude-opus-5-5 '/witness'`)
     expect(pi).toContain('relay: /new then /witness')
   })
 
   it('carries the implement-stage pin into the Pi handoff, provider-qualified', async () => {
     const { repo, planId } = await shippableRepo()
-    repo.write('witness.config.yaml',
-      `${repo.read('witness.config.yaml')}gates:\n  implement: { model: claude-opus-5 }\n`)
+    patchConfig(repo, { gates: { implement: { model: 'claude-opus-5' } } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'pin implement model')
     const wt = `${repo.root}/.witness/worktrees/${planId}`
@@ -86,7 +85,7 @@ describe('witness next — the ladder', () => {
 
   it('refuses an unknown harness rather than printing an unrunnable handoff', async () => {
     const { repo } = await shippableRepo()
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
+    patchConfig(repo, { harness: 'pikachu' })
     const r = await repo.cli(['next'])
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('unknown-harness')
@@ -363,6 +362,7 @@ describe('a judge that changes mid-flow is named', () => {
   it('names a judge that changed since the last round', async () => {
     const { repo, planId } = await shippableRepo()
     ranUnder(repo, planId)
+    patchConfig(repo, { harness: 'pi' })   // row 193: the judge moves only by its declaration
     const out = await nextLine(repo, { env: { PI_CODING_AGENT: 'true' } })
     expect(out).toContain('judge changed — round')
     expect(out).toContain('claude-code')
@@ -381,7 +381,7 @@ describe('a judge that changes mid-flow is named', () => {
   it('an unresolvable judge costs the note, not the verb', async () => {
     const { repo, planId } = await shippableRepo()
     ranUnder(repo, planId)
-    repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}harness: pikachu\n`)
+    patchConfig(repo, { harness: 'pikachu' })
     const r = await repo.cli(['next'])
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('unknown-harness')

@@ -12,6 +12,8 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
 import type { Clock } from '../src/usage.js'
+import { parseDocument, stringify } from 'yaml'
+import { defaultValues, withValues } from '../src/settings.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
 
@@ -374,19 +376,48 @@ export function copyFixture(repo: TestRepo, name: 'vitest-single' | 'workspace')
   repo.git('commit', '-m', `fixture: ${name}`)
 }
 
-export function singleConfig(mode: 'filtered' | 'full-suite'): string {
-  const vb = vitestBin()
-  if (mode === 'filtered') {
-    return `schema: 1\ncriteria:\n  runner: 'node "${vb}" run -t "@spec:{id}" --passWithNoTests'\n`
+// Row 193. A complete schema-2 file — every setting at the list's default, `patch` over it — with
+// no comments. The one way a test writes a whole config; `patchConfig` changes one in place.
+export function configYaml(patch: Record<string, unknown> = {}): string {
+  return stringify(withValues(defaultValues({ harness: 'claude-code' }), patch))
+}
+
+const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+
+// Sets (or, for undefined, deletes) each leaf of `patch` in the repo's witness.config.yaml, keeping
+// everything else as written. Writes the file and does not commit it.
+export function patchConfig(repo: TestRepo, patch: Record<string, unknown>): void {
+  const doc = parseDocument(repo.read('witness.config.yaml'))
+  const apply = (obj: Record<string, unknown>, at: string[]) => {
+    for (const [k, val] of Object.entries(obj)) {
+      if (val === undefined) doc.deleteIn([...at, k])
+      else if (isPatchMap(val)) apply(val, [...at, k])
+      else doc.setIn([...at, k], val)
+    }
   }
-  return `schema: 1\ncriteria:\n  runner: full-suite\n  report: junit:**/reports/junit.xml\nship:\n  test: 'node "${vb}" run --reporter=junit --outputFile=reports/junit.xml'\n`
+  apply(patch, [])
+  repo.write('witness.config.yaml', doc.toString())
+}
+
+function singlePatch(mode: 'filtered' | 'full-suite'): Record<string, unknown> {
+  const vb = vitestBin()
+  if (mode === 'filtered') return { criteria: { runner: `node "${vb}" run -t "@spec:{id}" --passWithNoTests` } }
+  return {
+    criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' },
+    ship: { test: `node "${vb}" run --reporter=junit --outputFile=reports/junit.xml` },
+  }
+}
+
+export function singleConfig(mode: 'filtered' | 'full-suite'): string {
+  return configYaml(singlePatch(mode))
 }
 
 export function workspaceConfig(mode: 'filtered' | 'full-suite'): string {
-  if (mode === 'filtered') {
-    return `schema: 1\ncriteria:\n  runner: 'sh run-filtered.sh {id}'\n`
-  }
-  return `schema: 1\ncriteria:\n  runner: full-suite\n  report: junit:packages/*/reports/junit.xml\nship:\n  test: 'sh run-all.sh'\n`
+  if (mode === 'filtered') return configYaml({ criteria: { runner: 'sh run-filtered.sh {id}' } })
+  return configYaml({
+    criteria: { runner: 'full-suite', report: 'junit:packages/*/reports/junit.xml' },
+    ship: { test: 'sh run-all.sh' },
+  })
 }
 
 export function stampLive(repo: TestRepo, id: string): void {
@@ -420,7 +451,8 @@ export async function shippableRepo(
   const repo = await seededRepo()
   // ship.test/ship.lint: trivial always-green commands — ship-gate tests (Tasks 14/15/21)
   // need these lanes configured and passing; singleConfig('filtered') carries no ship section.
-  writeFileSync(join(repo.root, 'witness.config.yaml'), `${singleConfig('filtered')}ship:\n  test: 'true'\n  lint: 'true'\n`)
+  writeFileSync(join(repo.root, 'witness.config.yaml'),
+    configYaml(withValues(singlePatch('filtered'), { ship: { test: 'true', lint: 'true' } })))
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
   await writeSpec(repo, 'auth-refresh')          // criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }]
   approve(repo, 'auth-refresh')
@@ -469,11 +501,11 @@ export const SCAFFOLDING_FIRST = {
 
 // Row 191 §4.3. A plan of two criteria steps and a scaffolding one, approved and not started, in
 // a repo whose runner runs the vitest-single fixture, so a test can witness each step's cycle.
-// `extraYaml` extends the committed config (a step budget, a context limit); `manifest` orders the
+// `extra` patches the committed config (a step budget, a context limit); `manifest` orders the
 // steps otherwise.
-export async function threeStepPlan(extraYaml = '', manifest: Record<string, unknown> = THREE_STEPS): Promise<TestRepo> {
+export async function threeStepPlan(extra: Record<string, unknown> = {}, manifest: Record<string, unknown> = THREE_STEPS): Promise<TestRepo> {
   const repo = await seededRepo()
-  writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered') + extraYaml)
+  writeFileSync(join(repo.root, 'witness.config.yaml'), configYaml(withValues(singlePatch('filtered'), extra)))
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
   await writeSpec(repo, 'auth-refresh')
   approve(repo, 'auth-refresh')
@@ -486,9 +518,9 @@ export async function threeStepPlan(extraYaml = '', manifest: Record<string, unk
 // `threeStepPlan`, started, with the vitest-single fixture copied into its worktree: where a test
 // of the plan's steps begins.
 export async function startedThreeStepPlan(
-  extraYaml = '', manifest: Record<string, unknown> = THREE_STEPS,
+  extra: Record<string, unknown> = {}, manifest: Record<string, unknown> = THREE_STEPS,
 ): Promise<{ repo: TestRepo; wt: string; planId: string }> {
-  const repo = await threeStepPlan(extraYaml, manifest)
+  const repo = await threeStepPlan(extra, manifest)
   const planId = 'auth-refresh-plan-1'
   const started = await repo.cli(['start', planId])
   if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
@@ -500,8 +532,8 @@ export async function startedThreeStepPlan(
 // `threeStepPlan`, started, where s1's behavior predates the plan: main already holds it under an
 // untagged test, and the worktree adds the tagged tests alone. Every red on s1 passes, a red
 // `verify-red` reconstructs against the base included.
-export async function behaviorOnMain(extraYaml = ''): Promise<{ repo: TestRepo; wt: string; planId: string }> {
-  const repo = await threeStepPlan(extraYaml)
+export async function behaviorOnMain(extra: Record<string, unknown> = {}): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await threeStepPlan(extra)
   const planId = 'auth-refresh-plan-1'
   repo.write('package.json', readFileSync(join(fixturePath('vitest-single'), 'package.json'), 'utf8'))
   repo.write('src/token.ts', TOKEN_FIXED)
@@ -576,7 +608,7 @@ export function addOrigin(repo: TestRepo): void {
 
 // Rows 171-175: opt the repo into autonomy, as a committed repo fact.
 export function autonomyOn(repo: TestRepo): void {
-  repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}autonomy: on\n`)
+  patchConfig(repo, { autonomy: 'on' })
   repo.git('add', 'witness.config.yaml')
   repo.git('commit', '-m', 'autonomy: on')
 }

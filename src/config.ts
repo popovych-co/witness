@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { migrateValues, newestSchema, sectionsOf } from './migration.js'
+import { inlineValue } from './config-file.js'
+import { migrateValues, newestSchema, olderSchemaWarning, sectionsOf } from './migration.js'
 import { checkPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import {
@@ -10,7 +11,8 @@ import {
   type Battery, type GateName, type Setting,
 } from './settings.js'
 
-export const SCHEMA_VERSION = 1
+// Row 193 §4.2: every setting present, nothing unknown. Always the list's newest schema.
+export const SCHEMA_VERSION = 2
 
 export interface CanonPaths {
   specs: string
@@ -268,12 +270,8 @@ function walkKeys(raw: Raw, known: ReadonlySet<string>, mode: 'strict' | 'lenien
 function missing(s: Setting): Violation {
   const parent = s.path.includes('.') ? s.path.slice(0, s.path.lastIndexOf('.')) : undefined
   const leaf = s.path.slice(parent ? parent.length + 1 : 0)
-  const d = defaultAt(s, newestSchema())
-  const inline = Array.isArray(d) ? `[${d.join(', ')}]`
-    : isMap(d) ? `{ ${Object.entries(d).map(([k, x]) => `${k}: [${(x as string[]).join(', ')}]`).join(', ')} }`
-    : String(d)
   return v(s.path, 'missing-setting', 'absent',
-    `${leaf}: ${inline}${parent ? ` under ${parent}:` : ''} — or run witness migrate`)
+    `${leaf}: ${inlineValue(defaultAt(s, newestSchema()))}${parent ? ` under ${parent}:` : ''} — or run witness migrate`)
 }
 
 // Row 193 §4.1. The one resolver: every setting checked by its shape and returned typed.
@@ -502,23 +500,25 @@ export function loadConfig(root: string): Result<Config> {
     return refuse([v('schema', 'newer-than-cli', String(schema), `<=${SCHEMA_VERSION} — upgrade witness`)])
   }
   // Row 193 §4.8. An older file is read through the same migration `witness migrate` runs,
-  // in memory: missing settings take today's defaults, and nothing the file holds moves.
-  const older = schema < newestSchema()
+  // in memory: missing settings take today's defaults, and nothing the file holds moves. It
+  // keeps its own schema's leniency, so an upgrade never refuses a file that worked yesterday.
+  const older = schema < SCHEMA_VERSION
   let values: Record<string, unknown> = obj
+  const warnings: string[] = []
   if (older) {
     const m = migrateValues(obj, schema, { mode: 'memory' })
     if (!m.ok) return refuse(m.violations)
     values = m.value.raw
+    warnings.push(olderSchemaWarning(schema, SCHEMA_VERSION, m.value.changes))
   }
   const r = resolveSettings(values, older ? 'lenient' : 'strict')
   if (!r.ok) return refuse(r.violations)
   const uncommitted = r.value.autonomy && !committedAutonomy(root)
+  if (uncommitted) warnings.push('autonomy: on is not committed — it stays off until witness.config.yaml is committed')
   return ok({
     schema,
     ...r.value,
     autonomy: r.value.autonomy && !uncommitted,
-    warning: schema < SCHEMA_VERSION ? `schema ${schema} < ${SCHEMA_VERSION} — run witness migrate (reserved)`
-      : uncommitted ? 'autonomy: on is not committed — it stays off until witness.config.yaml is committed'
-      : undefined,
+    warning: warnings.length ? warnings.join('; ') : undefined,
   })
 }

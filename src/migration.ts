@@ -114,3 +114,17 @@ export function migrateValues(raw: Raw, from: number, opts: {
   }
   return ok({ raw: out, changes })
 }
+
+// Row 193 §4.8. What an older file is read as, and what `witness migrate` would write, in one
+// line — printed where config warnings print and filed by `check` as `older-schema`.
+export function olderSchemaWarning(from: number, to: number, changes: readonly Change[]): string {
+  const added = changes.filter((c) => c.kind === 'added').map((c) => c.path)
+  const parts: string[] = []
+  if (added.length) {
+    const named = [...added.slice(0, 3), ...(added.length > 3 ? ['…'] : [])].join(' · ')
+    parts.push(`adds ${added.length} setting${added.length === 1 ? '' : 's'} (${named})`)
+  }
+  if (changes.some((c) => c.kind === 'expanded')) parts.push('expands gates.model')
+  parts.push('refreshes comments')
+  return `schema ${from} is older than this witness (${to}) — witness migrate ${parts.join(' · ')}`
+}

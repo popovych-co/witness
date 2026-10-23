@@ -21,7 +21,7 @@ describe('start surfaces the slice shape (rows 79 · 191)', () => {
   })
 
   it('a configured budget and limit show in slices', async () => {
-    const repo = await threeStepPlan('session:\n  contextLimit: 15\nimplement:\n  stepsPerDispatch: 2\n')
+    const repo = await threeStepPlan({ session: { contextLimit: 15 }, implement: { stepsPerDispatch: 2 } })
     const first = await repo.cli(['start', 'auth-refresh-plan-1'])
     expect(first.code).toBe(0)
     expect(first.stdout).toContain('slices: by context — relay at 15% (step budget 2 if unmeasured)')

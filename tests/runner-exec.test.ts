@@ -7,8 +7,7 @@ import { withRunnerTurn } from '../src/runner-lock.js'
 import { worktreePath } from '../src/worktree.js'
 import {
   approve, breakSingleFixture, copyFixture, fakeCtx, fakeScenario, fixtureEnv, seededRepo, tmpRepo, vitestBin,
-  writePlan, writeSpec, type TestRepo,
-} from './helpers.js'
+  writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 // D158 (#20). execSync at Node's 1 MiB default threw ENOBUFS into the catch, so a
 // chatty-but-GREEN suite was reported as a failed lane and blocked ship with a false red.
@@ -83,7 +82,7 @@ function evidenceChild(cwd: string, plan: string): Promise<{ code: number | null
 
 // Two started plans, one worktree each. Each worktree's runner appends "start <id>" to one
 // shared log, sleeps a second and appends "end <id>".
-async function twoWorktrees(primaryYaml = ''): Promise<{ repo: TestRepo; log: string; wts: [string, string] }> {
+async function twoWorktrees(primary: Record<string, unknown> = {}): Promise<{ repo: TestRepo; log: string; wts: [string, string] }> {
   const repo = await seededRepo()
   for (const s of ['a', 'b']) {
     await writeSpec(repo, s, { criteria: [{ id: `ac-${s}`, test: `@spec:${s}` }] })
@@ -92,7 +91,7 @@ async function twoWorktrees(primaryYaml = ''): Promise<{ repo: TestRepo; log: st
     approve(repo, `${s}-plan-1`)
     await repo.cli(['start', `${s}-plan-1`])
   }
-  if (primaryYaml) repo.write('witness.config.yaml', `${repo.read('witness.config.yaml')}${primaryYaml}`)
+  patchConfig(repo, primary)
   const log = join(fakeScenario(), 'log')
   const wts = ['a', 'b'].map((s) => worktreePath(repo.root, `${s}-plan-1`)) as [string, string]
   for (const wt of wts) {
@@ -114,7 +113,7 @@ describe('test runs take turns across worktrees (B3)', () => {
   }, 60_000)
 
   it('drive.parallelSuites: true lets them overlap', async () => {
-    const { log, wts } = await twoWorktrees('drive:\n  parallelSuites: true\n')
+    const { log, wts } = await twoWorktrees({ drive: { parallelSuites: true } })
     const [a, b] = await Promise.all([evidenceChild(wts[0], 'a-plan-1'), evidenceChild(wts[1], 'b-plan-1')])
     expect([a.code, b.code]).toEqual([0, 0])
     const marks = readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split(' ')[0])

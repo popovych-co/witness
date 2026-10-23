@@ -83,9 +83,18 @@ describe('witness start — agent-model', () => {
     expect(again.stdout).toContain('agent-model: claude-sonnet-5')
   })
 
-  it('falls back to the global gates.model pin, then session-default', async () => {
-    const repo = await approvedPlanRepo()                  // init config: gates.model claude-fable-5
-    const global = await repo.cli(['start', 'auth-refresh-plan-1'])
+  // Row 193: nothing inherited. A current file states the implement gate's model; only an older
+  // file still reaches the worker through gates.model, and one with no pin at all, the session's.
+  it('takes the implement gate\'s own pin; an older file falls back to gates.model, then session-default', async () => {
+    const repo = await approvedPlanRepo()                  // init config: gates.implement.model claude-opus-5-5
+    const own = await repo.cli(['start', 'auth-refresh-plan-1'])
+    expect(own.stdout).toContain('agent-model: claude-opus-5-5')
+
+    const older = await approvedPlanRepo()
+    older.write('witness.config.yaml', 'schema: 1\ngates:\n  model: claude-fable-5\n')
+    older.git('add', 'witness.config.yaml')
+    older.git('commit', '-m', 'older config')
+    const global = await older.cli(['start', 'auth-refresh-plan-1'])
     expect(global.stdout).toContain('agent-model: claude-fable-5')
 
     const bare = await approvedPlanRepo()
