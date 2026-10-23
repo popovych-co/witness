@@ -180,7 +180,7 @@ Write `f` for the fill, `L` for the limit, and `g` for the expected size of the 
 
 There is no first-step exemption at a step close: the step has already finished, so every slice makes progress. A session that starts over the limit ends after one step.
 
-*Amended during the build, 2026-10-22 (final review):* a red open on any step — recorded out of order, behind an unclosed scaffolding step, or re-opened on a closed one — outranks all four rules: `continue`, since a session never relays mid-red, and with every step closed a gate would judge the tree mid-red. `next` routes that red's green ahead of the first unclosed step, and hands nothing over while it is open.
+*Amended during the build, 2026-10-22 (final review):* an open red outranks all four rules: `continue`, since a session never relays mid-red, and with every step closed a gate would judge the tree mid-red. A red is open while the plan's latest red that observed a failure has no passing green after it, whatever step either names or none: every run executes the parent tag's whole suite. Read per step instead, the red the skill tags on a legacy plan never closed under the untagged green `next` routes there (re-review). Recorded out of order, behind an unclosed scaffolding step, or re-opened on a closed one, its green is routed ahead of the first unclosed step, and `next` hands nothing over while it is open.
 
 **At a revise hand-over, a ship exit, or `next`:**
 - Relay when `f ≥ L` and this session has made at least one act (§4.8). There is no projection here. Other stages have no repeated unit to learn a size from, and projecting them is deferred (§7).
