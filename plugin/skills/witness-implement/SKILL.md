@@ -59,12 +59,16 @@ Protocol per step, in order — red/green/refactor with witnessed evidence:
 6. Early exit: if you have left the step's scope to fight infrastructure, the economy is to relay — finish the red→green you are in (never stop mid-red), report, and relay so a fresh context continues. Exceeding your slice is never the right economy.
 7. Fat artifacts (the living design, long docs) are read **by section** — `$WITNESS read <spec-id> --design --outline` names every anchor with its line range, then `--lines <a>-<b>` fetches the one you need — never whole into your context; you would re-pay their tokens on every subsequent request.
 
-**After each step closes, act on `slice:`.** A closing green prints three lines, and so does a `step-close`:
+**After each step closes, act on `slice:`.** A closing green prints three lines, and so does a `step-close`. Two closes in one session — the slice goes on at 12%, then ends at 17%, because the largest step so far would carry the next one past the limit:
 
 ```
-context: 17% of 1M · limit 20% · next step ≈ +5%
-steps: 1/3 done · next s2
+context: 12% of 1M · limit 20% · next step ≈ +5%
+steps: 2/5 done · next s3
 slice: continue
+
+context: 17% of 1M · limit 20% · next step ≈ +5%
+steps: 3/5 done · next s4
+slice: end — 17% + next step ≈ 22% passes the 20% limit
 ```
 
 - `slice: continue` → take the next step.
