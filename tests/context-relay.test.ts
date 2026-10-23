@@ -536,3 +536,43 @@ describe('an open red closes at any passing green', () => {
     expect(slice(closed)).toBe('slice: continue')
   })
 })
+
+// D192. One reading of an open red for every reader (steps.ts `redInFlight`): the step row, the
+// evidence row, `next`'s hand-over and the verdict at a step close. Each shape below was open to one
+// reader and closed to another.
+describe('one reading of an open red', () => {
+  const routed = (r: CliResult) => lines(r).find((l) => l.startsWith('next: '))
+  const slice = (r: CliResult) => lines(r).find((l) => l.startsWith('slice: '))
+
+  // The step row and the verdict read it closed (no red after the passing green), the evidence row
+  // open (the latest green failed). The suite failed at its last run: open.
+  it('a green that fails after a passing one: next routes its green, and a step close says continue', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const failing = await repo.cli(['test-evidence', PLAN, '--phase', 'green', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(150_000) } })
+    expect(failing.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(relays(r)).toEqual([])
+    const closed = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
+    expect(slice(closed)).toBe('slice: continue')
+  })
+
+  // The step row read it open (the genuine red, no passing green since), the evidence row closed (the
+  // parent tag's latest red was vacuous) and routed a second red. Every step closed, so the evidence
+  // row answers: it routes the green too.
+  it('a vacuous red after a genuine one: the evidence row routes its green', async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, PLAN, 's2', at(110_000))).code).toBe(0)
+    expect((await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(120_000) })).code).toBe(0)
+    await redIn(repo, wt, 's1', at(130_000))
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const vacuous = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', 's1'], { cwd: wt, env: { ...fixtureEnv(), ...at(140_000) } })
+    expect(vacuous.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(relays(r)).toEqual([])
+  })
+})

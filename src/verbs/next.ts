@@ -189,12 +189,18 @@ function judgeNote(entries: Entry[], gate: string, judge: string | undefined): s
 //
 // `step` is set where `test-evidence` refuses a cycle that names none (row 191): before the
 // first implement gate, on a plan whose progress is known and that has a criteria step.
+//
+// D192. The phase is the one reading of a red in flight (steps.ts `redInFlight`, `midRed` here):
+// its green while one is, a red otherwise. Read from the parent tag's latest red, as it was, a
+// vacuous red after a genuine one routed a second red here while the step row routed the green.
+// The gate's own semantics stay `evidenceForDiff`'s, so the owed note can still name a red the gate
+// wants after that green.
 function evidenceRow(
-  id: string, parentTag: string, files: string[], report: EvidenceReport | undefined,
-  seat: { home: string; model?: string }, step?: string,
+  id: string, files: string[], report: EvidenceReport | undefined,
+  seat: { home: string; model?: string }, opts: { midRed: boolean; step?: string },
 ): NextAction {
   const base = { stage: 'implement' as const, target: id, ...seat }
-  const stepFlag = step === undefined ? '' : ` --step ${step}`
+  const stepFlag = opts.step === undefined ? '' : ` --step ${opts.step}`
   if (report === undefined) {
     return {
       line: `witness test-evidence ${id} --phase red${stepFlag}`, ...base,
@@ -205,17 +211,10 @@ function evidenceRow(
     .filter((r) => !(r.red && r.green && !r.vacuous))
     .map((r) => `${r.tag} ${!r.red || r.vacuous ? 'red' : 'green'}`)
     .join(' · ')
-  const parent = report.required.find((r) => r.tag === parentTag)
-  const liveRed = parent !== undefined && parent.red && !parent.vacuous
-  const line = !liveRed && files.some((f) => !isTestPath(f))
+  const line = !opts.midRed && files.some((f) => !isTestPath(f))
     ? `witness verify-red ${id}${stepFlag}`
-    : `witness test-evidence ${id} --phase ${liveRed ? 'green' : 'red'}${stepFlag}`
-  // Unsatisfied with a live red, the parent tag's red has no green after it: this green is
-  // routed mid-red.
-  return {
-    line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`),
-    ...(liveRed ? { midRed: true as const } : {}),
-  }
+    : `witness test-evidence ${id} --phase ${opts.midRed ? 'green' : 'red'}${stepFlag}`
+  return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
 }
 
 // The run that works a plan's next unfinished step. A step whose latest red came back vacuous
@@ -257,9 +256,9 @@ export interface NextAction {
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
                   // itself is rendered at the print site, where the harness is known
-  // Row 191 §1–§2. A red still open (steps.ts `redInFlight`, or the parent tag's latest cycle): the
-  // session the action is routed to is mid-red, and a session never relays there. The point after
-  // it decides instead (§4.4): the green's close for a plan step, the re-gate for a fix round.
+  // Row 191 §1–§2, D192. A red in flight (steps.ts `redInFlight`, the one reading every row shares):
+  // the session the action is routed to is mid-red, and a session never relays there. The point
+  // after it decides instead (§4.4): the green's close for a plan step, the re-gate for a fix round.
   midRed?: true
 }
 
@@ -323,11 +322,12 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
   const progress = stepProgress(plan, entries)
   const stepped = progress.known && !implementGated(entries) ? progress : undefined
-  // Final review I1 and its re-review. A red in flight (steps.ts: the latest red that observed a
-  // failure, with no passing green since) is one whatever step it names, or none: recorded out of
-  // order, ahead of a scaffolding step left unclosed, re-opened on a closed step, or a fix round's.
-  // Whatever row follows, the session is mid-red.
-  const inFlight = redInFlight(entries) ? { midRed: true as const } : {}
+  // Final review I1, its re-review and D192. A red in flight (steps.ts: the latest run that saw the
+  // suite saw a failure) is one whatever step it names, or none: recorded out of order, ahead of a
+  // scaffolding step left unclosed, re-opened on a closed step, or a fix round's. Whatever row
+  // follows, the session is mid-red, and the evidence row's phase reads the same answer.
+  const midRed = redInFlight(entries)
+  const inFlight = midRed ? { midRed: true as const } : {}
   if (stepped?.next !== undefined) {
     // Its green comes before the first unclosed step: routing that step's red or its close would
     // leave the open red's green unrouted.
@@ -345,8 +345,8 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   const report = baseR.ok && files.length > 0 ? evidenceForDiff(wt, root, plan, baseR.value) : undefined
   if (report === undefined || !report.satisfied) {
     return {
-      ...evidenceRow(id, String(plan.meta.parent), files, report, inWorktree,
-        stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined),
+      ...evidenceRow(id, files, report, inWorktree,
+        { midRed, step: stepped !== undefined ? evidenceStep(stepped.steps, entries) : undefined }),
       ...inFlight,
     }
   }

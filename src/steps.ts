@@ -87,32 +87,38 @@ export function closedAt(p: Progress, index: number): string | undefined {
   return p.known ? p.steps.find((s) => s.closedAt === index)?.id : undefined
 }
 
-// Row 191 §1–§2. The red in flight: the plan's latest red that observed a failure, while no passing
-// green has followed it. Every evidence run executes the parent tag's whole suite, so a passing
-// green means no red is open any more, whatever step it names or none, and a failing green or a
-// vacuous red changes nothing. Read per step, the red the skill tags on a legacy plan, whose routed
-// green names no step, stayed open for good and switched the plan's slice cut off (re-review). One
-// red is open at a time, so its step, when it names one, is the open step. Which steps are closed is
-// another question (closingIndex): a criteria step closes only at a green tagged with it after its
-// own red.
-function redInFlightEntry(entries: Entry[]): Entry | undefined {
-  let open: Entry | undefined
-  for (const e of entries) {
-    if (opensCycle(e)) open = e
-    else if (closesCycle(e)) open = undefined
-  }
-  return open
+// Whether an evidence run saw the suite. Every run executes the parent tag's whole suite, so one
+// that did is the suite's state at that run, whatever step it names or none. A vacuous red saw
+// nothing of this tree: the behavior it asserts was already there, or verify-red ran it against the
+// base. An entry with no outcome saw nothing at all.
+const sawSuite = (e: Entry): boolean => e.t === 'test-evidence' && e.vacuous !== true && outcomes(e).length > 0
+
+// Row 191 §1–§2, D192. The red in flight, the one reading the step row, the evidence row, `next`'s
+// hand-over and the verdict at a step close all share: the plan's latest run that saw the suite saw
+// a failure, a red with a failing test or a green that did not pass. A passing green ends it
+// whatever step it names, or none: read per step, the red the skill tags on a legacy plan, whose
+// routed green names no step, stayed open for good (D191's re-review). A green that fails after a
+// passing one re-opens it: read from the latest red alone, `next` routed that green while the
+// verdict let the slice end (D192). Whether a red is open, whatever step it names or none (a fix
+// round's, a legacy cycle's): what keeps `next` from handing over, and a step close from ending the
+// slice, mid-red.
+export function redInFlight(entries: Entry[]): boolean {
+  const last = entries.filter(sawSuite).at(-1)
+  return last !== undefined && outcomes(last).some((t) => !t.ok)
 }
 
-// Whether a red is open, whatever step it names, or none (a fix round's, a legacy cycle's): what
-// keeps `next` from handing over, and a step close from ending the slice, mid-red.
-export function redInFlight(entries: Entry[]): boolean {
-  return redInFlightEntry(entries) !== undefined
+// The step of the red in flight: the latest genuine red's, when it names one. One red is open at a
+// time, so its step is the open step. Which steps are closed is another question (closingIndex): a
+// criteria step closes only at a green tagged with it after its own red.
+function stepInFlight(entries: Entry[]): string | undefined {
+  if (!redInFlight(entries)) return undefined
+  const step = entries.filter(opensCycle).at(-1)?.step
+  return typeof step === 'string' ? step : undefined
 }
 
 // A cycle is open on the step while the red in flight is its own.
 export function openRed(entries: Entry[], stepId: string): boolean {
-  return redInFlightEntry(entries)?.step === stepId
+  return stepInFlight(entries) === stepId
 }
 
 // Row 191 §1–§2 (final review I1). The step of the red in flight, when it names a criteria step of
@@ -121,7 +127,7 @@ export function openRed(entries: Entry[], stepId: string): boolean {
 // alone, because `test-evidence` refuses any other a green: a red on a step an amend removed or
 // turned into scaffolding routes nothing.
 export function redOpenStep(plan: CanonDoc, entries: Entry[]): string | undefined {
-  const step = redInFlightEntry(entries)?.step
+  const step = stepInFlight(entries)
   return manifest(plan).find((s) => s.kind === 'criteria' && s.id === step)?.id
 }
 
