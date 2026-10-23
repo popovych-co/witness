@@ -15,9 +15,10 @@ const manifest = (plan: CanonDoc): StepState[] =>
     .filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null)
     .map((s) => ({ id: String(s.id), kind: s.scaffolding === true ? 'scaffolding' : 'criteria' }))
 
-// A cycle can be a plan step's only where the plan has a criteria step for it to name. A plan
-// whose spec's criteria an earlier plan realized has none (an empty criteria delta), so none of
-// its evidence is a step's: it owes no `--step`, and its untagged evidence hides no step's close.
+// A cycle can be a plan step's only where the plan has a criteria step for it to name. Every chore
+// plan has none, since its parent, the principles, carries no criteria; nor does a plan whose
+// spec's criteria an earlier plan realized (an empty criteria delta). None of such a plan's evidence
+// is a step's: it owes no `--step`, and its untagged evidence hides no step's close.
 export const hasCriteriaStep = (plan: CanonDoc): boolean => manifest(plan).some((s) => s.kind === 'criteria')
 
 const outcomes = (e: Entry): Array<{ ok: boolean }> => (Array.isArray(e.tests) ? (e.tests as Array<{ ok: boolean }>) : [])
