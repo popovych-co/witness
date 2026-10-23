@@ -906,8 +906,10 @@ describe('drive is a scheduler, not a session (row 191 §4.9)', () => {
     writeLocalConfig(repo.root, { notify: noopOpener() })
     const seen = join(fakeScenario(), 'seen')
     const agent = script(`echo "\${WITNESS_CONTEXT-unset} \${CLAUDE_CODE_SESSION_ID-unset}" >> "${seen}"`)
+    // CI cleared, as gateEnv does: settling never runs under CI (settle.ts), and a CI runner
+    // exports CI=true into the process this suite spreads into every CLI's env.
     const r = await repo.cli(['drive', '--max-spawns', '1'],
-      { env: { ...chat, WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
+      { env: { ...chat, CI: '', WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
     expect(r.stdout).toContain(`decided: decompose ${repo.effort} → revise · policy · blocking-here`)
     expect(decisionOf(repo)).toMatchObject({ decision: 'revise', selected: 'policy' })
     expect(decisionOf(repo)).not.toHaveProperty('ctx')
