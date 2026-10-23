@@ -50,3 +50,9 @@ Refactors: export the argv helpers from `src/verbs/evidence.ts` (`planIdOf`, the
 - New row 192 (`Amends 191`): the unified in-flight definition, the window-absent reading rule, the display rule, the silent paths now announced.
 - Comments: `src/steps.ts:18-20` (every chore plan has no criteria step), `src/config.ts:135` (a machine overlay is deferred, not ruled out).
 - Implement skill: quote the `slice: own count — …` line whole; "a green that closes no step prints `context:` alone" gains "on a known plan".
+
+---
+
+## Build notes
+
+*Amended 2026-10-23 (final review):* Task 1 item 7's note now reads `nothing changed yet — make the change · every step of this plan is scaffolding`. A plan with no criteria step need not be a chore: a later plan of a feature spec can have none and still owe a red once tagged tests land. Each step is criteria or scaffolding, so the new note holds of every such plan. Task 3's row-191 residual now reads "outside implement only `check` reports a lost reading": `check` prints the reason a reading was lost, never the word `unmeasured`, and the plan gate's `slices:` line says "if unmeasured". Row 191 stays at about 15.6k characters, not the 10k Task 3 estimated: losing no decision is the binding constraint.
