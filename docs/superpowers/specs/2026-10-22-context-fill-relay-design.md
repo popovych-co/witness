@@ -127,7 +127,7 @@ WITNESS_CONTEXT={"session":"<harness session id>","tokens":31627,"window":100000
   Otherwise the reading is **unmeasured**, with a named reason: `no adapter`, `stale` (session mismatch), `malformed`, or `no reading yet`.
 - **`no reading yet`** covers `tokens` absent (Claude Code before the first response) and `tokens: 0` (Pi before the first response), per P7.
 - The Pi adapter maps Pi's `contextWindow` to the contract's `window`. Each harness's `tokens` keeps its own meaning (§3).
-- The session check is what makes stale values harmless. A drive process launched from a chat session's Bash inherits that chat session's `WITNESS_CONTEXT`. Drive also strips the variable from every child's environment, as a second guard.
+- The session check is what makes stale values harmless. A drive process launched from a chat session's Bash inherits that chat session's `WITNESS_CONTEXT`. Drive also strips the variable from every child's environment, as a second guard. *(Amended during the build, 2026-10-22: not for drive, see §4.9.)*
 - The CLI computes the percentage itself from `tokens / window`. The adapter's `percent` is display only, so the two harnesses can't round differently.
 
 ### 4.2 The limit
@@ -183,6 +183,7 @@ There is no first-step exemption at a step close: the step has already finished,
 **At a revise hand-over, a ship exit, or `next`:**
 - Relay when `f ≥ L` and this session has made at least one act (§4.8). There is no projection here. Other stages have no repeated unit to learn a size from, and projecting them is deferred (§7).
 - At a revise or a ship exit, the act guard always holds, because the gate run, the decision or the ship pass is itself an act.
+  *Amended during the build, 2026-10-22:* true at a revise, false at a ship exit. A ship pass can journal nothing (`revise owed`, a textual conflict, a decision still awaited, a watch-only pass), so a session that opened over the limit would relay there, and so would every fresh session after it. A ship exit takes the act guard, as `next` does; a revise needs none, since the decision is the session's journaled act (DESIGN row 191).
 - At `next`, the guard keeps a fresh session from relaying before it has done anything.
 - `next` meets a stage only at its own persisted boundaries, never in the middle of a conversation:
   - brainstorm, after `witness recap`;
@@ -244,6 +245,7 @@ There is no first-step exemption at a step close: the step has already finished,
 ### 4.9 Drive
 
 - Drive changes only in one respect: it strips `WITNESS_CONTEXT` from children.
+  *Amended during the build, 2026-10-22:* drive also inherits the chat session's session variable, which names the same session as the inherited reading, so §4.1's session check cannot tell that reading from drive's own; and a child of the other harness would inherit a variable its own harness never overwrites. Drive runs session-less instead: it drops `WITNESS_CONTEXT` and every registry session variable for its own process and everything it starts, and what it journals carries no session (DESIGN row 191).
 - A child ends its turn on a relay and exits. Drive runs `next` again and spawns a fresh child: the child that relayed after a settled revise is followed by one that picks up `revise owed`. This is already how slices work under drive (row 145).
 - Drive's no-progress check still holds. Every slice closes at least one step, and every other hand-over follows an act.
 
