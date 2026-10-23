@@ -1,6 +1,6 @@
 # Config surface: every setting in the file, commented, nothing inherited
 
-Date: 2026-10-23 · Status: draft for approval · Evidence: probes P1–P4 run 2026-10-23 (§6) · Builder check: done; both of its questions settled in the doc by the user's own rules (§4.3, the arbiter's model; §4.5, comment lines old templates wrote)
+Date: 2026-10-23 · Status: approved 2026-10-23 · Evidence: probes P1–P4 run 2026-10-23 (§6) · Builder check: done; both of its questions settled in the doc by the user's own rules (§4.3, the arbiter's model; §4.5, comment lines old templates wrote)
 
 ## 1. Why
 
