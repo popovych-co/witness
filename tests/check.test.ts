@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, approve, fakeScenario, gateEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -391,6 +391,41 @@ describe('witness check — harness findings', () => {
     repo.write('.witness/config.local.yaml', "opener: '/usr/bin/true'\n")
     const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
     expect(res.stdout).toContain('local-config-unignored')
+  })
+})
+
+// Row 191 §4.11. The adapter is judged by the reading itself, the signal the relay depends on,
+// never by Claude Code's own files: the plugin that carries it is installed per machine, outside
+// the repo, and only the session check runs in can say whether its reading arrived.
+describe('witness check — the context adapter', () => {
+  it('states a reading seen in this session, and its fill', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', ...measuredEnv('S', 170000, 1000000) } })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('adapter: claude-code — reading seen · 17% of 1M')
+  })
+
+  it('names the reason and the one-time install in a Claude Code session with no reading', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'], { env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'S' } })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('adapter: claude-code — no reading in this session (no adapter) · install once per machine: claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness')
+  })
+
+  // Pi before its first response sends tokens 0 (P7): the reason is the reading's own.
+  it('names the reason and the payload install in a Pi session with no reading', async () => {
+    const repo = await seededRepo()
+    const reading = JSON.stringify({ session: 'P', tokens: 0, window: 200000 })
+    const res = await repo.cli(['check'], { env: { PI_CODING_AGENT: 'true', PI_SESSION_ID: 'P', WITNESS_CONTEXT: reading } })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain(`adapter: pi — no reading in this session (no reading yet) · run ${NPX_LATEST} init --agent pi`)
+  })
+
+  it('says it cannot tell outside a harness session', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['check'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('adapter: not checkable outside a harness session — run witness check from a Claude Code or Pi session')
   })
 })
 

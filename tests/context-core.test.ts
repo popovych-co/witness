@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import * as core from '../plugin/hooks/context-core.mjs'
 import { configCandidates, contextLimitOf, invokesWitness, readingJson, warnLine } from '../plugin/hooks/context-core.mjs'
@@ -71,5 +73,14 @@ describe('the adapter core (row 191 §4.1, §4.6)', () => {
   ])('matches the CLI arithmetic for %i/%i', (t, w) => {
     expect(core.pctOf(t, w)).toBe(cli.pctOf(t, w))
     expect(core.windowLabel(w)).toBe(cli.windowLabel(w))
+  })
+
+  // Row 191 §4.11. A marketplace plugin is copied whole into Claude Code's cache, so the
+  // witness-context module imports a copy from its own folder; the Pi payload copies the
+  // original. Byte for byte, or the two harnesses could read one config as two limits.
+  it('the witness-context plugin carries a byte-identical copy', () => {
+    const bytes = (dir: string) => readFileSync(join(import.meta.dirname, '..', dir, 'hooks', 'context-core.mjs'))
+    expect(bytes('plugin-context').equals(bytes('plugin')),
+      'plugin-context/hooks/context-core.mjs differs from plugin/hooks/ — run pnpm run sync-versions').toBe(true)
   })
 })

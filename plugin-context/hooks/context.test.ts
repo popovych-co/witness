@@ -1,4 +1,4 @@
-// Row 191 §4.1, §4.6: the Claude Code adapter (context.ts) under `claude plugin test plugin`.
+// Row 191 §4.1, §4.6: the Claude Code adapter (context.ts) under `claude plugin test plugin-context`.
 // Nothing runs beneath the plugin here: the test's own hooks stand for the engine, answering each
 // call on `$` with `{ value }` and the Bash call itself with `{ result }`. Each test names its own
 // session, so no latch or warning can carry from one test to the next.

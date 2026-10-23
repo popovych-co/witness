@@ -11,7 +11,11 @@
 // environment, which has no Node (everything outside it is reached through `$`), so even
 // `node:path` would keep it from loading. The Pi extension (witness-pi.ts) imports this file as
 // its sibling in .pi/extensions/. Both adapters import it by relative path, byte for byte the
-// same, and keep only their harness's calls.
+// same, and keep only their harness's calls. The original is plugin/hooks/context-core.mjs, which
+// the Pi payload copies. Claude Code copies the witness-context plugin whole into its cache, where
+// nothing outside it resolves, so plugin-context/hooks/ holds a copy beside the module that
+// scripts/sync-versions.mjs makes from the original (tests/context-core.test.ts holds the two
+// equal): edit the original.
 //
 // The CLI never imports it: a runtime import from plugin/ is the packaging trap harness.ts
 // describes. So pctOf and windowLabel duplicate src/context.ts's on purpose, contextLimitOf reads,

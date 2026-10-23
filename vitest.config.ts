@@ -22,6 +22,9 @@ export default defineConfig({
     // failures read as flake because the losers change run to run. (`.witness/worktrees/**`
     // is the same shape during dogfooding and is NOT excluded here — see the note in the
     // commit; it needs its own decision.)
-    exclude: [...configDefaults.exclude, '**/fixtures/**', '**/calibration/**', '**/plugin/**', '**/.claude/**'],
+    //
+    // `plugin-context/**` as `plugin/**`: a plugin's *.test.ts is a `claude plugin test` kit,
+    // importing `claude-code/testing`, which only Claude Code's engine supplies.
+    exclude: [...configDefaults.exclude, '**/fixtures/**', '**/calibration/**', '**/plugin/**', '**/plugin-context/**', '**/.claude/**'],
   },
 })

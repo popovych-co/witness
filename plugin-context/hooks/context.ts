@@ -1,11 +1,15 @@
 // witness context — the Claude Code half of row 191's adapter: the live reading in every Bash
 // command's environment, and one warning per session at the limit.
 //
-// A hooks module: hooks.json names it under `modules`, beside the classic hooks (P1 ran both
-// kinds from one hooks.json in one session). The plugin API is early access and moves between
-// releases; its declaration file and `claude plugin validate plugin` are the authority over
-// anything written here. The logic is context-core.mjs's, shared byte for byte with the Pi
-// extension, and this file keeps only the calls on `$`.
+// A hooks module, and the whole of the witness-context plugin (row 191 §4.11): only a plugin
+// carries a module, and a project's settings declaring one do not load it headless (P9), so
+// this plugin, installed once per machine, serves both Claude Code routes. The full witness
+// plugin does not carry it, so a machine with both never runs it twice. The plugin API is early
+// access and moves between releases; its declaration file and `claude plugin validate
+// plugin-context` are the authority over anything written here. The logic is context-core.mjs's,
+// shared byte for byte with the Pi extension (the sibling here is a copy of plugin/hooks/'s,
+// since nothing outside this folder resolves once Claude Code has copied it into its cache), and
+// this file keeps only the calls on `$`.
 //
 // Fail open: nothing before next(e) can keep the command from running. A reading this call
 // cannot take clears the variable, so the command runs unmeasured and the CLI says so (§7: a
