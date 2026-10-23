@@ -125,8 +125,10 @@ function stepInFlight(entries: Entry[]): string | undefined {
   return redInFlight(entries) ? latestRed(entries)?.step : undefined
 }
 
-// Whether the green owed names this step: it is the red in flight's.
-export function openRed(entries: Entry[], stepId: string): boolean {
+// Whether the green owed names this step: it is the red in flight's. That is not whether the step
+// holds an open red of its own (D192): once its cycle closed, a later green that failed still owes
+// the green here (redCycleClosed).
+export function greenOwedOn(entries: Entry[], stepId: string): boolean {
   return stepInFlight(entries) === stepId
 }
 
@@ -138,12 +140,13 @@ export function redCycleClosed(entries: Entry[]): boolean {
   return red?.step !== undefined && closingIndex({ id: red.step, kind: 'criteria' }, entries.slice(red.at)) !== undefined
 }
 
-// Row 191 §1–§2 (final review I1). The step of the red in flight, when it names a criteria step of
-// the plan: recorded out of order ahead of an unclosed step, or re-opened on a closed one, its green
-// is owed before anything else. Read whether or not the plan's progress is known. A criteria step
-// alone, because `test-evidence` refuses any other a green: a red on a step an amend removed or
-// turned into scaffolding routes nothing.
-export function redOpenStep(plan: CanonDoc, entries: Entry[]): string | undefined {
+// Row 191 §1–§2 (final review I1), D192. Which step the green owed names: the red in flight's, when
+// it is a criteria step of the plan. That green comes before anything else, wherever the red stands:
+// recorded out of order ahead of an unclosed step, re-opened on a closed one, or on a step whose own
+// cycle has since closed and a later green failed (D192). Read whether or not the plan's progress is
+// known. A criteria step alone, because `test-evidence` refuses any other a green: a red on a step
+// an amend removed or turned into scaffolding routes nothing.
+export function greenOwedStep(plan: CanonDoc, entries: Entry[]): string | undefined {
   const step = stepInFlight(entries)
   return manifest(plan).find((s) => s.kind === 'criteria' && s.id === step)?.id
 }

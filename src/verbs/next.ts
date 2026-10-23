@@ -14,7 +14,8 @@ import { baseForSpec } from '../history.js'
 import { canonicalSha } from '../sha.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import {
-  hasCriteriaStep, implementGated, lastRedVacuous, openRed, redCycleClosed, redInFlight, redOpenStep, stepProgress, stepsLine, type StepState,
+  greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, redCycleClosed, redInFlight, stepProgress, stepsLine,
+  type StepState,
 } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
@@ -231,18 +232,20 @@ function evidenceRow(
 // its red was genuine and the green is what is owed.
 function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
   if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
-  if (openRed(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
+  if (greenOwedOn(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
   if (lastRedVacuous(entries, s.id)) {
     return { line: `witness verify-red ${id} --step ${s.id}`, why: 'its red was vacuous — verify-red reconstructs it against the base' }
   }
   return { line: `witness test-evidence ${id} --phase red --step ${s.id}` }
 }
 
-// The step an evidence row names once every step is closed, when no red is in flight (that red's
-// step comes first, D192): that of the latest red naming a criteria step of the plan as it stands.
-// Never a scaffolding step or one an amend removed, both of which `test-evidence` refuses. One
-// exists whenever the plan has a criteria step, since none closes without a red tagged with it, and
-// a plan with none is owed no step.
+// The step an evidence row names once every step is closed, unless the green owed names one (D192:
+// that step comes first): that of the latest red naming a criteria step of the plan as it stands.
+// So it answers when no red is in flight, and also while one is that names no criteria step of the
+// plan: a failing green with no genuine red before it, or a red on a step an amend removed or turned
+// into scaffolding. Never a scaffolding step or one an amend removed, both of which `test-evidence`
+// refuses. One exists whenever the plan has a criteria step, since none closes without a red tagged
+// with it, and a plan with none is owed no step.
 function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined {
   const criteria = new Set(steps.filter((s) => s.kind === 'criteria').map((s) => s.id))
   const red = entries
@@ -343,8 +346,8 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
     // failed is a later green (a failing red would be the latest genuine red, its cycle still open),
     // and the note says so rather than naming a red the step no longer holds. Not "the last run": a
     // vacuous red after that green may have passed.
-    const redOpen = redOpenStep(plan, entries)
-    const open = stepped.steps.find((s) => s.id === redOpen)
+    const owed = greenOwedStep(plan, entries)
+    const open = stepped.steps.find((s) => s.id === owed)
     const { line, why } = stepLine(id, open ?? stepped.next, entries)
     const ahead = open === undefined || open.id === stepped.next.id
       ? why
@@ -365,7 +368,7 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
         midRed, criteria: hasCriteriaStep(plan),
         // D192. While a red is in flight its green is owed, so the row names the red in flight's step,
         // as the step row does. Read from the latest red of any kind, it named a vacuous red's step.
-        step: stepped !== undefined ? redOpenStep(plan, entries) ?? evidenceStep(stepped.steps, entries) : undefined,
+        step: stepped !== undefined ? greenOwedStep(plan, entries) ?? evidenceStep(stepped.steps, entries) : undefined,
       }),
       ...inFlight,
     }

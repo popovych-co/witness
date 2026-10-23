@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import type { CanonDoc } from '../src/scan.js'
 import {
-  checkStep, closedAt, closingIndex, implementGated, lastRedVacuous, openRed, redCycleClosed, redInFlight, redOpenStep, stepProgress,
-  stepsLine,
+  checkStep, closedAt, closingIndex, greenOwedOn, greenOwedStep, implementGated, lastRedVacuous, redCycleClosed, redInFlight,
+  stepProgress, stepsLine,
 } from '../src/steps.js'
 
 const planDoc = (steps: Array<Record<string, unknown>>): CanonDoc =>
@@ -57,21 +57,21 @@ describe('step progress (row 191 §4.3)', () => {
     expect(stepsLine(stepProgress(plan, [red('s1'), green('s1'), red('s2'), green('s2'), close('s3')] as Entry[]))).toBe('3/3 done')
     expect(stepsLine({ known: false })).toBe('unknown (evidence predates step tags)')
   })
-  it('openRed holds between a tagged red and its closing green', () => {
-    expect(openRed([red('s1')] as Entry[], 's1')).toBe(true)
-    expect(openRed([red('s1'), green('s1')] as Entry[], 's1')).toBe(false)
+  it('greenOwedOn holds between a tagged red and its closing green', () => {
+    expect(greenOwedOn([red('s1')] as Entry[], 's1')).toBe(true)
+    expect(greenOwedOn([red('s1'), green('s1')] as Entry[], 's1')).toBe(false)
   })
   // Final review I1. A red is in flight wherever it stands: ahead of the first unclosed step, or
   // re-opened on a closed one. Its step is named; an untagged red names none, and a vacuous one
   // opens nothing.
-  it('redOpenStep names the step of the red in flight, wherever it stands', () => {
-    expect(redOpenStep(plan, [red('s2')] as Entry[])).toBe('s2')
-    expect(redOpenStep(plan, [red('s1'), green('s1'), red('s1')] as Entry[])).toBe('s1')
-    expect(redOpenStep(plan, [red('s2'), red('s1')] as Entry[])).toBe('s1')
-    expect(redOpenStep(plan, [red('s1'), green('s1')] as Entry[])).toBeUndefined()
-    expect(redOpenStep(plan, [red(), red('s2', { vacuous: true, tests: [{ name: 'a @spec:x', ok: true }] })] as Entry[])).toBeUndefined()
+  it('greenOwedStep names the step of the red in flight, wherever it stands', () => {
+    expect(greenOwedStep(plan, [red('s2')] as Entry[])).toBe('s2')
+    expect(greenOwedStep(plan, [red('s1'), green('s1'), red('s1')] as Entry[])).toBe('s1')
+    expect(greenOwedStep(plan, [red('s2'), red('s1')] as Entry[])).toBe('s1')
+    expect(greenOwedStep(plan, [red('s1'), green('s1')] as Entry[])).toBeUndefined()
+    expect(greenOwedStep(plan, [red(), red('s2', { vacuous: true, tests: [{ name: 'a @spec:x', ok: true }] })] as Entry[])).toBeUndefined()
     // a step an amend removed is no step of the plan, and its red routes nothing
-    expect(redOpenStep(plan, [red('gone')] as Entry[])).toBeUndefined()
+    expect(greenOwedStep(plan, [red('gone')] as Entry[])).toBeUndefined()
   })
   // Re-review. A red is open at the evidence level (D192: while the latest non-vacuous run saw a
   // failure). Every run executes the parent tag's whole suite, so a passing green clears it
@@ -80,17 +80,17 @@ describe('step progress (row 191 §4.3)', () => {
   it('a red is open until any passing green, whatever step it names', () => {
     const vacuous = red('s1', { vacuous: true, tests: [{ name: 'a @spec:x', ok: true }] })
     expect(redInFlight([red('s1'), green()] as Entry[])).toBe(false)
-    expect(openRed([red('s1'), green()] as Entry[], 's1')).toBe(false)
+    expect(greenOwedOn([red('s1'), green()] as Entry[], 's1')).toBe(false)
     expect(redInFlight([red('s1'), green('s2')] as Entry[])).toBe(false)
     expect(stepProgress(plan, [red('s1'), green('s2')] as Entry[])).toMatchObject({ done: 0, next: { id: 's1' } })
-    expect(redOpenStep(plan, [red('s1'), green('s1', false)] as Entry[])).toBe('s1')
-    expect(redOpenStep(plan, [red('s1'), vacuous] as Entry[])).toBe('s1')
+    expect(greenOwedStep(plan, [red('s1'), green('s1', false)] as Entry[])).toBe('s1')
+    expect(greenOwedStep(plan, [red('s1'), vacuous] as Entry[])).toBe('s1')
     // one red is open at a time: the latest
-    expect(redOpenStep(plan, [red('s1'), red('s2')] as Entry[])).toBe('s2')
-    expect(openRed([red('s1'), red('s2')] as Entry[], 's1')).toBe(false)
+    expect(greenOwedStep(plan, [red('s1'), red('s2')] as Entry[])).toBe('s2')
+    expect(greenOwedOn([red('s1'), red('s2')] as Entry[], 's1')).toBe(false)
     // untagged (a fix round's, a legacy cycle's): in flight, and no step's to route
     expect(redInFlight([red()] as Entry[])).toBe(true)
-    expect(redOpenStep(plan, [red()] as Entry[])).toBeUndefined()
+    expect(greenOwedStep(plan, [red()] as Entry[])).toBeUndefined()
   })
   // D192. One reading for every reader: a red is in flight while the latest non-vacuous run saw a
   // failure, and its step is the latest genuine red's. Read from the latest red alone, `next` and the
@@ -100,8 +100,8 @@ describe('step progress (row 191 §4.3)', () => {
     // and s1's own cycle stays closed. Closing is untouched.
     const regressed = [red('s1'), green('s1'), green('s1', false)] as Entry[]
     expect(redInFlight(regressed)).toBe(true)
-    expect(redOpenStep(plan, regressed)).toBe('s1')
-    expect(openRed(regressed, 's1')).toBe(true)
+    expect(greenOwedStep(plan, regressed)).toBe('s1')
+    expect(greenOwedOn(regressed, 's1')).toBe(true)
     expect(redCycleClosed(regressed)).toBe(true)
     expect(stepProgress(plan, regressed)).toMatchObject({ done: 1, next: { id: 's2' } })
     expect(redInFlight([...regressed, green()] as Entry[])).toBe(false)
@@ -110,10 +110,10 @@ describe('step progress (row 191 §4.3)', () => {
     expect(redInFlight([red('s1'), vacuous] as Entry[])).toBe(true)
     // D191's legacy shape: the red the skill tagged, then the untagged green `next` routes, passing.
     expect(redInFlight([red(), red('s2'), green()] as Entry[])).toBe(false)
-    expect(redOpenStep(plan, [red(), red('s2'), green()] as Entry[])).toBeUndefined()
+    expect(greenOwedStep(plan, [red(), red('s2'), green()] as Entry[])).toBeUndefined()
     // A failing green with no genuine red before it is in flight too, with no step to name.
     expect(redInFlight([green('s1', false)] as Entry[])).toBe(true)
-    expect(redOpenStep(plan, [green('s1', false)] as Entry[])).toBeUndefined()
+    expect(greenOwedStep(plan, [green('s1', false)] as Entry[])).toBeUndefined()
     // An entry with no outcome saw nothing, so it changes nothing either way.
     const blank = { ...green('s1'), tests: [] }
     expect(redInFlight([red('s1'), blank] as Entry[])).toBe(true)
@@ -124,7 +124,7 @@ describe('step progress (row 191 §4.3)', () => {
   it("redCycleClosed reads whether the latest genuine red's own cycle closed", () => {
     const failedAfter = [red('s1'), green('s1'), green('s2', false)] as Entry[]
     expect(redInFlight(failedAfter)).toBe(true)
-    expect(redOpenStep(plan, failedAfter)).toBe('s1')
+    expect(greenOwedStep(plan, failedAfter)).toBe('s1')
     expect(redCycleClosed(failedAfter)).toBe(true)
     // a red re-opened on the closed step is its own again
     expect(redCycleClosed([red('s1'), green('s1'), red('s1')] as Entry[])).toBe(false)
