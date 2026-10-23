@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { stringify } from 'yaml'
 
 // Row 193 §4.1. The one list of every setting witness.config.yaml holds. Everything else is
 // derived from it: the resolver (config.ts), the file `init` writes and `migrate` rewrites
@@ -293,4 +294,25 @@ export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS)
 export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
+}
+
+// A value as one line of the file. Quoted only where YAML needs it, except that a command
+// holding double quotes is written in single ones, as §4.5 writes the runner: shell quoting
+// reads plainly inside them. Collections are flow style (`[a, b]`, `{k: [a]}`).
+export function inlineValue(val: unknown): string {
+  if (typeof val === 'string' && val.includes('"') && !val.includes("'")) return `'${val}'`
+  return stringify(val, { collectionStyle: 'flow', flowCollectionPadding: false, lineWidth: 0 }).trimEnd()
+}
+
+// Row 193 §4.10. README's settings table, generated from this list (tests/settings-docs.test.ts
+// holds the two equal): what each setting does, what it accepts, and the default `init` writes.
+export function settingsTable(): string {
+  const cell = (text: string) => text.replaceAll('|', '\\|')
+  const schema = Math.max(...Object.keys(SCHEMA_FINGERPRINTS).map(Number))
+  return [
+    '| Setting | What it does | Default |',
+    '|---|---|---|',
+    ...SETTINGS.map((s) => `| \`${s.path}\` | ${cell(`${s.comment} — accepts: ${s.want}`)} | \`${cell(inlineValue(defaultAt(s, schema)))}\` |`),
+    '',
+  ].join('\n')
 }

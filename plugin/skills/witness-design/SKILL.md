@@ -54,7 +54,9 @@ $WITNESS index                         # sibling specs, for pattern consistency
 $WITNESS read <spec-id> --design       # the current look, in amend mode; its `no-design`
                                        # refusal IS the new-screen signal, so read it, don't hide it
 # the repo's design canon, if configured — read docs.design from witness.config.yaml:
-#   docs: { design: [docs/ui/design-language.md, ...] }  → read each; it is the blocking authority
+#   docs:
+#     design: [docs/ui/design-language.md, …]  → read each; it is the blocking authority
+#   design: [] means no canon is configured
 ```
 
 ## The session (interactive — this stage is human judgment)

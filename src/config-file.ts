@@ -1,7 +1,7 @@
-import { Lexer, isMap, isScalar, parseDocument, stringify, type Node } from 'yaml'
+import { Lexer, isMap, isScalar, parseDocument, type Node } from 'yaml'
 import { LEGACY_COMMENTS } from './legacy-comments.js'
 import {
-  CHANGE_CLASSES, FIRST_LINE, GROUP_HEADINGS, SCHEMA_COMMENT, SETTINGS, getIn, type Group,
+  CHANGE_CLASSES, FIRST_LINE, GROUP_HEADINGS, SCHEMA_COMMENT, SETTINGS, getIn, inlineValue, type Group,
 } from './settings.js'
 import { sectionsOf } from './migration.js'
 
@@ -25,13 +25,7 @@ const withComment = (content: string, comment: string): string =>
 
 const classComment = (cls: string) => `for a ${cls}`
 
-// A value as one line of the file. Quoted only where YAML needs it, except that a command
-// holding double quotes is written in single ones, as §4.5 writes the runner: shell quoting
-// reads plainly inside them. Collections are flow style (`[a, b]`, `{k: [a]}`).
-export function inlineValue(val: unknown): string {
-  if (typeof val === 'string' && val.includes('"') && !val.includes("'")) return `'${val}'`
-  return stringify(val, { collectionStyle: 'flow', flowCollectionPadding: false, lineWidth: 0 }).trimEnd()
-}
+export { inlineValue } from './settings.js'
 
 // Every map in block style, every list in flow style, sections in SECTION_ORDER (which the
 // list's own order follows), witness's comment at the end of every setting line and never on a
