@@ -576,4 +576,36 @@ describe('one reading of an open red', () => {
     expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
     expect(relays(r)).toEqual([])
   })
+
+  // The green owed while a red is in flight names the latest genuine red's step, whichever row
+  // routes it: the evidence row read the latest red of any kind, and named the vacuous one's step.
+  it("a vacuous red on another step after a genuine one: the evidence row names the genuine red's step", async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    expect((await evidenceCycle(repo, wt, PLAN, 's2', at(110_000))).code).toBe(0)
+    expect((await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(120_000) })).code).toBe(0)
+    await redIn(repo, wt, 's1', at(130_000))
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+    const vacuous = await repo.cli(['test-evidence', PLAN, '--phase', 'red', '--step', 's2'], { cwd: wt, env: { ...fixtureEnv(), ...at(140_000) } })
+    expect(vacuous.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(relays(r)).toEqual([])
+  })
+
+  // s1's cycle closed at its green, so the failing green on s2 is what holds the plan in flight: the
+  // green owed still names s1, the latest genuine red's step, and the note says what failed rather
+  // than an open red s1 does not have. A red re-opened on s1 is its own, and keeps the s1 note
+  // (`a red open on any step` above).
+  it("a green that fails after the open step's cycle closed: the note says the suite failed", async () => {
+    const { repo, wt } = await startedThreeStepPlan()
+    expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
+    writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+    const failing = await repo.cli(['test-evidence', PLAN, '--phase', 'green', '--step', 's2'], { cwd: wt, env: { ...fixtureEnv(), ...at(150_000) } })
+    expect(failing.code).toBe(1)
+    const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
+    expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the suite failed at its last run — its green comes first')
+    expect(relays(r)).toEqual([])
+  })
 })
