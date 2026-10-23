@@ -24,6 +24,13 @@ describe('the harness reading (row 191 §4.1)', () => {
     ['tokens absent — Claude Code before the first response', env({ session: S, window: 1000000 }), 'no reading yet'],
     ['tokens 0 — Pi before the first response', env({ session: S, tokens: 0, window: 100000 }), 'no reading yet'],
     ['tokens null — Pi right after a compaction', env({ session: S, tokens: null, window: 100000 }), 'no reading yet'],
+    // D192. Pi's adapter writes the session alone when the harness gives no usage at all: a reading
+    // not taken yet when it is this session's, another session's when it is not. A window that is
+    // there is still checked.
+    ['the session alone — Pi with no usage to give', env({ session: S }), 'no reading yet'],
+    ['the session alone, another session’s', env({ session: 'other' }), 'stale'],
+    ['tokens with no window', env({ session: S, tokens: 5 }), 'no reading yet'],
+    ['a zero window with no tokens', env({ session: S, window: 0 }), 'malformed'],
   ])('%s → unmeasured', (_, e, reason) => expect(readFill(e)).toEqual({ measured: false, reason }))
   it('reads PI_SESSION_ID under pi, and ignores the claude variable there', () => {
     const r = JSON.stringify({ session: 'p1', tokens: 6020, window: 100000 })
