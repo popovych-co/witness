@@ -145,8 +145,8 @@ export function redCycleClosed(entries: Entry[]): boolean {
 // it is a criteria step of the plan. That green comes before anything else, wherever the red stands:
 // recorded out of order ahead of an unclosed step, re-opened on a closed one, or on a step whose own
 // cycle has since closed and a later green failed (D192). Read whether or not the plan's progress is
-// known. A criteria step alone, because `test-evidence` refuses any other a green: a red on a step
-// an amend removed or turned into scaffolding routes nothing.
+// known. A criteria step alone, because `test-evidence` refuses a green naming any other: after a red
+// on a step an amend removed or turned into scaffolding, the green owed names none.
 export function greenOwedStep(plan: CanonDoc, entries: Entry[]): string | undefined {
   const step = stepInFlight(entries)
   return manifest(plan).find((s) => s.kind === 'criteria' && s.id === step)?.id

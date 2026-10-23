@@ -230,8 +230,8 @@ function evidenceRow(
 
 // The run that works a plan's next unfinished step. A step whose latest red came back vacuous
 // gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
-// again and `next` would answer with the same line twice. An open cycle outranks that, since
-// its red was genuine and the green is what is owed.
+// again and `next` would answer with the same line twice. A green owed on the step (`greenOwedOn`)
+// outranks that: a green, not another red, is what the step is owed.
 function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
   if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
   if (greenOwedOn(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
@@ -339,23 +339,24 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   // Final review I1, its re-review and D192. A red in flight (steps.ts: the latest non-vacuous run
   // saw a failure) is one whatever step it names, or none: recorded out of order, ahead of a
   // scaffolding step left unclosed, re-opened on a closed step, or a fix round's. Whatever row
-  // follows, the session is mid-red, and the evidence row's phase reads the same answer.
+  // follows, the session is mid-red, and the evidence row's phase reads the same answer unless the
+  // diff is empty.
   const midRed = redInFlight(entries)
   const inFlight = midRed ? { midRed: true as const } : {}
   if (stepped?.next !== undefined) {
-    // Its green comes before the first unclosed step: routing that step's red or its close would
-    // leave the open red's green unrouted. D192: once the open step's own cycle has closed, what
-    // failed is a later green (a failing red would be the latest genuine red, its cycle still open),
-    // and the note says so rather than naming a red the step no longer holds. Not "the last run": a
-    // vacuous red after that green may have passed.
+    // The green owed comes before the first unclosed step: routing that step's red or its close
+    // would leave the green owed unrouted. D192: once the latest genuine red's cycle has closed
+    // (`redCycleClosed`), what failed is a later green (a failing red would be the latest genuine red,
+    // its cycle still open), and the note says so rather than naming a red its step no longer holds.
+    // Not "the last run": a vacuous red after that green may have passed.
     const owed = greenOwedStep(plan, entries)
-    const open = stepped.steps.find((s) => s.id === owed)
-    const { line, why } = stepLine(id, open ?? stepped.next, entries)
-    const ahead = open === undefined || open.id === stepped.next.id
+    const owedStep = stepped.steps.find((s) => s.id === owed)
+    const { line, why } = stepLine(id, owedStep ?? stepped.next, entries)
+    const ahead = owedStep === undefined || owedStep.id === stepped.next.id
       ? why
       : redCycleClosed(entries)
         ? 'the last green failed — a passing green comes first'
-        : `${open.id} has an open red — its green comes first`
+        : `${owedStep.id} has an open red — its green comes first`
     return {
       line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
     }
