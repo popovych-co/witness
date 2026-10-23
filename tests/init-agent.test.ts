@@ -247,7 +247,7 @@ describe('witness init --agent', () => {
     const settings = JSON.parse(repo.read('.claude/settings.json'))
     expect(settings.extraKnownMarketplaces).toEqual({ witness: { source: { source: 'github', repo: 'popovych-co/witness' } } })
     expect(settings.enabledPlugins).toEqual({ 'witness-context@witness': true })
-    expect(res.stdout.split('\n')).toContain('adapter: install once per machine — claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness then start a new session')
+    expect(res.stdout.split('\n')).toContain('adapter: install once per machine — claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness — then start a new session')
     expect(repo.git('status', '--porcelain')).toBe('')
   })
 

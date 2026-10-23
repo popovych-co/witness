@@ -409,7 +409,8 @@ describe('witness check — the context adapter', () => {
   })
 
   // A fresh session loads the plugin and a running one does not (P9, P10), so the remedy says so.
-  const INSTALL = 'install once per machine: claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness then start a new session'
+  // The follow-up is set off from the command, so copying the command takes nothing else with it.
+  const INSTALL = 'install once per machine: claude plugin marketplace add popovych-co/witness && claude plugin install witness-context@witness — then start a new session'
 
   it('names the one-time install in a Claude Code session no adapter wrote a reading for', async () => {
     const repo = await seededRepo()

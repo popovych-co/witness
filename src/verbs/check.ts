@@ -46,10 +46,11 @@ const f = (level: Finding['level'], area: string, field: string, rule: string, d
   ({ level, area, field, rule, detail })
 
 // Row 191 §4.11. What gives a harness's sessions the reading: on Claude Code the witness-context
-// plugin, installed per machine, which a fresh session loads and a running one does not (P9, P10);
-// on Pi the extension the payload installs.
+// plugin, installed per machine, which a fresh session loads and a running one does not (P9, P10),
+// the follow-up set off by a dash so the command copies on its own; on Pi the extension the payload
+// installs.
 const ADAPTER_REMEDY: Record<HarnessName, string> = {
-  'claude-code': `install once per machine: ${CONTEXT_INSTALL} then start a new session`,
+  'claude-code': `install once per machine: ${CONTEXT_INSTALL} — then start a new session`,
   pi: `run ${NPX_LATEST} init --agent pi`,
 }
 
