@@ -39,6 +39,10 @@ const SESSION = /^(["']?)session\1[ \t]*:(?=\s|$)/;
 // A plain key needs whitespace after its colon; a quoted one may take its value straight after,
 // the JSON-like flow form (`{"contextLimit":15}`).
 const LIMIT = /^(?:(["'])contextLimit\1\s*:|contextLimit\s*:(?=\s|$))\s*([\s\S]*)$/;
+// Only in a flow map, though (D192). In a block map a value straight after the colon is a YAML
+// error for a quoted key, and makes the whole of `session:` one string for a plain one: the CLI
+// refuses the config either way.
+const ADJACENT = /^(["']?)contextLimit\1\s*:(?=\S)/;
 
 // A comment opens at a `#` that starts the line or follows whitespace; inside a word it is text.
 const uncomment = (line) => line.replace(/(^|\s)#.*$/, '');
@@ -78,13 +82,16 @@ function flowEntries(text) {
   return undefined;
 }
 
-// The `session:` map's own entries, one `key: value` text each. Undefined when `session:` holds
-// no map — nothing under it is null, and a scalar or a sequence is not a map — all of which the
-// CLI refuses. A block map's entries are its lines at the first child's indentation, so a
-// `contextLimit` nested deeper is some other key's.
+// The `session:` map's own entries, one `key: value` text each, and whether the map is a flow
+// map. Undefined when `session:` holds no map — nothing under it is null, and a scalar or a
+// sequence is not a map — all of which the CLI refuses. A block map's entries are its lines at the
+// first child's indentation, so a `contextLimit` nested deeper is some other key's.
 function sessionEntries(lines, at) {
   const inline = uncomment(lines[at].replace(SESSION, '')).trim();
-  if (inline.startsWith('{')) return flowEntries([inline, ...lines.slice(at + 1).map(uncomment)].join('\n'));
+  if (inline.startsWith('{')) {
+    const entries = flowEntries([inline, ...lines.slice(at + 1).map(uncomment)].join('\n'));
+    return entries === undefined ? undefined : { flow: true, entries };
+  }
   if (inline !== '') return undefined;
   const entries = [];
   let indent;
@@ -97,7 +104,7 @@ function sessionEntries(lines, at) {
     if (lead === indent) entries.push(text);
   }
   if (indent === undefined || /^-(\s|$)/.test(entries[0])) return undefined;
-  return entries;
+  return { flow: false, entries };
 }
 
 /**
@@ -109,10 +116,12 @@ export function contextLimitOf(text) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
   const at = lines.findIndex((line) => SESSION.test(line));
   if (at === -1) return DEFAULT_LIMIT;
-  const entries = sessionEntries(lines, at);
-  if (entries === undefined) return undefined;
-  for (const entry of entries) {
-    const m = LIMIT.exec(entry.trim());
+  const session = sessionEntries(lines, at);
+  if (session === undefined) return undefined;
+  for (const entry of session.entries) {
+    const text = entry.trim();
+    if (!session.flow && ADJACENT.test(text)) return undefined;
+    const m = LIMIT.exec(text);
     if (!m) continue;
     const n = numberOf((m[2] ?? '').trim());
     return Number.isInteger(n) && n >= 1 && n <= 100 ? n : undefined;
