@@ -32,10 +32,13 @@ const SHAPES = [
   'schema: 1\nsession:\n  contextLimit: 15.0\n',
   'schema: 1\nsession:\n  contextLimit: "15"\n',
   // D192. A value straight after the key's colon reads only in a flow map. In a block map it is a
-  // YAML error for a quoted key, and makes the whole of `session:` one string for a plain one.
+  // YAML error for a quoted key. A plain one makes the whole of `session:` one string when no
+  // `key: value` entry stands beside it, and is a YAML error beside one, before or after it.
   'schema: 1\nsession:\n  "contextLimit":15\n',
   'schema: 1\nsession:\n  "contextLimit": 15\n',
   'schema: 1\nsession:\n  contextLimit:15\n',
+  'schema: 1\nsession:\n  bogus: 1\n  contextLimit:15\n',
+  'schema: 1\nsession:\n  contextLimit:15\n  bogus: 1\n',
 ]
 
 // The limit the CLI reads from a config: none when its YAML parser cannot read the file (loadConfig

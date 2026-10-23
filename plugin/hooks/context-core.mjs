@@ -40,8 +40,9 @@ const SESSION = /^(["']?)session\1[ \t]*:(?=\s|$)/;
 // the JSON-like flow form (`{"contextLimit":15}`).
 const LIMIT = /^(?:(["'])contextLimit\1\s*:|contextLimit\s*:(?=\s|$))\s*([\s\S]*)$/;
 // Only in a flow map, though (D192). In a block map a value straight after the colon is a YAML
-// error for a quoted key, and makes the whole of `session:` one string for a plain one: the CLI
-// refuses the config either way.
+// error for a quoted key. A plain one is no key there at all: with no `key: value` entry beside it,
+// the whole of `session:` is one string, and beside one, before or after it, it is a YAML error.
+// The CLI refuses the config either way.
 const ADJACENT = /^(["']?)contextLimit\1\s*:(?=\S)/;
 
 // A comment opens at a `#` that starts the line or follows whitespace; inside a word it is text.
