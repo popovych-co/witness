@@ -14,23 +14,27 @@
 // same, and keep only their harness's calls.
 //
 // The CLI never imports it: a runtime import from plugin/ is the packaging trap harness.ts
-// describes. So pctOf and windowLabel duplicate src/context.ts's on purpose, contextLimitOf
-// answers what config.ts's resolveSession answers, and tests/context-core.test.ts holds each
-// to its original.
+// describes. So pctOf and windowLabel duplicate src/context.ts's on purpose, contextLimitOf reads,
+// without the CLI's YAML parser, the forms of `session.contextLimit` the CLI writes and documents,
+// and tests/context-core.test.ts holds each to its original on those forms.
 
 export const DEFAULT_LIMIT = 20;
 const CONFIG = 'witness.config.yaml';
 
 // ── The limit (§4.2) ─────────────────────────────────────────────────────────────────────────
 //
-// `session.contextLimit` without a YAML dependency, in canon-guard.mjs's plain-reader style:
-// block or flow style, trailing comments, and only as a direct child of a top-level `session:`.
-// The answers are the CLI resolver's: DEFAULT_LIMIT when the section or the key is absent, the
-// integer when it is one from 1 to 100, and undefined for anything the resolver refuses. The
+// `session.contextLimit` without a YAML dependency, in canon-guard.mjs's plain-reader style. It
+// reads the plain block and flow forms the CLI writes and documents, trailing comments and quoted
+// keys included, and the key only as a direct child of a top-level `session:`. On those forms the
+// answers are the CLI resolver's: DEFAULT_LIMIT when the section or the key is absent, the integer
+// when it is one from 1 to 100, and undefined for anything the resolver refuses. It is not a YAML
+// parser: rarer spellings (anchors, tags, a whole file in flow style) may read otherwise. The
 // adapters stay silent on undefined; the CLI names the refusal on its next run.
 
 const SESSION = /^(["']?)session\1[ \t]*:(?=\s|$)/;
-const LIMIT = /^(["']?)contextLimit\1\s*:(?:\s+([\s\S]*))?$/;
+// A plain key needs whitespace after its colon; a quoted one may take its value straight after,
+// the JSON-like flow form (`{"contextLimit":15}`).
+const LIMIT = /^(?:(["'])contextLimit\1\s*:|contextLimit\s*:(?=\s|$))\s*([\s\S]*)$/;
 
 // A comment opens at a `#` that starts the line or follows whitespace; inside a word it is text.
 const uncomment = (line) => line.replace(/(^|\s)#.*$/, '');
@@ -98,7 +102,7 @@ function sessionEntries(lines, at) {
  */
 export function contextLimitOf(text) {
   if (typeof text !== 'string') return undefined;
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/);
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
   const at = lines.findIndex((line) => SESSION.test(line));
   if (at === -1) return DEFAULT_LIMIT;
   const entries = sessionEntries(lines, at);

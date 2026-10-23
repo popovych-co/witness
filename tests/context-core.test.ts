@@ -24,6 +24,8 @@ const SHAPES = [
   'schema: 1\nsession:\n  contextLimit: 15\n  bogus: 1\n',
   'schema: 1\nsession: {}\n',
   'schema: 1\nsession: { contextLimit: 15, bogus: 1 }\n',
+  'schema: 1\nsession: {"contextLimit":15}\n',
+  "schema: 1\nsession: {'contextLimit':15}\n",
   'schema: 1\nsession:\n  nested:\n    contextLimit: 5\n',
   'schema: 1\nsession:\n  contextLimit: 15.0\n',
   'schema: 1\nsession:\n  contextLimit: "15"\n',

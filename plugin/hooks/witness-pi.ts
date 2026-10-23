@@ -17,7 +17,7 @@
 // not garnish: without it an unparseable witness.config.yaml would refuse every write
 // in the repo, `src/` included. Do not remove it because canonGuard already catches.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -40,18 +40,16 @@ function dashboardText(cwd: string): string {
 }
 
 // Row 191 §4.6: the nearest witness.config.yaml up from the session's directory decides
-// the limit; with none, there is no limit and no warning.
+// the limit, as canon-guard.mjs finds its root: the walk stops at the first that exists.
+// One that cannot be read gives no limit, and so no warning; with none, the same.
 function configuredLimit(cwd: string): number | undefined {
-  for (const path of configCandidates(cwd)) {
-    let text: string;
-    try {
-      text = readFileSync(path, "utf8");
-    } catch {
-      continue;
-    }
-    return contextLimitOf(text);
+  const path = configCandidates(cwd).find((candidate) => existsSync(candidate));
+  if (path === undefined) return undefined;
+  try {
+    return contextLimitOf(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -88,7 +86,9 @@ export default function (pi: ExtensionAPI) {
         if (invokesWitness(event.input.command)) latched.add(session);
       }
     } catch {
-      /* no reading this time; the command runs all the same */
+      // No reading this time, and none left over: the last one names this same session, and
+      // the CLI would trust it as live. The command runs all the same, unmeasured.
+      delete process.env.WITNESS_CONTEXT;
     }
     return undefined;
   });

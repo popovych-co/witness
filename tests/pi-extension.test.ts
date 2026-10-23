@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import register from '../plugin/hooks/witness-pi.ts';
@@ -37,6 +37,23 @@ function witnessRepo(config = 'schema: 1\n'): string {
   for (const d of ['specs', 'plans', 'src']) mkdirSync(join(dir, d), { recursive: true });
   return dir;
 }
+
+// Row 191 §4.1: every bash tool_call writes process.env.WITNESS_CONTEXT, which every later bash
+// child inherits, the guard tests' bash calls included; the suite may itself run inside a
+// measured session. So each test in this file starts without the variable or the reviewer mark,
+// and gives back whatever the process had.
+const KEYS = ['WITNESS_CONTEXT', 'WITNESS_REVIEWER'] as const;
+let saved: Record<string, string | undefined> = {};
+beforeEach(() => {
+  saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  for (const k of KEYS) delete process.env[k];
+});
+afterEach(() => {
+  for (const k of KEYS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
+});
 
 describe('pi extension — canon guard', () => {
   it('blocks a write to canon and returns the guard reason to the model', async () => {
@@ -142,22 +159,6 @@ describe('pi extension — dashboard injection', () => {
 });
 
 describe('pi extension — the context reading and the warning (row 191 §4.1, §4.6)', () => {
-  // The adapter writes process.env, which every later bash child inherits; the suite may itself
-  // run inside a measured session. Each test starts without either variable and gives back
-  // whatever the process had.
-  const KEYS = ['WITNESS_CONTEXT', 'WITNESS_REVIEWER'] as const;
-  let saved: Record<string, string | undefined> = {};
-  beforeEach(() => {
-    saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
-    for (const k of KEYS) delete process.env[k];
-  });
-  afterEach(() => {
-    for (const k of KEYS) {
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    }
-  });
-
   const OVER = { tokens: 210000, contextWindow: 1000000, percent: 21 };
   const LIMIT_20 = 'schema: 1\nsession:\n  contextLimit: 20\n';
   const bashResult = (text: string) => ({
@@ -237,13 +238,42 @@ describe('pi extension — the context reading and the warning (row 191 §4.1, �
     expect(await run(s, '$WITNESS next')).toBeTruthy();
   });
 
+  // The walk stops at the nearest config that exists, as canon-guard.mjs's does: one that cannot
+  // be read (here a directory by that name) gives no limit, and a parent's never stands in for it.
+  it('stays silent when the nearest config cannot be read, whatever lies above it', async () => {
+    const s = overTheLimit();
+    const sub = join(s.ctx.cwd, 'sub');
+    mkdirSync(join(sub, 'witness.config.yaml'), { recursive: true });
+    s.ctx.cwd = sub;
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    rmSync(join(sub, 'witness.config.yaml'), { recursive: true });
+    expect(await run(s, '$WITNESS next')).toBeTruthy();      // a directory with none: one level up
+  });
+
+  // The last reading names this same session, so left standing it would pass the CLI's check as
+  // live for a command it was never taken for.
+  it('clears the last reading when a new one cannot be taken', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_call', { toolName: 'bash', input: { command: 'ls' } }, s.ctx);
+    expect(process.env.WITNESS_CONTEXT).toBeDefined();
+    s.ctx.getContextUsage = () => { throw new Error('no model'); };
+    expect(await s.fire('tool_call', { toolName: 'bash', input: { command: 'ls' } }, s.ctx)).toBeUndefined();
+    expect(process.env.WITNESS_CONTEXT).toBeUndefined();
+  });
+
   // tool_call is the event pi blocks the tool on when a handler throws (the guard tests above
-  // say why), so a broken context API must cost nothing but the reading.
+  // say why), so a broken context API must cost nothing but the reading. The session latches
+  // under the limit first, so tool_result too gets as far as the throwing call.
   it('never throws when the context API throws', async () => {
     const s = overTheLimit();
-    s.ctx.getContextUsage = () => { throw new Error('no model'); };
+    s.state.usage = { tokens: 190000, contextWindow: 1000000, percent: 19 };
     expect(await run(s, '$WITNESS next')).toBeUndefined();
-    expect(process.env.WITNESS_CONTEXT).toBeUndefined();
+    let calls = 0;
+    s.ctx.getContextUsage = () => { calls++; throw new Error('no model'); };
+    expect(await run(s, '$WITNESS next')).toBeUndefined();
+    expect(calls).toBe(2);                                   // tool_call's and tool_result's
     const blocked = await s.fire('tool_call', { toolName: 'write', input: { path: 'specs/a.md' } }, s.ctx);
     expect(blocked).toMatchObject({ block: true });
     expect(await s.fire('tool_call', { toolName: 'write', input: { path: 'src/x.ts' } }, s.ctx)).toBeUndefined();

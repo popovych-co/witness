@@ -110,4 +110,11 @@ describe('hooks.json', () => {
       expect(entry.hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/guard-state.mjs');
     }
   });
+
+  // Row 191 §4.1: the context adapter is a hooks module, which only `modules` loads; without the
+  // key every Claude Code session runs unmeasured, and no other test would notice.
+  it('names the context module beside the classic hooks', () => {
+    const cfg = JSON.parse(readFileSync(join(__dirname, '..', 'plugin', 'hooks', 'hooks.json'), 'utf8'));
+    expect(cfg.modules).toEqual(['./context.ts']);
+  });
 });
