@@ -1,4 +1,4 @@
-import { Lexer, isMap, isScalar, parseDocument, type Node } from 'yaml'
+import { Lexer, isCollection, isMap, isScalar, parseDocument, type Node } from 'yaml'
 import { LEGACY_COMMENTS } from './legacy-comments.js'
 import {
   CHANGE_CLASSES, FIRST_LINE, GROUP_HEADINGS, SCHEMA_COMMENT, SETTINGS, getIn, inlineValue, type Group,
@@ -125,14 +125,20 @@ export function readComments(text: string): { human: HumanComments; legacy: numb
     return lo
   }
 
-  // Every key the file holds, block or flow, with where it starts. Lists are values, not keys.
-  const keys: Array<{ path: string; offset: number; line: number }> = []
+  // Every key the file holds, block or flow: where it starts, its column, and the span of its
+  // value when that is a map or a list (a block map's span runs on over the comments that end
+  // it). Lists are values, not keys.
+  const keys: Array<{ path: string; offset: number; line: number; column: number; value?: [number, number] }> = []
   const walk = (node: unknown, prefix: string) => {
     if (!isMap(node)) return
     for (const pair of node.items) {
       if (!isScalar(pair.key) || !pair.key.range) continue
       const path = prefix ? `${prefix}.${String(pair.key.value)}` : String(pair.key.value)
-      keys.push({ path, offset: pair.key.range[0], line: lineOf(pair.key.range[0]) })
+      const at = pair.key.range[0]
+      // Only a map or a list can hold a comment line: a scalar's span also runs over a deeper
+      // comment on the line after it, which sits between two keys, not inside the value.
+      const range = isCollection(pair.value) ? pair.value.range : undefined
+      keys.push({ path, offset: at, line: lineOf(at), column: at - lineStarts[lineOf(at)]!, value: range ? [range[0], range[2]] : undefined })
       walk(pair.value as Node | null, path)
     }
   }
@@ -160,9 +166,17 @@ export function readComments(text: string): { human: HumanComments; legacy: numb
     }
     let key: string | undefined
     if (ownLine) {
-      key = keys.find((k) => k.offset > at)?.path
+      // A line of its own sits above the next key — unless it sits inside an earlier key's value
+      // (between a list's items, at the indented end of a map) and that next key is outside it:
+      // then it belongs to that value's key, wherever the rewrite moves the next one (final
+      // review I2). Indentation decides the map end: a block map's span runs on to the next key.
+      const column = at - lineStarts[line]!
+      const next = keys.find((k) => k.offset > at)
+      const holder = keys.filter((k) => k.value && k.value[0] <= at && at < k.value[1] && k.column < column).at(-1)
+      key = holder && !(next && next.path.startsWith(`${holder.path}.`)) ? holder.path : next?.path
       if (key === undefined) { human.end.push(comment); continue }
-      if (key === keys[0]?.path) { human.top.push(comment); continue }
+      if (key === next?.path && key === keys[0]?.path) { human.top.push(comment); continue }
+      if (key !== next?.path) moved++
     } else {
       // At the end of a line: the key that line opens, else the one whose value it sits inside.
       key = keys.find((k) => k.line === line)?.path ?? keys.filter((k) => k.offset < at).at(-1)?.path

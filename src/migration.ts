@@ -49,6 +49,25 @@ function prune(raw: Raw, known: ReadonlySet<string>): Raw {
   return walk(raw, '')
 }
 
+// Final review I1. YAML's empty value — `key:` with nothing after it, or a section whose every
+// line is commented out — means unset, and 0.20.0 read it so wherever it read loosely; an upgrade
+// must not refuse such a file. The one exception is `session`: the context adapter reads an empty
+// value there as no limit (row 191 §4.6), so the CLI keeps refusing it and the two agree.
+const EMPTY_REFUSED: ReadonlySet<string> = new Set(['session', 'session.contextLimit'])
+
+export function withoutEmpty(raw: Raw): Raw {
+  const walk = (obj: Raw, prefix: string): Raw => {
+    const out: Raw = {}
+    for (const [key, val] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${key}` : key
+      if (val === null && !EMPTY_REFUSED.has(path)) continue
+      out[key] = isMap(val) ? walk(val, path) : val
+    }
+    return out
+  }
+  return walk(raw, '')
+}
+
 // A setting can be filled only where every section above it is a map or absent: filling
 // under `session: 20` would hide the invalid section the resolver must refuse.
 function fillable(raw: Raw, path: string): boolean {

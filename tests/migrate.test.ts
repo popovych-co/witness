@@ -206,6 +206,41 @@ describe('witness migrate (row 193 §4.6)', () => {
     expect(out).toBe(fixture('consumer-a.migrated.yaml'))
   })
 
+  // Final review I1: an empty section or value read as unset is filled, not refused.
+  it('migrates empty sections and values an older file left', async () => {
+    const repo = committed('schema: 1\nship:\n  # test: npm test\ngates:\n  model: claude-opus-5-5\n  design:\n')
+    const r = await repo.cli(['migrate'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/^added: ship\.branch main — /m)
+    expect(repo.read('witness.config.yaml')).toContain('# test: npm test')
+    expect(loaded(repo).gates.design.model).toBe('claude-opus-5-5')
+  })
+
+  // Final review I4: a multi-line command holding a double quote crashed the rewrite.
+  it('migrates a multi-line command that holds double quotes', async () => {
+    const repo = committed('schema: 1\nship:\n  test: |\n    pnpm build\n    pnpm test --reporter "dot"\n')
+    const r = await repo.cli(['migrate'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(loaded(repo).ship.test).toBe('pnpm build\npnpm test --reporter "dot"\n')
+  })
+
+  // Final review (re-graded Important): a Windows checkout with core.autocrlf holds the migrated
+  // file with CRLF line ends; a second run must still read it as up to date.
+  it('is idempotent on a CRLF checkout', async () => {
+    const repo = committed(fixture('consumer-a.yaml'))
+    expect((await repo.cli(['migrate'])).code).toBe(0)
+    repo.git('config', 'core.autocrlf', 'true')
+    repo.git('rm', '-q', '--cached', 'witness.config.yaml')
+    repo.git('reset', '-q', '--hard')
+    expect(repo.read('witness.config.yaml')).toContain('\r\n')
+    const head = repo.git('rev-parse', 'HEAD')
+    const again = await repo.cli(['migrate'])
+    expect(again.code, again.stderr).toBe(0)
+    expect(again.stdout).toContain('config: schema 2 · up to date')
+    expect(repo.read('witness.config.yaml')).toContain('\r\n')
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+  })
+
   it('acts on the primary root from a worktree', async () => {
     const repo = committed(fixture('consumer-b.yaml'))
     const wt = join(repo.root, '.witness', 'worktrees', 'p1')

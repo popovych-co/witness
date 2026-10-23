@@ -83,6 +83,15 @@ describe('witness check', () => {
     expect(res.stdout).toContain('orphan-journal')
   })
 
+  // Final review (re-graded Important): every refusal says how to fix it, check's included.
+  it('a config refusal shows its fix', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { session: { contextLimt: 30, contextLimit: undefined } })
+    const res = await repo.cli(['check'])
+    expect(res.stdout).toContain('did you mean session.contextLimit?')
+    expect(res.stdout).toContain('contextLimit: 20 under session: — or run witness migrate')
+  })
+
   it('flags a configured docs path that does not exist', async () => {
     const repo = await seededRepo()
     patchConfig(repo, { docs: { conventions: ['docs/conventions.md'] } })

@@ -204,7 +204,7 @@ export const SETTINGS: readonly Setting[] = [
 export const RETIRED: readonly Retired[] = [
   {
     path: 'gates.model', until: 1, shape: PIN,
-    instead: "each gate's own model (gates.<gate>.model) and arbiter.model — witness migrate writes them from it",
+    instead: "each gate's own model (gates.<gate>.model) and arbiter.model — set them, then delete gates.model",
   },
 ]
 
@@ -296,10 +296,12 @@ export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
 }
 
-// A value as one line of the file. Quoted only where YAML needs it, except that a command
-// holding double quotes is written in single ones, as §4.5 writes the runner: shell quoting
-// reads plainly inside them. Collections are flow style (`[a, b]`, `{k: [a]}`).
+// A value as one line of the file. Quoted only where YAML needs it, except that a one-line
+// command holding double quotes is written in single ones, as §4.5 writes the runner: shell
+// quoting reads plainly inside them. A string of several lines is one double-quoted line (JSON
+// is YAML), so the comment after it cannot fall inside it. Collections are flow style.
 export function inlineValue(val: unknown): string {
+  if (typeof val === 'string' && val.includes('\n')) return JSON.stringify(val)
   if (typeof val === 'string' && val.includes('"') && !val.includes("'")) return `'${val}'`
   return stringify(val, { collectionStyle: 'flow', flowCollectionPadding: false, lineWidth: 0 }).trimEnd()
 }

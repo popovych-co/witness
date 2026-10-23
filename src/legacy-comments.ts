@@ -20,4 +20,11 @@ export const LEGACY_COMMENTS: ReadonlySet<string> = new Set([
   'witness.config.yaml — the whole surface',
   "the judge — which harness runs this repo's gate reviewers; declared wins",
   'detection wins; this is the fallback',
+  // The end-of-line comments of the template's commented-out settings, which the template meant
+  // the human to uncomment (final review I3).
+  'optional canon roots (defaults: specs, plans); git mv existing docs when changing',
+  'repo docs registry — enumerated keys, unknown keys refused',
+  '→ injected into code-reviewer at implement + ship (cache-keyed)',
+  "the judge — which harness runs this repo's gate reviewers;",
+  'ms per reviewer invocation (machine auth/extension knobs live in .witness/config.local.yaml)',
 ])

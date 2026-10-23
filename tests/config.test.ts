@@ -277,11 +277,15 @@ describe('autonomy (A1)', () => {
   })
   it('refuses anything but on or off', () => {
     const repo = tmpRepo()
-    for (const bad of ['true', 'yes', '1', '""', '~']) {
+    for (const bad of ['true', 'yes', '1', '""']) {
       repo.write('witness.config.yaml', `schema: 1\nautonomy: ${bad}\n`)
       const r = loadConfig(repo.root)
       expect(!r.ok && r.violations[0]).toMatchObject({ field: 'autonomy', rule: 'invalid', want: 'on | off' })
     }
+    // An empty value is unset (final review I1) — off, as the hook-side autonomyAt reads it too.
+    repo.write('witness.config.yaml', 'schema: 1\nautonomy: ~\n')
+    const empty = loadConfig(repo.root)
+    expect(empty.ok && empty.value.autonomy).toBe(false)
   })
 })
 

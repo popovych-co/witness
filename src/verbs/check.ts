@@ -97,7 +97,8 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const skillsAbsent: string[] = []
 
   const cfg = loadConfig(root)
-  if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, x.got)))
+  // The want rides along: a config refusal says how to fix it (row 193), check's included.
+  if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, `${x.got} — ${x.want}`)))
   else if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
 
   // Machine config is read here as FINDINGS, never a refusal — same doctrine that

@@ -93,6 +93,31 @@ describe('typed config from the list (row 193, schema 1 read in memory)', () => 
     expect(load('schema: 1\ndocs: { conventions: [] }\n').docs).toEqual({})
   })
 
+  // Final review I1. 0.20.0 read an empty value (YAML null) where it read loosely — a section
+  // whose every line is commented out, an empty gate block, `model:` — as unset; an upgrade
+  // must not refuse those files.
+  it('reads empty values in an older file as unset, as 0.20.0 did', () => {
+    const cfg = load([
+      'schema: 1', 'harness:', 'paths:', 'ship:', '  # test: npm test', 'criteria:',
+      'gates:', '  model: claude-opus-5-5', '  design:', '  plan: { model: }', '',
+    ].join('\n'))
+    expect(cfg.harness).toBeUndefined()
+    expect(cfg.paths).toEqual({ specs: 'specs', plans: 'plans', designs: 'designs' })
+    expect(cfg.ship).toMatchObject({ test: undefined, lint: undefined, branch: 'main' })
+    expect(cfg.criteria.runner).toBeUndefined()
+    expect(cfg.gates.design.model).toBe('claude-opus-5-5')
+    expect(cfg.gates.plan.model).toBe('claude-opus-5-5')
+    expect(cfg.arbiter.model).toBe('claude-opus-5-5')
+  })
+
+  it('still refuses an empty session value, which the context adapter reads as no limit', () => {
+    for (const text of ['schema: 1\nsession:\n', 'schema: 1\nsession:\n  contextLimit:\n']) {
+      const repo = tmpRepo()
+      repo.write('witness.config.yaml', text)
+      expect(loadConfig(repo.root).ok, text).toBe(false)
+    }
+  })
+
   it('arbiter resolves the pin it used before', () => {
     const cfg = load(fixture('consumer-a.yaml'))
     const r = resolveModel(cfg, { shipped: [], local: [] }, 'arbiter')

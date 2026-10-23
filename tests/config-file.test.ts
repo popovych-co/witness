@@ -84,6 +84,49 @@ describe('readComments (row 193 §4.5 ownership)', () => {
     expect(human.above.get('session.contextLimit')).toEqual(["# the team's choice"])
   })
 
+  // Final review I2. A comment inside a value — between a list's items, at the indented end of a
+  // map — belongs to that value's key, wherever the next key sits after the rewrite reorders it.
+  it('files a comment inside a value under that value\'s key, not the next key', () => {
+    const { human } = readComments([
+      'schema: 2',
+      'docs:',
+      '  conventions:',
+      '    - a.md',
+      '    # b is the API doc, keep it last',
+      '    - b.md',
+      '  design: [x.md,',
+      '    # y is the dark variant',
+      '    y.md]',
+      'gates:',
+      '  plan:',
+      '    model: m',
+      '  # end of the gates map',
+      '# about ship, at column zero',
+      'ship:',
+      '  test: t',
+      '',
+    ].join('\n'))
+    expect(human.above.get('docs.conventions')).toEqual(['# b is the API doc, keep it last'])
+    expect(human.above.get('docs.design')).toEqual(['# y is the dark variant'])
+    expect(human.above.get('gates')).toEqual(['# end of the gates map'])
+    expect(human.above.get('ship')).toEqual(['# about ship, at column zero'])
+  })
+
+  it('drops the template comments of settings the human uncommented', () => {
+    const uncommented = fixture('init-0.20.0.yaml')
+      .replace('# paths: {', 'paths: {').replace('# docs:  ', 'docs:    ')
+      .replace('#   conventions:', '  conventions:').replace('# harness: pi', 'harness: pi')
+      .replace('  # reviewerTimeoutMs:', '  reviewerTimeoutMs:')
+    expect(uncommented).toMatch(/^paths: \{/m)
+    expect(uncommented).toMatch(/^ {2}reviewerTimeoutMs: 600000/m)
+    expect(humanLines(readComments(uncommented).human)).toEqual([])
+  })
+
+  it('keeps a multi-line command that holds double quotes', () => {
+    const v = withValues(defaults(), { ship: { test: 'pnpm build\npnpm test --reporter "dot"\n' } })
+    expect(parse(renderConfig(v))).toEqual(v)
+  })
+
   it('keeps comments at a map end, between deeper settings and at file end', () => {
     const text = [
       '# above everything, a human note',
@@ -101,7 +144,7 @@ describe('readComments (row 193 §4.5 ownership)', () => {
     ].join('\n')
     const { human } = readComments(text)
     expect(human.top).toEqual(['# above everything, a human note'])
-    expect(human.above.get('drive')).toEqual(["# at the end of session's map"])
+    expect(human.above.get('session')).toEqual(["# at the end of session's map"])   // final review I2: it stays in its section
     expect(human.above.get('drive.caps.upstream')).toEqual(['# deeper than its neighbours'])
     expect(human.end).toEqual(['# at the end of the file'])
     const out = renderConfig(defaults(), human)

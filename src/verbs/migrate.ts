@@ -10,7 +10,7 @@ import { inlineValue, readComments, renderConfig, type HumanComments } from '../
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { resolveDriver } from '../harness.js'
 import { acquireLock } from '../lock.js'
-import { deepEqual, migrateValues, type Change } from '../migration.js'
+import { deepEqual, migrateValues, withoutEmpty, type Change } from '../migration.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { GATE_NAMES, SETTINGS, getIn, settingAt } from '../settings.js'
 import { kv } from '../toon.js'
@@ -126,7 +126,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   } catch (e) {
     return refused([v('witness.config.yaml', 'yaml-parse', String((e as Error).message).slice(0, 120), 'valid YAML')])
   }
-  const raw = (parsed ?? {}) as Record<string, unknown>
+  const raw = withoutEmpty((parsed ?? {}) as Record<string, unknown>)
   const schema = raw.schema
   if (typeof schema !== 'number' || !Number.isInteger(schema)) {
     return refused([v('schema', 'required', String(schema ?? 'absent'), 'integer schema version')])
@@ -151,7 +151,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const { changes } = written.value
   const comments = readComments(oldText)
   const newText = renderConfig(written.value.raw, comments.human)
-  const after = resolveSettings(parseYaml(newText) as Record<string, unknown>, 'strict')
+  let reread: Record<string, unknown>
+  try {
+    reread = parseYaml(newText) as Record<string, unknown>
+  } catch (e) {
+    return refused([v('witness.config.yaml', 'invalid-output', String((e as Error).message).slice(0, 120),
+      `a file that resolves under schema ${SCHEMA_VERSION} — nothing was written, report this`)])
+  }
+  const after = resolveSettings(reread, 'strict')
   if (!after.ok) {
     return refused(after.violations.map((x) => v(x.field, 'invalid-output', `${x.rule}: ${x.got}`,
       `a file that resolves under schema ${SCHEMA_VERSION} — nothing was written, report this`)))
@@ -159,7 +166,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const guard = guardMigration({ before: before.value, after: after.value, changes, human: comments.human, newText })
   if (guard.length) return refused(guard)
 
-  if (newText === oldText) {
+  // Line ends and a BOM are the checkout's, not the file's: with core.autocrlf a Windows working
+  // copy of an up-to-date file reads CRLF, and is still up to date.
+  if (newText === oldText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')) {
     ctx.out(kv('config', `schema ${schema} · up to date`))
     return EXIT.OK
   }

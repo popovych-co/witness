@@ -58,6 +58,18 @@ describe('schema 2 (row 193)', () => {
     patchConfig(repo, { gates: { model: 'claude-opus-5-5' } })
     const r = loadConfig(repo.root)
     expect(!r.ok && r.violations[0]).toMatchObject({ field: 'gates.model', rule: 'unknown-key', want: RETIRED[0]!.instead })
+    // Final review I5: `migrate` refuses this same key in a schema-2 file, so the fix is the edit
+    expect(RETIRED[0]!.instead).not.toContain('witness migrate')
+    expect(RETIRED[0]!.instead).toContain('delete gates.model')
+  })
+
+  it('an empty value in a current file refuses with the line to add', async () => {
+    const { repo } = await initRepo()
+    patchConfig(repo, { ship: { lint: null } })
+    const r = loadConfig(repo.root)
+    expect(!r.ok && r.violations).toEqual([{
+      field: 'ship.lint', rule: 'missing-setting', got: 'absent', want: 'lint: npm run lint under ship: — or run witness migrate',
+    }])
   })
 
   it('reads a schema-1 file through the upgrade and warns', async () => {

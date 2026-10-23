@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { inlineValue } from './config-file.js'
-import { migrateValues, newestSchema, olderSchemaWarning, sectionsOf } from './migration.js'
+import { migrateValues, newestSchema, olderSchemaWarning, sectionsOf, withoutEmpty } from './migration.js'
 import { checkPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import {
@@ -497,7 +497,7 @@ export function loadConfig(root: string): Result<Config> {
   } catch (e) {
     return refuse([v('witness.config.yaml', 'yaml-parse', String((e as Error).message).slice(0, 120), 'valid YAML')])
   }
-  const obj = (raw ?? {}) as Record<string, unknown>
+  const obj = withoutEmpty((raw ?? {}) as Record<string, unknown>)
   const schema = obj.schema
   if (typeof schema !== 'number' || !Number.isInteger(schema)) {
     return refuse([v('schema', 'required', String(schema ?? 'absent'), 'integer schema version')])
