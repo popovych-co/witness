@@ -96,11 +96,13 @@ describe('step progress (row 191 §4.3)', () => {
   // failure, and its step is the latest genuine red's. Read from the latest red alone, `next` and the
   // verdict at a step close disagreed on the two shapes below.
   it('a red is in flight while the latest non-vacuous run saw a failure', () => {
-    // A green that failed after a passing one: the suite failed at its last run. Closing is untouched.
+    // A green that failed after a passing one: the last green failed, so a red is in flight again,
+    // and s1's own cycle stays closed. Closing is untouched.
     const regressed = [red('s1'), green('s1'), green('s1', false)] as Entry[]
     expect(redInFlight(regressed)).toBe(true)
     expect(redOpenStep(plan, regressed)).toBe('s1')
     expect(openRed(regressed, 's1')).toBe(true)
+    expect(redCycleClosed(regressed)).toBe(true)
     expect(stepProgress(plan, regressed)).toMatchObject({ done: 1, next: { id: 's2' } })
     expect(redInFlight([...regressed, green()] as Entry[])).toBe(false)
     // A vacuous red is no cycle (Plan's call 3), so the genuine red before it stays in flight.

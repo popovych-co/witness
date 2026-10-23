@@ -339,15 +339,18 @@ export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: st
   const inFlight = midRed ? { midRed: true as const } : {}
   if (stepped?.next !== undefined) {
     // Its green comes before the first unclosed step: routing that step's red or its close would
-    // leave the open red's green unrouted. D192: once the open step's own cycle closed, a later run
-    // is what failed (a green on the next step, say), and the note names that rather than a red the
-    // step no longer holds.
+    // leave the open red's green unrouted. D192: once the open step's own cycle has closed, what
+    // failed is a later green (a failing red would be the latest genuine red, its cycle still open),
+    // and the note says so rather than naming a red the step no longer holds. Not "the last run": a
+    // vacuous red after that green may have passed.
     const redOpen = redOpenStep(plan, entries)
     const open = stepped.steps.find((s) => s.id === redOpen)
     const { line, why } = stepLine(id, open ?? stepped.next, entries)
     const ahead = open === undefined || open.id === stepped.next.id
       ? why
-      : `${redCycleClosed(entries) ? 'the suite failed at its last run' : `${open.id} has an open red`} — its green comes first`
+      : redCycleClosed(entries)
+        ? 'the last green failed — a passing green comes first'
+        : `${open.id} has an open red — its green comes first`
     return {
       line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
     }

@@ -610,7 +610,8 @@ describe('one reading of an open red', () => {
   const slice = (r: CliResult) => lines(r).find((l) => l.startsWith('slice: '))
 
   // The step row and the verdict read it closed (no red after the passing green), the evidence row
-  // open (the latest green failed). The suite failed at its last run: open.
+  // open (the latest green failed). The last green failed: open. s1's own cycle closed at its first
+  // green, so the note says what failed rather than an open red s1 does not hold.
   it('a green that fails after a passing one: next routes its green, and a step close says continue', async () => {
     const { repo, wt } = await startedThreeStepPlan()
     expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
@@ -619,6 +620,7 @@ describe('one reading of an open red', () => {
     expect(failing.code).toBe(1)
     const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
     expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the last green failed — a passing green comes first')
     expect(relays(r)).toEqual([])
     const closed = await repo.cli(['step-close', PLAN, '--step', 's3'], { cwd: wt, env: at(210_000) })
     expect(slice(closed)).toBe('slice: continue')
@@ -661,7 +663,7 @@ describe('one reading of an open red', () => {
   // green owed still names s1, the latest genuine red's step, and the note says what failed rather
   // than an open red s1 does not have. A red re-opened on s1 is its own, and keeps the s1 note
   // (`a red open on any step` above).
-  it("a green that fails after the open step's cycle closed: the note says the suite failed", async () => {
+  it("a green that fails after the open step's cycle closed: the note says the last green failed", async () => {
     const { repo, wt } = await startedThreeStepPlan()
     expect((await evidenceCycle(repo, wt, PLAN, 's1', at(100_000))).code).toBe(0)
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
@@ -669,7 +671,7 @@ describe('one reading of an open red', () => {
     expect(failing.code).toBe(1)
     const r = await repo.cli(['next'], { cwd: wt, env: at(210_000) })
     expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
-    expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the suite failed at its last run — its green comes first')
+    expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the last green failed — a passing green comes first')
     expect(relays(r)).toEqual([])
   })
 })
