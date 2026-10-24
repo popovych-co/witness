@@ -3,9 +3,12 @@ import { appendEntry } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import {
-  approve, fakeCtx, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo,
+  approve, fakeCtx, fakeScenario, fixtureEnv, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, stampLive,
   writePlan, writeSpec, PLAN_BODY, PLAN_META, SPEC_BODY, type TestRepo,
 } from './helpers.js'
+
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+const amend = (repo: TestRepo, decisions: unknown) => repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions })])
 
 const REOPEN = { artifact: 'auth-refresh', gate: 'design', round: 1 }
 
@@ -41,6 +44,44 @@ describe('next — doc-gate lapse', () => {
     const r = await repo.cli(['next'])
     expect(r.code).toBe(0)
     expect(r.stdout).toContain(`gate decompose --effort ${repo.effort}`)
+  })
+
+  it('an amendment re-arms decompose until a round settles it (row 52)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    const env = fixtureEnv()
+    expect(await nextLine(repo, { env })).toContain('witness write auth-refresh-plan-1')
+    await amend(repo, D)
+    let out = await nextLine(repo, { env })
+    expect(out).toContain('next: witness gate decompose --effort auth-hardening')
+    expect(out).not.toContain('auth-refresh-plan-1')
+
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
+    const g = await repo.cli(['gate', 'decompose', '--effort', 'auth-hardening'], { env: gateEnv(scenario) })
+    expect(g.code).toBe(1)                                   // decision-coverage fails: d1, d2 uncarried
+    expect((await repo.cli(['decide', 'decompose', 'auth-hardening', '--revise', '--note', 'carry the decisions'])).code).toBe(0)
+    out = await nextLine(repo, { env })
+    expect(out).toContain('witness write <spec-id> --effort auth-hardening')
+    expect(out).toContain('stage: decompose')
+    expect(out).not.toContain('auth-refresh-plan-1')
+
+    expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1', 'd2'] })).code).toBe(0)
+    await repo.cli(['gate', 'decompose', '--effort', 'auth-hardening'], { env: gateEnv(scenario) })
+    expect((await repo.cli(['decide', 'decompose', 'auth-hardening', '--approve'])).code).toBe(0)
+    expect(await nextLine(repo, { env })).toContain('witness write auth-refresh-plan-1')
+  })
+
+  it('amending a finished effort re-arms nothing', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    await amend(repo, D)
+    expect(await nextLine(repo, { env: fixtureEnv() })).not.toContain('gate decompose')
   })
 })
 

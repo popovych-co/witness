@@ -1,10 +1,12 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, writePlan, approve } from './helpers.js'
+import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, writePlan, approve, type TestRepo } from './helpers.js'
 
 const cover = (ids: string[]) => ({
   coverage: ids.map((id) => ({ anchor: `${id} > ## Behavior`, note: 'read' })),
@@ -119,3 +121,50 @@ describe('decompose gate', () => {
     expect(ack.detail).toContain('auth-refresh-plan-1')
   })
 })
+
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+const amend = (repo: TestRepo, decisions: unknown) => repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions })])
+const criticStdin = (scenario: string) => readFileSync(join(callFor(scenario, 'slicing-critic')!, 'stdin'), 'utf8')
+
+describe('decompose gate — decision coverage (row 198)', () => {
+  it('decision-coverage fails on a decision no spec carries, and a carries-only fix is judged afresh', async () => {
+    const repo = await seededRepo()
+    await amend(repo, D)
+    await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })
+    const scenario = fakeScenario()
+    putVerdict(scenario, cover(['auth-refresh']))
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    await runGate(ctx, 'decompose', 'auth-hardening', { fresh: false, manual: false })
+    const first = runsOf(repo, 'auth-hardening').at(-1)!
+    const before = first.checks.find((c) => c.name === 'decision-coverage')!
+    expect(before.ok).toBe(false)
+    expect(before.detail).toBe('uncarried decisions: d2')
+    const calls = callCount(scenario)
+
+    await writeSpec(repo, 'auth-refresh', { carries: ['d1', 'd2'] })   // content unchanged, carries only
+    await runGate(ctx, 'decompose', 'auth-hardening', { fresh: false, manual: false })
+    const second = runsOf(repo, 'auth-hardening').at(-1)!
+    expect(second.reviewed_sha).not.toBe(first.reviewed_sha)
+    expect((second as { cached?: boolean }).cached).toBeFalsy()
+    const after = second.checks.find((c) => c.name === 'decision-coverage')!
+    expect(after.ok).toBe(true)
+    expect(after.detail).toBe('2 decisions carried')
+    expect(callCount(scenario)).toBeGreaterThan(calls)
+    const stdin = criticStdin(scenario)
+    expect(stdin).toContain('### Decision coverage (journaled)')
+    expect(stdin).toContain('auth-refresh: carries d1 d2')
+  })
+
+  it('an effort with no decisions passes decision-coverage and its critic reads no decision table', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const scenario = fakeScenario()
+    putVerdict(scenario, cover(['auth-refresh']))
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'decompose', 'auth-hardening', { fresh: false, manual: false })
+    const check = runsOf(repo, 'auth-hardening').at(-1)!.checks.find((c) => c.name === 'decision-coverage')!
+    expect(check.ok).toBe(true)
+    expect(check.detail).toBe('the recap carries no decisions')
+    expect(criticStdin(scenario)).not.toContain('### Decision coverage (journaled)')
+  })
+})
+

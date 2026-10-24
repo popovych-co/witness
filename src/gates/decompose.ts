@@ -54,6 +54,13 @@ registerGate({
       detail: missing.length ? `uncovered goals: ${missing.join(' ')}` : `${goals.length} goals covered` })
     checks.push({ name: 'spec-coverage', ok: orphans.length === 0,
       detail: orphans.length ? `specs covering no goal: ${orphans.join(' ')}` : 'every spec covers ≥ 1 goal' })
+    // Row 198. Every recap decision lands in ≥ 1 spec. No reverse rule: a spec may carry none.
+    const decisions = (recap.decisions ?? []).map((d) => d.id)
+    const carried = new Set(docs.flatMap((d) => writes.get(String(d.meta.id))?.carries ?? []))
+    const uncarried = decisions.filter((d) => !carried.has(d))
+    checks.push({ name: 'decision-coverage', ok: uncarried.length === 0,
+      detail: decisions.length === 0 ? 'the recap carries no decisions'
+        : uncarried.length ? `uncarried decisions: ${uncarried.join(' ')}` : `${decisions.length} decisions carried` })
 
     const staleChildren = canon.docs
       .filter((p) => p.meta.type === 'plan' && String(p.meta.status) === 'in-progress')
@@ -79,9 +86,14 @@ registerGate({
     const coverageTable = docs
       .map((d) => `${String(d.meta.id)}: covers ${(writes.get(String(d.meta.id))?.covers ?? []).join(' ') || '(none)'}`)
       .join('\n')
+    // Only when the recap carries decisions, so a decision-free effort's prompt is today's (c2).
+    const decisionTable = decisions.length === 0 ? undefined : docs
+      .map((d) => `${String(d.meta.id)}: carries ${(writes.get(String(d.meta.id))?.carries ?? []).join(' ') || '(none)'}`)
+      .join('\n')
     const promptBody = [
       '### Confirmed scope recap (latest)', canonicalJson(recap),
       '### Goal coverage (journaled)', coverageTable,
+      ...(decisionTable !== undefined ? ['### Decision coverage (journaled)', decisionTable] : []),
       ...docs.flatMap((d) => [`### Spec: ${String(d.meta.id)}`, serializeDoc({ meta: d.meta, body: d.body })]),
     ].join('\n\n')
 
@@ -90,7 +102,7 @@ registerGate({
     return ok<GateInput>({
       class: (recap.class ?? 'feature') as GateInput['class'],
       reviewedSha: sha,
-      ...(tree ? { snapshot: { tree, context: contextDigest(canonicalJson(recap), coverageTable) } } : {}),
+      ...(tree ? { snapshot: { tree, context: contextDigest(canonicalJson(recap), coverageTable, ...(decisionTable !== undefined ? [decisionTable] : [])) } } : {}),
       reviewed: { kind: 'docs', docs: docs.map((d) => ({ id: String(d.meta.id), body: d.body })) },
       promptBody,
       checks,

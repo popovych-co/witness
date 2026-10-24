@@ -118,8 +118,15 @@ export function effortReviewedSha(
 ): { sha: string; docs: CanonDoc[] } {
   const recap = latestRecap(root, effort)
   const docs = effortSpecs(root, canon, effort)
+  const writes = effortWrites(root, effort)
+  // Row 198 (Builder's call 7). The decision mapping is judged content, so a carries-only
+  // rewrite moves the identity rather than resuming into row 112's `cached` replay — a spec
+  // that carries nothing keeps today's bytes (c2). `covers` keeps the replay row 112 records.
   const lines = docs
-    .map((d) => `${String(d.meta.id)}:${canonicalSha(d.meta, d.body)}`)
+    .map((d) => {
+      const carries = writes.get(String(d.meta.id))?.carries ?? []
+      return `${String(d.meta.id)}:${canonicalSha(d.meta, d.body)}${carries.length ? `:carries=${carries.join('+')}` : ''}`
+    })
     .sort()
   return { sha: sha256([canonicalJson(recap ?? {}), '\n', lines.join('\n')]), docs }
 }

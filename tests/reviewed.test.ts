@@ -172,6 +172,19 @@ describe('effort reviewed set', () => {
   })
 })
 
+describe('effort reviewed set — carries (row 198)', () => {
+  it("carries join the effort's identity only when present", async () => {
+    const repo = await seededRepo()
+    await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text: 'Rotation is server-side' }] })])
+    await writeSpec(repo, 'auth-refresh')
+    const s1 = effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha
+    await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })
+    expect(effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha).not.toBe(s1)
+    await writeSpec(repo, 'auth-refresh')
+    expect(effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha).toBe(s1)
+  })
+})
+
 describe('planPairSha', () => {
   it('changes when either the plan or the parent changes', async () => {
     const repo = await seededRepo()

@@ -20,7 +20,7 @@ describe('witness-original reviewer prompts', () => {
 
   it('slicing-critic names its seven lenses', () => {
     const body = readFileSync(promptPath('slicing-critic'), 'utf8');
-    for (const lens of ['Slice quality', 'Coverage quality', 'Non-goal violations', 'Criteria adequacy', 'Behavior-only', 'Summary accuracy', 'Depends refs']) {
+    for (const lens of ['Slice quality', 'Coverage quality', 'Non-goal violations', 'Criteria adequacy', 'Behavior-only', 'Summary accuracy', 'Depends refs', 'Decision fidelity']) {
       expect(body).toContain(lens);
     }
   });
