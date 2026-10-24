@@ -131,9 +131,9 @@ describe('the same-home relay ends the turn (rows 82 · 191)', () => {
 describe('the stage skills act on the context warning (row 191 §4.6)', () => {
   const BULLET = "- **A `witness: context …` line is addressed to you.** Once per session, when this session's context has filled to the configured limit, it follows a command's result. Finish the act you are in"
   it.each([
-    ['witness-brainstorm', '(here: the interview, through its `recap`)'],
+    ['witness-brainstorm', '(here: the answer you are on, through its `witness draft` save)'],   // row 199
     ['witness-decompose', '(here: the specs, through their writes and the gate)'],
-    ['witness-design', '(here: the look, through `witness design` and its gate)'],
+    ['witness-design', '(here: the answer you are on, through its `witness draft` save — or, once the full look is authored, the look through `witness design` and its gate)'],
     ['witness-plan', '(here: the plan, through its write and gate)'],
   ])('%s finishes its act, then hands back to /witness', (name, act) => {
     expect(skill(name)).toContain(

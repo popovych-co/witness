@@ -1,6 +1,7 @@
 import type { Ctx } from './cli.js'
 import { loadConfig, type Config } from './config.js'
 import { pctOf, reached, readFill, sessionHash, sessionIdOf, windowLabel, type Fill } from './context.js'
+import { draftSessions } from './drafts.js'
 import { primaryRoot } from './gitio.js'
 import { relayLine, resolveDriver } from './harness.js'
 import { readStream, streamIds, type Entry, type EntryType, type JournalCtx } from './journal.js'
@@ -25,8 +26,11 @@ const stampOf = (e: Entry): Partial<JournalCtx> =>
 // a fresh session from handing over before it has done anything. A vacuous red is no act (final
 // review I3): it observed the behavior already there, so a session opened over the limit that only
 // re-ran one would hand over, and so would every fresh session after it.
+// Row 199: a settled answer saved to a draft is stage work too — the grill's and the design
+// session's boundary — so it counts beside the journal. Reading a draft back is not: a relayed
+// session that has only resumed has done nothing yet.
 export function sessionActed(root: string, hash: string): boolean {
-  return streamIds(root).some((id) =>
+  return draftSessions(root).includes(hash) || streamIds(root).some((id) =>
     readStream(root, id).some((e) => ACT_KINDS.has(e.t) && !vacuousEvidence(e) && stampOf(e).session === hash))
 }
 

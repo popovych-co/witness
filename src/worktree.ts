@@ -57,10 +57,13 @@ export function ensureExcluded(root: string): void {
   const current = existsSync(excludePath) ? readFileSync(excludePath, 'utf8') : ''
   const lines = current.split('\n')
   // screens are witnessed evidence, regenerable, never committed — ignored in every
-  // worktree so they stay out of changedFiles() and the reviewed tree-sha
-  for (const line of ['.witness/worktrees/', '.witness/screens/']) {
-    if (!lines.includes(line)) appendFileSync(excludePath, `${line}\n`)
-  }
+  // worktree so they stay out of changedFiles() and the reviewed tree-sha. Drafts (row 199)
+  // are a conversation's local memory, never committed: a repo whose .gitignore predates
+  // them would otherwise show each one to `git status` and to a human's `git add -A`
+  const missing = ['.witness/worktrees/', '.witness/screens/', '.witness/drafts/'].filter((l) => !lines.includes(l))
+  // A file a human left without a final newline keeps its last line whole.
+  const sep = current !== '' && !current.endsWith('\n') ? '\n' : ''
+  if (missing.length) appendFileSync(excludePath, `${sep}${missing.map((l) => `${l}\n`).join('')}`)
 }
 
 // Row 132. Canon has ONE home, and it is the primary root. The exclusion set is

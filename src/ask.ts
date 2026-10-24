@@ -1,4 +1,5 @@
 import type { Ctx } from './cli.js'
+import { draftLine, dropDraft } from './drafts.js'
 import { FLOOR_STREAM } from './floor.js'
 import { stateCommit } from './gitio.js'
 import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
@@ -127,15 +128,20 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
       return stateCommit(root, [stream], `ask(${id}): withdrawn`)
     })
     if (!res.ok) return res
+    // Row 199. The conversation that would have answered it is over; its draft goes with it.
+    dropDraft(root, { kind: 'ask', id })
     return ok({ already: false })
   } finally {
     lock.value()
   }
 }
 
-// The one derivation of which ask is routed next: the oldest still open.
+// The one derivation of which ask is routed next: the oldest still open — except that an ask whose
+// grill has a draft comes first, the oldest drafted ask among several (row 199: finish what you
+// started). A draft that does not read gives no priority.
 export function nextAsk(root: string): AskStatus | undefined {
-  return askQueue(root).find((a) => a.state === 'unanswered')
+  const open = askQueue(root).filter((a) => a.state === 'unanswered')
+  return open.find((a) => draftLine(root, { kind: 'ask', id: a.id }) !== undefined) ?? open[0]
 }
 
 // The ask an effort answers: what the decompose arbiter judges a slicing against beside the

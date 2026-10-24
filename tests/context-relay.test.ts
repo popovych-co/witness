@@ -7,7 +7,7 @@ import { readStream } from '../src/journal.js'
 import {
   PLAN_BLOCKING, SCAFFOLDING_FIRST, TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED, addOrigin, autonomyOn,
   behaviorOnMain, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, gateEnv, measuredEnv, plannedRepo, putVerdict,
-  shippableRepo, startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo, patchConfig} from './helpers.js'
+  shippableRepo, startedThreeStepPlan, untaggedRed, type CliResult, type TestRepo, patchConfig, draftSave, seededRepo} from './helpers.js'
 
 const at = (tokens: number) => measuredEnv('S1', tokens, 1_000_000)
 const lines = (r: CliResult) => r.stdout.split('\n')
@@ -696,5 +696,58 @@ describe('one reading of an open red', () => {
     expect(routed(r)).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
     expect(lines(r).find((l) => l.startsWith('note: '))).toBe('note: steps 1/3 done · next s2 · the last green failed — a passing green comes first')
     expect(relays(r)).toEqual([])
+  })
+})
+
+// Row 199. A conversation's boundary is a settled answer: its save is the session's act, so a grill
+// past the limit hands over at its next answer and the fresh session resumes from the draft.
+describe('a draft save is an act (row 199)', () => {
+  const G = (t: number) => measuredEnv('G1', t, 1_000_000)
+  const G2 = (t: number) => measuredEnv('G2', t, 1_000_000)
+  const GOAL = { goals: [{ id: 'g1', text: 'Readers can switch to a dark theme' }] }
+
+  it('a grill hands over at its next settled answer', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    expect((await repo.cli(['ask', 'add dark mode'], { env: G(10_000) })).code).toBe(0)   // bookkeeping, not an act
+    expect((await draftSave(repo, 'ask-a1', GOAL, G(150_000))).code).toBe(0)
+    const r = await repo.cli(['next'], { env: G(210_000) })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain('next: witness recap --file <recap.json> --ask a1')
+    expect(lines(r)).toContain('draft: 1 item settled · resume with witness draft ask-a1')
+    expect(lines(r)).toContain('context: 21% of 1M · limit 20%')
+    expect(lines(r)).toContain(RELAY)
+  })
+
+  it('reading a draft back is not an act', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'add dark mode'], { env: G(10_000) })
+    expect((await draftSave(repo, 'ask-a1', GOAL, G(150_000))).code).toBe(0)
+    expect((await repo.cli(['draft', 'ask-a1'], { env: G2(250_000) })).code).toBe(0)
+    const r = await repo.cli(['next'], { env: G2(250_000) })
+    expect(relays(r)).toEqual([])
+    expect(r.stdout).toContain(warnAt(25))
+  })
+
+  it('an autonomous chat hands the grill over too', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    autonomyOn(repo)
+    await repo.cli(['ask', 'add dark mode'], { env: { ...fixtureEnv(), ...G(10_000) } })
+    expect((await draftSave(repo, 'ask-a1', GOAL, { ...fixtureEnv(), ...G(150_000) })).code).toBe(0)
+    const r = await repo.cli(['next'], { env: { ...fixtureEnv(), ...G(210_000) } })
+    expect(r.code).toBe(0)
+    expect(lines(r)).toContain(RELAY)
+    expect(r.stdout).not.toContain('launch:')
+  })
+
+  it('an amendment hands over mid-grill, and its successor is routed back to it', async () => {
+    const repo = await seededRepo()
+    expect((await draftSave(repo, 'amend-auth-hardening', { decisions: [{ id: 'd1', text: 'Rotation is silent' }] }, G(150_000))).code).toBe(0)
+    const r = await repo.cli(['next'], { env: G(210_000) })
+    expect(lines(r)).toContain('next: witness recap --amend --file <recap.json>')
+    expect(lines(r)).toContain(RELAY)
+    const fresh = await repo.cli(['next'], { env: G2(10_000) })
+    expect(lines(fresh)).toContain('next: witness recap --amend --file <recap.json>')
+    expect(lines(fresh)).toContain('draft: 1 item settled · resume with witness draft amend-auth-hardening')
+    expect(relays(fresh)).toEqual([])
   })
 })

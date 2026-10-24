@@ -27,6 +27,7 @@ const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/calibration.local.yaml
 .witness/config.local.yaml
 .witness/screens/
+.witness/drafts/
 `
 
 const PRINCIPLES_BODY = `# Principles

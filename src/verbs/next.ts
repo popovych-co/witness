@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { askText, nextAsk } from '../ask.js'
+import { askText, nextAsk, type AskStatus } from '../ask.js'
+import { draftLine } from '../drafts.js'
 import { unmetNeeds } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
@@ -789,7 +790,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // the endgame decision itself is the next action — decisions outrank motion, jammed
   // targets must not be silently skipped. A parked gate is excluded: the human already made
   // the endgame decision.
-  const owed = owedFrom(root, efforts, specs, plans).find((o) => admits(o.target))
+  // Row 200 (§7). A behavior note at the look's approval stop starts an amendment of the spec's
+  // effort while its design decision is still pending. The drafted amendment comes first: the look
+  // is being re-specified, so approving it now would stamp the old one and end its draft. Only
+  // where the walk admits the effort, so the amendment the rung below returns is reachable.
+  const amendingLook = (o: OwedDecision): boolean => o.gate === 'design' && efforts.some((e) =>
+    admits(e.slug) && effortWrites(root, e.slug).has(o.target) && draftLine(root, { kind: 'amend', effort: e.slug }) !== undefined)
+  const owed = owedFrom(root, efforts, specs, plans).find((o) => admits(o.target) && !amendingLook(o))
   if (owed !== undefined) {
     if (!owed.bound) return { line: `witness decide ${owed.gate} ${owed.target} --show`, target: owed.target }
     const parent = owed.gate === 'plan' ? String(findById(canon, owed.target)?.meta.parent) : undefined
@@ -802,10 +809,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
   // never waits for other efforts' decompose, design, plan and start rungs. No `target`: it
   // would have withDeferralNote read a stream named like the ask id.
+  // Row 199: finish what you started. A grill with a draft comes before one without: a drafted
+  // ask, then a drafted amendment, then the oldest undrafted ask. The amendment has a target, so a
+  // walk scoped to its effort (drive's fill, `humanAction`) still meets it, and its line is
+  // `witness recap` on stage brainstorm, which `conversationStage` already reads as a conversation.
   const ask = admits(undefined) ? nextAsk(root) : undefined
-  if (ask !== undefined) {
-    return { line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm', ask: { id: ask.id, text: ask.text } }
-  }
+  const grill = (a: AskStatus): NextAction =>
+    ({ line: `witness recap --file <recap.json> --ask ${a.id}`, stage: 'brainstorm', ask: { id: a.id, text: a.text } })
+  if (ask !== undefined && draftLine(root, { kind: 'ask', id: ask.id }) !== undefined) return grill(ask)
+  const amending = efforts.find((e) => admits(e.slug) && draftLine(root, { kind: 'amend', effort: e.slug }) !== undefined)
+  if (amending !== undefined) return { line: 'witness recap --amend --file <recap.json>', stage: 'brainstorm', target: amending.slug }
+  if (ask !== undefined) return grill(ask)
   // Row 194. With no ask and no effort the grill opens, in both modes: a chat starts it, and
   // drive sets it aside as a conversation and reports the queue empty.
   if (efforts.length === 0 && admits(undefined)) return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
@@ -1002,6 +1016,17 @@ export function conversationStage(action: Pick<NextAction, 'stage' | 'line'>): b
     && (action.line.includes('--open') || action.line.includes('--file'))
 }
 
+// Row 199. The draft of the conversation an action routes into, as `next` prints it: the grill of
+// an ask or of an amendment, or the design session at any of its steps (author, show, gate), so a
+// session relayed mid-look finds its direction and answers whichever step it lands on. Read once,
+// here at the print site, so the ladder's action and the autonomous chat's walk print it alike.
+export function conversationDraft(root: string, action: Pick<NextAction, 'stage' | 'target' | 'ask'>): string | undefined {
+  if (action.stage === 'brainstorm' && action.ask !== undefined) return draftLine(root, { kind: 'ask', id: action.ask.id })
+  if (action.stage === 'brainstorm' && action.target !== undefined) return draftLine(root, { kind: 'amend', effort: action.target })
+  if (action.stage === 'design' && action.target !== undefined) return draftLine(root, { kind: 'design', spec: action.target })
+  return undefined
+}
+
 // A stop that waits for the human: a decision the CLI could not settle, a conversation, or a
 // start an unmet manual need blocks. Drive sets each aside, so none is work to launch it for.
 function humanStop(canon: Canon, a: NextAction): boolean {
@@ -1190,6 +1215,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
   if (action.ask) ctx.out(kv('ask', `${action.ask.id} — ${askText(action.ask.text)}`))
+  const draft = conversationDraft(root, action)
+  if (draft !== undefined) ctx.out(kv('draft', draft))
   if (action.note) ctx.out(kv('note', action.note))
   if (action.block) action.block.forEach((l) => ctx.out(l))
   // Whether this session is already in `home:` is a fact the CLI holds both halves of, so
