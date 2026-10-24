@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, loadLocalConfig } from '../config.js'
 import { designPending, designRel, designStamp, htmlSha, validateDesignArtifact } from '../design.js'
+import { dropDraft } from '../drafts.js'
 import { writeDoc } from '../fm.js'
 import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel, latestRecap } from '../journal.js'
@@ -207,6 +208,9 @@ function reconfirm(ctx: Ctx, root: string, spec: CanonDoc, specSha: string): num
     return stateCommit(root, [spec.rel, stream], `design-reconfirm(${id}): no visual delta`)
   })
   if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
+  // Row 200. Reconfirming stamps the look as an approve does, so the amend-mode session that chose
+  // it is over and its draft goes too — once the stamp is committed.
+  dropDraft(root, { kind: 'design', spec: id })
   ctx.out(kv('reconfirmed', id))
   ctx.out(kv('design', `re-pinned to ${short(specSha)} (artifact unchanged)`))
   return EXIT.OK

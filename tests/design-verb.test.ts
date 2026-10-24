@@ -94,4 +94,15 @@ describe('the design session has a draft (row 199)', () => {
     expect((await writeDesign(repo, 'auth-refresh')).code).toBe(0)
     expect(existsSync(draftPath(repo, 'design-auth-refresh'))).toBe(true)   // it ends when the look is stamped
   })
+
+  it('reconfirming a look ends its design draft', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
+    approve(repo, 'booking-form')
+    await writeDesign(repo, 'booking-form')
+    repo.setMeta('booking-form', { design: { sha: 'a'.repeat(64), spec: 'b'.repeat(64) } })   // a stale stamp, as an amended spec leaves it
+    expect((await draftSave(repo, 'design-booking-form', { direction: 'grouped list' })).code).toBe(0)
+    expect((await repo.cli(['design', 'booking-form', '--reconfirm'])).code).toBe(0)
+    expect(existsSync(draftPath(repo, 'design-booking-form'))).toBe(false)
+  })
 })

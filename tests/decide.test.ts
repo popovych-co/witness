@@ -451,6 +451,22 @@ describe('a revised gate still has exits', () => {
   })
 })
 
+// Row 52 (§4.8). The help line a decompose revise prints is a command that runs: `recap --amend`
+// takes no value, and the recap names its effort.
+describe("decide's scope help (row 52)", () => {
+  it("decide's scope help line is a command that runs", async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    expect((await repo.cli(['gate', 'decompose', '--effort', 'auth-hardening'], { env: gateEnv(scenario) })).code).toBe(1)
+    const res = await repo.cli(['decide', 'decompose', 'auth-hardening', '--revise', '--note', 'scope'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('help: scope itself implicated → witness recap --amend --file <recap.json> (the recap names effort auth-hardening)')
+    expect(res.stdout).not.toMatch(/recap --amend auth-hardening/)
+  })
+})
+
 describe('applyDecision — the one door (A4)', () => {
   const at = (repo: { root: string }) => {
     const outs: string[] = []; const errs: string[] = []

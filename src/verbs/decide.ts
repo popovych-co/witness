@@ -3,6 +3,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { grantCommands, untrustedCmdsFor } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
+import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
 import { gateSpec, liveExits, renderGateRun, type GateSpec } from '../gate.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
@@ -667,6 +668,12 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     lockR.value()
   }
 
+  // Row 200 (Builder's call 5). The look is stamped, so the design session that chose it is over:
+  // its draft goes now and not when the look registered, because a behavior note at the approval
+  // stop re-opens the look and must find the direction and answers still there. D154's rule below:
+  // after the decision is durable, never before.
+  if (gate === 'design' && entry.decision === 'approve') dropDraft(root, { kind: 'design', spec: target })
+
   // D154. After the decision is durable, never before: a refused or crashed decide must
   // not leave a grant behind that nobody chose.
   if (trustCmds) {
@@ -704,7 +711,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
       ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
     }
-    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness recap --amend ${target}`)
+    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness recap --amend --file <recap.json> (the recap names effort ${target})`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
   }
   return EXIT.OK
