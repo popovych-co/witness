@@ -7,7 +7,7 @@ import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
-import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
+import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
@@ -834,10 +834,16 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // Registered but unshown is the normal state right after --file. Ask for the show
     // step by name; routing to the gate here would refuse design-unseen every time — in
     // every mode (row 194).
-    return designUnseen(root, cfg.paths, id) !== undefined
-      ? { line: `witness design ${id} --open`, stage: 'design', target: id }
-      : { line: `witness gate design ${id}`, target: id,
-          ...noteOf(judgeNote(readStream(root, id), 'design', judge)) }
+    if (designUnseen(root, cfg.paths, id) !== undefined) return { line: `witness design ${id} --open`, stage: 'design', target: id }
+    // Row 194. A revise on bytes the gate already judged owes a new look, not a re-gate the CLI
+    // would decline as `changed nothing` — the rule decompose and plan route by. Every step
+    // of the design session, its gate included, carries the stage: it is the chat's.
+    const entries = readStream(root, id)
+    if (authoringOwed(entries, 'design', designCurrentSha(root, cfg.paths, spec))) {
+      return { line: `witness design ${id} --file <html>`, stage: 'design', target: id,
+        note: 'revise owed — re-author the look from witness decide design ' + id + ' --show' }
+    }
+    return { line: `witness gate design ${id}`, stage: 'design', target: id, ...noteOf(judgeNote(entries, 'design', judge)) }
   }
 
   const ready = (dep: string): boolean => {
@@ -939,11 +945,12 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
 }
 
 // A conversation is a stage whose product IS the exchange with a human: brainstorm has no
-// artifact to author headlessly, and design authoring/showing needs eyes on a rendered page.
-// Row 194: in every mode. The one classification, for drive and for `next` alike.
+// artifact to author headlessly, and the design session — author, show, gate, re-author —
+// needs eyes on a rendered page. Row 194: in every mode. The one classification, for drive
+// and for `next` alike.
 export function conversationStage(action: Pick<NextAction, 'stage' | 'line'>): boolean {
-  if (action.stage === 'brainstorm') return true
-  if (action.line.startsWith('witness recap')) return true
+  if (action.stage === 'brainstorm' || action.stage === 'design') return true
+  if (action.line.startsWith('witness recap') || action.line.startsWith('witness gate design ')) return true
   return action.line.startsWith('witness design ')
     && (action.line.includes('--open') || action.line.includes('--file'))
 }
@@ -956,15 +963,18 @@ function humanStop(canon: Canon, a: NextAction): boolean {
     unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
 }
 
-// The ladder with the human's stops set aside, the way drive's fill reads it.
+// The ladder with the human's stops set aside, the way drive's fill reads it. A target-less stop
+// (an ask's grill) is held once, as drive holds `-`, so the machine work below it still counts.
 function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
   const held = new Set<string>()
+  let targetless = false
   for (let a = first; ;) {
     if (a.line === 'witness check') return false
     if (!humanStop(canon, a)) return true
-    if (a.target === undefined || held.has(a.target)) return false
-    held.add(a.target)
-    a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
+    if (a.target === undefined ? targetless : held.has(a.target)) return false
+    if (a.target === undefined) targetless = true
+    else held.add(a.target)
+    a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined ? !targetless : !held.has(t) })
   }
 }
 
@@ -1103,7 +1113,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // A re-run owed outranks a stop left for a human: the CLI could not settle a stale
   // verdict, but the gate that would re-judge it is runnable now.
   if (routed !== undefined && action.line.startsWith('witness decide ')) {
-    action = { line: routed.command, target: routed.target }
+    // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
+    action = { line: routed.command, target: routed.target, ...(routed.command.startsWith('witness gate design ') ? { stage: 'design' } : {}) }
   }
   action = withDeferralNote(root, canon, action)
   // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the
@@ -1113,7 +1124,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const ladder = action
   const chat = cfgR.value.autonomy && marked === undefined && values.flow === undefined && ambientFlow === undefined
   const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder, outside) : undefined
-  if (human !== undefined) action = withDeferralNote(root, canon, human)
+  // The ladder's own action already carries its deferral note; one the walk reached does not yet.
+  if (human !== undefined && human !== ladder) action = withDeferralNote(root, canon, human)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
   // redirect report. Printed HERE, above the routing block, for the same reason the stale
   // rows are: it must not split the contiguous next:/stage:/target:/note:/home:/run:/relay:

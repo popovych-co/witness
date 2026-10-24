@@ -57,6 +57,20 @@ export function designPairSha(html: string, spec: CanonDoc): string {
     .digest('hex')
 }
 
+// What the design gate judges: the artifact PAIRED with the spec it realizes. With no artifact
+// the spec alone is the sha, so a re-authored spec still lapses a prior verdict. One derivation
+// for the gate's `resolve` and `currentSha` and for `next`'s revise-owed read (row 194), so none
+// can disagree about what moved.
+export function designGateSha(html: string | undefined, spec: CanonDoc): string {
+  return html !== undefined ? designPairSha(html, spec) : canonicalSha(spec.meta, spec.body)
+}
+
+// The same sha for the artifact on disk now.
+export function designCurrentSha(root: string, paths: CanonPaths, spec: CanonDoc): string {
+  const abs = join(root, designRel(paths, String(spec.meta.id)))
+  return designGateSha(existsSync(abs) ? readFileSync(abs, 'utf8') : undefined, spec)
+}
+
 export function designRel(paths: CanonPaths, specId: string): string {
   return `${paths.designs}/${specId}.html`
 }

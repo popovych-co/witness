@@ -48,4 +48,21 @@ describe('design under autonomy (A6, row 194)', () => {
     await repo.cli(['gate', 'design', 'auth-refresh'], { env })
     expect((await repo.cli(['decide', 'design', 'auth-refresh', '--approve'])).code).toBe(0)
   })
+  it("an opened look's gate is the design session's", async () => {
+    const { repo } = await registered()
+    await witnessDesign(repo, 'auth-refresh')
+    const out = await nextLine(repo)
+    expect(out).toContain('next: witness gate design auth-refresh')
+    expect(out).toContain('stage: design')
+  })
+  it('a note at the design look routes the session back to authoring', async () => {
+    const { repo, env } = await registered()
+    await witnessDesign(repo, 'auth-refresh')
+    await repo.cli(['gate', 'design', 'auth-refresh'], { env })  // clean → the kept stop
+    expect((await repo.cli(['decide', 'design', 'auth-refresh', '--revise', '--note', 'bigger save button'])).code).toBe(0)
+    const out = await nextLine(repo, { env })
+    expect(out).toContain('next: witness design auth-refresh --file <html>')
+    expect(out).toContain('stage: design')
+    expect(out).toContain('revise owed')
+  })
 })

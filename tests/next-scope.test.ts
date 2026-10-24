@@ -224,6 +224,37 @@ describe("the chat keeps the human's work (row 195)", () => {
     expect(out).not.toMatch(/^stage: (brainstorm|design)$/m)
     expect(out).toMatch(/^launch: witness drive --detach$/m)
   }, 60_000)
+  it("an ask does not hide drive's work below it", async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    approve(repo, 'auth-refresh-plan-1')
+    autonomyOn(repo)
+    await repo.cli(['ask', 'add dark mode'])
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('stage: brainstorm')
+    expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
+  it('a deferral note prints once in the chat', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await lookOwed(repo)
+    const doc = findById(loadCanon(repo.root), 'billing-page')!
+    appendEntry(repo.root, 'billing-page', {
+      v: 1, t: 'gate-run', gate: 'design', artifact: 'billing-page', round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+      standing: 'design always stops — the human judges the look',
+      verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: 'billing-page > ## Behavior', note: 'read' }], findings: [] }],
+    } as never)
+    appendEntry(repo.root, 'billing-page', {
+      v: 1, t: 'deferral', id: 'd-1a2b3c4d', artifact: 'billing-page', gate: 'design', round: 1,
+      anchor: 'design#save-bar', kind: 'artifact-debt', caused_by_run: 'rd1',
+    } as never)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness decide design billing-page --show')
+    expect(out.match(/open deferral\(s\)/g)).toHaveLength(1)
+  }, 60_000)
   it("a pending transaction stays the ladder's", async () => {
     const repo = await seededRepo()
     autonomyOn(repo)

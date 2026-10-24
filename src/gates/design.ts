@@ -1,22 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serializeDoc } from '../fm.js'
-import { designPairSha, designRel, designUnseen, elementIds, htmlSha, validateDesignArtifact } from '../design.js'
+import { designCurrentSha, designGateSha, designRel, designUnseen, elementIds, htmlSha, validateDesignArtifact } from '../design.js'
 import { registerGate, type GateInput, type MetaStamp } from '../gate.js'
 import { latestRecap } from '../journal.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import type { GateCheck } from '../rounds.js'
-import { findById, type CanonDoc } from '../scan.js'
+import { findById } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
 import { contextDigest } from '../delta.js'
 import { snapshotFiles } from '../snapshot.js'
-
-// What this gate judges: the artifact PAIRED with the spec it realizes. With no artifact
-// the spec alone is the sha, so a re-authored spec still lapses a prior verdict. Shared
-// by `resolve` and `currentSha` so the two can never disagree about what moved.
-const reviewedShaOf = (html: string | undefined, spec: CanonDoc): string =>
-  html !== undefined ? designPairSha(html, spec) : canonicalSha(spec.meta, spec.body)
 
 registerGate({
   gate: 'design',
@@ -68,7 +62,7 @@ registerGate({
 
     return ok<GateInput>({
       class: (recap?.class ?? 'feature') as GateInput['class'],
-      reviewedSha: reviewedShaOf(html, spec),
+      reviewedSha: designGateSha(html, spec),
       ...(tree ? { snapshot: { tree, context: contextDigest(canonicalSha(spec.meta, spec.body)) } } : {}),
       artifactSha: html !== undefined ? htmlSha(html) : undefined,
       reviewed: { kind: 'design', artifact: { ids }, spec: { id: specId, body: spec.body } },
@@ -82,8 +76,7 @@ registerGate({
   currentSha(root, canon, cfg, specId) {
     const spec = findById(canon, specId)
     if (!spec || spec.meta.type !== 'spec') return undefined
-    const abs = join(root, designRel(cfg.paths, specId))
-    return reviewedShaOf(existsSync(abs) ? readFileSync(abs, 'utf8') : undefined, spec)
+    return designCurrentSha(root, cfg.paths, spec)
   },
 
   // Upstream from the design gate is the spec's SLICING, which reopens the owning

@@ -16,8 +16,8 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
-  seededRepo, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
   const r = loadConfig(repo.root)
@@ -491,6 +491,11 @@ describe('classifyAction under autonomy (B2)', () => {
     }, root, auto).kind).toBe('spawn')
     expect(classifyAction({ line: 'witness decide ship p1 --show', target: 'p1' }, root, auto))
       .toEqual({ kind: 'decision', gate: 'ship', target: 'p1' })
+  })
+  it('a look\'s gate is part of the design conversation (row 194)', () => {
+    expect(classifyAction({ line: 'witness gate design billing-page', stage: 'design', target: 'billing-page' }, root, auto).kind)
+      .toBe('conversation')
+    expect(classifyAction({ line: 'witness gate design billing-page', target: 'billing-page' }, root).kind).toBe('conversation')
   })
 })
 
@@ -1141,4 +1146,85 @@ describe('drive takes back what a human moved (row 196)', () => {
     expect(out).toContain('nothing queued — /witness <what to build> in a chat')
     expect(out.join('\n')).toContain('drive: done — 0 merged · 0 wait on you')
   }, 60000)
+
+  it('an opened look waits for its chat, never a session', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await uiSpec(repo, 'billing-page')
+    await writeDesign(repo, 'billing-page')
+    await witnessDesign(repo, 'billing-page')
+    const seen = join(fakeScenario(), 'seen')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), {})
+    expect(existsSync(seen)).toBe(false)
+    expect(out).toContain('drive: conversation — witness gate design billing-page')
+  }, 60000)
+
+  it('a stopping run still names the conversation it holds', async () => {
+    const repo = await planReady()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await repo.cli(['ask', 'first'])
+    const agent = script(`${witnessCli()} ask "second"`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 1 })
+    expect(out.join('\n')).toContain('drive: spawn ceiling reached (1)')
+    expect(out).toContain('wait: conversation · brainstorm · ask a1')
+  }, 120000)
+
+  it('a pending transaction releases nothing', async () => {
+    const repo = await planReady({ needs: [{ id: 'ses-prod', manual: 'SES production access', satisfied: false }] })
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const agent = script(`if [ "$WITNESS_DRIVE" = auth-mfa-plan-1 ]; then WITNESS_CRASH_AFTER=journal-append ${witnessCli()} ask crashed; fi`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 3 })
+    expect(out).toContain('drive: waits on you — auth-refresh-plan-1 · unmet need')
+    expect(out.filter((l) => l.startsWith('drive: taken back — auth-refresh-plan-1'))).toEqual([])
+  }, 120000)
+
+  it('a re-authored look whose stop the settle pass routes to a re-run stays the chat\'s', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await uiSpec(repo, 'billing-page')
+    await writeDesign(repo, 'billing-page')
+    await witnessDesign(repo, 'billing-page')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'design#save-bar', note: 'r' }, { anchor: 'billing-page > ## Behavior', note: 'r' }], findings: [] })
+    await repo.cli(['gate', 'design', 'billing-page'], { env: gateEnv(scenario) })   // clean → the kept stop
+    await writeDesign(repo, 'billing-page', DESIGN_HTML.replace('New service', 'New booking'))   // re-authored · the verdict is stale
+    const seen = join(fakeScenario(), 'seen')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), {})
+    expect(existsSync(seen) ? readFileSync(seen, 'utf8') : '').not.toContain('billing-page')
+  }, 60000)
+
+  it('a stopping run reports what it holds as it is now, not as it was set aside', async () => {
+    const repo = await planReady()
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await repo.cli(['ask', 'dark mode'])
+    const recap = join(fakeScenario(), 'recap.json')
+    writeFileSync(recap, JSON.stringify({ effort: 'dark-mode', class: 'feature', goals: [{ id: 'g1', text: 'dark mode' }] }))
+    const agent = script(`${witnessCli()} recap --file "${recap}" --ask a1`)   // the human's chat answers a1 meanwhile
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 1 })
+    expect(out.join('\n')).toContain('drive: spawn ceiling reached (1)')
+    expect(readStream(repo.root, 'dark-mode').some((e) => e.t === 'recap')).toBe(true)
+    expect(out.filter((l) => l.startsWith('wait: conversation'))).toEqual([])
+  }, 120000)
 })
