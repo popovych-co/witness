@@ -71,16 +71,16 @@ export function implementReviewedSha(runRoot: string, base: string, plan: CanonD
     .digest('hex')
 }
 
-export interface WriteInfo { sha: string; covers?: string[]; created?: boolean }
+export interface WriteInfo { sha: string; covers?: string[]; carries?: string[]; created?: boolean }
 
 export function effortWrites(root: string, effort: string): Map<string, WriteInfo> {
   const out = new Map<string, WriteInfo>()
   for (const e of readStream(root, effort)) {
     if (e.t !== 'write') continue
-    const w = e as unknown as { artifact: string; sha: string; covers?: string[]; created?: boolean }
-    // D168. Latest write wins for sha and covers, but a revision does not un-create: the effort
-    // created the artifact if any of its writes did.
-    out.set(w.artifact, { sha: w.sha, covers: w.covers, created: w.created ?? out.get(w.artifact)?.created })
+    const w = e as unknown as { artifact: string; sha: string; covers?: string[]; carries?: string[]; created?: boolean }
+    // D168. Latest write wins for sha, covers and carries, but a revision does not un-create:
+    // the effort created the artifact if any of its writes did.
+    out.set(w.artifact, { sha: w.sha, covers: w.covers, carries: w.carries, created: w.created ?? out.get(w.artifact)?.created })
   }
   return out
 }

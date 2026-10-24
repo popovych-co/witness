@@ -111,3 +111,17 @@ describe('log --all reads each line\'s commit (D189)', () => {
     expect(write.commit).toBe(repo.git('rev-parse', 'HEAD'))               // the write's own commit
   })
 })
+
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+
+describe('witness log — decisions (row 198)', () => {
+  it('names decisions on the recap and carries on the write', async () => {
+    const repo = await seededRepo()
+    await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: D })])
+    expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1', 'd2'] })).code).toBe(0)
+    const res = await repo.cli(['log', 'auth-hardening'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain('decisions=2')
+    expect(res.stdout).toContain('carries=d1+d2')
+  })
+})

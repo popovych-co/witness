@@ -27,6 +27,7 @@ export interface Manifest {
   needs?: unknown
   criteria?: unknown
   covers?: unknown
+  carries?: unknown
   supersedes?: unknown
   parent?: unknown
   'derives-from'?: unknown
@@ -37,6 +38,7 @@ export interface Manifest {
 interface Built {
   meta: Record<string, unknown>
   covers: string[]
+  carries: string[]
   violations: Violation[]
   warnings: string[]
 }
@@ -51,6 +53,12 @@ function buildSpecMeta(root: string, id: string, manifest: Manifest, recap: Reca
   const goalIds = new Set(recap.goals.map((g) => g.id))
   covers.forEach((g, i) => {
     if (!goalIds.has(g)) violations.push(v(`covers[${i}]`, 'unknown-goal', String(g), `a goal id from the latest recap: ${[...goalIds].join(' ')}`))
+  })
+  // Row 198: the decisions this spec realizes ride covers' rail — journal only, never frontmatter.
+  const carries = Array.isArray(manifest.carries) ? (manifest.carries as string[]) : []
+  const decisionIds = new Set((recap.decisions ?? []).map((d) => d.id))
+  carries.forEach((d, i) => {
+    if (!decisionIds.has(d)) violations.push(v(`carries[${i}]`, 'unknown-decision', String(d), `a decision id from the latest recap: ${[...decisionIds].join(' ') || '(none)'}`))
   })
   const meta: Record<string, unknown> = {
     id,
@@ -78,7 +86,7 @@ function buildSpecMeta(root: string, id: string, manifest: Manifest, recap: Reca
   if (typeof manifest.supersedes === 'string' && !findById(canon, manifest.supersedes) && !streamExists(root, manifest.supersedes)) {
     violations.push(v('supersedes', 'unknown-ref', manifest.supersedes, 'an existing spec id or frozen journal stream'))
   }
-  return { meta, covers, violations, warnings: [] }
+  return { meta, covers, carries, violations, warnings: [] }
 }
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
@@ -247,7 +255,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       : canonicalSha(built.meta, body)
     const entry = {
       t: 'write' as const, effort, artifact: id!, sha,
-      ...(manifest.type === 'plan' ? {} : { covers: built.covers }),
+      ...(manifest.type === 'plan' ? {} : { covers: built.covers, ...(built.carries.length ? { carries: built.carries } : {}) }),
       ...(existing === undefined ? { created: true } : {}),
       ...(supersedes !== undefined ? { supersedes } : {}),
     }
@@ -310,7 +318,7 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   const parent = parentId ? findById(canon, parentId) : undefined
   if (!parent) {
     violations.push(v('parent', 'unknown-parent', parentId || 'absent', 'an existing spec id (or principles for chores)'))
-    return { meta: {}, covers: [], violations, warnings }
+    return { meta: {}, covers: [], carries: [], violations, warnings }
   }
   if (parent.meta.type === 'principles' && recap.class !== 'chore') {
     violations.push(v('parent', 'class-mismatch', `principles parent on a ${recap.class} effort`, 'feature and fix plans derive from a spec'))
@@ -405,7 +413,7 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   })
   const cycle = findCycle(canon, { id, depends })
   if (cycle) violations.push(v('depends', 'cycle', cycle.join(' -> '), 'an acyclic depends graph'))
-  return { meta, covers: [], violations, warnings }
+  return { meta, covers: [], carries: [], violations, warnings }
 }
 
 function deltaCriteriaIds(root: string, canon: Canon, parent: CanonDoc, excludePlanId: string): Set<string> {

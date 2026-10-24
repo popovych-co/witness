@@ -16,11 +16,13 @@ function detail(e: Entry): string {
   switch (e.t) {
     case 'recap': {
       const size = (k: string) => (Array.isArray(e[k]) ? (e[k] as unknown[]).length : 0)
-      return `class=${String(e.class)} goals=${size('goals')} non_goals=${size('non_goals')} slices=${size('slices')}`
+      const decisions = size('decisions') > 0 ? ` decisions=${size('decisions')}` : ''
+      return `class=${String(e.class)} goals=${size('goals')}${decisions} non_goals=${size('non_goals')} slices=${size('slices')}`
     }
     case 'write': {
       const covers = Array.isArray(e.covers) && e.covers.length ? ` covers=${(e.covers as string[]).join('+')}` : ''
-      return `artifact=${String(e.artifact)} sha=${short(String(e.sha))}${covers}`
+      const carries = Array.isArray(e.carries) && e.carries.length ? ` carries=${(e.carries as string[]).join('+')}` : ''
+      return `artifact=${String(e.artifact)} sha=${short(String(e.sha))}${covers}${carries}`
     }
     case 'write-refused': {
       const pairs = Array.isArray(e.rules)
