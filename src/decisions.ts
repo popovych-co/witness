@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { writeAct } from './abandon.js'
-import { effortStreams, latestRecap, readStream, type Entry, type RecapEntry } from './journal.js'
+import { journalRel, latestRecap, readStream, streamIds, type RecapEntry } from './journal.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
 import { canonicalJson, canonicalSha } from './sha.js'
@@ -18,13 +20,46 @@ export type RecapDecision = { id: string; text: string }
 export function carriedDecisions(root: string, doc: CanonDoc): { effort: string; decisions: RecapDecision[] } | undefined {
   const id = String(doc.meta.id)
   const sha = canonicalSha(doc.meta, doc.body)
-  const madeIt = (e: Entry): boolean => e.t === 'write' && e.artifact === id && e.sha === sha
-  const writers = effortStreams(root).filter((effort) => readStream(root, effort).some(madeIt))
+  const index = writerIndex(root)
+  const writers = index.writes.get(`${id}\0${sha}`) ?? []
   if (writers.length === 0) return undefined
-  const effort = writers.length === 1 ? writers[0]! : writeAct(root, id, sha)?.effort ?? writers[0]!
-  const carries = (readStream(root, effort).filter(madeIt).at(-1)?.carries ?? []) as string[]
-  const decisions = (latestRecap(root, effort)?.decisions ?? []).filter((d) => carries.includes(d.id))
+  const effort = writers.length === 1 ? writers[0]!.effort : writeAct(root, id, sha)?.effort ?? writers[0]!.effort
+  const carries = writers.find((w) => w.effort === effort)?.carries ?? []
+  const decisions = (index.decisions.get(effort) ?? []).filter((d) => carries.includes(d.id))
   return { effort, decisions }
+}
+
+// Which effort writes made which content and what each carried, with each effort's latest
+// recap decisions: one pass over the streams, kept while no stream file changed (name, size,
+// mtime). `next` asks once per queued spec, and re-reading every stream per ask cost fewhats
+// ~700 journal reads a turn. One slot: a process works one repository at a time.
+interface WriterIndex {
+  key: string
+  writes: Map<string, Array<{ effort: string; carries: string[] }>>   // `<id>\0<sha>` → each effort's last write of it
+  decisions: Map<string, RecapDecision[]>
+}
+let lastIndex: { root: string; index: WriterIndex } | undefined
+
+function writerIndex(root: string): WriterIndex {
+  const ids = streamIds(root)
+  const key = ids.map((id) => {
+    const st = statSync(join(root, journalRel(id)), { throwIfNoEntry: false })
+    return `${id}:${st?.size ?? '-'}:${st?.mtimeMs ?? '-'}`
+  }).join('\n')
+  if (lastIndex?.root === root && lastIndex.index.key === key) return lastIndex.index
+  const index: WriterIndex = { key, writes: new Map(), decisions: new Map() }
+  for (const effort of ids) {
+    const entries = readStream(root, effort)
+    if (entries[0]?.t !== 'recap') continue
+    const last = new Map<string, string[]>()
+    for (const e of entries) {
+      if (e.t === 'recap') index.decisions.set(effort, (e as RecapEntry).decisions ?? [])
+      else if (e.t === 'write') last.set(`${String(e.artifact)}\0${String(e.sha)}`, (e.carries ?? []) as string[])
+    }
+    for (const [k, carries] of last) index.writes.set(k, [...(index.writes.get(k) ?? []), { effort, carries }])
+  }
+  lastIndex = { root, index }
+  return index
 }
 
 // The pin a plan takes on what its parent carries — undefined for none, so a decision-free
