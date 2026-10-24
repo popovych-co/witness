@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { RECAP_CHECK_BOUND, askQueue, askText, nextAsk } from '../ask.js'
+import { askText, nextAsk } from '../ask.js'
 import { unmetNeeds } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
@@ -762,28 +762,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
   // never waits for other efforts' decompose, design, plan and start rungs. No `target`: it
   // would have withDeferralNote read a stream named like the ask id.
-  const ask = admits(undefined) ? nextAsk(root, cfg.autonomy) : undefined
+  const ask = admits(undefined) ? nextAsk(root) : undefined
   if (ask !== undefined) {
-    // Row 177. A draft the check sent back carries its reason to the next draft.
-    const rejected = ask.reason !== undefined
-      ? { note: `recap check ${ask.checks} of ${RECAP_CHECK_BOUND} rejected — ${ask.reason}${ask.note ? ` · ${ask.note}` : ''}` }
-      : {}
-    return {
-      line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm',
-      ask: { id: ask.id, text: ask.text }, ...rejected,
-    }
+    return { line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm', ask: { id: ask.id, text: ask.text } }
   }
-  if (efforts.length === 0 && admits(undefined)) {
-    // Under autonomy nobody is there to interview, so with no ask there is nothing to build —
-    // unless an ask waits for a human, which must be named rather than called absent.
-    if (cfg.autonomy) {
-      const parked = askQueue(root).find((a) => a.state === 'parked')
-      return parked !== undefined
-        ? { line: 'witness check', note: `${parked.id} is parked — a human answers it with witness recap --file <recap.json> --ask ${parked.id} --manual · or withdraws it with witness ask --withdraw ${parked.id}` }
-        : { line: 'witness check', note: 'nothing to build — no unanswered ask is queued · a human queues one with witness ask <text>' }
-    }
-    return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
-  }
+  // Row 194. With no ask and no effort the grill opens, in both modes: a chat starts it, and
+  // drive sets it aside as a conversation and reports the queue empty.
+  if (efforts.length === 0 && admits(undefined)) return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   for (const e of efforts) {
     if (!admits(e.slug)) continue
     const writes = effortWrites(root, e.slug)

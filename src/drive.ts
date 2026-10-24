@@ -298,7 +298,7 @@ const moved = (e: Entry) => e.t !== 'write-refused' && !vacuousEvidence(e)
 // A target's key is its line, its stream, and the entries in its owning effort's stream that
 // are about its own flow (F5: one effort carries every sibling's writes). Target-less work
 // (brainstorm, the recovery fork) keys on the effort count and the asks stream, because a
-// rejected recap check grows the asks and an accepted one births an effort. A crashed
+// queued ask grows the asks and a recap births an effort. A crashed
 // transaction is part of the target-less key (F4): the recovery fork is judged like any other
 // work, so a session that leaves the same crash behind is set aside instead of being
 // respawned to the ceiling.

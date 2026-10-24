@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { EXIT, version, type Ctx } from '../cli.js'
-import { ASK_STREAM, RECAP_CHECK_BOUND, askQueue, askText, type AskStatus } from '../ask.js'
+import { ASK_STREAM, askQueue, askText } from '../ask.js'
 import { loadConfig } from '../config.js'
 import { departedStreams } from '../departure.js'
 import { designArtifactCurrent, designPending } from '../design.js'
@@ -53,17 +53,11 @@ function blockedRows(canon: Canon, ctx: Ctx): Array<{ doc: string; why: string }
 // human. Answered and withdrawn asks are history, readable through `witness log asks`.
 export function askRows(root: string): Array<{ id: string; state: string; text: string }> {
   return askQueue(root)
-    .filter((a) => a.state === 'unanswered' || a.state === 'parked')
+    .filter((a) => a.state === 'unanswered')
     .map((a) => {
       const text = askText(a.text)
-      return { id: a.id, state: askState(a), text: text.length > 80 ? `${text.slice(0, 80)}…` : text }
+      return { id: a.id, state: 'queued', text: text.length > 80 ? `${text.slice(0, 80)}…` : text }
     })
-}
-
-function askState(a: AskStatus): string {
-  if (a.parked === 'malformed') return 'parked — the arbiter answered malformed twice'
-  if (a.parked === 'bound') return `parked — ${a.checks} of ${RECAP_CHECK_BOUND} recap checks rejected`
-  return a.reason !== undefined ? `queued — recap check ${a.checks} of ${RECAP_CHECK_BOUND} rejected` : 'queued'
 }
 
 // Row 187. What a demotion let through, while its target is live: the demoted findings on the
@@ -182,7 +176,8 @@ export function autonomousRows(root: string, canon: Canon): {
   counts: { policy: number; arbiter: number }
   recent: Array<{ target: string; gate: string; round: number; decision: string; by: string; rule: string }>
 } {
-  // Row 177: a recap check is an arbiter decision too, journaled on the ask queue (A5).
+  // Row 177's recap checks, journaled on the ask queue before row 194 removed them, are
+  // arbiter decisions too: history this table still counts.
   const streams = new Set([...effortStreams(root), ...canon.docs.map((d) => String(d.meta.id)), ASK_STREAM])
   const counts = { policy: 0, arbiter: 0 }
   const latest = new Map<string, DecisionEntry>()

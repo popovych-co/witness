@@ -4,7 +4,6 @@ import { stateCommit } from './gitio.js'
 import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
-import { ROUND_BOUND, type DecisionEntry } from './rounds.js'
 import { crashPoint, pendingTxn, withTxn } from './txn.js'
 
 // Row 176. The human's ask is journaled state, on a stream witness owns the way it owns
@@ -19,34 +18,8 @@ export interface AskEntry { v: 1; t: 'ask'; id: string; text: string }   // id: 
 export interface AskStatus {
   id: string
   text: string
-  state: 'unanswered' | 'answered' | 'parked' | 'withdrawn'
+  state: 'unanswered' | 'answered' | 'withdrawn'
   effort?: string   // answered: the effort whose recap names it
-  checks: number    // recap checks journaled for it
-  reason?: string   // the last rejected check's reason
-  note?: string     // the last rejected check's note
-  parked?: 'bound' | 'malformed'   // why a parked ask waits: its checks ran out · the arbiter answered malformed twice
-}
-
-// Row 177. A recap check is a disposition on the ask, journaled on this stream in A1's
-// `human-decision` shape plus what it judged: the effort the recap would birth, its class,
-// and the class the arbiter's choice named.
-export type RecapCheckEntry = DecisionEntry & { effort: string; class: 'feature' | 'fix' | 'chore'; decided?: 'feature' | 'fix' | 'chore' }
-
-// The house bound on review rounds: a recap sent back three times waits for a human.
-export const RECAP_CHECK_BOUND = ROUND_BOUND
-
-export function recapChecks(root: string, id: string): RecapCheckEntry[] {
-  return (readStream(root, ASK_STREAM) as unknown as RecapCheckEntry[])
-    .filter((e) => e.t === 'human-decision' && e.gate === 'recap' && e.artifact === id)
-}
-
-// The one rendering of why a check sent a recap back, shared by `recap`'s output, `next`'s
-// rung and the arbiter's own prior-checks section — so it lives here, and this module never
-// imports recap-check.ts.
-export function checkReason(e: { rule: string; class: string; decided?: string; reason: string }): string {
-  return e.rule === 'recap-class'
-    ? `class — the recap says ${e.class} and the check decided ${e.decided ?? '?'} · ${e.reason}`
-    : e.reason
 }
 
 // Display only: the stored text is the human's, trimmed and otherwise as given.
@@ -63,25 +36,14 @@ export function oneLine(text: string): string {
 
 export function askQueue(root: string): AskStatus[] {
   const out: AskStatus[] = []
+  // Row 194. A `human-decision` entry on this stream is an old recap check (row 177): history
+  // `log` still prints, and nothing a queue derives from.
   for (const e of readStream(root, ASK_STREAM)) {
-    if (e.t === 'ask') out.push({ id: String(e.id), text: String(e.text), state: 'unanswered', checks: 0 })
+    if (e.t === 'ask') out.push({ id: String(e.id), text: String(e.text), state: 'unanswered' })
     else if (e.t === 'ask-withdrawn') {
       const a = out.find((x) => x.id === e.ask)
       if (a) a.state = 'withdrawn'
     }
-  }
-  for (const a of out) {
-    const checks = recapChecks(root, a.id)
-    const last = checks.at(-1)
-    a.checks = checks.length
-    if (last?.decision === 'revise') {
-      a.reason = oneLine(checkReason({ rule: String(last.rule), class: last.class, decided: last.decided, reason: String(last.reason ?? '') }))
-      if (last.note !== undefined) a.note = oneLine(last.note)
-    }
-    if (a.state !== 'unanswered' || last === undefined) continue
-    if (last.decision === 'stop') a.parked = 'malformed'
-    else if (last.decision === 'revise' && checks.length >= RECAP_CHECK_BOUND) a.parked = 'bound'
-    if (a.parked !== undefined) a.state = 'parked'
   }
   // An ask is answered once any recap names it, even one an abandon later ended: re-asking is
   // the human's act, so an abandoned effort never puts its ask back in the queue.
@@ -93,7 +55,7 @@ export function askQueue(root: string): AskStatus[] {
   }
   for (const a of out) {
     const effort = answeredBy.get(a.id)
-    if (effort !== undefined) { a.state = 'answered'; a.effort = effort; delete a.parked }
+    if (effort !== undefined) { a.state = 'answered'; a.effort = effort }
   }
   return out
 }
@@ -126,7 +88,7 @@ export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: str
     // crashed `/witness <words>` run again must not queue, and build, the work twice.
     const queue = askQueue(root)
     const unanswered = (): number => askQueue(root).filter((a) => a.state === 'unanswered').length
-    const open = queue.find((a) => (a.state === 'unanswered' || a.state === 'parked') && askText(a.text) === askText(text))
+    const open = queue.find((a) => a.state === 'unanswered' && askText(a.text) === askText(text))
     if (open !== undefined) return ok({ id: open.id, unanswered: unanswered(), already: true })
     // numbered under the lock: two queuers racing must not both take the next id
     const id = `a${queue.length + 1}`
@@ -171,11 +133,9 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
   }
 }
 
-// The one derivation of which ask is routed next: the oldest still open. A parked ask waits
-// for a human, so it is routable whenever a human interviews and skipped under autonomy,
-// where re-offering it would repeat a command `recap` refuses.
-export function nextAsk(root: string, autonomous: boolean): AskStatus | undefined {
-  return askQueue(root).find((a) => a.state === 'unanswered' || (a.state === 'parked' && !autonomous))
+// The one derivation of which ask is routed next: the oldest still open.
+export function nextAsk(root: string): AskStatus | undefined {
+  return askQueue(root).find((a) => a.state === 'unanswered')
 }
 
 // The ask an effort answers: what the decompose arbiter judges a slicing against beside the

@@ -22,15 +22,15 @@ import { canonicalJson } from './sha.js'
 // composed. It runs on the chain with no per-gate pin, so one arbiter identity is
 // comparable across every gate it judges.
 
-// Row 177: `recap` checks a drafted recap against the ask it answers (recap-check.ts).
-export type ArbiterMode = 'decision' | 'recap'
+// Row 194: the recap check (row 177) is gone, so a decision is the one mode.
+export type ArbiterMode = 'decision'
 export interface ArbiterSection { title: string; body: string }
 export interface ArbiterRequest { mode: ArbiterMode; menu: readonly Option[]; evidence: readonly ArbiterSection[] }
 // `choice` is 1-based, the number the prompt showed.
 export interface ArbiterRuling { choice: number; reason: string; note?: string; model: string; prompts_sha: string }
 
-// How a later mode (plan A2's recap check) adds its own prompt without a second invoker.
-export const PROMPT_OF: Record<ArbiterMode, string> = { decision: 'arbiter', recap: 'arbiter-recap' }
+// How a later mode adds its own prompt without a second invoker.
+export const PROMPT_OF: Record<ArbiterMode, string> = { decision: 'arbiter' }
 
 const TEXT_MAX = 600
 
