@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { canonicalSha } from '../src/sha.js'
-import { seededRepo, writeSpec, type TestRepo } from './helpers.js'
+import { decidedRepo, seededRepo, stampLive, turnDecision, writeSpec, type TestRepo } from './helpers.js'
 
 function currentSha(repo: TestRepo, rel: string): string {
   const doc = splitDoc(repo.read(rel))
@@ -79,3 +79,20 @@ describe('witness diff', () => {
     expect(res.stdout).toContain('pin-unresolvable')
   })
 })
+
+describe('witness diff — decisions (row 198)', () => {
+  it('prints the decision delta when only the decisions moved', async () => {
+    const repo = await decidedRepo()
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    await turnDecision(repo, 'Rotation is client-side')
+    const r = await repo.cli(['diff', 'auth-refresh'])
+    expect(r.code).toBe(0)
+    const lines = r.stdout.split('\n')
+    expect(lines).toContain('delta: decisions only — the spec content is unchanged since the last plan')
+    expect(lines).toContain('decisions: moved since auth-refresh-plan-1')
+    expect(lines).toContain('decisions-delta[1]{id,change,text}:')
+    expect(lines).toContain('  d1,changed,Rotation is client-side')
+  })
+})
+

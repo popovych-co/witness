@@ -71,16 +71,23 @@ export function implementReviewedSha(runRoot: string, base: string, plan: CanonD
     .digest('hex')
 }
 
-export interface WriteInfo { sha: string; covers?: string[]; created?: boolean }
+// `decisions` is inline rather than decisions.ts's RecapDecision: this module never imports
+// decisions.ts (see planPairSha).
+export interface WriteInfo {
+  sha: string; covers?: string[]; carries?: string[]; decisions?: Array<{ id: string; text: string }>; created?: boolean
+}
 
 export function effortWrites(root: string, effort: string): Map<string, WriteInfo> {
   const out = new Map<string, WriteInfo>()
   for (const e of readStream(root, effort)) {
     if (e.t !== 'write') continue
-    const w = e as unknown as { artifact: string; sha: string; covers?: string[]; created?: boolean }
-    // D168. Latest write wins for sha and covers, but a revision does not un-create: the effort
-    // created the artifact if any of its writes did.
-    out.set(w.artifact, { sha: w.sha, covers: w.covers, created: w.created ?? out.get(w.artifact)?.created })
+    const w = e as unknown as WriteInfo & { artifact: string }
+    // D168. Latest write wins for sha, covers and carries, but a revision does not un-create:
+    // the effort created the artifact if any of its writes did.
+    out.set(w.artifact, {
+      sha: w.sha, covers: w.covers, carries: w.carries, decisions: w.decisions,
+      created: w.created ?? out.get(w.artifact)?.created,
+    })
   }
   return out
 }
@@ -118,15 +125,26 @@ export function effortReviewedSha(
 ): { sha: string; docs: CanonDoc[] } {
   const recap = latestRecap(root, effort)
   const docs = effortSpecs(root, canon, effort)
+  const writes = effortWrites(root, effort)
+  // Row 198 (Builder's call 7). The decision mapping is judged content, so a carries-only
+  // rewrite moves the identity rather than resuming into row 112's `cached` replay — a spec
+  // that carries nothing keeps today's bytes (c2). `covers` keeps the replay row 112 records.
   const lines = docs
-    .map((d) => `${String(d.meta.id)}:${canonicalSha(d.meta, d.body)}`)
+    .map((d) => {
+      const carries = writes.get(String(d.meta.id))?.carries ?? []
+      return `${String(d.meta.id)}:${canonicalSha(d.meta, d.body)}${carries.length ? `:carries=${carries.join('+')}` : ''}`
+    })
     .sort()
   return { sha: sha256([canonicalJson(recap ?? {}), '\n', lines.join('\n')]), docs }
 }
 
-export function planPairSha(plan: CanonDoc, parent: CanonDoc): string {
+// Row 198. `decisions` is the plan's decisions term (basis.ts's `planDecisionsTerm`), taken as a
+// sha so this module never imports decisions.ts: design.ts → reviewed.ts sits inside abandon.ts's
+// import closure, which decisions.ts imports. Undefined hashes exactly today's two parts (c2).
+export function planPairSha(plan: CanonDoc, parent: CanonDoc, decisions?: string): string {
   return sha256([
     `${String(plan.meta.id)}:${canonicalSha(plan.meta, plan.body)}\n`,
     `${String(parent.meta.id)}:${canonicalSha(parent.meta, parent.body)}`,
+    ...(decisions !== undefined ? [`\ndecisions:${decisions}`] : []),
   ])
 }

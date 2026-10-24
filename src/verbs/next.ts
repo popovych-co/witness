@@ -11,7 +11,7 @@ import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } 
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
-import { canonicalSha } from '../sha.js'
+import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import {
   greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, redCycleClosed, redInFlight, stepProgress, stepsLine,
@@ -284,6 +284,46 @@ function liveEfforts(root: string): Array<{ slug: string; entries: Entry[] }> {
     .map((slug) => ({ slug, entries: readStream(root, slug) }))
     .filter((e) => latestRecap(root, e.slug) !== undefined && !effortAbandoned(e.entries))
     .sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
+// Row 52 (Builder's call 8, D198). An amendment no round has judged: ≥ 2 recaps, the last
+// after the last SETTLING decompose event — a passed round or an approve. Measured against
+// the last gate run instead, a stopped round followed by `revise` handed the effort back to
+// the fixture shortcut and `next` routed the plan write again.
+function amendedSinceSettled(entries: Entry[]): boolean {
+  let recaps = 0
+  let lastRecap = -1
+  let lastSettled = -1
+  entries.forEach((e, i) => {
+    if (e.t === 'recap') { recaps++; lastRecap = i; return }
+    if (e.gate !== 'decompose') return
+    if ((e.t === 'gate-run' && e.outcome === 'passed') || (e.t === 'human-decision' && e.decision === 'approve')) lastSettled = i
+  })
+  return recaps >= 2 && lastRecap > lastSettled
+}
+
+// A finished effort keeps the shortcut: re-arming one spends a critic round on shipped work,
+// and under autonomy a blocking finding would send a headless decompose session to rewrite
+// live specs (c2). A finished effort's change is a new effort.
+function effortFinished(specs: CanonDoc[], plans: CanonDoc[]): boolean {
+  const ids = new Set(specs.map((d) => String(d.meta.id)))
+  return specs.every((d) => String(d.meta.status) === 'live') &&
+    !plans.some((p) => ids.has(String(p.meta.parent)) && !planFinished(p))
+}
+
+// Whether an effort's decompose is owed. Settled either by a real gate-run+approve, or
+// (fixture/seed shortcuts) by every effort spec already being past draft — a plan can't
+// legally target a draft parent, so non-draft specs are proof decompose's outcome was
+// reached one way or another. The shortcut stands in for a gate-run, so an OPEN REOPEN
+// un-discharges it too: otherwise it short-circuits past gateSettled and the reopen is
+// never routed. Row 52: so does an amendment no round has settled, unless the effort is
+// finished.
+function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, specs: CanonDoc[], plans: CanonDoc[]): boolean {
+  const reopened = openReopen(e.entries, 'decompose') !== undefined
+  const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft') &&
+    (!amendedSinceSettled(e.entries) || effortFinished(specs, plans))
+  return !specsApproved && !gateSettled(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha) &&
+    !gateParked(e.entries, 'decompose')
 }
 
 // The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
@@ -793,17 +833,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
         stage: 'decompose', target: e.slug,
       }
     }
-    // Settled either by a real gate-run+approve, or (fixture/seed shortcuts) by every
-    // effort spec already being past draft — a plan can't legally target a draft parent,
-    // so non-draft specs are proof decompose's outcome was reached one way or another.
-    // The shortcut stands in for a gate-run, so an OPEN REOPEN un-discharges it too:
-    // otherwise it short-circuits past gateSettled and the reopen is never routed.
-    const specs = effortSpecs(root, canon, e.slug)
-    const reopened = openReopen(e.entries, 'decompose') !== undefined
-    const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft')
-    const effortSha = effortReviewedSha(root, canon, e.slug).sha
-    if (!specsApproved && !gateSettled(e.entries, 'decompose', effortSha) &&
-      !gateParked(e.entries, 'decompose')) {
+    if (decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans)) {
+      const effortSha = effortReviewedSha(root, canon, e.slug).sha
       return authoringOwed(e.entries, 'decompose', effortSha)
         ? {
             line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
@@ -815,9 +846,22 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     }
   }
 
+  // Row 52 (Builder's call 8). While an effort owes the re-slice an amendment re-armed, the specs
+  // it wrote wait for it: a walk scoped to a spec never meets its effort's rung (`admits(e.slug)`
+  // is false there), so without this drive would plan a spec mid-re-slice and the chat would open
+  // a design session on the pre-amendment spec. Only the amendment's: a decompose owed for another
+  // reason (a sibling written after an approve) leaves the approved specs moving, as before. An
+  // admitted effort that owes decompose returned above, so only the efforts this walk does not
+  // admit can still owe it here. Flows, draft-plan gates and starts keep row 18's soft lock.
+  const reslicing = efforts
+    .filter((e) => !admits(e.slug) && latestRecap(root, e.slug)?.class !== 'chore' && effortWrites(root, e.slug).size > 0)
+    .filter((e) => amendedSinceSettled(e.entries) && decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans))
+  const resliced = new Set(reslicing.flatMap((e) => [...effortWrites(root, e.slug).keys()]))
+
   for (const spec of specs) {
     if (String(spec.meta.status) !== 'approved') continue
     if (!admits(String(spec.meta.id))) continue
+    if (resliced.has(String(spec.meta.id))) continue
     if (!designPending(root, spec)) continue
     const id = String(spec.meta.id)
     // A parked design gate is off the board too — routing to `witness design` or its gate
@@ -857,14 +901,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // prints, because the effort ledger is not a readiness signal: an amendment can be
   // realized by a plan booked under a different effort (issue #25), and a plan count of
   // zero proves nothing either way. No pin at all means never realized, which is owed.
-  // Reaching this rung proves decompose is settled: rung 6 returns first otherwise.
+  // Reaching this rung proves decompose is settled for every effort the walk admits: rung 6
+  // returns first otherwise. A scoped walk relies on `resliced` for the efforts it does not.
   const unrealizedDelta = (d: CanonDoc): boolean => {
     const base = baseForSpec(root, canon, String(d.meta.id))
-    return base.kind === 'empty' || base.sha !== canonicalSha(d.meta, d.body)
+    return base.kind === 'empty' ||
+      basisMoved({ spec: base.sha!, ...(base.decisions ? { decisions: base.decisions } : {}) }, specBasis(root, d)).length > 0
   }
   const planless = canon.docs
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
     .filter((d) => admits(String(d.meta.id)))
+    .filter((d) => !resliced.has(String(d.meta.id)))
     .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) && !planFinished(p)))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
     // last on purpose: the only filter that costs a subprocess — the in-memory ones above
@@ -901,7 +948,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     if (String(plan.meta.status) !== 'draft') continue
     if (!admits(id)) continue
     const parent = findById(canon, String(plan.meta.parent))
-    const planSha = parent ? planPairSha(plan, parent) : undefined
+    const planSha = parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
     const entries = readStream(root, id)
     // Parked skips for the same reason settled does — the gate is off the board until a
     // fresh run brings it back, and `status` is where it stays visible meanwhile.

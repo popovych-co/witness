@@ -102,3 +102,62 @@ describe('witness read', () => {
     expect(past.stderr).toContain('bad-range')
   })
 })
+
+const LIMITS = {
+  decisions: [{ id: 'd1', text: 'Rotation is server-side' }],
+  constraints: [{ id: 'c1', text: 'No new dependencies' }],
+  non_goals: [{ id: 'n1', text: 'No SSO changes' }],
+}
+async function decisionsRepo() {
+  const repo = await seededRepo()
+  await repo.cli(['recap', '--amend', '--file', repo.writeRecap(LIMITS)])
+  await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })
+  return repo
+}
+
+describe('witness read --decisions (row 198)', () => {
+  it("--decisions prints what a spec carries with its effort's limits", async () => {
+    const repo = await decisionsRepo()
+    const r = await repo.cli(['read', 'auth-refresh', '--decisions'])
+    expect(r.code).toBe(0)
+    expect(r.stdout.split('\n')).toEqual([
+      'carried-by: auth-hardening',
+      'decisions[1]{id,text}:', '  d1,Rotation is server-side',
+      'constraints[1]{id,text}:', '  c1,No new dependencies',
+      'non_goals[1]{id,text}:', '  n1,No SSO changes',
+    ])
+  })
+
+  it('--decisions on an effort prints its whole recap', async () => {
+    const repo = await decisionsRepo()
+    const r = await repo.cli(['read', 'auth-hardening', '--decisions'])
+    expect(r.code).toBe(0)
+    const lines = r.stdout.split('\n')
+    expect(lines[0]).toBe('effort: auth-hardening · feature')
+    expect(lines).toContain('goals[1]{id,text}:')
+    expect(lines).toContain('  g1,Refresh tokens rotate before expiry')
+    expect(lines.some((l) => l.startsWith('slices['))).toBe(true)
+  })
+
+  it('--decisions is its own mode', async () => {
+    const repo = await decisionsRepo()
+    const mixed = await repo.cli(['read', 'auth-refresh', '--decisions', '--outline'])
+    expect(mixed.code).toBe(2)
+    expect(mixed.stderr).toContain('exclusive')
+    expect((await repo.cli(['read', 'auth-refresh', '--outline'])).stdout).not.toContain('decisions[')
+    const whole = (await repo.cli(['read', 'auth-refresh'])).stdout.split('\n')
+    expect((await repo.cli(['read', 'auth-refresh', '--lines', '1-3'])).stdout.split('\n')).toEqual(whole.slice(0, 3))
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    const plan = await repo.cli(['read', 'auth-refresh-plan-1', '--decisions'])
+    expect(plan.code).toBe(2)
+    expect(plan.stderr).toContain('not-a-spec')
+    const nope = await repo.cli(['read', 'nope', '--decisions'])
+    expect(nope.code).toBe(2)
+    expect(nope.stderr).toContain('unknown-id')
+    repo.setMeta('auth-refresh', { summary: 'hand edited' })
+    expect((await repo.cli(['read', 'auth-refresh', '--decisions'])).stdout)
+      .toMatch(/^carried-by: none — no journaled write made this content/)
+  })
+})
+

@@ -20,14 +20,14 @@ describe('witness-original reviewer prompts', () => {
 
   it('slicing-critic names its seven lenses', () => {
     const body = readFileSync(promptPath('slicing-critic'), 'utf8');
-    for (const lens of ['Slice quality', 'Coverage quality', 'Non-goal violations', 'Criteria adequacy', 'Behavior-only', 'Summary accuracy', 'Depends refs']) {
+    for (const lens of ['Slice quality', 'Coverage quality', 'Non-goal violations', 'Criteria adequacy', 'Behavior-only', 'Summary accuracy', 'Depends refs', 'Decision fidelity']) {
       expect(body).toContain(lens);
     }
   });
 
   it('plan-critic and drift-reviewer name their lenses', () => {
     const plan = readFileSync(promptPath('plan-critic'), 'utf8');
-    for (const lens of ['Delta faithfulness', 'Step quality', 'Honest scaffolding']) expect(plan).toContain(lens);
+    for (const lens of ['Delta faithfulness', 'Step quality', 'Honest scaffolding', 'Decision fidelity']) expect(plan).toContain(lens);
     const drift = readFileSync(promptPath('drift-reviewer'), 'utf8');
     for (const lens of ['Broken promises', 'Value drift', 'Error-path drift', 'Undocumented behavior']) expect(drift).toContain(lens);
   });

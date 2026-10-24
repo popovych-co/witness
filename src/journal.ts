@@ -41,6 +41,8 @@ export interface RecapEntry extends Entry {
   goals: Array<{ id: string; text: string }>
   non_goals: Array<{ id: string; text: string }>
   constraints: Array<{ id: string; text: string }>
+  // Row 198: settled answers that shape at least one spec — absent means none, never `[]`.
+  decisions?: Array<{ id: string; text: string }>
   slices: string[]
   ask?: string   // row 176: the ask this recap answers
 }

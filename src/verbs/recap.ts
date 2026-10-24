@@ -18,6 +18,7 @@ export interface RecapInput {
   goals: Array<{ id: string; text: string }>
   non_goals: Array<{ id: string; text: string }>
   constraints: Array<{ id: string; text: string }>
+  decisions?: Array<{ id: string; text: string }>
   slices: string[]
   // Row 176. Set from --ask only, never from the file: the ask a recap answers is the CLI's
   // record of what the human asked, so a recap cannot name its own.
@@ -60,6 +61,7 @@ export function validateRecap(raw: unknown): Violation[] {
   out.push(...idTextList(e.goals, 'goals', 'g', true))
   out.push(...idTextList(e.non_goals, 'non_goals', 'n', false))
   out.push(...idTextList(e.constraints, 'constraints', 'c', false))
+  out.push(...idTextList(e.decisions, 'decisions', 'd', false))
   if (e.slices !== undefined && (!Array.isArray(e.slices) || e.slices.some((s) => typeof s !== 'string' || s === ''))) {
     out.push(v('slices', 'shape', JSON.stringify(e.slices), 'list of non-empty strings (non-binding)'))
   }
@@ -146,7 +148,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
     const entry = {
       t: 'recap' as const, effort: recap.effort, class: recap.class,
-      goals: recap.goals, non_goals: recap.non_goals, constraints: recap.constraints, slices: recap.slices,
+      goals: recap.goals, non_goals: recap.non_goals, constraints: recap.constraints,
+      // Row 198: no key when there are none, so a decision-free recap journals today's bytes (c2).
+      ...(recap.decisions?.length ? { decisions: recap.decisions } : {}),
+      slices: recap.slices,
       ...(recap.ask !== undefined ? { ask: recap.ask } : {}),
     }
     // entryLine, never a second inline JSON.stringify — completeTxn re-appends when this
@@ -163,8 +168,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('effort', recap.effort))
     ctx.out(kv('class', recap.class))
     ctx.out(kv('goals', recap.goals.length))
+    if (recap.decisions?.length) ctx.out(kv('decisions', recap.decisions.length))
     if (recap.ask !== undefined) ctx.out(kv('ask', `${recap.ask} — answered`))
-    if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage re-validates against it'))
+    if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage and decisions re-validate against it'))
     ctx.out(`next: witness write --effort ${recap.effort} --meta <m.json> --body <b.md> <spec-id>`)
     return EXIT.OK
   } finally {

@@ -60,6 +60,8 @@ describe('validateDoc: plan', () => {
   it('requires parent and a 64-hex derives-from', () => {
     expect(validateDoc(planMeta({ parent: undefined }), '## Step: s1\nx\n').map((x) => x.rule)).toContain('required')
     expect(validateDoc(planMeta({ 'derives-from': 'abc' }), '## Step: s1\nx\n').map((x) => x.rule)).toContain('shape')
+    expect(validateDoc(planMeta({ 'decisions-from': 'zz' }), '## Step: s1\nx\n').map((x) => [x.field, x.rule]))
+      .toContainEqual(['decisions-from', 'shape'])
   })
 
   it('demands criteria XOR scaffolding per step', () => {

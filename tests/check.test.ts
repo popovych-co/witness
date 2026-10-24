@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, approve, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig } from './helpers.js'
+import { SPEC_META, approve, decidedRepo, turnDecision, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -684,3 +684,15 @@ describe('check — a departure is lineage (D166)', () => {
     expect((await repo.cli(['check'])).code).toBe(0)
   })
 })
+
+describe('witness check — carried decisions (row 198)', () => {
+  it("warns when an in-progress plan's carried decisions moved", async () => {
+    const repo = await decidedRepo()
+    repo.flipStatus('auth-refresh-plan-1', 'in-progress')
+    await turnDecision(repo, 'Rotation is client-side')
+    const r = await repo.cli(['check'])
+    expect(r.stdout).toContain('mid-flight-amendment')
+    expect(r.stdout).toContain('the decisions auth-refresh carries moved off the pin')
+  })
+})
+

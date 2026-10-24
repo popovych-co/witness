@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { askQueue } from '../src/ask.js'
 import { appendEntry, latestRecap, readStream } from '../src/journal.js'
-import { autonomyOn, tmpRepo, type TestRepo } from './helpers.js'
+import { autonomyOn, seededRepo, tmpRepo, type TestRepo } from './helpers.js'
 
 const RECAP = {
   effort: 'auth-hardening',
@@ -140,5 +140,24 @@ describe('recap --ask (A9)', () => {
       v: 1, t: 'human-decision', gate: 'effort', artifact: 'auth-hardening', round: 0, decision: 'abandon-effort',
     })
     expect(askQueue(repo.root)[0]!.state).toBe('answered')
+  })
+})
+
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+
+describe('witness recap — numbered decisions (row 198)', () => {
+  it('decisions are numbered like goals and journaled only when present', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    const r = await repo.cli(['recap', '--file', repo.writeRecap({ decisions: D })])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('decisions: 2')
+    expect(latestRecap(repo.root, 'auth-hardening')?.decisions).toEqual(D)
+    for (const [bad, rule] of [[[{ id: 'x1', text: 'a' }], 'id-prefix'], [[D[0], D[0]], 'id-unique'], [[{ id: 'd1', text: ' ' }], 'required']] as const) {
+      const res = await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: bad })])
+      expect(res.code).toBe(2); expect(res.stderr).toContain(rule)
+    }
+    const bare = await seededRepo({ noRecap: true })
+    await bare.cli(['recap', '--file', bare.writeRecap({ decisions: [] })])
+    expect('decisions' in latestRecap(bare.root, 'auth-hardening')!).toBe(false)
   })
 })

@@ -109,3 +109,20 @@ describe('witness write (spec)', () => {
     expect(existsSync(join(repo.root, 'specs/auth-refresh.md'))).toBe(false)
   })
 })
+
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+
+describe('witness write (spec) — carries (row 198)', () => {
+  it('carries names recap decisions and is journaled beside covers, never in frontmatter', async () => {
+    const repo = await seededRepo()
+    await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: D })])
+    expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })).code).toBe(0)
+    const last = () => readStream(repo.root, 'auth-hardening').filter((e) => e.t === 'write').at(-1)!
+    expect(last().carries).toEqual(['d1'])
+    expect(repo.read('specs/auth-refresh.md')).not.toContain('carries')
+    const bad = await writeSpec(repo, 'auth-refresh', { carries: ['d9'] })
+    expect(bad.code).toBe(2); expect(bad.stderr).toContain('unknown-decision'); expect(bad.stderr).toContain('d1 d2')
+    await writeSpec(repo, 'auth-refresh')
+    expect('carries' in last()).toBe(false)
+  })
+})

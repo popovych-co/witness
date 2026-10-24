@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { approve, PLAN_BODY, seededRepo, stampLive, writePlan, writeSpec } from './helpers.js'
+import { approve, decidedRepo, fixtureEnv, nextLine, PLAN_BODY, seededRepo, stampLive, turnDecision, writePlan, writeSpec } from './helpers.js'
 
 // D157 — the reported shape (#21): an effort's decompose passed, its spec went back to
 // `live` (abandon revert or lazy stamp), it owns zero plans. `next` must offer the plan
@@ -96,3 +96,33 @@ describe('next — live specs re-enter the plan queue when an effort owes them',
     expect(r.stdout).toContain('nothing is owed')   // rule B carries a note; rule A stays bare
   })
 })
+
+describe('next — a changed carried decision re-queues (row 198)', () => {
+  it('a changed carried decision re-queues the spec of a done plan', async () => {
+    const repo = await decidedRepo()
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    expect(await nextLine(repo, { env: fixtureEnv() })).not.toContain('witness write auth-refresh-plan-2')
+    await turnDecision(repo, 'Rotation is client-side')
+    expect(await nextLine(repo, { env: fixtureEnv() })).toContain('witness write auth-refresh-plan-2')
+  })
+
+  it('an amendment that only reorders the decisions, or adds a key beside their text, re-queues nothing', async () => {
+    const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+    const repo = await seededRepo({ noRecap: true })
+    expect((await repo.cli(['recap', '--file', repo.writeRecap({ decisions: D })])).code).toBe(0)
+    repo.effort = 'auth-hardening'
+    expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1', 'd2'] })).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    expect((await writePlan(repo, 'auth-refresh-plan-1')).code).toBe(0)
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    const amend = (ds: unknown) => repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: ds })])
+    expect(await nextLine(repo, { env: fixtureEnv() })).not.toContain('auth-refresh-plan-2')
+    expect((await amend([D[1], D[0]])).code).toBe(0)
+    expect(await nextLine(repo, { env: fixtureEnv() })).not.toContain('auth-refresh-plan-2')
+    expect((await amend([{ ...D[0], why: 'asked twice' }, D[1]])).code).toBe(0)
+    expect(await nextLine(repo, { env: fixtureEnv() })).not.toContain('auth-refresh-plan-2')
+  })
+})
+

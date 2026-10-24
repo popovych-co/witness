@@ -36,6 +36,8 @@ Everything below is rebuilt from `witness diff` and the CLI's read verbs — nev
 ```bash
 $WITNESS diff <spec-id>        # the delta this plan must realize (base: previous plan's pin → last live → empty)
 $WITNESS read <spec-id>        # the parent spec, current content (reading is fine — writing is not)
+$WITNESS read <spec-id> --decisions   # the decisions the spec carries + its effort's constraints and non-goals — the plan contradicts none (the critic blocks it)
+$WITNESS read <effort> --decisions    # a chore plan: the chore's whole recap, too
 $WITNESS index                 # the plans table names this spec's prior plans, if any
 $WITNESS read <plan-id>        # …then read the one you care about
 $WITNESS decide plan <plan-id> --show       # ONLY when re-entered after a revise
@@ -47,7 +49,7 @@ $WITNESS decide plan <plan-id> --show       # ONLY when re-entered after a revis
 
 ## Author the plan
 
-Every criterion in the delta must be realized by ≥ 1 step; every step maps to ≥ 1 criterion **or** is honestly `scaffolding: true` (rigging only — fixtures, wiring, config; never behavior a criterion owns). `derives-from` is **stamped by the CLI** from the parent's current content — never put it in the manifest; a supplied stale pin refuses.
+Every criterion in the delta must be realized by ≥ 1 step; every step maps to ≥ 1 criterion **or** is honestly `scaffolding: true` (rigging only — fixtures, wiring, config; never behavior a criterion owns). `derives-from` and `decisions-from` are **stamped by the CLI** from the parent's current content and the decisions it carries — never put either in the manifest; a supplied stale pin refuses.
 
 If the parent spec is `ui`-flagged, its **design must already be approved** (the design stage runs between decompose and plan). Read it with `$WITNESS read <spec-id> --design` (`--outline`, then `--lines <a>-<b>`, when it is fat) — your steps derive from that approved look, not a fresh invention — and put its approved artifact sha in the manifest as `"design-from"` (the CLI refuses a plan whose pin is missing, stale, or present on a non-ui parent; get it from the spec's `design.sha` stamp via `$WITNESS log <spec-id>`). A UI step names the design section (`design#<id>`) it realizes alongside its `@spec:` browser test.
 
@@ -94,6 +96,6 @@ $WITNESS gate plan <plan-id>    # append --manual when the run asked for it
 
 - **Auto-pass** → done; hand back to /witness.
 - **Stop** → render the gate output verbatim and in full, including its ranked options and `run:` line, and END YOUR TURN.
-- **Re-entered after `--revise`** → `decide --show` gives the verdict + note (findings anchor to `<plan-id> > ## Step: <id>`); rewrite via `witness write` with the same plan id; re-gate. A parent amended mid-flight fails `pin-fresh` — rewriting through `witness write` re-stamps the pin to current content; your body must then realize the *new* delta (`$WITNESS diff` again). `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
+- **Re-entered after `--revise`** → `decide --show` gives the verdict + note (findings anchor to `<plan-id> > ## Step: <id>`); rewrite via `witness write` with the same plan id; re-gate. A parent amended mid-flight, or a decision it carries changed, fails `pin-fresh` — rewriting through `witness write` re-stamps the pin to current content; your body must then realize the *new* delta (`$WITNESS diff` again). `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **spec** (plan faithful, spec wrong)? Tell the human `--revise --upstream <spec-id>` reopens decompose for it.
 - **Under `autonomy: on`** (printed by `gate`; not on a `--manual` run): the CLI settles this stop and prints `decided:`. If a `relay:` line printed under it, this session has reached its context limit: print that line verbatim and END YOUR TURN — a fresh session takes the revise. Otherwise, on `→ revise`, rewrite from the revise-context it printed and re-gate; on `→ approve`, `→ revise-upstream` or `→ stop`, hand back to /witness. Never run `witness decide`. End your turn only at a `kept-stop:` line, a `relay:` line, or a refusal you cannot repair.

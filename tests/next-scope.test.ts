@@ -12,6 +12,9 @@ import {
   seededRepo, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+const amend = (repo: TestRepo, decisions: unknown) => repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions })])
+
 // a flow at ship (in progress · pr set) beside a draft plan of another spec awaiting its gate.
 // The fake gh answers the lazy stamp's PR query, so `next` never reaches a real gh.
 async function flowAndDraft(): Promise<TestRepo & { env: Record<string, string> }> {
@@ -270,3 +273,48 @@ describe("the chat keeps the human's work (row 195)", () => {
     expect(out).not.toContain('ask: a1')
   }, 60_000)
 })
+
+// Row 52 / Builder's call 8. A walk scoped to a spec never meets its effort's decompose rung,
+// so the re-slice an amendment owes must still hold the spec's design and plan rungs back.
+describe('a spec its effort is re-slicing waits for the re-slice (row 52)', () => {
+  it('a drive child on a plain spec is told it is done', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await amend(repo, D)
+    const out = await nextLine(repo, { env: fixtureEnv({ WITNESS_DRIVE: 'auth-refresh' }) })
+    expect(out).toContain('next: witness check')
+    expect(out).toContain('drive: done — nothing more is owed for auth-refresh')
+    expect(out).not.toContain('witness write auth-refresh-plan-1')
+  })
+
+  it('a ui spec waits as a drive child and in the chat', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+    await amend(repo, D)
+    autonomyOn(repo)
+    const child = await nextLine(repo, { env: fixtureEnv({ WITNESS_DRIVE: 'billing-page' }) })
+    expect(child).toContain('drive: done — nothing more is owed for billing-page')
+    expect(child).not.toContain('witness design billing-page')
+    const chat = await nextLine(repo, { env: fixtureEnv() })
+    expect(chat).toContain('next: witness gate decompose --effort auth-hardening')
+    expect(chat).toContain('launch: witness drive --detach')
+    expect(chat).not.toContain('witness design billing-page')
+  })
+
+  // Final review (both reviewers). The hold is the amendment's: a decompose owed for another
+  // reason — a sibling written after an approve — leaves 0.22.0's scoped walks as they were.
+  it('without an amendment, an approved spec is planned and designed while a sibling waits for decompose', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })   // draft: decompose owed
+    expect(await nextLine(repo, { env: fixtureEnv({ WITNESS_DRIVE: 'auth-refresh' }) })).toContain('witness write auth-refresh-plan-1')
+    autonomyOn(repo)
+    expect(await nextLine(repo, { env: fixtureEnv() })).toContain('witness design billing-page')
+  })
+})
+

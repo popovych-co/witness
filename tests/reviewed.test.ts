@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { changedFiles } from '../src/evidence.js'
 import { diffReviewedSha, effortReviewedSha, effortSpecs, planPairSha } from '../src/reviewed.js'
 import { loadCanon } from '../src/scan.js'
+import { readStream } from '../src/journal.js'
 import { SPEC_META, approve, seededRepo, writeSpec, writePlan } from './helpers.js'
 import type { TestRepo } from './helpers.js'
 
@@ -172,6 +173,30 @@ describe('effort reviewed set', () => {
   })
 })
 
+describe('effort reviewed set — carries (row 198)', () => {
+  it("carries join the effort's identity only when present", async () => {
+    const repo = await seededRepo()
+    await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text: 'Rotation is server-side' }] })])
+    await writeSpec(repo, 'auth-refresh')
+    const s1 = effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha
+    await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })
+    expect(effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha).not.toBe(s1)
+    await writeSpec(repo, 'auth-refresh')
+    expect(effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha).toBe(s1)
+  })
+
+  it('carries are one set — order and repeats move nothing', async () => {
+    const repo = await seededRepo()
+    await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text: 'a' }, { id: 'd2', text: 'b' }, { id: 'd10', text: 'c' }] })])
+    await writeSpec(repo, 'auth-refresh', { carries: ['d1', 'd2', 'd10'] })
+    const s1 = effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha
+    await writeSpec(repo, 'auth-refresh', { carries: ['d10', 'd2', 'd1', 'd2'] })
+    expect(effortReviewedSha(repo.root, loadCanon(repo.root), 'auth-hardening').sha).toBe(s1)
+    const last = readStream(repo.root, 'auth-hardening').filter((e) => e.t === 'write').at(-1)!
+    expect(last.carries).toEqual(['d1', 'd2', 'd10'])
+  })
+})
+
 describe('planPairSha', () => {
   it('changes when either the plan or the parent changes', async () => {
     const repo = await seededRepo()
@@ -184,5 +209,8 @@ describe('planPairSha', () => {
     const base = planPairSha(plan, parent)
     expect(planPairSha(plan, { ...parent, body: parent.body + '\nmore' })).not.toBe(base)
     expect(planPairSha({ ...plan, body: plan.body + '\nmore' }, parent)).not.toBe(base)
+    // Row 198: no decisions term is today's two parts, byte for byte (c2).
+    expect(planPairSha(plan, parent, undefined)).toBe(base)
+    expect(planPairSha(plan, parent, 'a'.repeat(64))).not.toBe(base)
   })
 })

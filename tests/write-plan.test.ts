@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import { canonicalSha } from '../src/sha.js'
+import { decisionsSha } from '../src/decisions.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { approve, PLAN_META, SPEC_META, seededRepo, stampLive, writePlan, writeSpec, type TestRepo } from './helpers.js'
 
@@ -184,3 +185,35 @@ describe('re-authoring a plan does not end its flow', () => {
     expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('draft')
   })
 })
+
+const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+
+describe('witness write (plan) — decisions-from (row 198)', () => {
+  const planWrite = (repo: TestRepo) =>
+    readStream(repo.root, 'auth-hardening').filter((e) => e.t === 'write' && e.artifact === 'auth-refresh-plan-1').at(-1)!
+
+  it('a plan pins the decisions its parent carries', async () => {
+    const repo = await seededRepo()
+    await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: D })])
+    await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })
+    approve(repo, 'auth-refresh')
+    const res = await writePlan(repo, 'auth-refresh-plan-1')
+    expect(res.code, res.stderr).toBe(0)
+    const plan = splitDoc(repo.read('plans/auth-refresh-plan-1.md'))
+    expect(plan.ok && plan.value.meta['decisions-from']).toBe(decisionsSha([D[0]!]))
+    expect(planWrite(repo).decisions).toEqual([D[0]])
+    const stale = await writePlan(repo, 'auth-refresh-plan-1', { 'decisions-from': 'f'.repeat(64) })
+    expect(stale.code).toBe(2)
+    expect(stale.stderr).toContain('stale-decisions')
+  })
+
+  it('a parent that carries nothing leaves the plan as it was', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    expect((await writePlan(repo, 'auth-refresh-plan-1')).code).toBe(0)
+    expect(repo.read('plans/auth-refresh-plan-1.md')).not.toContain('decisions-from')
+    expect('decisions' in planWrite(repo)).toBe(false)
+  })
+})
+
