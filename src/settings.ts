@@ -148,7 +148,7 @@ export const SETTINGS: readonly Setting[] = [
   },
   {
     path: 'arbiter.model', shape: PIN, since: 2, defaults: { 2: DEFAULT_MODEL }, ambient: true, group: 'behavior',
-    comment: 'model for the arbiter that settles stops and checks recaps under autonomy · exact id, no aliases', want: PIN_WANT,
+    comment: 'model for the arbiter that settles stops under autonomy · exact id, no aliases', want: PIN_WANT,
   },
   {
     path: 'session.contextLimit', shape: { kind: 'int', min: 1, max: 100 }, since: 1, defaults: { 1: 20 }, hookRead: true, group: 'behavior',

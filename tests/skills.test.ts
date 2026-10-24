@@ -258,38 +258,36 @@ describe('the execution protocol', () => {
 
 describe('one autonomy conditional per skill (A8)', () => {
   const read = (name: string) => readFileSync(skillPath(name), 'utf8');
-  it('every skill keys it on the CLI line, exactly once', () => {
-    for (const name of SKILLS) expect(read(name).match(/Under `autonomy: on`/g), name).toHaveLength(1);
+  it('every skill keys it on the CLI line, exactly once · brainstorm has none (row 194)', () => {
+    for (const name of SKILLS.filter((n) => n !== 'witness-brainstorm')) expect(read(name).match(/Under `autonomy: on`/g), name).toHaveLength(1);
+    expect(read('witness-brainstorm')).not.toContain('Under `autonomy: on`');
   });
   it('names what changes per stage', () => {
     expect(read('witness-implement')).toContain('the plan says X; doing Y because Z');
     expect(read('witness-ship')).toContain('`merged:`');
     expect(read('witness-ship')).toContain('Never merge');
     expect(read('witness-design')).toContain('the kept stop `design look`');
-    expect(read('witness-brainstorm')).toContain('there is no interview and no confirmation');
     expect(read('witness-ship')).toContain('Any other `merge: held`');
     expect(read('witness-ship')).toContain('ship <plan-id>    # append --manual when the run asked for it');
   });
 });
 
-describe('witness-design under autonomy (A6)', () => {
-  it('authors without the conversation and never opens the look itself', () => {
+describe('witness-design under autonomy (A6, row 194)', () => {
+  it('stays a conversation; only the critic rounds are settled for it', () => {
     const body = readFileSync(skillPath('witness-design'), 'utf8')
-    for (const s of ['Skip the directions-and-converge conversation', 'Never run `$WITNESS design <spec-id> --open`',
-      'the kept stop `design look`']) expect(body).toContain(s)
+    expect(body).toContain('the kept stop `design look`')
+    expect(body).not.toContain('Skip the directions-and-converge conversation')
+    expect(body).not.toContain('Never run `$WITNESS design <spec-id> --open`')
     expect(body.match(/Under `autonomy: on`/g)).toHaveLength(1)
-    expect(body).not.toContain('The session itself stays a conversation')
   })
 })
 
-describe('witness-brainstorm under autonomy (A6)', () => {
-  it('drafts from the ask with no interview and writes its assumptions down', () => {
+describe('witness-brainstorm in every mode (A6, row 194)', () => {
+  it('is an interview with a human under autonomy too', () => {
     const body = readFileSync(skillPath('witness-brainstorm'), 'utf8')
-    for (const s of ['there is no interview and no confirmation', '`ask: <id> — <text>`',
-      'Write every assumption down', '--ask <id>', 'the ask is parked', 'Never pass `--manual` yourself']) expect(body).toContain(s)
-    expect(body.match(/Under `autonomy: on`/g)).toHaveLength(1)
-    expect(body.indexOf('Under `autonomy: on`')).toBeLessThan(body.indexOf('## Interview protocol'))
-    expect(body).not.toContain('Nothing in this stage changes yet')
+    expect(body).not.toContain('there is no interview and no confirmation')
+    expect(body).not.toContain('Never pass `--manual` yourself')
+    expect(body).not.toContain('the ask is parked')
   })
 })
 describe('witness-decompose needs (A10)', () => {

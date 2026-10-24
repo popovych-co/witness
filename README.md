@@ -186,7 +186,7 @@ the list the CLI reads (`src/settings.ts`).
 | `ship.merge` | how ship merges its own PR under autonomy · merge \| squash \| rebase — accepts: merge \| squash \| rebase | `merge` |
 | `ship.ciSettleMs` | ms green CI must hold still before an autonomous merge · 0–1800000 — accepts: an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges | `60000` |
 | `autonomy` | on = the CLI settles its own stops and merges green PRs · on \| off · counts once committed — accepts: on \| off | `off` |
-| `arbiter.model` | model for the arbiter that settles stops and checks recaps under autonomy · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
+| `arbiter.model` | model for the arbiter that settles stops under autonomy · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
 | `session.contextLimit` | % of the context window at which a session hands over to a fresh one · 1–100 — accepts: an integer from 1 to 100 — % of the session's context window at which witness hands over to a fresh session | `20` |
 | `implement.stepsPerDispatch` | steps an implement session takes when its context fill can't be read · ≥ 1 — accepts: an integer >= 1 — steps handed to each fresh implement agent | `3` |
 | `gates.reviewerTimeoutMs` | ms one reviewer, or the arbiter, may run before it is stopped (10 min) · ≥ 1 — accepts: an integer >= 1 — milliseconds each reviewer invocation may take | `600000` |
@@ -233,7 +233,9 @@ need and a trust grant. `witness ship` merges with `ship.merge` only once the sh
 approved and CI is green — never when the approval lapsed or GitHub refuses — and only after the
 check set has held still for `ship.ciSettleMs`: gh's watch ends the moment nothing is pending, so
 a check that registers late would otherwise be missed. Green means at least one check passed and
-none failed, was cancelled or is pending.
+none failed, was cancelled or is pending. Brainstorm and design stay conversations with a human in
+every mode: `/witness` starts drive for the machine work and keeps the human's own items —
+decisions left for them, asks to grill, looks to design — in the chat.
 
 **`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns, because
 suites that boot servers or browsers collide. A target that reaches any `drive.caps.*` bound is
@@ -285,7 +287,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `design <spec-id> --file <html>\|--open\|--reconfirm` | register/show a `ui` spec's approved look |
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
-| `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] [--ask "<text>"]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log`; `--ask` queues an ask first; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
+| `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log`; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
 | `ship <plan-id> [--manual]` | lanes → ship gate → PR → CI watch → under autonomy: merge on green · `--manual` keeps that run's stop and merge for a human |
 | `test-evidence <plan-id> --phase red\|green [--step <id>]` / `verify-red <plan-id> [--base <ref>] [--step <id>]` | journal red/green criteria evidence from a worktree; `--step` names the plan step the cycle closes — required before the plan's first implement gate (on a plan with a criteria step), left off for a fix round after it. A green that closes a step prints `context:`, `steps:` and `slice:` |
 | `step-close <plan-id> --step <id>` | close a scaffolding step, which has no red→green to witness; prints `context:`, `steps:` and `slice:` as a closing green does, and closing it again changes nothing |

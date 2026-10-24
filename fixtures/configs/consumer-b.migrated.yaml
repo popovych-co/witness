@@ -32,7 +32,7 @@ ship:
 # ── Behavior: how witness works here ─────────────────────────────────────────
 autonomy: off                  # on = the CLI settles its own stops and merges green PRs · on | off · counts once committed
 arbiter:
-  model: claude-opus-5         # model for the arbiter that settles stops and checks recaps under autonomy · exact id, no aliases
+  model: claude-opus-5         # model for the arbiter that settles stops under autonomy · exact id, no aliases
 session:
   contextLimit: 20             # % of the context window at which a session hands over to a fresh one · 1–100
 implement:

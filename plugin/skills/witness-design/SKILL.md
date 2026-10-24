@@ -39,12 +39,7 @@ The `/witness` loop invokes you for a `ui`-flagged spec in a **feature** effort 
 
 ## Under `autonomy: on`
 
-When the CLI prints `autonomy: on` and this run is not `--manual`, the look is yours to author and the human's to approve. Nobody converses with you:
-
-- **New screen.** Skip the directions-and-converge conversation. Weigh 2–3 structural directions yourself, take the one that best serves the screen's one job under the design canon, and state the pick and its why in one line before you author it.
-- **Amend.** Make the smallest change that re-serves the amended behavior. Never run `$WITNESS design <spec-id> --reconfirm`: a re-armed look is the human's kept stop even when you see no visual delta.
-- **Never run `$WITNESS design <spec-id> --open`.** Opening the look is the human's act. Under autonomy the gate runs the critic without it, and `witness decide design <spec-id> --approve` refuses until the human has opened the current bytes.
-- **Gate, then follow the CLI.** Run `$WITNESS gate design <spec-id>`. The CLI settles the critic's rounds itself and prints `decided: … → revise` with a revise-context: re-author from it and re-gate, without asking — unless a `relay:` line printed under the decision: this session has reached its context limit, so print that line verbatim and END YOUR TURN — a fresh session takes the revise. When the critic is clean the CLI stops at the kept stop `design look` and prints its `kept-stop:` line: render the gate output and END YOUR TURN. A human's `--revise --note "…"` starts the next round, and that round is autonomous again.
+When the CLI prints `autonomy: on` and this run is not `--manual`, the session is still a conversation with the human, and only the critic's rounds are settled for you. The CLI settles each round itself and prints `decided: … → revise` with a revise-context: re-author from it, register the new look with `$WITNESS design <spec-id> --file`, `--open` it and re-gate, showing the human each new look — unless a `relay:` line printed under the decision: this session has reached its context limit, so print that line verbatim and END YOUR TURN — a fresh session takes the revise. When the critic is clean the CLI stops at the kept stop `design look` and prints its `kept-stop:` line: render the gate output and END YOUR TURN; the human approves the screen or sends a note. A human's `--revise --note "…"` starts the next round, and that round is settled the same way.
 
 ## Inputs (rebuild them, never remember them)
 

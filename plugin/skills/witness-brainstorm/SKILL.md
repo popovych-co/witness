@@ -1,6 +1,6 @@
 ---
 name: witness-brainstorm
-description: Stateless scope interview for a witness effort — one question at a time, each with a firm recommendation, ending in a confirmed scope recap persisted via witness recap; under autonomy it drafts the recap from the queued ask with no interview. Use when starting a new effort or re-scoping one; normally invoked by /witness.
+description: Stateless scope interview for a witness effort — one question at a time, each with a firm recommendation, ending in a confirmed scope recap persisted via witness recap. Use when starting a new effort or re-scoping one; normally invoked by /witness.
 ---
 
 # witness-brainstorm — scope interview → confirmed recap
@@ -32,16 +32,6 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.21.1}"
 ## What you produce
 
 No canon, only evidence: a **confirmed scope recap** persisted by `witness recap` as the birth entry of the effort journal. This skill writes no spec, no plan, no brief — decompose consumes the recap after you, including after session death.
-
-## Under `autonomy: on`
-
-When the CLI prints `autonomy: on` and this run is not `--manual`, there is no interview and no confirmation: nobody is there to answer. You answer one ask.
-
-1. **Read the ask from the CLI.** `$WITNESS next` prints it as `ask: <id> — <text>` under `stage: brainstorm`, and it is the whole brief. No `ask:` line means nobody asked for anything: report `no ask — nothing to build` and end.
-2. **Draft the recap from the ask and the repo.** Read `$WITNESS index` (existing canon, so a `fix` can name the spec whose promise it restores) and the repo's product docs. Pick the class by the interview's rules. When the ask could add or change a screen, the class is `feature`.
-3. **Write every assumption down.** Everything the ask does not say and your recap assumes becomes a constraint (`c1 …`, "Assumed: …") or a non-goal (`n1 …`). Leave no assumption in your head: the recap is all the next stage and the check can see.
-4. **Persist with the ask:** `$WITNESS recap --file "$DIR/recap.json" --ask <id>`. The CLI checks the recap against the ask before the effort is born. Exit 1 means the check sent it back: its `reason:` and `note:` lines say what to change, so re-draft and run it again. When it prints that the ask is parked, end: the CLI reports it.
-5. **Never pass `--manual` yourself.** It tells the CLI a human confirmed the recap. A refusal the CLI calls a human's decision (`ask-required`, `ask-parked`, `class-change`) is a stop.
 
 ## Interview protocol
 
