@@ -66,14 +66,10 @@ export interface GateInput {
   snapshot?: { tree: string; context: string }
 }
 
-// Row 178. What `resolve` may need to know about the run itself, not the target: whether the
-// CLI settles this run's stop (autonomy on, not --manual). Only the design gate reads it.
-export interface GateRun { autonomous: boolean }
-
 export interface GateSpec {
   gate: GateName
   targetKind: 'effort' | 'plan' | 'spec'
-  resolve(root: string, ctx: Ctx, canon: Canon, cfg: Config, target: string, run?: GateRun): Promise<Result<GateInput>>
+  resolve(root: string, ctx: Ctx, canon: Canon, cfg: Config, target: string): Promise<Result<GateInput>>
   // The sha `resolve` would report for the CURRENT content, without doing resolve's work.
   // `decide --approve` needs it to refuse stamping bytes no gate read (D75: staleness at
   // consumption), and resolve() is not usable there — the ship and implement gates run
@@ -259,7 +255,7 @@ async function judge(
     return owed !== undefined && !owed.manual
   }
   const canon = loadCanon(root)
-  const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target, { autonomous })
+  const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const input = inputR.value
   // Resolved once for every render this run performs — the entry renderers stay pure

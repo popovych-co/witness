@@ -832,10 +832,9 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
       return { line: `witness design ${id} --file <html>`, stage: 'design', target: id }
     }
     // Registered but unshown is the normal state right after --file. Ask for the show
-    // step by name; routing to the gate here would refuse design-unseen every time.
-    // Under autonomy the gate needs no sight (row 178): opening the look is the human's act,
-    // at the kept stop, never the session's.
-    return !cfg.autonomy && designUnseen(root, cfg.paths, id) !== undefined
+    // step by name; routing to the gate here would refuse design-unseen every time — in
+    // every mode (row 194).
+    return designUnseen(root, cfg.paths, id) !== undefined
       ? { line: `witness design ${id} --open`, stage: 'design', target: id }
       : { line: `witness gate design ${id}`, target: id,
           ...noteOf(judgeNote(readStream(root, id), 'design', judge)) }

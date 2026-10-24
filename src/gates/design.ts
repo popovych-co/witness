@@ -22,7 +22,7 @@ registerGate({
   gate: 'design',
   targetKind: 'spec',
 
-  async resolve(root, _ctx, canon, cfg, specId, run): Promise<Result<GateInput>> {
+  async resolve(root, _ctx, canon, cfg, specId): Promise<Result<GateInput>> {
     const spec = findById(canon, specId)
     if (!spec || spec.meta.type !== 'spec') {
       return refuse([v('spec', 'unknown-spec', specId, 'a specs/ doc id')])
@@ -40,11 +40,9 @@ registerGate({
     // learns about. An agent that drops the show step now hits a loud refusal its repair
     // loop already handles, instead of silently gating something nobody was shown.
     //
-    // Row 178 moves sight from the gate to the approval for an autonomous run. Gating unseen
-    // mattered because a human decided each round from findings; under autonomy nobody does
-    // until the kept stop, and `decide design --approve` still refuses a look nobody opened,
-    // so the human's stop is where it is opened and nothing stamps a look unseen.
-    const unseen = run?.autonomous ? undefined : designUnseen(root, cfg.paths, specId)
+    // Row 194: in every mode. A look comes out of a conversation with a human, so the human
+    // has seen it before any critic judges it (row 178's unseen gate is gone).
+    const unseen = designUnseen(root, cfg.paths, specId)
     if (unseen !== undefined) {
       return refuse([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
         `a human shown this artifact — run: witness design ${specId} --open`)])
