@@ -1,10 +1,12 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { TIDY, choreOnSpec, decidedRepo, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, turnDecision, writeSpec, writePlan, approve } from './helpers.js'
+import { TIDY, callFor, choreOnSpec, decidedRepo, fakeCtx, stampLive, fakeScenario, gateEnv, putVerdict, seededRepo, turnDecision, writeSpec, writePlan, approve } from './helpers.js'
 
 const PAIR_CLEAN = {
   coverage: [
@@ -113,6 +115,39 @@ describe('plan gate — carried decisions (row 198)', () => {
     expect(all[1]!.reviewed_sha).not.toBe(all[0]!.reviewed_sha)
     expect(repo.read('plans/auth-refresh-plan-1.md')).not.toContain('decisions-from')
     expect(repo.read('plans/auth-refresh-plan-1.md').replace(/status: \S+/, '')).toBe(before.replace(/status: \S+/, ''))
+  })
+
+  it("the plan critic reads the parent's decisions, and a chore plan also reads its recap", async () => {
+    const stdinOf = (scenario: string) => readFileSync(join(callFor(scenario, 'plan-critic')!, 'stdin'), 'utf8')
+    const feature = await decidedRepo()
+    const s1 = fakeScenario()
+    putVerdict(s1, PAIR_CLEAN)
+    await runGate(fakeCtx(feature.root, { env: gateEnv(s1) }), 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })
+    expect(stdinOf(s1)).toContain('### Decisions auth-refresh carries — witness read auth-refresh --decisions')
+    expect(stdinOf(s1)).toContain('  d1,Rotation is server-side')
+
+    const chore = await choreOnSpec()
+    const s2 = fakeScenario()
+    putVerdict(s2, PAIR_CLEAN)
+    await runGate(fakeCtx(chore.root, { env: gateEnv(s2) }), 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })
+    expect(stdinOf(s2)).toContain("### The chore's recap — witness read tidy --decisions")
+    expect(stdinOf(s2)).toContain('effort: tidy · chore')
+  })
+
+  it('a plan re-queued for decisions alone reads the decision delta', async () => {
+    const repo = await decidedRepo()
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    stampLive(repo, 'auth-refresh')
+    await turnDecision(repo, 'Rotation is client-side')
+    expect((await writePlan(repo, 'auth-refresh-plan-2')).code).toBe(0)
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...PAIR_CLEAN, coverage: [
+      { anchor: 'auth-refresh-plan-2 > ## Step: s1', note: 'read' }, { anchor: 'auth-refresh > ## Behavior', note: 'read' },
+    ] })
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'plan', 'auth-refresh-plan-2', { fresh: false, manual: false })
+    const stdin = readFileSync(join(callFor(scenario, 'plan-critic')!, 'stdin'), 'utf8')
+    expect(stdin).toContain('decisions moved since auth-refresh-plan-1:')
+    expect(stdin).toContain('  d1,changed,Rotation is client-side')
   })
 })
 

@@ -7,6 +7,8 @@ import { serializeDoc } from '../fm.js'
 import { primaryRoot } from '../gitio.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
+import { latestRecap } from '../journal.js'
+import { decisionLines, recapLines } from '../decisions.js'
 import { rows } from '../toon.js'
 
 interface Anchor { anchor: string; lines: string }
@@ -50,10 +52,18 @@ function mdOutline(lines: string[]): Anchor[] {
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv, allowPositionals: true,
-    options: { design: { type: 'boolean' }, outline: { type: 'boolean' }, lines: { type: 'string' } },
+    options: { design: { type: 'boolean' }, outline: { type: 'boolean' }, lines: { type: 'string' }, decisions: { type: 'boolean' } },
   })
   const id = positionals[0]
-  if (!id) { ctx.err('usage: witness read <id> [--design] [--outline] [--lines <a>-<b>]'); return EXIT.REFUSED }
+  if (!id) { ctx.err('usage: witness read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]'); return EXIT.REFUSED }
+  // Row 198. A separate mode, never mixed into the artifact's lines: those are one array behind
+  // whole, outline and slice, and an extra row would shift every range `--outline` names.
+  const mixed = [values.design && '--design', values.outline && '--outline', values.lines !== undefined && '--lines'].filter(Boolean)
+  if (values.decisions && mixed.length > 0) {
+    renderRefusal([v('--decisions', 'exclusive', mixed.join(' '),
+      "witness read <id> --decisions alone — a separate mode, never mixed into the artifact's lines")]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
 
   // primaryRoot, never ctx.cwd: this verb exists BECAUSE a worktree carries no canon, so
   // reading relative to where it was typed is the exact bug it closes.
@@ -62,6 +72,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootR.value
   const canon = loadCanon(root)
   const doc = findById(canon, id)
+  // Before the unknown-id refusal: an effort slug is the one non-canon id this mode takes (§11).
+  if (values.decisions) {
+    if (doc?.meta.type === 'plan') {
+      renderRefusal([v('id', 'not-a-spec', `${id} is a plan`, `its parent's — witness read ${String(doc.meta.parent)} --decisions`)]).forEach(ctx.err)
+      return EXIT.REFUSED
+    }
+    const recap = doc === undefined ? latestRecap(root, id) : undefined
+    if (doc === undefined && recap === undefined) {
+      renderRefusal([v('id', 'unknown-id', id, 'an id from witness index — or an effort slug with --decisions')]).forEach(ctx.err)
+      return EXIT.REFUSED
+    }
+    ;(doc !== undefined ? decisionLines(root, doc) : recapLines(recap!)).forEach(ctx.out)
+    return EXIT.OK
+  }
   if (!doc) {
     renderRefusal([v('id', 'unknown-id', id, 'an id from witness index')]).forEach(ctx.err)
     return EXIT.REFUSED

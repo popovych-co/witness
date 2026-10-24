@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto'
 import { writeAct } from './abandon.js'
-import { effortStreams, latestRecap, readStream, type Entry } from './journal.js'
+import { effortStreams, latestRecap, readStream, type Entry, type RecapEntry } from './journal.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
 import { canonicalJson, canonicalSha } from './sha.js'
+import { kv, list, rows } from './toon.js'
 
 // Row 198. A recap's numbered decision: one settled answer that shapes at least one spec.
 // Not `Decision` — recommend.ts already names its ranked option block that.
-export interface RecapDecision { id: string; text: string }
+export type RecapDecision = { id: string; text: string }
 
 // Row 198 (Builder's call 2). What a doc carries is what the write that made its CURRENT
 // content said it carries — D168's act, so this adds no second derivation. Two efforts can
@@ -53,6 +54,33 @@ export function decisionDelta(root: string, base: { planId?: string; decisions?:
     ...now.filter((d) => !was.has(d.id)).sort(byId).map((d) => ({ id: d.id, change: 'added' as const, text: d.text })),
     ...now.filter((d) => was.has(d.id) && was.get(d.id) !== d.text).sort(byId).map((d) => ({ id: d.id, change: 'changed' as const, text: d.text })),
     ...before.filter((d) => !is.has(d.id)).sort(byId).map((d) => ({ id: d.id, change: 'removed' as const, text: d.text })),
+  ]
+}
+
+// Row 198. `witness read <spec> --decisions`: what the spec carries and the standing limits of
+// the effort whose write made its content. Every row prints even when empty, so a reader can
+// tell "none" from "not shown". One rendering for the verb and the plan critic's prompt.
+export function decisionLines(root: string, doc: CanonDoc): string[] {
+  const carried = carriedDecisions(root, doc)
+  const recap = carried === undefined ? undefined : latestRecap(root, carried.effort)
+  return [
+    carried === undefined ? 'carried-by: none — no journaled write made this content' : kv('carried-by', carried.effort),
+    ...rows('decisions', ['id', 'text'], carried?.decisions ?? []),
+    ...rows('constraints', ['id', 'text'], recap?.constraints ?? []),
+    ...rows('non_goals', ['id', 'text'], recap?.non_goals ?? []),
+  ]
+}
+
+// `witness read <effort> --decisions`: the effort's whole latest recap — what a chore plan
+// carries, since a chore writes no spec to carry it (§4.5).
+export function recapLines(recap: RecapEntry): string[] {
+  return [
+    `effort: ${recap.effort} · ${recap.class}`,
+    ...rows('goals', ['id', 'text'], recap.goals),
+    ...rows('decisions', ['id', 'text'], recap.decisions ?? []),
+    ...rows('constraints', ['id', 'text'], recap.constraints),
+    ...rows('non_goals', ['id', 'text'], recap.non_goals),
+    list('slices', recap.slices),
   ]
 }
 

@@ -11,6 +11,8 @@ import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput } from '../gate.js'
 import { designPending, designStamp } from '../design.js'
 import { basisMoved, planBasis, planDecisionsTerm, specBasis } from '../basis.js'
+import { decisionDelta, decisionLines, recapLines } from '../decisions.js'
+import { rows } from '../toon.js'
 import type { GateCheck } from '../rounds.js'
 
 // D167. One derivation for the gate's stamp and `decide`'s: a pass approves a draft and nothing
@@ -74,12 +76,33 @@ registerGate({
           : `design-from ${short(String(planPin ?? 'absent'))} ≠ current design ${short(stamp.sha)}` })
     }
 
-    const base = baseForSpec(root, canon, String(parent.meta.id), planId)
+    const parentId = String(parent.meta.id)
+    const base = baseForSpec(root, canon, parentId, planId)
+    // Row 198 (g4). A plan re-queued because only the decisions moved is told what moved: its
+    // delta criteria are empty, so nothing else would check that it realizes the change.
+    const baseMoved = base.kind === 'empty' ? []
+      : basisMoved({ spec: base.sha!, ...(base.decisions ? { decisions: base.decisions } : {}) }, current)
+    const delta = baseMoved.includes('decisions') ? decisionDelta(root, base, parent) : undefined
+    const deltaBase = base.kind === 'empty'
+      ? 'new spec — the delta is the whole spec'
+      : [
+          `previous plan ${base.planId} pinned ${short(base.sha ?? '')} — the plan must realize what changed since`,
+          ...(!baseMoved.includes('decisions') ? []
+            : delta === undefined ? [`decisions moved since ${base.planId} — witness read ${parentId} --decisions`]
+            : [`decisions moved since ${base.planId}:`, ...rows('decisions-delta', ['id', 'change', 'text'], delta)]),
+        ].join('\n')
+    // What the parent's slicing settled and its effort's standing limits — shown only when it
+    // holds any, so a plan on a decision-free, limit-free effort reads today's prompt (c2). A
+    // chore plan also reads its chore's whole recap: a chore writes no spec to carry it.
+    const carried = decisionLines(root, parent)
+    const sections = [
+      ...(carried.some((l) => l.startsWith('  ')) ? [`### Decisions ${parentId} carries — witness read ${parentId} --decisions`, carried.join('\n')] : []),
+      ...(recap?.class === 'chore' ? [`### The chore's recap — witness read ${effort} --decisions`, recapLines(recap).join('\n')] : []),
+    ]
     const promptBody = [
-      `### Parent spec: ${String(parent.meta.id)}`, serializeDoc({ meta: parent.meta, body: parent.body }),
-      `### Delta base`, base.kind === 'empty'
-        ? 'new spec — the delta is the whole spec'
-        : `previous plan ${base.planId} pinned ${short(base.sha ?? '')} — the plan must realize what changed since`,
+      `### Parent spec: ${parentId}`, serializeDoc({ meta: parent.meta, body: parent.body }),
+      `### Delta base`, deltaBase,
+      ...sections,
       `### Plan: ${planId}`, serializeDoc({ meta: plan.meta, body: plan.body }),
     ].join('\n\n')
 
@@ -88,7 +111,7 @@ registerGate({
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)),
-      ...(tree ? { snapshot: { tree, context: contextDigest(parentSha, canonicalJson(base)) } } : {}),
+      ...(tree ? { snapshot: { tree, context: contextDigest(parentSha, canonicalJson(base), ...(sections.length ? [sections.join('\n\n')] : [])) } } : {}),
       artifactSha: canonicalSha(plan.meta, plan.body),
       reviewed: {
         kind: 'docs',

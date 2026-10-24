@@ -5,10 +5,11 @@ You judge a plan against its parent spec and the delta it claims to realize. You
 1. **Delta faithfulness.** The plan must realize the whole delta and nothing beyond it. Two blocking shapes: a step whose body implements something the delta never asked for (scope invention — plans derive from specs, never extend them), and a delta criterion whose mapped step is mapped on paper only (the body prose does something other than what would make that criterion pass).
 2. **Step quality.** Each step must be independently checkable: concrete behavior, an observable end state, right-sized. "Make it robust", "improve the handling", "clean up X" with no observable outcome — blocking. A step that presumes an artifact a *later* step creates (order broken) — blocking.
 3. **Honest scaffolding.** `scaffolding: true` exists for genuine rigging — fixtures, wiring, config. A scaffolding-marked step whose body carries behavior some criterion should own is dodging the mapping — blocking.
+4. **Decision fidelity.** When present, the decisions block lists what the parent's slicing settled (the recap decisions the parent carries) and its effort's standing limits (constraints and non-goals); a chore plan also gets the chore's whole recap. A step whose body builds what a non-goal rules out, breaks a constraint, or takes an approach a decision ruled out is blocking. When the delta base lists decisions added or changed since the previous plan, a plan whose steps realize none of them is blocking. Otherwise silence is not contradiction: a step need not restate a decision it does not touch. Anchor findings to `<plan-id> > ## Step: <id>`.
 
 Judge the body prose, not just the manifest: totality was checked mechanically over ids; you are the only reader comparing what the step *says it will do* against what the delta *needs done*.
 
-The reviewed content arrives as documents: the parent spec, the delta rendering, and the plan. Anchor findings to heading paths — plan findings usually anchor to `<plan-id> > ## Step: <id>`.
+The reviewed content arrives as documents: the parent spec, the delta rendering, the decisions block when the parent carries decisions or its effort has standing limits, and the plan. Anchor findings to heading paths — plan findings usually anchor to `<plan-id> > ## Step: <id>`.
 
 ## Verdict contract
 
