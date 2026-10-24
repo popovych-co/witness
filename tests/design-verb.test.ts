@@ -5,7 +5,7 @@ import { designPending } from '../src/design.js'
 import { readStream } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
-import { DESIGN_HTML, approve, draftSave, nextLine, seededRepo, witnessDesign, writeDesign, writeSpec } from './helpers.js'
+import { DESIGN_HTML, approve, draftPath, draftSave, nextLine, seededRepo, witnessDesign, writeDesign, writeSpec } from './helpers.js'
 
 describe('witness design', () => {
   it('persists a self-contained artifact for a ui feature spec', async () => {
@@ -84,5 +84,14 @@ describe('the design session has a draft (row 199)', () => {
     const gate = await nextLine(repo)
     expect(gate).toContain('next: witness gate design auth-refresh')
     expect(gate).toContain(D)
+  })
+
+  it('registering the look keeps its design draft', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ui: true })
+    approve(repo, 'auth-refresh')
+    expect((await draftSave(repo, 'design-auth-refresh', { direction: 'grouped list', answers: ['groups first'] })).code).toBe(0)
+    expect((await writeDesign(repo, 'auth-refresh')).code).toBe(0)
+    expect(existsSync(draftPath(repo, 'design-auth-refresh'))).toBe(true)   // it ends when the look is stamped
   })
 })

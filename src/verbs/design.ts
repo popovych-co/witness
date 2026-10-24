@@ -20,10 +20,10 @@ import { crashPoint, guardTxn, withTxn } from '../txn.js'
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv, allowPositionals: true,
-    options: { file: { type: 'string' }, reconfirm: { type: 'boolean' }, open: { type: 'boolean' } },
+    options: { file: { type: 'string' }, reconfirm: { type: 'boolean' }, open: { type: 'boolean' }, preview: { type: 'string' } },
   })
   const specId = positionals[0]
-  if (!specId) { ctx.err('usage: witness design <spec-id> --file <html> | --reconfirm | --open'); return EXIT.REFUSED }
+  if (!specId) { ctx.err('usage: witness design <spec-id> --file <html> | --reconfirm | --open | --preview <html>'); return EXIT.REFUSED }
 
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach(ctx.err); return EXIT.REFUSED }
@@ -40,6 +40,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   if (values.open) return openOnly(ctx, root, designRel(cfgR.value.paths, specId), specId)
+  if (values.preview !== undefined) return previewOnly(ctx, root, specId, values.preview)
   if (spec.meta.ui !== true) {
     renderRefusal([v('spec', 'not-ui', specId, 'a ui-flagged spec — set ui: true at decompose to earn a design stage')]).forEach(ctx.err)
     return EXIT.REFUSED
@@ -64,7 +65,33 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 }
 
-// The one place anything is ever spawned at a human. Journals a sha-keyed witness that
+// Row 200. The design session shows before it asks: its directions page, and the full look before
+// it registers, open through the same opener as --open (`opener:`, row 90). A preview takes no
+// lock and records nothing: `design-shown` is the witness that registered bytes were seen (row 72),
+// and these bytes are not registered.
+function previewOnly(ctx: Ctx, root: string, id: string, file: string): number {
+  const abs = resolve(ctx.cwd, file)
+  if (!existsSync(abs)) {
+    renderRefusal([v('--preview', 'input-unreadable', abs, 'a readable HTML file')]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  const localR = loadLocalConfig(root)
+  if (!localR.ok) { renderRefusal(localR.violations).forEach(ctx.err); return EXIT.REFUSED }
+  const { outcome, command } = openArtifact(localR.value.opener, abs)
+  if (outcome === 'failed') {
+    renderRefusal([v('design', 'opener-failed', `${command} did not resolve`,
+      `a working platform opener, or opener: in .witness/config.local.yaml — meanwhile open it yourself: file://${abs}`)]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  ctx.out(kv('previewed', id))
+  ctx.out(kv('path', abs))
+  ctx.out(kv('opener', command))
+  ctx.out(kv('note', `a preview registers nothing — witness design ${id} --file <html> registers the look`))
+  return EXIT.OK
+}
+
+// The one place a registered look is ever spawned at a human (a preview, above, shows bytes that
+// are not registered and witnesses nothing). Journals a sha-keyed witness that
 // `gate design`, `decide --approve` and `next` all consult. Deliberately reachable for
 // any registered artifact — re-showing a file that exists needs no ui/feature eligibility,
 // and gating it on those would dead-end the very refusals that point here.

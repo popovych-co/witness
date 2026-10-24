@@ -82,7 +82,7 @@ const VERB_USAGE: Record<string, string> = {
   draft: 'witness draft <ask-<id>|amend-<effort>|design-<spec-id>> [--file <json>]',
   decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]',
   floor: 'witness floor --show | --set <triple> --note <why>',
-  design: 'witness design <spec-id> --file <html> | --reconfirm | --open',
+  design: 'witness design <spec-id> --file <html> | --reconfirm | --open | --preview <html>',
   diff: 'witness diff <spec-id>',
   drive: 'witness drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] — runs every session itself · under autonomy it needs no terminal and reports when nothing else can move',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
