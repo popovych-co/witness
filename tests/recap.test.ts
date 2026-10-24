@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { askQueue } from '../src/ask.js'
 import { appendEntry, latestRecap, readStream } from '../src/journal.js'
-import { autonomyOn, seededRepo, tmpRepo, type TestRepo } from './helpers.js'
+import { autonomyOn, draftPath, draftSave, seededRepo, tmpRepo, type TestRepo } from './helpers.js'
 
 const RECAP = {
   effort: 'auth-hardening',
@@ -159,5 +159,24 @@ describe('witness recap — numbered decisions (row 198)', () => {
     const bare = await seededRepo({ noRecap: true })
     await bare.cli(['recap', '--file', bare.writeRecap({ decisions: [] })])
     expect('decisions' in latestRecap(bare.root, 'auth-hardening')!).toBe(false)
+  })
+})
+
+describe('witness recap — a confirmed recap ends its draft (row 199)', () => {
+  it('a confirmed recap ends its draft', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'one'])
+    expect((await draftSave(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'One works' }] })).code).toBe(0)
+    expect((await repo.cli(['recap', '--file', repo.writeRecap({}), '--ask', 'a1'])).code).toBe(0)
+    expect(existsSync(draftPath(repo, 'ask-a1'))).toBe(false)
+    expect((await draftSave(repo, 'amend-auth-hardening', { decisions: [{ id: 'd1', text: 'Rotation is silent' }] })).code).toBe(0)
+    expect((await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text: 'Rotation is silent' }] })])).code).toBe(0)
+    expect(existsSync(draftPath(repo, 'amend-auth-hardening'))).toBe(false)
+    await repo.cli(['ask', 'two'])
+    expect((await draftSave(repo, 'ask-a2', { goals: [{ id: 'g1', text: 'Two works' }] })).code).toBe(0)
+    const reused = await repo.cli(['recap', '--file', repo.writeRecap({}), '--ask', 'a2'])
+    expect(reused.code).toBe(2)
+    expect(reused.stderr).toContain('slug-reuse')
+    expect(existsSync(draftPath(repo, 'ask-a2'))).toBe(true)
   })
 })

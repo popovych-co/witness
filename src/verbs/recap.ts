@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { askQueue, reservedId } from '../ask.js'
 import { loadConfig } from '../config.js'
+import { dropDraft } from '../drafts.js'
 import { ID_RE } from '../dsl.js'
 import { idTextList } from '../idlists.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -146,6 +147,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return stateCommit(root, marker.files, `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}${recap.ask !== undefined ? ` · ask ${recap.ask}` : ''}`)
     })
     if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
+    // Row 199. The recap is the record now, so the grill's draft is done — only once the commit
+    // landed: a refused recap leaves the conversation where it was.
+    if (recap.ask !== undefined) dropDraft(root, { kind: 'ask', id: recap.ask })
+    if (values.amend) dropDraft(root, { kind: 'amend', effort: recap.effort })
     ctx.out(kv('effort', recap.effort))
     ctx.out(kv('class', recap.class))
     ctx.out(kv('goals', recap.goals.length))

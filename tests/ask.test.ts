@@ -1,8 +1,9 @@
+import { existsSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ASK_STREAM, askQueue } from '../src/ask.js'
 import { idRetired } from '../src/departure.js'
 import { effortStreams, readStream } from '../src/journal.js'
-import { seededRepo, tmpRepo, writeSpec } from './helpers.js'
+import { draftPath, draftSave, seededRepo, tmpRepo, writeSpec } from './helpers.js'
 
 const initialized = async () => { const repo = tmpRepo(); await repo.cli(['init']); return repo }
 
@@ -123,5 +124,16 @@ describe('the same ask twice (final review F10)', () => {
     expect(askQueue(repo.root)).toHaveLength(1)
     await repo.cli(['ask', '--withdraw', 'a1'])
     expect((await repo.cli(['ask', 'pay by card'])).stdout).toContain('ask: a2 — queued')
+  })
+})
+
+describe('a withdrawn ask (row 199)', () => {
+  it('withdrawing an ask ends its draft', async () => {
+    const repo = await initialized()
+    await repo.cli(['ask', 'one'])
+    expect((await draftSave(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'One works' }] })).code).toBe(0)
+    expect(existsSync(draftPath(repo, 'ask-a1'))).toBe(true)
+    expect((await repo.cli(['ask', '--withdraw', 'a1'])).code).toBe(0)
+    expect(existsSync(draftPath(repo, 'ask-a1'))).toBe(false)
   })
 })

@@ -5,7 +5,7 @@ import { designPending } from '../src/design.js'
 import { readStream } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
-import { DESIGN_HTML, approve, seededRepo, writeDesign, writeSpec } from './helpers.js'
+import { DESIGN_HTML, approve, draftSave, nextLine, seededRepo, witnessDesign, writeDesign, writeSpec } from './helpers.js'
 
 describe('witness design', () => {
   it('persists a self-contained artifact for a ui feature spec', async () => {
@@ -63,5 +63,26 @@ describe('witness design', () => {
     expect(designPending(repo.root, spec())).toBe(false)
     expect((await repo.cli(['satisfy', 'auth-refresh', '--need', 'sbx'])).code).toBe(0)
     expect(designPending(repo.root, spec())).toBe(false)
+  })
+})
+
+describe('the design session has a draft (row 199)', () => {
+  it("next names a look's design draft at every step", async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ui: true })
+    approve(repo, 'auth-refresh')
+    expect((await draftSave(repo, 'design-auth-refresh', { direction: 'grouped list', answers: ['groups first'], page: '<!doctype html><p>x</p>' })).code).toBe(0)
+    const D = 'draft: direction chosen · 1 answer settled · page saved · resume with witness draft design-auth-refresh'
+    const file = await nextLine(repo)
+    expect(file).toContain('next: witness design auth-refresh --file <html>')
+    expect(file).toContain(D)
+    expect((await writeDesign(repo, 'auth-refresh')).code).toBe(0)
+    const open = await nextLine(repo)
+    expect(open).toContain('next: witness design auth-refresh --open')
+    expect(open).toContain(D)
+    expect((await witnessDesign(repo, 'auth-refresh')).code).toBe(0)
+    const gate = await nextLine(repo)
+    expect(gate).toContain('next: witness gate design auth-refresh')
+    expect(gate).toContain(D)
   })
 })

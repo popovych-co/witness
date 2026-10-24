@@ -3,16 +3,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ASK_STREAM } from '../src/ask.js'
 import { readStream } from '../src/journal.js'
-import { measuredEnv, seededRepo, writeSpec, type TestRepo } from './helpers.js'
+import { draftPath, draftSave as save, measuredEnv, seededRepo, writeSpec } from './helpers.js'
 
 // Row 199. A conversation's local draft: saved after every settled answer, read back to resume.
-const save = async (repo: TestRepo, key: string, d: unknown, env?: Record<string, string>) => {
-  repo.write('d.json', JSON.stringify(d))
-  const r = await repo.cli(['draft', key, '--file', 'd.json'], env ? { env } : {})
-  rmSync(join(repo.root, 'd.json'), { force: true })
-  return r
-}
-const draftPath = (repo: TestRepo, key: string) => join(repo.root, '.witness', 'drafts', `${key}.json`)
 const readBack = (stdout: string) => { const [head, ...rest] = stdout.split('\n'); return { head, json: JSON.parse(rest.join('\n')) } }
 
 // The block `init` wrote before row 199: what fewhats and HYC carry today.

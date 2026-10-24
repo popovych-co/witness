@@ -301,6 +301,17 @@ export async function witnessDesign(repo: TestRepo, specId: string): Promise<Cli
   return repo.cli(['design', specId, '--open'])
 }
 
+// Row 199. One settled answer saved, as the grill and the design session save it. The temp file
+// goes before the caller looks at `git status`.
+export async function draftSave(repo: TestRepo, key: string, draft: unknown, env?: Record<string, string>): Promise<CliResult> {
+  repo.write('d.json', JSON.stringify(draft))
+  const r = await repo.cli(['draft', key, '--file', 'd.json'], env ? { env } : {})
+  rmSync(join(repo.root, 'd.json'), { force: true })
+  return r
+}
+
+export const draftPath = (repo: TestRepo, key: string): string => join(repo.root, '.witness', 'drafts', `${key}.json`)
+
 // Task 5 (B4). A clock whose sleep returns at once, records the ms and advances `now`, so a
 // usage wait of hours runs in a test in no time and its length is asserted exactly.
 export function fakeClock(start: number): Clock & { slept: number[] } {

@@ -1,6 +1,7 @@
+import { copyFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
-import { autonomyOn, nextLine, seededRepo, shippableRepo } from './helpers.js'
+import { autonomyOn, draftPath, draftSave, nextLine, seededRepo, shippableRepo } from './helpers.js'
 
 describe('next — the ask rung (A9)', () => {
   it('routes the oldest unanswered ask to brainstorm with its text', async () => {
@@ -72,5 +73,57 @@ describe('next — the ask rung (A9)', () => {
     const st = await repo.cli(['status'])
     expect(st.stdout).toContain('asks[1]{id,state,text}:')
     expect(st.stdout).toContain('  a1,queued,one')
+  })
+})
+
+describe('next — a drafted conversation resumes first (row 199)', () => {
+  it('an ask with a draft routes first and says where to resume', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'one'])
+    await repo.cli(['ask', 'two'])
+    expect((await draftSave(repo, 'ask-a2', { goals: [{ id: 'g1', text: 'Two works' }] })).code).toBe(0)
+    const out = await nextLine(repo)
+    expect(out).toContain('--ask a2')
+    expect(out).toContain('ask: a2 — two')
+    expect(out).toContain('draft: 1 item settled · resume with witness draft ask-a2')
+    expect((await draftSave(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'One works' }] })).code).toBe(0)
+    expect(await nextLine(repo)).toContain('--ask a1')
+    const back = await repo.cli(['draft', 'ask-a2'])
+    expect(back.stdout).toContain('Two works')
+  })
+
+  it('a draft whose ask was answered elsewhere is ignored', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'one'])
+    expect((await draftSave(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'One works' }] })).code).toBe(0)
+    const aside = `${draftPath(repo, 'ask-a1')}.aside`
+    copyFileSync(draftPath(repo, 'ask-a1'), aside)
+    expect((await repo.cli(['recap', '--file', repo.writeRecap({}), '--ask', 'a1'])).code).toBe(0)
+    copyFileSync(aside, draftPath(repo, 'ask-a1'))
+    expect(await nextLine(repo)).not.toContain('--ask a1')
+  })
+
+  it('a corrupt draft neither crashes next nor jumps the queue', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'one'])
+    await repo.cli(['ask', 'two'])
+    repo.write('.witness/drafts/ask-a2.json', '{"v":1,')
+    const out = await nextLine(repo)
+    expect(out).toContain('--ask a1')
+    expect(out).not.toContain('draft:')
+  })
+
+  it('a drafted amendment is resumed before an undrafted ask', async () => {
+    const repo = await seededRepo()
+    expect((await draftSave(repo, 'amend-auth-hardening', { decisions: [{ id: 'd1', text: 'Rotation is silent' }] })).code).toBe(0)
+    await repo.cli(['ask', 'later'])
+    const out = await nextLine(repo)
+    expect(out).toContain('next: witness recap --amend --file <recap.json>')
+    expect(out).toContain('stage: brainstorm')
+    expect(out).toContain('target: auth-hardening')
+    expect(out).toContain('draft: 1 item settled · resume with witness draft amend-auth-hardening')
+    expect(out).not.toContain('--ask a1')
+    expect((await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text: 'Rotation is silent' }] })])).code).toBe(0)
+    expect(await nextLine(repo)).toContain('--ask a1')
   })
 })
