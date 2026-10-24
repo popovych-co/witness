@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeAct } from './abandon.js'
-import { journalRel, latestRecap, readStream, streamIds, type RecapEntry } from './journal.js'
+import { effortAbandoned, journalRel, latestRecap, readStream, streamIds, type RecapEntry } from './journal.js'
 import { effortOf, effortWrites } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
 import { canonicalJson, canonicalSha } from './sha.js'
@@ -15,15 +15,20 @@ export type RecapDecision = { id: string; text: string }
 // Row 198 (Builder's call 2). What a doc carries is what the write that made its CURRENT
 // content said it carries — D168's act, so this adds no second derivation. Two efforts can
 // write identical content with different `carries`; the later act wins, and git is asked only
-// in that rare case. An id the effort's latest recap no longer holds is history, not carried.
-// A doc no journaled write made (a hand edit, an adopt) carries nothing.
+// in that rare case. An abandoned effort's act is taken back (D168): while a live effort's write
+// made the same content, the live one carries; content only abandoned writes made is canon of
+// record, and so is what they carried. An id the effort's latest recap no longer holds is
+// history, not carried. A doc no journaled write made (a hand edit, an adopt) carries nothing.
 export function carriedDecisions(root: string, doc: CanonDoc): { effort: string; decisions: RecapDecision[] } | undefined {
   const id = String(doc.meta.id)
   const sha = canonicalSha(doc.meta, doc.body)
   const index = writerIndex(root)
-  const writers = index.writes.get(`${id}\0${sha}`) ?? []
+  const all = index.writes.get(`${id}\0${sha}`) ?? []
+  const live = all.filter((w) => !index.abandoned.has(w.effort))
+  const writers = live.length > 0 ? live : all
   if (writers.length === 0) return undefined
-  const effort = writers.length === 1 ? writers[0]!.effort : writeAct(root, id, sha)?.effort ?? writers[0]!.effort
+  const effort = writers.length === 1 ? writers[0]!.effort
+    : writeAct(root, id, sha, 'HEAD', new Set(writers.map((w) => w.effort)))?.effort ?? writers[0]!.effort
   const carries = writers.find((w) => w.effort === effort)?.carries ?? []
   const decisions = (index.decisions.get(effort) ?? []).filter((d) => carries.includes(d.id))
   return { effort, decisions }
@@ -37,6 +42,7 @@ interface WriterIndex {
   key: string
   writes: Map<string, Array<{ effort: string; carries: string[] }>>   // `<id>\0<sha>` → each effort's last write of it
   decisions: Map<string, RecapDecision[]>
+  abandoned: Set<string>
 }
 let lastIndex: { root: string; index: WriterIndex } | undefined
 
@@ -47,10 +53,11 @@ function writerIndex(root: string): WriterIndex {
     return `${id}:${st?.size ?? '-'}:${st?.mtimeMs ?? '-'}`
   }).join('\n')
   if (lastIndex?.root === root && lastIndex.index.key === key) return lastIndex.index
-  const index: WriterIndex = { key, writes: new Map(), decisions: new Map() }
+  const index: WriterIndex = { key, writes: new Map(), decisions: new Map(), abandoned: new Set() }
   for (const effort of ids) {
     const entries = readStream(root, effort)
     if (entries[0]?.t !== 'recap') continue
+    if (effortAbandoned(entries)) index.abandoned.add(effort)
     const last = new Map<string, string[]>()
     for (const e of entries) {
       if (e.t === 'recap') index.decisions.set(effort, (e as RecapEntry).decisions ?? [])
@@ -62,11 +69,20 @@ function writerIndex(root: string): WriterIndex {
   return index
 }
 
+const byId = (a: RecapDecision, b: RecapDecision) => a.id.localeCompare(b.id, undefined, { numeric: true })
+
+// What a pin reads of a set of decisions: each id with its text, in id order. A recap may reorder
+// them or keep other keys beside the text (validation reads only id and text), and neither is a
+// changed decision — hashing the objects whole re-queued shipped specs with an empty delta.
+export function canonicalDecisions(decisions: readonly RecapDecision[]): RecapDecision[] {
+  return [...decisions].sort(byId).map(({ id, text }) => ({ id, text }))
+}
+
 // The pin a plan takes on what its parent carries — undefined for none, so a decision-free
 // basis is exactly the spec sha (c2).
 export function decisionsSha(decisions: readonly RecapDecision[]): string | undefined {
   if (decisions.length === 0) return undefined
-  return createHash('sha256').update(canonicalJson(decisions)).digest('hex')
+  return createHash('sha256').update(canonicalJson(canonicalDecisions(decisions))).digest('hex')
 }
 
 export type DecisionChange = { id: string; change: 'added' | 'changed' | 'removed'; text: string }
@@ -84,7 +100,6 @@ export function decisionDelta(root: string, base: { planId?: string; decisions?:
   const now = carriedDecisions(root, spec)?.decisions ?? []
   const was = new Map(before.map((d) => [d.id, d.text]))
   const is = new Set(now.map((d) => d.id))
-  const byId = (a: RecapDecision, b: RecapDecision) => a.id.localeCompare(b.id, undefined, { numeric: true })
   return [
     ...now.filter((d) => !was.has(d.id)).sort(byId).map((d) => ({ id: d.id, change: 'added' as const, text: d.text })),
     ...now.filter((d) => was.has(d.id) && was.get(d.id) !== d.text).sort(byId).map((d) => ({ id: d.id, change: 'changed' as const, text: d.text })),

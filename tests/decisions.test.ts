@@ -59,4 +59,20 @@ describe('what a doc carries (row 198)', () => {
     expect(basisMoved({ spec: 'a' }, { spec: 'a', decisions: 'x' })).toEqual(['decisions'])
     expect(basisMoved({ spec: 'a', decisions: 'x' }, { spec: 'b' })).toEqual(['spec', 'decisions'])
   })
+
+  it("an abandoned effort's act is taken back — the live effort that wrote the same content carries (D168)", async () => {
+    const repo = await seededRepo({ noRecap: true })
+    repo.write('rz.json', JSON.stringify({ ...RECAP, effort: 'zeta', decisions: [{ id: 'd1', text: 'zeta says A' }] }))
+    expect((await repo.cli(['recap', '--file', 'rz.json'])).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1'] }, SPEC_BODY, 'zeta')).code).toBe(0)
+    repo.write('ra.json', JSON.stringify({ ...RECAP, effort: 'alpha', class: 'fix', decisions: [{ id: 'd1', text: 'alpha says B' }] }))
+    expect((await repo.cli(['recap', '--file', 'ra.json'])).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1'] }, SPEC_BODY, 'alpha')).code).toBe(0)   // the same content
+    expect(carriedDecisions(repo.root, doc(repo, 'auth-refresh'))?.effort).toBe('alpha')                      // the later act, while it stands
+    const ab = await repo.cli(['abandon', 'alpha'])
+    expect(ab.code, ab.stderr).toBe(0)
+    expect(carriedDecisions(repo.root, doc(repo, 'auth-refresh')))
+      .toEqual({ effort: 'zeta', decisions: [{ id: 'd1', text: 'zeta says A' }] })
+  })
 })
+

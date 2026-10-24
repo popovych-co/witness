@@ -846,15 +846,16 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     }
   }
 
-  // Row 52 (Builder's call 8). While an effort owes decompose, the specs it wrote wait for the
-  // re-slice: a walk scoped to a spec never meets its effort's rung (`admits(e.slug)` is false
-  // there), so without this drive would plan a spec mid-re-slice and the chat would open a design
-  // session on the pre-amendment spec. An admitted effort that owes decompose returned above, so
-  // only the efforts this walk does not admit can still owe it here. Flows, draft-plan gates and
-  // starts keep row 18's soft lock.
+  // Row 52 (Builder's call 8). While an effort owes the re-slice an amendment re-armed, the specs
+  // it wrote wait for it: a walk scoped to a spec never meets its effort's rung (`admits(e.slug)`
+  // is false there), so without this drive would plan a spec mid-re-slice and the chat would open
+  // a design session on the pre-amendment spec. Only the amendment's: a decompose owed for another
+  // reason (a sibling written after an approve) leaves the approved specs moving, as before. An
+  // admitted effort that owes decompose returned above, so only the efforts this walk does not
+  // admit can still owe it here. Flows, draft-plan gates and starts keep row 18's soft lock.
   const reslicing = efforts
     .filter((e) => !admits(e.slug) && latestRecap(root, e.slug)?.class !== 'chore' && effortWrites(root, e.slug).size > 0)
-    .filter((e) => decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans))
+    .filter((e) => amendedSinceSettled(e.entries) && decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans))
   const resliced = new Set(reslicing.flatMap((e) => [...effortWrites(root, e.slug).keys()]))
 
   for (const spec of specs) {

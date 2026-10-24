@@ -36,10 +36,12 @@ function later(root: string, a: string, b: string): string {
 // back under a later commit, whose parent was never the write's — so an amendment read as a create
 // and was deleted, and a create restored another effort's abandoned amendment. And the same bytes
 // written again later, by another effort, are that effort's: who may take them back is the
-// caller's question, asked of this answer.
-export function writeAct(root: string, id: string, sha: string, at = 'HEAD'): WriteAct | undefined {
+// caller's question, asked of this answer. `among` narrows the efforts asked (row 198 asks the
+// live ones first).
+export function writeAct(root: string, id: string, sha: string, at = 'HEAD', among?: ReadonlySet<string>): WriteAct | undefined {
   let found: WriteAct | undefined
   for (const effort of effortStreams(root)) {
+    if (among !== undefined && !among.has(effort)) continue
     if (!readStream(root, effort).some((e) => isWrite(e, id, sha))) continue
     for (const { entry, commit } of journalActs(root, effort, at)) {
       if (!isWrite(entry, id, sha)) continue

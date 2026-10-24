@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { carriedDecisions, decisionsSha } from './decisions.js'
+import { canonicalDecisions, carriedDecisions, decisionsSha } from './decisions.js'
 import { latestRecap } from './journal.js'
 import { effortOf } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
@@ -38,6 +38,6 @@ export function planDecisionsTerm(root: string, plan: CanonDoc, parent: CanonDoc
   const recap = effort === undefined ? undefined : latestRecap(root, effort)
   const chore = recap?.class === 'chore' ? recap.decisions ?? [] : []
   if (chore.length === 0) return decisionsSha(carried)
-  return createHash('sha256').update(canonicalJson({ parent: carried, chore })).digest('hex')
+  return createHash('sha256').update(canonicalJson({ parent: canonicalDecisions(carried), chore: canonicalDecisions(chore) })).digest('hex')
 }
 

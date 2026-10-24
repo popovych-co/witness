@@ -58,11 +58,13 @@ function buildSpecMeta(root: string, id: string, manifest: Manifest, recap: Reca
     if (!goalIds.has(g)) violations.push(v(`covers[${i}]`, 'unknown-goal', String(g), `a goal id from the latest recap: ${[...goalIds].join(' ')}`))
   })
   // Row 198: the decisions this spec realizes ride covers' rail — journal only, never frontmatter.
-  const carries = Array.isArray(manifest.carries) ? (manifest.carries as string[]) : []
+  // Journaled as a set in id order, so a reordered or repeated list is the same mapping.
+  const listed = Array.isArray(manifest.carries) ? (manifest.carries as string[]) : []
   const decisionIds = new Set((recap.decisions ?? []).map((d) => d.id))
-  carries.forEach((d, i) => {
+  listed.forEach((d, i) => {
     if (!decisionIds.has(d)) violations.push(v(`carries[${i}]`, 'unknown-decision', String(d), `a decision id from the latest recap: ${[...decisionIds].join(' ') || '(none)'}`))
   })
+  const carries = [...new Set(listed)].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
   const meta: Record<string, unknown> = {
     id,
     type,

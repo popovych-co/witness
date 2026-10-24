@@ -302,5 +302,19 @@ describe('a spec its effort is re-slicing waits for the re-slice (row 52)', () =
     expect(chat).toContain('launch: witness drive --detach')
     expect(chat).not.toContain('witness design billing-page')
   })
+
+  // Final review (both reviewers). The hold is the amendment's: a decompose owed for another
+  // reason — a sibling written after an approve — leaves 0.22.0's scoped walks as they were.
+  it('without an amendment, an approved spec is planned and designed while a sibling waits for decompose', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })   // draft: decompose owed
+    expect(await nextLine(repo, { env: fixtureEnv({ WITNESS_DRIVE: 'auth-refresh' }) })).toContain('witness write auth-refresh-plan-1')
+    autonomyOn(repo)
+    expect(await nextLine(repo, { env: fixtureEnv() })).toContain('witness design billing-page')
+  })
 })
 
