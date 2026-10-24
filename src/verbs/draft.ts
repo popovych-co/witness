@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { journalStamp } from '../context.js'
 import {
-  draftSummary, dropDraft, keyName, parseKey, readDraft, saveDraft, settledItems, validateDraft, type DraftKey,
+  draftSummary, dropDraft, keyName, markRead, parseKey, readDraft, saveDraft, settledItems, validateDraft, type DraftKey,
 } from '../drafts.js'
 import { primaryRoot } from '../gitio.js'
 import { latestRecap } from '../journal.js'
@@ -31,6 +31,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (referent !== undefined) return refused([referent])
 
   const stored = readDraft(root, k)
+  const session = journalStamp(ctx.env)?.session
   if (values.file === undefined) {
     if (!stored.ok) return refused(stored.violations)
     if (stored.value === undefined) {
@@ -48,6 +49,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     }
     ctx.out(kv('draft', `${keyName(k)} · ${draftSummary(k, stored.value.draft)}`))
     JSON.stringify(stored.value.draft, null, 2).split('\n').forEach((l) => ctx.out(l))
+    if (session !== undefined) markRead(root, k, stored.value, session)
     return EXIT.OK
   }
 
@@ -60,11 +62,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const violations = validateDraft(k, parsed)
   if (violations.length) return refused(violations)
   const draft = parsed as Record<string, unknown>
-  const session = journalStamp(ctx.env)?.session
   // Builder's call 11. Two chats routed into one conversation would otherwise overwrite each
-  // other's answers. A relay's successor reads the draft back first, so its first save keeps
-  // everything; a session dropping its own answer is not this guard's business.
-  if (stored.ok && stored.value?.session !== undefined && session !== undefined && stored.value.session !== session) {
+  // other's answers unseen. A session that saved this draft, or read it back since, has seen every
+  // answer in it, so it may drop or reword one — that is the human's call in its chat.
+  const seen = stored.ok && (stored.value?.session === session || stored.value?.read?.includes(session ?? '') === true)
+  if (stored.ok && stored.value?.session !== undefined && session !== undefined && !seen) {
     const kept = new Set(settledItems(k, draft))
     const lost = settledItems(k, stored.value.draft).filter((i) => !kept.has(i))
     if (lost.length) {

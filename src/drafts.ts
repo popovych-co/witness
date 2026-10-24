@@ -15,7 +15,9 @@ export const DRAFTS_DIR = '.witness/drafts'
 
 export type DraftKey = { kind: 'ask'; id: string } | { kind: 'amend'; effort: string } | { kind: 'design'; spec: string }
 
-export interface StoredDraft { v: 1; key: string; session?: string; draft: Record<string, unknown> }
+// `session` is the last saver's; `read` the other sessions that read that content back since, each
+// of which has seen every answer in it (Builder's call 11).
+export interface StoredDraft { v: 1; key: string; session?: string; read?: string[]; draft: Record<string, unknown> }
 
 export function parseKey(key: string): DraftKey | undefined {
   const ask = /^ask-(a[0-9]+)$/.exec(key)
@@ -47,10 +49,18 @@ export function readDraft(root: string, k: DraftKey): Result<StoredDraft | undef
   let raw: unknown
   try { raw = JSON.parse(readFileSync(path, 'utf8')) } catch { return unreadable(k) }
   if (!isObject(raw) || raw.v !== 1 || !isObject(raw.draft)) return unreadable(k)
+  const read = Array.isArray(raw.read) ? raw.read.filter((x): x is string => typeof x === 'string') : []
   return ok({
     v: 1, key: keyName(k), draft: raw.draft,
     ...(typeof raw.session === 'string' ? { session: raw.session } : {}),
+    ...(read.length ? { read } : {}),
   })
+}
+
+const writeStored = (root: string, k: DraftKey, stored: StoredDraft): void => {
+  const path = join(root, draftRel(k))
+  writeFileSync(`${path}.tmp`, `${JSON.stringify(stored, null, 2)}\n`)
+  renameSync(`${path}.tmp`, path)
 }
 
 // Written aside and renamed into place, so a crash never leaves half a draft. The exclusion
@@ -58,10 +68,15 @@ export function readDraft(root: string, k: DraftKey): Result<StoredDraft | undef
 export function saveDraft(root: string, k: DraftKey, draft: Record<string, unknown>, session: string | undefined): void {
   ensureExcluded(root)
   mkdirSync(join(root, DRAFTS_DIR), { recursive: true })
-  const path = join(root, draftRel(k))
-  const stored: StoredDraft = { v: 1, key: keyName(k), ...(session !== undefined ? { session } : {}), draft }
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(stored, null, 2)}\n`)
-  renameSync(`${path}.tmp`, path)
+  writeStored(root, k, { v: 1, key: keyName(k), ...(session !== undefined ? { session } : {}), draft })
+}
+
+// A read-back by a session other than the saver records it: that session has now seen every answer
+// in this content, so its next save may drop or reword one. Not an act (row 191 reads `session`
+// only), and a new save clears the list, because its content is unseen again.
+export function markRead(root: string, k: DraftKey, stored: StoredDraft, session: string): void {
+  if (stored.session === undefined || stored.session === session || stored.read?.includes(session)) return
+  writeStored(root, k, { ...stored, read: [...(stored.read ?? []), session] })
 }
 
 export function dropDraft(root: string, k: DraftKey): void {
@@ -125,13 +140,21 @@ export function validateDraft(k: DraftKey, raw: unknown): Violation[] {
 
 const list = (x: unknown): unknown[] => (Array.isArray(x) ? x : [])
 
-// What a save must keep of another session's draft (Builder's call 11): the ids it settled in
-// the recap's four lists, or the design session's answers.
+// What a save by a session that has not seen this draft must keep of it (Builder's call 11), by
+// content: two chats both number their first answer g1, so an id alone cannot tell their answers
+// apart. A grill's items are its four lists' `id: text`; a look's are its chosen direction, each
+// settled answer, and whether a page is saved (the page itself changes with every save).
 export function settledItems(k: DraftKey, draft: Record<string, unknown>): string[] {
-  if (k.kind === 'design') return list(draft.answers).filter((a): a is string => typeof a === 'string')
+  if (k.kind === 'design') {
+    return [
+      ...(typeof draft.direction === 'string' && draft.direction !== '' ? [`direction: ${draft.direction}`] : []),
+      ...list(draft.answers).filter((a): a is string => typeof a === 'string').map((a) => `answer: ${a}`),
+      ...(typeof draft.page === 'string' && draft.page !== '' ? ['page'] : []),
+    ]
+  }
   return ID_LISTS.flatMap(([field]) => list(draft[field]))
-    .map((e) => (isObject(e) && typeof e.id === 'string' ? e.id : undefined))
-    .filter((id): id is string => id !== undefined)
+    .map((e) => (isObject(e) && typeof e.id === 'string' ? `${e.id}: ${String(e.text)}` : undefined))
+    .filter((item): item is string => item !== undefined)
 }
 
 const count = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`

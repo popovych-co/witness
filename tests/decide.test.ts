@@ -462,7 +462,7 @@ describe("decide's scope help (row 52)", () => {
     expect((await repo.cli(['gate', 'decompose', '--effort', 'auth-hardening'], { env: gateEnv(scenario) })).code).toBe(1)
     const res = await repo.cli(['decide', 'decompose', 'auth-hardening', '--revise', '--note', 'scope'])
     expect(res.code).toBe(0)
-    expect(res.stdout).toContain('help: scope itself implicated → witness recap --amend --file <recap.json> (the recap names effort auth-hardening)')
+    expect(res.stdout).toContain('help: scope itself implicated → witness draft amend-auth-hardening seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it')
     expect(res.stdout).not.toMatch(/recap --amend auth-hardening/)
   })
 })

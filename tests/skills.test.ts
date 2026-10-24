@@ -48,6 +48,10 @@ describe('witness-brainstorm', () => {
     expect(body()).not.toContain('Stateless by design');
     expect(body()).not.toMatch(/recap --amend <effort>/);
   });
+  // Final review (B-I4). An amendment has no ask: a literal agent must not queue one for it.
+  it('an amendment queues no ask', () => {
+    expect(body()).toContain('An amendment queues no ask');
+  });
 });
 
 // D142 prose half. The CLI rebases on origin/<branch> (`ship.ts`), so a recipe that rebases
@@ -93,6 +97,11 @@ describe('witness-decompose', () => {
   // Row 199. The re-interview a scope stop sends back starts from the latest recap.
   it('starts a scope amendment from its draft seed', () => {
     expect(body()).toContain('draft amend-<effort>');
+  });
+  // Final review (B-I4). Re-entered after the re-interview option, the skill hands the effort to the
+  // grill instead of re-slicing against the recap the human just rejected.
+  it('re-entered after the re-interview option, never re-slices against the old recap', () => {
+    expect(body()).toContain('never re-slice against the recap the human rejected');
   });
 
   it('hands a dangling-parent re-slice to the human (D166)', () => {
@@ -261,6 +270,15 @@ describe('the interview asks the same way the CLI does', () => {
     expect(body).toContain('--preview')
     expect(body).toContain('not checked')
     expect(body).not.toContain('the strongest alternative with when it wins and what it costs')
+  })
+
+  // Final review (A-I2, B-I1). A behavior note at the approval stop settles the stop first, so no
+  // stale look can be approved and the design draft survives the amendment.
+  it('a behavior note at the approval stop settles the stop with a revise upstream first', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    expect(body).toContain('witness decide design <spec-id> --revise --upstream <effort> --note')
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('**A behavior answer**')
   })
 })
 

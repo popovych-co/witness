@@ -40,7 +40,8 @@ No canon, only evidence: a **confirmed scope recap** persisted by `witness recap
 DIR=$(mktemp -d)
 ```
 
-- **The ask.** Every grill starts by queuing an ask. Use the `ask:` line from `$WITNESS next` when it is there. When it is not, open with "what do you want to build?", run `$WITNESS ask "<their words>"` on the answer, then run `$WITNESS next` again — its `ask:` line names the id.
+- **An amendment queues no ask.** When `next` printed a `target:` with `stage: brainstorm`, or you were sent to amend (a decompose scope stop, a design session's behavior answer), skip the ask: the key is `amend-<effort>`, and the amendment bullet below is where you start.
+- **The ask.** Every new effort's grill starts by queuing an ask. Use the `ask:` line from `$WITNESS next` when it is there. When it is not, open with "what do you want to build?", run `$WITNESS ask "<their words>"` on the answer, then run `$WITNESS next` again — its `ask:` line names the id.
 - **The key.** Your draft's key is `ask-<id>`, or `amend-<effort>` for an amendment.
 - **Resuming.** A `draft:` line means resume: read the draft back with the command it names, continue after the last settled answer, and tell the human in one line where you resume. `next` names a drafted amendment the same way, with `target:` its effort.
 - **An amendment** (a decompose stop sent back to re-interview, or a design session's behavior answer) starts from `$WITNESS draft amend-<effort>`, which prints the latest recap as the seed. Edit that seed, and never retype a text you are not changing: a decision's text is part of its plans' pin. Walk the branches the change touches. Once its first answer is saved, `next` resumes it ahead of the effort's other work.

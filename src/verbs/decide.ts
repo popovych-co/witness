@@ -711,7 +711,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
       ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
     }
-    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness recap --amend --file <recap.json> (the recap names effort ${target})`)
+    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft amend-${target} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
   }
   return EXIT.OK

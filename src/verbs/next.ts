@@ -790,7 +790,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // the endgame decision itself is the next action — decisions outrank motion, jammed
   // targets must not be silently skipped. A parked gate is excluded: the human already made
   // the endgame decision.
-  const owed = owedFrom(root, efforts, specs, plans).find((o) => admits(o.target))
+  // Row 200 (§7). A behavior note at the look's approval stop starts an amendment of the spec's
+  // effort while its design decision is still pending. The drafted amendment comes first: the look
+  // is being re-specified, so approving it now would stamp the old one and end its draft. Only
+  // where the walk admits the effort, so the amendment the rung below returns is reachable.
+  const amendingLook = (o: OwedDecision): boolean => o.gate === 'design' && efforts.some((e) =>
+    admits(e.slug) && effortWrites(root, e.slug).has(o.target) && draftLine(root, { kind: 'amend', effort: e.slug }) !== undefined)
+  const owed = owedFrom(root, efforts, specs, plans).find((o) => admits(o.target) && !amendingLook(o))
   if (owed !== undefined) {
     if (!owed.bound) return { line: `witness decide ${owed.gate} ${owed.target} --show`, target: owed.target }
     const parent = owed.gate === 'plan' ? String(findById(canon, owed.target)?.meta.parent) : undefined

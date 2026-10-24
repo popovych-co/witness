@@ -70,6 +70,28 @@ describe('a design answer that changes behavior (§4.8)', () => {
     expect(existsSync(draftPath(repo, 'design-auth-refresh'))).toBe(false)
   })
 
+  // Final review I2 (§7). A behavior note at the approval stop starts an amendment while the look's
+  // decision is still pending: the drafted amendment is resumed first, so a relayed successor is not
+  // shown the approval with the amendment it was in the middle of nowhere on screen.
+  it('a behavior note at the approval stop resumes the amendment before the pending look', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', { ui: true })
+    approve(repo, 'auth-refresh')
+    expect((await draftSave(repo, 'design-auth-refresh', LOOK)).code).toBe(0)
+    expect((await writeDesign(repo, 'auth-refresh')).code).toBe(0)
+    expect((await witnessDesign(repo, 'auth-refresh')).code).toBe(0)
+    const scenario = fakeScenario()
+    putVerdict(scenario, CLEAN)
+    expect((await repo.cli(['gate', 'design', 'auth-refresh'], { env: gateEnv(scenario) })).code).toBe(1)
+    expect(await nextLine(repo, { env })).toContain('next: witness decide design auth-refresh --show')
+    expect((await draftSave(repo, 'amend-auth-hardening', { decisions: [D1] })).code).toBe(0)
+    const out = await nextLine(repo, { env })
+    expect(out).toContain('next: witness recap --amend --file <recap.json>')
+    expect(out).toContain('target: auth-hardening')
+    expect(out).toContain('draft: 1 item settled · resume with witness draft amend-auth-hardening')
+    expect(out).not.toContain('witness decide design')
+  })
+
   it('under autonomy the chat is not sent back into the look while decompose re-slices it', async () => {
     const repo = await amendedMidLook(true)
     const out = await nextLine(repo, { env })

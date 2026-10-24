@@ -142,6 +142,61 @@ describe('witness draft (row 199)', () => {
     expect(designMoved.stderr).toContain('draft-moved')
   })
 
+  // Final review I1. Two chats on one ask both number their first answer g1, so ids alone cannot
+  // tell their answers apart: the text is part of what a save must keep, and so are a look's chosen
+  // direction and its page.
+  it("two chats' first answers under one id do not overwrite each other", async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'add dark mode'])
+    const S1 = measuredEnv('S1', 10_000, 1_000_000)
+    const S2 = measuredEnv('S2', 10_000, 1_000_000)
+    expect((await save(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'Chat A: readers switch to dark' }] }, S1)).code).toBe(0)
+    const clash = await save(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'Chat B: admins pick a brand theme' }] }, S2)
+    expect(clash.code).toBe(2)
+    expect(clash.stderr).toContain('draft-moved')
+    expect(readBack((await repo.cli(['draft', 'ask-a1'])).stdout).json.goals[0].text).toBe('Chat A: readers switch to dark')
+
+    expect((await repo.cli(['recap', '--file', repo.writeRecap({})])).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-refresh', { ui: true })).code).toBe(0)
+    expect((await save(repo, 'design-auth-refresh', { direction: 'grouped list', page: '<p>a</p>' }, S1)).code).toBe(0)
+    const look = await save(repo, 'design-auth-refresh', { direction: 'tabs' }, S2)
+    expect(look.code).toBe(2)
+    expect(look.stderr).toContain('draft-moved')
+    expect((await save(repo, 'design-auth-refresh', { direction: 'grouped list', page: '<p>b</p>', answers: ['groups first'] }, S2)).code).toBe(0)
+  })
+
+  // Final review (B-I2). A successor that read the draft back saw every answer, so the human may
+  // drop or reword one there; a session that has not read the current draft still may not.
+  it('a session that read the draft back may drop or reword an answer', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'add dark mode'])
+    const S1 = measuredEnv('S1', 10_000, 1_000_000)
+    const S2 = measuredEnv('S2', 10_000, 1_000_000)
+    const S3 = measuredEnv('S3', 10_000, 1_000_000)
+    const g1 = { id: 'g1', text: 'Dark theme' }
+    const g2 = { id: 'g2', text: 'Per-page themes' }
+    expect((await save(repo, 'ask-a1', { goals: [g1, g2] }, S1)).code).toBe(0)
+    expect((await repo.cli(['draft', 'ask-a1'], { env: S3 })).code).toBe(0)   // S3 reads this version
+    expect((await repo.cli(['draft', 'ask-a1'], { env: S2 })).code).toBe(0)
+    expect((await save(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'A dark theme, following the OS' }] }, S2)).code).toBe(0)
+    const stale = await save(repo, 'ask-a1', { goals: [g1, g2] }, S3)   // S2's newer answer is unseen by S3
+    expect(stale.code).toBe(2)
+    expect(stale.stderr).toContain('draft-moved')
+    expect((await repo.cli(['draft', 'ask-a1'], { env: S1 })).code).toBe(0)
+    expect((await save(repo, 'ask-a1', {}, S1)).code).toBe(0)
+  })
+
+  // Final review I3. An exclude file a human left without a final newline keeps its last line.
+  it('the exclusion never glues onto a last line with no newline', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'add dark mode'])
+    writeFileSync(join(repo.root, '.git', 'info', 'exclude'), '# local\n*.swp')
+    expect((await save(repo, 'ask-a1', { goals: [{ id: 'g1', text: 'Dark theme' }] })).code).toBe(0)
+    const lines = readFileSync(join(repo.root, '.git', 'info', 'exclude'), 'utf8').split('\n')
+    expect(lines).toContain('*.swp')
+    expect(lines).toContain('.witness/drafts/')
+  })
+
   it('the exemption alone keeps a visible draft from blocking state', async () => {
     const repo = await seededRepo({ noRecap: true })
     await repo.cli(['ask', 'add dark mode'])
