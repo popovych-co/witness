@@ -156,4 +156,13 @@ describe('the chat shows the human their stop (B1)', () => {
     expect(out).toContain('next: witness decide design billing-page --show')
     expect(out).toMatch(/^launch: witness drive --detach$/m)
   }, 60_000)
+  it('prints no launch: when only a conversation waits', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness design billing-page --file <html>')
+    expect(out).not.toMatch(/^(launch|watch):/m)
+  }, 60_000)
 })

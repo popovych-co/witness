@@ -8,7 +8,7 @@ import { crashPoint, pendingTxn, withTxn } from './txn.js'
 
 // Row 176. The human's ask is journaled state, on a stream witness owns the way it owns
 // `floor`. This module is its one home: the entries, the queue derived from them, and the
-// one write path the verb, `/witness <text>` and `drive --ask` share — so a crashed session
+// one write path the verb and `/witness <text>` share — so a crashed session
 // loses nothing, because the brainstorm that answers an ask reads it from here, never from
 // its prompt.
 export const ASK_STREAM = 'asks'

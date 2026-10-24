@@ -9,7 +9,7 @@ import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
-import { computeNext, type NextAction } from './verbs/next.js'
+import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
@@ -36,26 +36,17 @@ export type DriveStep =
   | { kind: 'merge'; line: string }
   | { kind: 'idle' }
 
-// A conversation is a stage whose product IS the exchange with a human: brainstorm has no
-// artifact to author headlessly, and design authoring/showing needs eyes on a rendered
-// page. Drive prints the handoff and gets out of the way rather than spawning a session
-// that would talk to nobody.
-function isConversation(action: NextAction): boolean {
-  if (action.stage === 'brainstorm') return true
-  if (action.line.startsWith('witness recap')) return true
-  return action.line.startsWith('witness design ')
-    && (action.line.includes('--open') || action.line.includes('--file'))
-}
-
 // The rule table is an ORDERED FIRST-MATCH list, on `recommend.ts`'s precedent: a
 // misrouted action is attributable to one line here rather than to a weighting. Pure over
 // the NextAction shape — no I/O — so every branch is one `expect` away.
 //
-// Row 180. Under autonomy nothing is a conversation: brainstorm, `witness recap` and design
-// authoring run headless (A2), and A1 answers the choose block and the recovery fork with
-// the policy's pick. A block that still reaches drive under a runnable line spawns, and the
-// session's own `next` takes it, so no block stops an unattended run. `witness decide`
-// lines stay decisions in both modes.
+// Row 194. A conversation (`conversationStage`) is one in both modes: brainstorm, `witness
+// recap` and design authoring and showing are exchanges with a human, so drive prints the
+// handoff and gets out of the way rather than spawning a session that would talk to nobody.
+// Row 180: under autonomy A1 answers the choose block and the recovery fork with the policy's
+// pick. A block that still reaches drive under a runnable line spawns, and the session's own
+// `next` takes it, so no block stops an unattended run. `witness decide` lines stay decisions
+// in both modes.
 export function classifyAction(action: NextAction, root: string, opts: { autonomy?: boolean } = {}): DriveStep {
   const { line } = action
   // Both decision surfaces render `witness decide <gate> <target> …`: tier 2's pending
@@ -72,7 +63,7 @@ export function classifyAction(action: NextAction, root: string, opts: { autonom
   if (action.block !== undefined && !opts.autonomy) {
     return { kind: 'decision', target: action.target, block: action.block }
   }
-  if (!opts.autonomy && isConversation(action)) return { kind: 'conversation', line }
+  if (conversationStage(action)) return { kind: 'conversation', line }
   // The merge is GitHub's act, not witness's — a flow at `watch` has nothing left for an
   // agent to do. In practice this line arrives in the spawned ship session's OUTPUT
   // (ship.ts:277) rather than in a routing row, which is why the loop reads the child's
@@ -410,7 +401,7 @@ export async function driveLoop(
   const standAside = async (step: Exclude<DriveStep, { kind: 'spawn' | 'idle' }>, action: NextAction, key: string) => {
     if (step.kind === 'conversation') {
       ctx.out(`drive: conversation — ${step.line}`)
-      ctx.out('help: this stage is an exchange with a human — run it in a chat session, then re-run witness drive')
+      ctx.out('help: run /witness in a chat — drive takes it back when you are done')
       setAside(key, { kind: 'conversation', line: step.line, why: 'an exchange with a human' })
       return
     }

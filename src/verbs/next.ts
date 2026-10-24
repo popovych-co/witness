@@ -938,10 +938,20 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   return { line: 'witness check', note: NOTHING_OWED }
 }
 
-// A stop that waits for the human: a decision the CLI could not settle, or a start an unmet
-// manual need blocks. Drive sets either aside, so neither is work to launch it for.
+// A conversation is a stage whose product IS the exchange with a human: brainstorm has no
+// artifact to author headlessly, and design authoring/showing needs eyes on a rendered page.
+// Row 194: in every mode. The one classification, for drive and for `next` alike.
+export function conversationStage(action: Pick<NextAction, 'stage' | 'line'>): boolean {
+  if (action.stage === 'brainstorm') return true
+  if (action.line.startsWith('witness recap')) return true
+  return action.line.startsWith('witness design ')
+    && (action.line.includes('--open') || action.line.includes('--file'))
+}
+
+// A stop that waits for the human: a decision the CLI could not settle, a conversation, or a
+// start an unmet manual need blocks. Drive sets each aside, so none is work to launch it for.
 function humanStop(canon: Canon, a: NextAction): boolean {
-  if (a.line.startsWith('witness decide ')) return true
+  if (a.line.startsWith('witness decide ') || conversationStage(a)) return true
   return a.line.startsWith('witness start ') &&
     unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
 }

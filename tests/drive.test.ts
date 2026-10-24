@@ -478,11 +478,11 @@ describe('sessions carry their target (B1 · B3)', () => {
 describe('classifyAction under autonomy (B2)', () => {
   const root = '/repo'
   const auto = { autonomy: true }
-  it('runs conversations and option blocks headless · decisions stay decisions', () => {
+  it('conversations stay conversations under autonomy · option blocks run headless · decisions stay decisions', () => {
     expect(classifyAction({ line: 'witness recap --file <recap.json> --ask a1', stage: 'brainstorm' }, root, auto))
-      .toEqual({ kind: 'spawn', home: root, stage: 'brainstorm', target: undefined, model: undefined })
+      .toEqual({ kind: 'conversation', line: 'witness recap --file <recap.json> --ask a1' })
     expect(classifyAction({ line: 'witness design auth-refresh --file <html>', stage: 'design', target: 'auth-refresh' }, root, auto).kind)
-      .toBe('spawn')
+      .toBe('conversation')
     expect(classifyAction({ line: 'witness recover --complete', block: ['recovery: 2 options · 1 is recommended'] }, root, auto).kind)
       .toBe('spawn')
     expect(classifyAction({
@@ -621,7 +621,7 @@ describe('autonomy in the loop (B2)', () => {
     expect(code).toBe(0)
   }, 60000)
 
-  it('brainstorm runs headless under autonomy', async () => {
+  it('brainstorm waits for a chat under autonomy', async () => {
     const repo = await seededRepo({ noRecap: true })
     autonomyOn(repo)
     writeLocalConfig(repo.root, { notify: noopOpener() })
@@ -629,8 +629,9 @@ describe('autonomy in the loop (B2)', () => {
     const seen = join(fakeScenario(), 'seen')
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), { maxSpawns: 1 })
-    expect(readFileSync(seen, 'utf8').trim()).toBe('-')
-    expect(out.join('\n')).not.toContain('drive: conversation')
+    expect(existsSync(seen)).toBe(false)
+    expect(out.join('\n')).toContain('drive: conversation — witness recap --file <recap.json> --ask a1')
+    expect(out.join('\n')).toContain('help: run /witness in a chat — drive takes it back when you are done')
   }, 60000)
 })
 
@@ -884,13 +885,12 @@ describe('one command (B1)', () => {
     expect(readFileSync(outside, 'utf8')).toBe('export SAFE=1\n')
   })
 
-  it('--ask queues the ask before the first session', async () => {
+  it('--ask is gone', async () => {
     const repo = await autonomous()
-    const agent = script(`grep -rqF 'add dark mode' "${repo.root}/.witness/journal" && echo ask-seen`)
-    const r = await repo.cli(['drive', '--ask', 'add dark mode', '--max-spawns', '1'], { env: { ...quiet, WITNESS_DRIVE_AGENT_BIN: agent } })
-    expect(r.stdout).toMatch(/ask: a\d+ — queued/)
-    expect(r.stdout).toContain('] ask-seen')
-  }, 60000)
+    const r = await repo.cli(['drive', '--ask', 'x'], { env: quiet })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('bad-arguments')
+  })
 })
 
 // Row 191 §4.9. `witness drive` typed in a chat session's shell inherits that session's reading
