@@ -1,6 +1,6 @@
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { serializeDoc } from '../fm.js'
-import { canonicalJson, canonicalSha } from '../sha.js'
+import { canonicalJson } from '../sha.js'
 import { contextDigest } from '../delta.js'
 import { snapshotFiles } from '../snapshot.js'
 import { latestRecap, streamExists } from '../journal.js'
@@ -8,6 +8,7 @@ import { findCycle, findById, type CanonDoc } from '../scan.js'
 import { effortReviewedSha, effortSpecs, effortWrites } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput, type Stamp } from '../gate.js'
+import { basisMoved, planBasis, specBasis } from '../basis.js'
 import type { GateCheck } from '../rounds.js'
 
 function stampsFor(docs: CanonDoc[]): Stamp[] {
@@ -67,7 +68,7 @@ registerGate({
       .filter((p) => docs.some((d) => String(d.meta.id) === String(p.meta.parent)))
       .filter((p) => {
         const parent = findById(canon, String(p.meta.parent))!
-        return String(p.meta['derives-from']) !== canonicalSha(parent.meta, parent.body)
+        return basisMoved(planBasis(p), specBasis(root, parent)).length > 0
       })
       .map((p) => String(p.meta.id))
     checks.push({ name: 'amendment-ack', ok: staleChildren.length === 0,

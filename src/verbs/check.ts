@@ -19,6 +19,7 @@ import { designPending } from '../design.js'
 import { ASK_STREAM, reservedId } from '../ask.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
+import { basisMoved, planBasis, specBasis } from '../basis.js'
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
@@ -28,7 +29,6 @@ import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
 import { findById, findCycle, loadCanon, planFinished } from '../scan.js'
-import { canonicalSha } from '../sha.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows } from '../toon.js'
 import { pendingTxn } from '../txn.js'
@@ -187,9 +187,11 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     const id = String(plan.meta.id)
     if (String(plan.meta.status) === 'in-progress') {
       const parent = findById(canon, String(plan.meta.parent))
-      if (parent && canonicalSha(parent.meta, parent.body) !== String(plan.meta['derives-from'])) {
-        findings.push(f('warn', 'motion', id, 'mid-flight-amendment',
-          `parent ${String(parent.meta.id)} moved off the pin — ship will re-verify against current content`))
+      const moved = parent ? basisMoved(planBasis(plan), specBasis(root, parent)) : []
+      if (moved.length > 0) {
+        findings.push(f('warn', 'motion', id, 'mid-flight-amendment', moved.includes('spec')
+          ? `parent ${String(parent!.meta.id)} moved off the pin — ship will re-verify against current content`
+          : `the decisions ${String(parent!.meta.id)} carries moved off the pin — the plan was derived under the old ones · witness diff ${String(parent!.meta.id)}`))
       }
       if (!existsSync(worktreePath(root, id))) {
         findings.push(f('warn', 'motion', id, 'missing-worktree', `witness start ${id} recreates it`))

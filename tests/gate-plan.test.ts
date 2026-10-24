@@ -4,7 +4,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, writePlan, approve } from './helpers.js'
+import { TIDY, choreOnSpec, decidedRepo, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, turnDecision, writeSpec, writePlan, approve } from './helpers.js'
 
 const PAIR_CLEAN = {
   coverage: [
@@ -80,3 +80,39 @@ describe('plan gate', () => {
     expect(r.stdout + r.stderr).toContain('no-effort')
   })
 })
+
+describe('plan gate — carried decisions (row 198)', () => {
+  it('a changed carried decision fails pin-fresh and re-keys the verdict', async () => {
+    const repo = await decidedRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, PAIR_CLEAN)
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    expect(await runGate(ctx, 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })).toBe(0)
+    await turnDecision(repo, 'Rotation is client-side')
+    expect(await runGate(ctx, 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })).toBe(1)
+    const [first, second] = runs(repo)
+    expect(second!.reviewed_sha).not.toBe(first!.reviewed_sha)
+    const pin = second!.checks.find((c) => c.name === 'pin-fresh')!
+    expect(pin.ok).toBe(false)
+    expect(pin.detail).toContain('decisions-from')
+    expect(pin.detail).toContain('but auth-refresh carries decisions at')
+  })
+
+  it("a changed chore decision re-keys its chore plan's gate", async () => {
+    const repo = await choreOnSpec()
+    const before = repo.read('plans/auth-refresh-plan-1.md')
+    const scenario = fakeScenario()
+    putVerdict(scenario, PAIR_CLEAN)
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    await runGate(ctx, 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })
+    repo.write('tidy.json', JSON.stringify({ ...TIDY, decisions: [{ id: 'd1', text: 'Break the public API' }] }))
+    expect((await repo.cli(['recap', '--amend', '--file', 'tidy.json'])).code).toBe(0)
+    await runGate(ctx, 'plan', 'auth-refresh-plan-1', { fresh: false, manual: false })
+    const all = runs(repo)
+    expect(all).toHaveLength(2)
+    expect(all[1]!.reviewed_sha).not.toBe(all[0]!.reviewed_sha)
+    expect(repo.read('plans/auth-refresh-plan-1.md')).not.toContain('decisions-from')
+    expect(repo.read('plans/auth-refresh-plan-1.md').replace(/status: \S+/, '')).toBe(before.replace(/status: \S+/, ''))
+  })
+})
+

@@ -5,6 +5,8 @@ import { EXIT, type Ctx } from '../cli.js'
 import { serializeDoc } from '../fm.js'
 import { primaryRoot, tryGit } from '../gitio.js'
 import { baseForSpec, contentAtSha } from '../history.js'
+import { basisMoved, specBasis } from '../basis.js'
+import { carriedDecisions, decisionDelta } from '../decisions.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { canonicalSha, short, VOLATILE_FIELDS } from '../sha.js'
@@ -38,11 +40,31 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('base', 'empty (never realized)'))
     ctx.out(kv('sha', short(current)))
     ctx.out('delta: full content is the delta — new spec')
+    const carried = carriedDecisions(root, spec)?.decisions.length ?? 0
+    if (carried > 0) ctx.out(`decisions: ${carried} carried — all are the delta · witness read ${id} --decisions`)
     return EXIT.OK
   }
   ctx.out(kv('base', `plan-pin ${base.planId} @ ${short(base.sha!)}`))
-  if (base.sha === current) {
+  // Row 198. The delta is against the base plan's whole basis: its content pin and the
+  // decisions the spec carried when it was derived.
+  const moved = basisMoved({ spec: base.sha!, ...(base.decisions ? { decisions: base.decisions } : {}) }, specBasis(root, spec))
+  if (moved.length === 0) {
     ctx.out('delta: none — no delta since the last plan')
+    return EXIT.OK
+  }
+  const decisionsBlock = (): void => {
+    if (!moved.includes('decisions')) return
+    const delta = decisionDelta(root, base, spec)
+    if (delta === undefined) {
+      ctx.out(`decisions: moved since ${base.planId} — witness read ${id} --decisions`)
+      return
+    }
+    ctx.out(`decisions: moved since ${base.planId}`)
+    rows('decisions-delta', ['id', 'change', 'text'], delta).forEach(ctx.out)
+  }
+  if (!moved.includes('spec')) {
+    ctx.out('delta: decisions only — the spec content is unchanged since the last plan')
+    decisionsBlock()
     return EXIT.OK
   }
   const baseDoc = contentAtSha(root, spec.rel, base.sha!)
@@ -57,5 +79,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   writeFileSync(join(tmp, 'current.md'), canonicalRender(spec.meta, spec.body))
   const diff = tryGit(root, 'diff', '--no-index', '--', join(tmp, 'base.md'), join(tmp, 'current.md'))
   ctx.out(diff.out)
+  decisionsBlock()
   return EXIT.OK
 }

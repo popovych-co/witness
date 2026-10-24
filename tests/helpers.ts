@@ -690,6 +690,42 @@ export const SKILL_GROUND_RULES = [
   'Read a file before your first edit',
 ]
 
+// Row 198. A spec carrying one decision under a plan derived from it: a birth recap, not an
+// amendment, so the fixture shortcut holds and the plan stands as the spec's base.
+export async function decidedRepo(): Promise<TestRepo> {
+  const repo = await seededRepo({ noRecap: true })
+  const r = await repo.cli(['recap', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text: 'Rotation is server-side' }] })])
+  if (r.code !== 0) throw new Error(`recap: ${r.stderr}`)
+  repo.effort = 'auth-hardening'
+  const w = await writeSpec(repo, 'auth-refresh', { carries: ['d1'] })
+  if (w.code !== 0) throw new Error(`write spec: ${w.stderr}`)
+  approve(repo, 'auth-refresh')
+  const p = await writePlan(repo, 'auth-refresh-plan-1')
+  if (p.code !== 0) throw new Error(`write plan: ${p.stderr}`)
+  return repo
+}
+
+// Amends the carried decision's text — the spec's content stays as it is.
+export async function turnDecision(repo: TestRepo, text: string): Promise<void> {
+  const r = await repo.cli(['recap', '--amend', '--file', repo.writeRecap({ decisions: [{ id: 'd1', text }] })])
+  if (r.code !== 0) throw new Error(`amend: ${r.stderr}`)
+}
+
+// Row 198 (Builder's call 4). A chore plan on a live spec, the chore carrying its own decision.
+export const TIDY = {
+  effort: 'tidy', class: 'chore', goals: [{ id: 'g1', text: 'Tidy the token module' }],
+  non_goals: [], constraints: [], decisions: [{ id: 'd1', text: 'Keep the public API' }], slices: [],
+}
+export async function choreOnSpec(): Promise<TestRepo> {
+  const repo = await seededRepo({ preexisting: ['auth-refresh'] })
+  repo.write('tidy.json', JSON.stringify(TIDY))
+  const r = await repo.cli(['recap', '--file', 'tidy.json'])
+  if (r.code !== 0) throw new Error(`recap tidy: ${r.stderr}`)
+  const p = await writePlan(repo, 'auth-refresh-plan-1', {}, PLAN_BODY, 'tidy')
+  if (p.code !== 0) throw new Error(`write chore plan: ${p.stderr}`)
+  return repo
+}
+
 // A second effort, so a test can put plans or amendments under a different owner.
 export async function recapEffort(repo: TestRepo, slug: string): Promise<void> {
   repo.write(`recap-${slug}.json`, JSON.stringify({

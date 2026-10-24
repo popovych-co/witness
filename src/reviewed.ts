@@ -71,16 +71,23 @@ export function implementReviewedSha(runRoot: string, base: string, plan: CanonD
     .digest('hex')
 }
 
-export interface WriteInfo { sha: string; covers?: string[]; carries?: string[]; created?: boolean }
+// `decisions` is inline rather than decisions.ts's RecapDecision: this module never imports
+// decisions.ts (see planPairSha).
+export interface WriteInfo {
+  sha: string; covers?: string[]; carries?: string[]; decisions?: Array<{ id: string; text: string }>; created?: boolean
+}
 
 export function effortWrites(root: string, effort: string): Map<string, WriteInfo> {
   const out = new Map<string, WriteInfo>()
   for (const e of readStream(root, effort)) {
     if (e.t !== 'write') continue
-    const w = e as unknown as { artifact: string; sha: string; covers?: string[]; carries?: string[]; created?: boolean }
+    const w = e as unknown as WriteInfo & { artifact: string }
     // D168. Latest write wins for sha, covers and carries, but a revision does not un-create:
     // the effort created the artifact if any of its writes did.
-    out.set(w.artifact, { sha: w.sha, covers: w.covers, carries: w.carries, created: w.created ?? out.get(w.artifact)?.created })
+    out.set(w.artifact, {
+      sha: w.sha, covers: w.covers, carries: w.carries, decisions: w.decisions,
+      created: w.created ?? out.get(w.artifact)?.created,
+    })
   }
   return out
 }

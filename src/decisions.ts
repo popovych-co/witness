@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { writeAct } from './abandon.js'
 import { effortStreams, latestRecap, readStream, type Entry } from './journal.js'
+import { effortOf, effortWrites } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
 import { canonicalJson, canonicalSha } from './sha.js'
 
@@ -31,3 +32,27 @@ export function decisionsSha(decisions: readonly RecapDecision[]): string | unde
   if (decisions.length === 0) return undefined
   return createHash('sha256').update(canonicalJson(decisions)).digest('hex')
 }
+
+export type DecisionChange = { id: string; change: 'added' | 'changed' | 'removed'; text: string }
+
+// Row 198. What moved in a spec's carried decisions since the base plan was derived: added,
+// then changed, then removed, each by id; a removed row shows the text the plan was derived
+// under. A base plan with no `decisions-from` was derived under none, so all it carries now is
+// added. Undefined when the plan pinned decisions but its write journaled no texts — unknown,
+// never guessed. One derivation for `witness diff` and the plan gate's delta block.
+export function decisionDelta(root: string, base: { planId?: string; decisions?: string }, spec: CanonDoc): DecisionChange[] | undefined {
+  const effort = base.planId === undefined ? undefined : effortOf(root, base.planId)
+  const journaled = effort === undefined ? undefined : effortWrites(root, effort).get(base.planId!)?.decisions
+  const before = journaled ?? (base.decisions === undefined ? [] : undefined)
+  if (before === undefined) return undefined
+  const now = carriedDecisions(root, spec)?.decisions ?? []
+  const was = new Map(before.map((d) => [d.id, d.text]))
+  const is = new Set(now.map((d) => d.id))
+  const byId = (a: RecapDecision, b: RecapDecision) => a.id.localeCompare(b.id, undefined, { numeric: true })
+  return [
+    ...now.filter((d) => !was.has(d.id)).sort(byId).map((d) => ({ id: d.id, change: 'added' as const, text: d.text })),
+    ...now.filter((d) => was.has(d.id) && was.get(d.id) !== d.text).sort(byId).map((d) => ({ id: d.id, change: 'changed' as const, text: d.text })),
+    ...before.filter((d) => !is.has(d.id)).sort(byId).map((d) => ({ id: d.id, change: 'removed' as const, text: d.text })),
+  ]
+}
+

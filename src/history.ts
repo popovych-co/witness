@@ -20,6 +20,7 @@ export interface BaseResolution {
   kind: 'plan-pin' | 'empty'
   sha?: string
   planId?: string
+  decisions?: string   // row 198: the base plan's `decisions-from`, when it pinned one
 }
 
 // D160 audit note: a batched `git log --name-only` replacement for the per-plan
@@ -48,5 +49,9 @@ export function baseForSpec(root: string, canon: Canon, specId: string, excludeP
   })
   stamped.sort((a, b) => b.at - a.at || String(b.p.meta.id).localeCompare(String(a.p.meta.id)))
   const latest = stamped[0]!.p
-  return { kind: 'plan-pin', sha: String(latest.meta['derives-from']), planId: String(latest.meta.id) }
+  const decisions = latest.meta['decisions-from']
+  return {
+    kind: 'plan-pin', sha: String(latest.meta['derives-from']), planId: String(latest.meta.id),
+    ...(typeof decisions === 'string' ? { decisions } : {}),
+  }
 }

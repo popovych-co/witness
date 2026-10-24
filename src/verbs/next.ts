@@ -11,7 +11,7 @@ import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } 
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
-import { canonicalSha } from '../sha.js'
+import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import {
   greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, redCycleClosed, redInFlight, stepProgress, stepsLine,
@@ -904,7 +904,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // returns first otherwise. A scoped walk relies on `resliced` for the efforts it does not.
   const unrealizedDelta = (d: CanonDoc): boolean => {
     const base = baseForSpec(root, canon, String(d.meta.id))
-    return base.kind === 'empty' || base.sha !== canonicalSha(d.meta, d.body)
+    return base.kind === 'empty' ||
+      basisMoved({ spec: base.sha!, ...(base.decisions ? { decisions: base.decisions } : {}) }, specBasis(root, d)).length > 0
   }
   const planless = canon.docs
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
@@ -946,7 +947,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     if (String(plan.meta.status) !== 'draft') continue
     if (!admits(id)) continue
     const parent = findById(canon, String(plan.meta.parent))
-    const planSha = parent ? planPairSha(plan, parent) : undefined
+    const planSha = parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
     const entries = readStream(root, id)
     // Parked skips for the same reason settled does — the gate is off the board until a
     // fresh run brings it back, and `status` is where it stays visible meanwhile.

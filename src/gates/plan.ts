@@ -10,6 +10,7 @@ import { effortOf, planPairSha } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput } from '../gate.js'
 import { designPending, designStamp } from '../design.js'
+import { basisMoved, planBasis, planDecisionsTerm, specBasis } from '../basis.js'
 import type { GateCheck } from '../rounds.js'
 
 // D167. One derivation for the gate's stamp and `decide`'s: a pass approves a draft and nothing
@@ -47,12 +48,20 @@ registerGate({
     checks.push({ name: 'parent-approved', ok: parentOk,
       detail: `${String(parent.meta.id)} is ${parentStatus}` })
 
-    const parentSha = canonicalSha(parent.meta, parent.body)
-    const pin = String(plan.meta['derives-from'])
-    checks.push({ name: 'pin-fresh', ok: pin === parentSha,
-      detail: pin === parentSha
-        ? `pin ${short(parentSha)}`
-        : `derives-from ${short(pin)} but parent is at ${short(parentSha)} — rewrite the plan (witness write re-stamps the pin)` })
+    // Row 198. Fresh iff neither pin moved: the parent's content, nor the decisions it carries.
+    const pinned = planBasis(plan)
+    const current = specBasis(root, parent)
+    const parentSha = current.spec
+    const moved = basisMoved(pinned, current)
+    const pin7 = (x: string | undefined) => (x === undefined ? 'none' : short(x))
+    const clause = {
+      spec: `derives-from ${short(pinned.spec)} but parent is at ${short(current.spec)} — rewrite the plan (witness write re-stamps the pin)`,
+      decisions: `decisions-from ${pin7(pinned.decisions)} but ${String(parent.meta.id)} carries decisions at ${pin7(current.decisions)} — rewrite the plan (witness write re-stamps the pins)`,
+    }
+    checks.push({ name: 'pin-fresh', ok: moved.length === 0,
+      detail: moved.length === 0
+        ? `pin ${short(parentSha)}${current.decisions !== undefined ? ` · decisions ${short(current.decisions)}` : ''}`
+        : moved.map((m) => clause[m]).join(' · ') })
 
     if (parent.meta.ui === true) {
       const stamp = designStamp(parent)
@@ -78,7 +87,7 @@ registerGate({
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
-      reviewedSha: planPairSha(plan, parent),
+      reviewedSha: planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)),
       ...(tree ? { snapshot: { tree, context: contextDigest(parentSha, canonicalJson(base)) } } : {}),
       artifactSha: canonicalSha(plan.meta, plan.body),
       reviewed: {
@@ -94,10 +103,10 @@ registerGate({
     })
   },
 
-  currentSha(_root, canon, _cfg, planId) {
+  currentSha(root, canon, _cfg, planId) {
     const plan = findById(canon, planId)
     const parent = plan ? findById(canon, String(plan.meta.parent)) : undefined
-    return plan && parent ? planPairSha(plan, parent) : undefined
+    return plan && parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
   },
 
   upstreamOf(_root, canon, planId) {

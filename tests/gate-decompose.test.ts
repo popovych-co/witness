@@ -6,7 +6,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, writePlan, approve, type TestRepo } from './helpers.js'
+import { callCount, callFor, decidedRepo, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, turnDecision, writeSpec, writePlan, approve, type TestRepo } from './helpers.js'
 
 const cover = (ids: string[]) => ({
   coverage: ids.map((id) => ({ anchor: `${id} > ## Behavior`, note: 'read' })),
@@ -165,6 +165,18 @@ describe('decompose gate — decision coverage (row 198)', () => {
     expect(check.ok).toBe(true)
     expect(check.detail).toBe('the recap carries no decisions')
     expect(criticStdin(scenario)).not.toContain('### Decision coverage (journaled)')
+  })
+
+  it('amendment-ack names an in-progress plan whose carried decisions moved', async () => {
+    const repo = await decidedRepo()
+    repo.flipStatus('auth-refresh-plan-1', 'in-progress')
+    await turnDecision(repo, 'Rotation is client-side')
+    const scenario = fakeScenario()
+    putVerdict(scenario, cover(['auth-refresh']))
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'decompose', 'auth-hardening', { fresh: false, manual: false })
+    const ack = runsOf(repo, 'auth-hardening').at(-1)!.checks.find((c) => c.name === 'amendment-ack')!
+    expect(ack.ok).toBe(false)
+    expect(ack.detail).toContain('auth-refresh-plan-1')
   })
 })
 
