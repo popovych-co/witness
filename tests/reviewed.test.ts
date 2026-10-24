@@ -197,5 +197,8 @@ describe('planPairSha', () => {
     const base = planPairSha(plan, parent)
     expect(planPairSha(plan, { ...parent, body: parent.body + '\nmore' })).not.toBe(base)
     expect(planPairSha({ ...plan, body: plan.body + '\nmore' }, parent)).not.toBe(base)
+    // Row 198: no decisions term is today's two parts, byte for byte (c2).
+    expect(planPairSha(plan, parent, undefined)).toBe(base)
+    expect(planPairSha(plan, parent, 'a'.repeat(64))).not.toBe(base)
   })
 })

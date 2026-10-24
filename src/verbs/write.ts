@@ -15,6 +15,7 @@ import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
 import { baseForSpec, contentAtSha } from '../history.js'
 import { findById, findCycle, loadCanon, planFinished, plansOn, type Canon, type CanonDoc } from '../scan.js'
 import { canonicalJson, canonicalSha, short } from '../sha.js'
+import { carriedDecisions, decisionsSha, type RecapDecision } from '../decisions.js'
 import { kv } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { validateDoc } from '../schemas.js'
@@ -32,6 +33,7 @@ export interface Manifest {
   parent?: unknown
   'derives-from'?: unknown
   'design-from'?: unknown
+  'decisions-from'?: unknown
   steps?: unknown
 }
 
@@ -39,6 +41,7 @@ interface Built {
   meta: Record<string, unknown>
   covers: string[]
   carries: string[]
+  decisions?: RecapDecision[]   // a plan's: the texts its parent carries, journaled for witness diff
   violations: Violation[]
   warnings: string[]
 }
@@ -256,6 +259,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const entry = {
       t: 'write' as const, effort, artifact: id!, sha,
       ...(manifest.type === 'plan' ? {} : { covers: built.covers, ...(built.carries.length ? { carries: built.carries } : {}) }),
+      ...(built.decisions ? { decisions: built.decisions } : {}),
       ...(existing === undefined ? { created: true } : {}),
       ...(supersedes !== undefined ? { supersedes } : {}),
     }
@@ -334,6 +338,18 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   if (typeof supplied === 'string' && supplied !== computed) {
     violations.push(v('derives-from', 'stale-derivation', short(supplied), `current parent content is ${short(computed)} — re-derive from witness diff ${parentId}`))
   }
+  // Row 198. The decisions the parent carries pin beside its content, absent when it carries
+  // none, so a decision-free plan keeps today's bytes (c2). A chore's own decisions never pin
+  // here (Builder's call 4): the chore plan would become its parent's base with a pin the
+  // parent's carried set never matches, and the parent would re-queue forever.
+  const carried = carriedDecisions(root, parent)?.decisions ?? []
+  const decisionsFrom = decisionsSha(carried)
+  const suppliedDecisions = manifest['decisions-from']
+  if (suppliedDecisions !== undefined && suppliedDecisions !== decisionsFrom) {
+    const pin7 = (x: unknown) => (x === undefined ? 'none' : short(String(x)))
+    violations.push(v('decisions-from', 'stale-decisions', pin7(suppliedDecisions),
+      `the decisions ${parentId} carries are at ${pin7(decisionsFrom)} — omit decisions-from; witness write stamps it`))
+  }
   const parentUi = parent.meta.ui === true
   const suppliedDesignFrom = manifest['design-from']
   if (!parentUi && suppliedDesignFrom !== undefined) {
@@ -379,6 +395,7 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
     parent: parentId,
     'derives-from': computed,
     ...(designFrom !== undefined ? { 'design-from': designFrom } : {}),
+    ...(decisionsFrom !== undefined ? { 'decisions-from': decisionsFrom } : {}),
     depends: manifest.depends ?? [],
     needs: manifest.needs ?? [],
     steps: manifest.steps,
@@ -413,7 +430,7 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   })
   const cycle = findCycle(canon, { id, depends })
   if (cycle) violations.push(v('depends', 'cycle', cycle.join(' -> '), 'an acyclic depends graph'))
-  return { meta, covers: [], carries: [], violations, warnings }
+  return { meta, covers: [], carries: [], ...(carried.length ? { decisions: carried } : {}), violations, warnings }
 }
 
 function deltaCriteriaIds(root: string, canon: Canon, parent: CanonDoc, excludePlanId: string): Set<string> {

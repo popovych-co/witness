@@ -9,7 +9,7 @@ export interface RawDoc {
 }
 
 const FIELD_ORDER = [
-  'id', 'type', 'status', 'summary', 'ui', 'parent', 'derives-from', 'design-from',
+  'id', 'type', 'status', 'summary', 'ui', 'parent', 'derives-from', 'design-from', 'decisions-from',
   'supersedes', 'depends', 'needs', 'criteria', 'steps', 'pr', 'drift', 'design',
 ] as const
 

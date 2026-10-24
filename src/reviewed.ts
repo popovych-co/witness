@@ -131,9 +131,13 @@ export function effortReviewedSha(
   return { sha: sha256([canonicalJson(recap ?? {}), '\n', lines.join('\n')]), docs }
 }
 
-export function planPairSha(plan: CanonDoc, parent: CanonDoc): string {
+// Row 198. `decisions` is the plan's decisions term (basis.ts's `planDecisionsTerm`), taken as a
+// sha so this module never imports decisions.ts: design.ts → reviewed.ts sits inside abandon.ts's
+// import closure, which decisions.ts imports. Undefined hashes exactly today's two parts (c2).
+export function planPairSha(plan: CanonDoc, parent: CanonDoc, decisions?: string): string {
   return sha256([
     `${String(plan.meta.id)}:${canonicalSha(plan.meta, plan.body)}\n`,
     `${String(parent.meta.id)}:${canonicalSha(parent.meta, parent.body)}`,
+    ...(decisions !== undefined ? [`\ndecisions:${decisions}`] : []),
   ])
 }

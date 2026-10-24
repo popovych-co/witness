@@ -83,6 +83,9 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
     if (meta['design-from'] !== undefined && (typeof meta['design-from'] !== 'string' || !/^[0-9a-f]{64}$/.test(String(meta['design-from'])))) {
       out.push(v('design-from', 'shape', String(meta['design-from']), '64-hex design artifact sha'))
     }
+    if (meta['decisions-from'] !== undefined && (typeof meta['decisions-from'] !== 'string' || !/^[0-9a-f]{64}$/.test(String(meta['decisions-from'])))) {
+      out.push(v('decisions-from', 'shape', String(meta['decisions-from']), '64-hex carried-decisions sha'))
+    }
     out.push(...validateSteps(meta.steps, body))
   }
 
