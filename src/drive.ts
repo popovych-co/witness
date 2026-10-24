@@ -12,7 +12,7 @@ import { resolveSpawn } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
-import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
+import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, readStream, type Entry } from './journal.js'
@@ -535,7 +535,7 @@ export async function driveLoop(
     const needs = unmetNeeds(loadCanon(root)).filter((u) => u.doc === action.target && u.blocks === 'start')
     if (needs.length === 0) return false
     ctx.out(`drive: waits on you — ${action.target} · unmet need`)
-    const line = keptStopLine('unmet-need', [...needs.map((u) => u.text), ...needs.map((u) => u.satisfy)].join(' · '))
+    const line = unmetNeedLine(needs)
     ctx.out(line)
     setAside(key, { kind: 'kept', line, why: KEPT_STOP_NAMES['unmet-need'], stop: 'unmet-need' })
     return true

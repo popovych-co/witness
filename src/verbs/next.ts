@@ -26,7 +26,7 @@ import { cmd, kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
-import { autonomyLines, policyFor } from '../autonomy.js'
+import { autonomyLines, policyFor, unmetNeedLine } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
@@ -968,6 +968,36 @@ function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: 
   }
 }
 
+// Row 195. The ladder with drive's work set aside, the mirror of `driveHasWork`: the first
+// item an autonomous chat keeps for the human — a conversation, or a decision they settle in
+// the chat. `outside` holds the targets whose stop the human settles outside the chat (a trust
+// grant, answered in a terminal). Everything else is held aside, need-blocked starts included.
+// A target-less action that is no conversation (the recovery fork) is the ladder's own, and the
+// walk never passes it.
+export function humanAction(
+  root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction, outside: ReadonlySet<string>,
+): NextAction | undefined {
+  const held = new Set<string>()
+  for (let a = first; ;) {
+    if (conversationStage(a)) return a
+    if (a.line.startsWith('witness decide ') && (a.target === undefined || !outside.has(a.target))) return a
+    if (a.line === 'witness check' || a.target === undefined || held.has(a.target)) return undefined
+    held.add(a.target)
+    a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
+  }
+}
+
+// Row 195. The stops a chat shows once and never asks about: one line per plan whose start an
+// unmet manual need blocks. Read from the needs table, not from the walk, which stops at the
+// first human item and would miss a need past it.
+function needNotices(canon: Canon): string[] {
+  const byPlan = new Map<string, Array<{ text: string; satisfy: string }>>()
+  for (const u of unmetNeeds(canon)) {
+    if (u.blocks === 'start') byPlan.set(u.doc, [...(byPlan.get(u.doc) ?? []), u])
+  }
+  return [...byPlan.values()].map(unmetNeedLine)
+}
+
 // Exported for `drive`, which claims a flow with the same `--flow` semantics `next` has:
 // a claim that refuses when false. A second copy of these three refusals would be a
 // second answer to "is this a flow", and the two would part company on the first change.
@@ -1028,6 +1058,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const marked = driveChild(ctx.env)
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   let routed: { command: string; target: string } | undefined
+  // Row 195. Targets whose stop the human settles outside a chat: the trust grants left kept.
+  const outside = new Set<string>()
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
@@ -1038,6 +1070,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       if (routed === undefined && r.settled.kind === 'routed') {
         routed = { command: r.settled.line.replace(/^autonomy: re-run owed — /, ''), target: r.target }
       }
+      if (r.settled.kind === 'kept' && r.settled.stop === 'trust-grant') outside.add(r.target)
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1073,6 +1106,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     action = { line: routed.command, target: routed.target }
   }
   action = withDeferralNote(root, canon, action)
+  // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the
+  // rest: it is routed to the first item the human owes, and `launch:`/`watch:` below still
+  // follow the ladder's own action. A `--flow` claim and a worktree's ambient flow keep their
+  // scope: the walk reads the whole ladder, which would route past the flow the session is on.
+  const ladder = action
+  const chat = cfgR.value.autonomy && marked === undefined && values.flow === undefined && ambientFlow === undefined
+  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder, outside) : undefined
+  if (human !== undefined) action = withDeferralNote(root, canon, human)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
   // redirect report. Printed HERE, above the routing block, for the same reason the stale
   // rows are: it must not split the contiguous next:/stage:/target:/note:/home:/run:/relay:
@@ -1082,6 +1123,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (assigned !== undefined && values.flow === undefined) ctx.out(kv('drive', `${assigned} — assigned by witness drive`))
   // Row 191 §4.5 "Before any work". Above the routing block, for the same reason as the lines
   // above it.
+  // Row 195. Raw, because each is a command (D120), and above the routing block for the same
+  // reason as the lines above.
+  if (chat) needNotices(canon).forEach((l) => ctx.out(l))
   reportOpening(ctx, root, cfgR.value)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
@@ -1107,18 +1151,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('relay', relayLine(harness)))
     }
   }
-  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
-  // the background and ends its turn, or says where to watch the one already running.
+  // Row 180. Under autonomy a chat session hands the machine work to drive: `/witness` starts it
+  // in the background, or says where to watch the one already running, and keeps the human's
+  // own item routed above (row 195).
   // Only when drive has work beyond the stops that wait for the human (F8): with nothing
   // else, a launched drive would set the stop aside and exit, and the chat would never show it.
-  const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)
+  const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, ladder)
   // Row 191 §4.4–§4.6. Whenever `next` prints no `run:` (at the action's `home:`, or for an
   // action with none), a session hands over before the next action once it has done stage work
   // and its fill reached the limit, with a same-home `relay:`. Outside the `run:` branch because a
   // `run:` already hands the work to a session of its own, in another home. Not where this
   // session's turn ends anyway: at a decision left for a human, with nothing owed, or with the run
-  // handed to drive. And never mid-red (`midRed`: a red in flight).
-  const turnEnds = toDrive || action.line.startsWith('witness decide ') || action.line === 'witness check'
+  // handed to drive and nothing kept for the human (row 195: a routed conversation keeps the
+  // guard). And never mid-red (`midRed`: a red in flight).
+  const turnEnds = (toDrive && human === undefined) || action.line.startsWith('witness decide ') || action.line === 'witness check'
   if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
