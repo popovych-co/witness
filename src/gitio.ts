@@ -114,6 +114,12 @@ const LOCAL_STATE_FILES = new Set([
   '.witness/config.local.yaml',
 ])
 
+// Row 199. A conversation's drafts are local by directory, as row 90's machine config is by file,
+// and the exemption is load-bearing for the same reason: init writes its .gitignore block only
+// when scaffolding, so on every repo older than the row a draft is untracked-but-visible under a
+// state dir, and an unrelated-dirty refusal there would block the very recap the grill lands.
+const LOCAL_STATE_DIRS = ['.witness/drafts/']
+
 export function dirtyStatePaths(root: string): string[] {
   const res = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...stateDirs(root))
   if (!res.ok || res.out === '') return []
@@ -122,7 +128,7 @@ export function dirtyStatePaths(root: string): string[] {
     // a rename (e.g. from `git mv`) porcelain-formats as "old -> new" on one line —
     // split it into its two paths so each is checked against the caller's planned set
     .flatMap((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> '))
-    .filter((p) => !LOCAL_STATE_FILES.has(p))
+    .filter((p) => !LOCAL_STATE_FILES.has(p) && !LOCAL_STATE_DIRS.some((d) => p.startsWith(d)))
 }
 
 export const TRAILER = 'Witness-State: 1'

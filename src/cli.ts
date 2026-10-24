@@ -28,6 +28,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   recap: () => import('./verbs/recap.js'),
   // Row 176. The human's ask, queued as state so `next` routes it and no session can lose it.
   ask: () => import('./verbs/ask.js'),
+  // Row 199. A conversation's local draft: saved after every settled answer, never committed.
+  draft: () => import('./verbs/draft.js'),
   write: () => import('./verbs/write.js'),
   // Row 132's read route. Canon lives at the primary root and nowhere else, so reading it
   // is a verb rather than a path — which is also what lets a worktree carry no copy.
@@ -77,6 +79,7 @@ const VERB_USAGE: Record<string, string> = {
   calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
   check: 'witness check',
   clean: 'witness clean',
+  draft: 'witness draft <ask-<id>|amend-<effort>|design-<spec-id>> [--file <json>]',
   decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]',
   floor: 'witness floor --show | --set <triple> --note <why>',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open',

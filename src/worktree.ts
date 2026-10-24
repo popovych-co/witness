@@ -57,8 +57,10 @@ export function ensureExcluded(root: string): void {
   const current = existsSync(excludePath) ? readFileSync(excludePath, 'utf8') : ''
   const lines = current.split('\n')
   // screens are witnessed evidence, regenerable, never committed — ignored in every
-  // worktree so they stay out of changedFiles() and the reviewed tree-sha
-  for (const line of ['.witness/worktrees/', '.witness/screens/']) {
+  // worktree so they stay out of changedFiles() and the reviewed tree-sha. Drafts (row 199)
+  // are a conversation's local memory, never committed: a repo whose .gitignore predates
+  // them would otherwise show each one to `git status` and to a human's `git add -A`
+  for (const line of ['.witness/worktrees/', '.witness/screens/', '.witness/drafts/']) {
     if (!lines.includes(line)) appendFileSync(excludePath, `${line}\n`)
   }
 }
