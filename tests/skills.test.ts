@@ -31,10 +31,22 @@ describe('witness-brainstorm', () => {
     expect(body()).toContain('recap --amend');
     expect(body()).toContain('writes no');
   });
-  it('carries the fix short form and the goal-id scheme', () => {
-    expect(body()).toContain('two questions');
+  // Row 197. The grill walks the whole tree for every class: no short forms.
+  it('walks every class whole and carries the id scheme', () => {
+    expect(body()).toContain('No short forms');
+    expect(body()).not.toContain('two questions');
     expect(body()).toContain('g1');
     expect(body()).toContain('n1');
+    expect(body()).toContain('d1');
+  });
+  // Rows 197 and 199. It opens on an ask, saves as it goes, and ends in a critique pass and a playback.
+  it('is the grill: an ask first, a draft per answer, a critique pass and a playback', () => {
+    expect(body()).toContain('witness draft');
+    expect(body()).toContain('what do you want to build?');
+    expect(body()).toContain('critique pass');
+    expect(body()).toContain('playback');
+    expect(body()).not.toContain('Stateless by design');
+    expect(body()).not.toMatch(/recap --amend <effort>/);
   });
 });
 
@@ -77,6 +89,10 @@ describe('witness-decompose', () => {
   // unsatisfiable in both directions and the skill must not claim it always runs.
   it('does not claim the chore path always runs', () => {
     expect(body()).not.toContain('it never skips');
+  });
+  // Row 199. The re-interview a scope stop sends back starts from the latest recap.
+  it('starts a scope amendment from its draft seed', () => {
+    expect(body()).toContain('draft amend-<effort>');
   });
 
   it('hands a dangling-parent re-slice to the human (D166)', () => {
@@ -229,17 +245,22 @@ describe('canon is read through the CLI', () => {
 // headless runner, brainstorm has no seed directory, and a multi-turn interview with a human
 // answering has no headless form.
 describe('the interview asks the same way the CLI does', () => {
-  it('brainstorm states the five-field form', () => {
+  // Row 197 amends this: up to three ranked answers in the block's own field words, pick first.
+  it('brainstorm states the ranked-answers form', () => {
     const body = readFileSync(skillPath('witness-brainstorm'), 'utf8')
-    for (const f of ['recommendation', 'why', 'alternative', 'when', 'tradeoff']) {
+    for (const f of ['why', 'when', 'tradeoff', 'up to three', 'never padded']) {
       expect(body, f).toContain(f)
     }
     expect(body).toContain('One question per turn')
   })
 
+  // Row 200: the design session converges the same way, after showing rendered, checked directions.
   it('design convergence asks the same way', () => {
     const body = readFileSync(skillPath('witness-design'), 'utf8')
-    expect(body).toContain('the strongest alternative with when it wins and what it costs')
+    expect(body).toContain('up to three ranked')
+    expect(body).toContain('--preview')
+    expect(body).toContain('not checked')
+    expect(body).not.toContain('the strongest alternative with when it wins and what it costs')
   })
 })
 

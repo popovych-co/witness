@@ -28,7 +28,7 @@ From **superpowers** (obra) — `LICENSES/superpowers-MIT.txt`:
 
 From **mattpocock/skills** — `LICENSES/mattpocock-skills-MIT.txt`:
 
-- `plugin/skills/witness-brainstorm/SKILL.md` (← grill-me: one-question-with-recommendation interview style)
+- `plugin/skills/witness-brainstorm/SKILL.md` (← grill-me: the whole decision tree, one question at a time with a recommended answer, the codebase explored instead of asking)
 - `plugin/skills/witness-implement/SKILL.md` (← tdd: red/green loop discipline)
 
 From **no-mistakes / axi family** (kunchenguid) — `LICENSES/no-mistakes-MIT.txt`:

@@ -235,7 +235,10 @@ check set has held still for `ship.ciSettleMs`: gh's watch ends the moment nothi
 a check that registers late would otherwise be missed. Green means at least one check passed and
 none failed, was cancelled or is pending. Brainstorm and design stay conversations with a human in
 every mode: `/witness` starts drive for the machine work and keeps the human's own items —
-decisions left for them, asks to grill, looks to design — in the chat.
+decisions left for them, asks to grill, looks to design — in the chat. Brainstorm is a grill: one
+plain-words question per turn with up to three ranked answers, the repo explored first, and a local
+draft after every settled answer, so a dead session resumes. Design shows up to three rendered,
+checked directions on one page before it asks which.
 
 **`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns, because
 suites that boot servers or browsers collide. A target that reaches any `drive.caps.*` bound is
@@ -275,6 +278,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | --- | --- |
 | `init [--agent claude-code\|pi\|auto]` | scaffold config, principles, journal — one trailer commit; `--agent` also installs that harness's engine, guard and dashboard (idempotent) |
 | `recap [--amend] --file <json>` | validate + persist a scope recap — class, goals, non-goals, constraints and numbered decisions; births the effort journal |
+| `draft <key> [--file <json>]` | a grill's or design session's local draft — saved after every settled answer, read back to resume; never committed or journaled |
 | `write <id> --effort <e> --meta <json> --body <md>` | validated manifest → spec/plan on disk + journal entry; a spec's `covers` and `carries` map it to the recap's goals and decisions |
 | `diff <spec-id>` | delta since the last realized state (plan pin → empty), and the decisions that moved since that plan |
 | `read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts; `--decisions` prints the decisions a spec carries with its effort's constraints and non-goals, or an effort's whole recap |
@@ -284,7 +288,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `log <id>` | render a journal stream |
 | `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
 | `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |
-| `design <spec-id> --file <html>\|--open\|--reconfirm` | register/show a `ui` spec's approved look |
+| `design <spec-id> --file <html>\|--open\|--reconfirm\|--preview <html>` | register/show a `ui` spec's approved look; `--preview` opens a page and records nothing |
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
 | `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log`; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
@@ -312,7 +316,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 - **The journal is history** — `.witness/journal/<id>.jsonl`, append-only, committed, never compacted.
 - **Every state commit carries `Witness-State: 1`** — `witness check` audits that spec/plan diffs appear only in trailer-bearing commits.
 - **Canon roots are configurable** — `paths: { specs: docs/specs, plans: docs/plans }` in `witness.config.yaml` (defaults: `specs/`, `plans/`); scan, commit scoping, the guard hook, and criteria excludes all follow it. `git mv` existing docs when changing it.
-- Local, never committed: `.witness/{lock,txn.json,allow.json,calibration.local.yaml}`.
+- Local, never committed: `.witness/{lock,txn.json,allow.json,calibration.local.yaml,drafts/}`.
 
 ## Development
 

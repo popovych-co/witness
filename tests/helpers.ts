@@ -699,6 +699,8 @@ export const SKILL_GROUND_RULES = [
   // 103×/8× edit-friction clusters that are witness's to fix.
   'designs/**',
   'Read a file before your first edit',
+  // Row 197. A grill's answers are numbered too, and a number there is no CLI selection (D143).
+  'never a `witness decide` option',
 ]
 
 // Row 198. A spec carrying one decision under a plan derived from it: a birth recap, not an
