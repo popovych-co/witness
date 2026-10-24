@@ -1,28 +1,22 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serializeDoc } from '../fm.js'
-import { designPairSha, designRel, designUnseen, elementIds, htmlSha, validateDesignArtifact } from '../design.js'
+import { designCurrentSha, designGateSha, designRel, designUnseen, elementIds, htmlSha, validateDesignArtifact } from '../design.js'
 import { registerGate, type GateInput, type MetaStamp } from '../gate.js'
 import { latestRecap } from '../journal.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import type { GateCheck } from '../rounds.js'
-import { findById, type CanonDoc } from '../scan.js'
+import { findById } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
 import { contextDigest } from '../delta.js'
 import { snapshotFiles } from '../snapshot.js'
-
-// What this gate judges: the artifact PAIRED with the spec it realizes. With no artifact
-// the spec alone is the sha, so a re-authored spec still lapses a prior verdict. Shared
-// by `resolve` and `currentSha` so the two can never disagree about what moved.
-const reviewedShaOf = (html: string | undefined, spec: CanonDoc): string =>
-  html !== undefined ? designPairSha(html, spec) : canonicalSha(spec.meta, spec.body)
 
 registerGate({
   gate: 'design',
   targetKind: 'spec',
 
-  async resolve(root, _ctx, canon, cfg, specId, run): Promise<Result<GateInput>> {
+  async resolve(root, _ctx, canon, cfg, specId): Promise<Result<GateInput>> {
     const spec = findById(canon, specId)
     if (!spec || spec.meta.type !== 'spec') {
       return refuse([v('spec', 'unknown-spec', specId, 'a specs/ doc id')])
@@ -40,11 +34,9 @@ registerGate({
     // learns about. An agent that drops the show step now hits a loud refusal its repair
     // loop already handles, instead of silently gating something nobody was shown.
     //
-    // Row 178 moves sight from the gate to the approval for an autonomous run. Gating unseen
-    // mattered because a human decided each round from findings; under autonomy nobody does
-    // until the kept stop, and `decide design --approve` still refuses a look nobody opened,
-    // so the human's stop is where it is opened and nothing stamps a look unseen.
-    const unseen = run?.autonomous ? undefined : designUnseen(root, cfg.paths, specId)
+    // Row 194: in every mode. A look comes out of a conversation with a human, so the human
+    // has seen it before any critic judges it (row 178's unseen gate is gone).
+    const unseen = designUnseen(root, cfg.paths, specId)
     if (unseen !== undefined) {
       return refuse([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
         `a human shown this artifact — run: witness design ${specId} --open`)])
@@ -70,7 +62,7 @@ registerGate({
 
     return ok<GateInput>({
       class: (recap?.class ?? 'feature') as GateInput['class'],
-      reviewedSha: reviewedShaOf(html, spec),
+      reviewedSha: designGateSha(html, spec),
       ...(tree ? { snapshot: { tree, context: contextDigest(canonicalSha(spec.meta, spec.body)) } } : {}),
       artifactSha: html !== undefined ? htmlSha(html) : undefined,
       reviewed: { kind: 'design', artifact: { ids }, spec: { id: specId, body: spec.body } },
@@ -84,8 +76,7 @@ registerGate({
   currentSha(root, canon, cfg, specId) {
     const spec = findById(canon, specId)
     if (!spec || spec.meta.type !== 'spec') return undefined
-    const abs = join(root, designRel(cfg.paths, specId))
-    return reviewedShaOf(existsSync(abs) ? readFileSync(abs, 'utf8') : undefined, spec)
+    return designCurrentSha(root, cfg.paths, spec)
   },
 
   // Upstream from the design gate is the spec's SLICING, which reopens the owning

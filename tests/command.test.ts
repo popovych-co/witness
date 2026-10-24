@@ -84,3 +84,22 @@ describe('drive handoff rows (B1)', () => {
     expect(b.indexOf('`launch:` is printed')).toBeLessThan(b.indexOf('A `choose:` block is printed'))
   })
 })
+
+// Row 195. A chat under autonomy keeps only the human's own items; drive's machine stages are drive's.
+describe('the chat keeps only the human\'s items (row 195)', () => {
+  it('launch: and watch: act on a decision, a brainstorm or a design — otherwise the turn ends', () => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| `launch:` is printed') || l.startsWith('| `watch:` is printed'))
+    expect(rows).toHaveLength(2)
+    for (const r of rows) {
+      expect(r).toContain('if `next:` names `witness decide`, or `stage:` is `brainstorm` or `design`')
+      expect(r).not.toContain('or a `stage:` is printed')
+      expect(r).toContain('otherwise **END YOUR TURN**')
+    }
+  })
+  it('the kept-stop row names only the stops settled outside the chat', () => {
+    const row = body().split('\n').find((l) => l.startsWith('| `kept-stop:'))!
+    expect(row).toContain('`kept-stop: trust grant`')
+    expect(row).toContain('`kept-stop: unmet need`')
+    expect(row).toContain('A `kept-stop: design look` line is the chat\'s own stop')
+  })
+})

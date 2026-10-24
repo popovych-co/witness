@@ -32,6 +32,12 @@ export function keptStopLine(stop: KeptStop, detail: string): string {
   return cmd('kept-stop', `${KEPT_STOP_NAMES[stop]} — ${detail}`)
 }
 
+// Row 179's kept stop for one plan's start: what is missing, then how to satisfy it. Drive's
+// set-aside and the chat's notice (row 195) print this one line.
+export function unmetNeedLine(needs: ReadonlyArray<{ text: string; satisfy: string }>): string {
+  return keptStopLine('unmet-need', [...needs.map((u) => u.text), ...needs.map((u) => u.satisfy)].join(' · '))
+}
+
 // Row 171. What the policy does with a stop: take a rendered command (a `witness decide`
 // the CLI executes, or a re-run it only names), hand the stop to the arbiter, or leave it
 // for a human because it is a kept stop.

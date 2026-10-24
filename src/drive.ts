@@ -9,10 +9,10 @@ import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { resolveSpawn } from './spawn.js'
-import { computeNext, type NextAction } from './verbs/next.js'
+import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
-import { KEPT_STOP_NAMES, keptStopLine, type KeptStop } from './autonomy.js'
+import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, readStream, type Entry } from './journal.js'
@@ -36,26 +36,17 @@ export type DriveStep =
   | { kind: 'merge'; line: string }
   | { kind: 'idle' }
 
-// A conversation is a stage whose product IS the exchange with a human: brainstorm has no
-// artifact to author headlessly, and design authoring/showing needs eyes on a rendered
-// page. Drive prints the handoff and gets out of the way rather than spawning a session
-// that would talk to nobody.
-function isConversation(action: NextAction): boolean {
-  if (action.stage === 'brainstorm') return true
-  if (action.line.startsWith('witness recap')) return true
-  return action.line.startsWith('witness design ')
-    && (action.line.includes('--open') || action.line.includes('--file'))
-}
-
 // The rule table is an ORDERED FIRST-MATCH list, on `recommend.ts`'s precedent: a
 // misrouted action is attributable to one line here rather than to a weighting. Pure over
 // the NextAction shape — no I/O — so every branch is one `expect` away.
 //
-// Row 180. Under autonomy nothing is a conversation: brainstorm, `witness recap` and design
-// authoring run headless (A2), and A1 answers the choose block and the recovery fork with
-// the policy's pick. A block that still reaches drive under a runnable line spawns, and the
-// session's own `next` takes it, so no block stops an unattended run. `witness decide`
-// lines stay decisions in both modes.
+// Row 194. A conversation (`conversationStage`) is one in both modes: brainstorm, `witness
+// recap` and design authoring and showing are exchanges with a human, so drive prints the
+// handoff and gets out of the way rather than spawning a session that would talk to nobody.
+// Row 180: under autonomy A1 answers the choose block and the recovery fork with the policy's
+// pick. A block that still reaches drive under a runnable line spawns, and the session's own
+// `next` takes it, so no block stops an unattended run. `witness decide` lines stay decisions
+// in both modes.
 export function classifyAction(action: NextAction, root: string, opts: { autonomy?: boolean } = {}): DriveStep {
   const { line } = action
   // Both decision surfaces render `witness decide <gate> <target> …`: tier 2's pending
@@ -72,7 +63,7 @@ export function classifyAction(action: NextAction, root: string, opts: { autonom
   if (action.block !== undefined && !opts.autonomy) {
     return { kind: 'decision', target: action.target, block: action.block }
   }
-  if (!opts.autonomy && isConversation(action)) return { kind: 'conversation', line }
+  if (conversationStage(action)) return { kind: 'conversation', line }
   // The merge is GitHub's act, not witness's — a flow at `watch` has nothing left for an
   // agent to do. In practice this line arrives in the spawned ship session's OUTPUT
   // (ship.ts:277) rather than in a routing row, which is why the loop reads the child's
@@ -277,10 +268,12 @@ export const DEFAULT_MAX_SPAWNS = 20
 // window (design §2).
 export const AUTONOMY_MAX_SPAWNS = 200
 
-// Row 180. A target drive stops working on for the rest of the run — none of these ends
-// the run. Held in memory and never journaled (D145): the report reads them at the end.
+// Row 180. A target drive stops working on — none of these ends the run. Held in memory and
+// never journaled (D145): the report reads them at the end. Row 196: one set aside for a human
+// (kept, decision, conversation) records `key0`, its progress key then, and is drive's again
+// once a human moves it; drive's own verdicts (stuck, capped) and the merge stay aside.
 export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
-export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop }
+export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string }
 
 const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
@@ -298,7 +291,7 @@ const moved = (e: Entry) => e.t !== 'write-refused' && !vacuousEvidence(e)
 // A target's key is its line, its stream, and the entries in its owning effort's stream that
 // are about its own flow (F5: one effort carries every sibling's writes). Target-less work
 // (brainstorm, the recovery fork) keys on the effort count and the asks stream, because a
-// rejected recap check grows the asks and an accepted one births an effort. A crashed
+// queued ask grows the asks and a recap births an effort. A crashed
 // transaction is part of the target-less key (F4): the recovery fork is judged like any other
 // work, so a session that leaves the same crash behind is set aside instead of being
 // respawned to the ceiling.
@@ -393,6 +386,42 @@ export async function driveLoop(
     return ![...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))
   }
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
+  // Row 196. A target's own next action, read with every other target filtered out: how the
+  // settle pass, which holds no action, and `takeBack` derive the key a human may move.
+  const ownNext = (key: string): NextAction =>
+    computeNext(root, ctx, canonNow, cfg, { scope: key === TARGETLESS ? (t) => t === undefined : (t) => t === key })
+  const keyOf = (action: NextAction): string => progressKey(root, action, family)
+  // Whether `now` is this target's own answer: a pending transaction (a crash, or a lane caught
+  // mid-write) and canon errors answer every scope with one global rung, which says nothing
+  // about the target, so reading it as a move would release every aside at once.
+  const ownAnswer = (key: string, now: NextAction): boolean =>
+    pendingTxn(root) === undefined && (key === TARGETLESS || now.target === key)
+  // Row 196. First in every round: each target set aside for a human whose key moved since
+  // (an ask answered or queued, a need satisfied, a stop decided in a chat) leaves the aside
+  // set and competes for a slot again. One whose next act is the human's again is set aside
+  // anew, under its new key, by the settle pass or the fill that meets it.
+  const takeBack = () => {
+    for (const [key, a] of aside) {
+      if (a.key0 === undefined) continue
+      const now = ownNext(key)
+      if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
+      aside.delete(key)
+      ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
+    }
+  }
+  // Row 196 (spec §4.3). Once more before the report: a target still the human's is reported as
+  // it is now, and one a human moved on to drive's work leaves the set — the report's
+  // journal-derived rows (decisions, needs) name whatever else still waits.
+  const refreshAside = () => {
+    canonNow = loadCanon(root)
+    for (const [key, a] of aside) {
+      if (a.key0 === undefined) continue
+      const now = ownNext(key)
+      if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
+      if (conversationStage(now)) aside.set(key, { ...a, kind: 'conversation', line: now.line, key0: keyOf(now) })
+      else if (!now.line.startsWith('witness decide ')) aside.delete(key)
+    }
+  }
   const stuck = (key: string, action: NextAction) => {
     ctx.out(`drive: no progress — ${action.line}`)
     ctx.out(`help: ${action.target ?? 'untargeted work'} is set aside for this run — read its stream above`)
@@ -410,8 +439,8 @@ export async function driveLoop(
   const standAside = async (step: Exclude<DriveStep, { kind: 'spawn' | 'idle' }>, action: NextAction, key: string) => {
     if (step.kind === 'conversation') {
       ctx.out(`drive: conversation — ${step.line}`)
-      ctx.out('help: this stage is an exchange with a human — run it in a chat session, then re-run witness drive')
-      setAside(key, { kind: 'conversation', line: step.line, why: 'an exchange with a human' })
+      ctx.out('help: run /witness in a chat — drive takes it back when you are done')
+      setAside(key, { kind: 'conversation', line: step.line, why: 'an exchange with a human', key0: keyOf(action) })
       return
     }
     if (step.kind === 'merge') {
@@ -424,12 +453,12 @@ export async function driveLoop(
     // a `--manual` run's stop, which waits for the human and is never settled.
     if (autonomous) {
       ctx.out(`drive: waits on you — ${action.target ?? 'untargeted work'} · decision · ${action.line}`)
-      setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
+      setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}), key0: keyOf(action) })
       return
     }
     if (unmoved(key, action)) return
     const r = await resolveDecision(step, action, ctx)
-    if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
+    if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}), key0: keyOf(action) })
     if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}` })
   }
 
@@ -514,7 +543,7 @@ export async function driveLoop(
   // the pass leaves for a human, drive sets aside. The pass never waits inside a reviewer
   // (F6: that wait was silent, uncounted and deaf to a signal): an arbiter refused by a usage
   // limit becomes drive's own pause, and the stop is judged again after it.
-  const routed = new Set<string>()
+  const routed = new Map<string, string>()            // target → the re-run its settle routed
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
     for (const r of await settleOwed(ctx, root, cfg, { scope: admits })) {
@@ -527,12 +556,12 @@ export async function driveLoop(
       if (line !== undefined) ctx.out(line)
       if (s.kind === 'kept') {
         ctx.out(`drive: waits on you — ${r.target} · ${KEPT_STOP_NAMES[s.stop]}`)
-        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop })
+        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'left') {
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
-        setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate })
+        setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'routed') {
-        routed.add(r.target)
+        routed.set(r.target, s.line.replace(/^autonomy: re-run owed — /, ''))
       }
     }
   }
@@ -544,9 +573,9 @@ export async function driveLoop(
     const needs = unmetNeeds(loadCanon(root)).filter((u) => u.doc === action.target && u.blocks === 'start')
     if (needs.length === 0) return false
     ctx.out(`drive: waits on you — ${action.target} · unmet need`)
-    const line = keptStopLine('unmet-need', [...needs.map((u) => u.text), ...needs.map((u) => u.satisfy)].join(' · '))
+    const line = unmetNeedLine(needs)
     ctx.out(line)
-    setAside(key, { kind: 'kept', line, why: KEPT_STOP_NAMES['unmet-need'], stop: 'unmet-need' })
+    setAside(key, { kind: 'kept', line, why: KEPT_STOP_NAMES['unmet-need'], stop: 'unmet-need', key0: keyOf(action) })
     return true
   }
 
@@ -594,6 +623,9 @@ export async function driveLoop(
     for (;;) {
       stillAutonomous()
       canonNow = loadCanon(root)
+      // A run that is stopping fills nothing more, so a target released now would be set aside
+      // by nobody and drop out of the report; it stays where it is, and the report derives it.
+      if (!stop && !signalled) takeBack()
       if (autonomous && !stop && !signalled && clock.now() >= pausedUntil) await settlePass()
       while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
         canonNow = loadCanon(root)
@@ -604,9 +636,11 @@ export async function driveLoop(
         if (step.kind === 'idle') { idle = action.line; break }
         idle = undefined
         // A stop whose settle the CLI routed to a re-run: the target's own session runs it,
-        // because its scoped `next` prints the re-run (A1).
-        if (step.kind === 'decision' && autonomous && action.target !== undefined && routed.has(action.target)) {
-          step = { kind: 'spawn', home: root, target: action.target }
+        // because its scoped `next` prints the re-run (A1) — unless the re-run is a step of the
+        // design session, which is the chat's (row 194).
+        const rerun = action.target !== undefined ? routed.get(action.target) : undefined
+        if (step.kind === 'decision' && autonomous && rerun !== undefined) {
+          step = conversationStage({ line: rerun }) ? { kind: 'conversation', line: rerun } : { kind: 'spawn', home: root, target: action.target }
         }
         if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
         if (spawns >= ceiling) {
@@ -639,6 +673,7 @@ export async function driveLoop(
     // Row 184. One report when nothing else can move, and for an autonomous run one
     // notification — a human at a TTY prompt is already watching.
     const stopped = signalled !== undefined ? `signal ${signalled}` : stop
+    refreshAside()
     const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stopped ? { stopped } : {}) })
     report.lines.forEach((l) => ctx.out(l))
     if (autonomous) {

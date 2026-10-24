@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { appendEntry } from '../src/journal.js'
 import { autonomyOn, nextLine, seededRepo, shippableRepo } from './helpers.js'
 
 describe('next — the ask rung (A9)', () => {
@@ -43,13 +44,24 @@ describe('next — the ask rung (A9)', () => {
     expect(lines).toEqual(['ask: "a1 — line one line two, with a comma"'])
   })
 
-  it('under autonomy with no ask there is nothing to build', async () => {
+  it('under autonomy with no ask and no effort the grill opens, as without autonomy', async () => {
     const repo = await seededRepo({ noRecap: true })
     autonomyOn(repo)
     const out = await nextLine(repo)
-    expect(out).toContain('next: witness check')
-    expect(out).toContain('nothing to build — no unanswered ask is queued')
-    expect(out).not.toContain('stage: brainstorm')
+    expect(out).toContain('next: witness recap --file <recap.json>')
+    expect(out).toContain('stage: brainstorm')
+    expect(out).not.toContain('nothing to build')
+  })
+
+  it('an ask that still holds old recap checks reads unanswered', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    await repo.cli(['ask', 'one'])
+    for (const round of [1, 2, 3]) appendEntry(repo.root, 'asks', {
+      v: 1, t: 'human-decision', gate: 'recap', artifact: 'a1', round, run_id: `r${round}`,
+      decision: 'revise', selected: 'arbiter', reason: 'no', effort: 'x', class: 'feature',
+    } as never)
+    expect(await nextLine(repo)).toContain('ask: a1 — one')
+    expect((await repo.cli(['status'])).stdout).toContain('  a1,queued,one')
   })
 
   it('status lists the unanswered asks', async () => {

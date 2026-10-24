@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { RECAP_CHECK_BOUND, askQueue, askText, nextAsk } from '../ask.js'
+import { askText, nextAsk } from '../ask.js'
 import { unmetNeeds } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
-import { designArtifactCurrent, designPending, designUnseen } from '../design.js'
+import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
@@ -26,7 +26,7 @@ import { cmd, kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
-import { autonomyLines, policyFor } from '../autonomy.js'
+import { autonomyLines, policyFor, unmetNeedLine } from '../autonomy.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
@@ -762,28 +762,13 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
   // never waits for other efforts' decompose, design, plan and start rungs. No `target`: it
   // would have withDeferralNote read a stream named like the ask id.
-  const ask = admits(undefined) ? nextAsk(root, cfg.autonomy) : undefined
+  const ask = admits(undefined) ? nextAsk(root) : undefined
   if (ask !== undefined) {
-    // Row 177. A draft the check sent back carries its reason to the next draft.
-    const rejected = ask.reason !== undefined
-      ? { note: `recap check ${ask.checks} of ${RECAP_CHECK_BOUND} rejected — ${ask.reason}${ask.note ? ` · ${ask.note}` : ''}` }
-      : {}
-    return {
-      line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm',
-      ask: { id: ask.id, text: ask.text }, ...rejected,
-    }
+    return { line: `witness recap --file <recap.json> --ask ${ask.id}`, stage: 'brainstorm', ask: { id: ask.id, text: ask.text } }
   }
-  if (efforts.length === 0 && admits(undefined)) {
-    // Under autonomy nobody is there to interview, so with no ask there is nothing to build —
-    // unless an ask waits for a human, which must be named rather than called absent.
-    if (cfg.autonomy) {
-      const parked = askQueue(root).find((a) => a.state === 'parked')
-      return parked !== undefined
-        ? { line: 'witness check', note: `${parked.id} is parked — a human answers it with witness recap --file <recap.json> --ask ${parked.id} --manual · or withdraws it with witness ask --withdraw ${parked.id}` }
-        : { line: 'witness check', note: 'nothing to build — no unanswered ask is queued · a human queues one with witness ask <text>' }
-    }
-    return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
-  }
+  // Row 194. With no ask and no effort the grill opens, in both modes: a chat starts it, and
+  // drive sets it aside as a conversation and reports the queue empty.
+  if (efforts.length === 0 && admits(undefined)) return { line: 'witness recap --file <recap.json>', stage: 'brainstorm' }
   for (const e of efforts) {
     if (!admits(e.slug)) continue
     const writes = effortWrites(root, e.slug)
@@ -847,13 +832,18 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
       return { line: `witness design ${id} --file <html>`, stage: 'design', target: id }
     }
     // Registered but unshown is the normal state right after --file. Ask for the show
-    // step by name; routing to the gate here would refuse design-unseen every time.
-    // Under autonomy the gate needs no sight (row 178): opening the look is the human's act,
-    // at the kept stop, never the session's.
-    return !cfg.autonomy && designUnseen(root, cfg.paths, id) !== undefined
-      ? { line: `witness design ${id} --open`, stage: 'design', target: id }
-      : { line: `witness gate design ${id}`, target: id,
-          ...noteOf(judgeNote(readStream(root, id), 'design', judge)) }
+    // step by name; routing to the gate here would refuse design-unseen every time — in
+    // every mode (row 194).
+    if (designUnseen(root, cfg.paths, id) !== undefined) return { line: `witness design ${id} --open`, stage: 'design', target: id }
+    // Row 194. A revise on bytes the gate already judged owes a new look, not a re-gate the CLI
+    // would decline as `changed nothing` — the rule decompose and plan route by. Every step
+    // of the design session, its gate included, carries the stage: it is the chat's.
+    const entries = readStream(root, id)
+    if (authoringOwed(entries, 'design', designCurrentSha(root, cfg.paths, spec))) {
+      return { line: `witness design ${id} --file <html>`, stage: 'design', target: id,
+        note: 'revise owed — re-author the look from witness decide design ' + id + ' --show' }
+    }
+    return { line: `witness gate design ${id}`, stage: 'design', target: id, ...noteOf(judgeNote(entries, 'design', judge)) }
   }
 
   const ready = (dep: string): boolean => {
@@ -954,24 +944,68 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   return { line: 'witness check', note: NOTHING_OWED }
 }
 
-// A stop that waits for the human: a decision the CLI could not settle, or a start an unmet
-// manual need blocks. Drive sets either aside, so neither is work to launch it for.
+// A conversation is a stage whose product IS the exchange with a human: brainstorm has no
+// artifact to author headlessly, and the design session — author, show, gate, re-author —
+// needs eyes on a rendered page. Row 194: in every mode. The one classification, for drive
+// and for `next` alike.
+export function conversationStage(action: Pick<NextAction, 'stage' | 'line'>): boolean {
+  if (action.stage === 'brainstorm' || action.stage === 'design') return true
+  if (action.line.startsWith('witness recap') || action.line.startsWith('witness gate design ')) return true
+  return action.line.startsWith('witness design ')
+    && (action.line.includes('--open') || action.line.includes('--file'))
+}
+
+// A stop that waits for the human: a decision the CLI could not settle, a conversation, or a
+// start an unmet manual need blocks. Drive sets each aside, so none is work to launch it for.
 function humanStop(canon: Canon, a: NextAction): boolean {
-  if (a.line.startsWith('witness decide ')) return true
+  if (a.line.startsWith('witness decide ') || conversationStage(a)) return true
   return a.line.startsWith('witness start ') &&
     unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
 }
 
-// The ladder with the human's stops set aside, the way drive's fill reads it.
+// The ladder with the human's stops set aside, the way drive's fill reads it. A target-less stop
+// (an ask's grill) is held once, as drive holds `-`, so the machine work below it still counts.
 function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
   const held = new Set<string>()
+  let targetless = false
   for (let a = first; ;) {
     if (a.line === 'witness check') return false
     if (!humanStop(canon, a)) return true
-    if (a.target === undefined || held.has(a.target)) return false
+    if (a.target === undefined ? targetless : held.has(a.target)) return false
+    if (a.target === undefined) targetless = true
+    else held.add(a.target)
+    a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined ? !targetless : !held.has(t) })
+  }
+}
+
+// Row 195. The ladder with drive's work set aside, the mirror of `driveHasWork`: the first
+// item an autonomous chat keeps for the human — a conversation, or a decision they settle in
+// the chat. `outside` holds the targets whose stop the human settles outside the chat (a trust
+// grant, answered in a terminal). Everything else is held aside, need-blocked starts included.
+// A target-less action that is no conversation (the recovery fork) is the ladder's own, and the
+// walk never passes it.
+export function humanAction(
+  root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction, outside: ReadonlySet<string>,
+): NextAction | undefined {
+  const held = new Set<string>()
+  for (let a = first; ;) {
+    if (conversationStage(a)) return a
+    if (a.line.startsWith('witness decide ') && (a.target === undefined || !outside.has(a.target))) return a
+    if (a.line === 'witness check' || a.target === undefined || held.has(a.target)) return undefined
     held.add(a.target)
     a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
   }
+}
+
+// Row 195. The stops a chat shows once and never asks about: one line per plan whose start an
+// unmet manual need blocks. Read from the needs table, not from the walk, which stops at the
+// first human item and would miss a need past it.
+function needNotices(canon: Canon): string[] {
+  const byPlan = new Map<string, Array<{ text: string; satisfy: string }>>()
+  for (const u of unmetNeeds(canon)) {
+    if (u.blocks === 'start') byPlan.set(u.doc, [...(byPlan.get(u.doc) ?? []), u])
+  }
+  return [...byPlan.values()].map(unmetNeedLine)
 }
 
 // Exported for `drive`, which claims a flow with the same `--flow` semantics `next` has:
@@ -1034,6 +1068,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const marked = driveChild(ctx.env)
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   let routed: { command: string; target: string } | undefined
+  // Row 195. Targets whose stop the human settles outside a chat: the trust grants left kept.
+  const outside = new Set<string>()
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
@@ -1044,6 +1080,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       if (routed === undefined && r.settled.kind === 'routed') {
         routed = { command: r.settled.line.replace(/^autonomy: re-run owed — /, ''), target: r.target }
       }
+      if (r.settled.kind === 'kept' && r.settled.stop === 'trust-grant') outside.add(r.target)
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1076,9 +1113,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // A re-run owed outranks a stop left for a human: the CLI could not settle a stale
   // verdict, but the gate that would re-judge it is runnable now.
   if (routed !== undefined && action.line.startsWith('witness decide ')) {
-    action = { line: routed.command, target: routed.target }
+    // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
+    action = { line: routed.command, target: routed.target, ...(routed.command.startsWith('witness gate design ') ? { stage: 'design' } : {}) }
   }
   action = withDeferralNote(root, canon, action)
+  // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the
+  // rest: it is routed to the first item the human owes, and `launch:`/`watch:` below still
+  // follow the ladder's own action. A `--flow` claim and a worktree's ambient flow keep their
+  // scope: the walk reads the whole ladder, which would route past the flow the session is on.
+  const ladder = action
+  const chat = cfgR.value.autonomy && marked === undefined && values.flow === undefined && ambientFlow === undefined
+  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder, outside) : undefined
+  // The ladder's own action already carries its deferral note; one the walk reached does not yet.
+  if (human !== undefined && human !== ladder) action = withDeferralNote(root, canon, human)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
   // redirect report. Printed HERE, above the routing block, for the same reason the stale
   // rows are: it must not split the contiguous next:/stage:/target:/note:/home:/run:/relay:
@@ -1088,6 +1135,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (assigned !== undefined && values.flow === undefined) ctx.out(kv('drive', `${assigned} — assigned by witness drive`))
   // Row 191 §4.5 "Before any work". Above the routing block, for the same reason as the lines
   // above it.
+  // Row 195. Raw, because each is a command (D120), and above the routing block for the same
+  // reason as the lines above.
+  if (chat) needNotices(canon).forEach((l) => ctx.out(l))
   reportOpening(ctx, root, cfgR.value)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
@@ -1113,18 +1163,20 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('relay', relayLine(harness)))
     }
   }
-  // Row 180. Under autonomy a chat session hands the run to drive: `/witness` starts it in
-  // the background and ends its turn, or says where to watch the one already running.
+  // Row 180. Under autonomy a chat session hands the machine work to drive: `/witness` starts it
+  // in the background, or says where to watch the one already running, and keeps the human's
+  // own item routed above (row 195).
   // Only when drive has work beyond the stops that wait for the human (F8): with nothing
   // else, a launched drive would set the stop aside and exit, and the chat would never show it.
-  const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, action)
+  const toDrive = cfgR.value.autonomy && marked === undefined && driveHasWork(root, ctx, canon, cfgR.value, ladder)
   // Row 191 §4.4–§4.6. Whenever `next` prints no `run:` (at the action's `home:`, or for an
   // action with none), a session hands over before the next action once it has done stage work
   // and its fill reached the limit, with a same-home `relay:`. Outside the `run:` branch because a
   // `run:` already hands the work to a session of its own, in another home. Not where this
   // session's turn ends anyway: at a decision left for a human, with nothing owed, or with the run
-  // handed to drive. And never mid-red (`midRed`: a red in flight).
-  const turnEnds = toDrive || action.line.startsWith('witness decide ') || action.line === 'witness check'
+  // handed to drive and nothing kept for the human (row 195: a routed conversation keeps the
+  // guard). And never mid-red (`midRed`: a red in flight).
+  const turnEnds = (toDrive && human === undefined) || action.line.startsWith('witness decide ') || action.line === 'witness check'
   if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))

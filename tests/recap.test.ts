@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { askQueue } from '../src/ask.js'
 import { appendEntry, latestRecap, readStream } from '../src/journal.js'
-import { tmpRepo, type TestRepo } from './helpers.js'
+import { autonomyOn, tmpRepo, type TestRepo } from './helpers.js'
 
 const RECAP = {
   effort: 'auth-hardening',
@@ -89,6 +89,18 @@ describe('witness recap', () => {
 })
 
 describe('recap --ask (A9)', () => {
+  it('under autonomy a recap with no ask is born · --manual is gone', async () => {
+    const repo = await initialized()
+    autonomyOn(repo)
+    const born = await repo.cli(['recap', '--file', repo.writeRecap({ effort: 'e1' })])
+    expect(born.code).toBe(0)
+    expect(born.stdout).toContain('effort: e1')
+    const manual = await repo.cli(['recap', '--file', repo.writeRecap({ effort: 'e2' }), '--manual'])
+    expect(manual.code).toBe(2)
+    expect(manual.stderr).toContain('bad-arguments')
+    expect(manual.stderr).toContain("Unknown option '--manual'")
+  })
+
   it('records the ask a recap answers', async () => {
     const repo = await initialized()
     await repo.cli(['ask', 'Refresh tokens rotate before expiry'])

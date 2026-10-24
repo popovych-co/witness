@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 import { appendEntry, readStream } from '../src/journal.js'
@@ -8,7 +8,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { computeNext, NOTHING_OWED } from '../src/verbs/next.js'
 import {
-  approve, autonomyOn, fakeCtx, fixtureEnv, fakeScenario, gateEnv, ghState, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
+  approve, autonomyOn, fakeCtx, fixtureEnv, fakeScenario, gateEnv, ghState, hermeticEnv, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 
@@ -155,5 +155,118 @@ describe('the chat shows the human their stop (B1)', () => {
     const out = await nextLine(repo, { env: fixtureEnv() })
     expect(out).toContain('next: witness decide design billing-page --show')
     expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
+  it('prints no launch: when only a conversation waits', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness design billing-page --file <html>')
+    expect(out).not.toMatch(/^(launch|watch):/m)
+  }, 60_000)
+})
+
+// Row 195. Under autonomy a chat keeps the human's own items — a conversation, a decision left
+// for them — while drive runs the rest: `next` routes the first one beside `launch:`/`watch:`.
+describe("the chat keeps the human's work (row 195)", () => {
+  const startedFlow = async (repo: TestRepo) => {
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    approve(repo, 'auth-refresh-plan-1')
+    expect((await repo.cli(['start', 'auth-refresh-plan-1'])).code).toBe(0)
+  }
+  const lookOwed = async (repo: TestRepo) => {
+    await writeSpec(repo, 'billing-page', { ui: true, criteria: [{ id: 'ac-b', test: '@spec:billing-page' }] })
+    approve(repo, 'billing-page')
+  }
+  it('an ask waits in the chat while drive has a flow', async () => {
+    const repo = await seededRepo()
+    await startedFlow(repo)
+    autonomyOn(repo)
+    await repo.cli(['ask', 'add dark mode'])
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness recap --file <recap.json> --ask a1')
+    expect(out).toContain('stage: brainstorm')
+    expect(out).toContain('ask: a1 — add dark mode')
+    expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
+  it('a look waits in the chat while drive has a flow', async () => {
+    const repo = await seededRepo()
+    await startedFlow(repo)
+    await lookOwed(repo)
+    autonomyOn(repo)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness design billing-page --file <html>')
+    expect(out).toContain('stage: design')
+    expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
+  it('an unmet need is a notice and the chat moves on', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ id: 'ses-prod', manual: 'SES production access', satisfied: false }] })
+    approve(repo, 'auth-refresh-plan-1')
+    await lookOwed(repo)
+    autonomyOn(repo)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    const notice = 'kept-stop: unmet need — SES production access · witness satisfy auth-refresh-plan-1 --need ses-prod'
+    expect(out.split('\n').filter((l) => l === notice)).toHaveLength(1)
+    expect(out).toContain('next: witness design billing-page --file <html>')
+  }, 60_000)
+  it("with nothing for the human next prints the ladder's own action", async () => {
+    const repo = await seededRepo()
+    await startedFlow(repo)
+    autonomyOn(repo)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toMatch(/^next: witness test-evidence auth-refresh-plan-1 .*--phase red --step s1$/m)
+    expect(out).not.toMatch(/^stage: (brainstorm|design)$/m)
+    expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
+  it("an ask does not hide drive's work below it", async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    approve(repo, 'auth-refresh-plan-1')
+    autonomyOn(repo)
+    await repo.cli(['ask', 'add dark mode'])
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('stage: brainstorm')
+    expect(out).toMatch(/^launch: witness drive --detach$/m)
+  }, 60_000)
+  it('a deferral note prints once in the chat', async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await lookOwed(repo)
+    const doc = findById(loadCanon(repo.root), 'billing-page')!
+    appendEntry(repo.root, 'billing-page', {
+      v: 1, t: 'gate-run', gate: 'design', artifact: 'billing-page', round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+      standing: 'design always stops — the human judges the look',
+      verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: 'billing-page > ## Behavior', note: 'read' }], findings: [] }],
+    } as never)
+    appendEntry(repo.root, 'billing-page', {
+      v: 1, t: 'deferral', id: 'd-1a2b3c4d', artifact: 'billing-page', gate: 'design', round: 1,
+      anchor: 'design#save-bar', kind: 'artifact-debt', caused_by_run: 'rd1',
+    } as never)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toContain('next: witness decide design billing-page --show')
+    expect(out.match(/open deferral\(s\)/g)).toHaveLength(1)
+  }, 60_000)
+  it("a pending transaction stays the ladder's", async () => {
+    const repo = await seededRepo()
+    autonomyOn(repo)
+    await repo.cli(['ask', 'one'])
+    // crashPoint exits the process, so the crashed write runs in a child of its own
+    const tsx = join(resolve(import.meta.dirname, '..'), 'node_modules', '.bin', 'tsx')
+    const crashed = spawnSync(tsx, [join(resolve(import.meta.dirname, '..'), 'src', 'bin.ts'), 'ask', 'two'],
+      { cwd: repo.root, env: hermeticEnv({ WITNESS_CRASH_AFTER: 'journal-append' }), encoding: 'utf8' })
+    expect(crashed.status).toBe(9)
+    const out = await nextLine(repo, { env: fixtureEnv() })
+    expect(out).toMatch(/^next: witness recover --(complete|rollback)$/m)
+    expect(out).not.toMatch(/^stage:/m)
+    expect(out).not.toContain('ask: a1')
   }, 60_000)
 })

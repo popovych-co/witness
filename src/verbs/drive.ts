@@ -1,5 +1,4 @@
 import { parseArgs } from 'node:util'
-import { queueAsk } from '../ask.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { withoutSession } from '../context.js'
@@ -9,12 +8,11 @@ import { primaryRoot } from '../gitio.js'
 import { withJournalCtx } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { loadCanon } from '../scan.js'
-import { kv } from '../toon.js'
 import { resolveFlow } from './next.js'
 
 // Row 191 §4.9. Drive is a scheduler, not a session. Typed in a chat session's shell, it
 // inherits that session's reading and session variable: everything it journals (a decision it
-// settles or takes at its prompt, an ask it queues) would read as the chat session's, and every
+// settles or takes at its prompt) would read as the chat session's, and every
 // process it starts (a session, a detached drive) would inherit both. So it runs without them,
 // outside the stamp `main` opened for this command. A decision taken at its prompt runs `main`
 // again, from the env without them, so no session stamps it either.
@@ -47,7 +45,7 @@ async function drive(ctx: Ctx, argv: string[]): Promise<number> {
     args: argv,
     options: {
       flow: { type: 'string' }, 'max-spawns': { type: 'string' }, manual: { type: 'boolean' },
-      detach: { type: 'boolean' }, ask: { type: 'string' },
+      detach: { type: 'boolean' },
     },
     allowPositionals: true,
   })
@@ -78,11 +76,6 @@ async function drive(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.flow !== undefined) {
     const flowR = resolveFlow(loadCanon(root), values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  }
-  if (values.ask !== undefined) {
-    const res = queueAsk(ctx, root, values.ask)
-    if (!res.ok) { renderRefusal(res.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    ctx.out(kv('ask', `${res.value.id} — ${res.value.already ? 'already queued' : 'queued'}`))
   }
   if (values.detach) {
     const args = [
