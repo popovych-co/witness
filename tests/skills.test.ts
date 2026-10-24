@@ -88,6 +88,12 @@ describe('witness-decompose', () => {
     expect(body()).toContain('id-taken');
     expect(body()).toContain('path-taken');
   });
+
+  it('reads the decisions and carries every one (row 198)', () => {
+    expect(body()).toContain('"carries"');
+    expect(body()).toContain('decision-coverage');
+    expect(body()).toContain('read <effort> --decisions');
+  });
 });
 
 describe('witness-plan', () => {
@@ -109,6 +115,11 @@ describe('witness-plan', () => {
   it('owns the chore parent choice decompose no longer routes', () => {
     expect(body()).toContain('implementation area');
     expect(body()).toContain('principles');
+  });
+
+  it('reads the decisions it must not contradict and never supplies their pin (row 198)', () => {
+    expect(body()).toContain('--decisions');
+    expect(body()).toContain('decisions-from');
   });
 });
 

@@ -274,10 +274,10 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | verb | does |
 | --- | --- |
 | `init [--agent claude-code\|pi\|auto]` | scaffold config, principles, journal — one trailer commit; `--agent` also installs that harness's engine, guard and dashboard (idempotent) |
-| `recap [--amend] --file <json>` | validate + persist a scope recap; births the effort journal |
-| `write <id> --effort <e> --meta <json> --body <md>` | validated manifest → spec/plan on disk + journal entry |
-| `diff <spec-id>` | delta since the last realized state (plan pin → empty) |
-| `read <id> [--design] [--outline] [--lines <a>-<b>]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts |
+| `recap [--amend] --file <json>` | validate + persist a scope recap — class, goals, non-goals, constraints and numbered decisions; births the effort journal |
+| `write <id> --effort <e> --meta <json> --body <md>` | validated manifest → spec/plan on disk + journal entry; a spec's `covers` and `carries` map it to the recap's goals and decisions |
+| `diff <spec-id>` | delta since the last realized state (plan pin → empty), and the decisions that moved since that plan |
+| `read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts; `--decisions` prints the decisions a spec carries with its effort's constraints and non-goals, or an effort's whole recap |
 | `check` | schema, graph, invariants, needs, trailer audit, probes |
 | `index` | id · summary · status · depends across the canon, then each spec's plans |
 | `satisfy <id> --need <id\|n\|text>` | journal a manual need as met — the spec is never rewritten |

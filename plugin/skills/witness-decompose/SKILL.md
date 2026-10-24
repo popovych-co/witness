@@ -27,7 +27,7 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.22.0}"
 ## Inputs (rebuild them, never remember them)
 
 ```bash
-$WITNESS log <effort>     # the latest recap entry is your contract: class, goals g*, non-goals n*, constraints c*
+$WITNESS read <effort> --decisions   # the latest recap: class, goals g*, decisions d*, constraints c*, non-goals n*
 $WITNESS index            # live canon: id · summary · status · depends, grouped by dir
 $WITNESS decide decompose <effort> --show   # ONLY when re-entered after a revise
 ```
@@ -47,7 +47,7 @@ The class comes from the recap. Never ask for it again.
 - Amending a living spec is the same write with the existing id — its status resets to `draft` (re-approval owed). If the CLI warns the spec has an in-flight child plan, surface that warning at the gate stop.
 - Boundary changes (split, merge, extraction out of a live spec) → the new spec's manifest carries `supersedes: <old-id>`; rewrite every dependent's `depends` in the same effort — the CLI refuses dangling edges. It also refuses `dangling-parent` while a plan of the old spec is still in motion: whether that plan ships first or is abandoned is the human's call, so stop and surface it — never abandon it yourself.
 - Cross-cutting changes → sequenced per-slice amendments ordered via `depends`, expand-contract style (accept both → switch → drop old), each step independently shippable.
-- Self-check totality before gating: every goal covered by ≥ 1 spec, every spec covers ≥ 1 goal.
+- Self-check totality before gating: every goal covered by ≥ 1 spec, every spec covers ≥ 1 goal, every decision carried by ≥ 1 spec. A decision no slice can carry was filed wrong — it is a constraint or a non-goal; say so at the gate stop, where `--revise --upstream` re-opens the recap.
 
 ## Author each spec
 
@@ -65,7 +65,8 @@ cat > "$DIR/meta.json" <<'EOF'
     { "id": "ac-rotate", "test": "@spec:auth-refresh" },
     { "id": "ac-smoke", "cmd": "npm run smoke:auth" }
   ],
-  "covers": ["g1"]
+  "covers": ["g1"],
+  "carries": ["d1"]
 }
 EOF
 cat > "$DIR/body.md" <<'EOF'
@@ -87,6 +88,7 @@ Get these right the first time — the dashboard trends your first-try valid rat
 - `summary` ≤ 120 chars: what the slice **is** (Motivation carries the why).
 - `criteria`: ≥ 1 entry, unique ids, each exactly one of `test` (value must be `@spec:<this-spec-id>`) or `cmd`. A criterion that cannot fail is not a criterion.
 - `covers`: the recap goal ids this spec honestly advances — the critic judges the mapping's quality.
+- `carries`: the recap decision ids this spec realizes. Every decision is carried by ≥ 1 spec (the gate's `decision-coverage`). A behavior decision is stated in that spec's `## Behavior`; an approach decision is not contradicted. The journal holds it, never frontmatter. Omit it when the recap has no decisions.
 - Body: exactly the `## Motivation` and `## Behavior` headings; behavior-only — internal interfaces never appear in a spec.
 - `id`: `[a-z0-9-]+`; new ids land at `specs/<id>.md` (or the repo's configured specs dir). An id that already names something is refused `id-taken` — a superseded spec, an effort's slug, witness's `floor` — and so is a path another doc holds (`path-taken`): choose a new id.
 - `needs`: external prerequisites only, machine-checkable (`env:` / `cmd:` / `manual:` + `satisfied`). A manual need the slice can still be built and shipped without carries an `id` and names the `cmd:` criteria it holds — `{ "id": "ses-prod", "manual": "SES production access", "satisfied": false, "holds": ["ac-baseline"] }` — and while it is unmet those criteria report `held` instead of failing. A need the slice cannot even start without belongs on its plan, where it blocks `witness start`.
