@@ -268,10 +268,12 @@ export const DEFAULT_MAX_SPAWNS = 20
 // window (design §2).
 export const AUTONOMY_MAX_SPAWNS = 200
 
-// Row 180. A target drive stops working on for the rest of the run — none of these ends
-// the run. Held in memory and never journaled (D145): the report reads them at the end.
+// Row 180. A target drive stops working on — none of these ends the run. Held in memory and
+// never journaled (D145): the report reads them at the end. Row 196: one set aside for a human
+// (kept, decision, conversation) records `key0`, its progress key then, and is drive's again
+// once a human moves it; drive's own verdicts (stuck, capped) and the merge stay aside.
 export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
-export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop }
+export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string }
 
 const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
@@ -384,6 +386,24 @@ export async function driveLoop(
     return ![...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))
   }
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
+  // Row 196. A target's own next action, read with every other target filtered out: how the
+  // settle pass, which holds no action, and `takeBack` derive the key a human may move.
+  const ownNext = (key: string): NextAction =>
+    computeNext(root, ctx, canonNow, cfg, { scope: key === TARGETLESS ? (t) => t === undefined : (t) => t === key })
+  const keyOf = (action: NextAction): string => progressKey(root, action, family)
+  // Row 196. First in every round: each target set aside for a human whose key moved since
+  // (an ask answered or queued, a need satisfied, a stop decided in a chat) leaves the aside
+  // set and competes for a slot again. One whose next act is the human's again is set aside
+  // anew, under its new key, by the settle pass or the fill that meets it.
+  const takeBack = () => {
+    for (const [key, a] of aside) {
+      if (a.key0 === undefined) continue
+      const now = ownNext(key)
+      if (keyOf(now) === a.key0) continue
+      aside.delete(key)
+      ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
+    }
+  }
   const stuck = (key: string, action: NextAction) => {
     ctx.out(`drive: no progress — ${action.line}`)
     ctx.out(`help: ${action.target ?? 'untargeted work'} is set aside for this run — read its stream above`)
@@ -402,7 +422,7 @@ export async function driveLoop(
     if (step.kind === 'conversation') {
       ctx.out(`drive: conversation — ${step.line}`)
       ctx.out('help: run /witness in a chat — drive takes it back when you are done')
-      setAside(key, { kind: 'conversation', line: step.line, why: 'an exchange with a human' })
+      setAside(key, { kind: 'conversation', line: step.line, why: 'an exchange with a human', key0: keyOf(action) })
       return
     }
     if (step.kind === 'merge') {
@@ -415,12 +435,12 @@ export async function driveLoop(
     // a `--manual` run's stop, which waits for the human and is never settled.
     if (autonomous) {
       ctx.out(`drive: waits on you — ${action.target ?? 'untargeted work'} · decision · ${action.line}`)
-      setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
+      setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}), key0: keyOf(action) })
       return
     }
     if (unmoved(key, action)) return
     const r = await resolveDecision(step, action, ctx)
-    if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}) })
+    if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}), key0: keyOf(action) })
     if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}` })
   }
 
@@ -518,10 +538,10 @@ export async function driveLoop(
       if (line !== undefined) ctx.out(line)
       if (s.kind === 'kept') {
         ctx.out(`drive: waits on you — ${r.target} · ${KEPT_STOP_NAMES[s.stop]}`)
-        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop })
+        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'left') {
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
-        setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate })
+        setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'routed') {
         routed.add(r.target)
       }
@@ -537,7 +557,7 @@ export async function driveLoop(
     ctx.out(`drive: waits on you — ${action.target} · unmet need`)
     const line = unmetNeedLine(needs)
     ctx.out(line)
-    setAside(key, { kind: 'kept', line, why: KEPT_STOP_NAMES['unmet-need'], stop: 'unmet-need' })
+    setAside(key, { kind: 'kept', line, why: KEPT_STOP_NAMES['unmet-need'], stop: 'unmet-need', key0: keyOf(action) })
     return true
   }
 
@@ -585,6 +605,7 @@ export async function driveLoop(
     for (;;) {
       stillAutonomous()
       canonNow = loadCanon(root)
+      takeBack()
       if (autonomous && !stop && !signalled && clock.now() >= pausedUntil) await settlePass()
       while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
         canonNow = loadCanon(root)

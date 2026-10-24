@@ -1094,3 +1094,51 @@ describe('the merge sniff (B2)', () => {
     expect(out).toContain('  run: gh pr merge 7')
   }, 60_000)
 })
+
+// Row 196. A target set aside for a human (a kept stop, a decision, a conversation) is drive's
+// again once its progress key moves: P1 inverted.
+describe('drive takes back what a human moved (row 196)', () => {
+  it('a need satisfied mid-run is started in the same run', async () => {
+    const repo = await planReady({ needs: [{ id: 'ses-prod', manual: 'SES production access', satisfied: false }] })
+    await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
+    approve(repo, 'auth-mfa')
+    await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })
+    approve(repo, 'auth-mfa-plan-1')
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const seen = join(fakeScenario(), 'seen')
+    const agent = script([
+      `echo "$WITNESS_DRIVE" >> "${seen}"`,
+      `if [ "$WITNESS_DRIVE" = auth-mfa-plan-1 ]; then ${witnessCli()} satisfy auth-refresh-plan-1 --need ses-prod; fi`,
+    ].join('\n'))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(readFileSync(seen, 'utf8')).toContain('auth-refresh-plan-1')
+    expect(out).toContain('drive: taken back — auth-refresh-plan-1 · witness start auth-refresh-plan-1')
+  }, 120000)
+
+  it('a target taken back to a new human stop waits again without a session', async () => {
+    const repo = await planReady()
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    await repo.cli(['ask', 'first'])
+    const seen = join(fakeScenario(), 'seen')
+    const agent = script([`echo "$WITNESS_DRIVE" >> "${seen}"`, `${witnessCli()} ask "second"`].join('\n'))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 1 })
+    expect(readFileSync(seen, 'utf8').split('\n')).not.toContain('-')
+    expect(out).toContain('drive: taken back — untargeted work · witness recap --file <recap.json> --ask a1')
+    expect(out.filter((l) => l.startsWith('wait: conversation'))).toEqual(['wait: conversation · brainstorm · ask a1'])
+    expect(out.join('\n')).not.toMatch(/^stuck:/m)
+  }, 120000)
+
+  it('an empty queue is reported, not waited on', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 9') }, out), {})
+    expect(out).toContain('nothing queued — /witness <what to build> in a chat')
+    expect(out.join('\n')).toContain('drive: done — 0 merged · 0 wait on you')
+  }, 60000)
+})
