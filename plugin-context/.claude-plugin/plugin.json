@@ -1,6 +1,6 @@
 {
   "name": "witness-context",
-  "version": "0.24.1",
+  "version": "0.24.2",
   "description": "witness: the live context reading for every Bash command, and a once-per-session warning at the configured limit",
   "author": {
     "name": "Kostiantyn Popovych"
