@@ -12,7 +12,7 @@ Any other words in `$ARGUMENTS` are the human's ask: run `$WITNESS ask "<those w
 Resolve the CLI once:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.24.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.24.1}"
 ```
 
 If the repo has no `witness.config.yaml`, run `$WITNESS init` first (one bootstrap commit), then proceed. If init or any verb refuses on a dirty tree, the human commits or cleans it — **never `git commit` yourself, anywhere, at any stage**: the CLI makes its own state commits, and the ship phase makes the sole code commit.
