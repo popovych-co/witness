@@ -19,6 +19,14 @@ export function driveChild(env: Record<string, string | undefined>): { target: s
   return { target: marker === TARGETLESS ? undefined : marker }
 }
 
+// Rows 173 and 207. A session acts for the human only through the chat it answers to: one
+// drive spawned, or a reviewer, never grants trust or un-sticks a target. Names the marker.
+export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | undefined {
+  if (driveChild(env) !== undefined) return DRIVE_ENV
+  if (env.WITNESS_REVIEWER !== undefined && env.WITNESS_REVIEWER !== '') return 'WITNESS_REVIEWER'
+  return undefined
+}
+
 // Row 180. One drive per repo: `.witness/drive.lock` names the live drive's pid and, for a
 // background drive, its log — so a second drive, or `next` under autonomy, can say where to
 // watch the one that runs and how to stop it.

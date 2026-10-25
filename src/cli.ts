@@ -39,6 +39,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   check: () => import('./verbs/check.js'),
   index: () => import('./verbs/index-verb.js'),
   satisfy: () => import('./verbs/satisfy.js'),
+  // Row 207. A journaled human act that asks drive to try a set-aside target again.
+  retry: () => import('./verbs/retry.js'),
   dismiss: () => import('./verbs/dismiss.js'),
   log: () => import('./verbs/log.js'),
   'test-evidence': () => import('./verbs/evidence.js'),
@@ -97,6 +99,7 @@ const VERB_USAGE: Record<string, string> = {
   recap: 'witness recap --file <recap.json> [--ask <id>] [--amend]',
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
+  retry: 'witness retry <target>',
   satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
