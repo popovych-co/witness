@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
+import { watchLine } from '../src/drive-presence.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { worktreePath } from '../src/worktree.js'
@@ -822,6 +823,13 @@ describe('one command (B1)', () => {
   }
   const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' }
 
+  it('names the stop the platform has (row 201)', () => {
+    const h = { pid: 7, log: '/r/.witness/drive.log' }
+    expect(watchLine(h, 'linux')).toBe('tail -f /r/.witness/drive.log · stop it: kill 7')
+    expect(watchLine(h, 'win32')).toBe('tail -f /r/.witness/drive.log · stop it: taskkill /PID 7 /T /F')
+    expect(watchLine({ pid: 7 }, 'win32')).toBe('the terminal running witness drive · pid 7')
+  })
+
   it('a session drive spawned is refused even in a terminal', async () => {
     const repo = await seededRepo()
     // `quiet` matters while this test fails: today's drive would otherwise spawn the real harness CLI
@@ -863,13 +871,22 @@ describe('one command (B1)', () => {
     const repo = await autonomous()
     const dir = fakeScenario()
     const agent = join(dir, 'agent')
-    writeFileSync(agent, `#!/bin/sh\necho $$ > "${dir}/session"\nexec sleep 30\n`, { mode: 0o755 })
-    const r = await repo.cli(['drive', '--detach'], { env: { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' } })
+    writeFileSync(agent, `#!/bin/sh\nenv > "${dir}/env"\necho $$ > "${dir}/session"\nexec sleep 30\n`, { mode: 0o755 })
+    // a child started with no env of its own inherits drive's process environment
+    const awake = join(dir, 'awake')
+    writeFileSync(awake, `#!/bin/sh\nenv > "${dir}/awake-env"\n`, { mode: 0o755 })
+    const r = await repo.cli(['drive', '--detach'], { env: { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: awake } })
     expect(r.code).toBe(0)
     const pid = Number(/background · pid (\d+)/.exec(r.stdout)![1])
     const log = join(repo.root, '.witness', 'drive.log')
     expect(r.stdout).toContain(`watch: tail -f ${log} · stop it: kill ${pid}`)
     await expect.poll(() => existsSync(join(dir, 'session')), { timeout: 30_000 }).toBe(true)
+    // Row 201: the marker describes the background drive alone — a session has a console
+    expect(readFileSync(join(dir, 'env'), 'utf8')).toContain('WITNESS_DRIVE=')
+    expect(readFileSync(join(dir, 'env'), 'utf8')).not.toContain('WITNESS_NO_CONSOLE')
+    await expect.poll(() => existsSync(join(dir, 'awake-env')), { timeout: 15_000 }).toBe(true)
+    expect(readFileSync(join(dir, 'awake-env'), 'utf8')).toContain('WITNESS_DRIVE_LOG=')
+    expect(readFileSync(join(dir, 'awake-env'), 'utf8')).not.toContain('WITNESS_NO_CONSOLE')
     process.kill(pid, 'SIGTERM')
     await expect.poll(() => readFileSync(log, 'utf8'), { timeout: 30_000 }).toContain('drive: stopped — signal SIGTERM')
     const session = Number(readFileSync(join(dir, 'session'), 'utf8'))

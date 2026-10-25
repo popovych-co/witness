@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adoptedCommits } from '../adopt.js'

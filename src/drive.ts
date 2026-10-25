@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +7,7 @@ import { withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
-import { resolveSpawn } from './spawn.js'
+import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
@@ -134,6 +133,23 @@ function lineSink(prefix: string, emit: (line: string) => void): { push: (chunk:
   }
 }
 
+// How drive stops a session it started: its process group (F11), or on Windows, which has no
+// groups to signal, its process tree (row 201).
+export function signalSession(
+  child: ReturnType<typeof spawn>, grouped: boolean, env: Record<string, string | undefined>, sig: NodeJS.Signals,
+): void {
+  try {
+    if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
+    else if (child.pid === undefined) child.kill(sig)
+    else if (child.exitCode === null && child.signalCode === null) {
+      // Only while it runs: Node closes the handle before it reports the exit, and from then on
+      // the pid may name another process, which a tree kill would take down with its own.
+      const stop = treeStop(child.pid, env)
+      spawn(stop.file, stop.args, { stdio: 'ignore' }).on('error', () => {})
+    }
+  } catch { /* already gone */ }
+}
+
 // One headless session, in the action's home, streamed to the driver's terminal.
 //
 // The harness is the JUDGE ladder's answer (declared first, detection as fallback), not
@@ -186,7 +202,8 @@ export async function spawnSession(
   return await new Promise<SessionEnd>((resolve) => {
     // Final review F11: its own process group, so a stop reaches the tools, shells and gates
     // the session started, not just the agent — an orphan would keep writing state after
-    // drive moved on. Windows has no groups to signal; the agent alone is stopped there.
+    // drive moved on. Windows has no groups to signal: there the stop is a tree kill from the
+    // shim down, because libuv's job object lets the agent under the shim break away (row 201).
     const grouped = process.platform !== 'win32'
     const child = spawn(run.value.file, run.value.args, {
       cwd: step.home,
@@ -195,12 +212,7 @@ export async function spawnSession(
       windowsVerbatimArguments: run.value.windowsVerbatimArguments,
       detached: grouped,
     })
-    const signal = (sig: NodeJS.Signals) => {
-      try {
-        if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
-        else child.kill(sig)
-      } catch { /* already gone */ }
-    }
+    const signal = (sig: NodeJS.Signals) => signalSession(child, grouped, run.value.env, sig)
     if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)
     let outcome: SpawnOutcome = 'exited'
     let code: number | null = null
@@ -721,7 +733,7 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
   try {
     const child = spawn(file, argv as string[], {
       cwd: root, detached: true, stdio: ['ignore', fd, fd],
-      env: { ...ctx.env, [DRIVE_LOG_ENV]: log } as NodeJS.ProcessEnv,
+      env: { ...ctx.env, [DRIVE_LOG_ENV]: log, [NO_CONSOLE_ENV]: '1' } as NodeJS.ProcessEnv,
     })
     if (child.pid === undefined) return refuse([v('--detach', 'spawn-failed', file, 'a runnable witness CLI')])
     child.on('error', () => {})

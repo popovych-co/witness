@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gitBlob, tryGit } from './gitio.js'
+import { execFileSync } from './spawn.js'
 
 // Row 186. What a gate's battery read, kept as a git tree so a later round can diff against
 // it. Nothing reviewed is in the object database today: `blobOf` hashes without `-w` and

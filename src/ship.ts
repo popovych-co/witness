@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { EXIT, type Ctx } from './cli.js'
 import { autonomyAt, loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
@@ -19,6 +18,7 @@ import { authoringOwed, gateSettled } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
 import { handOverIfDue } from './slice.js'
+import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { settleStop, settledCode } from './settle.js'

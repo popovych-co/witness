@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { ensureTrusted } from './allowlist.js'
@@ -7,6 +6,7 @@ import type { Config } from './config.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { withRunnerTurn } from './runner-lock.js'
+import { execSync } from './spawn.js'
 
 export type RunnerConfig =
   | { mode: 'filtered'; template: string; reportGlob?: string }

@@ -11,7 +11,7 @@ import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { probe } from '../src/probe.js'
 import type { Result } from '../src/refusal.js'
 import { invokeReviewer } from '../src/reviewer.js'
-import { resolveSpawn } from '../src/spawn.js'
+import { resolveSpawn, treeStop } from '../src/spawn.js'
 import { fakeCtx, seededRepo } from './helpers.js'
 
 // A PATH directory holding the named files. Real files, not a predicate: resolution IS
@@ -162,6 +162,15 @@ describe('resolveSpawn — the win32 algorithm, on any host', () => {
     const env = winEnv(dir)
     expect(resolveSpawn('pi', ['-p', 'a\nb'], env, 'linux'))
       .toEqual({ ok: true, value: { file: 'pi', args: ['-p', 'a\nb'], env, windowsVerbatimArguments: false } })
+  })
+})
+
+describe('treeStop (row 201)', () => {
+  it("stops a Windows process tree with System32's taskkill, whatever PATH holds", () => {
+    expect(treeStop(4242, { SystemRoot: 'D:\\WINNT', PATH: 'C:\\planted' })).toEqual({
+      file: 'D:\\WINNT\\System32\\taskkill.exe', args: ['/PID', '4242', '/T', '/F'],
+    })
+    expect(treeStop(7, {}).file).toBe('C:\\Windows\\System32\\taskkill.exe')
   })
 })
 
@@ -316,9 +325,22 @@ process.stdin.on('end', () => {
     const env = { ...envWith(dir), WITNESS_DRIVE_AGENT_BIN: join(dir, 'agent.cmd') } as Record<string, string>
     const res = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg.value,
       fakeCtx(repo.root, { tty: true, env, out: (l) => lines.push(l) }), 1)
-    expect(res).toBe('exited')
+    expect(res.outcome).toBe('exited')
     expect(lines).toContain(`[1 implement/p1] ${repo.root}`)
     expect(lines.join('\n')).toContain('[1 implement/p1] ["-p","/witness"')
+  }, 20000)
+
+  it('a stopped .cmd session takes the agent under the shim with it (F11, row 201)', async () => {
+    const repo = await seededRepo()
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
+    const late = join(mkdtempSync(join(tmpdir(), 'witness-late-')), 'late')
+    const dir = shimmed('agent', `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(late)}, 'acted'), 2000); setTimeout(() => {}, 30000)`)
+    const env = { ...envWith(dir), WITNESS_DRIVE_AGENT_BIN: join(dir, 'agent.cmd') } as Record<string, string>
+    const quick = { ...cfg.value, drive: { ...cfg.value.drive, sessionTimeoutMs: 300 } }
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, quick, fakeCtx(repo.root, { env }), 1)).outcome).toBe('timeout')
+    await new Promise((r) => setTimeout(r, 3_000))
+    expect(existsSync(late)).toBe(false)
   }, 20000)
 
   it('the calibrate worker refuses, out loud, a multi-line prompt no batch file can receive', async () => {

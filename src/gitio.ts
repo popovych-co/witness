@@ -1,7 +1,7 @@
-import { execFileSync } from 'node:child_process'
 import { dirname } from 'node:path'
 import { canonPaths } from './config.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { execFileSync } from './spawn.js'
 
 // D158 (#20). A reviewer-bound diff is legitimately multi-megabyte and Node's spawnSync
 // default is 1 MiB, which crashed ship/gate as `spawnSync git ENOBUFS` — and, worse,

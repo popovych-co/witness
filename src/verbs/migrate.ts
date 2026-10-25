@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +12,7 @@ import { acquireLock } from '../lock.js'
 import { deepEqual, migrateValues, withoutEmpty, type Change } from '../migration.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { GATE_NAMES, SETTINGS, getIn, settingAt } from '../settings.js'
+import { execFileSync } from '../spawn.js'
 import { kv } from '../toon.js'
 
 // Row 193 §4.6, the verb row 23 reserved: bring witness.config.yaml to this CLI's schema and

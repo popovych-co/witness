@@ -98,8 +98,10 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
 // A path is quoted only when it needs it, so the common line stays the one a human types.
 const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
 
-export function watchLine(h: DriveHolder): string {
+// Row 201: `kill` is not a Windows command, and PowerShell's alias ends drive alone.
+export function watchLine(h: DriveHolder, platform: NodeJS.Platform = process.platform): string {
+  const stop = platform === 'win32' ? `taskkill /PID ${h.pid} /T /F` : `kill ${h.pid}`
   return h.log !== undefined
-    ? `tail -f ${shellArg(h.log)} · stop it: kill ${h.pid}`
+    ? `tail -f ${shellArg(h.log)} · stop it: ${stop}`
     : `the terminal running witness drive · pid ${h.pid}`
 }

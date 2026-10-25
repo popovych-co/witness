@@ -1,5 +1,4 @@
-import { spawnSync } from 'node:child_process'
-import { resolveSpawn } from './spawn.js'
+import { resolveSpawn, spawnSync } from './spawn.js'
 
 // Revision 3. The old form passed no `env`, so it silently answered about process.env
 // while reviewer.ts:133 spawns `claude` with `env: ctx.env` — two different questions,

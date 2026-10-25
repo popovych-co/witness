@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process'
 import { resolves } from './opener.js'
+import { spawnSync } from './spawn.js'
 
 // Row 184. The desktop notification an autonomous run ends with (design B6). A machine-local
 // `notify:` command receives the run summary as its one argument; otherwise the platform
