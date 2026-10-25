@@ -1,8 +1,8 @@
-import { execSync } from 'node:child_process'
 import { ensureTrusted } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { GateCheck } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
+import { execSync } from './spawn.js'
 
 export interface NeedResult {
   label: string

@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
@@ -9,6 +8,7 @@ import { appendEntry, entryLine, journalRel, readStream, type StatusCause, type 
 import { acquireLock } from './lock.js'
 import { canonicalSha } from './sha.js'
 import { findById, type Canon, type CanonDoc } from './scan.js'
+import { execFileSync } from './spawn.js'
 import { crashPoint, withTxn } from './txn.js'
 import { autoSync } from './verbs/sync.js'
 import { removeWorktree, worktreePath } from './worktree.js'

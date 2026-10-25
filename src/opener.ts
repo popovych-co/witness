@@ -1,4 +1,4 @@
-import { spawnSync, spawn } from 'node:child_process'
+import { spawnSync, spawn } from './spawn.js'
 
 export type OpenOutcome = 'spawned' | 'failed'
 
@@ -35,7 +35,8 @@ export function openArtifact(
   if (!resolves(cmd)) return { outcome: 'failed', command: cmd }
 
   try {
-    const child = spawn(cmd, [...pre, absPath], { detached: true, stdio: 'ignore' })
+    // The one window witness means to show: never hidden, even from a background drive (row 201).
+    const child = spawn(cmd, [...pre, absPath], { detached: true, stdio: 'ignore', windowsHide: false })
     child.unref()
     return { outcome: 'spawned', command: cmd }
   } catch {

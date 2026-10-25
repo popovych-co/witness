@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import * as cp from 'node:child_process'
 import { statSync } from 'node:fs'
 import { extname, join, win32 } from 'node:path'
 import { ok, refuse, v, type Result } from './refusal.js'
@@ -120,3 +122,37 @@ export function resolveSpawn(
     windowsVerbatimArguments: true,
   })
 }
+
+// Row 201. The one module that starts a child process. A console program started by a process
+// with no console of its own gets a new console, and on Windows a new console is a window: the
+// background drive `drive --detach` starts has none (libuv's DETACHED_PROCESS), so each git call
+// and each session it ran opened one. `windowsHide` asks for CREATE_NO_WINDOW instead, which
+// libuv grants only when no stdio slot inherits a handle — a hidden child pipes or ignores all
+// three. It is asked for only where witness has no console to lend: a child given a hidden
+// console of its own no longer shares the terminal's, and Ctrl+C typed there never reaches it —
+// a foreground drive's sessions rely on exactly that. Async-local, like the journal stamp (row
+// 191 §4.8), so an invocation run in process — drive's decisions, a test's CLI — keeps its own
+// answer. The scope only ever turns hiding on: a nested `main` inherits it.
+export const NO_CONSOLE_ENV = 'WITNESS_NO_CONSOLE'
+const noConsole = new AsyncLocalStorage<true>()
+
+export function withoutConsole<T>(fn: () => T): T {
+  return noConsole.run(true, fn)
+}
+
+// child_process takes `(file, args?, options?)` or `(file, options?)`; the options are found
+// whichever form a caller used, and an explicit `windowsHide` — the viewer's — wins.
+function hidden(rest: unknown[]): unknown[] {
+  const [a, b] = rest
+  const opts = (o: unknown) => ({ windowsHide: noConsole.getStore() === true, ...(o as object | undefined) })
+  return Array.isArray(a) ? [a, opts(b)] : [opts(a)]
+}
+
+export const spawn = ((file: string, ...rest: unknown[]) =>
+  (cp.spawn as (...a: unknown[]) => unknown)(file, ...hidden(rest))) as typeof cp.spawn
+export const spawnSync = ((file: string, ...rest: unknown[]) =>
+  (cp.spawnSync as (...a: unknown[]) => unknown)(file, ...hidden(rest))) as typeof cp.spawnSync
+export const execFileSync = ((file: string, ...rest: unknown[]) =>
+  (cp.execFileSync as (...a: unknown[]) => unknown)(file, ...hidden(rest))) as typeof cp.execFileSync
+export const execSync = ((command: string, ...rest: unknown[]) =>
+  (cp.execSync as (...a: unknown[]) => unknown)(command, ...hidden(rest))) as typeof cp.execSync

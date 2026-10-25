@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn } from './spawn.js'
 
 // Row 182. Drive keeps the machine awake for its own lifetime (design B4): macOS sleep kills
 // long runs (the README's operator note). `caffeinate -ims` holds off idle, disk and AC

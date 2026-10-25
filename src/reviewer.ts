@@ -1,4 +1,3 @@
-import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -8,7 +7,7 @@ import { validatePin, type Harness } from './harness.js'
 import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
-import { resolveSpawn } from './spawn.js'
+import { resolveSpawn, spawn, spawnSync } from './spawn.js'
 import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
 

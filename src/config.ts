@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -10,6 +9,7 @@ import {
   CHANGE_CLASSES, GATE_NAMES, RETIRED, SETTINGS, defaultAt, getIn, knownAt, settingAt,
   type Battery, type GateName, type Setting,
 } from './settings.js'
+import { execFileSync } from './spawn.js'
 
 // Row 193 §4.2: every setting present, nothing unknown. Always the list's newest schema.
 export const SCHEMA_VERSION = 2
