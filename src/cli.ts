@@ -5,6 +5,7 @@ import { stateFloor } from './floor.js'
 import { primaryRoot } from './gitio.js'
 import { withJournalCtx } from './journal.js'
 import { renderRefusal, v } from './refusal.js'
+import { NO_CONSOLE_ENV, withoutConsole } from './spawn.js'
 import { NPX_LATEST, compareTriple, version } from './version.js'
 
 export interface Ctx {
@@ -123,6 +124,14 @@ export function usage(): string {
 }
 
 export async function main(ctx: Ctx, argv: string[]): Promise<number> {
+  // Row 201. The background drive has no console, so everything this invocation starts —
+  // the floor gate's git calls below included — starts hidden. The marker describes this
+  // process alone: a session it starts has a console, the hidden one its spawn gave it.
+  // It leaves process.env too, which every child started without an env of its own inherits.
+  if (ctx.env[NO_CONSOLE_ENV] !== undefined) {
+    delete process.env[NO_CONSOLE_ENV]
+    return withoutConsole(() => main({ ...ctx, env: { ...ctx.env, [NO_CONSOLE_ENV]: undefined } }, argv))
+  }
   const [verb, ...rest] = argv
   if (verb === '--version' || verb === '-v') {
     ctx.out(version())

@@ -86,3 +86,62 @@ describe('a child starts hidden only where witness has no console (row 201)', ()
     expect(calls[0]!.opts.windowsHide).toBe(false)
   })
 })
+
+describe('the background drive has no console (row 201)', () => {
+  it('drive --detach hands the background drive the marker', () => {
+    const root = mkdtempSync(join(tmpdir(), 'witness-console-'))
+    const ctx: Ctx = { cwd: root, env: { ...process.env }, isTTY: false, out: () => {}, err: () => {}, ask: async () => '' }
+    expect(detachDrive(root, ctx, ['--max-spawns', '1']).ok).toBe(true)
+    const bg = calls.find((c) => c.fn === 'spawn' && c.opts.detached === true)
+    expect((bg!.opts.env as Record<string, string | undefined>)[NO_CONSOLE_ENV]).toBe('1')
+  })
+
+  it('an invocation carrying the marker starts every child hidden, the floor gate\'s git calls included', async () => {
+    const repo = await seededRepo()
+    calls.length = 0
+    expect((await repo.cli(['status'], { env: { [NO_CONSOLE_ENV]: '1' } })).code).toBe(0)
+    expect(calls.some((c) => c.file === 'git' && c.args.includes('--show-toplevel'))).toBe(true)
+    expect(calls.filter((c) => c.opts.windowsHide !== true)).toEqual([])
+  })
+
+  it('without the marker nothing is hidden — a foreground child shares the terminal, and its Ctrl+C', async () => {
+    const repo = await seededRepo()
+    calls.length = 0
+    expect((await repo.cli(['status'])).code).toBe(0)
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.filter((c) => c.opts.windowsHide !== false)).toEqual([])
+  })
+
+  it('an invocation run in process inside the scope stays hidden — drive\'s decisions', async () => {
+    const repo = await seededRepo()
+    calls.length = 0
+    await withoutConsole(() => repo.cli(['status']))
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.filter((c) => c.opts.windowsHide !== true)).toEqual([])
+  })
+})
+
+// The contract itself, through the real CreateProcess: a process with no console (as the
+// background drive is) asks Windows for a child's console window. GetConsoleWindow is 0 for a
+// console made without one.
+describe.runIf(process.platform === 'win32')('a child of a console-less witness has no window (win32 only)', () => {
+  it('gets one outside the scope, and none inside it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'witness-console-'))
+    const helper = join(dir, 'helper.mts')
+    const ps = ['-NoProfile', '-NonInteractive', '-Command',
+      "Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [W.K]::GetConsoleWindow().ToInt64()"]
+    writeFileSync(helper, [
+      `import { spawnSync, withoutConsole } from ${JSON.stringify(pathToFileURL(join(SRC, 'spawn.ts')).href)}`,
+      `const ask = () => spawnSync('powershell.exe', ${JSON.stringify(ps)}, { encoding: 'utf8' }).stdout.trim()`,
+      'process.stdout.write(JSON.stringify({ shown: ask(), hidden: withoutConsole(ask) }))',
+    ].join('\n'))
+    const { spawn: rawSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+    const child = rawSpawn(node, ['--import', 'tsx', helper], { cwd: join(SRC, '..'), detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    child.stdout!.on('data', (c: Buffer) => { out += String(c) })
+    await new Promise((resolve) => child.on('close', resolve))
+    const seen = JSON.parse(out) as { shown: string; hidden: string }
+    expect(seen.shown).not.toBe('0')
+    expect(seen.hidden).toBe('0')
+  }, 60_000)
+})

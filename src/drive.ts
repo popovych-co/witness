@@ -7,7 +7,7 @@ import { withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
-import { resolveSpawn, spawn } from './spawn.js'
+import { NO_CONSOLE_ENV, resolveSpawn, spawn } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
@@ -720,7 +720,7 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
   try {
     const child = spawn(file, argv as string[], {
       cwd: root, detached: true, stdio: ['ignore', fd, fd],
-      env: { ...ctx.env, [DRIVE_LOG_ENV]: log } as NodeJS.ProcessEnv,
+      env: { ...ctx.env, [DRIVE_LOG_ENV]: log, [NO_CONSOLE_ENV]: '1' } as NodeJS.ProcessEnv,
     })
     if (child.pid === undefined) return refuse([v('--detach', 'spawn-failed', file, 'a runnable witness CLI')])
     child.on('error', () => {})
