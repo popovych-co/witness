@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
+import { watchLine } from '../src/drive-presence.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { worktreePath } from '../src/worktree.js'
@@ -821,6 +822,13 @@ describe('one command (B1)', () => {
     return repo
   }
   const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' }
+
+  it('names the stop the platform has (row 201)', () => {
+    const h = { pid: 7, log: '/r/.witness/drive.log' }
+    expect(watchLine(h, 'linux')).toBe('tail -f /r/.witness/drive.log · stop it: kill 7')
+    expect(watchLine(h, 'win32')).toBe('tail -f /r/.witness/drive.log · stop it: taskkill /PID 7 /T /F')
+    expect(watchLine({ pid: 7 }, 'win32')).toBe('the terminal running witness drive · pid 7')
+  })
 
   it('a session drive spawned is refused even in a terminal', async () => {
     const repo = await seededRepo()

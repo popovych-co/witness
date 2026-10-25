@@ -7,7 +7,7 @@ import { withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
-import { NO_CONSOLE_ENV, resolveSpawn, spawn } from './spawn.js'
+import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
 import { ASK_STREAM } from './ask.js'
@@ -185,7 +185,8 @@ export async function spawnSession(
   return await new Promise<SessionEnd>((resolve) => {
     // Final review F11: its own process group, so a stop reaches the tools, shells and gates
     // the session started, not just the agent — an orphan would keep writing state after
-    // drive moved on. Windows has no groups to signal; the agent alone is stopped there.
+    // drive moved on. Windows has no groups to signal: there the stop is a tree kill from the
+    // shim down, because libuv's job object lets the agent under the shim break away (row 201).
     const grouped = process.platform !== 'win32'
     const child = spawn(run.value.file, run.value.args, {
       cwd: step.home,
@@ -197,7 +198,10 @@ export async function spawnSession(
     const signal = (sig: NodeJS.Signals) => {
       try {
         if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
-        else child.kill(sig)
+        else if (child.pid !== undefined) {
+          const stop = treeStop(child.pid, run.value.env)
+          spawn(stop.file, stop.args, { stdio: 'ignore' }).on('error', () => {})
+        } else child.kill(sig)
       } catch { /* already gone */ }
     }
     if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)

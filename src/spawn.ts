@@ -156,3 +156,13 @@ export const execFileSync = ((file: string, ...rest: unknown[]) =>
   (cp.execFileSync as (...a: unknown[]) => unknown)(file, ...hidden(rest))) as typeof cp.execFileSync
 export const execSync = ((command: string, ...rest: unknown[]) =>
   (cp.execSync as (...a: unknown[]) => unknown)(command, ...hidden(rest))) as typeof cp.execSync
+
+// Row 201. A Windows session's stop: its whole tree, from the shim down, the twin of the POSIX
+// group kill. System32's taskkill, never PATH's, where a repo could plant one — resolveSpawn's
+// System32 `cmd.exe` precedent.
+export function treeStop(pid: number, env: Record<string, string | undefined>): { file: string; args: string[] } {
+  return {
+    file: win32.join(envGet(env, 'SYSTEMROOT') ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
+    args: ['/PID', String(pid), '/T', '/F'],
+  }
+}
