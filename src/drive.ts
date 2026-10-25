@@ -133,6 +133,23 @@ function lineSink(prefix: string, emit: (line: string) => void): { push: (chunk:
   }
 }
 
+// How drive stops a session it started: its process group (F11), or on Windows, which has no
+// groups to signal, its process tree (row 201).
+export function signalSession(
+  child: ReturnType<typeof spawn>, grouped: boolean, env: Record<string, string | undefined>, sig: NodeJS.Signals,
+): void {
+  try {
+    if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
+    else if (child.pid === undefined) child.kill(sig)
+    else if (child.exitCode === null && child.signalCode === null) {
+      // Only while it runs: Node closes the handle before it reports the exit, and from then on
+      // the pid may name another process, which a tree kill would take down with its own.
+      const stop = treeStop(child.pid, env)
+      spawn(stop.file, stop.args, { stdio: 'ignore' }).on('error', () => {})
+    }
+  } catch { /* already gone */ }
+}
+
 // One headless session, in the action's home, streamed to the driver's terminal.
 //
 // The harness is the JUDGE ladder's answer (declared first, detection as fallback), not
@@ -195,15 +212,7 @@ export async function spawnSession(
       windowsVerbatimArguments: run.value.windowsVerbatimArguments,
       detached: grouped,
     })
-    const signal = (sig: NodeJS.Signals) => {
-      try {
-        if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
-        else if (child.pid !== undefined) {
-          const stop = treeStop(child.pid, run.value.env)
-          spawn(stop.file, stop.args, { stdio: 'ignore' }).on('error', () => {})
-        } else child.kill(sig)
-      } catch { /* already gone */ }
-    }
+    const signal = (sig: NodeJS.Signals) => signalSession(child, grouped, run.value.env, sig)
     if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)
     let outcome: SpawnOutcome = 'exited'
     let code: number | null = null

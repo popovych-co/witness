@@ -140,12 +140,13 @@ export function withoutConsole<T>(fn: () => T): T {
   return noConsole.run(true, fn)
 }
 
-// child_process takes `(file, args?, options?)` or `(file, options?)`; the options are found
-// whichever form a caller used, and an explicit `windowsHide` — the viewer's — wins.
+// child_process takes `(file, args?, options?)` or `(file, options?)`, and an argv left out
+// (`undefined`, `null`) still has the options behind it; they are found whichever form a caller
+// used, and an explicit `windowsHide` — the viewer's — wins.
 function hidden(rest: unknown[]): unknown[] {
   const [a, b] = rest
   const opts = (o: unknown) => ({ windowsHide: noConsole.getStore() === true, ...(o as object | undefined) })
-  return Array.isArray(a) ? [a, opts(b)] : [opts(a)]
+  return Array.isArray(a) || (a == null && rest.length > 1) ? [a, opts(b)] : [opts(a)]
 }
 
 export const spawn = ((file: string, ...rest: unknown[]) =>

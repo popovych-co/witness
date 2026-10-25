@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { once } from 'node:events'
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Ctx } from '../src/cli.js'
-import { detachDrive } from '../src/drive.js'
+import { detachDrive, signalSession } from '../src/drive.js'
 import { NO_CONSOLE_ENV, execFileSync, execSync, spawn, spawnSync, withoutConsole } from '../src/spawn.js'
 import { seededRepo } from './helpers.js'
 
@@ -15,7 +16,8 @@ const calls = vi.hoisted(() => [] as Call[])
 vi.mock('node:child_process', async (importOriginal) => {
   const cp = await importOriginal<typeof import('node:child_process')>()
   const record = (fn: string, real: (...a: unknown[]) => unknown) => (file: string, ...rest: unknown[]) => {
-    const [args, opts] = Array.isArray(rest[0]) ? [rest[0] as string[], rest[1]] : [[], rest[0]]
+    const argv = Array.isArray(rest[0]) || (rest[0] == null && rest.length > 1)
+    const [args, opts] = argv ? [(rest[0] ?? []) as string[], rest[1]] : [[], rest[0]]
     const o = (opts ?? {}) as Record<string, unknown>
     calls.push({ fn, file, args, opts: o })
     if ((o.env as Record<string, string | undefined> | undefined)?.WITNESS_DRIVE_LOG !== undefined) {
@@ -81,6 +83,13 @@ describe('a child starts hidden only where witness has no console (row 201)', ()
     expect(calls.map((c) => [c.args, c.opts.windowsHide])).toEqual([[[], true], [[], true]])
   })
 
+  it('reads the options behind an argv left out, as child_process does', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-console-')))
+    const r = withoutConsole(() => spawnSync(node, undefined, { cwd: dir, encoding: 'utf8', input: 'process.stdout.write(process.cwd())' }))
+    expect(r.stdout).toBe(dir)
+    expect(calls[0]!.opts.windowsHide).toBe(true)
+  })
+
   it('lets an explicit windowsHide win — the viewer is never hidden', () => {
     withoutConsole(() => spawnSync(node, ['-e', '0'], { windowsHide: false }))
     expect(calls[0]!.opts.windowsHide).toBe(false)
@@ -118,6 +127,30 @@ describe('the background drive has no console (row 201)', () => {
     await withoutConsole(() => repo.cli(['status']))
     expect(calls.length).toBeGreaterThan(0)
     expect(calls.filter((c) => c.opts.windowsHide !== true)).toEqual([])
+  })
+})
+
+// Row 201. Off POSIX's groups — on Windows — a session is stopped by its tree, by pid. Node
+// closes a child's handle before it reports the exit, so from then on the pid is free to name
+// another process, which a tree kill would take down with everything under it.
+describe('a session drive stops by its tree (row 201)', () => {
+  const env = { SystemRoot: 'C:\\Windows' }
+
+  it('stops a running session with taskkill, its whole tree', async () => {
+    const child = spawn(node, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })
+    calls.length = 0
+    signalSession(child, false, env, 'SIGTERM')
+    expect(calls.map((c) => [c.file, c.args])).toEqual([['C:\\Windows\\System32\\taskkill.exe', ['/PID', String(child.pid), '/T', '/F']]])
+    child.kill()
+    await once(child, 'exit')
+  })
+
+  it('never stops a session by pid once it has exited', async () => {
+    const child = spawn(node, ['-e', '0'], { stdio: 'ignore' })
+    await once(child, 'exit')
+    calls.length = 0
+    signalSession(child, false, env, 'SIGKILL')
+    expect(calls).toEqual([])
   })
 })
 
