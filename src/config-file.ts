@@ -1,5 +1,5 @@
 import { Lexer, isCollection, isMap, isScalar, parseDocument, type Node } from 'yaml'
-import { LEGACY_COMMENTS } from './legacy-comments.js'
+import { RELEASED_COMMENTS } from './released-comments.js'
 import {
   CHANGE_CLASSES, FIRST_LINE, GROUP_HEADINGS, SCHEMA_COMMENT, SETTINGS, getIn, inlineValue, type Group,
 } from './settings.js'
@@ -87,6 +87,10 @@ const CURRENT_COMMENTS: ReadonlySet<string> = new Set([
   ...Object.values(GROUP_HEADINGS).map((h) => h.slice(1).trim()),
 ])
 
+// What a released witness wrote and this one no longer does: derived from the one record, so a
+// reworded comment's old text can never be left out of it.
+const LEGACY_COMMENTS: ReadonlySet<string> = new Set([...RELEASED_COMMENTS].filter((t) => !CURRENT_COMMENTS.has(t)))
+
 // Where a human line can be printed: every setting and section, and a per-class reviewer line.
 const PRINTABLE: ReadonlySet<string> = new Set([
   ...SETTINGS.map((s) => s.path),
@@ -159,7 +163,7 @@ export function readComments(text: string): { human: HumanComments; legacy: numb
     const comment = token.trimEnd()
     const body = comment.slice(1).trim()
     const ownLine = src.slice(lineStarts[line]!, at).trim() === ''
-    if (LEGACY_COMMENTS.has(body) || CURRENT_COMMENTS.has(body)) {
+    if (RELEASED_COMMENTS.has(body) || CURRENT_COMMENTS.has(body)) {
       // A line of its own vanishes; one on a setting's line, or the first line, is replaced.
       if (ownLine && line !== 0 && LEGACY_COMMENTS.has(body)) legacy++
       continue

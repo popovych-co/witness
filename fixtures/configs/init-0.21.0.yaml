@@ -1,0 +1,62 @@
+# witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.
+schema: 2                      # format version · witness migrate raises it; never edit by hand
+
+# ── Setup: what this repo is ─────────────────────────────────────────────────
+harness: claude-code           # the judge: the agent CLI that runs this repo's gate reviewers and arbiter · claude-code | pi
+paths:
+  specs: specs                 # folder for specs, repo-relative · git mv the docs when you change it
+  plans: plans                 # folder for plans, repo-relative · git mv the docs when you change it
+  designs: designs             # folder for approved designs, repo-relative · git mv the docs when you change it
+docs:
+  conventions: []              # code docs handed to code-reviewer at implement and ship · file list, [] = none
+  design: []                   # design docs handed to design-critic and design-reviewer · file list, [] = none
+criteria:
+  runner: 'npm test -- -t "@spec:{id}"'  # how a spec's criteria run · a command with {id}, or full-suite
+  report: none                 # the junit report witness reads · junit:<glob>, or none · full-suite needs one
+  exclude: []                  # extra globs never scanned for criteria tags · [] = none
+ship:
+  test: npm test               # the suite command ship runs · full-suite criteria run it too
+  lint: npm run lint           # the lint command ship runs
+  branch: main                 # the branch witness ships into
+  merge: merge                 # how ship merges its own PR under autonomy · merge | squash | rebase
+  ciSettleMs: 60000            # ms green CI must hold still before an autonomous merge · 0–1800000
+
+# ── Behavior: how witness works here ─────────────────────────────────────────
+autonomy: off                  # on = the CLI settles its own stops and merges green PRs · on | off · counts once committed
+arbiter:
+  model: claude-opus-5-5       # model for the arbiter that settles stops and checks recaps under autonomy · exact id, no aliases
+session:
+  contextLimit: 20             # % of the context window at which a session hands over to a fresh one · 1–100
+implement:
+  stepsPerDispatch: 3          # steps an implement session takes when its context fill can't be read · ≥ 1
+gates:
+  reviewerTimeoutMs: 600000    # ms one reviewer, or the arbiter, may run before it is stopped (10 min) · ≥ 1
+  decompose:
+    model: claude-opus-5-5     # model for this gate's reviewers · exact id, [provider/]id[:thinking], no aliases
+    reviewers: [slicing-critic]  # reviewers this gate runs · one list, or one list per class (feature, fix, chore)
+  plan:
+    model: claude-opus-5-5     # model for this gate's reviewers · exact id, no aliases
+    reviewers: [plan-critic]   # reviewers this gate runs · one list, or one list per class
+  design:
+    model: claude-opus-5-5     # model for this gate's reviewers · runs only on specs marked ui
+    reviewers: [design-critic] # reviewers this gate runs · one list, or one list per class
+  implement:
+    model: claude-opus-5-5     # model for this gate's reviewers AND for the agent that writes the code
+    reviewers:
+      feature: [code-reviewer, silent-failure-hunter, type-design, pr-test, design-reviewer]  # for a feature
+      fix: [code-reviewer, silent-failure-hunter, design-reviewer]  # for a fix
+      chore: [code-reviewer]   # for a chore
+  ship:
+    model: claude-opus-5-5     # model for this gate's reviewers · exact id, no aliases
+    reviewers: [drift-reviewer, code-reviewer]  # reviewers this gate runs · one list, or one list per class
+
+# ── Tuning: witness drive ────────────────────────────────────────────────────
+drive:
+  parallel: 2                  # sessions drive runs at once, one per target · ≥ 1
+  parallelSuites: false        # let test runs in two worktrees overlap · true | false
+  sessionTimeoutMs: 3600000    # ms one spawned session may run before it is stopped (1 h) · ≥ 1
+  caps:
+    rounds: 16                 # gate rounds one target may run across budget resets, then it is parked · ≥ 1
+    upstream: 6                # upstream resets one target may take, then it is parked · ≥ 1
+    spawns: 24                 # sessions one target may take in one run, then it is parked · ≥ 1
+    wallClockMs: 57600000      # ms of session time one target may take in one run (16 h), then it is parked · ≥ 1
