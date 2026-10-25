@@ -352,6 +352,8 @@ describe('witness init --agent', () => {
     older.write('witness.config.yaml', 'schema: 1\n')
     older.git('add', '-A'); older.git('commit', '-m', 'an older scaffold')
     await older.cli(['init', '--agent', 'pi'])
-    expect(older.read('witness.config.yaml')).toContain('# the judge — which harness runs this repo\'s gate reviewers; declared wins')
+    // One source of comment text: the recorded line carries the setting's own comment, as a fresh
+    // init writes it, so migrate never meets a second wording of it.
+    expect(older.read('witness.config.yaml')).toMatch(/^harness: pi +# the judge: the agent CLI that runs this repo's gate reviewers and arbiter/m)
   })
 })

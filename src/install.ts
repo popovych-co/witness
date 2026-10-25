@@ -5,6 +5,7 @@ import { version } from './cli.js'
 import { tryGit } from './gitio.js'
 import { type Harness } from './harness.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { SETTINGS } from './settings.js'
 import { NPX_LATEST, compareTriple, pinIn } from './version.js'
 
 // dist/install.js and src/install.ts both sit one level under the package root, so the
@@ -269,7 +270,8 @@ export function recordHarness(configText: string, name: string): { text: string;
   if (found) return { text: configText, changed: false, declared: found[1] }
   const suffix = configText.endsWith('\n') ? '' : '\n'
   return {
-    text: `${configText}${suffix}harness: ${name}   # the judge — which harness runs this repo's gate reviewers; declared wins\n`,
+    // The setting's own comment, as a fresh init writes it: one source of witness's comment text.
+    text: `${configText}${suffix}harness: ${name}   # ${SETTINGS.find((s) => s.path === 'harness')!.comment}\n`,
     changed: true,
   }
 }

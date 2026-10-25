@@ -8,6 +8,8 @@ import { contextLimitOf } from '../plugin/hooks/context-core.mjs'
 import { readComments, renderConfig } from '../src/config-file.js'
 import { migrateValues } from '../src/migration.js'
 import { defaultValues, withValues } from '../src/settings.js'
+import { recordHarness } from '../src/install.js'
+import { RELEASED_COMMENTS as RELEASED_CONFIG_COMMENTS } from '../src/released-comments.js'
 
 // Row 193 §4.5. The file `init` writes and `migrate` rewrites, and who owns which comment.
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
@@ -57,6 +59,42 @@ describe('readComments (row 193 §4.5 ownership)', () => {
     const r = readComments(fixture('init-0.20.0.yaml'))
     expect(humanLines(r.human)).toEqual([])
     expect(r.legacy).toBeGreaterThan(0)
+  })
+
+  // Part A (0.22.0) reworded arbiter.model's comment, and migrate kept 0.21's text as a human's line.
+  it('drops every line the 0.21.0 template wrote', () => {
+    const r = readComments(fixture('init-0.21.0.yaml'))
+    expect(humanLines(r.human)).toEqual([])
+    expect(r.moved).toBe(0)
+  })
+
+  // What 0.22.0–0.24.0's migrate left in a 0.21 file: the old text on a line of its own.
+  it('drops the old arbiter comment a 0.22–0.24 migrate left on its own line', () => {
+    const healed = 'schema: 2\narbiter:\n  # model for the arbiter that settles stops and checks recaps under autonomy · exact id, no aliases\n  model: claude-opus-5-5\n'
+    const r = readComments(healed)
+    expect(humanLines(r.human)).toEqual([])
+    expect(r.legacy).toBe(1)
+  })
+
+  it('every comment a released witness wrote is still its own', () => {
+    for (const text of RELEASED_CONFIG_COMMENTS) {
+      expect(humanLines(readComments(`schema: 2\n# ${text}\nautonomy: off\n`).human), text).toEqual([])
+    }
+  })
+
+  // The ratchet: a reworded comment fails here until its new text is on the record, and then the
+  // test above until its old text is legacy.
+  it('every comment this witness writes is on the released record', () => {
+    const record = new Set(RELEASED_CONFIG_COMMENTS)
+    const written = renderConfig(defaults()).split('\n').flatMap((l) => {
+      const m = /(?:^|\s)#(.*)$/.exec(l)
+      return m ? [m[1]!.trim()] : []
+    })
+    expect(written.length).toBeGreaterThan(30)
+    expect(written.filter((t) => !record.has(t))).toEqual([])
+    // The other writer: the harness line init records into a file that lacks one.
+    const recorded = /#(.*)$/.exec(recordHarness('schema: 1\n', 'pi').text.trimEnd())![1]!.trim()
+    expect(record.has(recorded), recorded).toBe(true)
   })
 
   it('drops the old inheritance advice and keeps edited copies', () => {
