@@ -14,9 +14,9 @@ import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
-import { effortStreams, readStream, type Entry } from './journal.js'
+import { effortStreams, readStream } from './journal.js'
+import { movesFlow } from './progress.js'
 import { effortOf } from './reviewed.js'
-import { vacuousEvidence } from './steps.js'
 import { pendingTxn } from './txn.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
@@ -293,10 +293,6 @@ const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
 
 const streamLines = (root: string, id: string): number => readStream(root, id).length
 
-// A refused write is the CLI saying no: it moves nothing (F5). Nor does a vacuous red (row 191,
-// final review I3): a session that only re-runs one has done nothing, and counted, it read as
-// progress, so the target was respawned until its spawn cap.
-const moved = (e: Entry) => e.t !== 'write-refused' && !vacuousEvidence(e)
 
 // Row 181. Did anything happen for THIS target? A whole-journal count is satisfied by any
 // other lane's progress, so a stalled flow beside a busy one would spawn until the ceiling.
@@ -316,9 +312,9 @@ function progressKey(root: string, action: NextAction, family: (t: string) => st
   const target = action.target
   const effort = effortOf(root, target)
   const flow = family(target)
-  const own = readStream(root, target).filter(moved).length
+  const own = readStream(root, target).filter(movesFlow).length
   const inEffort = effort !== undefined && effort !== target
-    ? readStream(root, effort).filter((e) => moved(e) && flow.includes(String((e as { artifact?: unknown }).artifact))).length
+    ? readStream(root, effort).filter((e) => movesFlow(e) && flow.includes(String((e as { artifact?: unknown }).artifact))).length
     : 0
   return [action.line, own, inEffort].join('\u0000')
 }

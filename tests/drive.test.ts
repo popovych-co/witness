@@ -17,7 +17,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -519,13 +519,45 @@ describe('side by side (B3)', () => {
 
   it('catches a stalled target while another target journals every spawn (Review Focus 1)', async () => {
     const repo = await startedFlows(['a', 'b'])
-    const agent = script(`echo tick\ncase "$WITNESS_DRIVE" in a-plan-1) exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0 ;; *) exit 0 ;; esac`)
+    // a-plan-1 moves every spawn with a real act (row 206: a dispatch report is bookkeeping). A
+    // session may not retry its own target (row 207), so the agent drops its marker: the retry
+    // stands in for a human act landing while each session runs.
+    const agent = script(`echo tick\ncase "$WITNESS_DRIVE" in a-plan-1) WITNESS_DRIVE= exec ${witnessCli()} retry a-plan-1 ;; *) exit 0 ;; esac`)
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
     const all = out.join('\n')
     expect(all).toContain('drive: no progress — witness test-evidence b-plan-1 --phase red --step s1')
     expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
     expect(all).toMatch(/drive: spawn ceiling reached \(6\)/)
+  }, 90000)
+
+  // Issue #56, P2: a zero-step dispatch report is row 81's telemetry, never progress.
+  it('a session that only reports a zero-step dispatch is caught after one spawn', async () => {
+    const repo = await startedFlows(['a'])
+    const agent = script(`echo tick\nexec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 }, fakeClock(0))
+    expect(out.join('\n')).toContain('drive: no progress — witness test-evidence a-plan-1 --phase red --step s1')
+    expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)
+  }, 60000)
+
+  // Issue #56, P6: every implement session runs `start`, which journals a sync when the repo
+  // has a remote — bookkeeping, so a session that does nothing else is caught after one spawn.
+  it('a session that only re-runs start in a repo with a remote is caught after one spawn', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'a', { criteria: [{ id: 'ac-a', test: '@spec:a' }] })
+    approve(repo, 'a')
+    await writePlan(repo, 'a-plan-1', { parent: 'a', steps: [{ id: 's1', title: 'a', criteria: ['ac-a'] }] })
+    approve(repo, 'a-plan-1')
+    addOrigin(repo)
+    await repo.cli(['start', 'a-plan-1'])
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const agent = script(`echo tick\nexec ${witnessCli()} start a-plan-1`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 }, fakeClock(0))
+    expect(out.join('\n')).toContain('drive: no progress — witness test-evidence a-plan-1 --phase red --step s1')
+    expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)
   }, 90000)
 
   it('with autonomy off a standing decision no longer ends the run', async () => {
