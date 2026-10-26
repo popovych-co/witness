@@ -1,4 +1,4 @@
-import { ensureTrusted } from './allowlist.js'
+import { ensureTrusted, grantOf } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
 import type { TestOutcome } from './junit.js'
@@ -112,12 +112,12 @@ export async function runCriteria(
     } else if (typeof c.cmd === 'string') {
       const trust = await ensureTrusted(trustRoot, ctx, c.cmd)
       if (trust !== 'trusted') {
-        // D154. The block now names the verb that unblocks it. `witness trust <id>` is
-        // fully resolved — D147's runnability test, applied where the refusal is a detail
-        // string rather than a Violation.
+        // D154. The block now names the verb that unblocks it, fully resolved — D147's
+        // runnability test, applied where the refusal is a detail string rather than a
+        // Violation. Row 205: the grant names the one command, as the human names it.
         criteria.push({
           id: cid, kind: 'cmd', ok: false,
-          detail: `untrusted-${trust} — run: witness trust ${id} (or set WITNESS_TRUST_CMDS=1)`,
+          detail: `untrusted-${trust} — the human names it: ${grantOf(id, c as { cmd: string })} · or WITNESS_TRUST_CMDS=1 for automation`,
           untrusted: c.cmd,
         })
         continue

@@ -65,13 +65,17 @@ export function untrustedOf(violations: readonly Violation[]): string | undefine
   return violations.find((x) => x.rule.startsWith('untrusted-'))?.got
 }
 
+// Row 205. The runner knows no target, so it names the verb that does: `next` prints the grant
+// to make, and the human names the command in the chat. The env var is the automation route.
+const UNTRUSTED_WANT = 'a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation'
+
 export async function runFiltered(
   runRoot: string, ctx: Ctx, template: string, specId: string, trustRoot = runRoot,
 ): Promise<Result<RunOutcome>> {
   const trust = await ensureTrusted(trustRoot, ctx, template)
   if (trust !== 'trusted') {
     return refuse([v('criteria.runner', `untrusted-${trust}`, template,
-      trust === 'blocked' ? 'allow interactively or set WITNESS_TRUST_CMDS=1' : 'trust was declined')])
+      trust === 'blocked' ? UNTRUSTED_WANT : 'trust was declined')])
   }
   return ok(execCommand(runRoot, ctx, template.replaceAll('{id}', specId)))
 }
@@ -82,7 +86,7 @@ export async function runFullSuite(
   const trust = await ensureTrusted(trustRoot, ctx, rc.suiteCmd)
   if (trust !== 'trusted') {
     return refuse([v('ship.test', `untrusted-${trust}`, rc.suiteCmd,
-      trust === 'blocked' ? 'allow interactively or set WITNESS_TRUST_CMDS=1' : 'trust was declined')])
+      trust === 'blocked' ? UNTRUSTED_WANT : 'trust was declined')])
   }
   for (const f of reportFiles(runRoot, rc.reportGlob)) rmSync(join(runRoot, f))
   const run = execCommand(runRoot, ctx, rc.suiteCmd)

@@ -39,7 +39,7 @@ export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[], do
       if (trust !== 'trusted') {
         out.push({
           label: n.cmd, kind: 'cmd', status: trust,
-          detail: trust === 'blocked' ? 'untrusted in non-TTY — allow interactively or set WITNESS_TRUST_CMDS=1' : 'trust declined',
+          detail: trust === 'blocked' ? 'untrusted on this machine — witness next names the grant to make' : 'trust declined',
         })
         continue
       }
