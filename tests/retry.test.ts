@@ -34,6 +34,13 @@ describe('witness retry (D207)', () => {
     expect(readStream(repo.root, 'auth-refresh-plan-1').some((e) => e.t === 'retry')).toBe(false)
   })
 
+  it('retries an effort drive set aside, on the effort\'s own stream (final review)', async () => {
+    const repo = await startedPlan()
+    const res = await repo.cli(['retry', repo.effort])
+    expect(res.code).toBe(0)
+    expect(readStream(repo.root, repo.effort).at(-1)?.t).toBe('retry')
+  })
+
   it('refuses a target that is not in canon, and a missing id', async () => {
     const repo = await startedPlan()
     const ghost = await repo.cli(['retry', 'ghost-plan-1'])

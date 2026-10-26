@@ -1,6 +1,6 @@
 import { EXIT, type Ctx } from '../cli.js'
 import { sessionMarker } from '../drive-presence.js'
-import { appendEntry, entryLine, journalRel } from '../journal.js'
+import { appendEntry, effortStreams, entryLine, journalRel } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v } from '../refusal.js'
@@ -28,8 +28,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const root = rootRes.value
   const blocked = guardTxn(ctx, root)
   if (blocked !== undefined) return blocked
-  if (!findById(loadCanon(root), id)) {
-    renderRefusal([v('id', 'unknown-doc', id, 'a doc id from witness index')]).forEach(ctx.err)
+  // A canon doc, or an effort: drive sets effort-level work aside too (a decompose owed).
+  if (!findById(loadCanon(root), id) && !effortStreams(root).includes(id)) {
+    renderRefusal([v('id', 'unknown-doc', id, 'a doc id from witness index, or an effort slug')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const lock = acquireLock(root)

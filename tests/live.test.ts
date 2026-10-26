@@ -60,6 +60,14 @@ describe('.witness/live/ (D203)', () => {
     expect(readLive(repo.root, loadCanon(repo.root))?.asides).toEqual([{ target: 'auth-refresh', kind: 'stuck' }])
   })
 
+  // Final review (b) I4: drive sets aside effort-level work too (a decompose owed): its slug is
+  // a target as good as a canon id.
+  it('an effort slug is a target', async () => {
+    const repo = await seededRepo()
+    writeLive(repo.root, { pid: process.pid, asides: [{ target: repo.effort, kind: 'stuck' }] })
+    expect(readLive(repo.root, loadCanon(repo.root))?.asides).toEqual([{ target: repo.effort, kind: 'stuck' }])
+  })
+
   it('an unparseable file or a non-integer pid reads as nothing', async () => {
     const repo = await seededRepo()
     mkdirSync(join(repo.root, LIVE_DIR), { recursive: true })

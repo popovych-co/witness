@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { KEPT_STOP_NAMES, type KeptStop } from './autonomy.js'
 import type { AsideKind } from './drive.js'
 import { TARGETLESS, driveHolder } from './drive-presence.js'
+import { effortStreams } from './journal.js'
 import type { Canon } from './scan.js'
 import { GATE_NAMES } from './settings.js'
 import { ensureExcluded } from './worktree.js'
@@ -82,12 +83,13 @@ export function writeLive(root: string, state: LiveState): void {
   put(root, DRIVE_FILE, state)
 }
 
-// Every field is checked against what this CLI knows: a target that is no canon id, a kind,
+// Every field is checked against what this CLI knows: a target that is no canon id or effort, a kind,
 // gate or stop this CLI does not name, is dropped whole. No free text is kept.
 export function readLive(root: string, canon: Canon): LiveState | undefined {
   const raw = get(root, DRIVE_FILE) as { pid?: unknown; asides?: unknown; ended?: unknown } | undefined
   if (raw === undefined || raw === null || typeof raw !== 'object' || !isPid(raw.pid)) return undefined
-  const ids = new Set(canon.docs.map((d) => String(d.meta.id)))
+  // Canon ids and effort slugs: drive sets aside effort-level work too (final review b-I4).
+  const ids = new Set([...canon.docs.map((d) => String(d.meta.id)), ...effortStreams(root)])
   const stops = Object.keys(KEPT_STOP_NAMES)
   const asides: LiveAside[] = []
   for (const a of Array.isArray(raw.asides) ? raw.asides as Array<Record<string, unknown>> : []) {
