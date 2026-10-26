@@ -1066,7 +1066,7 @@ function humanStop(canon: Canon, a: NextAction): boolean {
 
 // The ladder with the human's stops set aside, the way drive's fill reads it. A target-less stop
 // (an ask's grill) is held once, as drive holds `-`, so the machine work below it still counts.
-function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
+export function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
   const held = new Set<string>()
   let targetless = false
   for (let a = first; ;) {

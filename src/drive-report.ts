@@ -1,18 +1,11 @@
 import { basename } from 'node:path'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
-import { grantOf, shownCmd } from './allowlist.js'
 import type { Aside } from './drive.js'
-import { TARGETLESS } from './drive-presence.js'
-import { handoffLine, resolveDriver } from './harness.js'
 import { readStream, streamIds, type Entry } from './journal.js'
-import { unmetNeeds } from './needs.js'
+import { needsYou, WAIT_KINDS } from './needs-you.js'
 import type { DecisionEntry } from './rounds.js'
-import { findById, loadCanon } from './scan.js'
-import { hasControl } from './toon.js'
-import { pendingTxn } from './txn.js'
-import { owedDecisions, parkedGates } from './verbs/next.js'
-import { recoverChoice } from './verbs/recover.js'
+import { loadCanon } from './scan.js'
 
 // Row 184. What the run did and what waits, read from the journal written since the run
 // began plus the state at its end (design B6). Drive journals nothing of its own (D145), so
@@ -29,20 +22,7 @@ export function entriesSince(root: string, start: RunStart): Array<{ stream: str
     readStream(root, stream).slice(start.lines.get(stream) ?? 0).map((entry) => ({ stream, entry })))
 }
 
-// Row 205. One wait per command, each with its source and the grant that names it — never a
-// `<gate>` placeholder for a target no gate holds. A command the verb would not take (anything
-// outside printable ASCII) gets a note, never a `run:`.
-function trustRows(a: Aside): string[] {
-  if (a.trust === undefined || a.trust.length === 0) return [`wait: trust grant · ${a.target}`, `  run: witness trust ${a.target}`]
-  return a.trust.flatMap((c) => [
-    `wait: trust grant · ${a.target} · ${shownCmd(c)}`,
-    `  ${hasControl(c.cmd) ? 'note' : 'run'}: ${grantOf(a.target, c)}`,
-  ])
-}
-
 export interface Report { lines: string[]; summary: string; merged: number; waiting: number; parked: number; stuck: number }
-
-const prOf = (line: string): string | undefined => /PR #(\d+)/.exec(line)?.[1]
 
 // Every `run:` and `then:` line is raw: a command is never kv-escaped (D120).
 export function driveReport(
@@ -53,59 +33,13 @@ export function driveReport(
   const merged = since.filter(({ entry }) => entry.t === 'status' && (entry as { cause?: unknown }).cause === 'merge')
     .map(({ entry }) => `merged: ${String(entry.artifact)} · PR #${String((entry as { pr?: unknown }).pr)}`)
 
-  // The waits, each target once, in the order a human answers them.
-  const waits: string[] = []
-  const named = new Set<string>()
-  const wait = (target: string, rows: string[]) => { named.add(target); waits.push(...rows) }
-  // A crash no session could recover blocks every write: it is named first (F4).
-  const txn = pendingTxn(root)
-  if (txn !== undefined) {
-    wait('-txn', [`wait: pending transaction · ${txn.op}`, `  run: ${recoverChoice(root, txn).options[0]!.command}`])
-  }
-  for (const a of aside.filter((x) => x.kind === 'kept' && (x.stop === 'design-look' || x.stop === 'trust-grant'))) {
-    if (named.has(a.target)) continue
-    wait(a.target, a.stop === 'design-look'
-      ? [`wait: design look · ${a.target}`, `  run: witness design ${a.target} --open`, `  then: witness decide design ${a.target} --show`]
-      : trustRows(a))
-  }
-  for (const u of unmetNeeds(canon)) {
-    const held = u.type === 'spec' && u.holds.length > 0
-    wait(u.doc, [
-      held ? `wait: held criterion · ${u.doc} · ${u.text} holds ${u.holds.join(' · ')}` : `wait: unmet need · ${u.doc} · ${u.text}`,
-      `  run: ${u.satisfy}`,
-    ])
-  }
-  for (const o of owedDecisions(root, canon)) {
-    if (named.has(o.target)) continue
-    wait(o.target, [`wait: decision · ${o.gate} ${o.target}`, `  run: witness decide ${o.gate} ${o.target} --show`])
-  }
-  const driver = resolveDriver(ctx.env, cfg.harness)
-  for (const a of aside.filter((x) => x.kind === 'conversation' || x.kind === 'merge')) {
-    if (named.has(a.target)) continue
-    if (a.kind === 'conversation') {
-      // Row 196. A target-less conversation is a grill: of a queued ask, or — with nothing
-      // queued — of what to build next, which waits on nobody, so it is said and not counted.
-      const ask = a.target === TARGETLESS ? / --ask (\S+)/.exec(a.line)?.[1] : undefined
-      if (a.target === TARGETLESS && ask === undefined) { waits.push('nothing queued — /witness <what to build> in a chat'); continue }
-      const who = a.target === TARGETLESS ? `brainstorm · ask ${ask}` : a.target
-      wait(a.target, [`wait: conversation · ${who}`,
-        ...(driver.ok ? [`  run: ${handoffLine(driver.value.harness, root, undefined)}`] : [])])
-    } else {
-      const pr = prOf(a.line) ?? (findById(canon, a.target)?.meta.pr !== undefined ? String(findById(canon, a.target)!.meta.pr) : undefined)
-      wait(a.target, [`wait: merge · ${a.target}${pr ? ` · PR #${pr}` : ''}`, ...(pr ? [`  run: gh pr merge ${pr}`] : [])])
-    }
-  }
-
-  const parked = parkedGates(root, canon).flatMap((p) => {
-    const stopped = readStream(root, p.target)
-      .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === p.gate)
-      .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
-    const why = stopped?.selected === 'policy' && stopped.note ? stopped.note : `parked at ${p.anchor}`
-    return [`parked: ${p.target} · ${p.gate} round ${p.round} — ${why}`, `  run: ${p.reopen}`]
-  })
-  // A capped target the policy could not park carries no gate (drive.ts): it is stuck too.
-  const stuck = aside.filter((a) => a.kind === 'stuck' || (a.kind === 'capped' && a.gate === undefined))
-    .map((a) => `stuck: ${a.target} — ${a.why}`)
+  // Row 203. The waits, each target once, in the order a human answers them, then the parked
+  // gates and the stuck targets: one derivation, read by the notifier and `witness wait` too.
+  const items = needsYou(root, ctx, cfg, canon, aside)
+  const waiting = items.filter((i) => WAIT_KINDS.has(i.kind))
+  const waits = waiting.flatMap((i) => i.rows)
+  const parked = items.filter((i) => i.kind === 'parked').flatMap((i) => i.rows)
+  const stuck = items.filter((i) => i.kind === 'stuck' || i.kind === 'capped').flatMap((i) => i.rows)
   const obligations = since.filter(({ entry }) => entry.t === 'deferral').map(({ entry }) => {
     const d = entry as unknown as { id: string; artifact: string; anchor: string; kind: string }
     return `obligation: ${d.id} · ${d.artifact} · ${d.anchor} — ${d.kind}`
@@ -119,8 +53,9 @@ export function driveReport(
   }
 
   const m = merged.length
-  const w = named.size
-  const p = parkedGates(root, canon).length
+  // A crash is one wait whatever it names; a notice waits on nobody.
+  const w = new Set(waiting.filter((i) => i.notice !== true).map((i) => i.kind === 'pending-txn' ? '-txn' : i.target)).size
+  const p = items.filter((i) => i.kind === 'parked').length
   const s = stuck.length
   const tally = `${m} merged · ${w} wait on you · ${p} parked · ${s} stuck`
   const lines = [
