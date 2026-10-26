@@ -23,12 +23,12 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
-import { cmd, kv, rows, shellArg, visible } from '../toon.js'
+import { cmd, kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
-import { trustOwed, type RunCommand } from '../allowlist.js'
+import { grantOf, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
@@ -336,7 +336,7 @@ function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: E
 export function trustAction(target: string, owed: RunCommand[]): NextAction {
   return {
     line: `witness trust ${target}`, target, trust: owed,
-    note: `not trusted on this machine — ${owed.map((c) => `${visible(c.cmd)} (${c.source})`).join(' · ')} · the human names each to trust it`,
+    note: `not trusted on this machine — ${owed.map(shownCmd).join(' · ')} · the human names each to trust it`,
   }
 }
 
@@ -1240,7 +1240,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // with the grant that names it — paste-ready whatever quotes the command carries.
   if (cfgR.value.autonomy && action.trust !== undefined && action.target !== undefined) {
     for (const c of action.trust) {
-      ctx.out(keptStopLine('trust-grant', `${visible(c.cmd)} (${c.source}) · witness trust ${action.target} --cmd ${shellArg(c.cmd)}`))
+      ctx.out(keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(action.target, c)}`))
     }
   }
   reportOpening(ctx, root, cfgR.value)

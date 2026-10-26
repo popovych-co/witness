@@ -4,6 +4,7 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
 import { criteriaOwner, type Canon, type CanonDoc } from './scan.js'
+import { hasControl, shellArg, visible } from './toon.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
@@ -55,6 +56,14 @@ export function untrustedCmdsFor(root: string, doc: CanonDoc | undefined): strin
 // commands every flow runs, a spec's `cmd:` criteria, a doc's `cmd:` needs. The source is what
 // the human reads before naming a command to trust.
 export interface RunCommand { cmd: string; source: string }
+
+// Security review. Every surface that asks the human to trust a command — `next`'s kept stop,
+// drive's report, the chat — renders it here: escaped, beside its source, and with the grant
+// that names it only when the verb would take it (printable ASCII, `witness trust`).
+export const shownCmd = (c: RunCommand): string => `${visible(c.cmd)} (${visible(c.source)})`
+export const grantOf = (target: string, c: RunCommand): string => hasControl(c.cmd)
+  ? 'never granted here — rewrite it in printable ASCII where it is written'
+  : `witness trust ${target} --cmd ${shellArg(c.cmd)}`
 
 // The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
 // runner IS `ship.test`, and a command listed twice is listed once, under its first source.
