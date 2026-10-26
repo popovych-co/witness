@@ -19,7 +19,11 @@ import {
   type StepState,
 } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
-import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
+import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } from '../harness.js'
+import { payloadStale } from '../install.js'
+import { NPX_LATEST } from '../version.js'
+import { liveDrive } from '../live.js'
+import { needsYou, needsYouToken } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -1290,9 +1294,25 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
   }
   // Last, so it never splits the routing unit, and raw, because both lines are commands (D120).
-  if (toDrive) {
-    const holder = driveHolder(root)
+  // Row 204: `watch:` whenever a drive holds the lock — a paused one included, which has no
+  // work of its own and waits on the human.
+  const holder = cfgR.value.autonomy && marked === undefined ? driveHolder(root) : undefined
+  if (toDrive || holder !== undefined) {
     ctx.out(holder !== undefined ? cmd('watch', watchLine(holder)) : cmd('launch', 'witness drive --detach'))
+  }
+  // Row 204. With nothing routed for the human and drive running or launched, the chat sleeps
+  // until something new needs the human: the token names the list it saw, and the mode is its
+  // harness's way to be woken. A Pi add-on older than this CLI may not wake it, so that chat is
+  // told and waits in the foreground.
+  if (chat && human === undefined && (toDrive || holder !== undefined)) {
+    const items = needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? [])
+    let mode: Harness['waitMode'] | 'foreground' = harness.waitMode
+    if (harness.name === 'pi' && payloadStale(root, harness).length > 0) {
+      ctx.out(kv('warn', `the witness Pi add-on is older than this CLI — this chat waits in the foreground · run ${NPX_LATEST} init --agent pi`))
+      mode = 'foreground'
+    }
+    ctx.out(cmd('wait', `witness wait --since ${needsYouToken(items)}`))
+    ctx.out(kv('wait-mode', mode))
   }
   return EXIT.OK
 }
