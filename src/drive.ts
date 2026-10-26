@@ -1,8 +1,9 @@
-import { closeSync, constants, fstatSync, mkdirSync, openSync, writeSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
-import { loadConfig, loadLocalConfig, type Config } from './config.js'
+import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
 import { withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
@@ -25,6 +26,8 @@ import {
 import { keepAwake } from './awake.js'
 import { driveReport, runStart } from './drive-report.js'
 import { notify } from './notify.js'
+import { writeLive, type EndReason, type LiveAside } from './live.js'
+import { needsYou, needsYouToken, WAIT_LABEL, type NeedYou } from './needs-you.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -287,6 +290,41 @@ export const DEFAULT_MAX_SPAWNS = 20
 // window (design §2).
 export const AUTONOMY_MAX_SPAWNS = 200
 
+// Row 202 (issue #56). When everything left waits on the human, an autonomous drive pauses
+// instead of quitting: it polls what a human act writes every 5 s and gives up after 12 h with
+// nothing moving. Constants, not settings (no `migrate` for an upgrade); the suite reaches them
+// through the Clock seam, and a CLI-level test bounds the idle limit through an undocumented
+// seam on WITNESS_KEEP_AWAKE_BIN's precedent.
+export const PAUSE_POLL_MS = 5_000
+export const PAUSE_IDLE_MAX_MS = 43_200_000
+const idleMaxOf = (env: Record<string, string | undefined>): number => {
+  const v = env.WITNESS_DRIVE_IDLE_MAX_MS
+  return v !== undefined && /^\d+$/.test(v) ? Number(v) : PAUSE_IDLE_MAX_MS
+}
+
+// What a human act writes: the journal, canon, the committed config, the trust list and the
+// machine config — each file's size and mtime, hashed. Never drive's own log or its live
+// folder, which it writes itself while paused.
+export function watchSignature(root: string): string {
+  const p = canonPaths(root)
+  const files: string[] = []
+  for (const dir of [join(root, '.witness', 'journal'), join(root, p.specs), join(root, p.plans), join(root, p.designs)]) {
+    try {
+      for (const n of readdirSync(dir, { recursive: true }) as string[]) files.push(join(dir, n))
+    } catch { /* absent: nothing to watch there yet */ }
+  }
+  for (const f of ['witness.config.yaml', join('.witness', 'allow.json'), join('.witness', 'config.local.yaml')]) files.push(join(root, f))
+  const parts = files.sort().map((f) => {
+    try {
+      const st = statSync(f)
+      return st.isFile() ? `${f}:${st.size}:${st.mtimeMs}` : ''
+    } catch {
+      return `${f}:-`
+    }
+  })
+  return createHash('sha1').update(parts.join('\n')).digest('hex')
+}
+
 // Row 180. A target drive stops working on — none of these ends the run. Held in memory and
 // never journaled (D145): the report reads them at the end. Row 196: one set aside for a human
 // (kept, decision, conversation) records `key0`, its progress key then, and is drive's again
@@ -358,7 +396,7 @@ export async function driveLoop(
   const progress = new Map<string, string>()
   const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
   let spawns = 0
-  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | undefined
+  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | 'idle-limit' | undefined
   let idle: string | undefined
   // Row 182. A usage limit pauses every lane: nothing new starts until the reset, and the
   // running sessions finish, because they meet the same account. Every wait is printed, one
@@ -424,6 +462,7 @@ export async function driveLoop(
       const now = ownNext(key)
       if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
       aside.delete(key)
+      pauseSince = undefined                               // a human act: the idle clock starts over
       ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
     }
   }
@@ -631,10 +670,82 @@ export async function driveLoop(
   }
 
   const start = runStart(root)
-  const awake = keepAwake(ctx.env, process.platform, process.pid)
+  let awake = keepAwake(ctx.env, process.platform, process.pid)
+  let awakeHeld = true
   ctx.out(awake.command !== undefined
     ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
+  // Row 182, amended by row 202: held while a session runs, released while drive waits on the
+  // human — a paused drive lets the machine sleep — and taken again before the next spawn.
+  const holdAwake = () => {
+    if (awakeHeld) return
+    awake = keepAwake(ctx.env, process.platform, process.pid)
+    awakeHeld = true
+  }
+  const releaseAwake = () => {
+    if (!awakeHeld) return
+    awake.stop()
+    awakeHeld = false
+  }
+
+  // Row 203. Drive's set-asides, published for a chat waiting beside it: ids and kinds only. A
+  // grill with nothing queued waits on nobody and is not published.
+  const notice = (a: Aside): boolean => a.target === TARGETLESS && a.kind === 'conversation' && !/ --ask /.test(a.line)
+  const publish = (ended?: EndReason) => {
+    if (!autonomous) return
+    const asides: LiveAside[] = [...aside.values()].filter((a) => !notice(a)).map((a) => ({
+      target: a.target, kind: a.kind, ...(a.gate !== undefined ? { gate: a.gate } : {}), ...(a.stop !== undefined ? { stop: a.stop } : {}),
+    }))
+    writeLive(root, { pid: process.pid, asides, ...(ended !== undefined ? { ended } : {}) })
+  }
+  // Row 203 (Q2). Each item that newly needs the human is notified once per run (n5), a burst
+  // as one notification, started in the background so no round waits on it. Mid-run, an item
+  // whose flow a session is working on is that session's to settle, and a crash is drive's own
+  // to recover; both are said only once drive pauses.
+  const notified = new Set<string>()
+  const busy = (t: string): boolean => [...lanes.keys()].some((l) => l === t || family(l).includes(t) || family(t).includes(l))
+  const notifyNew = (items: readonly NeedYou[]) => {
+    const fresh = items.filter((i) => i.notice !== true && !notified.has(i.key))
+    if (fresh.length === 0) return
+    for (const i of fresh) notified.add(i.key)
+    const named = fresh.slice(0, 3).map((i) => i.kind === 'pending-txn' ? WAIT_LABEL[i.kind] : `${WAIT_LABEL[i.kind]} · ${i.target}`)
+    const local = loadLocalConfig(root)
+    notify(local.ok ? local.value.notify : undefined, 'witness drive',
+      `witness · ${basename(root)}: ${named.join(' · ')}${fresh.length > 3 ? ` (+${fresh.length - 3})` : ''}`,
+      process.platform, { wait: false })
+  }
+  const owed = (): NeedYou[] => needsYou(root, ctx, cfg, loadCanon(root), [...aside.values()])
+
+  // Row 202. Everything left waits on the human: say what, notify, let the machine sleep, and
+  // watch for the act. A change runs a round as usual (take-back, settle pass, fill); a change
+  // that releases nothing re-enters the pause silently. True to run a round, false to end.
+  const idleMax = idleMaxOf(ctx.env)
+  let pauseSince: number | undefined
+  let pausePrinted: string | undefined
+  const pauseForHuman = async (): Promise<boolean> => {
+    const items = owed().filter((i) => i.notice !== true)
+    const token = needsYouToken(items)
+    if (token !== pausePrinted) {
+      ctx.out(`drive: waiting on you — ${items.length} item(s)`)
+      items.flatMap((i) => i.rows).forEach((l) => ctx.out(l))
+      pausePrinted = token
+    }
+    notifyNew(items)
+    releaseAwake()
+    publish()
+    pauseSince ??= clock.now()
+    const signature = watchSignature(root)
+    for (;;) {
+      if (clock.now() - pauseSince >= idleMax) {
+        ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
+        stop = 'idle-limit'
+        return false
+      }
+      await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
+      if (signalled !== undefined) return false
+      if (watchSignature(root) !== signature) return true
+    }
+  }
   // Final review F9. Autonomy is re-read from the committed config before every round, on
   // A1's precedent (ship re-reads it at merge time): a human who turns it off mid-run takes
   // the wheel at once — no stop of theirs is settled, and no new session starts.
@@ -649,6 +760,7 @@ export async function driveLoop(
 
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
+  publish()
   try {
     for (;;) {
       stillAutonomous()
@@ -684,13 +796,21 @@ export async function driveLoop(
         if (await capped(action, key)) continue
         if (unmoved(key, action)) continue
         spawns += 1
+        holdAwake()
+        pauseSince = undefined
         lanes.set(key, launch(step, action, spawns))
+      }
+      if (autonomous) {
+        publish()
+        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target)))
       }
       if (lanes.size === 0) {
         if (!stop && !signalled && pausedUntil > clock.now()) {
           await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted])
           continue
         }
+        // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
+        if (autonomous && !stop && !signalled && [...aside.values()].some((a) => !notice(a)) && await pauseForHuman()) continue
         break
       }
       const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
@@ -702,7 +822,8 @@ export async function driveLoop(
     else if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
     // Row 184. One report when nothing else can move, and for an autonomous run one
     // notification — a human at a TTY prompt is already watching.
-    const stopped = signalled !== undefined ? `signal ${signalled}` : stop
+    // The idle limit is no failure: the run waited on the human as long as it could.
+    const stopped = signalled !== undefined ? `signal ${signalled}` : stop === 'idle-limit' ? undefined : stop
     refreshAside()
     const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stopped ? { stopped } : {}) })
     report.lines.forEach((l) => ctx.out(l))
@@ -718,7 +839,8 @@ export async function driveLoop(
   } finally {
     process.removeListener('SIGINT', onSignal)
     process.removeListener('SIGTERM', onSignal)
-    awake.stop()
+    publish(signalled !== undefined ? 'signal' : stop ?? 'done')
+    releaseAwake()
   }
 }
 

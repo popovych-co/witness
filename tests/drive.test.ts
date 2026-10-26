@@ -65,8 +65,12 @@ async function startedFlows(specs: string[], opts: { shipping?: string } = {}): 
   writeLocalConfig(repo.root, { notify: noopOpener() })
   return repo
 }
+// Row 202: a run left with only the human's work pauses for them. These tests are about what
+// comes before, so the human never comes back: the idle limit is reached at once (the pause's
+// own tests are tests/drive-pause.test.ts).
+const NO_WAIT = { WITNESS_DRIVE_IDLE_MAX_MS: '0' }
 const autoCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
-  fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+  fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...NO_WAIT, ...env }), out: (l) => out.push(l) })
 const script = (body: string): string => {
   const bin = join(fakeScenario(), 'agent')
   writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
@@ -823,15 +827,18 @@ describe('coming back (B6)', () => {
     return { bin, got: join(dir, 'got') }
   }
 
-  it('an autonomous run ends with the report and one notification', async () => {
+  // Row 203 (Q2): the item notified when it first needs the human, once, and the run's end.
+  it('an autonomous run ends with the report, its new item notified once and the end once', async () => {
     const repo = await startedFlows(['a'])
     const n = recorder()
     writeLocalConfig(repo.root, { notify: n.bin })
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0') }, out), {})
     expect(out).toContain('drive: done — 0 merged · 0 wait on you · 0 parked · 1 stuck')
-    expect(readFileSync(n.got, 'utf8').trim().split('\n'))
-      .toEqual([`witness drive — ${basename(repo.root)} · 0 merged · 0 wait on you · 0 parked · 1 stuck`])
+    await expect.poll(() => readFileSync(n.got, 'utf8').trim().split('\n').sort(), { timeout: 5000 }).toEqual([
+      `witness · ${basename(repo.root)}: stuck · a-plan-1`,
+      `witness drive — ${basename(repo.root)} · 0 merged · 0 wait on you · 0 parked · 1 stuck`,
+    ].sort())
     expect(out).toContain(`notify: sent via ${n.bin}`)
   }, 60000)
 
@@ -853,7 +860,7 @@ describe('one command (B1)', () => {
     writeLocalConfig(repo.root, { notify: noopOpener() })
     return repo
   }
-  const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' }
+  const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true', ...NO_WAIT }
 
   it('names the stop the platform has (row 201)', () => {
     const h = { pid: 7, log: '/r/.witness/drive.log' }
