@@ -82,7 +82,7 @@ describe('witness wait (D204)', () => {
       const clock = scripted({ 3: () => writeLive(repo.root, { pid: process.pid, asides: [{ target: 'a-plan-1', kind: 'stuck' }] }) })
       await waitLoop(repo.root, ctxOf(repo, out), cfgOf(repo), { since: tokenNow(repo) }, clock)
       expect(clock.slept.length).toBe(3)
-      expect(out).toEqual(['wait: needs you — 1 item(s)', 'stuck: a-plan-1 — witness log a-plan-1',
+      expect(out).toEqual(['wait: needs you — 1 item(s)', 'stuck: a-plan-1 — witness log a-plan-1', '  run: witness retry a-plan-1',
         `token: ${tokenNow(repo, [{ target: 'a-plan-1', kind: 'stuck' }])}`])
     } finally { release() }
   })
