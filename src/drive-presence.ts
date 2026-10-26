@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { shellArg } from './toon.js'
 
 // Row 180. What a process knows about the drive it runs under. Drive marks every child
 // session with WITNESS_DRIVE=<target>: the marker is the recursion guard (a marked session's
@@ -103,8 +104,6 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
   }
 }
 
-// A path is quoted only when it needs it, so the common line stays the one a human types.
-const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
 
 // Row 201: `kill` is not a Windows command, and PowerShell's alias ends drive alone.
 export function watchLine(h: DriveHolder, platform: NodeJS.Platform = process.platform): string {

@@ -1,3 +1,7 @@
+// A shell word is quoted only when it needs it, so the common line stays the one a human
+// types — a path in drive's watch line, a command in a `--cmd` grant (row 205).
+export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
+
 function esc(value: unknown): string {
   const s = String(value ?? '')
   return /[,"\n]|^\s|\s$/.test(s) ? `"${s.replaceAll('"', '""')}"` : s

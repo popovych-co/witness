@@ -107,7 +107,7 @@ const VERB_USAGE: Record<string, string> = {
   status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
   'step-close': 'witness step-close <plan-id> --step <id>',
   sync: 'witness sync',
-  trust: 'witness trust <artifact-id> [--yes]',
+  trust: "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]",
   'test-evidence': 'witness test-evidence <plan-id> --phase red|green [--step <id>]',
   'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
 }

@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
+import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
-import type { CanonDoc } from './scan.js'
+import { criteriaOwner, type Canon, type CanonDoc } from './scan.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
@@ -48,6 +49,51 @@ export function untrustedCmdsFor(root: string, doc: CanonDoc | undefined): strin
   const cmds = list.filter((c) => !held.has(String(c.id))).map((c) => c.cmd).filter((c): c is string => typeof c === 'string')
   const trusted = new Set(load(root))
   return [...new Set(cmds.filter((c) => !trusted.has(c)))]
+}
+
+// Row 205. A command witness runs on this repo's behalf, and where it comes from: the config
+// commands every flow runs, a spec's `cmd:` criteria, a doc's `cmd:` needs. The source is what
+// the human reads before naming a command to trust.
+export interface RunCommand { cmd: string; source: string }
+
+// The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
+// runner IS `ship.test`, and a command listed twice is listed once, under its first source.
+export function configCommands(cfg: Config): RunCommand[] {
+  const out: RunCommand[] = []
+  const add = (cmd: string | undefined, source: string) => {
+    if (cmd !== undefined && cmd !== '' && !out.some((c) => c.cmd === cmd)) out.push({ cmd, source })
+  }
+  if (cfg.criteria.runner !== 'full-suite') add(cfg.criteria.runner, 'criteria.runner')
+  add(cfg.ship.test, 'ship.test')
+  add(cfg.ship.lint, 'ship.lint')
+  return out
+}
+
+const cmdCriteria = (doc: CanonDoc): RunCommand[] =>
+  (Array.isArray(doc.meta.criteria) ? (doc.meta.criteria as Array<Record<string, unknown>>) : [])
+    .filter((c) => typeof c.cmd === 'string')
+    .map((c) => ({ cmd: c.cmd as string, source: `cmd: ${String(c.id)}` }))
+
+const cmdNeeds = (doc: CanonDoc): RunCommand[] =>
+  (Array.isArray(doc.meta.needs) ? (doc.meta.needs as Array<Record<string, unknown>>) : [])
+    .flatMap((n, i) => typeof n.cmd === 'string'
+      ? [{ cmd: n.cmd, source: `need: ${typeof n.id === 'string' ? n.id : i + 1}` }] : [])
+
+// Row 205. Every command a target's flow runs: the config commands, the `cmd:` criteria of the
+// doc that owns its criteria (the spec, for a plan, which carries none of its own), and the
+// target's own `cmd:` needs (`start` evaluates a plan's). Held criteria are listed too, so a
+// human may trust one ahead of time.
+export function commandsRun(cfg: Config, canon: Canon, doc: CanonDoc): RunCommand[] {
+  const owner = criteriaOwner(canon, String(doc.meta.id)) ?? doc
+  return [...configCommands(cfg), ...cmdCriteria(owner), ...cmdNeeds(doc)]
+}
+
+// `witness trust` with no target: everything the repo runs, each doc's commands under its id.
+export function repoCommands(cfg: Config, canon: Canon): Array<RunCommand & { doc: string }> {
+  return [
+    ...configCommands(cfg).map((c) => ({ ...c, doc: '-' })),
+    ...canon.docs.flatMap((d) => [...cmdCriteria(d), ...cmdNeeds(d)].map((c) => ({ ...c, doc: String(d.meta.id) }))),
+  ]
 }
 
 export async function ensureTrusted(root: string, ctx: Ctx, cmd: string): Promise<'trusted' | 'declined' | 'blocked'> {
