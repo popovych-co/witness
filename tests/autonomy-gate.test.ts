@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
@@ -99,6 +99,7 @@ it('a command trust blocked is the human\'s to grant (kept stop)', async () => {
   }
   const scenario = fakeScenario(); putVerdict(scenario, SHIP_CLEAN)
   expect(await runGate(capture(repo.root, scenario).ctx, 'implement', planId, F)).toBe(0)
+  rmSync(join(repo.root, '.witness', 'allow.json'))             // a machine that trusts nothing yet
   const h = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
   expect(await runGate(h.ctx, 'ship', planId, F)).toBe(1)
   expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship')).toEqual([])

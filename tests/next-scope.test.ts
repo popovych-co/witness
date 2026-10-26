@@ -10,6 +10,7 @@ import { computeNext, NOTHING_OWED } from '../src/verbs/next.js'
 import {
   approve, autonomyOn, fakeCtx, fixtureEnv, fakeScenario, gateEnv, ghState, hermeticEnv, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writePlan, writeSpec, type TestRepo,
+  trustConfig,
 } from './helpers.js'
 
 const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
@@ -25,6 +26,7 @@ async function flowAndDraft(): Promise<TestRepo & { env: Record<string, string> 
   approve(repo, 'auth-refresh-plan-1')
   await repo.cli(['start', 'auth-refresh-plan-1'])
   repo.setMeta('auth-refresh-plan-1', { pr: 7 })
+  trustConfig(repo)
   await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })
   approve(repo, 'auth-mfa')
   await writePlan(repo, 'auth-mfa-plan-1', { parent: 'auth-mfa', steps: [{ id: 's1', title: 'mfa', criteria: ['ac-mfa'] }] })

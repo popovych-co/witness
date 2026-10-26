@@ -96,6 +96,34 @@ export function repoCommands(cfg: Config, canon: Canon): Array<RunCommand & { do
   ]
 }
 
+// Row 205 (issue #56, P5). The commands the routed action's verb runs that this machine does
+// not trust yet, checked before any work: found only inside the session, a refusal journaled
+// nothing, `next` routed the same line again and drive respawned it to the cap. Only the
+// commands with no "no" path — the runner (the template, or ship.test in full-suite) for the
+// evidence verbs and the implement gate; that plus ship.test and ship.lint for ship; a start's
+// own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
+// headless gate, so trust is never the toll, and a gate whose check failed on one reaches the
+// settle pass's trust-grant stop instead.
+export function trustOwed(
+  root: string, env: Record<string, string | undefined>, cfg: Config, canon: Pick<Canon, 'docs'>,
+  action: { line: string; target?: string },
+): RunCommand[] {
+  if (env.WITNESS_TRUST_CMDS === '1') return []
+  const config = configCommands(cfg)
+  const runner = config.filter((c) => c.source === (cfg.criteria.runner === 'full-suite' ? 'ship.test' : 'criteria.runner'))
+  const line = `${action.line} `
+  const run: RunCommand[] =
+    /^witness (test-evidence|verify-red|gate implement|check --drift) /.test(line) ? runner
+      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => c.source === 'ship.test' || c.source === 'ship.lint')]
+        : /^witness start /.test(line) && action.target !== undefined
+          ? (() => { const doc = canon.docs.find((d) => d.meta.id === action.target); return doc ? cmdNeeds(doc) : [] })()
+          : []
+  const trusted = new Set(load(root))
+  const out: RunCommand[] = []
+  for (const c of run) if (!trusted.has(c.cmd) && !out.some((o) => o.cmd === c.cmd)) out.push(c)
+  return out
+}
+
 export async function ensureTrusted(root: string, ctx: Ctx, cmd: string): Promise<'trusted' | 'declined' | 'blocked'> {
   if (ctx.env.WITNESS_TRUST_CMDS === '1') return 'trusted'
   const commands = load(root)

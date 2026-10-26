@@ -5,7 +5,9 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { configCommands, grantCommands } from '../src/allowlist.js'
 import { main, type Ctx } from '../src/cli.js'
+import { loadConfig } from '../src/config.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
 import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
@@ -455,6 +457,16 @@ export function fixSingleFixture(repo: TestRepo): void {
   repo.git('commit', '-m', 'fix token rotation')
 }
 
+// Row 205. A repo whose config commands this machine trusts, as a human who set the runner up
+// has granted them (P8: fewhats and HYC do). `next` checks trust before it routes, so a flow
+// fixture that runs its evidence must start from a trusted machine, or every route it asks
+// about is the trust act. A test about trust itself overwrites allow.json.
+export function trustConfig(repo: TestRepo): void {
+  const cfg = loadConfig(repo.root)
+  if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
+  grantCommands(repo.root, configCommands(cfg.value).map((c) => c.cmd))
+}
+
 export async function shippableRepo(
   opts: { commit?: boolean } = {},
 ): Promise<{ repo: TestRepo; wt: string; planId: string; specId: string }> {
@@ -465,6 +477,7 @@ export async function shippableRepo(
   writeFileSync(join(repo.root, 'witness.config.yaml'),
     configYaml(withValues(singlePatch('filtered'), { ship: { test: 'true', lint: 'true' } })))
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+  trustConfig(repo)
   await writeSpec(repo, 'auth-refresh')          // criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }]
   approve(repo, 'auth-refresh')
   await writePlan(repo, 'auth-refresh-plan-1')
@@ -518,6 +531,7 @@ export async function threeStepPlan(extra: Record<string, unknown> = {}, manifes
   const repo = await seededRepo()
   writeFileSync(join(repo.root, 'witness.config.yaml'), configYaml(withValues(singlePatch('filtered'), extra)))
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+  trustConfig(repo)
   await writeSpec(repo, 'auth-refresh')
   approve(repo, 'auth-refresh')
   const written = await writePlan(repo, 'auth-refresh-plan-1', manifest, THREE_STEP_BODY)

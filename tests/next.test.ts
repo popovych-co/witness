@@ -6,7 +6,8 @@ import { worktreePath } from '../src/worktree.js'
 import {
   SPEC_META, TOKEN_BROKEN, TOKEN_FIXED, approve, autonomyOn, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, fixturePath,
   gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, singleConfig, stampLive, startedThreeStepPlan, untaggedRed,
-  witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo, patchConfig} from './helpers.js'
+  witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo, patchConfig, trustConfig,
+} from './helpers.js'
 
 describe('witness next — the ladder', () => {
   it('walks recap → write → gate decompose → decide → plan-stage', async () => {
@@ -32,6 +33,7 @@ describe('witness next — the ladder', () => {
 
   it('walks plan gate → start → implement stage → implement gate → ship', async () => {
     const repo = await seededRepo()
+    trustConfig(repo)
     await writeSpec(repo, 'auth-refresh')
     approve(repo, 'auth-refresh')
     await writePlan(repo, 'auth-refresh-plan-1')
@@ -196,6 +198,7 @@ describe('the evidence row names the phase it wants', () => {
     const repo = await seededRepo()
     writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered'))
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+    trustConfig(repo)
     await writeSpec(repo, 'auth-refresh')
     approve(repo, 'auth-refresh')
     await writePlan(repo, 'auth-refresh-plan-1')
@@ -311,6 +314,7 @@ describe('next routes the next unfinished plan step', () => {
     const repo = await seededRepo()
     writeFileSync(join(repo.root, 'witness.config.yaml'), singleConfig('filtered'))
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+    trustConfig(repo)
     await writeSpec(repo, 'auth-refresh')
     approve(repo, 'auth-refresh')
     await writePlan(repo, 'auth-refresh-plan-1')
