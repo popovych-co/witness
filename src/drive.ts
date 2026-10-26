@@ -16,6 +16,7 @@ import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, readStream } from './journal.js'
 import { movesFlow } from './progress.js'
+import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import {
@@ -33,6 +34,8 @@ export type DriveStep =
   | { kind: 'decision'; gate?: string; target?: string; block?: string[] }
   | { kind: 'conversation'; line: string }
   | { kind: 'merge'; line: string }
+  // Row 205. A config command the step runs is untrusted on this machine: the human's grant.
+  | { kind: 'kept'; stop: 'trust-grant'; line: string }
   | { kind: 'idle' }
 
 // The rule table is an ORDERED FIRST-MATCH list, on `recommend.ts`'s precedent: a
@@ -56,6 +59,10 @@ export function classifyAction(action: NextAction, root: string, opts: { autonom
     const [, , gate, target] = line.split(' ')
     return { kind: 'decision', gate, target: target ?? action.target }
   }
+  // Row 205 (issue #56). A step whose runner, ship lanes or cmd: need this machine does not
+  // trust would only be refused inside the session — the refusal journaled nothing, so drive
+  // respawned it to the cap. In both modes it waits for the human, and no session is spent.
+  if (action.trust !== undefined && action.trust.length > 0) return { kind: 'kept', stop: 'trust-grant', line }
   // D121: a block is the CLI saying the human is choosing, not being told — so a runnable
   // line under a block (the recovery fork, `N ready — ranked below`) is still a stop.
   // Below the decide rule so a gate decision keeps its gate/target rather than its block.
@@ -285,7 +292,10 @@ export const AUTONOMY_MAX_SPAWNS = 200
 // (kept, decision, conversation) records `key0`, its progress key then, and is drive's again
 // once a human moves it; drive's own verdicts (stuck, capped) and the merge stay aside.
 export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
-export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string }
+export interface Aside {
+  target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string
+  trust?: RunCommand[]   // row 205: a trust grant's commands, each with its source
+}
 
 const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
@@ -445,6 +455,14 @@ export async function driveLoop(
   }
 
   const standAside = async (step: Exclude<DriveStep, { kind: 'spawn' | 'idle' }>, action: NextAction, key: string) => {
+    if (step.kind === 'kept') {
+      ctx.out(`drive: waits on you — ${action.target ?? 'untargeted work'} · ${KEPT_STOP_NAMES[step.stop]}`)
+      setAside(key, {
+        kind: 'kept', line: step.line, why: KEPT_STOP_NAMES[step.stop], stop: step.stop,
+        ...(action.trust !== undefined ? { trust: action.trust } : {}), key0: keyOf(action),
+      })
+      return
+    }
     if (step.kind === 'conversation') {
       ctx.out(`drive: conversation — ${step.line}`)
       ctx.out('help: run /witness in a chat — drive takes it back when you are done')
@@ -564,7 +582,11 @@ export async function driveLoop(
       if (line !== undefined) ctx.out(line)
       if (s.kind === 'kept') {
         ctx.out(`drive: waits on you — ${r.target} · ${KEPT_STOP_NAMES[s.stop]}`)
-        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop, key0: keyOf(ownNext(r.target)) })
+        const trust = s.untrusted !== undefined ? sourced(cfg, canonNow, r.target, s.untrusted) : undefined
+        setAside(r.target, {
+          kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop,
+          ...(trust !== undefined ? { trust } : {}), key0: keyOf(ownNext(r.target)),
+        })
       } else if (s.kind === 'left') {
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
         setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })

@@ -1277,3 +1277,53 @@ describe('drive takes back what a human moved (row 196)', () => {
     expect(out.filter((l) => l.startsWith('wait: conversation'))).toEqual([])
   }, 120000)
 })
+
+// Row 205 (issue #56, P1). A step whose config command this machine does not trust is the
+// human's: drive spends no session on it, sets it aside as a trust grant, and the report names
+// each command with the grant that takes it.
+describe('a trust grant waits on the human without a session (D205)', () => {
+  async function untrustedFlow(): Promise<TestRepo> {
+    const repo = await seededRepo()
+    patchConfig(repo, { criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' }, ship: { test: 'pnpm test', lint: 'pnpm lint' } })
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'full-suite')
+    await writeSpec(repo, 'ingest', { criteria: [{ id: 'ac-i', test: '@spec:ingest' }] })
+    approve(repo, 'ingest')
+    await writePlan(repo, 'ingest-plan-1', { parent: 'ingest', steps: [{ id: 's1', title: 'ingest', criteria: ['ac-i'] }] })
+    approve(repo, 'ingest-plan-1')
+    await repo.cli(['start', 'ingest-plan-1'])
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    return repo
+  }
+
+  it('spawns nothing for a trust-blocked step and reports the grant (P1)', async () => {
+    const repo = await untrustedFlow()
+    const marker = join(fakeScenario(), 'spawned')
+    const agent = script(`touch ${marker}`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_TRUST_CMDS: '' }, out), {}, fakeClock(0))
+    expect(existsSync(marker)).toBe(false)
+    expect(out).toContain('drive: waits on you — ingest-plan-1 · trust grant')
+    expect(out).toContain('wait: trust grant · ingest-plan-1 · pnpm test (ship.test)')
+    expect(out).toContain("  run: witness trust ingest-plan-1 --cmd 'pnpm test'")
+    expect(out.join('\n')).not.toContain('<gate>')
+  }, 60000)
+
+  it('a drive started with WITNESS_TRUST_CMDS=1 spawns the step (Review Focus 1)', async () => {
+    const repo = await untrustedFlow()
+    const marker = join(fakeScenario(), 'spawned')
+    const agent = script(`touch ${marker}`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_TRUST_CMDS: '1' }, out), { maxSpawns: 1 }, fakeClock(0))
+    expect(existsSync(marker)).toBe(true)
+    expect(out.join('\n')).not.toContain('trust grant ·')
+  }, 60000)
+
+  it('classifyAction reads a trust act as kept', () => {
+    expect(classifyAction({ line: 'witness trust p1', target: 'p1', trust: [{ cmd: 'pnpm test', source: 'ship.test' }] }, '/r'))
+      .toEqual({ kind: 'kept', stop: 'trust-grant', line: 'witness trust p1' })
+    expect(classifyAction({ line: 'witness trust p1', target: 'p1', trust: [{ cmd: 'pnpm test', source: 'ship.test' }] }, '/r', { autonomy: true }))
+      .toEqual({ kind: 'kept', stop: 'trust-grant', line: 'witness trust p1' })
+  })
+})

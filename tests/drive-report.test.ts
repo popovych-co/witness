@@ -59,6 +59,28 @@ describe('the run report (B6)', () => {
   })
 })
 
+// Row 205. A gate's kept trust grant names each command with its source and the grant that
+// takes it — the `<gate>` placeholder is gone — and a command the verb would refuse gets a note.
+describe('the trust grant in the report (D205)', () => {
+  it('names each command, its source and its grant', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error('config')
+    const r = driveReport(repo.root, fakeCtx(repo.root), cfg.value, runStart(repo.root), [
+      { target: 'auth-refresh', kind: 'kept', stop: 'trust-grant', gate: 'ship', line: 'l', why: 'trust grant',
+        trust: [{ cmd: 'npm test', source: 'ship.test' }, { cmd: 'bad\u001bcmd', source: 'ship.lint' }] },
+      { target: 'auth-refresh-plan-9', kind: 'kept', stop: 'trust-grant', line: 'l', why: 'trust grant' },
+    ], { autonomous: true })
+    expect(r.lines).toContain('wait: trust grant · auth-refresh · npm test (ship.test)')
+    expect(r.lines).toContain("  run: witness trust auth-refresh --cmd 'npm test'")
+    expect(r.lines).toContain('wait: trust grant · auth-refresh · bad\\x1bcmd (ship.lint)')
+    expect(r.lines).toContain('  note: never granted here — rewrite it in printable ASCII where it is written')
+    expect(r.lines).toContain('  run: witness trust auth-refresh-plan-9')
+    expect(r.lines.join('\n')).not.toContain('<gate>')
+  })
+})
+
 describe('notify (B6)', () => {
   it('renders the platform notifier and a configured command', () => {
     expect(notifyArgv('darwin', undefined, 'witness drive', 'a "b" c'))

@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
+import { grantOf, shownCmd } from './allowlist.js'
 import type { Aside } from './drive.js'
 import { TARGETLESS } from './drive-presence.js'
 import { handoffLine, resolveDriver } from './harness.js'
@@ -8,6 +9,7 @@ import { readStream, streamIds, type Entry } from './journal.js'
 import { unmetNeeds } from './needs.js'
 import type { DecisionEntry } from './rounds.js'
 import { findById, loadCanon } from './scan.js'
+import { hasControl } from './toon.js'
 import { pendingTxn } from './txn.js'
 import { owedDecisions, parkedGates } from './verbs/next.js'
 import { recoverChoice } from './verbs/recover.js'
@@ -25,6 +27,17 @@ export function runStart(root: string): RunStart {
 export function entriesSince(root: string, start: RunStart): Array<{ stream: string; entry: Entry }> {
   return streamIds(root).flatMap((stream) =>
     readStream(root, stream).slice(start.lines.get(stream) ?? 0).map((entry) => ({ stream, entry })))
+}
+
+// Row 205. One wait per command, each with its source and the grant that names it — never a
+// `<gate>` placeholder for a target no gate holds. A command the verb would not take (anything
+// outside printable ASCII) gets a note, never a `run:`.
+function trustRows(a: Aside): string[] {
+  if (a.trust === undefined || a.trust.length === 0) return [`wait: trust grant · ${a.target}`, `  run: witness trust ${a.target}`]
+  return a.trust.flatMap((c) => [
+    `wait: trust grant · ${a.target} · ${shownCmd(c)}`,
+    `  ${hasControl(c.cmd) ? 'note' : 'run'}: ${grantOf(a.target, c)}`,
+  ])
 }
 
 export interface Report { lines: string[]; summary: string; merged: number; waiting: number; parked: number; stuck: number }
@@ -53,7 +66,7 @@ export function driveReport(
     if (named.has(a.target)) continue
     wait(a.target, a.stop === 'design-look'
       ? [`wait: design look · ${a.target}`, `  run: witness design ${a.target} --open`, `  then: witness decide design ${a.target} --show`]
-      : [`wait: trust grant · ${a.target} · in a terminal · answer each prompt`, `  run: witness gate ${a.gate ?? '<gate>'} ${a.target}`])
+      : trustRows(a))
   }
   for (const u of unmetNeeds(canon)) {
     const held = u.type === 'spec' && u.holds.length > 0

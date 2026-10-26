@@ -97,6 +97,14 @@ export function commandsRun(cfg: Config, canon: Canon, doc: CanonDoc): RunComman
   return [...configCommands(cfg), ...cmdCriteria(owner), ...cmdNeeds(doc)]
 }
 
+// A gate's trust-grant stop carries bare commands (its checks' `untrusted`); the report and the
+// chat name each with its source, read from what the target's flow runs.
+export function sourced(cfg: Config, canon: Canon, target: string, cmds: readonly string[]): RunCommand[] {
+  const doc = canon.docs.find((d) => d.meta.id === target)
+  const known = doc !== undefined ? commandsRun(cfg, canon, doc) : configCommands(cfg)
+  return cmds.map((cmd) => ({ cmd, source: known.find((c) => c.cmd === cmd)?.source ?? 'gate' }))
+}
+
 // `witness trust` with no target: everything the repo runs, each doc's commands under its id.
 export function repoCommands(cfg: Config, canon: Canon): Array<RunCommand & { doc: string }> {
   return [

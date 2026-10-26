@@ -24,7 +24,8 @@ export type Settled =
   | { kind: 'none' }
   | { kind: 'decided'; by: 'policy' | 'arbiter'; decision: DecisionEntry['decision']; rule: string }
   | { kind: 'routed'; line: string }                                       // a re-run the CLI names and never executes
-  | { kind: 'kept'; stop: KeptStop; line: string }
+  // Row 205: a trust grant carries the commands its gate's checks found untrusted.
+  | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   | { kind: 'left'; why: string; code: number; limit?: string }            // limit: the usage limit that refused the arbiter
 
 // The commands a failed check of `run` names that the repo STILL does not trust. A grant
@@ -100,7 +101,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     const line = keptStopLine(policy.stop, detail)
     renderDecision(block).forEach((l) => ctx.out(l))
     ctx.out(line)
-    return { kind: 'kept', stop: policy.stop, line }
+    return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }
   }
 
   if (policy.kind === 'take') {
