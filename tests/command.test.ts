@@ -104,7 +104,11 @@ describe('the chat keeps only the human\'s items (row 195)', () => {
     const trust = rows.find((r) => r.includes('`kept-stop: trust grant`'))!
     expect(trust).toContain('`--cmd`')
     expect(trust).toContain('a bare "y" grants nothing')
-    expect(trust).toContain('**END YOUR TURN**')
+    // final review I2: the kept stop renders and keeps matching, so a `launch:` below it still
+    // starts drive's other work; the `next: witness trust` row asks and ends the turn
+    expect(trust).not.toContain('END YOUR TURN')
+    expect(trust).toContain('keep matching the rows below')
+    expect(rows.find((r) => r.startsWith('| `next:` names `witness trust`'))).toContain('**END YOUR TURN**')
     const need = rows.find((r) => r.includes('`kept-stop: unmet need`'))!
     expect(need).toContain('"done"')
     expect(need).toContain('one need at a time')
