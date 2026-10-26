@@ -1,4 +1,4 @@
-import { grantOf, trustedCommands, untrustedCmdsFor } from './allowlist.js'
+import { grantOf, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
 import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
@@ -10,7 +10,7 @@ import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal } from './refusal.js'
 import type { DecisionEntry, GateRunEntry } from './rounds.js'
 import { criteriaOwner, loadCanon } from './scan.js'
-import { cmd, kv, visible } from './toon.js'
+import { cmd, kv } from './toon.js'
 import { actOfCommand, applyDecision, type DecisionAct } from './verbs/decide.js'
 import { owedDecisions, owedRun } from './verbs/next.js'
 import { pendingTxn } from './txn.js'
@@ -95,10 +95,11 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
 
   if (policy.kind === 'human') {
     // Row 194: the gate ran only on a look the human opened, so approving is their one act.
-    const detail = policy.stop === 'design-look'
-      ? `the human approves the screen or sends a note — witness decide design ${target} --show`
-      : `${untrusted.map(visible).join(' · ')} — the human names each in the chat: ${untrusted.map((cmd) => grantOf(target, { cmd })).join(' · ')}`
-    const line = keptStopLine(policy.stop, detail)
+    // Row 205 (final review): a trust grant is one line per command — escaped, with its source and
+    // the grant that names it — as `next`'s pre-flight prints it, so the chat shows the source.
+    const line = policy.stop === 'design-look'
+      ? keptStopLine(policy.stop, `the human approves the screen or sends a note — witness decide design ${target} --show`)
+      : sourced(cfg, canon, target, untrusted).map((c) => keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(target, c)}`)).join('\n')
     renderDecision(block).forEach((l) => ctx.out(l))
     ctx.out(line)
     return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }

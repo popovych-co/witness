@@ -104,8 +104,9 @@ it('a command trust blocked is the human\'s to grant (kept stop)', async () => {
   expect(await runGate(h.ctx, 'ship', planId, F)).toBe(1)
   expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship')).toEqual([])
   expect(callFor(scenario, 'arbiter')).toBeUndefined()
-  expect(h.out()).toContain('kept-stop: trust grant — true · ')
-  expect(h.out()).toContain('the human names each in the chat: witness trust auth-refresh-plan-1 --cmd true')
+  // final review: one line per command, with its source and the grant that names it (row 205)
+  expect(h.out()).toContain('kept-stop: trust grant — true (ship.test) · witness trust auth-refresh-plan-1 --cmd true\n')
+  expect(h.out()).toMatch(/^kept-stop: trust grant — node .* \(criteria\.runner\) · witness trust auth-refresh-plan-1 --cmd '/m)
 })
 
 it('a --manual run keeps its stop for a human (Review Focus 4)', async () => {
