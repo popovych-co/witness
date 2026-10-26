@@ -238,3 +238,69 @@ export function warnLine(tokens, window, limit) {
   if (tokens * 100 < limit * window) return undefined;
   return `witness: context ${pctOf(tokens, window)}% of ${windowLabel(window)} has reached the ${limit}% limit — finish what you are in (implement: the red→green), then hand over`;
 }
+
+// ── The waker (row 204) ──────────────────────────────────────────────────────────────────────
+//
+// On Pi the waiting chat ends its turn, and witness's add-on runs `witness wait` for it and
+// posts what it printed, which wakes the chat. These are its decisions, pure so both are
+// unit-tested. Nothing from any command's output is run: the output contributes only a token
+// checked against a 12-hex shape, and the command is always the one built here.
+
+const WAIT_LINE = /^wait: witness wait --since ([0-9a-f]{12})$/m;
+const ADD_ON = /^wait-mode: add-on$/m;
+const TOKEN = /^[0-9a-f]{12}$/;
+const PIN = /^\d+\.\d+\.\d+$/;
+
+/**
+ * @param {unknown} output what a witness command printed
+ * @returns {{ token: string } | undefined} the wait it asks this chat's add-on to run
+ */
+export function waitRequest(output) {
+  if (typeof output !== 'string') return undefined;
+  const m = WAIT_LINE.exec(output);
+  return m !== null && ADD_ON.test(output) ? { token: m[1] } : undefined;
+}
+
+/**
+ * @param {unknown} text the installed engine file
+ * @returns {string | undefined} the exact CLI version its `$WITNESS` resolves to
+ */
+export function pinOf(text) {
+  if (typeof text !== 'string') return undefined;
+  const m = /@popovych\.co\/witness@(\d+\.\d+\.\d+)(?![\w.])/.exec(text);
+  return m === null ? undefined : m[1];
+}
+
+/**
+ * The user's own WITNESS_BIN, else the engine's pinned package. On Windows `npx` is a `.cmd`
+ * shim (row 164), so the line runs through System32's cmd.exe by its absolute path (row 201) —
+ * a line that carries only the validated pin and token beside the user's own WITNESS_BIN.
+ *
+ * @param {{ bin?: string, pin?: string, token: string, platform: string, systemRoot?: string }} o
+ * @returns {string[] | undefined}
+ */
+export function waitArgv({ bin, pin, token, platform, systemRoot }) {
+  if (typeof token !== 'string' || !TOKEN.test(token)) return undefined;
+  let argv;
+  let line;
+  if (typeof bin === 'string' && bin !== '') {
+    line = `${bin} wait --since ${token}`;
+    argv = ['sh', '-c', `exec ${line}`];
+  } else {
+    if (typeof pin !== 'string' || !PIN.test(pin)) return undefined;
+    argv = ['npx', '-y', `@popovych.co/witness@${pin}`, 'wait', '--since', token];
+    line = argv.join(' ');
+  }
+  if (platform === 'win32') return [`${systemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`, '/d', '/s', '/c', line];
+  return argv;
+}
+
+/**
+ * A chat with a screen waits; drive's headless sessions and reviewers never do.
+ *
+ * @param {{ hasUI: unknown, env: Record<string, string | undefined> }} o
+ * @returns {boolean}
+ */
+export function wakeAllowed({ hasUI, env }) {
+  return hasUI === true && (env.WITNESS_DRIVE ?? '') === '' && (env.WITNESS_REVIEWER ?? '') === '';
+}
