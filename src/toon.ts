@@ -2,11 +2,12 @@
 // types — a path in drive's watch line, a command in a `--cmd` grant (row 205).
 export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
 
-// Security review. A command a human is asked to trust is repo-authored text, and a carriage
-// return or an escape sequence in it could paint a different command over the real one, a bidi
-// override reorder it (Trojan Source). Shown, every control, format and line-separator character
-// is spelled out; a command carrying one is never granted (`witness trust`).
-const UNSHOWABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+// Security review. A command a human is asked to trust is repo-authored text: a carriage return
+// or an escape sequence could paint a different command over the real one, a bidi override
+// reorder it (Trojan Source), an invisible filler hide a second command beside it. A denylist of
+// such characters always misses one, so the rule is an allowlist: printable ASCII shows as it
+// is, anything else is spelled out, and a command carrying any of it is never granted.
+const UNSHOWABLE = /[^\x20-\x7e]/u
 export const hasControl = (s: string): boolean => UNSHOWABLE.test(s)
 export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), (c) =>
   c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
