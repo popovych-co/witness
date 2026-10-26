@@ -23,7 +23,8 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { canonGuard } from "./canon-guard.mjs";
 import {
-  armedBy, configCandidates, contextLimitOf, freshDue, invokesWitness, pinOf, readingJson, waitArgv, waitRequest, wakeAllowed,
+  armedBy, configCandidates, contextLimitOf, freshDue, invokesWitness, pinOf, readingJson, routesNext, waitArgv, waitRequest,
+  wakeAllowed,
   warnLine,
 } from "./context-core.mjs";
 
@@ -150,13 +151,13 @@ export default function (pi: ExtensionAPI) {
   // that has run the witness CLI carries one more text block, which the model reads with the
   // output (P2). Never in a gate reviewer's spawn, never without a witness.config.yaml.
   pi.on("tool_result", async (event, ctx) => {
-    // Row 204: the last witness command decides whether this chat waits. Its own try/catch:
+    // Row 204: the last `next` decides whether this chat waits (final review C1). Its own try/catch:
     // the warning below must never be lost to it.
     try {
       if (event.toolName === "bash" && invokesWitness((event.input as { command?: unknown } | undefined)?.command)) {
         const session = ctx.sessionManager.getSessionId();
         const text = textOf(event.content);
-        requests.set(session, waitRequest(text));
+        if (routesNext(text)) requests.set(session, waitRequest(text));
         if (freshDue(text)) fresh.add(session);
         else fresh.delete(session);
       }

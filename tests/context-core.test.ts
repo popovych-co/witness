@@ -179,3 +179,11 @@ describe('the fresh chat (row 204, Q5)', () => {
     expect(core.armedBy('/witnessy --manual')).toBe(false)
   })
 })
+
+describe('only next routes a wait (final review C1)', () => {
+  it('routesNext reads next\'s routing output', () => {
+    expect(core.routesNext('autonomy: on\nnext: witness check')).toBe(true)
+    expect(core.routesNext('drive: background · pid 4\nwatch: tail -f x')).toBe(false)
+    expect(core.routesNext(undefined)).toBe(false)
+  })
+})

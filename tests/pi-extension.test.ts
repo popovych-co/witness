@@ -350,7 +350,7 @@ describe('pi extension — the waker', () => {
     }
   });
 
-  it('ignores a wait line from a command that is not witness\'s, and a later witness command without one', async () => {
+  it('ignores a wait line from a command that is not witness\'s, and a later next without one', async () => {
     process.env.WITNESS_BIN = fakeBin('echo woke');
     const s = stubPi();
     register(s.pi as never);
@@ -358,10 +358,25 @@ describe('pi extension — the waker', () => {
     await s.fire('tool_result', result('cat notes.txt'), s.ctx);
     await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
     await s.fire('tool_result', result('$WITNESS next'), s.ctx);
-    await s.fire('tool_result', result('$WITNESS status', 'flows: none'), s.ctx);
+    await s.fire('tool_result', result('$WITNESS next', 'next: witness decide plan p --show'), s.ctx);
     await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
     await new Promise((r) => setTimeout(r, 300));
     expect(s.sent).toEqual([]);
+  });
+
+  // Final review C1: the launch row runs `drive --detach` after `next`, and its output carries
+  // no `next:` line — only a `next` decides whether this chat waits, or the first turn of every
+  // session that launches drive would never be woken.
+  it('a launch after next still wakes the chat', async () => {
+    process.env.WITNESS_BIN = fakeBin('echo "wait: needs you — 1 item(s)"');
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result('$WITNESS next', `${OUT.replace('next: witness check', 'next: witness check\nlaunch: witness drive --detach')}`), s.ctx);
+    await s.fire('tool_result', result('$WITNESS drive --detach', 'drive: background · pid 42\nwatch: tail -f /r/.witness/drive.log · stop it: kill 42'), s.ctx);
+    await s.fire('tool_result', result('$WITNESS status', 'flows: none'), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    await expect.poll(() => s.sent.length, { timeout: 10_000 }).toBe(1);
   });
 
   it('kills the waiter on session_shutdown', async () => {

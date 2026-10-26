@@ -262,6 +262,18 @@ export function waitRequest(output) {
 }
 
 /**
+ * Final review C1. Only a `next` decides whether this chat waits: the engine runs other witness
+ * commands after it in the same turn (`drive --detach` from a `launch:` line), and those print
+ * no `wait:` line of their own.
+ *
+ * @param {unknown} output what a witness command printed
+ * @returns {boolean} whether it is `next`'s routing output
+ */
+export function routesNext(output) {
+  return typeof output === 'string' && /^next: /m.test(output);
+}
+
+/**
  * @param {unknown} text the installed engine file
  * @returns {string | undefined} the exact CLI version its `$WITNESS` resolves to
  */
