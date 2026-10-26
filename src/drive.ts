@@ -603,6 +603,13 @@ export async function driveLoop(
     return true
   }
 
+  // Final review I3: an aside set when a lane ends keys on the target's state after the session,
+  // as the settle pass's do — the line the lane started with may be one the session moved past,
+  // which would read as a human's move at the next take-back.
+  const keyAfter = (key: string): string => {
+    canonNow = loadCanon(root)
+    return keyOf(ownNext(key))
+  }
   const settle = (key: string, lane: Lane, end: SessionEnd) => {
     if (end.outcome === 'stopped') return                // the signal's, reported once at the end
     if (limited(key, end)) return
@@ -610,7 +617,7 @@ export async function driveLoop(
     use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
     if (end.outcome === 'timeout') {
       ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
-      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}`, key0: keyOf(lane.action) })
+      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}`, key0: keyAfter(key) })
       return
     }
     if (end.outcome === 'spawn-failed') {
@@ -620,7 +627,7 @@ export async function driveLoop(
     }
     if (lane.merged !== undefined) {
       ctx.out(`drive: merge — ${lane.merged}`)
-      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s', key0: keyOf(lane.action) })
+      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s', key0: keyAfter(key) })
     }
   }
 

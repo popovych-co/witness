@@ -9,7 +9,7 @@ import { readLive, writeLive } from '../src/live.js'
 import { loadCanon } from '../src/scan.js'
 import {
   type TestRepo, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, ghState, noopOpener, patchConfig, seededRepo,
-  writeLocalConfig, writePlan, writeSpec,
+  writeLocalConfig, writePlan, writeSpec, SCAFFOLDING_FIRST, startedThreeStepPlan,
 } from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -235,5 +235,22 @@ describe('what drive set aside comes back (D207)', () => {
     expect(out).toContain('drive: released — a-plan-1 · done')
     expect(ticks(out)).toBe(1)
     expect(out.some((l) => /^drive: done — \d+ merged · 0 wait on you/.test(l))).toBe(true)
+  }, 60000)
+})
+
+// Final review (a) I3. An aside set when a lane ends keyed on the line the lane STARTED with: a
+// session that moved its target before it timed out read as a key move at once, so drive released
+// it with no human act and wiped its caps.
+describe('a lane-end aside keys on the state after the session (final review)', () => {
+  it('a session that moves its target and then times out stays aside', async () => {
+    const { repo, planId } = await startedThreeStepPlan({ drive: { sessionTimeoutMs: 1500 } }, SCAFFOLDING_FIRST)
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const agent = script(`${witnessCli()} step-close ${planId} --step s1 > /dev/null\necho tick\nsleep 5`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '0', WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 3 }, fakeClock(0))
+    expect(out.some((l) => l.startsWith('drive: spawn-timeout — '))).toBe(true)
+    expect(out.some((l) => l.startsWith(`drive: taken back — ${planId}`))).toBe(false)
+    expect(ticks(out)).toBe(1)
   }, 60000)
 })
