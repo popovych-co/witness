@@ -328,7 +328,9 @@ export function watchSignature(root: string): string {
 // Row 180. A target drive stops working on — none of these ends the run. Held in memory and
 // never journaled (D145): the report reads them at the end. Row 196: one set aside for a human
 // (kept, decision, conversation) records `key0`, its progress key then, and is drive's again
-// once a human moves it; drive's own verdicts (stuck, capped) and the merge stay aside.
+// once a human moves it. Row 207: so do drive's own verdicts (stuck, capped) and the merge — a
+// paused drive would otherwise hold them forever — moved by a grant, a satisfied need, a
+// decision, the merge stamp, or the human's `witness retry` for a fix that leaves no record.
 export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
 export interface Aside {
   target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string
@@ -456,13 +458,32 @@ export async function driveLoop(
   // (an ask answered or queued, a need satisfied, a stop decided in a chat) leaves the aside
   // set and competes for a slot again. One whose next act is the human's again is set aside
   // anew, under its new key, by the settle pass or the fill that meets it.
+  // Row 207: a release is a new chance, so the target's per-run use and its last key go too.
+  const release = (key: string) => {
+    aside.delete(key)
+    use.delete(key)
+    progress.delete(key)
+    pauseSince = undefined                                 // a human act: the idle clock starts over
+  }
+  // A plan that reached its end — merged, abandoned — is no flow any more: its scoped ladder
+  // answers with a global rung, so `ownAnswer` would hold its aside forever.
+  const ended = (key: string): string | undefined => {
+    const doc = findById(canonNow, key)
+    const status = String(doc?.meta.status)
+    return doc?.meta.type === 'plan' && (status === 'done' || status === 'abandoned') ? status : undefined
+  }
   const takeBack = () => {
     for (const [key, a] of aside) {
       if (a.key0 === undefined) continue
+      const over = ended(key)
+      if (over !== undefined) {
+        release(key)
+        ctx.out(`drive: released — ${key} · ${over}`)
+        continue
+      }
       const now = ownNext(key)
       if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
-      aside.delete(key)
-      pauseSince = undefined                               // a human act: the idle clock starts over
+      release(key)
       ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
     }
   }
@@ -473,6 +494,7 @@ export async function driveLoop(
     canonNow = loadCanon(root)
     for (const [key, a] of aside) {
       if (a.key0 === undefined) continue
+      if (ended(key) !== undefined) { aside.delete(key); continue }
       const now = ownNext(key)
       if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
       if (conversationStage(now)) aside.set(key, { ...a, kind: 'conversation', line: now.line, key0: keyOf(now) })
@@ -482,7 +504,7 @@ export async function driveLoop(
   const stuck = (key: string, action: NextAction) => {
     ctx.out(`drive: no progress — ${action.line}`)
     ctx.out(`help: ${action.target ?? 'untargeted work'} is set aside for this run — read its stream above`)
-    setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}` })
+    setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}`, key0: keyOf(action) })
   }
   // A decision is an act too, and it gets the same convergence guard as a spawn: a decision
   // that executes and journals nothing would otherwise re-render its own block forever.
@@ -510,7 +532,7 @@ export async function driveLoop(
     }
     if (step.kind === 'merge') {
       ctx.out(`drive: merge — ${step.line}`)
-      setAside(key, { kind: 'merge', line: step.line, why: 'the merge is a human\'s' })
+      setAside(key, { kind: 'merge', line: step.line, why: 'the merge is a human\'s', key0: keyOf(action) })
       return
     }
     // Under autonomy a `witness decide` line still reaching the fill is a stop the settle
@@ -524,7 +546,7 @@ export async function driveLoop(
     if (unmoved(key, action)) return
     const r = await resolveDecision(step, action, ctx)
     if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}), key0: keyOf(action) })
-    if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}` })
+    if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}`, key0: keyOf(action) })
   }
 
   const launch = (step: SpawnStep, action: NextAction, n: number): Lane => {
@@ -588,7 +610,7 @@ export async function driveLoop(
     use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
     if (end.outcome === 'timeout') {
       ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
-      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}` })
+      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}`, key0: keyOf(lane.action) })
       return
     }
     if (end.outcome === 'spawn-failed') {
@@ -598,7 +620,7 @@ export async function driveLoop(
     }
     if (lane.merged !== undefined) {
       ctx.out(`drive: merge — ${lane.merged}`)
-      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s' })
+      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s', key0: keyOf(lane.action) })
     }
   }
 
@@ -660,11 +682,11 @@ export async function driveLoop(
     if (parked.parked) {
       ctx.out(`drive: parked — ${action.target} · ${hit.note}`)
       const gate = hit.gate ?? lastRunGate(readStream(root, action.target))
-      setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}) })
+      setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}), key0: keyOf(action) })
     } else {
       const why = `${hit.note} · ${parked.why}`
       ctx.out(`drive: capped — ${action.target} · ${why}`)
-      setAside(key, { kind: 'capped', line: action.line, why })
+      setAside(key, { kind: 'capped', line: action.line, why, key0: keyOf(action) })
     }
     return true
   }

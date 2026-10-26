@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { grantCommands } from '../src/allowlist.js'
 import type { Ctx } from '../src/cli.js'
@@ -8,7 +8,7 @@ import { driveLoop, PAUSE_IDLE_MAX_MS, PAUSE_POLL_MS, watchSignature } from '../
 import { readLive, writeLive } from '../src/live.js'
 import { loadCanon } from '../src/scan.js'
 import {
-  type TestRepo, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, noopOpener, patchConfig, seededRepo,
+  type TestRepo, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, ghState, noopOpener, patchConfig, seededRepo,
   writeLocalConfig, writePlan, writeSpec,
 } from './helpers.js'
 
@@ -165,3 +165,75 @@ describe('drive waits for the human (D202)', () => {
   }, 60000)
 })
 
+
+const witnessCli = (): string => {
+  const repo = resolve(import.meta.dirname, '..')
+  return `${join(repo, 'node_modules', '.bin', 'tsx')} ${join(repo, 'src', 'bin.ts')}`
+}
+
+// A started plan, autonomy on; `drive.caps.spawns` when a cap is the point.
+async function startedFlow(opts: { spawns?: number; pr?: number } = {}): Promise<TestRepo> {
+  const repo = await seededRepo()
+  if (opts.spawns !== undefined) {
+    patchConfig(repo, { drive: { caps: { spawns: opts.spawns } } })
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'caps')
+  }
+  await writeSpec(repo, 'a', { criteria: [{ id: 'ac-a', test: '@spec:a' }] })
+  approve(repo, 'a')
+  await writePlan(repo, 'a-plan-1', { parent: 'a', steps: [{ id: 's1', title: 'a', criteria: ['ac-a'] }] })
+  approve(repo, 'a-plan-1')
+  await repo.cli(['start', 'a-plan-1'])
+  if (opts.pr !== undefined) repo.setMeta('a-plan-1', { pr: opts.pr })
+  autonomyOn(repo)
+  writeLocalConfig(repo.root, { notify: noopOpener() })
+  return repo
+}
+const ticks = (out: string[]) => out.filter((l) => /\] tick$/.test(l)).length
+
+// Row 207. Row 196 took back only what a human set aside; drive's own verdicts and the merge
+// stayed aside for good, which a paused drive would then hold forever. Each records its key
+// now and comes back when its record moves — the human's `witness retry` for a fix that leaves
+// no other record — and a release is a new chance: the target's per-run use starts over.
+describe('what drive set aside comes back (D207)', () => {
+  it('a stuck target comes back when the human retries it', async () => {
+    const repo = await startedFlow()
+    const out: string[] = []
+    const clock = scripted({ 2: async () => { expect((await repo.cli(['retry', 'a-plan-1'])).code).toBe(0) } })
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '30000', WITNESS_DRIVE_AGENT_BIN: script('echo tick') }, out), {}, clock)
+    expect(out).toContain('drive: no progress — witness test-evidence a-plan-1 --phase red --step s1')
+    expect(out.some((l) => l.startsWith('drive: taken back — a-plan-1'))).toBe(true)
+    expect(ticks(out)).toBe(2)
+  }, 60000)
+
+  it('a capped target starts its spawn count over on release', async () => {
+    const repo = await startedFlow({ spawns: 1 })
+    // every session moves its target, so the cap — not the stall — is what sets it aside
+    const agent = script(`echo tick\nWITNESS_DRIVE= exec ${witnessCli()} retry a-plan-1`)
+    const out: string[] = []
+    const clock = scripted({ 2: async () => { expect((await repo.cli(['retry', 'a-plan-1'])).code).toBe(0) } })
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '30000', WITNESS_DRIVE_AGENT_BIN: agent }, out), {}, clock)
+    expect(out.filter((l) => l.startsWith('drive: capped — a-plan-1'))).toHaveLength(2)
+    expect(out.some((l) => l.startsWith('drive: taken back — a-plan-1'))).toBe(true)
+    expect(ticks(out)).toBe(2)
+  }, 60000)
+
+  it('a merge aside leaves when the merge stamp lands', async () => {
+    const repo = await startedFlow({ pr: 7 })
+    const scenario = fakeScenario()
+    ghState(scenario, 7, 'OPEN')
+    const agent = script("echo tick\necho 'ship: merge PR #7 on GitHub when ready'")
+    const out: string[] = []
+    const clock = scripted({
+      2: async () => {
+        ghState(scenario, 7, 'MERGED')
+        await repo.cli(['next'], { env: gateEnv(scenario) })            // the chat's lazy stamp
+      },
+    })
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '30000', WITNESS_DRIVE_AGENT_BIN: agent }, out), {}, clock)
+    expect(out).toContain('drive: merge — ship: merge PR #7 on GitHub when ready')
+    expect(out).toContain('drive: released — a-plan-1 · done')
+    expect(ticks(out)).toBe(1)
+    expect(out.some((l) => /^drive: done — \d+ merged · 0 wait on you/.test(l))).toBe(true)
+  }, 60000)
+})
