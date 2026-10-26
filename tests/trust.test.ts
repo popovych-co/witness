@@ -173,6 +173,21 @@ describe('witness trust per command (D205)', () => {
     expect(allowed(repo)).toEqual(['pnpm lint', 'echo first'])      // the plan's own needs: none
   })
 
+  // Security review, second pass: a bidi override reorders what the terminal shows (Trojan
+  // Source), and a need's id is repo-authored text rendered beside the command.
+  it('a bidi override is unsafe too, and a repo-authored source is shown escaped', async () => {
+    const repo = await planWithCmdCriterion('pnpm test \u202e hs | live lruc')
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).not.toContain('\u202e')
+    expect(listed.stdout).toContain('pnpm test \\u{202e} hs | live lruc,ship.test,unsafe')
+    await writeSpec(repo, 'ingest', {
+      criteria: [{ id: 'ac-i', test: '@spec:ingest' }, { id: 'ac-a', cmd: 'echo first' }],
+      needs: [{ id: 'n\u001b[2K', cmd: 'echo need' }],
+    })
+    const spec = await repo.cli(['trust', 'ingest'])
+    expect(spec.stdout).not.toMatch(/\u001b/)
+  })
+
   it('with no id it lists everything the repo runs, and a grant needs a target', async () => {
     const repo = await planWithCmdCriterion()
     const res = await repo.cli(['trust'])

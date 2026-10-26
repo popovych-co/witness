@@ -3,12 +3,14 @@
 export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
 
 // Security review. A command a human is asked to trust is repo-authored text, and a carriage
-// return or an escape sequence in it could paint a different command over the real one. Shown,
-// every control character is spelled out; such a command is never granted (`witness trust`).
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
-export const hasControl = (s: string): boolean => /[\u0000-\u001f\u007f-\u009f]/.test(s)
-export const visible = (s: string): string => s.replace(CONTROL, (c) =>
-  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t' : `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+// return or an escape sequence in it could paint a different command over the real one, a bidi
+// override reorder it (Trojan Source). Shown, every control, format and line-separator character
+// is spelled out; a command carrying one is never granted (`witness trust`).
+const UNSHOWABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+export const hasControl = (s: string): boolean => UNSHOWABLE.test(s)
+export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), (c) =>
+  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
+    : c.codePointAt(0)! < 0x100 ? `\\x${c.codePointAt(0)!.toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0)!.toString(16)}}`)
 
 function esc(value: unknown): string {
   const s = String(value ?? '')

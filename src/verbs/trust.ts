@@ -68,7 +68,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const canon = loadCanon(root)
   const trusted = new Set(trustedCommands(root))
   const status = (cmd: string) => trusted.has(cmd) ? 'trusted' : hasControl(cmd) ? 'unsafe' : 'untrusted'
-  const shown = (c: { cmd: string }): Record<string, unknown> => ({ ...c, cmd: visible(c.cmd), status: status(c.cmd) })
+  // Every repo-authored field is shown escaped: a criterion's or a need's id rides in `source`.
+  const shown = (c: { cmd: string; source: string; doc?: string }): Record<string, unknown> => ({
+    ...c, cmd: visible(c.cmd), source: visible(c.source), ...(c.doc !== undefined ? { doc: visible(c.doc) } : {}), status: status(c.cmd),
+  })
   // Nothing left to grant is not "all trusted" while an unsafe command stays blocked.
   const settled = (cmds: string[]): number => {
     const unsafe = cmds.filter((c) => status(c) === 'unsafe').length
