@@ -63,6 +63,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   // D145. The scheduler. `next` names the action; `drive` runs the sessions that perform
   // it, stopping only where a human's judgment is the input.
   drive: () => import('./verbs/drive.js'),
+  // Row 204. The chat's sleep: blocks until something new needs the human.
+  wait: () => import('./verbs/wait.js'),
   abandon: () => import('./verbs/abandon.js'),
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
@@ -110,6 +112,7 @@ const VERB_USAGE: Record<string, string> = {
   trust: "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]",
   'test-evidence': 'witness test-evidence <plan-id> --phase red|green [--step <id>]',
   'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
+  wait: 'witness wait [--since <token>] — blocks until something new needs you · the chat runs it under autonomy',
 }
 
 // Row 116 moved the body to version.ts, which journal.ts can import without closing a

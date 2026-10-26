@@ -45,7 +45,7 @@ export interface LazyResult {
   kept: string[]
 }
 
-function prState(ctx: Ctx, root: string, pr: number): string | undefined {
+export function prState(ctx: Ctx, root: string, pr: number): string | undefined {
   try {
     const out = execFileSync('gh', ['pr', 'view', String(pr), '--json', 'state'], {
       cwd: root, env: ctx.env as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 3_000,
