@@ -243,10 +243,11 @@ describe('what drive set aside comes back (D207)', () => {
 // it with no human act and wiped its caps.
 describe('a lane-end aside keys on the state after the session (final review)', () => {
   it('a session that moves its target and then times out stays aside', async () => {
-    const { repo, planId } = await startedThreeStepPlan({ drive: { sessionTimeoutMs: 1500 } }, SCAFFOLDING_FIRST)
+    // a timeout generous enough for the step close to land even under a loaded suite
+    const { repo, planId } = await startedThreeStepPlan({ drive: { sessionTimeoutMs: 6000 } }, SCAFFOLDING_FIRST)
     autonomyOn(repo)
     writeLocalConfig(repo.root, { notify: noopOpener() })
-    const agent = script(`${witnessCli()} step-close ${planId} --step s1 > /dev/null\necho tick\nsleep 5`)
+    const agent = script(`echo tick\n${witnessCli()} step-close ${planId} --step s1 > /dev/null\nsleep 30`)
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '0', WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 3 }, fakeClock(0))
     expect(out.some((l) => l.startsWith('drive: spawn-timeout — '))).toBe(true)
