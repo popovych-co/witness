@@ -21,6 +21,19 @@ describe('.witness/live/ (D203)', () => {
     expect(dirtyStatePaths(repo.root)).toEqual([])
   })
 
+  // Final review I1 (spec c2). A consumer initialised before this row has no ignore line for
+  // the folder, and drive may never start a session that would add one (a trust-blocked run):
+  // the first write excludes it, as the drafts' does.
+  it('a repo whose ignore rules predate the folder never shows it to git status', async () => {
+    const repo = await seededRepo()
+    repo.write('.gitignore', repo.read('.gitignore').replace('.witness/live/\n', ''))
+    repo.git('add', '.gitignore')
+    repo.git('commit', '-m', 'an older ignore block')
+    writeLive(repo.root, { pid: process.pid, asides: [] })
+    takeWaiter(repo.root, process.pid)
+    expect(repo.git('status', '--porcelain')).toBe('')
+  })
+
   it('ensureExcluded and init both exclude .witness/live/', async () => {
     const repo = await seededRepo()
     ensureExcluded(repo.root)

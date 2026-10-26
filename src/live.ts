@@ -6,6 +6,7 @@ import type { AsideKind } from './drive.js'
 import { TARGETLESS, driveHolder } from './drive-presence.js'
 import type { Canon } from './scan.js'
 import { GATE_NAMES } from './settings.js'
+import { ensureExcluded } from './worktree.js'
 
 // Row 203. Drive's set-asides — stuck and capped above all — live only in its memory (D145),
 // and a chat waiting beside it must know them. So drive publishes what needs the human here,
@@ -42,6 +43,10 @@ function liveDir(root: string, create: boolean): string | undefined {
 // real .witness/live/, and a link at a name drive would write through could aim it anywhere.
 // The rename replaces whatever entry holds the final name, a link included, never its target.
 function put(root: string, file: string, value: unknown): void {
+  // Spec c2 (final review I1): a repo whose ignore rules predate this folder must never show it,
+  // and drive may run without starting the session whose worktree would exclude it — so the
+  // write excludes it first, as a draft's does. Best effort: a write is never refused for it.
+  try { ensureExcluded(root) } catch { /* not a git checkout we can write to */ }
   const dir = liveDir(root, true)
   if (dir === undefined) return
   const tmp = join(dir, `.${file}.${randomBytes(8).toString('hex')}.tmp`)
