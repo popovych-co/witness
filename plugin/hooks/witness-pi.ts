@@ -23,7 +23,8 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { canonGuard } from "./canon-guard.mjs";
 import {
-  configCandidates, contextLimitOf, invokesWitness, pinOf, readingJson, waitArgv, waitRequest, wakeAllowed, warnLine,
+  armedBy, configCandidates, contextLimitOf, freshDue, invokesWitness, pinOf, readingJson, waitArgv, waitRequest, wakeAllowed,
+  warnLine,
 } from "./context-core.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -80,6 +81,31 @@ export default function (pi: ExtensionAPI) {
   // waiter posts nothing.
   const requests = new Map<string, { token: string } | undefined>();
   const waiters = new Map<string, ChildProcess>();
+  // Row 204 (Q5): sessions whose last witness command asked for a fresh session, and sessions
+  // armed with `/witness --manual`, whose fresh session continues armed.
+  const fresh = new Set<string>();
+  const armed = new Set<string>();
+
+  // Only a command handler may open a session (`ctx.newSession`), so the add-on runs its own
+  // command as a follow-up once the turn settles — Pi's reload-runtime example's shape.
+  pi.registerCommand("witness-fresh", {
+    description: "continue witness in a fresh session",
+    handler: async (_args, ctx) => {
+      const next = armed.has(ctx.sessionManager.getSessionId()) ? "/witness --manual" : "/witness";
+      await ctx.newSession({
+        parentSession: ctx.sessionManager.getSessionFile(),
+        withSession: async (c) => { await c.sendUserMessage(next); },
+      });
+    },
+  });
+  pi.on("input", async (event, ctx) => {
+    try {
+      if (armedBy(event.text)) armed.add(ctx.sessionManager.getSessionId());
+    } catch {
+      /* not armed */
+    }
+    return undefined;
+  });
   // Row 191 §4.6, keyed by session id: after `new_session` the session id moves (P7), and
   // the new session latches and warns afresh.
   const latched = new Set<string>();
@@ -128,7 +154,11 @@ export default function (pi: ExtensionAPI) {
     // the warning below must never be lost to it.
     try {
       if (event.toolName === "bash" && invokesWitness((event.input as { command?: unknown } | undefined)?.command)) {
-        requests.set(ctx.sessionManager.getSessionId(), waitRequest(textOf(event.content)));
+        const session = ctx.sessionManager.getSessionId();
+        const text = textOf(event.content);
+        requests.set(session, waitRequest(text));
+        if (freshDue(text)) fresh.add(session);
+        else fresh.delete(session);
       }
     } catch {
       /* no wait this time */
@@ -158,7 +188,13 @@ export default function (pi: ExtensionAPI) {
       const session = ctx.sessionManager.getSessionId();
       const request = requests.get(session);
       requests.delete(session);
-      if (request === undefined || !wakeAllowed({ hasUI: ctx.hasUI, env: process.env })) return;
+      if (!wakeAllowed({ hasUI: ctx.hasUI, env: process.env })) return;
+      // A full chat continues in a fresh one, which waits there itself if it has to.
+      if (fresh.delete(session)) {
+        pi.sendUserMessage("/witness-fresh", { deliverAs: "followUp" });
+        return;
+      }
+      if (request === undefined) return;
       const argv = waitArgv({
         bin: process.env.WITNESS_BIN, pin: enginePin(), token: request.token, platform: process.platform,
         systemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT,

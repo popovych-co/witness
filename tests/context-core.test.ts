@@ -161,3 +161,21 @@ describe('the waker (row 204)', () => {
     expect(core.wakeAllowed({ hasUI: true, env: { WITNESS_REVIEWER: '1' } })).toBe(false)
   })
 })
+
+// Row 204 (Q5). On Pi a chat at its fill limit continues in a fresh session by itself.
+describe('the fresh chat (row 204, Q5)', () => {
+  it('freshDue wants a relay with no run: beside it', () => {
+    expect(core.freshDue('context: 21% of 1M\nrelay: /new then /witness')).toBe(true)
+    expect(core.freshDue('home: /r/wt\nrun: cd /r/wt && pi \'/witness\'\nrelay: /new then /witness')).toBe(false)
+    expect(core.freshDue('next: witness check')).toBe(false)
+    expect(core.freshDue('  relay: indented')).toBe(false)
+    expect(core.freshDue(undefined)).toBe(false)
+  })
+  it('armedBy reads --manual on a /witness prompt', () => {
+    expect(core.armedBy('/witness --manual')).toBe(true)
+    expect(core.armedBy('/witness --manual add billing')).toBe(true)
+    expect(core.armedBy('/witness add billing')).toBe(false)
+    expect(core.armedBy('please run --manual')).toBe(false)
+    expect(core.armedBy('/witnessy --manual')).toBe(false)
+  })
+})

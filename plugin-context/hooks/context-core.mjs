@@ -304,3 +304,25 @@ export function waitArgv({ bin, pin, token, platform, systemRoot }) {
 export function wakeAllowed({ hasUI, env }) {
   return hasUI === true && (env.WITNESS_DRIVE ?? '') === '' && (env.WITNESS_REVIEWER ?? '') === '';
 }
+
+// ── The fresh chat (row 204, Q5) ─────────────────────────────────────────────────────────────
+//
+// A `relay:` printed with no `run:` beside it says this session reached its fill limit where it
+// stands. On Pi the add-on then opens the fresh session itself and runs `/witness` there. A
+// `relay:` beside `run:` hands work to another directory and never opens one.
+
+/**
+ * @param {unknown} output what a witness command printed
+ * @returns {boolean}
+ */
+export function freshDue(output) {
+  return typeof output === 'string' && /^relay: /m.test(output) && !/^run: /m.test(output);
+}
+
+/**
+ * @param {unknown} input a prompt the human typed
+ * @returns {boolean} whether it armed this session with `/witness --manual`
+ */
+export function armedBy(input) {
+  return typeof input === 'string' && /^\/witness(?:\s|$)/.test(input) && /(?:^|\s)--manual(?:\s|$)/.test(input);
+}

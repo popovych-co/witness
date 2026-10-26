@@ -380,3 +380,75 @@ describe('pi extension — the waker', () => {
     expect(s.sent).toEqual([]);
   });
 });
+
+describe('pi extension — the fresh chat (Q5)', () => {
+  const RELAY = 'context: 21% of 1M\nrelay: /new then /witness'
+  const result = (text: string) => ({ toolName: 'bash', input: { command: '$WITNESS next' }, content: [{ type: 'text', text }], isError: false });
+  const commandCtx = (sessionFile: string) => {
+    const opened: Array<{ parentSession?: string }> = [];
+    const prompts: string[] = [];
+    return {
+      opened, prompts,
+      ctx: {
+        sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => 'p1' },
+        newSession: async (o: { parentSession?: string; withSession?: (c: unknown) => Promise<void> }) => {
+          opened.push({ parentSession: o.parentSession });
+          await o.withSession?.({ sendUserMessage: async (m: string) => { prompts.push(m); } });
+          return { cancelled: false };
+        },
+      },
+    };
+  };
+
+  it('a relay with no run: opens a fresh session that runs /witness', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result(RELAY), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    expect(s.userSent).toEqual([{ content: '/witness-fresh', options: { deliverAs: 'followUp' } }]);
+    const c = commandCtx('/sessions/p1.jsonl');
+    await s.commands.get('witness-fresh')!.handler('', c.ctx);
+    expect(c.opened).toEqual([{ parentSession: '/sessions/p1.jsonl' }]);
+    expect(c.prompts).toEqual(['/witness']);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    expect(s.userSent).toHaveLength(1);                          // the latch cleared
+  });
+
+  it('a relay printed beside run: never opens one', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result("home: /r/wt\nrun: cd /r/wt && pi '/witness'\nrelay: /new then /witness"), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    expect(s.userSent).toEqual([]);
+  });
+
+  it('an armed chat continues armed', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('input', { type: 'input', text: '/witness --manual', source: 'interactive' }, s.ctx);
+    await s.fire('tool_result', result(RELAY), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    const c = commandCtx('/sessions/p1.jsonl');
+    await s.commands.get('witness-fresh')!.handler('', c.ctx);
+    expect(c.prompts).toEqual(['/witness --manual']);
+  });
+
+  it('never without a screen or in a drive session', async () => {
+    for (const setup of [
+      (s: ReturnType<typeof stubPi>) => { s.ctx.hasUI = false; },
+      () => { process.env.WITNESS_DRIVE = 'p1'; },
+    ]) {
+      const s = stubPi();
+      register(s.pi as never);
+      s.ctx.cwd = witnessRepo();
+      setup(s);
+      await s.fire('tool_result', result(RELAY), s.ctx);
+      await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+      expect(s.userSent).toEqual([]);
+      delete process.env.WITNESS_DRIVE;
+    }
+  });
+});
