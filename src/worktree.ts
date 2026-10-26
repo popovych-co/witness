@@ -59,8 +59,9 @@ export function ensureExcluded(root: string): void {
   // screens are witnessed evidence, regenerable, never committed — ignored in every
   // worktree so they stay out of changedFiles() and the reviewed tree-sha. Drafts (row 199)
   // are a conversation's local memory, never committed: a repo whose .gitignore predates
-  // them would otherwise show each one to `git status` and to a human's `git add -A`
-  const missing = ['.witness/worktrees/', '.witness/screens/', '.witness/drafts/'].filter((l) => !lines.includes(l))
+  // them would otherwise show each one to `git status` and to a human's `git add -A`; drive's
+  // live folder (row 203) is the same kind
+  const missing = ['.witness/worktrees/', '.witness/screens/', '.witness/drafts/', '.witness/live/'].filter((l) => !lines.includes(l))
   // A file a human left without a final newline keeps its last line whole.
   const sep = current !== '' && !current.endsWith('\n') ? '\n' : ''
   if (missing.length) appendFileSync(excludePath, `${sep}${missing.map((l) => `${l}\n`).join('')}`)
