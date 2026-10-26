@@ -90,6 +90,20 @@ describe('.witness/live/ (D203)', () => {
     expect(() => readFileSync(join(elsewhere, 'waiter.json'))).toThrow()
   })
 
+  // Security review: a repo can commit files inside a real .witness/live/, so a link planted at
+  // a predictable temp name would aim the write anywhere.
+  it('never writes through a link planted at a temp name', async () => {
+    const repo = await seededRepo()
+    const victim = join(fakeScenario(), 'victim')
+    writeFileSync(victim, 'keep')
+    mkdirSync(join(repo.root, LIVE_DIR), { recursive: true })
+    for (const f of ['drive.json', 'waiter.json']) symlinkSync(victim, join(repo.root, LIVE_DIR, `.${f}.${process.pid}.tmp`))
+    writeLive(repo.root, { pid: process.pid, asides: [] })
+    takeWaiter(repo.root, process.pid)
+    expect(readFileSync(victim, 'utf8')).toBe('keep')
+    expect(readLive(repo.root, loadCanon(repo.root))?.pid).toBe(process.pid)
+  })
+
   it('the newest waiter takes the lock', async () => {
     const repo = await seededRepo()
     const other = spawn('sleep', ['5'])

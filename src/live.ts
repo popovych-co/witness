@@ -1,4 +1,5 @@
-import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { KEPT_STOP_NAMES, type KeptStop } from './autonomy.js'
 import type { AsideKind } from './drive.js'
@@ -36,16 +37,25 @@ function liveDir(root: string, create: boolean): string | undefined {
   return dir
 }
 
-// Written to a temp name and renamed, so a reader never sees half a file.
+// Written to a temp name and renamed, so a reader never sees half a file. The temp name is
+// random and created exclusively without following a link: a repo can commit files inside a
+// real .witness/live/, and a link at a name drive would write through could aim it anywhere.
+// The rename replaces whatever entry holds the final name, a link included, never its target.
 function put(root: string, file: string, value: unknown): void {
   const dir = liveDir(root, true)
   if (dir === undefined) return
-  const tmp = join(dir, `.${file}.${process.pid}.tmp`)
+  const tmp = join(dir, `.${file}.${randomBytes(8).toString('hex')}.tmp`)
+  let fd: number | undefined
   try {
-    writeFileSync(tmp, JSON.stringify(value))
+    fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644)
+    writeSync(fd, JSON.stringify(value))
+    closeSync(fd)
+    fd = undefined
     renameSync(tmp, join(dir, file))
   } catch {
     // best effort: a reader with no file reads "unknown", never a wrong answer
+    if (fd !== undefined) closeSync(fd)
+    rmSync(tmp, { force: true })
   }
 }
 
