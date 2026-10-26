@@ -8,7 +8,7 @@ import { appendEntry, entryLine, journalRel } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
-import { cmd as cmdLine, kv, rows, shellArg } from '../toon.js'
+import { cmd as cmdLine, hasControl, kv, rows, shellArg, visible } from '../toon.js'
 import { guardTxn, withTxn } from '../txn.js'
 
 const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]"
@@ -67,14 +67,21 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const canon = loadCanon(root)
   const trusted = new Set(trustedCommands(root))
-  const status = (cmd: string) => trusted.has(cmd) ? 'trusted' : 'untrusted'
+  const status = (cmd: string) => trusted.has(cmd) ? 'trusted' : hasControl(cmd) ? 'unsafe' : 'untrusted'
+  const shown = (c: { cmd: string }): Record<string, unknown> => ({ ...c, cmd: visible(c.cmd), status: status(c.cmd) })
+  // Nothing left to grant is not "all trusted" while an unsafe command stays blocked.
+  const settled = (cmds: string[]): number => {
+    const unsafe = cmds.filter((c) => status(c) === 'unsafe').length
+    if (unsafe === 0) { ctx.out(kv('trust', 'every command is already trusted')); return EXIT.OK }
+    ctx.out(kv('trust', `${unsafe} carry control characters — never granted here · rewrite where it is written`))
+    return EXIT.FINDINGS
+  }
 
   if (id === undefined) {
     const all = repoCommands(cfgR.value, canon)
-    rows('commands', ['cmd', 'source', 'doc', 'status'], all.map((c) => ({ ...c, status: status(c.cmd) })))
-      .forEach((l) => ctx.out(l))
-    const pending = [...new Set(all.map((c) => c.cmd).filter((c) => !trusted.has(c)))]
-    if (pending.length === 0) { ctx.out(kv('trust', 'every command is already trusted')); return EXIT.OK }
+    rows('commands', ['cmd', 'source', 'doc', 'status'], all.map(shown)).forEach((l) => ctx.out(l))
+    const pending = [...new Set(all.map((c) => c.cmd).filter((c) => status(c) === 'untrusted'))]
+    if (pending.length === 0) return settled(all.map((c) => c.cmd))
     ctx.out(kv('trust', `${pending.length} untrusted — grant each from the target that runs it: witness trust <id> --cmd '<cmd>'`))
     return EXIT.FINDINGS
   }
@@ -87,9 +94,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const listed = commandsRun(cfgR.value, canon, doc)
   const cmds = [...new Set(listed.map((c) => c.cmd))]
+  const unsafe = named.find(hasControl)
+  if (unsafe !== undefined) {
+    renderRefusal([v('--cmd', 'control-characters', visible(unsafe),
+      'a command without control characters — one that carries them can hide what it runs')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   const unknown = named.filter((c) => !cmds.includes(c))
   if (unknown.length > 0) {
-    renderRefusal([v('--cmd', 'unknown-command', unknown[0]!, `one of: ${cmds.join(' · ') || '(nothing to trust)'}`)])
+    renderRefusal([v('--cmd', 'unknown-command', unknown[0]!, `one of: ${cmds.map(visible).join(' · ') || '(nothing to trust)'}`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -97,13 +110,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('trust', `${id} runs no command — nothing to trust`))
     return EXIT.OK
   }
-  rows('commands', ['cmd', 'source', 'status'], listed.map((c) => ({ ...c, status: status(c.cmd) })))
-    .forEach((l) => ctx.out(l))
-  const pending = cmds.filter((c) => !trusted.has(c))
-  if (pending.length === 0) {
-    ctx.out(kv('trust', 'every command is already trusted'))
-    return EXIT.OK
-  }
+  rows('commands', ['cmd', 'source', 'status'], listed.map(shown)).forEach((l) => ctx.out(l))
+  // An unsafe command is listed and never pending: no flag and no prompt grants it.
+  const pending = cmds.filter((c) => status(c) === 'untrusted')
+  if (pending.length === 0) return settled(cmds)
 
   // One command at a time, because a blanket yes is a different act from four considered ones:
   // the named ones, all at a terminal's --yes, or the terminal's own per-command prompt.

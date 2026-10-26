@@ -2,6 +2,14 @@
 // types — a path in drive's watch line, a command in a `--cmd` grant (row 205).
 export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
 
+// Security review. A command a human is asked to trust is repo-authored text, and a carriage
+// return or an escape sequence in it could paint a different command over the real one. Shown,
+// every control character is spelled out; such a command is never granted (`witness trust`).
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+export const hasControl = (s: string): boolean => /[\u0000-\u001f\u007f-\u009f]/.test(s)
+export const visible = (s: string): string => s.replace(CONTROL, (c) =>
+  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t' : `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+
 function esc(value: unknown): string {
   const s = String(value ?? '')
   return /[,"\n]|^\s|\s$/.test(s) ? `"${s.replaceAll('"', '""')}"` : s
