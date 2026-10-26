@@ -273,3 +273,19 @@ describe('an act that lands during a round (final review)', () => {
     expect(out.some((l) => /\] tick$/.test(l))).toBe(true)
   }, 60000)
 })
+
+// Final review (b) M7. An item notified once is not notified again in a run (n5) — but a target
+// released by the human's act and set aside anew is a new item: a second trust grant, a target
+// stuck again after a retry.
+describe('a release makes the next item on that target news (final review)', () => {
+  it('a target stuck again after a retry is notified again', async () => {
+    const repo = await startedFlow()
+    const log = join(fakeScenario(), 'notified')
+    writeLocalConfig(repo.root, { notify: script(`echo "$1" >> "${log}"`, 'notifier') })
+    const out: string[] = []
+    const clock = scripted({ 2: async () => { expect((await repo.cli(['retry', 'a-plan-1'])).code).toBe(0) } })
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '30000', WITNESS_DRIVE_AGENT_BIN: script('echo tick') }, out), {}, clock)
+    expect(ticks(out)).toBe(2)
+    await expect.poll(() => readFileSync(log, 'utf8').split('\n').filter((l) => l.includes('stuck · a-plan-1')).length, { timeout: 5000 }).toBe(2)
+  }, 60000)
+})

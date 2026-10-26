@@ -466,6 +466,9 @@ export async function driveLoop(
     use.delete(key)
     progress.delete(key)
     pauseSince = undefined                                 // a human act: the idle clock starts over
+    // What this target needs of the human next is news (final review): a second trust grant,
+    // a stuck again after a retry. Keys are `<kind>:<target>[:…]`, and ids carry no colon.
+    for (const k of [...notified]) if (k.split(':')[1] === key) notified.delete(k)
   }
   // A plan that reached its end — merged, abandoned — is no flow any more: its scoped ladder
   // answers with a global rung, so `ownAnswer` would hold its aside forever.
