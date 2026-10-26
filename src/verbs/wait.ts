@@ -3,8 +3,9 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, type Config } from '../config.js'
 import { PAUSE_IDLE_MAX_MS } from '../drive.js'
 import { driveHolder, sessionMarker } from '../drive-presence.js'
+import { resolveDriver } from '../harness.js'
 import { primaryRoot } from '../gitio.js'
-import { lastEnd, liveDrive, takeWaiter, waiterIs, type EndReason } from '../live.js'
+import { lastEnd, liveDrive, takeWaiter, waiterState, type EndReason } from '../live.js'
 import { needsYou, needsYouToken, type NeedYou } from '../needs-you.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
@@ -34,7 +35,10 @@ const WHY: Record<EndReason, string> = {
 
 export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { since?: string }, clock: Clock): Promise<number> {
   const me = process.pid
-  takeWaiter(root, me)                                     // one waiter per repo: the newest
+  // The chat this wait belongs to, by its harness's session variable (final review C2).
+  const driver = resolveDriver(ctx.env, cfg.harness)
+  const session = driver.ok ? ctx.env[driver.value.harness.session] : undefined
+  takeWaiter(root, me, session)                            // one waiter per repo: the newest
   const read = () => {
     const canon = loadCanon(root)
     return { canon, items: needsYou(root, ctx, cfg, canon, liveDrive(root, canon)?.asides ?? []).filter((i) => i.notice !== true) }
@@ -55,7 +59,10 @@ export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { sinc
   for (;;) {
     // Superseded for good: the engine row tells that chat never to wait again, so two chats
     // never trade the lock.
-    if (!waiterIs(root, me)) { ctx.out('wait: taken over by another chat'); return EXIT.OK }
+    // This chat's own newer wait only ends this one.
+    const state = waiterState(root, me, session)
+    if (state === 'replaced') { ctx.out("wait: replaced by this chat's newer wait"); return EXIT.OK }
+    if (state === 'taken') { ctx.out('wait: taken over by another chat'); return EXIT.OK }
     // A 0.24.x drive writes no live file but holds the lock: running, its waits unknown.
     if (driveHolder(root) === undefined) {
       if (driveHasWork(root, ctx, canon, cfg, computeNext(root, ctx, canon, cfg))) {

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { KEPT_STOP_NAMES, type KeptStop } from './autonomy.js'
@@ -115,12 +115,26 @@ export function lastEnd(root: string, canon: Canon): EndReason | undefined {
 }
 
 // Row 204. One waiting chat per repo: the newest takes over, and the one it displaced learns so
-// on its next poll.
-export function takeWaiter(root: string, pid: number): void {
-  put(root, WAITER_FILE, { pid })
+// on its next poll. Final review C2: the waiter names its chat too (the harness's session, hashed
+// — the raw id never lands on disk), so a chat whose human typed while it waited, and whose new
+// turn started a second wait, reads as replaced by itself rather than taken over by another.
+const chatKey = (session: string | undefined): string | undefined =>
+  session === undefined || session === '' ? undefined : createHash('sha1').update(session).digest('hex').slice(0, 12)
+
+export function takeWaiter(root: string, pid: number, session?: string): void {
+  const chat = chatKey(session)
+  put(root, WAITER_FILE, { pid, ...(chat !== undefined ? { chat } : {}) })
+}
+
+export type WaiterState = 'mine' | 'replaced' | 'taken'
+
+export function waiterState(root: string, pid: number, session?: string): WaiterState {
+  const raw = get(root, WAITER_FILE) as { pid?: unknown; chat?: unknown } | undefined
+  if (raw !== undefined && raw !== null && raw.pid === pid) return 'mine'
+  const chat = chatKey(session)
+  return chat !== undefined && raw !== undefined && raw !== null && raw.chat === chat ? 'replaced' : 'taken'
 }
 
 export function waiterIs(root: string, pid: number): boolean {
-  const raw = get(root, WAITER_FILE) as { pid?: unknown } | undefined
-  return raw !== undefined && raw !== null && raw.pid === pid
+  return waiterState(root, pid) === 'mine'
 }

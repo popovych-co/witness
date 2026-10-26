@@ -34,6 +34,7 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 | `drive: done` is printed | `witness drive` started this session for one target and that target needs nothing more from it. **END YOUR TURN**. |
 | `wait: needs you` is printed | Something new needs the human. Run `$WITNESS next` and act on the first item it routes, one at a time; after the human's answer, loop. |
 | `wait: drive stopped — <why>` is printed | Drive is gone with work left. Tell the human, with the why, and **END YOUR TURN** — never restart drive yourself. When they say "go", run `$WITNESS next`: its `launch:` restarts it. |
+| `wait: replaced by this chat's newer wait` is printed | A newer wait of this same chat now runs. **END YOUR TURN** — that wait wakes you. |
 | `wait: taken over by another chat` is printed | A newer `/witness` chat now waits for this repo. **END YOUR TURN**, and never wait again in this chat. |
 | `wait: merged on GitHub` is printed | A merge left to the human landed. Run `$WITNESS next` — its stamp records the merge — and loop. |
 | `wait: nothing owed` is printed | Nothing is left for drive or the human. **END YOUR TURN**. |

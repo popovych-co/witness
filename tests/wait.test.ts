@@ -150,6 +150,25 @@ describe('witness wait (D204)', () => {
     } finally { release() }
   })
 
+  // Final review C2. On Claude Code a human may type while the chat waits; that turn's `next`
+  // starts a second background wait in the same chat. The first must not read that as another
+  // chat taking over, whose row says never to wait again.
+  it("a newer wait of the same chat replaces the older one, never takes it over", async () => {
+    const repo = await flowing()
+    const release = holdDrive(repo)
+    const other = spawn('sleep', ['5'])
+    try {
+      const same: string[] = []
+      await waitLoop(repo.root, ctxOf(repo, same, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' }), cfgOf(repo), { since: tokenNow(repo) },
+        scripted({ 1: () => takeWaiter(repo.root, other.pid!, 's1') }))
+      expect(same).toEqual(["wait: replaced by this chat's newer wait"])
+      const another: string[] = []
+      await waitLoop(repo.root, ctxOf(repo, another, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' }), cfgOf(repo), { since: tokenNow(repo) },
+        scripted({ 1: () => takeWaiter(repo.root, other.pid!, 's2') }))
+      expect(another).toEqual(['wait: taken over by another chat'])
+    } finally { other.kill(); release() }
+  })
+
   it('a merged PR returns merged on GitHub', async () => {
     const repo = await flowing({ pr: 7 })
     const scenario = fakeScenario()

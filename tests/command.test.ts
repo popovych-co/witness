@@ -123,6 +123,7 @@ describe('the chat waits (row 204)', () => {
   it('each wait: outcome has its row', () => {
     const b = body()
     for (const s of ['`wait: needs you`', '`wait: drive stopped', '`wait: taken over by another chat`', 'never wait again in this chat',
+      "`wait: replaced by this chat's newer wait`",
       '`wait: merged on GitHub`', '`wait: nothing owed`']) expect(b, s).toContain(s)
     expect(b).toContain('never restart drive yourself')
   })
