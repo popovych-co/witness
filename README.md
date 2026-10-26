@@ -265,7 +265,7 @@ are declared in machine config, not env:
 reviewerExtensions:
   - /Users/you/.pi/agent/npm/node_modules/pi-claude-oauth-adapter
 opener: xdg-open   # optional; nonstandard desktops only
-notify: /usr/local/bin/ping-me   # optional; the run summary is its one argument · default: the platform notifier
+notify: /usr/local/bin/ping-me   # optional; each notification's text is its one argument · default: the platform notifier
 ```
 
 Repo facts live in `witness.config.yaml` (committed); machine facts live in
@@ -285,6 +285,9 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `check` | schema, graph, invariants, needs, trailer audit, probes |
 | `index` | id · summary · status · depends across the canon, then each spec's plans |
 | `satisfy <id> --need <id\|n\|text>` | journal a manual need as met — the spec is never rewritten |
+| `trust [<id>] [--cmd '<exact command>']… [--yes]` | list every command a target's flow runs (the runner, `ship.test`, `ship.lint`, its spec's `cmd:` criteria, its `cmd:` needs) with its source; `--cmd` grants exactly the named command, `--yes` grants all only at a terminal; no session grants trust · with no id, everything the repo runs |
+| `retry <target>` | ask drive to try a set-aside target again, after a fix that leaves no record of its own (code, a tool, an account); refused inside a session |
+| `wait [--since <token>]` | under autonomy, block until something new needs you, drive stops with work left, a merge lands on GitHub, or a newer chat takes over — the `/witness` chat runs it; journals nothing |
 | `log <id>` | render a journal stream |
 | `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
 | `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |
@@ -359,6 +362,17 @@ Operator notes, non-load-bearing — the design depends on none of them:
   `drive.caps.spawns` (24). A measured slice on a large window can run past an hour, and on a
   200k window every slice is one step, so a plan takes more sessions; raise either if drive
   times out or caps a plan that is still moving.
+- **Being told, and the waiting chat.** Under autonomy, drive notifies the moment something new
+  needs you — a trust grant, a need, a decision, a look, a merge, a stuck target — once per item,
+  a burst as one notification, plus once when the run ends. macOS uses `osascript`, Linux
+  `notify-send`, Windows a toast through Windows PowerShell 5.1 (no install, no registration);
+  `notify:` in `.witness/config.local.yaml` replaces all three. When everything left waits on you,
+  drive pauses rather than exits, lets the machine sleep, resumes the moment your act lands, and
+  gives up after 12 h with its report. The `/witness` chat sleeps beside it and is woken: on
+  Claude Code by `witness wait` in the background, on Pi by witness's add-on (`witness init --agent
+  pi` installs it). The chat never restarts a drive that stopped — it says so and waits for your
+  "go". After a fix witness cannot see (code, a tool, an account), `witness retry <target>` tells
+  drive to try a stuck or capped target again.
 - **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt
   cache; on wake the full agent context is re-written at cache-write price. On macOS:
   `witness drive` holds `caffeinate -ims` for its own lifetime (a closed lid on battery
