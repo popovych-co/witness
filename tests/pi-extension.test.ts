@@ -14,8 +14,14 @@ type Handler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown;
 function stubPi() {
   const handlers = new Map<string, Handler[]>();
   const notes: string[] = [];
+  const sent: Array<{ message: unknown; options: unknown }> = [];
+  const userSent: Array<{ content: unknown; options: unknown }> = [];
+  const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> | void }>();
   const pi = {
     on: (name: string, fn: Handler) => { handlers.set(name, [...(handlers.get(name) ?? []), fn]); },
+    sendMessage: (message: unknown, options: unknown) => { sent.push({ message, options }); },
+    sendUserMessage: (content: unknown, options: unknown) => { userSent.push({ content, options }); },
+    registerCommand: (name: string, opts: { handler: (args: string, ctx: unknown) => Promise<void> | void }) => { commands.set(name, opts); },
   };
   const fire = async (name: string, event: unknown, ctx: unknown): Promise<unknown> => {
     let last: unknown;
@@ -28,7 +34,7 @@ function stubPi() {
     getContextUsage: (): unknown => state.usage,
     sessionManager: { getSessionId: () => state.session },
   };
-  return { pi, fire, ctx, notes, state };
+  return { pi, fire, ctx, notes, state, sent, userSent, commands };
 }
 
 function witnessRepo(config = 'schema: 1\n'): string {
@@ -42,7 +48,7 @@ function witnessRepo(config = 'schema: 1\n'): string {
 // child inherits, the guard tests' bash calls included; the suite may itself run inside a
 // measured session. So each test in this file starts without the variable or the reviewer mark,
 // and gives back whatever the process had.
-const KEYS = ['WITNESS_CONTEXT', 'WITNESS_REVIEWER'] as const;
+const KEYS = ['WITNESS_CONTEXT', 'WITNESS_REVIEWER', 'WITNESS_BIN', 'WITNESS_DRIVE'] as const;
 let saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
@@ -293,5 +299,171 @@ describe('pi extension — the context reading and the warning (row 191 §4.1, �
     const blocked = await s.fire('tool_call', { toolName: 'write', input: { path: 'specs/a.md' } }, s.ctx);
     expect(blocked).toMatchObject({ block: true });
     expect(await s.fire('tool_call', { toolName: 'write', input: { path: 'src/x.ts' } }, s.ctx)).toBeUndefined();
+  });
+});
+
+// Row 204. On Pi the chat ends its turn and witness's add-on waits for it: when a turn settles
+// and the last witness command the agent ran printed a `wait:` line in the add-on mode, the
+// add-on runs that wait and posts what it printed, which wakes the chat. Drive's headless
+// sessions and reviewers never wait, and a command that is not witness's never asks to.
+describe('pi extension — the waker', () => {
+  const OUT = 'next: witness check\nwait: witness wait --since 0123456789ab\nwait-mode: add-on'
+  const fakeBin = (body: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'piwait-'));
+    const bin = join(dir, 'witness');
+    writeFileSync(bin, `#!/bin/sh\n${body}\n`);
+    chmodSync(bin, 0o755);
+    return bin;
+  };
+  const result = (command: string, text = OUT) => ({ toolName: 'bash', input: { command }, content: [{ type: 'text', text }], isError: false });
+
+  it('wakes the chat with the wait output when the turn settles', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    process.env.WITNESS_BIN = fakeBin('echo "wait: needs you — 1 item(s) $*"');
+    await s.fire('tool_result', result('$WITNESS next'), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    await expect.poll(() => s.sent.length, { timeout: 10_000 }).toBe(1);
+    expect(s.sent[0]!.message).toMatchObject({ customType: 'witness-wait', display: true });
+    expect((s.sent[0]!.message as { content: string }).content).toContain('wait: needs you — 1 item(s) wait --since 0123456789ab');
+    expect(s.sent[0]!.options).toEqual({ triggerTurn: true, deliverAs: 'followUp' });
+  });
+
+  it('never waits without a screen, in a drive session or in a reviewer', async () => {
+    process.env.WITNESS_BIN = fakeBin('echo woke');
+    for (const setup of [
+      (s: ReturnType<typeof stubPi>) => { s.ctx.hasUI = false; },
+      () => { process.env.WITNESS_DRIVE = 'p1'; },
+      () => { process.env.WITNESS_REVIEWER = '1'; },
+    ]) {
+      const s = stubPi();
+      register(s.pi as never);
+      s.ctx.cwd = witnessRepo();
+      setup(s);
+      await s.fire('tool_result', result('$WITNESS next'), s.ctx);
+      await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(s.sent).toEqual([]);
+      delete process.env.WITNESS_DRIVE;
+      delete process.env.WITNESS_REVIEWER;
+    }
+  });
+
+  it('ignores a wait line from a command that is not witness\'s, and a later next without one', async () => {
+    process.env.WITNESS_BIN = fakeBin('echo woke');
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result('cat notes.txt'), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    await s.fire('tool_result', result('$WITNESS next'), s.ctx);
+    await s.fire('tool_result', result('$WITNESS next', 'next: witness decide plan p --show'), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.sent).toEqual([]);
+  });
+
+  // Final review C1: the launch row runs `drive --detach` after `next`, and its output carries
+  // no `next:` line — only a `next` decides whether this chat waits, or the first turn of every
+  // session that launches drive would never be woken.
+  it('a launch after next still wakes the chat', async () => {
+    process.env.WITNESS_BIN = fakeBin('echo "wait: needs you — 1 item(s)"');
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result('$WITNESS next', `${OUT.replace('next: witness check', 'next: witness check\nlaunch: witness drive --detach')}`), s.ctx);
+    await s.fire('tool_result', result('$WITNESS drive --detach', 'drive: background · pid 42\nwatch: tail -f /r/.witness/drive.log · stop it: kill 42'), s.ctx);
+    await s.fire('tool_result', result('$WITNESS status', 'flows: none'), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    await expect.poll(() => s.sent.length, { timeout: 10_000 }).toBe(1);
+  });
+
+  it('kills the waiter on session_shutdown', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'piwait-'));
+    process.env.WITNESS_BIN = fakeBin(`echo $$ > "${dir}/pid"\nexec sleep 30`);
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result('$WITNESS next'), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    const { existsSync, readFileSync } = await import('node:fs');
+    await expect.poll(() => existsSync(join(dir, 'pid')), { timeout: 10_000 }).toBe(true);
+    const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'));
+    await s.fire('session_shutdown', { type: 'session_shutdown' }, s.ctx);
+    await expect.poll(() => { try { process.kill(pid, 0); return 'alive'; } catch { return 'gone'; } }, { timeout: 10_000 }).toBe('gone');
+    expect(s.sent).toEqual([]);
+  });
+});
+
+describe('pi extension — the fresh chat (Q5)', () => {
+  const RELAY = 'context: 21% of 1M\nrelay: /new then /witness'
+  const result = (text: string) => ({ toolName: 'bash', input: { command: '$WITNESS next' }, content: [{ type: 'text', text }], isError: false });
+  const commandCtx = (sessionFile: string) => {
+    const opened: Array<{ parentSession?: string }> = [];
+    const prompts: string[] = [];
+    return {
+      opened, prompts,
+      ctx: {
+        sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => 'p1' },
+        newSession: async (o: { parentSession?: string; withSession?: (c: unknown) => Promise<void> }) => {
+          opened.push({ parentSession: o.parentSession });
+          await o.withSession?.({ sendUserMessage: async (m: string) => { prompts.push(m); } });
+          return { cancelled: false };
+        },
+      },
+    };
+  };
+
+  it('a relay with no run: opens a fresh session that runs /witness', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result(RELAY), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    expect(s.userSent).toEqual([{ content: '/witness-fresh', options: { deliverAs: 'followUp' } }]);
+    const c = commandCtx('/sessions/p1.jsonl');
+    await s.commands.get('witness-fresh')!.handler('', c.ctx);
+    expect(c.opened).toEqual([{ parentSession: '/sessions/p1.jsonl' }]);
+    expect(c.prompts).toEqual(['/witness']);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    expect(s.userSent).toHaveLength(1);                          // the latch cleared
+  });
+
+  it('a relay printed beside run: never opens one', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('tool_result', result("home: /r/wt\nrun: cd /r/wt && pi '/witness'\nrelay: /new then /witness"), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    expect(s.userSent).toEqual([]);
+  });
+
+  it('an armed chat continues armed', async () => {
+    const s = stubPi();
+    register(s.pi as never);
+    s.ctx.cwd = witnessRepo();
+    await s.fire('input', { type: 'input', text: '/witness --manual', source: 'interactive' }, s.ctx);
+    await s.fire('tool_result', result(RELAY), s.ctx);
+    await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+    const c = commandCtx('/sessions/p1.jsonl');
+    await s.commands.get('witness-fresh')!.handler('', c.ctx);
+    expect(c.prompts).toEqual(['/witness --manual']);
+  });
+
+  it('never without a screen or in a drive session', async () => {
+    for (const setup of [
+      (s: ReturnType<typeof stubPi>) => { s.ctx.hasUI = false; },
+      () => { process.env.WITNESS_DRIVE = 'p1'; },
+    ]) {
+      const s = stubPi();
+      register(s.pi as never);
+      s.ctx.cwd = witnessRepo();
+      setup(s);
+      await s.fire('tool_result', result(RELAY), s.ctx);
+      await s.fire('agent_settled', { type: 'agent_settled' }, s.ctx);
+      expect(s.userSent).toEqual([]);
+      delete process.env.WITNESS_DRIVE;
+    }
   });
 });

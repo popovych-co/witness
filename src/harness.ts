@@ -36,6 +36,10 @@ export interface Harness {
   // empty probe there is not evidence of a problem, and a false warning on every run is
   // worse than a missing one. Pi has no such bundle, so absence there IS evidence.
   bundled: boolean
+  // Row 204. How the `/witness` chat sleeps until something needs the human: Claude Code runs
+  // `witness wait` in the background and is re-invoked when it exits; Pi ends its turn and
+  // witness's add-on runs the wait and wakes it.
+  waitMode: 'background' | 'add-on'
   payload: Array<{ from: string; to: string }>
   skills: { project: string; global: string }
   // The judgment lane: how THIS harness runs a headless reviewer and what its stdout
@@ -132,6 +136,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     launch: 'claude',
     relay: '/clear',
     session: 'CLAUDE_CODE_SESSION_ID',
+    waitMode: 'background',
     settings: '.claude/settings.json',
     bundled: true,
     payload: [
@@ -172,6 +177,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
     defaultProvider: 'anthropic',
     relay: '/new',
     session: 'PI_SESSION_ID',
+    waitMode: 'add-on',
     bundled: false,
     payload: [
       { from: 'plugin/commands/witness.md', to: '.pi/prompts/witness.md' },

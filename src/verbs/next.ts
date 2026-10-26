@@ -19,7 +19,11 @@ import {
   type StepState,
 } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
-import { handoffLine, relayLine, resolveDriver, resolveJudge } from '../harness.js'
+import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } from '../harness.js'
+import { payloadStale } from '../install.js'
+import { NPX_LATEST } from '../version.js'
+import { liveDrive } from '../live.js'
+import { HELD_KINDS, needsYou, needsYouToken } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -27,7 +31,8 @@ import { cmd, kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { recoverChoice } from './recover.js'
-import { autonomyLines, policyFor, unmetNeedLine } from '../autonomy.js'
+import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
+import { grantOf, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
@@ -275,6 +280,9 @@ export interface NextAction {
   // the session the action is routed to is mid-red, and a session never relays there. The point
   // after it decides instead (§4.4): the green's close for a plan step, the re-gate for a fix round.
   midRed?: true
+  // Row 205. The untrusted config commands this action's verb runs: the action is the trust
+  // act, the human's, and nothing is spawned for it.
+  trust?: RunCommand[]
 }
 
 // One list for both readers. `flowAction` needs it to name an effort that can carry a plan
@@ -327,11 +335,35 @@ function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: E
     !gateParked(e.entries, 'decompose')
 }
 
+// Row 205. The trust act: the human names, in the chat, each command to trust. The listing
+// form of the verb, which grants nothing, so a routed line run verbatim cannot over-grant.
+export function trustAction(target: string, owed: RunCommand[]): NextAction {
+  return {
+    line: `witness trust ${target}`, target, trust: owed,
+    note: `not trusted on this machine — ${owed.map(shownCmd).join(' · ')} · the human names each to trust it`,
+  }
+}
+
+// An action whose verb runs a config command this machine does not trust is the trust act.
+function withTrust(root: string, env: Ctx['env'], cfg: Config, canon: Pick<Canon, 'docs'>, a: NextAction): NextAction {
+  if (a.target === undefined) return a
+  const owed = trustOwed(root, env, cfg, canon, a)
+  return owed.length > 0 ? trustAction(a.target, owed) : a
+}
+
 // The action for ONE flow. A flow is a plan with status `in-progress`: it begins at
 // `witness start` and ends at the merge stamp. Anything else returns undefined and is
 // not a flow. Exported because `--flow` and the dashboard must answer with the SAME
-// derivation next uses, never a re-derived shorthand.
-export function flowAction(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
+// derivation next uses, never a re-derived shorthand — the trust check included (row 205),
+// so `--flow`, a worktree's `next` and the ladder agree.
+export function flowAction(
+  root: string, cfg: Config, plan: CanonDoc, judge: string | undefined, env: Ctx['env'],
+): NextAction | undefined {
+  const a = flowStep(root, cfg, plan, judge)
+  return a && withTrust(root, env, cfg, { docs: [plan] }, a)
+}
+
+function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const entries = readStream(root, id)
@@ -769,7 +801,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   const flows = plans
     .filter((plan) => admits(String(plan.meta.id)))
     .filter((plan) => !flowBlocked(root, plan, readStream(root, String(plan.meta.id))))
-    .map((plan) => flowAction(root, cfg, plan, judge))
+    .map((plan) => flowAction(root, cfg, plan, judge, ctx.env))
     .filter((a): a is NextAction => a !== undefined)
     .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))
   if (flows.length > 0) {
@@ -993,10 +1025,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
       ]
     }
     const free = approved.find((p) => waitsOn(p).length === 0)
-    if (free !== undefined) return { line: `witness start ${String(free.meta.id)}`, target: String(free.meta.id) }
+    if (free !== undefined) return withTrust(root, ctx.env, cfg, canon, { line: `witness start ${String(free.meta.id)}`, target: String(free.meta.id) })
     const first = approved[0]!
     const id = String(first.meta.id)
-    return { line: `witness start ${id}`, target: id, note: `${id} waits on an unmet need — ${waitsOn(first).join(' · ')}` }
+    return withTrust(root, ctx.env, cfg, canon,
+      { line: `witness start ${id}`, target: id, note: `${id} waits on an unmet need — ${waitsOn(first).join(' · ')}` })
   }
   // Rule B — the ladder is exhausted. Same line as rule A (canon errors, the early
   // return above) but a different state; the note is what tells them apart on screen
@@ -1030,14 +1063,14 @@ export function conversationDraft(root: string, action: Pick<NextAction, 'stage'
 // A stop that waits for the human: a decision the CLI could not settle, a conversation, or a
 // start an unmet manual need blocks. Drive sets each aside, so none is work to launch it for.
 function humanStop(canon: Canon, a: NextAction): boolean {
-  if (a.line.startsWith('witness decide ') || conversationStage(a)) return true
+  if (a.line.startsWith('witness decide ') || a.line.startsWith('witness trust ') || conversationStage(a)) return true
   return a.line.startsWith('witness start ') &&
     unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
 }
 
 // The ladder with the human's stops set aside, the way drive's fill reads it. A target-less stop
 // (an ask's grill) is held once, as drive holds `-`, so the machine work below it still counts.
-function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
+export function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction): boolean {
   const held = new Set<string>()
   let targetless = false
   for (let a = first; ;) {
@@ -1051,18 +1084,18 @@ function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, first: 
 }
 
 // Row 195. The ladder with drive's work set aside, the mirror of `driveHasWork`: the first
-// item an autonomous chat keeps for the human — a conversation, or a decision they settle in
-// the chat. `outside` holds the targets whose stop the human settles outside the chat (a trust
-// grant, answered in a terminal). Everything else is held aside, need-blocked starts included.
-// A target-less action that is no conversation (the recovery fork) is the ladder's own, and the
+// item an autonomous chat keeps for the human — a conversation, a decision they settle in the
+// chat, or a trust grant they name in it (row 205: a gate's kept trust grant too, no longer
+// answered in a terminal). Everything else is held aside, need-blocked starts included. A
+// target-less action that is no conversation (the recovery fork) is the ladder's own, and the
 // walk never passes it.
 export function humanAction(
-  root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction, outside: ReadonlySet<string>,
+  root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction,
 ): NextAction | undefined {
   const held = new Set<string>()
   for (let a = first; ;) {
     if (conversationStage(a)) return a
-    if (a.line.startsWith('witness decide ') && (a.target === undefined || !outside.has(a.target))) return a
+    if (a.line.startsWith('witness decide ') || a.line.startsWith('witness trust ')) return a
     if (a.line === 'witness check' || a.target === undefined || held.has(a.target)) return undefined
     held.add(a.target)
     a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
@@ -1140,8 +1173,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const marked = driveChild(ctx.env)
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   let routed: { command: string; target: string } | undefined
-  // Row 195. Targets whose stop the human settles outside a chat: the trust grants left kept.
-  const outside = new Set<string>()
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
@@ -1152,7 +1183,6 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       if (routed === undefined && r.settled.kind === 'routed') {
         routed = { command: r.settled.line.replace(/^autonomy: re-run owed — /, ''), target: r.target }
       }
-      if (r.settled.kind === 'kept' && r.settled.stop === 'trust-grant') outside.add(r.target)
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1168,7 +1198,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.flow !== undefined) {
     const flowR = resolveFlow(canon, values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    action = flowAction(root, cfgR.value, flowR.value, judge) ?? { line: 'witness check', target: values.flow }
+    action = flowAction(root, cfgR.value, flowR.value, judge, ctx.env) ?? { line: 'witness check', target: values.flow }
   } else if (scope) {
     // The drive marker outranks the worktree's ambient flow: drive assigned this session
     // its target, and a worktree cwd only infers one.
@@ -1177,7 +1207,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const inferred = worktreeFlow(ctx.cwd, root)
     const ambient = inferred !== undefined ? findById(canon, inferred) : undefined
     const scoped = ambient && ambient.meta.type === 'plan'
-      ? flowAction(root, cfgR.value, ambient, judge)
+      ? flowAction(root, cfgR.value, ambient, judge, ctx.env)
       : undefined
     if (scoped) ambientFlow = inferred
     action = scoped ?? computeNext(root, ctx, canon, cfgR.value)
@@ -1195,7 +1225,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // scope: the walk reads the whole ladder, which would route past the flow the session is on.
   const ladder = action
   const chat = cfgR.value.autonomy && marked === undefined && values.flow === undefined && ambientFlow === undefined
-  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder, outside) : undefined
+  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder) : undefined
   // The ladder's own action already carries its deferral note; one the walk reached does not yet.
   if (human !== undefined && human !== ladder) action = withDeferralNote(root, canon, human)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
@@ -1210,6 +1240,21 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 195. Raw, because each is a command (D120), and above the routing block for the same
   // reason as the lines above.
   if (chat) needNotices(canon).forEach((l) => ctx.out(l))
+  // Final review. What waits on the human that no `next:` routes — a target drive set aside as
+  // stuck or capped, a merge, a parked gate — is said here, once per line with its command, so a
+  // chat that starts beside a paused drive sees it rather than folding it into its wait token.
+  const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
+  for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) {
+    const [head, ...more] = i.rows
+    ctx.out(cmd('waiting', [head!.replace(/^wait: /, ''), ...more.map((r) => r.trim())].join(' · ')))
+  }
+  // Row 205. Under autonomy each untrusted command is a kept stop, one raw line each (D120),
+  // with the grant that names it — paste-ready whatever quotes the command carries.
+  if (cfgR.value.autonomy && action.trust !== undefined && action.target !== undefined) {
+    for (const c of action.trust) {
+      ctx.out(keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(action.target, c)}`))
+    }
+  }
   reportOpening(ctx, root, cfgR.value)
   ctx.out(kv('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
@@ -1250,15 +1295,32 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // session's turn ends anyway: at a decision left for a human, with nothing owed, or with the run
   // handed to drive and nothing kept for the human (row 195: a routed conversation keeps the
   // guard). And never mid-red (`midRed`: a red in flight).
-  const turnEnds = (toDrive && human === undefined) || action.line.startsWith('witness decide ') || action.line === 'witness check'
+  const turnEnds = (toDrive && human === undefined) || action.line.startsWith('witness decide ') ||
+    action.line.startsWith('witness trust ') || action.line === 'witness check'
   if (!elsewhere && !turnEnds && action.midRed !== true) reportHandover(ctx, root, cfgR.value, { guard: true })
   if (assigned !== undefined && values.flow === undefined && action.line === 'witness check' && action.note === NOTHING_OWED) {
     ctx.out(kv('drive', `done — nothing more is owed for ${assigned}`))
   }
   // Last, so it never splits the routing unit, and raw, because both lines are commands (D120).
-  if (toDrive) {
-    const holder = driveHolder(root)
+  // Row 204: `watch:` whenever a drive holds the lock — a paused one included, which has no
+  // work of its own and waits on the human.
+  const holder = cfgR.value.autonomy && marked === undefined ? driveHolder(root) : undefined
+  if (toDrive || holder !== undefined) {
     ctx.out(holder !== undefined ? cmd('watch', watchLine(holder)) : cmd('launch', 'witness drive --detach'))
+  }
+  // Row 204. With nothing routed for the human and drive running or launched, the chat sleeps
+  // until something new needs the human: the token names the list it saw, and the mode is its
+  // harness's way to be woken. A Pi add-on older than this CLI may not wake it, so that chat is
+  // told and waits in the foreground.
+  if (chat && human === undefined && (toDrive || holder !== undefined)) {
+    const items = owed
+    let mode: Harness['waitMode'] | 'foreground' = harness.waitMode
+    if (harness.name === 'pi' && payloadStale(root, harness).length > 0) {
+      ctx.out(kv('warn', `the witness Pi add-on is older than this CLI — this chat waits in the foreground · run ${NPX_LATEST} init --agent pi`))
+      mode = 'foreground'
+    }
+    ctx.out(cmd('wait', `witness wait --since ${needsYouToken(items)}`))
+    ctx.out(kv('wait-mode', mode))
   }
   return EXIT.OK
 }

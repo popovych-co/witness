@@ -147,6 +147,21 @@ export function payloadHomes(root: string): string[] {
     .sort()]
 }
 
+// Row 102: content, not pins — every installed payload file, in every home, that differs from
+// what this CLI ships. A shipped file that cannot be read is a packaging failure, not staleness,
+// and is skipped. Read by `check` (payload-stale) and by `next`, whose waiting Pi chat falls
+// back to the foreground when its add-on is older than this CLI (row 204).
+export function payloadStale(root: string, harness: Harness): string[] {
+  const installed = harness.payload.filter((p) => existsSync(join(root, p.to)))
+  return payloadHomes(root).flatMap((home) => installed
+    .filter((p) => {
+      const src = join(packageRoot(), p.from)
+      if (!existsSync(src) || !existsSync(join(home, p.to))) return false
+      return readFileSync(join(home, p.to), 'utf8') !== readFileSync(src, 'utf8')
+    })
+    .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
+}
+
 // Preflight EVERY home before writing ANY. install.ts's standing doctrine is that a
 // refusal leaves nothing half-installed; across homes that matters more, not less — a
 // half-upgraded set of homes IS the skew row 116 refuses and this row prevents.

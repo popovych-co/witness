@@ -118,3 +118,72 @@ describe('the adapter core (row 191 §4.1, §4.6)', () => {
       'plugin-context/hooks/context-core.mjs differs from plugin/hooks/ — run pnpm run sync-versions').toBe(true)
   })
 })
+
+// Row 204. The Pi add-on wakes a waiting chat. Its decisions are pure and live here: whether the
+// CLI's output asks this chat to wait, what to run (only the validated token and pin come from
+// any output), and whether this session may wait at all.
+describe('the waker (row 204)', () => {
+  const NEXT = 'next: witness check\nlaunch: witness drive --detach\nwait: witness wait --since 0123456789ab\nwait-mode: add-on\n'
+
+  it('waitRequest needs both lines, the add-on mode and a well-formed token', () => {
+    expect(core.waitRequest(NEXT)).toEqual({ token: '0123456789ab' })
+    expect(core.waitRequest(NEXT.replace('wait-mode: add-on', 'wait-mode: background'))).toBeUndefined()
+    expect(core.waitRequest(NEXT.replace('wait-mode: add-on\n', ''))).toBeUndefined()
+    expect(core.waitRequest(NEXT.replace('0123456789ab', '0123; rm -rf ~'))).toBeUndefined()
+    expect(core.waitRequest(NEXT.replace('0123456789ab', '0123456789AB'))).toBeUndefined()
+    expect(core.waitRequest('  wait: witness wait --since 0123456789ab\nwait-mode: add-on')).toBeUndefined()
+    expect(core.waitRequest(undefined)).toBeUndefined()
+  })
+
+  it('pinOf reads the engine pin', () => {
+    expect(core.pinOf('WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.25.0}"')).toBe('0.25.0')
+    expect(core.pinOf('no pin here')).toBeUndefined()
+    expect(core.pinOf('@popovych.co/witness@latest')).toBeUndefined()
+  })
+
+  it('waitArgv runs the user\'s bin, else the pinned package, and goes through cmd.exe on Windows', () => {
+    const t = '0123456789ab'
+    expect(core.waitArgv({ bin: '/opt/w', pin: '0.25.0', token: t, platform: 'darwin' }))
+      .toEqual(['sh', '-c', `exec /opt/w wait --since ${t}`])
+    expect(core.waitArgv({ pin: '0.25.0', token: t, platform: 'linux' }))
+      .toEqual(['npx', '-y', '@popovych.co/witness@0.25.0', 'wait', '--since', t])
+    expect(core.waitArgv({ pin: '0.25.0', token: t, platform: 'win32', systemRoot: 'D:\\Win' }))
+      .toEqual(['D:\\Win\\System32\\cmd.exe', '/d', '/s', '/c', `npx -y @popovych.co/witness@0.25.0 wait --since ${t}`])
+    expect(core.waitArgv({ pin: '0.25.0', token: t, platform: 'win32' })![0]).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(core.waitArgv({ pin: 'latest', token: t, platform: 'darwin' })).toBeUndefined()
+    expect(core.waitArgv({ pin: '0.25.0', token: 'x; y', platform: 'darwin' })).toBeUndefined()
+  })
+
+  it('wakeAllowed needs a screen and no drive or reviewer mark', () => {
+    expect(core.wakeAllowed({ hasUI: true, env: {} })).toBe(true)
+    expect(core.wakeAllowed({ hasUI: false, env: {} })).toBe(false)
+    expect(core.wakeAllowed({ hasUI: true, env: { WITNESS_DRIVE: 'p' } })).toBe(false)
+    expect(core.wakeAllowed({ hasUI: true, env: { WITNESS_REVIEWER: '1' } })).toBe(false)
+  })
+})
+
+// Row 204 (Q5). On Pi a chat at its fill limit continues in a fresh session by itself.
+describe('the fresh chat (row 204, Q5)', () => {
+  it('freshDue wants a relay with no run: beside it', () => {
+    expect(core.freshDue('context: 21% of 1M\nrelay: /new then /witness')).toBe(true)
+    expect(core.freshDue('home: /r/wt\nrun: cd /r/wt && pi \'/witness\'\nrelay: /new then /witness')).toBe(false)
+    expect(core.freshDue('next: witness check')).toBe(false)
+    expect(core.freshDue('  relay: indented')).toBe(false)
+    expect(core.freshDue(undefined)).toBe(false)
+  })
+  it('armedBy reads --manual on a /witness prompt', () => {
+    expect(core.armedBy('/witness --manual')).toBe(true)
+    expect(core.armedBy('/witness --manual add billing')).toBe(true)
+    expect(core.armedBy('/witness add billing')).toBe(false)
+    expect(core.armedBy('please run --manual')).toBe(false)
+    expect(core.armedBy('/witnessy --manual')).toBe(false)
+  })
+})
+
+describe('only next routes a wait (final review C1)', () => {
+  it('routesNext reads next\'s routing output', () => {
+    expect(core.routesNext('autonomy: on\nnext: witness check')).toBe(true)
+    expect(core.routesNext('drive: background · pid 4\nwatch: tail -f x')).toBe(false)
+    expect(core.routesNext(undefined)).toBe(false)
+  })
+})

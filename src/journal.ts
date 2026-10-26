@@ -27,6 +27,9 @@ export type EntryType =
   // Row 191 §4.3. A scaffolding step's close. Such a step has no red→green to witness, and
   // until now it left no trace, so the CLI could not tell where a plan stood.
   | 'step-close'
+  // Row 207. The human's ask that drive try a target again, for a fix that leaves no other
+  // record (code, a tool, an account): it moves the target's key, so drive takes it back.
+  | 'retry'
 
 export interface Entry {
   v: 1

@@ -1,4 +1,4 @@
-import { trustedCommands, untrustedCmdsFor } from './allowlist.js'
+import { grantOf, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
 import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
@@ -24,7 +24,8 @@ export type Settled =
   | { kind: 'none' }
   | { kind: 'decided'; by: 'policy' | 'arbiter'; decision: DecisionEntry['decision']; rule: string }
   | { kind: 'routed'; line: string }                                       // a re-run the CLI names and never executes
-  | { kind: 'kept'; stop: KeptStop; line: string }
+  // Row 205: a trust grant carries the commands its gate's checks found untrusted.
+  | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   | { kind: 'left'; why: string; code: number; limit?: string }            // limit: the usage limit that refused the arbiter
 
 // The commands a failed check of `run` names that the repo STILL does not trust. A grant
@@ -94,13 +95,14 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
 
   if (policy.kind === 'human') {
     // Row 194: the gate ran only on a look the human opened, so approving is their one act.
-    const detail = policy.stop === 'design-look'
-      ? `the human approves the screen or sends a note — witness decide design ${target} --show`
-      : `${untrusted.join(' · ')} — the human runs witness gate ${gate} ${target} in a terminal and answers each prompt`
-    const line = keptStopLine(policy.stop, detail)
+    // Row 205 (final review): a trust grant is one line per command — escaped, with its source and
+    // the grant that names it — as `next`'s pre-flight prints it, so the chat shows the source.
+    const line = policy.stop === 'design-look'
+      ? keptStopLine(policy.stop, `the human approves the screen or sends a note — witness decide design ${target} --show`)
+      : sourced(cfg, canon, target, untrusted).map((c) => keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(target, c)}`)).join('\n')
     renderDecision(block).forEach((l) => ctx.out(l))
     ctx.out(line)
-    return { kind: 'kept', stop: policy.stop, line }
+    return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }
   }
 
   if (policy.kind === 'take') {

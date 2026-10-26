@@ -39,6 +39,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   check: () => import('./verbs/check.js'),
   index: () => import('./verbs/index-verb.js'),
   satisfy: () => import('./verbs/satisfy.js'),
+  // Row 207. A journaled human act that asks drive to try a set-aside target again.
+  retry: () => import('./verbs/retry.js'),
   dismiss: () => import('./verbs/dismiss.js'),
   log: () => import('./verbs/log.js'),
   'test-evidence': () => import('./verbs/evidence.js'),
@@ -61,6 +63,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   // D145. The scheduler. `next` names the action; `drive` runs the sessions that perform
   // it, stopping only where a human's judgment is the input.
   drive: () => import('./verbs/drive.js'),
+  // Row 204. The chat's sleep: blocks until something new needs the human.
+  wait: () => import('./verbs/wait.js'),
   abandon: () => import('./verbs/abandon.js'),
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
@@ -97,6 +101,7 @@ const VERB_USAGE: Record<string, string> = {
   recap: 'witness recap --file <recap.json> [--ask <id>] [--amend]',
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
+  retry: 'witness retry <target>',
   satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
@@ -104,9 +109,10 @@ const VERB_USAGE: Record<string, string> = {
   status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
   'step-close': 'witness step-close <plan-id> --step <id>',
   sync: 'witness sync',
-  trust: 'witness trust <artifact-id> [--yes]',
+  trust: "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]",
   'test-evidence': 'witness test-evidence <plan-id> --phase red|green [--step <id>]',
   'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
+  wait: 'witness wait [--since <token>] — blocks until something new needs you · the chat runs it under autonomy',
 }
 
 // Row 116 moved the body to version.ts, which journal.ts can import without closing a

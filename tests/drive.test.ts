@@ -17,7 +17,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -65,8 +65,12 @@ async function startedFlows(specs: string[], opts: { shipping?: string } = {}): 
   writeLocalConfig(repo.root, { notify: noopOpener() })
   return repo
 }
+// Row 202: a run left with only the human's work pauses for them. These tests are about what
+// comes before, so the human never comes back: the idle limit is reached at once (the pause's
+// own tests are tests/drive-pause.test.ts).
+const NO_WAIT = { WITNESS_DRIVE_IDLE_MAX_MS: '0' }
 const autoCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
-  fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+  fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...NO_WAIT, ...env }), out: (l) => out.push(l) })
 const script = (body: string): string => {
   const bin = join(fakeScenario(), 'agent')
   writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
@@ -519,13 +523,45 @@ describe('side by side (B3)', () => {
 
   it('catches a stalled target while another target journals every spawn (Review Focus 1)', async () => {
     const repo = await startedFlows(['a', 'b'])
-    const agent = script(`echo tick\ncase "$WITNESS_DRIVE" in a-plan-1) exec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0 ;; *) exit 0 ;; esac`)
+    // a-plan-1 moves every spawn with a real act (row 206: a dispatch report is bookkeeping). A
+    // session may not retry its own target (row 207), so the agent drops its marker: the retry
+    // stands in for a human act landing while each session runs.
+    const agent = script(`echo tick\ncase "$WITNESS_DRIVE" in a-plan-1) WITNESS_DRIVE= exec ${witnessCli()} retry a-plan-1 ;; *) exit 0 ;; esac`)
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 })
     const all = out.join('\n')
     expect(all).toContain('drive: no progress — witness test-evidence b-plan-1 --phase red --step s1')
     expect(out.filter((l) => / implement\/b-plan-1\] tick$/.test(l))).toHaveLength(1)
     expect(all).toMatch(/drive: spawn ceiling reached \(6\)/)
+  }, 90000)
+
+  // Issue #56, P2: a zero-step dispatch report is row 81's telemetry, never progress.
+  it('a session that only reports a zero-step dispatch is caught after one spawn', async () => {
+    const repo = await startedFlows(['a'])
+    const agent = script(`echo tick\nexec ${witnessCli()} dispatch-report a-plan-1 --steps-assigned 1 --steps-completed 0`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 }, fakeClock(0))
+    expect(out.join('\n')).toContain('drive: no progress — witness test-evidence a-plan-1 --phase red --step s1')
+    expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)
+  }, 60000)
+
+  // Issue #56, P6: every implement session runs `start`, which journals a sync when the repo
+  // has a remote — bookkeeping, so a session that does nothing else is caught after one spawn.
+  it('a session that only re-runs start in a repo with a remote is caught after one spawn', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'a', { criteria: [{ id: 'ac-a', test: '@spec:a' }] })
+    approve(repo, 'a')
+    await writePlan(repo, 'a-plan-1', { parent: 'a', steps: [{ id: 's1', title: 'a', criteria: ['ac-a'] }] })
+    approve(repo, 'a-plan-1')
+    addOrigin(repo)
+    await repo.cli(['start', 'a-plan-1'])
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const agent = script(`echo tick\nexec ${witnessCli()} start a-plan-1`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 6 }, fakeClock(0))
+    expect(out.join('\n')).toContain('drive: no progress — witness test-evidence a-plan-1 --phase red --step s1')
+    expect(out.filter((l) => / implement\/a-plan-1\] tick$/.test(l))).toHaveLength(1)
   }, 90000)
 
   it('with autonomy off a standing decision no longer ends the run', async () => {
@@ -791,15 +827,18 @@ describe('coming back (B6)', () => {
     return { bin, got: join(dir, 'got') }
   }
 
-  it('an autonomous run ends with the report and one notification', async () => {
+  // Row 203 (Q2): the item notified when it first needs the human, once, and the run's end.
+  it('an autonomous run ends with the report, its new item notified once and the end once', async () => {
     const repo = await startedFlows(['a'])
     const n = recorder()
     writeLocalConfig(repo.root, { notify: n.bin })
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0') }, out), {})
     expect(out).toContain('drive: done — 0 merged · 0 wait on you · 0 parked · 1 stuck')
-    expect(readFileSync(n.got, 'utf8').trim().split('\n'))
-      .toEqual([`witness drive — ${basename(repo.root)} · 0 merged · 0 wait on you · 0 parked · 1 stuck`])
+    await expect.poll(() => readFileSync(n.got, 'utf8').trim().split('\n').sort(), { timeout: 5000 }).toEqual([
+      `witness · ${basename(repo.root)}: stuck · a-plan-1`,
+      `witness drive — ${basename(repo.root)} · 0 merged · 0 wait on you · 0 parked · 1 stuck`,
+    ].sort())
     expect(out).toContain(`notify: sent via ${n.bin}`)
   }, 60000)
 
@@ -821,7 +860,7 @@ describe('one command (B1)', () => {
     writeLocalConfig(repo.root, { notify: noopOpener() })
     return repo
   }
-  const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true' }
+  const quiet = { WITNESS_DRIVE_AGENT_BIN: '/usr/bin/true', WITNESS_KEEP_AWAKE_BIN: '/usr/bin/true', ...NO_WAIT }
 
   it('names the stop the platform has (row 201)', () => {
     const h = { pid: 7, log: '/r/.witness/drive.log' }
@@ -878,6 +917,9 @@ describe('one command (B1)', () => {
     const r = await repo.cli(['drive', '--detach'], { env: { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: awake } })
     expect(r.code).toBe(0)
     const pid = Number(/background · pid (\d+)/.exec(r.stdout)![1])
+    // final review: --detach returns once the child holds the lock, so a chat's `wait` started
+    // right after it never reads the drive as stopped
+    expect(existsSync(join(repo.root, '.witness', 'drive.lock'))).toBe(true)
     const log = join(repo.root, '.witness', 'drive.log')
     expect(r.stdout).toContain(`watch: tail -f ${log} · stop it: kill ${pid}`)
     await expect.poll(() => existsSync(join(dir, 'session')), { timeout: 30_000 }).toBe(true)
@@ -1244,4 +1286,54 @@ describe('drive takes back what a human moved (row 196)', () => {
     expect(readStream(repo.root, 'dark-mode').some((e) => e.t === 'recap')).toBe(true)
     expect(out.filter((l) => l.startsWith('wait: conversation'))).toEqual([])
   }, 120000)
+})
+
+// Row 205 (issue #56, P1). A step whose config command this machine does not trust is the
+// human's: drive spends no session on it, sets it aside as a trust grant, and the report names
+// each command with the grant that takes it.
+describe('a trust grant waits on the human without a session (D205)', () => {
+  async function untrustedFlow(): Promise<TestRepo> {
+    const repo = await seededRepo()
+    patchConfig(repo, { criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' }, ship: { test: 'pnpm test', lint: 'pnpm lint' } })
+    repo.git('add', 'witness.config.yaml')
+    repo.git('commit', '-m', 'full-suite')
+    await writeSpec(repo, 'ingest', { criteria: [{ id: 'ac-i', test: '@spec:ingest' }] })
+    approve(repo, 'ingest')
+    await writePlan(repo, 'ingest-plan-1', { parent: 'ingest', steps: [{ id: 's1', title: 'ingest', criteria: ['ac-i'] }] })
+    approve(repo, 'ingest-plan-1')
+    await repo.cli(['start', 'ingest-plan-1'])
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    return repo
+  }
+
+  it('spawns nothing for a trust-blocked step and reports the grant (P1)', async () => {
+    const repo = await untrustedFlow()
+    const marker = join(fakeScenario(), 'spawned')
+    const agent = script(`touch ${marker}`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_TRUST_CMDS: '' }, out), {}, fakeClock(0))
+    expect(existsSync(marker)).toBe(false)
+    expect(out).toContain('drive: waits on you — ingest-plan-1 · trust grant')
+    expect(out).toContain('wait: trust grant · ingest-plan-1 · pnpm test (ship.test)')
+    expect(out).toContain("  run: witness trust ingest-plan-1 --cmd 'pnpm test'")
+    expect(out.join('\n')).not.toContain('<gate>')
+  }, 60000)
+
+  it('a drive started with WITNESS_TRUST_CMDS=1 spawns the step (Review Focus 1)', async () => {
+    const repo = await untrustedFlow()
+    const marker = join(fakeScenario(), 'spawned')
+    const agent = script(`touch ${marker}`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_TRUST_CMDS: '1' }, out), { maxSpawns: 1 }, fakeClock(0))
+    expect(existsSync(marker)).toBe(true)
+    expect(out.join('\n')).not.toContain('trust grant ·')
+  }, 60000)
+
+  it('classifyAction reads a trust act as kept', () => {
+    expect(classifyAction({ line: 'witness trust p1', target: 'p1', trust: [{ cmd: 'pnpm test', source: 'ship.test' }] }, '/r'))
+      .toEqual({ kind: 'kept', stop: 'trust-grant', line: 'witness trust p1' })
+    expect(classifyAction({ line: 'witness trust p1', target: 'p1', trust: [{ cmd: 'pnpm test', source: 'ship.test' }] }, '/r', { autonomy: true }))
+      .toEqual({ kind: 'kept', stop: 'trust-grant', line: 'witness trust p1' })
+  })
 })

@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { shellArg } from './toon.js'
 
 // Row 180. What a process knows about the drive it runs under. Drive marks every child
 // session with WITNESS_DRIVE=<target>: the marker is the recursion guard (a marked session's
@@ -17,6 +18,14 @@ export function driveChild(env: Record<string, string | undefined>): { target: s
   const marker = env[DRIVE_ENV]
   if (marker === undefined || marker === '') return undefined
   return { target: marker === TARGETLESS ? undefined : marker }
+}
+
+// Rows 173 and 207. A session acts for the human only through the chat it answers to: one
+// drive spawned, or a reviewer, never grants trust or un-sticks a target. Names the marker.
+export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | undefined {
+  if (driveChild(env) !== undefined) return DRIVE_ENV
+  if (env.WITNESS_REVIEWER !== undefined && env.WITNESS_REVIEWER !== '') return 'WITNESS_REVIEWER'
+  return undefined
 }
 
 // Row 180. One drive per repo: `.witness/drive.lock` names the live drive's pid and, for a
@@ -95,8 +104,6 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
   }
 }
 
-// A path is quoted only when it needs it, so the common line stays the one a human types.
-const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
 
 // Row 201: `kill` is not a Windows command, and PowerShell's alias ends drive alone.
 export function watchLine(h: DriveHolder, platform: NodeJS.Platform = process.platform): string {

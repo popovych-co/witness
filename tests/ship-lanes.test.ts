@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
@@ -126,6 +126,7 @@ describe('a check names the commands trust blocked (A1)', () => {
     const scenario = fakeScenario(); putVerdict(scenario, CLEAN)
     await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
     expect(runs(repo, planId).at(-1)!.checks.every((c) => c.untrusted === undefined)).toBe(true)
+    rmSync(join(repo.root, '.witness', 'allow.json'))           // a machine that trusts nothing yet
     const blocked = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '' }) })
     expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
     const checks = runs(repo, planId).at(-1)!.checks

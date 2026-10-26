@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { untrustedCmdsFor } from '../src/allowlist.js'
 import { criterionMark, runCriteria } from '../src/criteria.js'
+import { evaluateNeeds } from '../src/needs.js'
+import { runFiltered, runFullSuite } from '../src/runner.js'
 import { findById, loadCanon } from '../src/scan.js'
 import type { TestRepo } from './helpers.js'
 import {
@@ -37,8 +39,23 @@ describe('an untrusted command names its remedy (D154)', () => {
     if (!res.ok) return
     const smoke = res.value.criteria.find((c) => c.id === 'ac-smoke')!
     expect(smoke.ok).toBe(false)
-    expect(smoke.detail).toContain('run: witness trust auth-refresh')
+    // row 205: the human names the command; the env var stays the automation route
+    expect(smoke.detail).toContain('the human names it: witness trust auth-refresh --cmd \'echo hi\'')
     expect(smoke.detail).toContain('WITNESS_TRUST_CMDS=1')
+  })
+
+  // Row 205. The runner knows no target, so it names `next`, which prints the grant to make.
+  it('the runner and a cmd: need name next, and the automation route', async () => {
+    const { repo, doc } = await singleRepo()
+    const ctx = fakeCtx(repo.root, { env: { ...fixtureEnv(), WITNESS_TRUST_CMDS: '' } })
+    const filtered = await runFiltered(repo.root, ctx, 'echo {id}', 'auth-refresh')
+    expect(filtered.ok).toBe(false)
+    if (!filtered.ok) expect(filtered.violations[0]!.want).toBe('a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation')
+    const full = await runFullSuite(repo.root, ctx, { mode: 'full-suite', reportGlob: 'r.xml', suiteCmd: 'echo all' })
+    expect(full.ok).toBe(false)
+    if (!full.ok) expect(full.violations[0]!.want).toBe('a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation')
+    const needs = await evaluateNeeds(repo.root, ctx, [{ cmd: 'echo need' }], doc)
+    expect(needs[0]!.detail).toBe('untrusted on this machine — witness next names the grant to make')
   })
   it('names the command it could not run (A1)', async () => {
     const { repo, doc } = await singleRepo([{ id: 'ac-smoke', cmd: 'echo hi' }])

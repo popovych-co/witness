@@ -7,7 +7,7 @@ import {
   DEFAULT_HARNESS, HARNESSES, judgeLine, loadHarness, resolveDriver, resolveJudge, resolveSkills, skillPins,
   type HarnessName,
 } from '../harness.js'
-import { CONTEXT_INSTALL, packageRoot, payloadHomes } from '../install.js'
+import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadStale } from '../install.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
@@ -404,13 +404,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       // root keeps its bare relative path; a worktree is named, or four checkouts of one
       // repository all report `.claude/commands/witness.md` and the human cannot tell
       // which of them is the rotten one.
-      const stale = payloadHomes(root).flatMap((home) => installed
-        .filter((p) => {
-          const src = join(packageRoot(), p.from)
-          if (!existsSync(src) || !existsSync(join(home, p.to))) return false
-          return readFileSync(join(home, p.to), 'utf8') !== readFileSync(src, 'utf8')
-        })
-        .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
+      const stale = payloadStale(root, harness)
       if (stale.length > 0) {
         findings.push(f('warn', 'harness', `${name}: payload`, 'payload-stale',
           `${stale.join(' · ')} differ from what ${version()} ships — run ${NPX_LATEST} init --agent ${name}`))

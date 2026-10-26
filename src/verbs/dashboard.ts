@@ -327,12 +327,12 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
         // re-derived shorthand (flowAction's own contract) — so the judge is passed here
         // too, even though the flows table has no note column and nothing changes on
         // screen. Diverging the arguments is how the shorthand creeps back in.
-        const action = flowAction(root, cfg.value, d, judgeR.ok ? judgeR.value.harness.name : undefined)
+        const action = flowAction(root, cfg.value, d, judgeR.ok ? judgeR.value.harness.name : undefined, ctx.env)
         if (!action) return []
         const id = String(d.meta.id)
         return [{
           id,
-          stage: action.stage ?? 'gate',
+          stage: action.stage ?? (action.trust !== undefined ? 'trust' : 'gate'),
           next: action.line,
           worktree: existsSync(worktreePath(root, id)) ? 'present' : 'missing',
           pr: d.meta.pr ?? '—',

@@ -1,22 +1,25 @@
-import { closeSync, constants, fstatSync, mkdirSync, openSync, writeSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
-import { loadConfig, loadLocalConfig, type Config } from './config.js'
+import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
 import { withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
-import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
+import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
+import { isAlive, pause } from './lock.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
-import { effortStreams, readStream, type Entry } from './journal.js'
+import { effortStreams, readStream } from './journal.js'
+import { movesFlow } from './progress.js'
+import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
-import { vacuousEvidence } from './steps.js'
 import { pendingTxn } from './txn.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
@@ -24,6 +27,8 @@ import {
 import { keepAwake } from './awake.js'
 import { driveReport, runStart } from './drive-report.js'
 import { notify } from './notify.js'
+import { writeLive, type EndReason, type LiveAside } from './live.js'
+import { needsYou, needsYouToken, WAIT_LABEL, type NeedYou } from './needs-you.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -33,6 +38,8 @@ export type DriveStep =
   | { kind: 'decision'; gate?: string; target?: string; block?: string[] }
   | { kind: 'conversation'; line: string }
   | { kind: 'merge'; line: string }
+  // Row 205. A config command the step runs is untrusted on this machine: the human's grant.
+  | { kind: 'kept'; stop: 'trust-grant'; line: string }
   | { kind: 'idle' }
 
 // The rule table is an ORDERED FIRST-MATCH list, on `recommend.ts`'s precedent: a
@@ -56,6 +63,10 @@ export function classifyAction(action: NextAction, root: string, opts: { autonom
     const [, , gate, target] = line.split(' ')
     return { kind: 'decision', gate, target: target ?? action.target }
   }
+  // Row 205 (issue #56). A step whose runner, ship lanes or cmd: need this machine does not
+  // trust would only be refused inside the session — the refusal journaled nothing, so drive
+  // respawned it to the cap. In both modes it waits for the human, and no session is spent.
+  if (action.trust !== undefined && action.trust.length > 0) return { kind: 'kept', stop: 'trust-grant', line }
   // D121: a block is the CLI saying the human is choosing, not being told — so a runnable
   // line under a block (the recovery fork, `N ready — ranked below`) is still a stop.
   // Below the decide rule so a gate decision keeps its gate/target rather than its block.
@@ -280,12 +291,53 @@ export const DEFAULT_MAX_SPAWNS = 20
 // window (design §2).
 export const AUTONOMY_MAX_SPAWNS = 200
 
+// Row 202 (issue #56). When everything left waits on the human, an autonomous drive pauses
+// instead of quitting: it polls what a human act writes every 5 s and gives up after 12 h with
+// nothing moving. Constants, not settings (no `migrate` for an upgrade); the suite reaches them
+// through the Clock seam, and a CLI-level test bounds the idle limit through an undocumented
+// seam on WITNESS_KEEP_AWAKE_BIN's precedent.
+export const PAUSE_POLL_MS = 5_000
+const DETACH_LOCK_WAIT_MS = 10_000
+export const PAUSE_IDLE_MAX_MS = 43_200_000
+const idleMaxOf = (env: Record<string, string | undefined>): number => {
+  const v = env.WITNESS_DRIVE_IDLE_MAX_MS
+  return v !== undefined && /^\d+$/.test(v) ? Number(v) : PAUSE_IDLE_MAX_MS
+}
+
+// What a human act writes: the journal, canon, the committed config, the trust list and the
+// machine config — each file's size and mtime, hashed. Never drive's own log or its live
+// folder, which it writes itself while paused.
+export function watchSignature(root: string): string {
+  const p = canonPaths(root)
+  const files: string[] = []
+  for (const dir of [join(root, '.witness', 'journal'), join(root, p.specs), join(root, p.plans), join(root, p.designs)]) {
+    try {
+      for (const n of readdirSync(dir, { recursive: true }) as string[]) files.push(join(dir, n))
+    } catch { /* absent: nothing to watch there yet */ }
+  }
+  for (const f of ['witness.config.yaml', join('.witness', 'allow.json'), join('.witness', 'config.local.yaml')]) files.push(join(root, f))
+  const parts = files.sort().map((f) => {
+    try {
+      const st = statSync(f)
+      return st.isFile() ? `${f}:${st.size}:${st.mtimeMs}` : ''
+    } catch {
+      return `${f}:-`
+    }
+  })
+  return createHash('sha1').update(parts.join('\n')).digest('hex')
+}
+
 // Row 180. A target drive stops working on — none of these ends the run. Held in memory and
 // never journaled (D145): the report reads them at the end. Row 196: one set aside for a human
 // (kept, decision, conversation) records `key0`, its progress key then, and is drive's again
-// once a human moves it; drive's own verdicts (stuck, capped) and the merge stay aside.
+// once a human moves it. Row 207: so do drive's own verdicts (stuck, capped) and the merge — a
+// paused drive would otherwise hold them forever — moved by a grant, a satisfied need, a
+// decision, the merge stamp, or the human's `witness retry` for a fix that leaves no record.
 export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
-export interface Aside { target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string }
+export interface Aside {
+  target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string
+  trust?: RunCommand[]   // row 205: a trust grant's commands, each with its source
+}
 
 const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
@@ -293,10 +345,6 @@ const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
 
 const streamLines = (root: string, id: string): number => readStream(root, id).length
 
-// A refused write is the CLI saying no: it moves nothing (F5). Nor does a vacuous red (row 191,
-// final review I3): a session that only re-runs one has done nothing, and counted, it read as
-// progress, so the target was respawned until its spawn cap.
-const moved = (e: Entry) => e.t !== 'write-refused' && !vacuousEvidence(e)
 
 // Row 181. Did anything happen for THIS target? A whole-journal count is satisfied by any
 // other lane's progress, so a stalled flow beside a busy one would spawn until the ceiling.
@@ -316,9 +364,9 @@ function progressKey(root: string, action: NextAction, family: (t: string) => st
   const target = action.target
   const effort = effortOf(root, target)
   const flow = family(target)
-  const own = readStream(root, target).filter(moved).length
+  const own = readStream(root, target).filter(movesFlow).length
   const inEffort = effort !== undefined && effort !== target
-    ? readStream(root, effort).filter((e) => moved(e) && flow.includes(String((e as { artifact?: unknown }).artifact))).length
+    ? readStream(root, effort).filter((e) => movesFlow(e) && flow.includes(String((e as { artifact?: unknown }).artifact))).length
     : 0
   return [action.line, own, inEffort].join('\u0000')
 }
@@ -352,7 +400,7 @@ export async function driveLoop(
   const progress = new Map<string, string>()
   const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
   let spawns = 0
-  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | undefined
+  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | 'idle-limit' | undefined
   let idle: string | undefined
   // Row 182. A usage limit pauses every lane: nothing new starts until the reset, and the
   // running sessions finish, because they meet the same account. Every wait is printed, one
@@ -412,12 +460,35 @@ export async function driveLoop(
   // (an ask answered or queued, a need satisfied, a stop decided in a chat) leaves the aside
   // set and competes for a slot again. One whose next act is the human's again is set aside
   // anew, under its new key, by the settle pass or the fill that meets it.
+  // Row 207: a release is a new chance, so the target's per-run use and its last key go too.
+  const release = (key: string) => {
+    aside.delete(key)
+    use.delete(key)
+    progress.delete(key)
+    pauseSince = undefined                                 // a human act: the idle clock starts over
+    // What this target needs of the human next is news (final review): a second trust grant,
+    // a stuck again after a retry. Keys are `<kind>:<target>[:…]`, and ids carry no colon.
+    for (const k of [...notified]) if (k.split(':')[1] === key) notified.delete(k)
+  }
+  // A plan that reached its end — merged, abandoned — is no flow any more: its scoped ladder
+  // answers with a global rung, so `ownAnswer` would hold its aside forever.
+  const ended = (key: string): string | undefined => {
+    const doc = findById(canonNow, key)
+    const status = String(doc?.meta.status)
+    return doc?.meta.type === 'plan' && (status === 'done' || status === 'abandoned') ? status : undefined
+  }
   const takeBack = () => {
     for (const [key, a] of aside) {
       if (a.key0 === undefined) continue
+      const over = ended(key)
+      if (over !== undefined) {
+        release(key)
+        ctx.out(`drive: released — ${key} · ${over}`)
+        continue
+      }
       const now = ownNext(key)
       if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
-      aside.delete(key)
+      release(key)
       ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
     }
   }
@@ -428,6 +499,7 @@ export async function driveLoop(
     canonNow = loadCanon(root)
     for (const [key, a] of aside) {
       if (a.key0 === undefined) continue
+      if (ended(key) !== undefined) { aside.delete(key); continue }
       const now = ownNext(key)
       if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
       if (conversationStage(now)) aside.set(key, { ...a, kind: 'conversation', line: now.line, key0: keyOf(now) })
@@ -436,8 +508,10 @@ export async function driveLoop(
   }
   const stuck = (key: string, action: NextAction) => {
     ctx.out(`drive: no progress — ${action.line}`)
-    ctx.out(`help: ${action.target ?? 'untargeted work'} is set aside for this run — read its stream above`)
-    setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}` })
+    ctx.out(action.target !== undefined
+      ? `help: ${action.target} is set aside until its record moves — read its stream above · after a fix witness cannot see: witness retry ${action.target}`
+      : 'help: untargeted work is set aside until its record moves — read its stream above')
+    setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}`, key0: keyOf(action) })
   }
   // A decision is an act too, and it gets the same convergence guard as a spawn: a decision
   // that executes and journals nothing would otherwise re-render its own block forever.
@@ -449,6 +523,14 @@ export async function driveLoop(
   }
 
   const standAside = async (step: Exclude<DriveStep, { kind: 'spawn' | 'idle' }>, action: NextAction, key: string) => {
+    if (step.kind === 'kept') {
+      ctx.out(`drive: waits on you — ${action.target ?? 'untargeted work'} · ${KEPT_STOP_NAMES[step.stop]}`)
+      setAside(key, {
+        kind: 'kept', line: step.line, why: KEPT_STOP_NAMES[step.stop], stop: step.stop,
+        ...(action.trust !== undefined ? { trust: action.trust } : {}), key0: keyOf(action),
+      })
+      return
+    }
     if (step.kind === 'conversation') {
       ctx.out(`drive: conversation — ${step.line}`)
       ctx.out('help: run /witness in a chat — drive takes it back when you are done')
@@ -457,7 +539,7 @@ export async function driveLoop(
     }
     if (step.kind === 'merge') {
       ctx.out(`drive: merge — ${step.line}`)
-      setAside(key, { kind: 'merge', line: step.line, why: 'the merge is a human\'s' })
+      setAside(key, { kind: 'merge', line: step.line, why: 'the merge is a human\'s', key0: keyOf(action) })
       return
     }
     // Under autonomy a `witness decide` line still reaching the fill is a stop the settle
@@ -471,7 +553,7 @@ export async function driveLoop(
     if (unmoved(key, action)) return
     const r = await resolveDecision(step, action, ctx)
     if (r === 'stands') setAside(key, { kind: 'decision', line: action.line, why: action.line, ...(step.gate ? { gate: step.gate } : {}), key0: keyOf(action) })
-    if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}` })
+    if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}`, key0: keyOf(action) })
   }
 
   const launch = (step: SpawnStep, action: NextAction, n: number): Lane => {
@@ -528,6 +610,13 @@ export async function driveLoop(
     return true
   }
 
+  // Final review I3: an aside set when a lane ends keys on the target's state after the session,
+  // as the settle pass's do — the line the lane started with may be one the session moved past,
+  // which would read as a human's move at the next take-back.
+  const keyAfter = (key: string): string => {
+    canonNow = loadCanon(root)
+    return keyOf(ownNext(key))
+  }
   const settle = (key: string, lane: Lane, end: SessionEnd) => {
     if (end.outcome === 'stopped') return                // the signal's, reported once at the end
     if (limited(key, end)) return
@@ -535,7 +624,7 @@ export async function driveLoop(
     use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
     if (end.outcome === 'timeout') {
       ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
-      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}` })
+      setAside(key, { kind: 'stuck', line: lane.action.line, why: `spawn-timeout on ${lane.action.line}`, key0: keyAfter(key) })
       return
     }
     if (end.outcome === 'spawn-failed') {
@@ -545,7 +634,7 @@ export async function driveLoop(
     }
     if (lane.merged !== undefined) {
       ctx.out(`drive: merge — ${lane.merged}`)
-      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s' })
+      setAside(key, { kind: 'merge', line: lane.merged, why: 'the merge is a human\'s', key0: keyAfter(key) })
     }
   }
 
@@ -568,7 +657,11 @@ export async function driveLoop(
       if (line !== undefined) ctx.out(line)
       if (s.kind === 'kept') {
         ctx.out(`drive: waits on you — ${r.target} · ${KEPT_STOP_NAMES[s.stop]}`)
-        setAside(r.target, { kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop, key0: keyOf(ownNext(r.target)) })
+        const trust = s.untrusted !== undefined ? sourced(cfg, canonNow, r.target, s.untrusted) : undefined
+        setAside(r.target, {
+          kind: 'kept', line: s.line, why: KEPT_STOP_NAMES[s.stop], gate: r.gate, stop: s.stop,
+          ...(trust !== undefined ? { trust } : {}), key0: keyOf(ownNext(r.target)),
+        })
       } else if (s.kind === 'left') {
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
         setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
@@ -603,20 +696,95 @@ export async function driveLoop(
     if (parked.parked) {
       ctx.out(`drive: parked — ${action.target} · ${hit.note}`)
       const gate = hit.gate ?? lastRunGate(readStream(root, action.target))
-      setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}) })
+      setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}), key0: keyOf(action) })
     } else {
       const why = `${hit.note} · ${parked.why}`
       ctx.out(`drive: capped — ${action.target} · ${why}`)
-      setAside(key, { kind: 'capped', line: action.line, why })
+      setAside(key, { kind: 'capped', line: action.line, why, key0: keyOf(action) })
     }
     return true
   }
 
   const start = runStart(root)
-  const awake = keepAwake(ctx.env, process.platform, process.pid)
+  let awake = keepAwake(ctx.env, process.platform, process.pid)
+  let awakeHeld = true
   ctx.out(awake.command !== undefined
     ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
+  // Row 182, amended by row 202: held while a session runs, released while drive waits on the
+  // human — a paused drive lets the machine sleep — and taken again before the next spawn.
+  const holdAwake = () => {
+    if (awakeHeld) return
+    awake = keepAwake(ctx.env, process.platform, process.pid)
+    awakeHeld = true
+  }
+  const releaseAwake = () => {
+    if (!awakeHeld) return
+    awake.stop()
+    awakeHeld = false
+  }
+
+  // Row 203. Drive's set-asides, published for a chat waiting beside it: ids and kinds only. A
+  // grill with nothing queued waits on nobody and is not published.
+  const notice = (a: Aside): boolean => a.target === TARGETLESS && a.kind === 'conversation' && !/ --ask /.test(a.line)
+  const publish = (ended?: EndReason) => {
+    if (!autonomous) return
+    const asides: LiveAside[] = [...aside.values()].filter((a) => !notice(a)).map((a) => ({
+      target: a.target, kind: a.kind, ...(a.gate !== undefined ? { gate: a.gate } : {}), ...(a.stop !== undefined ? { stop: a.stop } : {}),
+    }))
+    writeLive(root, { pid: process.pid, asides, ...(ended !== undefined ? { ended } : {}) })
+  }
+  // Row 203 (Q2). Each item that newly needs the human is notified once per run (n5), a burst
+  // as one notification, started in the background so no round waits on it. Mid-run, an item
+  // whose flow a session is working on is that session's to settle, and a crash is drive's own
+  // to recover; both are said only once drive pauses.
+  const notified = new Set<string>()
+  const busy = (t: string): boolean => [...lanes.keys()].some((l) => l === t || family(l).includes(t) || family(t).includes(l))
+  const notifyNew = (items: readonly NeedYou[]) => {
+    const fresh = items.filter((i) => i.notice !== true && !notified.has(i.key))
+    if (fresh.length === 0) return
+    for (const i of fresh) notified.add(i.key)
+    const named = fresh.slice(0, 3).map((i) => i.kind === 'pending-txn' ? WAIT_LABEL[i.kind] : `${WAIT_LABEL[i.kind]} · ${i.target}`)
+    const local = loadLocalConfig(root)
+    notify(local.ok ? local.value.notify : undefined, 'witness drive',
+      `witness · ${basename(root)}: ${named.join(' · ')}${fresh.length > 3 ? ` (+${fresh.length - 3})` : ''}`,
+      process.platform, { wait: false })
+  }
+  const owed = (): NeedYou[] => needsYou(root, ctx, cfg, loadCanon(root), [...aside.values()])
+
+  // Row 202. Everything left waits on the human: say what, notify, let the machine sleep, and
+  // watch for the act. A change runs a round as usual (take-back, settle pass, fill); a change
+  // that releases nothing re-enters the pause silently. True to run a round, false to end.
+  const idleMax = idleMaxOf(ctx.env)
+  let pauseSince: number | undefined
+  let pausePrinted: string | undefined
+  // Final review (b) I3: the signature the round began with. A human act that lands during the
+  // round — after its take-back, before the pause — differs from it, and resumes at once.
+  let roundSignature = ''
+  const pauseForHuman = async (): Promise<boolean> => {
+    const items = owed().filter((i) => i.notice !== true)
+    const token = needsYouToken(items)
+    if (token !== pausePrinted) {
+      ctx.out(`drive: waiting on you — ${items.length} item(s)`)
+      items.flatMap((i) => i.rows).forEach((l) => ctx.out(l))
+      pausePrinted = token
+    }
+    notifyNew(items)
+    releaseAwake()
+    publish()
+    pauseSince ??= clock.now()
+    const signature = roundSignature
+    for (;;) {
+      if (watchSignature(root) !== signature) return true
+      if (clock.now() - pauseSince >= idleMax) {
+        ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
+        stop = 'idle-limit'
+        return false
+      }
+      await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
+      if (signalled !== undefined) return false
+    }
+  }
   // Final review F9. Autonomy is re-read from the committed config before every round, on
   // A1's precedent (ship re-reads it at merge time): a human who turns it off mid-run takes
   // the wheel at once — no stop of theirs is settled, and no new session starts.
@@ -631,8 +799,10 @@ export async function driveLoop(
 
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
+  publish()
   try {
     for (;;) {
+      if (autonomous) roundSignature = watchSignature(root)
       stillAutonomous()
       canonNow = loadCanon(root)
       // A run that is stopping fills nothing more, so a target released now would be set aside
@@ -666,13 +836,21 @@ export async function driveLoop(
         if (await capped(action, key)) continue
         if (unmoved(key, action)) continue
         spawns += 1
+        holdAwake()
+        pauseSince = undefined
         lanes.set(key, launch(step, action, spawns))
+      }
+      if (autonomous) {
+        publish()
+        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target)))
       }
       if (lanes.size === 0) {
         if (!stop && !signalled && pausedUntil > clock.now()) {
           await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted])
           continue
         }
+        // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
+        if (autonomous && !stop && !signalled && [...aside.values()].some((a) => !notice(a)) && await pauseForHuman()) continue
         break
       }
       const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
@@ -684,7 +862,8 @@ export async function driveLoop(
     else if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
     // Row 184. One report when nothing else can move, and for an autonomous run one
     // notification — a human at a TTY prompt is already watching.
-    const stopped = signalled !== undefined ? `signal ${signalled}` : stop
+    // The idle limit is no failure: the run waited on the human as long as it could.
+    const stopped = signalled !== undefined ? `signal ${signalled}` : stop === 'idle-limit' ? undefined : stop
     refreshAside()
     const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stopped ? { stopped } : {}) })
     report.lines.forEach((l) => ctx.out(l))
@@ -700,7 +879,8 @@ export async function driveLoop(
   } finally {
     process.removeListener('SIGINT', onSignal)
     process.removeListener('SIGTERM', onSignal)
-    awake.stop()
+    publish(signalled !== undefined ? 'signal' : stop ?? 'done')
+    releaseAwake()
   }
 }
 
@@ -738,6 +918,13 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
     if (child.pid === undefined) return refuse([v('--detach', 'spawn-failed', file, 'a runnable witness CLI')])
     child.on('error', () => {})
     child.unref()
+    // Final review: return once the child holds the drive lock (or has died, or a bound passed),
+    // so a chat's `wait` started right after it never reads the drive as stopped — the previous
+    // run's end record would otherwise answer for a drive that is only starting.
+    const deadline = Date.now() + DETACH_LOCK_WAIT_MS
+    // Any live holder is this child's (detach refuses while a drive runs); under a WITNESS_BIN
+    // wrapper the lock's pid may be a process the wrapper started.
+    while (Date.now() < deadline && driveHolder(root) === undefined && isAlive(child.pid)) pause(50)
     return ok({ pid: child.pid, log })
   } finally {
     closeSync(fd)

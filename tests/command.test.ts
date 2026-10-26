@@ -87,19 +87,54 @@ describe('drive handoff rows (B1)', () => {
 
 // Row 195. A chat under autonomy keeps only the human's own items; drive's machine stages are drive's.
 describe('the chat keeps only the human\'s items (row 195)', () => {
-  it('launch: and watch: act on a decision, a brainstorm or a design — otherwise the turn ends', () => {
+  it('launch: and watch: act on a decision, a trust act, a brainstorm or a design — otherwise the chat waits', () => {
     const rows = body().split('\n').filter((l) => l.startsWith('| `launch:` is printed') || l.startsWith('| `watch:` is printed'))
     expect(rows).toHaveLength(2)
     for (const r of rows) {
-      expect(r).toContain('if `next:` names `witness decide`, or `stage:` is `brainstorm` or `design`')
+      // row 204: the human's items stay in the chat (a trust act too, row 205); otherwise it waits
+      expect(r).toContain('if `next:` names `witness decide` or `witness trust`, or `stage:` is `brainstorm` or `design`')
       expect(r).not.toContain('or a `stage:` is printed')
-      expect(r).toContain('otherwise **END YOUR TURN**')
+      expect(r).toContain('Otherwise wait, by the `wait-mode:` line')
     }
   })
-  it('the kept-stop row names only the stops settled outside the chat', () => {
-    const row = body().split('\n').find((l) => l.startsWith('| `kept-stop:'))!
-    expect(row).toContain('`kept-stop: trust grant`')
-    expect(row).toContain('`kept-stop: unmet need`')
-    expect(row).toContain('A `kept-stop: design look` line is the chat\'s own stop')
+  // Row 205 (Q4): trust grants and unmet needs are answered in this chat, never in a terminal;
+  // a grant is per named command, and a bare "y" grants nothing.
+  it('the kept-stop rows answer trust grants and needs in the chat', () => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| `kept-stop:') || l.startsWith('| `next:` names `witness trust`'))
+    const trust = rows.find((r) => r.includes('`kept-stop: trust grant`'))!
+    expect(trust).toContain('`--cmd`')
+    expect(trust).toContain('a bare "y" grants nothing')
+    // final review I2: the kept stop renders and keeps matching, so a `launch:` below it still
+    // starts drive's other work; the `next: witness trust` row asks and ends the turn
+    expect(trust).not.toContain('END YOUR TURN')
+    expect(trust).toContain('keep matching the rows below')
+    expect(rows.find((r) => r.startsWith('| `next:` names `witness trust`'))).toContain('**END YOUR TURN**')
+    const need = rows.find((r) => r.includes('`kept-stop: unmet need`'))!
+    expect(need).toContain('"done"')
+    expect(need).toContain('one need at a time')
+    expect(rows.some((r) => r.startsWith('| `next:` names `witness trust`'))).toBe(true)
+    expect(body()).toContain('A `kept-stop: design look` line is the chat\'s own stop')
+    expect(body()).not.toContain('a trust grant in a terminal')
+  })
+})
+
+// Row 204. The chat sleeps until something needs the human and is woken, in one session.
+describe('the chat waits (row 204)', () => {
+  it('launch: and watch: wait by wait-mode instead of ending the chat for good', () => {
+    const b = body()
+    for (const s of ['wait-mode:', 'run_in_background', '`background`', '`add-on`', '`foreground`']) expect(b, s).toContain(s)
+  })
+  it('each wait: outcome has its row', () => {
+    const b = body()
+    for (const s of ['`wait: needs you`', '`wait: drive stopped', '`wait: taken over by another chat`', 'never wait again in this chat',
+      "`wait: replaced by this chat's newer wait`",
+      '`wait: merged on GitHub`', '`wait: nothing owed`']) expect(b, s).toContain(s)
+    expect(b).toContain('never restart drive yourself')
+  })
+  // Final review: what no `next:` routes is said, and a wake is told to the human first.
+  it('waiting: lines are told to the human, and a wake says what woke it', () => {
+    const rows = body().split('\n')
+    expect(rows.find((l) => l.startsWith('| `waiting:` lines are printed'))).toContain('only when they ask')
+    expect(rows.find((l) => l.startsWith('| `wait: needs you`'))).toContain('Tell the human the rows it printed')
   })
 })

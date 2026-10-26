@@ -28,6 +28,7 @@ const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/config.local.yaml
 .witness/screens/
 .witness/drafts/
+.witness/live/
 `
 
 const PRINCIPLES_BODY = `# Principles

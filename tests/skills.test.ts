@@ -163,6 +163,11 @@ describe('witness-implement', () => {
     expect(body()).toContain('gate implement');
     expect(body()).toContain('@spec:');
   });
+  // Row 205: no session grants trust — a refusal for an untrusted command is the human's.
+  it('stops on an untrusted- refusal and never grants trust', () => {
+    expect(body()).toContain("**An `untrusted-` refusal is the human's.**");
+    expect(body()).toContain('Never run `witness trust` — no session grants trust.');
+  });
 });
 
 describe('witness-implement — capture mandate', () => {

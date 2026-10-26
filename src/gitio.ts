@@ -118,7 +118,8 @@ const LOCAL_STATE_FILES = new Set([
 // and the exemption is load-bearing for the same reason: init writes its .gitignore block only
 // when scaffolding, so on every repo older than the row a draft is untracked-but-visible under a
 // state dir, and an unrelated-dirty refusal there would block the very recap the grill lands.
-const LOCAL_STATE_DIRS = ['.witness/drafts/']
+// Row 203: drive's live folder (what needs the human, the waiting chat's lock) is the same tier.
+const LOCAL_STATE_DIRS = ['.witness/drafts/', '.witness/live/']
 
 export function dirtyStatePaths(root: string): string[] {
   const res = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...stateDirs(root))

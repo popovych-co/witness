@@ -16,13 +16,17 @@
 // scoped to exactly the event the guard uses. So the try/catch below is load-bearing,
 // not garnish: without it an unparseable witness.config.yaml would refuse every write
 // in the repo, `src/` included. Do not remove it because canonGuard already catches.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { canonGuard } from "./canon-guard.mjs";
-import { configCandidates, contextLimitOf, invokesWitness, readingJson, warnLine } from "./context-core.mjs";
+import {
+  armedBy, configCandidates, contextLimitOf, freshDue, invokesWitness, pinOf, readingJson, routesNext, waitArgv, waitRequest,
+  wakeAllowed,
+  warnLine,
+} from "./context-core.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -53,7 +57,56 @@ function configuredLimit(cwd: string): number | undefined {
   }
 }
 
+// Row 204: the CLI version the engine resolves `$WITNESS` to, read from the engine installed
+// beside this file (.pi/prompts/witness.md), or the plugin's own copy when run from it.
+function enginePin(): string | undefined {
+  for (const p of [join(here, "..", "prompts", "witness.md"), join(here, "..", "commands", "witness.md")]) {
+    try {
+      const pin = pinOf(readFileSync(p, "utf8"));
+      if (pin !== undefined) return pin;
+    } catch {
+      /* next candidate */
+    }
+  }
+  return undefined;
+}
+
+const textOf = (content: unknown): string =>
+  Array.isArray(content)
+    ? content.flatMap((c) => (c !== null && typeof c === "object" && (c as { type?: unknown }).type === "text" ? [String((c as { text?: unknown }).text)] : [])).join("\n")
+    : "";
+
 export default function (pi: ExtensionAPI) {
+  // Row 204, keyed by session id: the wait the last witness command asked for, and the one
+  // waiter this session runs. A newer request replaces the waiter; a replaced or shut-down
+  // waiter posts nothing.
+  const requests = new Map<string, { token: string } | undefined>();
+  const waiters = new Map<string, ChildProcess>();
+  // Row 204 (Q5): sessions whose last witness command asked for a fresh session, and sessions
+  // armed with `/witness --manual`, whose fresh session continues armed.
+  const fresh = new Set<string>();
+  const armed = new Set<string>();
+
+  // Only a command handler may open a session (`ctx.newSession`), so the add-on runs its own
+  // command as a follow-up once the turn settles — Pi's reload-runtime example's shape.
+  pi.registerCommand("witness-fresh", {
+    description: "continue witness in a fresh session",
+    handler: async (_args, ctx) => {
+      const next = armed.has(ctx.sessionManager.getSessionId()) ? "/witness --manual" : "/witness";
+      await ctx.newSession({
+        parentSession: ctx.sessionManager.getSessionFile(),
+        withSession: async (c) => { await c.sendUserMessage(next); },
+      });
+    },
+  });
+  pi.on("input", async (event, ctx) => {
+    try {
+      if (armedBy(event.text)) armed.add(ctx.sessionManager.getSessionId());
+    } catch {
+      /* not armed */
+    }
+    return undefined;
+  });
   // Row 191 §4.6, keyed by session id: after `new_session` the session id moves (P7), and
   // the new session latches and warns afresh.
   const latched = new Set<string>();
@@ -98,6 +151,19 @@ export default function (pi: ExtensionAPI) {
   // that has run the witness CLI carries one more text block, which the model reads with the
   // output (P2). Never in a gate reviewer's spawn, never without a witness.config.yaml.
   pi.on("tool_result", async (event, ctx) => {
+    // Row 204: the last `next` decides whether this chat waits (final review C1). Its own try/catch:
+    // the warning below must never be lost to it.
+    try {
+      if (event.toolName === "bash" && invokesWitness((event.input as { command?: unknown } | undefined)?.command)) {
+        const session = ctx.sessionManager.getSessionId();
+        const text = textOf(event.content);
+        if (routesNext(text)) requests.set(session, waitRequest(text));
+        if (freshDue(text)) fresh.add(session);
+        else fresh.delete(session);
+      }
+    } catch {
+      /* no wait this time */
+    }
     try {
       if (event.toolName !== "bash") return undefined;
       const session = ctx.sessionManager.getSessionId();
@@ -112,6 +178,55 @@ export default function (pi: ExtensionAPI) {
       return { content };
     } catch {
       return undefined;
+    }
+  });
+
+  // Row 204. Once a turn has fully settled — no retry, compaction or queued continuation left —
+  // a chat whose last witness command printed a `wait:` line in the add-on mode is woken by
+  // the wait's own output when it exits. Every failure path falls open: no wake, never a block.
+  pi.on("agent_settled", async (_event, ctx) => {
+    try {
+      const session = ctx.sessionManager.getSessionId();
+      const request = requests.get(session);
+      requests.delete(session);
+      if (!wakeAllowed({ hasUI: ctx.hasUI, env: process.env })) return;
+      // A full chat continues in a fresh one, which waits there itself if it has to.
+      if (fresh.delete(session)) {
+        pi.sendUserMessage("/witness-fresh", { deliverAs: "followUp" });
+        return;
+      }
+      if (request === undefined) return;
+      const argv = waitArgv({
+        bin: process.env.WITNESS_BIN, pin: enginePin(), token: request.token, platform: process.platform,
+        systemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT,
+      });
+      if (argv === undefined) return;
+      waiters.get(session)?.kill();
+      const child = spawn(argv[0]!, argv.slice(1), { cwd: ctx.cwd, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+      waiters.set(session, child);
+      let out = "";
+      child.stdout?.on("data", (d) => { out += String(d); });
+      child.on("error", () => { if (waiters.get(session) === child) waiters.delete(session); });
+      child.on("close", (_code, signal) => {
+        if (waiters.get(session) !== child) return;
+        waiters.delete(session);
+        if (signal !== null) return;
+        try {
+          pi.sendMessage({ customType: "witness-wait", content: out.trim() || "wait: ended", display: true },
+            { triggerTurn: true, deliverAs: "followUp" });
+        } catch {
+          /* no wake */
+        }
+      });
+    } catch {
+      /* falls open */
+    }
+  });
+  pi.on("session_shutdown", async () => {
+    const all = [...waiters.values()];
+    waiters.clear();
+    for (const child of all) {
+      try { child.kill(); } catch { /* gone */ }
     }
   });
 
