@@ -10,7 +10,8 @@ import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
-import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS } from './drive-presence.js'
+import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
+import { isAlive, pause } from './lock.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
@@ -296,6 +297,7 @@ export const AUTONOMY_MAX_SPAWNS = 200
 // through the Clock seam, and a CLI-level test bounds the idle limit through an undocumented
 // seam on WITNESS_KEEP_AWAKE_BIN's precedent.
 export const PAUSE_POLL_MS = 5_000
+const DETACH_LOCK_WAIT_MS = 10_000
 export const PAUSE_IDLE_MAX_MS = 43_200_000
 const idleMaxOf = (env: Record<string, string | undefined>): number => {
   const v = env.WITNESS_DRIVE_IDLE_MAX_MS
@@ -913,6 +915,13 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
     if (child.pid === undefined) return refuse([v('--detach', 'spawn-failed', file, 'a runnable witness CLI')])
     child.on('error', () => {})
     child.unref()
+    // Final review: return once the child holds the drive lock (or has died, or a bound passed),
+    // so a chat's `wait` started right after it never reads the drive as stopped — the previous
+    // run's end record would otherwise answer for a drive that is only starting.
+    const deadline = Date.now() + DETACH_LOCK_WAIT_MS
+    // Any live holder is this child's (detach refuses while a drive runs); under a WITNESS_BIN
+    // wrapper the lock's pid may be a process the wrapper started.
+    while (Date.now() < deadline && driveHolder(root) === undefined && isAlive(child.pid)) pause(50)
     return ok({ pid: child.pid, log })
   } finally {
     closeSync(fd)

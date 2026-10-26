@@ -917,6 +917,9 @@ describe('one command (B1)', () => {
     const r = await repo.cli(['drive', '--detach'], { env: { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent, WITNESS_KEEP_AWAKE_BIN: awake } })
     expect(r.code).toBe(0)
     const pid = Number(/background · pid (\d+)/.exec(r.stdout)![1])
+    // final review: --detach returns once the child holds the lock, so a chat's `wait` started
+    // right after it never reads the drive as stopped
+    expect(existsSync(join(repo.root, '.witness', 'drive.lock'))).toBe(true)
     const log = join(repo.root, '.witness', 'drive.log')
     expect(r.stdout).toContain(`watch: tail -f ${log} · stop it: kill ${pid}`)
     await expect.poll(() => existsSync(join(dir, 'session')), { timeout: 30_000 }).toBe(true)
