@@ -30,7 +30,7 @@ const CMD_META = /[()[\]%!^"`<>&|;, *?]|(?<=%)[^]/gu
 // Windows env names are case-insensitive, and a spread process.env carries `Path` beside
 // any `PATH` a caller adds. Node gives the child the key that sorts first, so resolution
 // reads that one — any other answer names a binary the child never sees.
-function envGet(env: Record<string, string | undefined>, name: string): string | undefined {
+export function envGet(env: Record<string, string | undefined>, name: string): string | undefined {
   const key = Object.keys(env).sort().find((k) => k.toUpperCase() === name)
   return key === undefined ? undefined : env[key]
 }

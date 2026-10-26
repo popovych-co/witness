@@ -84,9 +84,10 @@ describe('the trust grant in the report (D205)', () => {
 describe('notify (B6)', () => {
   it('renders the platform notifier and a configured command', () => {
     expect(notifyArgv('darwin', undefined, 'witness drive', 'a "b" c'))
-      .toEqual(['osascript', '-e', 'display notification "a \\"b\\" c" with title "witness drive"'])
-    expect(notifyArgv('linux', undefined, 'witness drive', 'm')).toEqual(['notify-send', 'witness drive', 'm'])
-    expect(notifyArgv('win32', undefined, 'witness drive', 'm')).toBeUndefined()
-    expect(notifyArgv('win32', '/bin/ping-me', 'witness drive', 'm')).toEqual(['/bin/ping-me', 'm'])
+      .toEqual({ argv: ['osascript', '-e', 'display notification "a \\"b\\" c" with title "witness drive"'] })
+    expect(notifyArgv('linux', undefined, 'witness drive', 'm')).toEqual({ argv: ['notify-send', 'witness drive', 'm'] })
+    // row 203: Windows has a default now (tests/notify.test.ts)
+    expect(notifyArgv('win32', undefined, 'witness drive', 'm')?.argv[0]).toMatch(/\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/)
+    expect(notifyArgv('win32', '/bin/ping-me', 'witness drive', 'm')).toEqual({ argv: ['/bin/ping-me', 'm'] })
   })
 })
