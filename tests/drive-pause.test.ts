@@ -254,3 +254,22 @@ describe('a lane-end aside keys on the state after the session (final review)', 
     expect(ticks(out)).toBe(1)
   }, 60000)
 })
+
+// Final review (b) I3. A human act that lands while a round runs — between its take-back and the
+// pause — was never seen: the pause took its signature at its own entry, which already held it.
+describe('an act that lands during a round (final review)', () => {
+  it('a grant made while drive sets the target aside still resumes it', async () => {
+    const repo = await trustBlocked()
+    const out: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...NO_TRUST, WITNESS_DRIVE_IDLE_MAX_MS: '60000', WITNESS_DRIVE_AGENT_BIN: script('echo tick') }),
+      out: (l) => {
+        out.push(l)
+        if (l === 'drive: waits on you — ingest-plan-1 · trust grant') grantCommands(repo.root, ['pnpm test'])
+      },
+    })
+    await driveLoop(repo.root, cfgOf(repo), ctx, { maxSpawns: 1 }, fakeClock(0))
+    expect(out.some((l) => l.startsWith('drive: taken back — ingest-plan-1'))).toBe(true)
+    expect(out.some((l) => /\] tick$/.test(l))).toBe(true)
+  }, 60000)
+})

@@ -751,6 +751,9 @@ export async function driveLoop(
   const idleMax = idleMaxOf(ctx.env)
   let pauseSince: number | undefined
   let pausePrinted: string | undefined
+  // Final review (b) I3: the signature the round began with. A human act that lands during the
+  // round — after its take-back, before the pause — differs from it, and resumes at once.
+  let roundSignature = ''
   const pauseForHuman = async (): Promise<boolean> => {
     const items = owed().filter((i) => i.notice !== true)
     const token = needsYouToken(items)
@@ -763,8 +766,9 @@ export async function driveLoop(
     releaseAwake()
     publish()
     pauseSince ??= clock.now()
-    const signature = watchSignature(root)
+    const signature = roundSignature
     for (;;) {
+      if (watchSignature(root) !== signature) return true
       if (clock.now() - pauseSince >= idleMax) {
         ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
         stop = 'idle-limit'
@@ -772,7 +776,6 @@ export async function driveLoop(
       }
       await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
       if (signalled !== undefined) return false
-      if (watchSignature(root) !== signature) return true
     }
   }
   // Final review F9. Autonomy is re-read from the committed config before every round, on
@@ -792,6 +795,7 @@ export async function driveLoop(
   publish()
   try {
     for (;;) {
+      if (autonomous) roundSignature = watchSignature(root)
       stillAutonomous()
       canonNow = loadCanon(root)
       // A run that is stopping fills nothing more, so a target released now would be set aside
