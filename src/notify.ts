@@ -59,7 +59,9 @@ export function notify(
   const env = r.env !== undefined ? { ...process.env, ...r.env } : process.env
   if (!opts.wait) {
     try {
-      const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true, env })
+      // Not detached: on Windows that opens a console of its own. Row 201: the spawn wrapper
+      // decides the window, hidden under a background drive.
+      const child = spawn(cmd, args, { stdio: 'ignore', env })
       child.on('error', () => {})                          // a notifier that fails is not drive's crash
       child.unref()
       return { outcome: 'started', command: cmd }
@@ -67,7 +69,7 @@ export function notify(
       return { outcome: 'failed', command: cmd }
     }
   }
-  const run = spawnSync(cmd, args, { stdio: 'ignore', timeout: NOTIFY_TIMEOUT_MS, windowsHide: true, env })
+  const run = spawnSync(cmd, args, { stdio: 'ignore', timeout: NOTIFY_TIMEOUT_MS, env })
   return run.error !== undefined && (run.error as NodeJS.ErrnoException).code !== 'ETIMEDOUT'
     ? { outcome: 'failed', command: cmd }
     : { outcome: 'sent', command: cmd }
