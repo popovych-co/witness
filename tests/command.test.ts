@@ -131,4 +131,10 @@ describe('the chat waits (row 204)', () => {
       '`wait: merged on GitHub`', '`wait: nothing owed`']) expect(b, s).toContain(s)
     expect(b).toContain('never restart drive yourself')
   })
+  // Final review: what no `next:` routes is said, and a wake is told to the human first.
+  it('waiting: lines are told to the human, and a wake says what woke it', () => {
+    const rows = body().split('\n')
+    expect(rows.find((l) => l.startsWith('| `waiting:` lines are printed'))).toContain('only when they ask')
+    expect(rows.find((l) => l.startsWith('| `wait: needs you`'))).toContain('Tell the human the rows it printed')
+  })
 })

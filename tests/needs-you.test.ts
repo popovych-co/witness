@@ -34,8 +34,11 @@ describe('needsYou (D203)', () => {
       { target: 'auth-refresh-plan-2', kind: 'capped' },
     ])
     const byKind = (k: string) => items.filter((i) => i.kind === k)
-    expect(byKind('stuck')[0]).toMatchObject({ target: 'auth-refresh-plan-1', rows: ['stuck: auth-refresh-plan-1 — witness log auth-refresh-plan-1'] })
-    expect(byKind('capped')[0]).toMatchObject({ target: 'auth-refresh-plan-2', rows: ['stuck: auth-refresh-plan-2 — witness log auth-refresh-plan-2'] })
+    // final review: a stuck or capped target names its way back
+    expect(byKind('stuck')[0]).toMatchObject({ target: 'auth-refresh-plan-1',
+      rows: ['stuck: auth-refresh-plan-1 — witness log auth-refresh-plan-1', '  run: witness retry auth-refresh-plan-1'] })
+    expect(byKind('capped')[0]).toMatchObject({ target: 'auth-refresh-plan-2',
+      rows: ['stuck: auth-refresh-plan-2 — witness log auth-refresh-plan-2', '  run: witness retry auth-refresh-plan-2'] })
     expect(byKind('parked')[0]).toMatchObject({ target: 'auth-refresh-plan-3', key: 'parked:auth-refresh-plan-3:plan' })
     expect(byKind('parked')[0]!.rows[0]).toBe('parked: auth-refresh-plan-3 · plan round 1 — drive cap: plan ran 16 rounds')
   })

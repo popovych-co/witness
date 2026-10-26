@@ -39,7 +39,8 @@ export function driveReport(
   const waiting = items.filter((i) => WAIT_KINDS.has(i.kind))
   const waits = waiting.flatMap((i) => i.rows)
   const parked = items.filter((i) => i.kind === 'parked').flatMap((i) => i.rows)
-  const stuck = items.filter((i) => i.kind === 'stuck' || i.kind === 'capped').flatMap((i) => i.rows)
+  const stuckItems = items.filter((i) => i.kind === 'stuck' || i.kind === 'capped')
+  const stuck = stuckItems.flatMap((i) => i.rows)
   const obligations = since.filter(({ entry }) => entry.t === 'deferral').map(({ entry }) => {
     const d = entry as unknown as { id: string; artifact: string; anchor: string; kind: string }
     return `obligation: ${d.id} · ${d.artifact} · ${d.anchor} — ${d.kind}`
@@ -56,7 +57,7 @@ export function driveReport(
   // A crash is one wait whatever it names; a notice waits on nobody.
   const w = new Set(waiting.filter((i) => i.notice !== true).map((i) => i.kind === 'pending-txn' ? '-txn' : i.target)).size
   const p = items.filter((i) => i.kind === 'parked').length
-  const s = stuck.length
+  const s = stuckItems.length
   const tally = `${m} merged · ${w} wait on you · ${p} parked · ${s} stuck`
   const lines = [
     `drive: ${run.stopped !== undefined ? 'stopped' : 'done'} — ${tally}`,

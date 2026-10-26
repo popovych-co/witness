@@ -503,7 +503,9 @@ export async function driveLoop(
   }
   const stuck = (key: string, action: NextAction) => {
     ctx.out(`drive: no progress — ${action.line}`)
-    ctx.out(`help: ${action.target ?? 'untargeted work'} is set aside for this run — read its stream above`)
+    ctx.out(action.target !== undefined
+      ? `help: ${action.target} is set aside until its record moves — read its stream above · after a fix witness cannot see: witness retry ${action.target}`
+      : 'help: untargeted work is set aside until its record moves — read its stream above')
     setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}`, key0: keyOf(action) })
   }
   // A decision is an act too, and it gets the same convergence guard as a spawn: a decision

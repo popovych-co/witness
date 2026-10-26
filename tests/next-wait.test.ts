@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { acquireDriveLock } from '../src/drive-presence.js'
+import { writeLive } from '../src/live.js'
 import { type TestRepo, approve, autonomyOn, patchConfig, seededRepo, trustConfig, writePlan, writeSpec } from './helpers.js'
 
 const WAIT = /^wait: witness wait --since [0-9a-f]{12}$/m
@@ -77,5 +79,21 @@ describe('next tells the chat how to wait (D204)', () => {
     const human = await repo.cli(['next'], { env: { CLAUDECODE: '1', WITNESS_TRUST_CMDS: '' } })
     expect(human.stdout).toContain('next: witness trust a-plan-1')
     expect(human.stdout).not.toMatch(/^wait/m)
+  })
+})
+
+// Final review (a) I4, (b) I5. What only the human can move and `next` never routes — a stuck or
+// capped target, a merge, a parked gate — was folded into the wait token and never said in the
+// chat. The chat's `next` names each, with its command.
+describe('next says what waits on the human that it does not route (final review)', () => {
+  it('a stuck target drive holds is named with its retry', async () => {
+    const repo = await flowing()
+    const lock = acquireDriveLock(repo.root, {})
+    if (!lock.ok) throw new Error('lock')
+    try {
+      writeLive(repo.root, { pid: process.pid, asides: [{ target: 'a-plan-1', kind: 'stuck' }] })
+      const res = await repo.cli(['next'], { env: { CLAUDECODE: '1' } })
+      expect(res.stdout).toContain('waiting: stuck: a-plan-1 — witness log a-plan-1 · run: witness retry a-plan-1')
+    } finally { lock.value() }
   })
 })

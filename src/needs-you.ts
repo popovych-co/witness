@@ -38,6 +38,9 @@ export const WAIT_LABEL: Record<WaitKind, string> = {
   decision: 'decision', conversation: 'conversation', merge: 'merge', parked: 'parked', stuck: 'stuck', capped: 'capped',
 }
 
+// The kinds `next` never routes: the chat names each, with its command (final review).
+export const HELD_KINDS: ReadonlySet<WaitKind> = new Set(['merge', 'parked', 'stuck', 'capped'])
+
 // The kinds the report counts as waits (each target once), in the order a human answers them.
 export const WAIT_KINDS: ReadonlySet<WaitKind> =
   new Set(['pending-txn', 'design-look', 'trust-grant', 'need', 'decision', 'conversation', 'merge'])
@@ -121,8 +124,10 @@ export function needsYou(root: string, ctx: Ctx, cfg: Config, canon: Canon, asid
   // A capped target the policy could not park carries no gate (drive.ts): it is stuck too. One
   // the policy parked is the parked row above, read from the journal.
   for (const a of aside.filter((x) => x.kind === 'stuck' || (x.kind === 'capped' && x.gate === undefined))) {
+    // Final review: the way back is named — a fix witness cannot see is the human's `retry`.
     items.push({ kind: a.kind as 'stuck' | 'capped', target: a.target, key: `${a.kind}:${a.target}`,
-      rows: [`stuck: ${a.target} — ${a.why ?? `witness log ${a.target}`}`] })
+      rows: [`stuck: ${a.target} — ${a.why ?? `witness log ${a.target}`}`,
+        ...(a.target !== TARGETLESS ? [`  run: witness retry ${a.target}`] : [])] })
   }
   return items
 }
