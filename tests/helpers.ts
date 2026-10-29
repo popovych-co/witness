@@ -407,7 +407,7 @@ function checkTrail(trace: string, dirs: Set<number>): void {
   }
 }
 
-// The latest call a lens made — a rerolled or fallen-back lens makes several.
+// The latest call a lens made — a rerolled lens makes several.
 export function callFor(scenario: string, lens: string, bin: 'claude' | 'pi' = 'claude'): string | undefined {
   return callDirs(scenario, bin)
     .filter((c) => existsSync(join(c.dir, 'lens')) && readFileSync(join(c.dir, 'lens'), 'utf8').trim() === lens)

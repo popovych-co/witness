@@ -71,9 +71,9 @@ describe('the battery runs its lenses at once', () => {
     expect(callCount(scenario)).toBe(4)                     // one call per lens, none on another model
   })
 
-  it('one lens exhausting the chain refuses the gate and journals nothing', async () => {
+  it('one lens that cannot be invoked refuses the gate and journals nothing', async () => {
     const { repo, planId, scenario } = await batteryRepo()
-    writeFileSync(join(scenario, 'claude-fail-type-design'), '')   // fails on every rung
+    writeFileSync(join(scenario, 'claude-fail-type-design'), '')   // fails on any model
     const errs: string[] = []
     const c = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => errs.push(l) })
     expect(await runGate(c, 'implement', planId, { fresh: false, manual: false })).toBe(2)

@@ -21,12 +21,12 @@ export interface GateRunEntry {
   prompts_sha: string
   witness: string
   model: string
-  // Row 106: the chain head actually REQUESTED. The verdict-cache key is built before
-  // anything is invoked, when only this is knowable; `model` is written afterwards, when
-  // the answering rung is. Those were one field, so every fallen-back round keyed against
-  // a model the key could not contain — permanently `fresh`, which killed resume,
-  // changed-nothing and the malformed-streak brake at once. Optional for READS only:
-  // every journal written before 0.8.0 lacks it and `pin ?? model` is exact for them,
+  // Row 106: the model the round ASKED for. The verdict-cache key is built before anything is
+  // invoked, when only this is knowable; `model` is what answered. Those were one field, so
+  // every fallen-back round keyed against a model the key could not contain — permanently
+  // `fresh`, which killed resume, changed-nothing and the malformed-streak brake at once.
+  // Since row 212 a round asks its pin alone, so only a 0.25.x round can differ. Optional for
+  // READS only: every journal written before 0.8.0 lacks it and `pin ?? model` is exact for them,
   // since a round that did not fall back has pin === model. gate.ts writes it always.
   pin?: string
   // Optional: every pre-88 journal on disk lacks it, and keyOf reads absent as

@@ -43,7 +43,7 @@ it('the scope stop goes to the arbiter, which approves the slicing (A2 · A3)', 
   const d = decisions(repo.root, 'auth-hardening').at(-1)!
   expect(d).toMatchObject({ decision: 'approve', selected: 'arbiter', rule: 'reserved-stop-clean',
     reason: 'one slice covers g1 and nothing the recap excludes' })
-  expect(d.arbiter!.model).toBe(lastRun(repo.root, 'auth-hardening', 'decompose').model)   // the gates.model chain, as the battery's
+  expect(d.arbiter!.model).toBe(lastRun(repo.root, 'auth-hardening', 'decompose').model)   // init gives the arbiter and the gate one pin
   expect(d.arbiter!.prompts_sha).toMatch(/^[0-9a-f]{64}$/)
   expect(findById(loadCanon(repo.root), 'auth-refresh')!.meta.status).toBe('approved')
   expect(h.out()).toContain('decided: decompose auth-hardening → approve · arbiter · reserved-stop-clean')

@@ -44,7 +44,7 @@ describe('arbitrate (A3)', () => {
   const REQ: ArbiterRequest = { mode: 'decision', evidence: [{ title: 'The stop', body: 'gate: plan · target: p1' }], menu: [
     { command: 'witness decide plan p1 --approve', depth: 'root', runnable: true, why: 'the finding misreads the spec' },
     { command: 'witness decide plan p1 --stop', depth: 'terminal', runnable: true, when: 'the work cannot converge' }] }
-  // init pins gates.model, so the rewrite is what makes the chain [session-default].
+  // init pins the arbiter, so the rewrite is what leaves it on the session default.
   async function setup(config = 'schema: 1\n') {
     const repo = await seededRepo()
     repo.write('witness.config.yaml', config)
@@ -94,7 +94,7 @@ describe('arbitrate (A3)', () => {
     const r = await arbitrate(ctx, repo.root, cfg, REQ)
     expect(!r.ok && r.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'provider-unrunnable' })
   })
-  it('refuses with the invocation rows once the chain is exhausted', async () => {
+  it('refuses with the invocation rows when its model cannot be invoked', async () => {
     const { repo, scenario, ctx, cfg } = await setup()
     writeFileSync(join(scenario, 'claude-fail-arbiter'), '')
     const r = await arbitrate(ctx, repo.root, cfg, REQ)
