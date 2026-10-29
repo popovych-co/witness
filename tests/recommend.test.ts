@@ -133,6 +133,22 @@ describe('malformed-rerun offers the re-run alone (row 212)', () => {
   })
 })
 
+// The suffix promises what appendKind will do (row 209): a repair re-asks only the lenses with
+// no verdict — on unchanged content, and never from a round that fell back. Moved content makes
+// the re-gate a fresh round, the whole battery asked, so the suffix would be false there.
+describe('the re-ask suffix promises only what the re-gate will do', () => {
+  const malformed = (extra: Record<string, unknown> = {}) =>
+    run(1, 'a', 'S', { outcome: 'malformed', malformed: [{ reviewer: 'code-reviewer', violations: [] }], ...extra })
+  it('names the re-asked lens on unchanged content, conditioned on the setup', () => {
+    const why = recommend(ctxFor([malformed()]))!.options[0]!.why!
+    expect(why).toContain('and on unchanged content and setup it re-asks only code-reviewer')
+  })
+  it('says nothing of a re-ask once the content moved, or after a fallen-back round', () => {
+    expect(recommend(ctxFor([malformed()], { stale: true }))!.options[0]!.why).not.toContain('re-asks')
+    expect(recommend(ctxFor([malformed({ pin: 'm1', model: 'session-default' })]))!.options[0]!.why).not.toContain('re-asks')
+  })
+})
+
 describe('the rule table is ordered and total', () => {
   it('blocking-here: one blocking finding anchored in this artifact', () => {
     const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')]))!

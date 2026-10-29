@@ -1,6 +1,6 @@
 import type { Entry } from './journal.js'
 import {
-  anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, pendingDecision,
+  anchorRecurrence, boundReached, fellBack, ladderSpent, lastGateRun, notePrefill, pendingDecision,
   repairGranted, roundBudget, roundsSinceApprove, type GateRunEntry,
 } from './rounds.js'
 
@@ -178,7 +178,10 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       options: [
         opt(`witness gate ${gate} ${target}`, 'root', {
           why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
-            last.malformed?.length ? `, and it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
+            // What appendKind will do (row 209): a repair, on unchanged content and setup, from
+            // a round that did not fall back. Moved content is a fresh round, every lens asked.
+            last.malformed?.length && !stale && !fellBack(last)
+              ? `, and on unchanged content and setup it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
           note: 'a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy',
         }),
       ],
