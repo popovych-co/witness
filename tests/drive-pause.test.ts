@@ -355,6 +355,34 @@ describe("drive prints a session's journaled acts (row 214)", () => {
     expect(poll()).toContainEqual(expect.stringMatching(/^journal: gate-run gate plan r1 passed/))
   }, 30000)
 
+  // Final review I2. A fix routes to the spec it amends, so a later effort writes the spec again and
+  // plans it: the watch reads every effort that wrote a flow member, not only the first one.
+  it('a spec a later effort amended is watched through that effort (issue #64)', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'], slug: 'zz-fix' })
+    expect((await writeSpec(repo, 'auth-refresh', {}, '## Motivation\nTokens leak.\n\n## Behavior\nRotate before expiry, amended.\n', 'zz-fix')).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    const poll = journalWatch(repo.root, 'auth-refresh')
+    expect((await writePlan(repo, 'p2', { parent: 'auth-refresh' }, undefined, 'zz-fix')).code).toBe(0)
+    expect(poll()).toContainEqual(expect.stringMatching(/^journal: write artifact=p2 /))
+    appendEntry(repo.root, 'p2', { t: 'gate-run', gate: 'plan', round: 1, outcome: 'passed', reviewed_sha: 'abc1234', verdicts: [] })
+    expect(poll()).toContainEqual(expect.stringMatching(/^journal: gate-run gate plan r1 passed/))
+  }, 30000)
+
+  // The same, when the amendment lands while the session runs: the effort joins once a watched
+  // stream moves (here a bookkeeping line on the spec's own stream, which prints nothing).
+  it('an effort that amends the spec mid-session joins the watch once the spec moves (issue #64)', async () => {
+    const repo = await seededRepo({ preexisting: ['auth-refresh'], slug: 'zz-fix' })
+    const poll = journalWatch(repo.root, 'auth-refresh')
+    expect((await writeSpec(repo, 'auth-refresh', {}, '## Motivation\nTokens leak.\n\n## Behavior\nRotate before expiry, amended.\n', 'zz-fix')).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    appendEntry(repo.root, 'auth-refresh', { t: 'drift-check', artifact: 'auth-refresh' })
+    expect(poll()).toEqual([])
+    repo.git('add', '-A')
+    repo.git('commit', '-qm', 'drift check')
+    expect((await writePlan(repo, 'p2', { parent: 'auth-refresh' }, undefined, 'zz-fix')).code).toBe(0)
+    expect(poll()).toContainEqual(expect.stringMatching(/^journal: write artifact=p2 /))
+  }, 30000)
+
   // P13: an entry carries the hash of the session that wrote it (row 191 §4.8).
   it('an entry from another session says so (issue #64)', async () => {
     const repo = await flowRepo()

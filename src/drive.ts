@@ -503,16 +503,18 @@ export function flowOf(canon: Canon, t: string): string[] {
 // taken before the read: a stream caught mid-append fails to parse and keeps its old gate, so it
 // is read again at the next check, once its line is whole. A stream that shrank starts over from
 // where it stands. What the repo held before the session is the baseline, taken at creation, or
-// for a stream that could not be read then, at the first check that can. A target no effort wrote
-// (an adopted spec) has its effort looked up again whenever a watched stream moves. Once the
+// for a stream that could not be read then, at the first check that can. The efforts read are
+// every one that wrote a flow member — a fix routes to the spec it amends, so a later effort writes
+// the spec again and plans it — collected again whenever a watched stream moves, so an amendment
+// or an adopted target's first effort joins, from where its stream then stands. Once the
 // session's id is known, an act it did not journal says so (its `ctx.session`, row 191 §4.8,
 // absent or another's). An entry that cannot be rendered — a hand-edited line — is skipped, and
 // costs no other entry its line.
 export function journalWatch(root: string, target: string): (session?: string) => string[] {
   const at = new Map<string, { gate: string; seen: number }>()
   let moved = false                                       // a watched stream's gate moved this poll
-  let effort: string | undefined
   let flow = [target]
+  let efforts: string[] = []                              // the efforts that wrote a flow member, read apart
   const derive = () => {
     try {
       flow = flowOf(loadCanon(root), target)
@@ -543,18 +545,19 @@ export function journalWatch(root: string, target: string): (session?: string) =
     const from = was === undefined ? (from0 ? 0 : entries.length) : Math.min(was.seen, entries.length)
     return entries.slice(from)
   }
-  // The effort's stream, read apart only when it is no member itself (a lane whose target is it).
-  const apart = (): boolean => effort !== undefined && !flow.includes(effort)
-  const lookUp = () => {
+  // An effort that is itself a flow member (a lane whose target is it) is read as one.
+  const collect = (): string[] => {
     try {
-      effort = effortOf(root, target)
-    } catch { /* looked up again when a stream moves */ }
-    if (effort !== undefined && apart()) read(effort, false)
+      return effortStreams(root).filter((id) => !flow.includes(id) && readStream(root, id)
+        .some((e) => e.t === 'write' && flow.includes(String((e as { artifact?: unknown }).artifact))))
+    } catch {
+      return efforts                                      // collected again when a stream moves
+    }
   }
-  lookUp()
   derive()
+  efforts = collect()
   const members = new Set(flow)                           // the flow at creation: a baseline, never news
-  for (const id of flow) read(id, false)
+  for (const id of [...flow, ...efforts]) read(id, false)
   const render = (e: Entry, mine: string | undefined, about?: readonly string[]): string[] => {
     try {
       if (!movesFlow(e)) return []
@@ -569,14 +572,17 @@ export function journalWatch(root: string, target: string): (session?: string) =
     try {
       const mine = session !== undefined ? sessionHash(session) : undefined
       moved = false
-      const inEffort = apart() ? read(effort!, false) : []
+      const inEffort = efforts.flatMap((id) => read(id, false))
       if (moved) derive()
       const out = inEffort.flatMap((e) => render(e, mine, flow))
       for (const id of flow) {
-        if (id === effort && apart()) continue
         out.push(...read(id, !members.has(id) && !at.has(id)).flatMap((e) => render(e, mine)))
       }
-      if (effort === undefined && moved) lookUp()
+      if (moved) {
+        const now = collect()
+        for (const id of now) if (!efforts.includes(id)) read(id, false)   // a new effort's baseline
+        efforts = now
+      }
       return out
     } catch {
       return []                                           // the next check reads it

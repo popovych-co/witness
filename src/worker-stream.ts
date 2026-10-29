@@ -194,6 +194,12 @@ const textOf = (content: unknown): string =>
     : Array.isArray(content) ? content.map(obj).filter((c) => c?.type === 'text').map((c) => str(c?.text) ?? '').join('\n') : ''
 
 const oldest = (open: Map<string, string>): string | undefined => open.values().next().value
+// The oldest open call that is not in the background, else the oldest one that is: a server an
+// agent left running is not what a call it is waiting on now waits for.
+const oldestForeground = (open: Map<string, string>, background: ReadonlySet<string>): string | undefined => {
+  for (const [id, action] of open) if (!background.has(id)) return action
+  return oldest(open)
+}
 
 // A tool's result is heard and never shown, error or not: both harnesses mark every non-zero exit
 // as a tool error (pi throws "Command exited with code N", claude answers `Exit code 1`), so a
@@ -277,12 +283,16 @@ const TASK_ENDED = new Set(['completed', 'failed', 'killed'])
 // the process keeps running; `task_notification` says the command ended, a second `init` names the
 // same session, the agent reads the output file, and a second `result` closes. So a backgrounded
 // call stays open past its tool_result until its task notifies (or a `task_updated` ends it), and
-// there may be several results. P17: claude registers a task for a foreground subagent too, so
-// only a `task_started` marked `is_backgrounded` keeps a call open.
+// there may be several results. P17: claude registers a task for a foreground call too — a
+// subagent, a Bash that has run a while — so only a task marked `is_backgrounded` keeps a call
+// open; claude 2.1.312 moves a Bash that outruns its limit to the background with a
+// `task_updated` whose patch says so (its SDK schema: "A later move to the background arrives as
+// task_updated patch.is_backgrounded"), not with a second `task_started`.
 export function claudeStream(home: string): WorkerStream {
   const open = new Map<string, string>()       // tool_use id → action line, oldest first
+  const calls = new Map<string, string>()      // every tool_use id → its action line
   const background = new Set<string>()         // tool_use ids a task runs past their tool_result
-  const tasks = new Map<string, string>()      // a backgrounded task's id → its tool_use id
+  const tasks = new Map<string, string>()      // a running task's id → its tool_use id
   const reads = new Set<string>()              // tool_use ids of Read calls, whose result is numbered
   let named: string | undefined                // the session id last emitted
   // The model is awaited from `init` or a tool_result until a record carrying a tool_use, or a
@@ -294,6 +304,14 @@ export function claudeStream(home: string): WorkerStream {
     if (id === undefined) return
     background.delete(id)
     open.delete(id)
+  }
+  // A call its task runs in the background: open until the task ends, even when the move to the
+  // background is told after the call's tool_result closed it.
+  const toBackground = (id: string | undefined): void => {
+    if (id === undefined) return
+    background.add(id)
+    const action = calls.get(id)
+    if (!open.has(id) && action !== undefined) open.set(id, action)
   }
   return {
     line(record) {
@@ -317,10 +335,10 @@ export function claudeStream(home: string): WorkerStream {
               return [show('compacting context')]
             case 'task_started': {
               const id = str(e.tool_use_id)
-              if (id === undefined || e.is_backgrounded !== true) return []
-              background.add(id)
+              if (id === undefined) return []
               const task = str(e.task_id)
               if (task !== undefined) tasks.set(task, id)
+              if (e.is_backgrounded === true) toBackground(id)
               return []
             }
             case 'task_notification': {
@@ -331,10 +349,14 @@ export function claudeStream(home: string): WorkerStream {
             }
             case 'task_updated': {
               const task = str(e.task_id)
-              const status = str(obj(e.patch)?.status)
-              if (task === undefined || status === undefined || !TASK_ENDED.has(status)) return []
-              close(tasks.get(task))
-              tasks.delete(task)
+              const patch = obj(e.patch)
+              if (task === undefined || patch === undefined) return []
+              if (patch.is_backgrounded === true) toBackground(tasks.get(task))
+              const status = str(patch.status)
+              if (status !== undefined && TASK_ENDED.has(status)) {
+                close(tasks.get(task))
+                tasks.delete(task)
+              }
               return []
             }
             default:
@@ -353,6 +375,7 @@ export function claudeStream(home: string): WorkerStream {
               const id = str(block.id)
               if (id !== undefined) {
                 open.set(id, action)
+                calls.set(id, action)
                 if (tool.toLowerCase() === 'read') reads.add(id)
               }
               out.push({ kind: 'show', text: action })
@@ -398,7 +421,7 @@ export function claudeStream(home: string): WorkerStream {
           return []
       }
     },
-    inFlight: () => oldest(open) ?? (awaiting ? 'the model' : undefined),
+    inFlight: () => oldestForeground(open, background) ?? (awaiting ? 'the model' : undefined),
     failed: () => failed,
   }
 }

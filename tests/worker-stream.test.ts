@@ -248,6 +248,48 @@ describe('claudeStream (row 214)', () => {
     expect(s.inFlight()).toBe('the model')
   })
 
+  // Final review I1. claude 2.1.312 registers a foreground Bash as a task with is_backgrounded false
+  // once it has run a while; moving it to the background at its timeout arrives only as a
+  // task_updated patch ("A later move to the background arrives as task_updated
+  // patch.is_backgrounded", the binary's own SDK schema). That call is what the session waits on.
+  it('a call moved to the background at its timeout stays in flight until its task ends (issue #64)', () => {
+    const s = claudeStream('/r')
+    s.line(init)
+    s.line(use('t7', 'Bash', { command: 'cd /r && $WITNESS ship p1' }))
+    s.line(r({ type: 'system', subtype: 'task_started', task_id: 'b7', tool_use_id: 't7', task_type: 'local_bash', is_backgrounded: false }))
+    expect(s.line(r({ type: 'system', subtype: 'task_updated', task_id: 'b7', patch: { is_backgrounded: true } }))).toEqual([])
+    s.line(result('t7', 'Command did not complete within its 120s timeout and was moved to the background (ID: b7)'))
+    expect(s.inFlight()).toBe('$ witness ship p1')
+    s.line(r({ type: 'result', subtype: 'success', is_error: false, result: 'Waiting on CI.' }))
+    expect(s.inFlight()).toBe('$ witness ship p1')
+    s.line(r({ type: 'system', subtype: 'task_notification', task_id: 'b7', tool_use_id: 't7', status: 'completed' }))
+    expect(s.inFlight()).toBeUndefined()
+  })
+
+  it('a move to the background that arrives after its result reopens the call (issue #64)', () => {
+    const s = claudeStream('/r')
+    s.line(init)
+    s.line(use('t7', 'Bash', { command: 'cargo test' }))
+    s.line(r({ type: 'system', subtype: 'task_started', task_id: 'b7', tool_use_id: 't7', is_backgrounded: false }))
+    s.line(result('t7', 'Command did not complete within its 120s timeout and was moved to the background (ID: b7)'))
+    s.line(r({ type: 'system', subtype: 'task_updated', task_id: 'b7', patch: { is_backgrounded: true } }))
+    expect(s.inFlight()).toBe('$ cargo test')
+  })
+
+  // Final review I1: a dev server the agent backgrounded is not what a running foreground call
+  // waits on.
+  it('a foreground call is named before a backgrounded one (issue #64)', () => {
+    const s = claudeStream('/r')
+    s.line(init)
+    s.line(use('t8', 'Bash', { command: 'pnpm dev' }))
+    s.line(r({ type: 'system', subtype: 'task_started', task_id: 'b8', tool_use_id: 't8', is_backgrounded: true }))
+    s.line(result('t8', 'Command running in background with ID: b8.'))
+    s.line(use('t9', 'Bash', { command: 'cargo test' }))
+    expect(s.inFlight()).toBe('$ cargo test')
+    s.line(result('t9', 'ok'))
+    expect(s.inFlight()).toBe('$ pnpm dev')
+  })
+
   // P12: the agent reads a backgrounded call's output file, line-numbered.
   it('a Read result is heard without its line numbers (issue #64)', () => {
     const s = claudeStream('/r')
