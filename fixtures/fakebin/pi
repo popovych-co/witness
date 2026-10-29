@@ -4,17 +4,23 @@
 set -e
 if [ "$1" = "--version" ]; then echo "pi fake 0.0.0"; exit 0; fi
 dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
-mkdir -p "$dir/pi-calls"
-# claim the next number atomically: mkdir without -p fails when the dir exists, so
-# lenses the gate launches together can never share a number
-n=1
-# Every invocation leaves its trail in pi-trace (one short line per append, so lines never
-# interleave): its pid, each claim attempt that failed with the error mkdir gave, the number it
-# claimed. tests/helpers.ts checks the trail against the dirs, so a call that ends up with no dir
-# of its own fails with the trail instead of as an off-by-one count (seen on CI only, 2026-10).
+# Claim the next number atomically, so lenses the gate launches together never share one. The
+# claim is node's mkdir(2), never the mkdir UTILITY: uutils' mkdir (Ubuntu 26.04's default
+# coreutils, 0.2.x) checks for the path, creates it, and reads an EEXIST it lost a race on as
+# success, so on CI two concurrent calls each claimed call-2 and one call's record vanished.
+# Every invocation also leaves its trail in pi-trace (one short line per append): start, each
+# number already taken, its claim, its end. tests/helpers.ts checks the trail against the dirs.
 trace="$dir/pi-trace"
+mkdir -p "$dir/pi-calls"
 echo "start $$" >> "$trace"
-while ! err=$(mkdir "$dir/pi-calls/call-$n" 2>&1); do echo "taken $$ $n $err" >> "$trace"; n=$((n + 1)); done
+n=$(node -e '
+  const fs = require("fs")
+  const [calls, trace, pid] = process.argv.slice(1)
+  for (let n = 1; ; n++) {
+    try { fs.mkdirSync(`${calls}/call-${n}`); process.stdout.write(String(n)); break }
+    catch (e) { if (e.code !== "EEXIST") throw e; fs.appendFileSync(trace, `taken ${pid} ${n}\n`) }
+  }
+' "$dir/pi-calls" "$trace" "$$")
 echo "claim $$ $n" >> "$trace"
 call="$dir/pi-calls/call-$n"
 if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
