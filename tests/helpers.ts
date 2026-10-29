@@ -1,5 +1,5 @@
 import { expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -89,6 +89,13 @@ export function tmpRepo(): TestRepo {
       err: (l) => errs.push(l),
       ask: async () => answers.shift() ?? '',
     }
+    // One event-loop turn per invocation, as a real process boundary gives. The CLI is
+    // synchronous by design, and `await` on work that never touched I/O yields only a
+    // microtask, so a test chaining in-process calls held its vitest worker's loop for the
+    // whole chain — 100 s and more, measured. vitest's worker RPC rejects any reply it
+    // has not READ in 60 s, so a chain that started while one was in flight failed the run
+    // with `Timeout calling "onTaskUpdate"`, every test green.
+    await new Promise((r) => setImmediate(r))
     const code = await main(ctx, args)
     return { code, stdout: outs.join('\n'), stderr: errs.join('\n') }
   }
@@ -245,6 +252,24 @@ export async function writeDesign(repo: TestRepo, specId: string, html = DESIGN_
   return res
 }
 
+// A child process a test awaits instead of spawnSync'ing. A test's sync child-process chain
+// holds its vitest worker's event loop for as long as the chain runs, and the worker's RPC
+// rejects any reply it has not read in 60 s (`Timeout calling "onTaskUpdate"`, every test
+// green) — so a test that runs real processes back to back awaits each one.
+export function spawnAsync(
+  file: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { cwd: opts.cwd, env: opts.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (d: string) => { stdout += d })
+    child.stderr.setEncoding('utf8').on('data', (d: string) => { stderr += d })
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+  })
+}
+
 export function vitestBin(): string {
   const req = createRequire(import.meta.url)
   return join(dirname(req.resolve('vitest/package.json')), 'vitest.mjs')
@@ -322,7 +347,10 @@ export function fakeClock(start: number): Clock & { slept: number[] } {
   return {
     slept,
     now: () => now,
-    sleep: async (ms: number) => { slept.push(ms); now += ms },
+    // A fake sleep still yields the event loop, as a real one does: resolved as a bare
+    // microtask, a loop sleeping on it (drive's pause, the reviewer's wait) never lets the
+    // worker read anything — the starvation repo.cli's yield above describes.
+    sleep: async (ms: number) => { slept.push(ms); now += ms; await new Promise((r) => setImmediate(r)) },
   }
 }
 

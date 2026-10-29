@@ -1,10 +1,10 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { parse, stringify } from 'yaml'
 import { withValues } from '../../src/settings.js'
 import { cpSync, existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { fakeBinDir, fakeScenario, fixtureEnv, fixturePath, ghState, putVerdict, singleConfig, TOKEN_BROKEN, vitestBin } from '../helpers.js'
+import { fakeBinDir, fakeScenario, fixtureEnv, fixturePath, ghState, putVerdict, singleConfig, spawnAsync, TOKEN_BROKEN, vitestBin } from '../helpers.js'
 
 const BIN = resolve(import.meta.dirname, '../../dist/bin.js')
 const RECAP = {
@@ -51,28 +51,31 @@ let wt: string
 let scenario: string
 let env: Record<string, string>
 
-function cli(args: string[], opts: { cwd?: string; crashAfter?: string; expect?: number[] } = {}): SpawnSyncReturns<string> {
-  const r = spawnSync(process.execPath, [BIN, ...args], {
+// The CLI runs out of process here, so each run is awaited (helpers.ts spawnAsync says why):
+// as a spawnSync chain, the two dozen runs below held this worker's event loop for the whole
+// pipeline — 55 s measured, one CI slowdown short of vitest's 60 s worker-RPC timeout.
+async function cli(args: string[], opts: { cwd?: string; crashAfter?: string; expect?: number[] } = {}) {
+  const ran = await spawnAsync(process.execPath, [BIN, ...args], {
     cwd: opts.cwd ?? root,
     env: { ...env, ...(opts.crashAfter ? { WITNESS_CRASH_AFTER: opts.crashAfter } : {}) },
-    encoding: 'utf8',
   })
+  const r = { status: ran.code, stdout: ran.stdout, stderr: ran.stderr }
   const allowed = opts.expect ?? [0]
-  if (!allowed.includes(r.status ?? -1)) {
+  if (!allowed.includes(r.status)) {
     throw new Error(`witness ${args.join(' ')} → ${r.status}\n${r.stdout}\n${r.stderr}`)
   }
   return r
 }
 
 // crash → verify exit 9 → recover → the step re-run must converge
-function withCrash(point: string, args: string[], opts: { cwd?: string; expect?: number[] } = {}) {
-  const crashed = cli(args, { ...opts, crashAfter: point, expect: [9] })
+async function withCrash(point: string, args: string[], opts: { cwd?: string; expect?: number[] } = {}) {
+  const crashed = await cli(args, { ...opts, crashAfter: point, expect: [9] })
   expect(crashed.status).toBe(9)
-  cli(['recover', '--complete'], { expect: [0] })
+  await cli(['recover', '--complete'], { expect: [0] })
   return cli(args, opts)
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   root = fakeScenario()                                     // reuse the tmp-dir maker
   scenario = fakeScenario()
   env = {
@@ -84,7 +87,7 @@ beforeAll(() => {
   execFileSync('git', ['init', '-b', 'main', root])
   execFileSync('git', ['-C', root, 'config', 'user.email', 'p@t.dev'])
   execFileSync('git', ['-C', root, 'config', 'user.name', 'protocol'])
-  cli(['init'])
+  await cli(['init'])
   // ship gate's command lanes (tests/lint) need something configured — trivial always-green
   // commands, same choice as helpers.ts's shippableRepo, since the fixture's own suite isn't
   // what's under test here.
@@ -98,36 +101,36 @@ beforeAll(() => {
 }, 240_000)
 
 describe('the whole pipeline, killed and resumed at every boundary', () => {
-  it('recap → decompose stop → approve → plan gate → start → evidence → implement → ship → merge', () => {
+  it('recap → decompose stop → approve → plan gate → start → evidence → implement → ship → merge', async () => {
     writeFileSync(join(root, 'recap.json'), JSON.stringify(RECAP))
-    cli(['recap', '--file', 'recap.json'])
+    await cli(['recap', '--file', 'recap.json'])
 
     writeFileSync(join(root, 'm.json'), JSON.stringify(SPEC_META))
     writeFileSync(join(root, 'b.md'), SPEC_BODY)
-    cli(['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm.json', '--body', 'b.md'])
+    await cli(['write', 'auth-refresh', '--effort', 'auth-hardening', '--meta', 'm.json', '--body', 'b.md'])
 
     putVerdict(scenario, DOC_CLEAN)
-    withCrash('gate-journal', ['gate', 'decompose', '--effort', 'auth-hardening'], { expect: [1] })
-    expect(cli(['next']).stdout).toContain('decide decompose')
+    await withCrash('gate-journal', ['gate', 'decompose', '--effort', 'auth-hardening'], { expect: [1] })
+    expect((await cli(['next'])).stdout).toContain('decide decompose')
     // decide is a one-shot transition, not resumable like gate/start/ship/next — once
     // crash+recovery applies it, re-running the same decide would correctly refuse
     // nothing-pending. Verify convergence via the crash+recover pair itself (the plan
     // write below requires the parent approved, which implicitly proves it landed).
-    const crashedDecide = cli(['decide', 'decompose', 'auth-hardening', '--approve'], { crashAfter: 'decide-journal', expect: [9] })
+    const crashedDecide = await cli(['decide', 'decompose', 'auth-hardening', '--approve'], { crashAfter: 'decide-journal', expect: [9] })
     expect(crashedDecide.status).toBe(9)
-    cli(['recover', '--complete'], { expect: [0] })
+    await cli(['recover', '--complete'], { expect: [0] })
 
     writeFileSync(join(root, 'pm.json'), JSON.stringify(PLAN_META))
     writeFileSync(join(root, 'pb.md'), PLAN_BODY)
-    cli(['write', 'auth-refresh-plan-1', '--effort', 'auth-hardening', '--meta', 'pm.json', '--body', 'pb.md'])
+    await cli(['write', 'auth-refresh-plan-1', '--effort', 'auth-hardening', '--meta', 'pm.json', '--body', 'pb.md'])
     putVerdict(scenario, PAIR_CLEAN)
-    cli(['gate', 'plan', 'auth-refresh-plan-1'])            // green path auto-pass
+    await cli(['gate', 'plan', 'auth-refresh-plan-1'])            // green path auto-pass
     // resume through a real process: unchanged content appends nothing
-    const before = cli(['log', 'auth-refresh-plan-1']).stdout
-    cli(['gate', 'plan', 'auth-refresh-plan-1'])
-    expect(cli(['log', 'auth-refresh-plan-1']).stdout).toBe(before)
+    const before = (await cli(['log', 'auth-refresh-plan-1'])).stdout
+    await cli(['gate', 'plan', 'auth-refresh-plan-1'])
+    expect((await cli(['log', 'auth-refresh-plan-1'])).stdout).toBe(before)
 
-    withCrash('start-commit', ['start', 'auth-refresh-plan-1'])
+    await withCrash('start-commit', ['start', 'auth-refresh-plan-1'])
     wt = join(root, '.witness/worktrees/auth-refresh-plan-1')
     expect(existsSync(wt)).toBe(true)
 
@@ -137,26 +140,26 @@ describe('the whole pipeline, killed and resumed at every boundary', () => {
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     execFileSync('git', ['-C', wt, 'add', '-A'])
     execFileSync('git', ['-C', wt, 'commit', '-m', 'tests first'])
-    cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { cwd: wt })
+    await cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { cwd: wt })
     cpSync(join(fixturePath('vitest-single'), 'src/token.ts'), join(wt, 'src/token.ts'))
     execFileSync('git', ['-C', wt, 'add', '-A'])
     execFileSync('git', ['-C', wt, 'commit', '-m', 'green'])
-    cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green', '--step', 's1'], { cwd: wt })
+    await cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'green', '--step', 's1'], { cwd: wt })
 
     putVerdict(scenario, treeClean(wt))
-    cli(['gate', 'implement', 'auth-refresh-plan-1'])       // exit 0: green path
+    await cli(['gate', 'implement', 'auth-refresh-plan-1'])       // exit 0: green path
 
-    cli(['ship', 'auth-refresh-plan-1'], { expect: [1] })   // ship always stops
-    cli(['decide', 'ship', 'auth-refresh-plan-1', '--approve'])
-    withCrash('pr-stamp', ['ship', 'auth-refresh-plan-1'])
-    expect(cli(['log', 'auth-refresh-plan-1']).stdout).toContain('pr')
+    await cli(['ship', 'auth-refresh-plan-1'], { expect: [1] })   // ship always stops
+    await cli(['decide', 'ship', 'auth-refresh-plan-1', '--approve'])
+    await withCrash('pr-stamp', ['ship', 'auth-refresh-plan-1'])
+    expect((await cli(['log', 'auth-refresh-plan-1'])).stdout).toContain('pr')
 
     ghState(scenario, 1, 'MERGED')
-    withCrash('merge-stamp', ['next'])
-    const dashboard = cli([]).stdout
+    await withCrash('merge-stamp', ['next'])
+    const dashboard = (await cli([])).stdout
     expect(dashboard).toContain('live')
-    expect(cli(['log', 'auth-refresh-plan-1']).stdout).toContain('in-progress → done (merge)')
-    expect(cli(['log', 'auth-refresh']).stdout).toContain('→ live (merge)')
+    expect((await cli(['log', 'auth-refresh-plan-1'])).stdout).toContain('in-progress → done (merge)')
+    expect((await cli(['log', 'auth-refresh'])).stdout).toContain('→ live (merge)')
     expect(existsSync(wt)).toBe(false)                      // reaped
   }, 600_000)
 })
