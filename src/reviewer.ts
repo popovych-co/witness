@@ -110,7 +110,9 @@ export interface InvokeExtras {
 
 // `lens` reaches the reviewer as WITNESS_LENS, the way runners get WITNESS_SCREENS_DIR: the
 // battery launches its lenses at once, so call order no longer says which lens a call was.
-export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; lens?: string; clock?: Clock }
+// `pinField` is the setting `model` came from, so a pin this harness cannot run is refused under
+// the key the reader edits (row 212), never the retired `gates.model`.
+export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; pinField?: string; lens?: string; clock?: Clock }
 
 // Row 182. Inside a drive session a usage-limited reviewer call waits for the reset and
 // retries, at most this long in all per invocation. Outside drive it refuses at once: an
@@ -154,7 +156,7 @@ interface Attempt {
 function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<Prepared> {
   let pin: ParsedPin | undefined
   if (opts.model !== undefined) {
-    const pinR = validatePin(harness, 'gates.model', opts.model)
+    const pinR = validatePin(harness, opts.pinField ?? 'model', opts.model)
     if (!pinR.ok) return refuse(pinR.violations)
     pin = pinR.value
   }

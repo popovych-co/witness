@@ -88,7 +88,7 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
   let prompt = `${lens.contents}\n${req.evidence.map((s) => `\n## ${s.title}\n\n${s.body}\n`).join('')}\n## Options\n\n${renderOptions(req.menu)}\n`
   for (let attempt = 0; ; attempt++) {
     const r = await invokeReviewerAsync(ctx, harness, {
-      cwd: root, prompt, model: model === SESSION_DEFAULT ? undefined : model, lens: 'arbiter',
+      cwd: root, prompt, model: model === SESSION_DEFAULT ? undefined : model, pinField: 'arbiter.model', lens: 'arbiter',
       timeoutMs: cfg.gates.reviewerTimeoutMs, extensions: localR.value.reviewerExtensions,
     })
     if (!r.ok) return refuse(unansweredPin(r.violations, 'arbiter.model', model, harness.name))

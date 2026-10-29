@@ -274,7 +274,8 @@ describe('gate engine', () => {
     const { repo, scenario } = await gateRepo()
     writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
     putVerdict(scenario, CLEAN('auth-refresh'))
-    writeFileSync(join(scenario, 'claude-fail'), '1')
+    writeFileSync(join(scenario, 'claude-error'),
+      "There's an issue with the selected model (test-model-1). It may not exist or you may not have access to it.")
     const errs: string[] = []
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
     expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(2)
@@ -282,6 +283,33 @@ describe('gate engine', () => {
     expect(callCount(scenario)).toBe(1)
     expect(errs.join('\n')).toContain('gates.plan.model')
     expect(errs.join('\n')).toContain("a human's decision: pin-unanswered")
+  })
+
+  it('a provider failure on a live pin names the pin, but leaves the re-run to the reader (row 212)', async () => {
+    const { repo, scenario } = await gateRepo()
+    writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: test-model-1\n')
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    writeFileSync(join(scenario, 'claude-error'), 'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}')
+    writeFileSync(join(scenario, 'claude-error-calls'), '1')
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(2)
+    expect(errs.join('\n')).toContain('gates.plan.model,pin-unanswered')
+    expect(errs.join('\n')).not.toContain("a human's decision")
+    expect(errs.join('\n')).toContain('help: fix each row and re-run')
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)   // the blip clears
+  })
+
+  it('a pin this harness cannot run is refused under its own setting, not the retired gates.model (row 212)', async () => {
+    const { repo, scenario } = await gateRepo()
+    writeFileSync(join(repo.root, 'witness.config.yaml'), 'schema: 1\ngates:\n  model: anthropic/test-model-1\n')
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l: string) => errs.push(l) })
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(2)
+    expect(callCount(scenario)).toBe(0)
+    expect(errs.join('\n')).toContain('gates.plan.model,provider-unrunnable')
+    expect(errs.join('\n')).not.toMatch(/^\s*gates\.model,/m)
   })
 
   it('the model line names the model alone; the entry carries no calibration stamp (row 212)', async () => {

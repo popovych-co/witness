@@ -89,6 +89,11 @@ describe('arbitrate (A3)', () => {
     expect(!r.ok && r.violations.find((x) => x.rule === 'pin-unanswered')!.field).toBe('arbiter.model')
     expect(callCount(scenario)).toBe(1)
   })
+  it('a pin this harness cannot run is refused under arbiter.model (row 212)', async () => {
+    const { repo, ctx, cfg } = await setup('schema: 1\ngates:\n  model: anthropic/test-model-1\n')
+    const r = await arbitrate(ctx, repo.root, cfg, REQ)
+    expect(!r.ok && r.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'provider-unrunnable' })
+  })
   it('refuses with the invocation rows once the chain is exhausted', async () => {
     const { repo, scenario, ctx, cfg } = await setup()
     writeFileSync(join(scenario, 'claude-fail-arbiter'), '')

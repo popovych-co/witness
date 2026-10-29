@@ -70,7 +70,7 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 - A `decide` line surfaced — the standing stops (ship always; feature scope; fix-created-spec) and every blocking finding land here by design.
 - A `relay:` line printed with no `run:` — by `next`, `gate`, `decide` (a `--revise` the human named included) or `ship`: the session reached its context limit, and the table's row applies.
 - The same `next:` line came back twice with nothing changed in between → report `no progress: <line>`, what you tried, and hand off.
-- An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human the witness satisfy command the refusal names), `slug-reuse`, lock contention, `pin-unanswered` (the pinned reviewer model cannot be invoked — show the human the pin the refusal names).
+- An exit 2/3 you cannot mechanically satisfy — `needs-unmet` (show the human the witness satisfy command the refusal names), `slug-reuse`, lock contention, `pin-unanswered` when the refusal calls it a human's decision (the harness says the pinned reviewer model does not exist or is out of reach — show the human the pin it names).
 - A skill ended its turn for a gate stop — that stop is yours too; do not restart the loop until the human decides.
 
 **Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** (or wherever the repo's `paths:` config relocates them) — that is what the skills' write path is for. Run `$WITNESS status` — the orientation screen (flows, blocked docs, reconcile rows, pending gates) — when you need position rather than the next action; bare `$WITNESS` prints the same screen.

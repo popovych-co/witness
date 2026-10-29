@@ -22,7 +22,7 @@ interface LensRun {
 // Row 169, amended by row 212: every lens is asked on the stage's one model, and a lens that
 // cannot be invoked refuses at once — there is no stand-in to fall back to.
 async function runLens(
-  ctx: Ctx, harness: Harness, model: string, lens: BatteryLens, opts: { cwd: string } & InvokeExtras,
+  ctx: Ctx, harness: Harness, model: string, lens: BatteryLens, opts: { cwd: string; pinField?: string } & InvokeExtras,
 ): Promise<Result<LensRun>> {
   let prompt = lens.prompt
   let rerolled = false
@@ -60,7 +60,7 @@ async function runLens(
 // for it.
 export async function runBattery(
   ctx: Ctx, harness: Harness, model: string, lenses: readonly BatteryLens[],
-  opts: { cwd: string } & InvokeExtras,
+  opts: { cwd: string; pinField?: string } & InvokeExtras,
 ): Promise<Result<BatteryRun>> {
   const results = await Promise.all(lenses.map((l) => runLens(ctx, harness, model, l, opts)))
   const runs: LensRun[] = []

@@ -465,9 +465,10 @@ async function judge(
     // asked the pin alone (row 212; appendKind never repairs a 0.25.x fallen-back round), so
     // the round's `model` stays the pin.
     const kept = new Map((repairFrom?.verdicts ?? []).map((rv) => [rv.reviewer, rv]))
-    const ranR = await runBattery(ctx, harness, pin, composed.filter((l) => !kept.has(l.name)), { cwd: root, ...extras })
+    const pinField = `gates.${spec.gate}.model`
+    const ranR = await runBattery(ctx, harness, pin, composed.filter((l) => !kept.has(l.name)), { cwd: root, pinField, ...extras })
     if (!ranR.ok) {
-      renderRefusal(unansweredPin(ranR.violations, `gates.${spec.gate}.model`, pin, harness.name)).forEach((l) => ctx.err(l))
+      renderRefusal(unansweredPin(ranR.violations, pinField, pin, harness.name)).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
     ;({ malformed } = ranR.value)
