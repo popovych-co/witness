@@ -50,12 +50,20 @@ const nameOf = (file: string): string => file.split(/[\\/]/).pop() ?? file
 
 // Why a helper that ended before drive let go of it no longer holds the host, or undefined when
 // its end is no news: a signal (drive's own group stop, the terminal's Ctrl+C), a clean exit
-// (caffeinate's `-w` pid ended), or win32's Ctrl+C status.
-export function lostWhy(platform: NodeJS.Platform, file: string, code: number | null, signal: NodeJS.Signals | null): string | undefined {
+// (caffeinate's `-w` pid ended), or win32's Ctrl+C status. The cause is named: exit 3 is
+// AWAKE_SCRIPT's own, and otherwise `said` — the helper's last stderr line, which under
+// `$ErrorActionPreference = 'Stop'` is the error that stopped it — beats a bare exit code.
+export function lostWhy(
+  platform: NodeJS.Platform, file: string, code: number | null, signal: NodeJS.Signals | null, said = '',
+): string | undefined {
   if (signal !== null || code === null || code === 0) return undefined
   if (platform === 'win32' && code === CTRL_C_EXIT) return undefined
-  return `${nameOf(file)} exited ${code}`
+  if (platform === 'win32' && code === 3) return `${nameOf(file)} exited 3 — SetThreadExecutionState refused the request`
+  return said ? `${nameOf(file)} exited ${code}: ${said}` : `${nameOf(file)} exited ${code}`
 }
+
+// The last non-empty line a helper wrote to stderr, capped: one row's worth for the warning.
+const lastLine = (text: string): string => text.trim().split(/\r?\n/).pop()?.trim().slice(0, 200) ?? ''
 
 export interface Awake { shown?: string; stop(): void }
 
@@ -70,10 +78,14 @@ export function keepAwake(
     done = true
     onLost(why)
   }
-  const child = spawn(a.file, a.args, { stdio: 'ignore', ...(a.env ? { env: { ...env, ...a.env } } : {}) })
-  // A helper that cannot hold the host costs the guard, never the run — but it says so.
+  const child = spawn(a.file, a.args, { stdio: ['ignore', 'ignore', 'pipe'], ...(a.env ? { env: { ...env, ...a.env } } : {}) })
+  // A helper that cannot hold the host costs the guard, never the run — but it says so, and why.
+  let said = ''
+  child.stderr?.setEncoding('utf8').on('data', (d: string) => { said = `${said}${d}`.slice(-4096) })
+  ;(child.stderr as { unref?: () => void } | null)?.unref?.()    // the pipe never holds drive open
   child.on('error', (e: NodeJS.ErrnoException) => lost(`${nameOf(a.file)} failed to start (${e.code ?? e.message})`))
-  child.on('exit', (code, signal) => lost(lostWhy(platform, a.file, code, signal)))
+  // 'close', not 'exit': the helper's stderr has been read in full only once its pipe closed.
+  child.on('close', (code, signal) => lost(lostWhy(platform, a.file, code, signal, lastLine(said))))
   child.unref()
   return {
     shown: a.shown,

@@ -46,6 +46,13 @@ describe('lostWhy', () => {
     expect(lostWhy('darwin', '/usr/bin/caffeinate', null, 'SIGINT')).toBeUndefined()
     expect(lostWhy('win32', 'powershell.exe', CTRL_C_EXIT, null)).toBeUndefined()
   })
+
+  // Deferred from 0.25.1's review: `exited 1` / `exited 3` named nothing a reader could act on.
+  it('names the cause: its own exit 3, else the last line the helper said', () => {
+    expect(lostWhy('win32', 'powershell.exe', 3, null)).toBe('powershell.exe exited 3 — SetThreadExecutionState refused the request')
+    expect(lostWhy('win32', 'powershell.exe', 1, null, 'Add-Type : Cannot add type. Compilation errors occurred.'))
+      .toBe('powershell.exe exited 1: Add-Type : Cannot add type. Compilation errors occurred.')
+  })
 })
 
 // Review Focus 1
@@ -54,6 +61,9 @@ describe('keepAwake', () => {
     const lost: string[] = []
     keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake('exit 1') }, 'darwin', process.pid, (w) => lost.push(w))
     await expect.poll(() => lost, { timeout: 5_000 }).toEqual(['fake-awake exited 1'])
+    const said: string[] = []
+    keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake('echo "first" >&2; echo "the error that stopped it" >&2; exit 1') }, 'darwin', process.pid, (w) => said.push(w))
+    await expect.poll(() => said, { timeout: 5_000 }).toEqual(['fake-awake exited 1: the error that stopped it'])
     const quiet: string[] = []
     keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake('exec sleep 30') }, 'darwin', process.pid, (w) => quiet.push(w)).stop()
     await new Promise((r) => setTimeout(r, 500))
