@@ -423,6 +423,21 @@ describe('drive says how a session goes (row 214)', () => {
   }, 20000)
 })
 
+// Review Focus 4. What drive prints of an act is repo text (a decision's note): spelled out too.
+// `firstPoll`, not `once`: this file imports `once` from node:events.
+describe('journal lines (row 214)', () => {
+  const firstPoll = (polled: string[]) => { let done = false; return () => { if (done) return []; done = true; return polled } }
+  it('journal lines are spelled out too (issue #64)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 1.5') }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1,
+      { progress: firstPoll(['journal: human-decision implement: approve — ok\x1b]52;c;x\x07']) })
+    expect(lines).toContain('[1 implement/p1] journal: human-decision implement: approve — ok\\x1b]52;c;x\\x07')
+    expect(lines.some((l) => l.includes('\x1b'))).toBe(false)
+  }, 20000)
+})
+
 describe('lineSink (row 214)', () => {
   // Review Focus 3: pi's agent_end carries the whole conversation in one record.
   it('lineSink takes one long record in linear time (issue #64)', () => {

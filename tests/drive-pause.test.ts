@@ -1,10 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { grantCommands } from '../src/allowlist.js'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
-import { driveLoop, PAUSE_IDLE_MAX_MS, PAUSE_POLL_MS, watchSignature } from '../src/drive.js'
+import { sessionHash } from '../src/context.js'
+import { driveLoop, journalWatch, PAUSE_IDLE_MAX_MS, PAUSE_POLL_MS, watchSignature } from '../src/drive.js'
+import { appendEntry, entryLine, journalRel, withJournalCtx } from '../src/journal.js'
 import { readLive, writeLive } from '../src/live.js'
 import { loadCanon } from '../src/scan.js'
 import {
@@ -289,4 +291,98 @@ describe('a release makes the next item on that target news (final review)', () 
     expect(ticks(out)).toBe(2)
     await expect.poll(() => readFileSync(log, 'utf8').split('\n').filter((l) => l.includes('stuck · a-plan-1')).length, { timeout: 5000 }).toBe(2)
   }, 60000)
+})
+
+// Wait (at most 10 s) for the test to see a line; exit 3 if it never does.
+const awaitFlag = (flag: string): string =>
+  `i=0; while [ ! -f "${flag}" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; [ -f "${flag}" ] || exit 3`
+// An approved spec with one plan, `p`, written for it in the repo's effort.
+async function flowRepo(): Promise<TestRepo> {
+  const repo = await seededRepo()
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'p', { parent: 'auth-refresh' })
+  return repo
+}
+
+describe("drive prints a session's journaled acts (row 214)", () => {
+  // The fake waits on its act's line, so a drive that read the journal only at session end
+  // deadlocks it into exit 3.
+  it('a step close shows while the session still runs (issue #64)', async () => {
+    const { repo, planId } = await startedThreeStepPlan({}, SCAFFOLDING_FIRST)
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const flag = join(fakeScenario(), 'seen')
+    const agent = script(`${witnessCli()} step-close ${planId} --step s1 > /dev/null\n${awaitFlag(flag)}`)
+    const seen = new RegExp(`^\\[1 \\w+/${planId}\\] journal: step-close step=s1$`)
+    const out: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), WITNESS_DRIVE_IDLE_MAX_MS: '0', WITNESS_DRIVE_AGENT_BIN: agent }),
+      out: (l) => { out.push(l); if (seen.test(l)) writeFileSync(flag, '') },
+    })
+    await driveLoop(repo.root, cfgOf(repo), ctx, { maxSpawns: 1 }, fakeClock(0))
+    expect(out.find((l) => /^\[1 [^\]]*\] ended /.test(l))).toContain(' · exit 0 · ')
+  }, 60000)
+
+  // Review Focus 5: a line read mid-append fails to parse; it is read again once it is whole.
+  it('an append in flight is read once it completes (issue #64)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'p')
+    const line = entryLine({ t: 'step-close', step: 's9' })
+    const stream = join(repo.root, journalRel('p'))
+    appendFileSync(stream, line.slice(0, 10))
+    expect(poll()).toEqual([])
+    appendFileSync(stream, `${line.slice(10)}\n`)
+    expect(poll()).toEqual(['journal: step-close step=s9'])
+    expect(poll()).toEqual([])
+  }, 30000)
+
+  it('bookkeeping prints nothing (issue #64)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'p')
+    appendFileSync(join(repo.root, journalRel('p')), `${entryLine({ t: 'dispatch', plan: 'p' })}\n`)
+    expect(poll()).toEqual([])
+  }, 30000)
+
+  // D9: the flow is re-derived when the effort's stream moves, so a plan a spec's session writes
+  // joins it, from its first entry.
+  it('a plan written and gated mid-session joins the flow (issue #64)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'auth-refresh')
+    expect((await writePlan(repo, 'p2', { parent: 'auth-refresh' })).code).toBe(0)
+    expect(poll()).toContainEqual(expect.stringMatching(/^journal: write artifact=p2 /))
+    appendEntry(repo.root, 'p2', { t: 'gate-run', gate: 'plan', round: 1, outcome: 'passed', reviewed_sha: 'abc1234', verdicts: [] })
+    expect(poll()).toContainEqual(expect.stringMatching(/^journal: gate-run gate plan r1 passed/))
+  }, 30000)
+
+  // P13: an entry carries the hash of the session that wrote it (row 191 §4.8).
+  it('an entry from another session says so (issue #64)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'p')
+    withJournalCtx({ session: sessionHash('S-1') }, () => appendEntry(repo.root, 'p', { t: 'step-close', step: 's1' }))
+    withJournalCtx({ session: sessionHash('S-2') }, () => appendEntry(repo.root, 'p', { t: 'step-close', step: 's2' }))
+    expect(poll('S-1')).toEqual(['journal: step-close step=s1', 'journal: step-close step=s2 · not this session'])
+  }, 30000)
+
+  // P17: `entryDetail` throws on a hand-edited gate-run with no reviewed_sha.
+  it('a hand-edited entry is skipped, not thrown (issue #64)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'p')
+    const stream = join(repo.root, journalRel('p'))
+    appendFileSync(stream, '{"v":1,"t":"gate-run","gate":"plan"}\n')
+    appendFileSync(stream, `${entryLine({ t: 'step-close', step: 's3' })}\n`)
+    expect(poll()).toEqual(['journal: step-close step=s3'])
+  }, 30000)
+
+  it('a stream that shrank starts over (issue #64)', async () => {
+    const repo = await flowRepo()
+    const stream = join(repo.root, journalRel('p'))
+    appendEntry(repo.root, 'p', { t: 'step-close', step: 's1' })
+    appendEntry(repo.root, 'p', { t: 'step-close', step: 's2' })
+    const poll = journalWatch(repo.root, 'p')
+    writeFileSync(stream, `${readFileSync(stream, 'utf8').split('\n')[0]}\n`)
+    expect(poll()).toEqual([])
+    appendEntry(repo.root, 'p', { t: 'step-close', step: 's9' })
+    expect(poll()).toEqual(['journal: step-close step=s9'])
+  }, 30000)
 })

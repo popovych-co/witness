@@ -4,19 +4,20 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
 import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
-import { withoutSession } from './context.js'
+import { sessionHash, withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { findById, loadCanon } from './scan.js'
+import { findById, loadCanon, type Canon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
+import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { isAlive, pause } from './lock.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
-import { effortStreams, readStream } from './journal.js'
+import { effortStreams, journalRel, readStream, type Entry } from './journal.js'
 import { movesFlow } from './progress.js'
 import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
@@ -184,7 +185,9 @@ export function signalSession(
 // make the same repo drive differently from two terminals.
 //
 // Row 214: `next` is the line drive derived for this session, shown on its `started` line; `hear`
-// gets every line the child wrote, shown or not — what the CLI printed, wherever it landed; `root`
+// gets every line the child wrote, shown or not — what the CLI printed, wherever it landed;
+// `progress` is what its flow journaled since the last poll (journalWatch), as lines, asked with
+// the session's id once its stream has named it; `root`
 // is the repo, whose drive sessions a harness that can be told where to keep them keeps in a
 // folder of their own (D2); `stream` replaces the harness's renderer, a test seam on `ticker`'s
 // precedent.
@@ -192,7 +195,7 @@ export async function spawnSession(
   step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number,
   opts: {
     manual?: boolean; signal?: AbortSignal; ticker?: Ticker; hear?: (line: string) => void; root?: string
-    stream?: WorkerStream; next?: string
+    stream?: WorkerStream; next?: string; progress?: (session?: string) => string[]
   } = {},
 ): Promise<SessionEnd> {
   const t0 = Date.now()
@@ -241,6 +244,8 @@ export async function spawnSession(
   // Awake time on the session's clock once the child runs: what the quiet line measures in (row
   // 210). `started` prints before the clock exists, at 0.
   let awakeNow = (): number => 0
+  // The id the session's stream named last: whose journal entries are its own.
+  let session: string | undefined
   // When a line was last printed, in awake time, and how many quiet lines followed it.
   let lastHeard = 0
   let quiet = 0
@@ -271,7 +276,10 @@ export async function spawnSession(
     for (const w of said) {
       if (w.kind === 'show') show(w.text)
       else if (w.kind === 'heard') opts.hear?.(w.text)
-      else emit(`session ${w.id}${transcripts !== undefined ? ` · ${transcripts}` : ''}`)
+      else {
+        session = w.id
+        emit(`session ${w.id}${transcripts !== undefined ? ` · ${transcripts}` : ''}`)
+      }
     }
   })
   const err = lineSink((record) => show(passthrough(record)))
@@ -284,6 +292,7 @@ export async function spawnSession(
   // before it runs, so a check that failed costs one line, never the limit.
   const tick = (awake: number) => {
     try {
+      for (const l of opts.progress?.(session) ?? []) emit(l)
       const n = Math.floor((awake - lastHeard) / SESSION_QUIET_MS)
       if (n <= quiet) return
       quiet = n
@@ -337,6 +346,10 @@ export async function spawnSession(
       // `(error)`: the stream says its last answer was an error, which pi's JSON mode reports at
       // exit 0 (D5).
       if (o !== 'spawn-failed') {
+        // What it journaled since the last check, before how it ended.
+        try {
+          for (const l of opts.progress?.(session) ?? []) emit(l)
+        } catch { /* what it journaled is in its stream; `ended` still says how it went */ }
         const how = o === 'timeout' ? 'timed out' : o === 'stopped' ? 'stopped'
           : code === null ? 'killed' : `exit ${code}${stream.failed() ? ' (error)' : ''}`
         emit(`ended ${clockTime()} · ${how} · ${duration(ms)}`)
@@ -467,6 +480,110 @@ function progressKey(root: string, action: NextAction, family: (t: string) => st
   return [action.line, own, inEffort].join('\u0000')
 }
 
+// Final review F2. A lane holds its whole flow: a spec and the plans written for it. Pure over the
+// canon it is given: drive's fill reads it from the canon of this fill, the journal watch from a
+// fresh one (row 214).
+export function flowOf(canon: Canon, t: string): string[] {
+  const doc = findById(canon, t)
+  if (doc?.meta.type === 'plan') return [t, String(doc.meta.parent)]
+  if (doc?.meta.type === 'spec') {
+    return [t, ...canon.docs.filter((d) => d.meta.type === 'plan' && String(d.meta.parent) === t).map((d) => String(d.meta.id))]
+  }
+  return [t]
+}
+
+// Row 214 (D9). What a session journals for its flow, as it lands: the target and its family
+// (flowOf), each member's own stream, and the owning effort's entries about a member. The flow is
+// read again from a fresh canon whenever the effort's stream moves, so the plan a spec's session
+// writes mid-session joins it, from its first entry. Polled on the session clock's check and once
+// before `ended`; drive journals nothing (row 145), so this only reads, and it never throws.
+//
+// Each stream has its own position, counted on all its entries — the filter (row 206's acts, the
+// effort's about the flow) applies only to what is printed — and its own gate, size and mtime
+// taken before the read: a stream caught mid-append fails to parse and keeps its old gate, so it
+// is read again at the next check, once its line is whole. A stream that shrank starts over from
+// where it stands. What the repo held before the session is the baseline, taken at creation, or
+// for a stream that could not be read then, at the first check that can. A target no effort wrote
+// (an adopted spec) has its effort looked up again whenever a watched stream moves. Once the
+// session's id is known, an act it did not journal says so (its `ctx.session`, row 191 §4.8,
+// absent or another's). An entry that cannot be rendered — a hand-edited line — is skipped, and
+// costs no other entry its line.
+export function journalWatch(root: string, target: string): (session?: string) => string[] {
+  const at = new Map<string, { gate: string; seen: number }>()
+  let moved = false                                       // a watched stream's gate moved this poll
+  let effort: string | undefined
+  let flow = [target]
+  const derive = () => {
+    try {
+      flow = flowOf(loadCanon(root), target)
+    } catch { /* the flow it had stands */ }
+  }
+  const gateOf = (id: string): string => {
+    try {
+      const st = statSync(join(root, journalRel(id)))
+      return `${st.size}:${st.mtimeMs}`
+    } catch {
+      return '-'                                          // no stream yet
+    }
+  }
+  // The entries a stream gained since it was last read; [] when its gate stands or it cannot be
+  // read yet. `from0`: a member that joined the flow now, whose every entry is new.
+  const read = (id: string, from0: boolean): Entry[] => {
+    const gate = gateOf(id)
+    const was = at.get(id)
+    if (was?.gate === gate) return []
+    moved = true
+    let entries: Entry[]
+    try {
+      entries = readStream(root, id)
+    } catch {
+      return []                                           // an append in flight
+    }
+    at.set(id, { gate, seen: entries.length })
+    const from = was === undefined ? (from0 ? 0 : entries.length) : Math.min(was.seen, entries.length)
+    return entries.slice(from)
+  }
+  // The effort's stream, read apart only when it is no member itself (a lane whose target is it).
+  const apart = (): boolean => effort !== undefined && !flow.includes(effort)
+  const lookUp = () => {
+    try {
+      effort = effortOf(root, target)
+    } catch { /* looked up again when a stream moves */ }
+    if (effort !== undefined && apart()) read(effort, false)
+  }
+  lookUp()
+  derive()
+  const members = new Set(flow)                           // the flow at creation: a baseline, never news
+  for (const id of flow) read(id, false)
+  const render = (e: Entry, mine: string | undefined, about?: readonly string[]): string[] => {
+    try {
+      if (!movesFlow(e)) return []
+      if (about !== undefined && !about.includes(String((e as { artifact?: unknown }).artifact))) return []
+      const by = (e as { ctx?: { session?: unknown } }).ctx?.session
+      return [`journal: ${String(e.t)} ${entryDetail(e)}${mine !== undefined && by !== mine ? ' · not this session' : ''}`]
+    } catch {
+      return []
+    }
+  }
+  return (session) => {
+    try {
+      const mine = session !== undefined ? sessionHash(session) : undefined
+      moved = false
+      const inEffort = apart() ? read(effort!, false) : []
+      if (moved) derive()
+      const out = inEffort.flatMap((e) => render(e, mine, flow))
+      for (const id of flow) {
+        if (id === effort && apart()) continue
+        out.push(...read(id, !members.has(id) && !at.has(id)).flatMap((e) => render(e, mine)))
+      }
+      if (effort === undefined && moved) lookUp()
+      return out
+    } catch {
+      return []                                           // the next check reads it
+    }
+  }
+}
+
 interface Lane { action: NextAction; end: Promise<SessionEnd>; merged?: string }
 
 const lastRunGate = (entries: ReturnType<typeof readStream>): string | undefined => {
@@ -526,14 +643,7 @@ export async function driveLoop(
   // a free target meanwhile — nor a spec while one of its plans runs. Read from the canon of
   // this fill, so a plan written a moment ago belongs to its spec's lane at once.
   let canonNow = loadCanon(root)
-  const family = (t: string): string[] => {
-    const doc = findById(canonNow, t)
-    if (doc?.meta.type === 'plan') return [t, String(doc.meta.parent)]
-    if (doc?.meta.type === 'spec') {
-      return [t, ...canonNow.docs.filter((d) => d.meta.type === 'plan' && String(d.meta.parent) === t).map((d) => String(d.meta.id))]
-    }
-    return [t]
-  }
+  const family = (t: string): string[] => flowOf(canonNow, t)
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
     if (lanes.has(k) || aside.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
@@ -666,7 +776,10 @@ export async function driveLoop(
     // prints — the session's printed lines alone met it only when an agent happened to quote it.
     const pr = action.target !== undefined ? findById(canonNow, action.target)?.meta.pr : undefined
     const hear = (line: string) => { if (pr !== undefined && MERGE_LINE.exec(line)?.[1] === String(pr)) lane.merged = line }
-    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, hear, root, next })
+    // Row 214: what the session journals for its flow. Target-less work has no stream of its own
+    // to watch (row 181 keys it on counts).
+    const progress = action.target !== undefined ? journalWatch(root, action.target) : undefined
+    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, hear, root, next, progress })
     return lane
   }
 
