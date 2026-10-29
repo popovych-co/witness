@@ -1,1 +1,0 @@
-{ "defect": "boolean product type represents impossible states (refunded && !paid; paid without receiptUrl)" }

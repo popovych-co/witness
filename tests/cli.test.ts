@@ -30,11 +30,19 @@ describe('cli entry', () => {
     const repo = tmpRepo()
     for (const verb of ['recover', 'init', 'recap', 'write', 'diff', 'check', 'index', 'satisfy', 'log',
       'test-evidence', 'verify-red', 'adopt', 'gate', 'decide', 'start', 'clean', 'ship', 'next',
-      'abandon', 'rename', 'sync', 'calibrate']) {
+      'abandon', 'rename', 'sync']) {
       const r = await repo.cli([verb, '--help'])
       expect(r.code, `${verb} --help`).toBe(0)
       expect(r.stdout, `${verb} --help`).toContain('usage: witness')
     }
+  })
+
+  it('calibrate is no verb (row 212)', async () => {
+    const repo = tmpRepo()
+    const r = await repo.cli(['calibrate', '--help'])      // --help: the RED run must never start a calibration
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('unknown verb: calibrate')
+    expect((await repo.cli(['--help'])).stdout).not.toContain('calibrate')
   })
 })
 

@@ -69,7 +69,6 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   rename: () => import('./verbs/rename.js'),
   sync: () => import('./verbs/sync.js'),
   trust: () => import('./verbs/trust.js'),
-  calibrate: () => import('./verbs/calibrate.js'),
   // Row 116's valve. Exempt from the floor gate in `main`, because a repository that
   // refuses every verb must still be able to run the one that unrefuses it.
   floor: () => import('./verbs/floor.js'),
@@ -81,7 +80,6 @@ const VERB_USAGE: Record<string, string> = {
   abandon: 'witness abandon <plan-id | effort-slug…>',
   adopt: 'witness adopt <specs/... | plans/...>.md',
   ask: 'witness ask <text> | --withdraw <id> [--note <why>]',
-  calibrate: 'witness calibrate <exact-model-id> [--suite all|reviewers|skills] [--only <name>] [--samples <n>] [--publish]',
   check: 'witness check',
   clean: 'witness clean',
   draft: 'witness draft <ask-<id>|amend-<effort>|design-<spec-id>> [--file <json>]',

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { seedScratchRepo } from '../src/calibrate.js'
 import { SCHEMA_VERSION, loadConfig, resolveSettings } from '../src/config.js'
 import { RETIRED, SCHEMA_FINGERPRINTS, defaultValues } from '../src/settings.js'
 import { patchConfig, tmpRepo } from './helpers.js'
@@ -97,13 +96,5 @@ describe('schema 2 (row 193)', () => {
     const r = await repo.cli(['init', '--agent', 'claude-code'])
     expect(r.code, r.stderr).toBe(0)
     expect(r.stderr).toContain('warn: schema 1 is older than this witness (2)')
-  })
-
-  it('calibrate writes a schema-2 scratch config', () => {
-    const { root } = seedScratchRepo('schema-2', 'pi')
-    const r = loadConfig(root)
-    expect(r.ok && r.value.warning).toBeUndefined()
-    expect(r.ok && r.value.harness).toBe('pi')
-    expect(r.ok && r.value.criteria.runner).toBe('node --test --test-name-pattern "@spec:{id}"')
   })
 })

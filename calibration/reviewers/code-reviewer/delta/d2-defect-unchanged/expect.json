@@ -1,6 +1,0 @@
-{
-  "defect": "the off-by-one that admits qty 100 sits in src/cart.mjs, which the change did not touch — demoted in the delta round, caught by the full twin",
-  "expect": "demote",
-  "site": "src/cart.mjs",
-  "findings": []
-}

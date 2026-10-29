@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 
@@ -7,20 +7,14 @@ const wf = (name: string) => parse(readFileSync(join(__dirname, '..', '.github',
 const raw = (name: string) => readFileSync(join(__dirname, '..', '.github', 'workflows', name), 'utf8');
 
 describe('workflow tiers', () => {
-  it('ci runs per commit, model-free — no API key, no calibrate', () => {
+  it('ci runs per commit, model-free — no API key', () => {
     const y = wf('ci.yml');
     expect(Object.keys(y.on)).toEqual(expect.arrayContaining(['push', 'pull_request']));
     expect(raw('ci.yml')).not.toContain('ANTHROPIC_API_KEY');
-    expect(raw('ci.yml')).not.toContain('calibrate');
   });
 
-  it('calibration runs nightly, on dispatch with a model input, and on prompt/fixture changes', () => {
-    const y = wf('calibration.yml');
-    expect(y.on.schedule[0].cron).toBeDefined();
-    expect(y.on.workflow_dispatch.inputs.model).toBeDefined();
-    expect(y.on.pull_request.paths).toEqual(expect.arrayContaining(['prompts/**', 'calibration/**']));
-    expect(raw('calibration.yml')).toContain('ANTHROPIC_API_KEY');
-    expect(raw('calibration.yml')).not.toContain('--publish');
+  it('runs exactly two workflows: ci and release (row 212)', () => {
+    expect(readdirSync(join(__dirname, '..', '.github', 'workflows')).sort()).toEqual(['ci.yml', 'release.yml']);
   });
 
   it('release requires tests, version sync, and the release gate', () => {
@@ -44,7 +38,7 @@ describe('workflow tiers', () => {
   // The lockfile is pnpm's; an `npm ci` step fails outright on the missing
   // package-lock.json — every tier installs from the committed pnpm lock.
   it('every workflow installs from the frozen pnpm lockfile', () => {
-    for (const name of ['ci.yml', 'calibration.yml', 'release.yml']) {
+    for (const name of ['ci.yml', 'release.yml']) {
       const r = raw(name);
       expect(r, name).toContain('pnpm/action-setup');
       expect(r, name).toContain('pnpm install --frozen-lockfile');

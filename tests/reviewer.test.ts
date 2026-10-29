@@ -355,7 +355,7 @@ describe('usage limits at the reviewer (B4)', () => {
     expect(clock.slept).toEqual([])
   })
 
-  it('the sync invoker (calibration) never waits · it refuses as outside drive', async () => {
+  it('the sync invoker (drift\'s lane) never waits · it refuses as outside drive', async () => {
     const { repo, scenario, ctx } = await setup(LIMIT, { WITNESS_DRIVE: 'p1' })
     const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'x' })
     expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['usage-limit', LIMIT])

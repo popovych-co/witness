@@ -15,16 +15,12 @@ import { fileURLToPath } from 'node:url'
 // so the Linux CI runner catches the regression too.
 
 const SCRIPTS = fileURLToPath(new URL('../scripts', import.meta.url))
-const NODE_MODULES = fileURLToPath(new URL('../node_modules', import.meta.url))
 
 // A throwaway package root holding a copy of scripts/ and the inputs the gate reads.
 function packageRoot(dir: string): string {
   mkdirSync(dir, { recursive: true })
   cpSync(SCRIPTS, join(dir, 'scripts'), { recursive: true })
-  // release-gate.mjs imports `yaml`; the copy resolves it through the repo's install.
-  symlinkSync(NODE_MODULES, join(dir, 'node_modules'), 'junction')
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ version: '1.2.3' })}\n`)
-  writeFileSync(join(dir, 'calibration.yaml'), 'models: []\n')
   return dir
 }
 
@@ -62,9 +58,8 @@ describe('the release scripts know when they are the CLI', () => {
     git('config', 'user.name', 'test')
     git('config', 'user.email', 'test@example.com')
     git('config', 'commit.gpgsign', 'false')
-    git('add', 'scripts', 'package.json', 'calibration.yaml')
+    git('add', 'scripts', 'package.json')
     git('commit', '-m', 'fixture')
-    writeFileSync(join(root, '.git', 'info', 'exclude'), 'node_modules\n')
     const r = spawnSync(process.execPath, [join(root, 'scripts', 'release.mjs'), 'nope'], { cwd: root, encoding: 'utf8' })
     expect(r.stderr).toContain('unparsable')
     expect(r.status).toBe(2)

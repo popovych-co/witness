@@ -55,4 +55,4 @@ from specops into this repository, and none may ever be.
 New material written for witness (no upstream text): `prompts/slicing-critic.md`,
 `prompts/plan-critic.md`, `prompts/drift-reviewer.md`, `prompts/design-critic.md`,
 `plugin/skills/witness-decompose/SKILL.md`, `plugin/commands/witness.md`, both hook
-scripts, and everything under `src/` and `calibration/`.
+scripts, and everything under `src/`.

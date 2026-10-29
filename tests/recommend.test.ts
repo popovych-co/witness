@@ -122,24 +122,14 @@ const ctxFor = (entries: Entry[], over: Partial<{ upstream: string; stale: boole
   gate: 'plan', target: 'p1', entries, upstream: over.upstream ?? 'auth-refresh', stale: over.stale ?? false,
 })
 
-// D152 (issue #17). `--only` takes lens/skill names, never gate names, so the old option 2
-// was refused by the very verb it named — a D129 "a rendered command runs" violation in the
-// recommender itself. The malformed rows name the lens that failed to parse; use it.
-describe('malformed-rerun emits a calibrate invocation the verb accepts (D152)', () => {
-  it('names the lens the malformed row names', () => {
+describe('malformed-rerun offers the re-run alone (row 212)', () => {
+  it('renders no calibrate invocation, and the re-run says what it re-asks', () => {
     const d = recommend(ctxFor([run(1, 'a', 'S', {
       outcome: 'malformed', malformed: [{ reviewer: 'code-reviewer', violations: [] }],
     })]))!
     expect(d.rule).toBe('malformed-rerun')
-    expect(d.options[1]!.command).toBe('witness calibrate m --only code-reviewer')
-    expect(d.options[1]!.runnable).toBe(true)
+    expect(d.options.map((o) => o.command)).toEqual(['witness gate plan p1'])
     expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
-  })
-
-  it('falls back to the reviewers suite when no lens is named', () => {
-    const d = recommend(ctxFor([run(1, 'a', 'S', { outcome: 'malformed' })]))!
-    expect(d.options[1]!.command).toBe('witness calibrate m --suite reviewers')
-    expect(d.options[1]!.command).not.toContain('--only plan')
   })
 })
 

@@ -1,1 +1,0 @@
-{ "defect": "exported mutable module state as the API — any caller can corrupt the registry" }

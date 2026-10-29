@@ -46,8 +46,6 @@
   "files": [
     "dist",
     "prompts",
-    "calibration.yaml",
-    "calibration",
     "plugin",
     "LICENSES",
     "NOTICE.md"

@@ -44,16 +44,15 @@ export interface Harness {
   skills: { project: string; global: string }
   // The judgment lane: how THIS harness runs a headless reviewer and what its stdout
   // means. spawn(undefined) is the session-default rung (no model flag). The exact flag
-  // set is part of the reviewer's identity — calibrate measures through the same spawn.
+  // set is part of the reviewer's identity.
   reviewer: {
     spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn
     parseEnvelope(stdout: string): Result<{ text: string }>
   }
   // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
-  // worktree rather than emitting a verdict. Used by the implement skill-calibration
-  // seed and by `drive`, which is the same act (D145): one home for "how do we run this
-  // harness headless", so the two lanes cannot drift apart on a flag. The prompt rides in
-  // argv (both CLIs accept a positional message), not stdin. `model` is the stage pin as
+  // worktree rather than emitting a verdict. Used by `drive` (D145): one home for "how do
+  // we run this harness headless", so no second spawn site can drift from it on a flag.
+  // The prompt rides in argv (both CLIs accept a positional message), not stdin. `model` is the stage pin as
   // written in config — parsed HERE, through the same renderer the reviewer and the
   // handoff line use, because a second parse is a second answer.
   worker: {
@@ -214,9 +213,9 @@ const REGISTRY: Record<HarnessName, Harness> = {
     worker: {
       // No bypass flag exists or is needed: pi's built-in tools are not approval-gated
       // (`pi --help` lists only --approve/--no-approve, which govern trusting
-      // project-local files). --no-session keeps a calibration run out of the user's
-      // session store; the worker otherwise keeps its skills and context files, which
-      // are exactly what the implement seed is measuring.
+      // project-local files). --no-session keeps a headless worker's run out of the user's
+      // session store; the worker otherwise keeps its skills and context files, which a
+      // drive session runs on.
       spawn: (prompt: string, model?: string): HarnessSpawn =>
         ({ cmd: 'pi', args: ['-p', prompt, '--no-session', ...modelFlags(REGISTRY.pi, model)], env: {} }),
     },

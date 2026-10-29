@@ -57,7 +57,7 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
   } else {
     obj.findings.forEach((f: unknown, i: number) => {
       const item = f as { blocking?: unknown; anchor?: unknown; claim?: unknown }
-      if (typeof item?.blocking !== 'boolean') violations.push(v(`findings[${i}].blocking`, 'blocking-shape', String(item?.blocking), 'true | false — the one calibrated bit'))
+      if (typeof item?.blocking !== 'boolean') violations.push(v(`findings[${i}].blocking`, 'blocking-shape', String(item?.blocking), 'true | false — whether this finding blocks the gate'))
       if (!isAnchor(item?.anchor)) violations.push(v(`findings[${i}].anchor`, 'anchor-shape', JSON.stringify(item?.anchor), 'a heading path, file[#symbol], or {kind: "omission", scope}'))
       if (typeof item?.claim !== 'string' || item.claim.trim() === '') violations.push(v(`findings[${i}].claim`, 'claim-missing', String(item?.claim), 'a one-sentence claim'))
       const cp = (item as { contradicts_pin?: unknown }).contradicts_pin

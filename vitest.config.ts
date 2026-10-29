@@ -25,6 +25,6 @@ export default defineConfig({
     //
     // `plugin-context/**` as `plugin/**`: a plugin's *.test.ts is a `claude plugin test` kit,
     // importing `claude-code/testing`, which only Claude Code's engine supplies.
-    exclude: [...configDefaults.exclude, '**/fixtures/**', '**/calibration/**', '**/plugin/**', '**/plugin-context/**', '**/.claude/**'],
+    exclude: [...configDefaults.exclude, '**/fixtures/**', '**/plugin/**', '**/plugin-context/**', '**/.claude/**'],
   },
 })

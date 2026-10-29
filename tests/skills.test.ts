@@ -255,9 +255,7 @@ describe('canon is read through the CLI', () => {
 // D125. The interview is the one decision surface with no CLI screen, and it was asking with
 // three fields while the block asks with five. A human should meet ONE shape everywhere in
 // this pipeline. This pins the INSTRUCTION, not compliance: compliance is unverifiable here
-// by construction — the skill calibration suites measure the artifact a skill produces via a
-// headless runner, brainstorm has no seed directory, and a multi-turn interview with a human
-// answering has no headless form.
+// by construction — a multi-turn interview with a human answering has no headless form.
 describe('the interview asks the same way the CLI does', () => {
   // Row 197 amends this: up to three ranked answers in the block's own field words, pick first.
   it('brainstorm states the ranked-answers form', () => {

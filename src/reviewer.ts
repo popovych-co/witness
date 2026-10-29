@@ -102,8 +102,7 @@ export function promptsSha(lenses: Lens[], extra?: string): string {
 }
 
 // The two machine-resolved knobs, split out: every reviewer lane resolves them once at
-// its verb boundary (row 90 — invokeReviewer's own cwd is a temp dir under calibration,
-// so it can never load config itself) and threads them down through the fan-out.
+// its verb boundary (row 90) and threads them down through the fan-out.
 export interface InvokeExtras {
   timeoutMs?: number
   extensions?: readonly string[]
@@ -122,9 +121,9 @@ const OUTSIDE_DRIVE_WANT = 'wait for the reset — witness drive waits it out on
 const SESSION_MARGIN_MS = 60_000
 
 const REVIEWER_TIMEOUT_MS = 600_000
-// One stalled call must not cost a whole run: a full calibration battery is ~200
-// invocations over hours, and treating a transient stall as fatal throws away every
-// sample already paid for. Retries are bounded so a genuinely wedged binary still ends.
+// One stalled call must not cost a whole run: a battery launches every lens at once, and
+// treating one transient stall as fatal throws away every verdict already paid for.
+// Retries are bounded so a genuinely wedged binary still ends.
 const TIMEOUT_RETRIES = 2
 const MAX_OUTPUT = 64 * 1024 * 1024
 const TERM_GRACE_MS = 5_000
@@ -221,7 +220,7 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
       timedOut, error: timedOut ? undefined : r.error, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
     })
     if (c === 'retry') continue
-    // Calibration's lane never waits: it refuses a limit as an attended gate does.
+    // The sync lane (drift's) never waits: it refuses a limit as an attended gate does.
     const limit = usageLimitOf(c, Date.now())
     return limit ? refuse([v(p.cmd, 'usage-limit', limit.text, OUTSIDE_DRIVE_WANT)]) : c
   }
