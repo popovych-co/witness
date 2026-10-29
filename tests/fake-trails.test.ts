@@ -1,7 +1,8 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { fakeScenario, scenariosMade, trailsSince } from './helpers.js'
+import { fakeScenario } from './helpers.js'
+import { scenariosMade, trailsSince } from './scenarios.js'
 
 it('collects the trails of the scenarios made since a point, and only those', () => {
   const before = fakeScenario()

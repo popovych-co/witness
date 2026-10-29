@@ -1,5 +1,5 @@
 import { beforeEach } from 'vitest'
-import { scenariosMade, trailsSince } from './helpers.js'
+import { scenariosMade, trailsSince } from './scenarios.js'   // never helpers.ts: it loads src
 
 // A test that fails while fake reviewers ran prints their trails: a gate run turns the fake's own
 // stderr into a refusal row (cut to 200 characters) or nothing at all, so a barrier that never
