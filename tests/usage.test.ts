@@ -46,6 +46,16 @@ describe('sessionLimit · waitFor · duration (B4)', () => {
     expect(sessionLimit({ code: 0, tail: ['Request timed out.'] }, NOW)).toBeUndefined()
     expect(sessionLimit({ code: 1, tail: ['Request timed out.'] }, NOW)?.kind).toBe('transient')
   })
+  // D5: pi's JSON mode exits 0 on a provider error, so the stream says the session failed; a
+  // session drive timed out ended on drive's signal, not on a 529 its harness retried earlier.
+  it('a transient shape counts on a session that failed, never on one drive timed out (issue #64)', () => {
+    expect(sessionLimit({ code: 0, failed: true, tail: ['Request timed out.'] }, NOW)?.kind).toBe('transient')
+    expect(sessionLimit({ code: 0, failed: false, tail: ['Request timed out.'] }, NOW)).toBeUndefined()
+    expect(sessionLimit({
+      outcome: 'timeout', code: 143, failed: false,
+      tail: ['529 {"type":"error","error":{"type":"overloaded_error"}}', 'retrying · attempt 1/3 · 529', '$ cargo test'],
+    }, NOW)).toBeUndefined()
+  })
   it('waits to the reset plus a minute and backs off on repeats', () => {
     const lim = limitIn(LA('2pm'), NOW)!
     expect(waitFor(lim, 0, NOW)).toBe(5_460_000)                         // 1h31m

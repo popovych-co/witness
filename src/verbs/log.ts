@@ -12,7 +12,8 @@ import { kv, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
-function detail(e: Entry): string {
+// Row 214: drive's `journal:` lines print an act as `witness log` does.
+export function entryDetail(e: Entry): string {
   switch (e.t) {
     case 'recap': {
       const size = (k: string) => (Array.isArray(e[k]) ? (e[k] as unknown[]).length : 0)
@@ -131,7 +132,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (values.all) {
     const merged = mergedRows(root)
-    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: detail(r.entry) })))
+    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -143,7 +144,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const chain = lineageChain(root, id!)
     ctx.out(`lineage: ${chain.join(' → ')}`)
     const merged = chain.flatMap((sid) => readStream(root, sid).map((entry) => ({ stream: sid, entry })))
-    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: detail(r.entry) })))
+    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -154,7 +155,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   const entries = readStream(root, id!)
-  rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: e.t, detail: detail(e) })))
+  rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: e.t, detail: entryDetail(e) })))
     .forEach(ctx.out)
   // Row 191 §4.3. A plan's stream ends with where the plan stands; an effort has no steps.
   const plan = findById(loadCanon(root), id!)

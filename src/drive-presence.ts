@@ -2,7 +2,7 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
-import { shellArg } from './toon.js'
+import { psArg, shellArg } from './toon.js'
 
 // Row 180. What a process knows about the drive it runs under. Drive marks every child
 // session with WITNESS_DRIVE=<target>: the marker is the recursion guard (a marked session's
@@ -106,9 +106,14 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
 
 
 // Row 201: `kill` is not a Windows command, and PowerShell's alias ends drive alone.
+//
+// Row 214: nor is `tail -f`. PowerShell's reader is `Get-Content -Wait`, with `-LiteralPath`
+// because `-Path` reads `[ ]` in a path as a wildcard, `-Tail 50` so it starts at the end rather
+// than replaying the whole log, and `-Encoding UTF8` because Windows PowerShell 5.1 reads a
+// BOM-less file as ANSI and would garble drive's `·` and `—`.
 export function watchLine(h: DriveHolder, platform: NodeJS.Platform = process.platform): string {
-  const stop = platform === 'win32' ? `taskkill /PID ${h.pid} /T /F` : `kill ${h.pid}`
-  return h.log !== undefined
-    ? `tail -f ${shellArg(h.log)} · stop it: ${stop}`
-    : `the terminal running witness drive · pid ${h.pid}`
+  if (h.log === undefined) return `the terminal running witness drive · pid ${h.pid}`
+  return platform === 'win32'
+    ? `Get-Content -LiteralPath ${psArg(h.log)} -Wait -Tail 50 -Encoding UTF8 · stop it: taskkill /PID ${h.pid} /T /F`
+    : `tail -f ${shellArg(h.log)} · stop it: kill ${h.pid}`
 }

@@ -4,23 +4,26 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT, main, type Ctx } from './cli.js'
 import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
-import { withoutSession } from './context.js'
+import { sessionHash, withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { findById, loadCanon } from './scan.js'
+import { findById, loadCanon, type Canon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
+import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { isAlive, pause } from './lock.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
-import { effortStreams, readStream } from './journal.js'
+import { effortStreams, journalRel, readStream, type Entry } from './journal.js'
 import { movesFlow } from './progress.js'
 import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
+import { logSafe } from './toon.js'
+import { passthrough, type WorkerLine, type WorkerStream } from './worker-stream.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
 } from './usage.js'
@@ -96,8 +99,9 @@ export type SpawnStep = Extract<DriveStep, { kind: 'spawn' }>
 export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
 // How a session ended. `tail` is the last three non-empty lines it printed on either pipe,
 // unprefixed, which is where a usage limit shows (row 182); `code` is null when it was
-// killed; `ms` runs from spawn to settle, less the time the host slept (row 210).
-export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number }
+// killed; `ms` runs from spawn to settle, less the time the host slept (row 210). `failed`: its
+// stream says its last answer was an error, which pi's JSON mode reports at exit 0 (row 214).
+export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean }
 const TAIL_LINES = 3
 
 // The prompt every spawned session gets. Not a plan, not a stage instruction: the same
@@ -115,6 +119,12 @@ const TERM_GRACE_MS = 5_000
 // before drive itself goes, so nothing a session started outlives the run.
 const LIVE_GROUPS = new Set<number>()
 const EXIT_GRACE_MS = 2_000
+// Row 214. How long a session may print nothing before drive says it still runs, and what on —
+// then again after each further stretch as long. Awake time, on the session's own clock (row
+// 210). A constant, not a setting, on row 202's precedent: no `migrate` for an upgrade.
+export const SESSION_QUIET_MS = 300_000
+// Local wall-clock time, `HH:MM:SS`: what a human at the terminal reads `started` and `ended` by.
+const clockTime = (): string => new Date().toTimeString().slice(0, 8)
 
 // This CLI, for the child. A spawned session shells out to `witness` through
 // ${WITNESS_BIN:-npx …} in every stage skill, and an unset value means the child resolves
@@ -127,19 +137,25 @@ function localBin(ctx: Ctx): string {
 
 // Line-buffered because a pipe's chunks split wherever the kernel felt like it: printing
 // chunks would interleave two streams mid-word and prefix half a line. Every complete
-// line is prefixed and forwarded as it arrives — drive is a terminal a human is watching,
-// and the child's own output IS the progress report (addendum §4).
-function lineSink(prefix: string, emit: (line: string) => void): { push: (chunk: string) => void; flush: () => void } {
+// record is forwarded as it arrives — drive is a terminal a human is watching (addendum §4).
+//
+// Row 214: one record per LF, a trailing CR dropped — the harnesses' JSON records end at LF alone,
+// and a CRLF would leave a CR on every line. A chunk with no LF is only appended: one record can
+// be megabytes (pi's agent_end carries the whole conversation), and splitting the whole buffer
+// again on every 64 KiB chunk was quadratic in it.
+export function lineSink(emit: (record: string) => void): { push(chunk: string): void; flush(): void } {
   let buf = ''
+  const record = (r: string) => emit(r.endsWith('\r') ? r.slice(0, -1) : r)
   return {
-    push: (chunk: string) => {
-      buf += chunk
-      const parts = buf.split('\n')
-      buf = parts.pop() ?? ''
-      for (const line of parts) emit(prefix + line)
+    push(chunk: string) {
+      const at = chunk.lastIndexOf('\n')
+      if (at === -1) { buf += chunk; return }
+      const records = (buf + chunk.slice(0, at)).split('\n')
+      buf = chunk.slice(at + 1)
+      records.forEach(record)
     },
-    flush: () => {
-      if (buf !== '') { emit(prefix + buf); buf = '' }
+    flush() {
+      if (buf !== '') { record(buf); buf = '' }
     },
   }
 }
@@ -167,17 +183,30 @@ export function signalSession(
 // the driver's: this is a programmatic spawn like the reviewer battery, not a statement
 // about which CLI a human is typing at. Ambient detection deciding what drive spawns would
 // make the same repo drive differently from two terminals.
+//
+// Row 214: `next` is the line drive derived for this session, shown on its `started` line; `hear`
+// gets every line the child wrote, shown or not — what the CLI printed, wherever it landed;
+// `progress` is what its flow journaled since the last poll (journalWatch), as lines, asked with
+// the session's id once its stream has named it; `root`
+// is the repo, whose drive sessions a harness that can be told where to keep them keeps in a
+// folder of their own (D2); `stream` replaces the harness's renderer, a test seam on `ticker`'s
+// precedent.
 export async function spawnSession(
   step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number,
-  opts: { manual?: boolean; signal?: AbortSignal; ticker?: Ticker } = {},
+  opts: {
+    manual?: boolean; signal?: AbortSignal; ticker?: Ticker; hear?: (line: string) => void; root?: string
+    stream?: WorkerStream; next?: string; progress?: (session?: string) => string[]
+  } = {},
 ): Promise<SessionEnd> {
   const t0 = Date.now()
   const end = (outcome: SpawnOutcome, code: number | null = null, tail: string[] = []): SessionEnd =>
-    ({ outcome, code, tail, ms: Math.max(1, Date.now() - t0) })
+    ({ outcome, code, tail, ms: Math.max(1, Date.now() - t0), failed: false })
   if (opts.signal?.aborted) return end('stopped')
   const hxR = resolveJudge(ctx.env, cfg.harness)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
-  const { cmd, args, env } = hxR.value.harness.worker.spawn(opts.manual ? MANUAL_PROMPT : SESSION_PROMPT, step.model)
+  const { harness } = hxR.value
+  const transcripts = opts.root !== undefined ? harness.worker.transcripts?.(ctx.env, opts.root) : undefined
+  const { cmd, args, env } = harness.worker.spawn(opts.manual ? MANUAL_PROMPT : SESSION_PROMPT, step.model, transcripts)
   // Test-only seam, on WITNESS_TRUST_CMDS' precedent (decide.ts): the suite points this at
   // a scripted fake that performs real CLI acts. Never documented for users — a spawn
   // binary chosen by ambient env is exactly the identity confusion row 90 removed.
@@ -206,12 +235,71 @@ export async function spawnSession(
   if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `
   const tail: string[] = []
-  const emit = (l: string) => {
-    if (l.trim() !== '') { tail.push(l); if (tail.length > TAIL_LINES) tail.shift() }
-    ctx.out(prefix + l)
+  // Row 214. Three readers of one stream: the human (every shown line, under the prefix), the
+  // merge sniff (`hear`: shown lines, each line of a tool's output and stderr, unprefixed — what
+  // the CLI printed, wherever it landed) and row 182's limit check (the tail: the child's own
+  // lines, never drive's about it). Every line a child wrote is spelled out before anyone reads
+  // it (logSafe): the stream's lines by the renderer, stderr by `passthrough`.
+  const stream = opts.stream ?? harness.worker.stream(step.home)
+  // Awake time on the session's clock once the child runs: what the quiet line measures in (row
+  // 210). `started` prints before the clock exists, at 0.
+  let awakeNow = (): number => 0
+  // The id the session's stream named last: whose journal entries are its own.
+  let session: string | undefined
+  // When a line was last printed, in awake time, and how many quiet lines followed it.
+  let lastHeard = 0
+  let quiet = 0
+  // D7. The one place a line is printed under the session's prefix, so the one place it is spelled
+  // out (logSafe: a renderer's lines already are, and spelling twice changes nothing). Any line
+  // but the quiet line itself ends the quiet. Drive's own lines (started, session, still running,
+  // ended, host slept) never enter the tail: only `show` puts the child's there.
+  const emit = (l: string, quietLine = false) => {
+    ctx.out(prefix + logSafe(l))
+    if (!quietLine) { lastHeard = awakeNow(); quiet = 0 }
   }
-  const out = lineSink('', emit)
-  const err = lineSink('', emit)
+  // The child's own lines: into the tail row 182 reads, and to the merge sniff.
+  const show = (l: string) => {
+    if (l.trim() !== '') { tail.push(l); if (tail.length > TAIL_LINES) tail.shift() }
+    emit(l)
+    opts.hear?.(l)
+  }
+  // A renderer never throws (row 214), and drive holds it to that: a throw here is in a pipe's
+  // 'data' listener, which takes drive down and leaves the session running unwatched (P16). The
+  // record is then shown as any record that is no event is.
+  const out = lineSink((record) => {
+    let said: WorkerLine[]
+    try {
+      said = stream.line(record)
+    } catch {
+      said = [{ kind: 'show', text: passthrough(record) }]
+    }
+    for (const w of said) {
+      if (w.kind === 'show') show(w.text)
+      else if (w.kind === 'heard') opts.hear?.(w.text)
+      else {
+        session = w.id
+        emit(`session ${w.id}${transcripts !== undefined ? ` · ${transcripts}` : ''}`)
+      }
+    }
+  })
+  const err = lineSink((record) => show(passthrough(record)))
+  // D8. A session that printed nothing for SESSION_QUIET_MS of awake time says it still runs, how
+  // long of its limit, and what it waits on — its oldest open call, else the model — then again
+  // after each further SESSION_QUIET_MS. `quiet` names the stretch it crossed, never the measured
+  // time, which drifts with how late each check fires. A harness whose events this CLI no longer
+  // reads still gets the line. The check runs in the clock's timer, so it catches everything: a
+  // throw there takes drive down and leaves the session unwatched (P16). The clock is re-armed
+  // before it runs, so a check that failed costs one line, never the limit.
+  const tick = (awake: number) => {
+    try {
+      for (const l of opts.progress?.(session) ?? []) emit(l)
+      const n = Math.floor((awake - lastHeard) / SESSION_QUIET_MS)
+      if (n <= quiet) return
+      quiet = n
+      const what = stream.inFlight()
+      emit(`still running · ${duration(awake)} of ${duration(cfg.drive.sessionTimeoutMs)} · quiet ${duration(n * SESSION_QUIET_MS)}${what !== undefined ? ` · in: ${what}` : ''}`, true)
+    } catch { /* the next check says it */ }
+  }
   return await new Promise<SessionEnd>((resolve) => {
     // Final review F11: its own process group, so a stop reaches the tools, shells and gates
     // the session started, not just the agent — an orphan would keep writing state after
@@ -227,6 +315,8 @@ export async function spawnSession(
     })
     const signal = (sig: NodeJS.Signals) => signalSession(child, grouped, run.value.env, sig)
     if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)
+    // Only a session that started says so: a binary that is not there reports spawn-failed alone.
+    if (child.pid !== undefined) emit(`started ${clockTime()}${opts.next !== undefined ? ` · next: ${opts.next}` : ''}`)
     let outcome: SpawnOutcome = 'exited'
     let code: number | null = null
     let settled = false
@@ -251,12 +341,27 @@ export async function spawnSession(
       err.flush()
       child.stdout.destroy()
       child.stderr.destroy()
-      resolve({ outcome: o, code, tail: [...tail], ms: Math.max(1, clock.awakeMs()) })
+      const ms = Math.max(1, clock.awakeMs())
+      // How it ended, in awake time. A spawn that failed never started, and said so already.
+      // `(error)`: the stream says its last answer was an error, which pi's JSON mode reports at
+      // exit 0 (D5).
+      if (o !== 'spawn-failed') {
+        // What it journaled since the last check, before how it ended.
+        try {
+          for (const l of opts.progress?.(session) ?? []) emit(l)
+        } catch { /* what it journaled is in its stream; `ended` still says how it went */ }
+        const how = o === 'timeout' ? 'timed out' : o === 'stopped' ? 'stopped'
+          : code === null ? 'killed' : `exit ${code}${stream.failed() ? ' (error)' : ''}`
+        emit(`ended ${clockTime()} · ${how} · ${duration(ms)}`)
+      }
+      resolve({ outcome: o, code, tail: [...tail], ms, failed: stream.failed() })
     }
     const clock = sessionClock(cfg.drive.sessionTimeoutMs, opts.ticker ?? monotonicTicker, {
       expire: () => stop('timeout'),
-      slept: (ms) => ctx.out(`${prefix}host slept ${duration(ms)} — not counted against drive.sessionTimeoutMs`),
+      slept: (ms) => emit(`host slept ${duration(ms)} — not counted against drive.sessionTimeoutMs`),
+      tick,
     })
+    awakeNow = () => clock.awakeMs()
     opts.signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -344,7 +449,6 @@ export interface Aside {
   trust?: RunCommand[]   // row 205: a trust grant's commands, each with its source
 }
 
-const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
 const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
 
@@ -374,6 +478,116 @@ function progressKey(root: string, action: NextAction, family: (t: string) => st
     ? readStream(root, effort).filter((e) => movesFlow(e) && flow.includes(String((e as { artifact?: unknown }).artifact))).length
     : 0
   return [action.line, own, inEffort].join('\u0000')
+}
+
+// Final review F2. A lane holds its whole flow: a spec and the plans written for it. Pure over the
+// canon it is given: drive's fill reads it from the canon of this fill, the journal watch from a
+// fresh one (row 214).
+export function flowOf(canon: Canon, t: string): string[] {
+  const doc = findById(canon, t)
+  if (doc?.meta.type === 'plan') return [t, String(doc.meta.parent)]
+  if (doc?.meta.type === 'spec') {
+    return [t, ...canon.docs.filter((d) => d.meta.type === 'plan' && String(d.meta.parent) === t).map((d) => String(d.meta.id))]
+  }
+  return [t]
+}
+
+// Row 214 (D9). What a session journals for its flow, as it lands: the target and its family
+// (flowOf), each member's own stream, and the owning effort's entries about a member. The flow is
+// read again from a fresh canon whenever the effort's stream moves, so the plan a spec's session
+// writes mid-session joins it, from its first entry. Polled on the session clock's check and once
+// before `ended`; drive journals nothing (row 145), so this only reads, and it never throws.
+//
+// Each stream has its own position, counted on all its entries — the filter (row 206's acts, the
+// effort's about the flow) applies only to what is printed — and its own gate, size and mtime
+// taken before the read: a stream caught mid-append fails to parse and keeps its old gate, so it
+// is read again at the next check, once its line is whole. A stream that shrank starts over from
+// where it stands. What the repo held before the session is the baseline, taken at creation, or
+// for a stream that could not be read then, at the first check that can. The efforts read are
+// every one that wrote a flow member — a fix routes to the spec it amends, so a later effort writes
+// the spec again and plans it — collected again whenever a watched stream moves, so an amendment
+// or an adopted target's first effort joins, from where its stream then stands. Once the
+// session's id is known, an act it did not journal says so (its `ctx.session`, row 191 §4.8,
+// absent or another's). An entry that cannot be rendered — a hand-edited line — is skipped, and
+// costs no other entry its line.
+export function journalWatch(root: string, target: string): (session?: string) => string[] {
+  const at = new Map<string, { gate: string; seen: number }>()
+  let moved = false                                       // a watched stream's gate moved this poll
+  let flow = [target]
+  let efforts: string[] = []                              // the efforts that wrote a flow member, read apart
+  const derive = () => {
+    try {
+      flow = flowOf(loadCanon(root), target)
+    } catch { /* the flow it had stands */ }
+  }
+  const gateOf = (id: string): string => {
+    try {
+      const st = statSync(join(root, journalRel(id)))
+      return `${st.size}:${st.mtimeMs}`
+    } catch {
+      return '-'                                          // no stream yet
+    }
+  }
+  // The entries a stream gained since it was last read; [] when its gate stands or it cannot be
+  // read yet. `from0`: a member that joined the flow now, whose every entry is new.
+  const read = (id: string, from0: boolean): Entry[] => {
+    const gate = gateOf(id)
+    const was = at.get(id)
+    if (was?.gate === gate) return []
+    moved = true
+    let entries: Entry[]
+    try {
+      entries = readStream(root, id)
+    } catch {
+      return []                                           // an append in flight
+    }
+    at.set(id, { gate, seen: entries.length })
+    const from = was === undefined ? (from0 ? 0 : entries.length) : Math.min(was.seen, entries.length)
+    return entries.slice(from)
+  }
+  // An effort that is itself a flow member (a lane whose target is it) is read as one.
+  const collect = (): string[] => {
+    try {
+      return effortStreams(root).filter((id) => !flow.includes(id) && readStream(root, id)
+        .some((e) => e.t === 'write' && flow.includes(String((e as { artifact?: unknown }).artifact))))
+    } catch {
+      return efforts                                      // collected again when a stream moves
+    }
+  }
+  derive()
+  efforts = collect()
+  const members = new Set(flow)                           // the flow at creation: a baseline, never news
+  for (const id of [...flow, ...efforts]) read(id, false)
+  const render = (e: Entry, mine: string | undefined, about?: readonly string[]): string[] => {
+    try {
+      if (!movesFlow(e)) return []
+      if (about !== undefined && !about.includes(String((e as { artifact?: unknown }).artifact))) return []
+      const by = (e as { ctx?: { session?: unknown } }).ctx?.session
+      return [`journal: ${String(e.t)} ${entryDetail(e)}${mine !== undefined && by !== mine ? ' · not this session' : ''}`]
+    } catch {
+      return []
+    }
+  }
+  return (session) => {
+    try {
+      const mine = session !== undefined ? sessionHash(session) : undefined
+      moved = false
+      const inEffort = efforts.flatMap((id) => read(id, false))
+      if (moved) derive()
+      const out = inEffort.flatMap((e) => render(e, mine, flow))
+      for (const id of flow) {
+        out.push(...read(id, !members.has(id) && !at.has(id)).flatMap((e) => render(e, mine)))
+      }
+      if (moved) {
+        const now = collect()
+        for (const id of now) if (!efforts.includes(id)) read(id, false)   // a new effort's baseline
+        efforts = now
+      }
+      return out
+    } catch {
+      return []                                           // the next check reads it
+    }
+  }
 }
 
 interface Lane { action: NextAction; end: Promise<SessionEnd>; merged?: string }
@@ -435,14 +649,7 @@ export async function driveLoop(
   // a free target meanwhile — nor a spec while one of its plans runs. Read from the canon of
   // this fill, so a plan written a moment ago belongs to its spec's lane at once.
   let canonNow = loadCanon(root)
-  const family = (t: string): string[] => {
-    const doc = findById(canonNow, t)
-    if (doc?.meta.type === 'plan') return [t, String(doc.meta.parent)]
-    if (doc?.meta.type === 'spec') {
-      return [t, ...canonNow.docs.filter((d) => d.meta.type === 'plan' && String(d.meta.parent) === t).map((d) => String(d.meta.id))]
-    }
-    return [t]
-  }
+  const family = (t: string): string[] => flowOf(canonNow, t)
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
     if (lanes.has(k) || aside.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
@@ -561,7 +768,8 @@ export async function driveLoop(
     if (r === 'refused') setAside(key, { kind: 'stuck', line: action.line, why: `decision refused on ${action.line}`, key0: keyOf(action) })
   }
 
-  const launch = (step: SpawnStep, action: NextAction, n: number): Lane => {
+  // `next` is the line the session takes (D13): the action's, or the re-run a settle routed.
+  const launch = (step: SpawnStep, action: NextAction, n: number, next: string): Lane => {
     const lane: Lane = { action, end: Promise.resolve(undefined as unknown as SessionEnd) }
     // The merge is announced by the SHIP SESSION's own output (ship.ts), not by a routing
     // row — a flow whose PR is open routes to `witness ship` forever, and only the child
@@ -569,16 +777,15 @@ export async function driveLoop(
     // human, so under autonomy this fires only where a human merges.
     // Final review F10: only the CLI's own line counts, and only for a flow with a PR — agent
     // prose that mentions a merge must never hand a human `gh pr merge` for a flow without one.
+    // Row 214: the line is read wherever the CLI printed it. The ship skill runs `witness ship` in
+    // the agent's bash tool, so in production it is a tool's output, which drive hears and never
+    // prints — the session's printed lines alone met it only when an agent happened to quote it.
     const pr = action.target !== undefined ? findById(canonNow, action.target)?.meta.pr : undefined
-    const childCtx: Ctx = {
-      ...ctx,
-      out: (l) => {
-        const line = l.replace(STREAM_PREFIX, '')
-        if (pr !== undefined && MERGE_LINE.exec(line)?.[1] === String(pr)) lane.merged = line
-        ctx.out(l)
-      },
-    }
-    lane.end = spawnSession(step, cfg, childCtx, n, { manual: flags.manual, signal: abort.signal })
+    const hear = (line: string) => { if (pr !== undefined && MERGE_LINE.exec(line)?.[1] === String(pr)) lane.merged = line }
+    // Row 214: what the session journals for its flow. Target-less work has no stream of its own
+    // to watch (row 181 keys it on counts).
+    const progress = action.target !== undefined ? journalWatch(root, action.target) : undefined
+    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, hear, root, next, progress })
     return lane
   }
 
@@ -831,8 +1038,12 @@ export async function driveLoop(
         // because its scoped `next` prints the re-run (A1) — unless the re-run is a step of the
         // design session, which is the chat's (row 194).
         const rerun = action.target !== undefined ? routed.get(action.target) : undefined
+        // Row 214 (D13): such a session says it takes the re-run, not the decision line it replaced.
+        // Only then: `routed` keeps a target's re-run for the whole run.
+        let next = action.line
         if (step.kind === 'decision' && autonomous && rerun !== undefined) {
           step = conversationStage({ line: rerun }) ? { kind: 'conversation', line: rerun } : { kind: 'spawn', home: root, target: action.target }
+          next = rerun
         }
         if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
         if (spawns >= ceiling) {
@@ -848,7 +1059,7 @@ export async function driveLoop(
         spawns += 1
         holdAwake()
         pauseSince = undefined
-        lanes.set(key, launch(step, action, spawns))
+        lanes.set(key, launch(step, action, spawns, next))
       }
       if (autonomous) {
         publish()

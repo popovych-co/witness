@@ -1,6 +1,13 @@
 // A shell word is quoted only when it needs it, so the common line stays the one a human
 // types — a path in drive's watch line, a command in a `--cmd` grant (row 205).
 export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
+// Row 214. The same rule for a PowerShell word — drive's Windows watch line. Bare only when no
+// character in it means anything to PowerShell: a bare `,` builds an array, a leading `@` splats
+// and a leading `-` binds as a parameter, so none of them is bare here as in a POSIX word. Else
+// single-quoted, where nothing expands and the one special character is a single quote — any of
+// the five PowerShell reads as one (' ‘ ’ ‚ ‛) — written twice.
+export const psArg = (p: string): string =>
+  /^[\w%+=:./\\][\w%+=:./\\-]*$/.test(p) ? p : `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`
 
 // Security review. A command a human is asked to trust is repo-authored text: a carriage return
 // or an escape sequence could paint a different command over the real one, a bidi override
@@ -9,9 +16,21 @@ export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : 
 // is, anything else is spelled out, and a command carrying any of it is never granted.
 const UNSHOWABLE = /[^\x20-\x7e]/u
 export const hasControl = (s: string): boolean => UNSHOWABLE.test(s)
-export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), (c) =>
+// One character spelled out: the one spelling `visible` and `logSafe` share.
+const spell = (c: string): string =>
   c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
-    : c.codePointAt(0)! < 0x100 ? `\\x${c.codePointAt(0)!.toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0)!.toString(16)}}`)
+    : c.codePointAt(0)! < 0x100 ? `\\x${c.codePointAt(0)!.toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0)!.toString(16)}}`
+export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), spell)
+
+// Row 214. What a session drive runs wrote, on the human's terminal and in .witness/drive.log: the
+// same paint-over and reorder attacks, from text an agent controls (a command, a path, its prose).
+// Nobody grants a log line, so the rule is narrower than `visible`'s — control and format
+// characters (ESC, CR, TAB, bidi overrides, zero-width fillers) and the line and paragraph
+// separators U+2028/U+2029, which editors and some terminals render as a line break, are spelled
+// out, and printable text in any script stays as written: `visible` would mangle drive's own `·`
+// and `→`, and every sentence an agent writes in another language.
+const UNLOGGABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
+export const logSafe = (s: string): string => s.replace(UNLOGGABLE, spell)
 
 function esc(value: unknown): string {
   const s = String(value ?? '')
