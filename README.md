@@ -377,6 +377,8 @@ Operator notes, non-load-bearing — the design depends on none of them:
   cache; on wake the full agent context is re-written at cache-write price. On macOS:
   `witness drive` holds `caffeinate -ims` for its own lifetime (a closed lid on battery
   still sleeps); for a chat session, `caffeinate -dims`, or plug in and disable sleep.
+  A sleep is not session time: drive counts neither `drive.sessionTimeoutMs` nor
+  `drive.caps.wallClockMs` across it, and its log says `host slept <duration>`.
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`** (set at CLI launch) lowers the harness's
   auto-compaction threshold, as belt-and-suspenders under the fill relay. Compaction
   stays the harness's continuity mechanism, never witness's; the variable is documented
