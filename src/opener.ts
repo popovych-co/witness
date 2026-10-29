@@ -1,21 +1,31 @@
-import { spawnSync, spawn } from './spawn.js'
+import { existsSync } from 'node:fs'
+import { win32 } from 'node:path'
+import { spawnSync, spawn, system32 } from './spawn.js'
 
 export type OpenOutcome = 'spawned' | 'failed'
 
-// Platform default openers. `start` is a cmd builtin, hence the shell wrapper.
-function platformOpener(): string[] {
-  if (process.platform === 'darwin') return ['open']
-  if (process.platform === 'win32') return ['cmd', '/c', 'start', '']
+type Env = Record<string, string | undefined>
+
+// Platform default openers. `start` is a cmd builtin, hence the shell wrapper — System32's
+// cmd.exe by absolute path (row 201), never a bare name another cmd.exe on PATH answers to.
+export function platformOpener(platform: NodeJS.Platform = process.platform, env: Env = process.env): string[] {
+  if (platform === 'darwin') return ['open']
+  if (platform === 'win32') return [system32(env, 'cmd.exe'), '/c', 'start', '']
   return ['xdg-open']
 }
 
-// win32 has no `sh`, so a POSIX probe there would report every opener missing and
-// make approve permanently unreachable. `where` is the cmd equivalent.
+// win32 has no `sh`, so a POSIX probe there would report every opener missing and make approve
+// permanently unreachable. System32's `where` is the cmd equivalent, but it matches name
+// patterns, never paths, so an absolute opener there is probed by existence.
+export function probeArgv(cmd: string, platform: NodeJS.Platform = process.platform, env: Env = process.env):
+  { file: string; args: string[] } | { exists: string } {
+  if (platform !== 'win32') return { file: 'sh', args: ['-c', `command -v ${cmd}`] }
+  return win32.isAbsolute(cmd) ? { exists: cmd } : { file: system32(env, 'where.exe'), args: [cmd] }
+}
+
 export function resolves(cmd: string): boolean {
-  const probe = process.platform === 'win32'
-    ? spawnSync('where', [cmd], { encoding: 'utf8' })
-    : spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' })
-  return probe.status === 0
+  const probe = probeArgv(cmd)
+  return 'exists' in probe ? existsSync(probe.exists) : spawnSync(probe.file, probe.args, { encoding: 'utf8' }).status === 0
 }
 
 // Show a file to the human. Returns the resolved command alongside the outcome so the

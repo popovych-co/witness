@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { openArtifact } from '../src/opener.js'
+import { openArtifact, platformOpener, probeArgv } from '../src/opener.js'
 import { waitForLine } from './helpers.js'
 
 // A recorder standing in for `open`/`xdg-open`: appends its argv to a file so the
@@ -42,5 +42,22 @@ describe('openArtifact', () => {
     const res = openArtifact(undefined, '/tmp/look.html')
     expect(res.command).toBe(process.platform === 'darwin' ? 'open'
       : process.platform === 'win32' ? 'cmd' : 'xdg-open')
+  })
+})
+
+// Row 201's doctrine: a Windows tool witness names starts from System32 by absolute path, never by
+// a bare name a planted cmd.exe or where.exe earlier on PATH would answer to (notify, taskkill
+// and the keep-awake helper already do). On win32 an absolute opener is probed by existence:
+// `where` matches name patterns, not paths; POSIX `command -v` takes a path as it is.
+describe('the platform opener on win32 (row 201)', () => {
+  const env = { SYSTEMROOT: 'D:\\Win' }
+  it('starts System32 cmd.exe by absolute path and probes with System32 where.exe', () => {
+    expect(platformOpener('win32', env)).toEqual(['D:\\Win\\System32\\cmd.exe', '/c', 'start', ''])
+    expect(probeArgv('code', 'win32', env)).toEqual({ file: 'D:\\Win\\System32\\where.exe', args: ['code'] })
+  })
+  it('probes an absolute opener by existence on win32, and through command -v elsewhere', () => {
+    expect(probeArgv('D:\\Win\\System32\\cmd.exe', 'win32', env)).toEqual({ exists: 'D:\\Win\\System32\\cmd.exe' })
+    expect(probeArgv('/usr/bin/open', 'darwin', {})).toEqual({ file: 'sh', args: ['-c', 'command -v /usr/bin/open'] })
+    expect(probeArgv('xdg-open', 'linux', {})).toEqual({ file: 'sh', args: ['-c', 'command -v xdg-open'] })
   })
 })
