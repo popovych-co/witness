@@ -246,7 +246,7 @@ export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: Invo
     if (c === 'retry') { attempt += 1; continue }
     const limit = usageLimitOf(c, clock.now())
     if (!limit) return c
-    // A wait spends no timeout retry: the same rung is asked again after the reset.
+    // A wait spends no timeout retry: the same model is asked again after the reset.
     const wait = waitFor(limit, streak, clock.now())
     // Inside a drive session the wait must also end before drive kills the session (F14).
     const deadline = Number(ctx.env[DRIVE_DEADLINE_ENV])

@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
@@ -39,7 +40,35 @@ describe.each(['claude', 'pi'] as const)('fake %s under a concurrent battery', (
     const dir = fakeScenario()
     putVerdict(dir, { coverage: [], findings: [] })
     await Promise.all(Array.from({ length: 6 }, (_, i) => runFakeAsync(bin, ['-p'], dir, `p${i}`)))
-    expect(readdirSync(join(dir, `${bin}-calls`)).sort()).toEqual(['call-1', 'call-2', 'call-3', 'call-4', 'call-5', 'call-6'])
+    // the fake's trail rides in the message: this is where a racy claim shows (row 213)
+    expect(readdirSync(join(dir, `${bin}-calls`)).sort(), readFileSync(join(dir, `${bin}-trace`), 'utf8'))
+      .toEqual(['call-1', 'call-2', 'call-3', 'call-4', 'call-5', 'call-6'])
+  })
+
+  // Root cause of the CI-only lost call: Ubuntu 26.04's default coreutils is uutils, whose
+  // mkdir (0.2.x) checks for the path, creates it, and reads an EEXIST it lost a race on as
+  // success — so two concurrent calls each claimed call-2 (the trail, PR #63). This mkdir does
+  // the same, with the window widened; a claim must not rest on the mkdir utility at all.
+  it('claims stay distinct under a mkdir that reads a lost race as success (uutils 0.2)', async () => {
+    const racy = mkdtempSync(join(tmpdir(), 'witness-racy-mkdir-'))
+    writeFileSync(join(racy, 'mkdir'), [
+      '#!/bin/sh',
+      'if [ "$1" = "-p" ]; then exec /bin/mkdir "$@"; fi',
+      'if [ -e "$1" ]; then echo "mkdir: $1: File exists" >&2; exit 1; fi',
+      'sleep 0.3',
+      '/bin/mkdir "$1" 2>/dev/null || [ -d "$1" ]',
+    ].join('\n'))
+    chmodSync(join(racy, 'mkdir'), 0o755)
+    const dir = fakeScenario()
+    putVerdict(dir, { coverage: [], findings: [] })
+    const env = { ...gateEnv(dir), PATH: `${racy}:${gateEnv(dir).PATH}` } as NodeJS.ProcessEnv
+    await Promise.all(Array.from({ length: 6 }, (_, i) => {
+      const p = promisify(execFile)(fakeFile(bin), ['-p'], { env, encoding: 'utf8' })
+      p.child.stdin!.end(`p${i}`)
+      return p
+    }))
+    expect(readdirSync(join(dir, `${bin}-calls`)).sort(), readFileSync(join(dir, `${bin}-trace`), 'utf8'))
+      .toEqual(['call-1', 'call-2', 'call-3', 'call-4', 'call-5', 'call-6'])
   })
 
   it('records WITNESS_LENS and answers verdict-<lens>.json, a numbered verdict still winning', () => {

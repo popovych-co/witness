@@ -16,6 +16,9 @@ export default defineConfig({
     testTimeout: 60000,
     // dist/ is built once here, never per file (tests/global-setup.ts says why)
     globalSetup: ['tests/global-setup.ts'],
+    // loop-watch names a test that holds its worker's event loop near vitest's 60 s RPC limit;
+    // fake-trails prints the fake reviewer calls behind a failing test (each says why)
+    setupFiles: ['tests/loop-watch.ts', 'tests/fake-trails.ts'],
     // `.claude/**`: a git worktree checked out INSIDE the repo is a second full copy of
     // `tests/`, so vitest collected every file twice — 243 files and ~5000s of test time,
     // which starves the fork pool until the heaviest files trip the 20s timeout. The

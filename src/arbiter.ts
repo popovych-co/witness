@@ -114,8 +114,8 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
 // and every approve over a failed deterministic check — it may overrule a reviewer, never a
 // check. `amendment-ack` alone is the exception: approving IS its acknowledgement.
 // The design gate is the exception that holds whatever the evidence says: the look is the
-// human's (§3 G2), so no approve of it is ever offered — at the bound, on a fallback round or
-// past a spent ladder the arbiter may revise, reset upstream, repair or park, never stamp.
+// human's (§3 G2), so no approve of it is ever offered — at the bound or past a spent ladder
+// the arbiter may revise, reset upstream, repair or park, never stamp.
 export function menuFor(block: Decision, run: GateRunEntry): Option[] {
   const failed = run.checks.filter((c) => !c.ok)
   const approveBarred = run.gate === 'design' || (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))

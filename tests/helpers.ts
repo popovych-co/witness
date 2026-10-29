@@ -1,11 +1,12 @@
 import { expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configCommands, grantCommands } from '../src/allowlist.js'
+import { scenariosMade } from './scenarios.js'
 import { main, type Ctx } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
@@ -89,6 +90,13 @@ export function tmpRepo(): TestRepo {
       err: (l) => errs.push(l),
       ask: async () => answers.shift() ?? '',
     }
+    // One event-loop turn per invocation, as a real process boundary gives. The CLI is
+    // synchronous by design, and `await` on work that never touched I/O yields only a
+    // microtask, so a test chaining in-process calls held its vitest worker's loop for the
+    // whole chain — 100 s and more, measured. vitest's worker RPC rejects any reply it
+    // has not READ in 60 s, so a chain that started while one was in flight failed the run
+    // with `Timeout calling "onTaskUpdate"`, every test green.
+    await new Promise((r) => setImmediate(r))
     const code = await main(ctx, args)
     return { code, stdout: outs.join('\n'), stderr: errs.join('\n') }
   }
@@ -245,6 +253,37 @@ export async function writeDesign(repo: TestRepo, specId: string, html = DESIGN_
   return res
 }
 
+// A child process a test awaits instead of spawnSync'ing. A test's sync child-process chain
+// holds its vitest worker's event loop for as long as the chain runs, and the worker's RPC
+// rejects any reply it has not read in 60 s (`Timeout calling "onTaskUpdate"`, every test
+// green) — so a test that runs real processes back to back awaits each one.
+export function spawnAsync(
+  file: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { cwd: opts.cwd, env: opts.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (d: string) => { stdout += d })
+    child.stderr.setEncoding('utf8').on('data', (d: string) => { stderr += d })
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+  })
+}
+
+// What a detached recorder (an opener, a notifier) wrote, once it has written a whole line.
+// The line is the event waited for: a shell's `>>` creates the file before the write, so the
+// file existing proved nothing (an empty read, CI-only). The deadline is a backstop for a
+// recorder that never ran, well inside the test timeout, never a guess at how long one takes.
+export async function waitForLine(log: string, ms = 30_000): Promise<string> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const text = existsSync(log) ? readFileSync(log, 'utf8') : ''
+    if (text.includes('\n') || Date.now() >= deadline) return text
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
 export function vitestBin(): string {
   const req = createRequire(import.meta.url)
   return join(dirname(req.resolve('vitest/package.json')), 'vitest.mjs')
@@ -322,12 +361,18 @@ export function fakeClock(start: number): Clock & { slept: number[] } {
   return {
     slept,
     now: () => now,
-    sleep: async (ms: number) => { slept.push(ms); now += ms },
+    // A fake sleep still yields the event loop, as a real one does: resolved as a bare
+    // microtask, a loop sleeping on it (drive's pause, the reviewer's wait) never lets the
+    // worker read anything — the starvation repo.cli's yield above describes.
+    sleep: async (ms: number) => { slept.push(ms); now += ms; await new Promise((r) => setImmediate(r)) },
   }
 }
 
+// Recorded (tests/scenarios.ts) so a failing test can print its fake calls' trails.
 export function fakeScenario(): string {
-  return mkdtempSync(join(tmpdir(), 'witness-fake-'))
+  const dir = mkdtempSync(join(tmpdir(), 'witness-fake-'))
+  scenariosMade.push(dir)
+  return dir
 }
 
 export function gateEnv(scenario: string, extra: Record<string, string> = {}): Record<string, string> {
@@ -345,11 +390,28 @@ export function putVerdict(scenario: string, verdict: unknown, call?: number | s
 function callDirs(scenario: string, bin: 'claude' | 'pi'): Array<{ n: number; dir: string }> {
   const calls = join(scenario, `${bin}-calls`)
   if (!existsSync(calls)) return []
-  return readdirSync(calls).filter((d) => /^call-\d+$/.test(d))
+  const found = readdirSync(calls).filter((d) => /^call-\d+$/.test(d))
     .map((d) => ({ n: Number(d.slice('call-'.length)), dir: join(calls, d) }))
+  checkTrail(join(scenario, `${bin}-trace`), new Set(found.map((c) => c.n)))
+  return found
 }
 
-// The latest call a lens made — a rerolled or fallen-back lens makes several.
+// The fake's own trail (fixtures/fakebin/claude). A number two calls claimed, or a claim whose
+// dir is gone, is the lost call a racy mkdir utility once made on CI (row 213) — fail with the
+// trail rather than as an off-by-one count. Neither can arise while calls are still in flight:
+// a claim is written after its mkdir succeeded.
+function checkTrail(trace: string, dirs: Set<number>): void {
+  if (!existsSync(trace)) return
+  const lines = readFileSync(trace, 'utf8').trim().split('\n')
+  const claimed = lines.filter((l) => l.startsWith('claim ')).map((l) => Number(l.split(' ')[2]))
+  const twice = claimed.filter((n, i) => claimed.indexOf(n) !== i)
+  const missing = claimed.filter((n) => !dirs.has(n))
+  if (twice.length || missing.length) {
+    throw new Error(`fake call trail is inconsistent (claimed twice: ${twice.join(',') || 'none'} · claimed with no dir: ${missing.join(',') || 'none'}) — ${trace}:\n${lines.join('\n')}`)
+  }
+}
+
+// The latest call a lens made — a rerolled lens makes several.
 export function callFor(scenario: string, lens: string, bin: 'claude' | 'pi' = 'claude'): string | undefined {
   return callDirs(scenario, bin)
     .filter((c) => existsSync(join(c.dir, 'lens')) && readFileSync(join(c.dir, 'lens'), 'utf8').trim() === lens)

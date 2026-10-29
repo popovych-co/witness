@@ -1,11 +1,11 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { cpSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, hermeticEnv, putVerdict,
-  seededRepo, singleConfig, TOKEN_BROKEN, TOKEN_FIXED, witnessDesign, writeDesign, writePlan, writeSpec,
+  seededRepo, singleConfig, spawnAsync, TOKEN_BROKEN, TOKEN_FIXED, witnessDesign, writeDesign, writePlan, writeSpec,
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
 import { readStream } from '../../src/journal.js'
@@ -16,8 +16,7 @@ const bin = join(pkgRoot, 'dist', 'bin.js')
 // a genuine subprocess is required for crash-injection (WITNESS_CRASH_AFTER + exit 9) —
 // repo.cli() below calls main() in-process and can't be killed mid-transaction.
 function spawnCli(root: string, args: string[], env: Record<string, string> = {}) {
-  const res = spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', env: hermeticEnv(env) })
-  return { code: res.status ?? -1, stdout: res.stdout, stderr: res.stderr }
+  return spawnAsync(process.execPath, [bin, ...args], { cwd: root, env: hermeticEnv(env) })   // awaited: helpers.ts spawnAsync
 }
 
 // the browser-e2e stand-in: writes a screen capture when WITNESS_SCREENS_DIR is set,
@@ -132,10 +131,10 @@ describe('the design lens, end to end', () => {
     putVerdict(greenScenario, treeClean(wt))
     putVerdict(greenScenario, DESIGN_SCREEN_CLEAN, 'design-reviewer')
     const greenEnv = gateEnv(greenScenario)
-    const crashed = spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], { ...greenEnv, WITNESS_CRASH_AFTER: 'gate-journal' })
+    const crashed = await spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], { ...greenEnv, WITNESS_CRASH_AFTER: 'gate-journal' })
     expect(crashed.code).toBe(9)
-    expect(spawnCli(repo.root, ['recover', '--complete']).code).toBe(0)
-    const resumed = spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], greenEnv)
+    expect((await spawnCli(repo.root, ['recover', '--complete'])).code).toBe(0)
+    const resumed = await spawnCli(repo.root, ['gate', 'implement', 'auth-refresh-plan-1'], greenEnv)
     expect(resumed.code).toBe(0)
 
     const runs = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'gate-run') as unknown as Array<{ outcome: string }>

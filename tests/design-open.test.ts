@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { approve, noopOpener, seededRepo, witnessDesign, writeDesign, writeLocalConfig, writeSpec, type TestRepo } from './helpers.js'
+import { approve, noopOpener, seededRepo, waitForLine, witnessDesign, writeDesign, writeLocalConfig, writeSpec, type TestRepo } from './helpers.js'
 import { readStream } from '../src/journal.js'
 import { htmlSha } from '../src/design.js'
 
@@ -13,15 +13,6 @@ function recorder(): { cmd: string; log: string } {
   writeFileSync(cmd, `#!/bin/sh\necho "$1" >> "${log}"\n`)
   chmodSync(cmd, 0o755)
   return { cmd, log }
-}
-
-async function waitForLog(log: string, ms = 3000): Promise<string> {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    if (existsSync(log)) return readFileSync(log, 'utf8')
-    await new Promise((r) => setTimeout(r, 25))
-  }
-  return ''
 }
 
 describe('witness design --open', () => {
@@ -36,7 +27,7 @@ describe('witness design --open', () => {
     const res = await repo.cli(['design', 'auth-refresh', '--open'])
 
     expect(res.code).toBe(0)
-    expect((await waitForLog(log)).trim()).toBe(join(repo.root, 'designs/auth-refresh.html'))
+    expect((await waitForLine(log)).trim()).toBe(join(repo.root, 'designs/auth-refresh.html'))
     const sha = htmlSha(readFileSync(join(repo.root, 'designs/auth-refresh.html'), 'utf8'))
     const entry = readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'design-shown').at(-1) as
       { sha?: string; opener?: string; by?: string } | undefined

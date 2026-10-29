@@ -3,11 +3,24 @@
 set -e
 if [ "$1" = "--version" ]; then echo "claude fake 0.0.0"; exit 0; fi
 dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
+# Claim the next number atomically, so lenses the gate launches together never share one. The
+# claim is node's mkdir(2), never the mkdir UTILITY: uutils' mkdir (Ubuntu 26.04's default
+# coreutils, 0.2.x) checks for the path, creates it, and reads an EEXIST it lost a race on as
+# success, so on CI two concurrent calls each claimed call-2 and one call's record vanished.
+# Every invocation also leaves its trail in claude-trace (one short line per append): start, each
+# number already taken, its claim, its end. tests/helpers.ts checks the trail against the dirs.
+trace="$dir/claude-trace"
 mkdir -p "$dir/claude-calls"
-# claim the next number atomically: mkdir without -p fails when the dir exists, so
-# lenses the gate launches together can never share a number
-n=1
-while ! mkdir "$dir/claude-calls/call-$n" 2>/dev/null; do n=$((n + 1)); done
+echo "start $$" >> "$trace"
+n=$(node -e '
+  const fs = require("fs")
+  const [calls, trace, pid] = process.argv.slice(1)
+  for (let n = 1; ; n++) {
+    try { fs.mkdirSync(`${calls}/call-${n}`); process.stdout.write(String(n)); break }
+    catch (e) { if (e.code !== "EEXIST") throw e; fs.appendFileSync(trace, `taken ${pid} ${n}\n`) }
+  }
+' "$dir/claude-calls" "$trace" "$$")
+echo "claim $$ $n" >> "$trace"
 call="$dir/claude-calls/call-$n"
 # lock probe: records whether witness held its global lock while this reviewer ran.
 # Sound because acquireLock refuses exactly when this file exists with a live pid
@@ -31,7 +44,7 @@ if [ -f "$dir/claude-barrier" ]; then
     for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && have=$((have + 1)); done
     [ "$have" -ge "$want" ] && break
     i=$((i + 1))
-    if [ "$i" -ge 50 ]; then echo "fake claude: barrier of $want not reached ($have in flight)" >&2; exit 1; fi
+    if [ "$i" -ge 50 ]; then echo "fake claude: barrier of $want not reached ($have in flight) · $(ls "$dir/claude-calls" | tr '\n' ' ')· $(tr '\n' ';' < "$trace")" >&2; exit 1; fi
     sleep 0.1
   done
 fi
@@ -71,3 +84,4 @@ node -e '
   const result = fs.readFileSync(process.argv[1], "utf8")
   process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result }))
 ' "$body"
+echo "end $$ $n" >> "$trace"
