@@ -40,8 +40,7 @@ describe('openArtifact', () => {
 
   it('names the resolved command so the journal can record what was run', () => {
     const res = openArtifact(undefined, '/tmp/look.html')
-    expect(res.command).toBe(process.platform === 'darwin' ? 'open'
-      : process.platform === 'win32' ? 'cmd' : 'xdg-open')
+    expect(res.command).toBe(platformOpener()[0])        // on win32, System32's cmd.exe by path
   })
 })
 

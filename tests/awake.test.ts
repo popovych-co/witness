@@ -62,8 +62,12 @@ describe('keepAwake', () => {
     keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake('exit 1') }, 'darwin', process.pid, (w) => lost.push(w))
     await expect.poll(() => lost, { timeout: 5_000 }).toEqual(['fake-awake exited 1'])
     const said: string[] = []
-    keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake('echo "first" >&2; echo "the error that stopped it" >&2; exit 1') }, 'darwin', process.pid, (w) => said.push(w))
-    await expect.poll(() => said, { timeout: 5_000 }).toEqual(['fake-awake exited 1: the error that stopped it'])
+    // Windows PowerShell 5.1's error view: the message first, then where and why (final review).
+    const ps = ['Add-Type : Cannot add type. Compilation errors occurred.', 'At line:2 char:6', '+ $k = Add-Type -Name Awake', '+      ~~~~~~~~',
+      '    + CategoryInfo          : InvalidData: (:) [Add-Type], InvalidOperationException',
+      '    + FullyQualifiedErrorId : COMPILER_ERRORS,Microsoft.PowerShell.Commands.AddTypeCommand']
+    keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake(`${ps.map((l) => `echo '${l}' >&2`).join('; ')}; exit 1`) }, 'darwin', process.pid, (w) => said.push(w))
+    await expect.poll(() => said, { timeout: 5_000 }).toEqual(['fake-awake exited 1: Add-Type : Cannot add type. Compilation errors occurred.'])
     const quiet: string[] = []
     keepAwake({ WITNESS_KEEP_AWAKE_BIN: fake('exec sleep 30') }, 'darwin', process.pid, (w) => quiet.push(w)).stop()
     await new Promise((r) => setTimeout(r, 500))
