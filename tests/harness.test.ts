@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import {
   HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
   resolveDriver, resolveJudge, resolveSkills, skillPins, skillsVisibility, validatePin,
@@ -284,17 +284,32 @@ describe('worker contract', () => {
   it('claude-code passes the prompt as argv and bypasses its permission gate', () => {
     const s = claude.worker.spawn('IMPLEMENT THIS')
     expect(s.cmd).toBe('claude')
-    expect(s.args).toEqual(['-p', 'IMPLEMENT THIS', '--dangerously-skip-permissions'])
+    expect(s.args).toEqual(['-p', 'IMPLEMENT THIS', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'])
   })
 
   // pi has no --dangerously-skip-permissions equivalent: its built-in tools are not
   // approval-gated, and --approve governs trusting project-local files, a different
-  // axis. The worker therefore needs no bypass flag — only an ephemeral session.
-  it('pi passes the prompt as argv with an ephemeral session and no bypass flag', () => {
+  // axis. The worker therefore needs no bypass flag. Row 214: it streams its events, and its
+  // session is kept, in drive's own folder.
+  it('pi passes the prompt as argv with a transcript folder and no bypass flag', () => {
     const s = pi.worker.spawn('IMPLEMENT THIS')
     expect(s.cmd).toBe('pi')
-    expect(s.args).toEqual(['-p', 'IMPLEMENT THIS', '--no-session'])
+    expect(s.args).toEqual(['-p', 'IMPLEMENT THIS', '--mode', 'json'])
+    expect(pi.worker.spawn('IMPLEMENT THIS', undefined, '/s').args).toEqual(['-p', 'IMPLEMENT THIS', '--mode', 'json', '--session-dir', '/s'])
+    expect(s.args).not.toContain('--no-session')
     expect(s.args.some((a) => a.includes('dangerously'))).toBe(false)
+  })
+
+  // D2: a folder of drive's own in pi's session store, one per repo, so `pi -c` in the repo stays
+  // the human's; always absolute, or it would resolve inside the session's worktree (P17).
+  it("pi keeps drive's sessions in a folder of their own (issue #64)", () => {
+    expect(pi.worker.transcripts?.({ HOME: '/h' }, '/r/fewhats.com'))
+      .toMatch(/^\/h\/\.pi\/agent\/sessions\/witness-drive\/fewhats\.com-[0-9a-f]{8}$/)
+    expect(pi.worker.transcripts?.({ HOME: '/h', PI_CODING_AGENT_DIR: '/a' }, '/r/x')).toMatch(/^\/a\/sessions\/witness-drive\//)
+    const bare = pi.worker.transcripts?.({ HOME: '', USERPROFILE: '' }, '/r/x') ?? ''
+    expect(isAbsolute(bare)).toBe(true)
+    expect(bare.startsWith(homedir())).toBe(true)
+    expect(claude.worker.transcripts).toBeUndefined()
   })
 })
 

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFil
 import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
-import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
+import { classifyAction, driveLoop, lineSink, spawnSession } from '../src/drive.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
 import { loadHarness } from '../src/harness.js'
@@ -77,6 +77,12 @@ const script = (body: string): string => {
   writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
   return bin
 }
+// One record as a /bin/sh line: what a harness in its streaming mode writes.
+const say = (event: object): string => `printf '%s\\n' '${JSON.stringify(event).replaceAll("'", "'\\''")}'`
+// Wait (at most 10 s) for the test to see a line; exit 3 if it never does.
+const awaitFlag = (flag: string): string =>
+  `i=0; while [ ! -f "${flag}" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; [ -f "${flag}" ] || exit 3`
+const MERGE = 'ship: "merge PR #7 on GitHub when ready — the lazy stamp flips plan → done, spec → live"'   // E2's real shape
 
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
@@ -246,7 +252,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
       env: { WITNESS_DRIVE_AGENT_BIN: bin, PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, out: (l) => lines.push(l),
     })
     await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
-    expect(lines).toEqual(['[1 implement/p1] args=-p /witness --no-session pi=unset claude=unset'])
+    expect(lines).toEqual(['[1 implement/p1] args=-p /witness --mode json pi=unset claude=unset'])
     expect(ctx.env).toMatchObject({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' })
   }, 20000)
 
@@ -254,19 +260,91 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const claude = loadHarness('claude-code')
     const pi = loadHarness('pi')
     expect(claude.ok && claude.value.worker.spawn('/witness'))
-      .toEqual({ cmd: 'claude', args: ['-p', '/witness', '--dangerously-skip-permissions'], env: {} })
+      .toEqual({ cmd: 'claude', args: ['-p', '/witness', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'], env: {} })
     expect(claude.ok && claude.value.worker.spawn('/witness', 'claude-opus-4-6:high'))
       .toEqual({
         cmd: 'claude',
-        args: ['-p', '/witness', '--dangerously-skip-permissions', '--model', 'claude-opus-4-6'],
+        args: ['-p', '/witness', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--model', 'claude-opus-4-6'],
         env: { MAX_THINKING_TOKENS: String(CLAUDE_THINKING_BUDGET.high) },
       })
     expect(pi.ok && pi.value.worker.spawn('/witness', 'claude-opus-4-6:high'))
       .toEqual({
         cmd: 'pi',
-        args: ['-p', '/witness', '--no-session', '--model', 'anthropic/claude-opus-4-6:high'],
+        args: ['-p', '/witness', '--mode', 'json', '--model', 'anthropic/claude-opus-4-6:high'],
         env: {},
       })
+  })
+
+  // Row 214. Print mode wrote one answer when the session ended; drive renders the event stream
+  // as it comes. The fake waits on its first line to be seen, so a drive that rendered only at
+  // exit deadlocks it into exit 3.
+  it('renders the worker\'s events as they arrive (issue #64)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })
+    const flag = join(fakeScenario(), 'seen')
+    const bin = fakeAgent([
+      say({ type: 'tool_execution_start', toolCallId: 'c1', toolName: 'bash', args: { command: 'witness start p1' } }),
+      awaitFlag(flag),
+      say({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }], stopReason: 'stop' } }),
+    ].join('\n'))
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, {
+      env: { WITNESS_DRIVE_AGENT_BIN: bin },
+      out: (l) => { lines.push(l); if (l === '[1 implement/p1] $ witness start p1') writeFileSync(flag, '') },
+    })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(end.code).toBe(0)
+    expect(lines).toContain('[1 implement/p1] Done.')
+    expect(lines.some((l) => l.includes('"type":'))).toBe(false)
+  }, 20000)
+
+  // D2: once per id, with the folder drive's pi sessions are kept in — and never in the tail
+  // row 182 reads.
+  it('prints the session id once, outside the tail (issue #64)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })
+    const header = say({ type: 'session', version: 3, id: 'S-1', timestamp: '2026-10-29T08:48:09.000Z', cwd: repo.root })
+    const bin = fakeAgent(`${header}\n${header}\necho hi`)
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: bin, HOME: '/h' }, out: (l) => lines.push(l) })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1, { root: repo.root })
+    expect(lines.filter((l) => /\] session /.test(l))).toHaveLength(1)
+    expect(lines.filter((l) => /^\[1 implement\/p1\] session S-1 · \/h\/\.pi\/agent\/sessions\/witness-drive\//.test(l))).toHaveLength(1)
+    expect(end.tail).toEqual(['hi'])
+  }, 20000)
+
+  // Review Focus 4: an escape a child writes is spelled out, never painted onto the human's terminal.
+  it('spells out the control characters a child writes (issue #64)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent("printf 'a\\033[2Jb\\n' >&2") }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(lines).toContain('[1 implement/p1] a\\x1b[2Jb')
+  }, 20000)
+
+  // Review Focus 1 (P16): a throw in a pipe's 'data' listener takes drive down and leaves the
+  // session running unwatched, so drive holds even a broken renderer to never throwing.
+  it('a renderer that throws never takes drive down (issue #64)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(`echo '{"type":"x"}'`) }, out: (l) => lines.push(l) })
+    const stream = { line: (): never => { throw new Error('boom') }, inFlight: () => undefined, failed: () => false }
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1, { stream })
+    expect(end.outcome).toBe('exited')
+    expect(lines).toContain('[1 implement/p1] {"type":"x"}')
+  }, 20000)
+})
+
+describe('lineSink (row 214)', () => {
+  // Review Focus 3: pi's agent_end carries the whole conversation in one record.
+  it('lineSink takes one long record in linear time (issue #64)', () => {
+    const recs: string[] = []
+    const sink = lineSink((r) => recs.push(r))
+    const t0 = performance.now()
+    for (let i = 0; i < 128; i++) sink.push('x'.repeat(65_536))
+    sink.push('\r\nnext\n')
+    expect(performance.now() - t0).toBeLessThan(1000)
+    expect(recs.map((r) => r.length)).toEqual([8_388_608, 4])
   })
 })
 
@@ -799,6 +877,23 @@ describe('surviving unattended (B4)', () => {
     expect(out.join('\n')).not.toContain('drive: no progress — witness start')
   }, 60000)
 
+  // Row 214. pi's JSON mode reports a provider error only in the stream and exits 0 (P2): read
+  // from the exit code alone, the 529 would stop drive waiting.
+  it('a pi provider error at exit 0 is waited out (row 182, issue #64)', async () => {
+    const repo = await planReady()
+    patchConfig(repo, { harness: 'pi' })
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const flag = join(fakeScenario(), 'limited')
+    const body = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+    const error = say({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: body } })
+    const agent = script(`if [ ! -f "${flag}" ]; then touch "${flag}"; ${error}; exit 0; fi\nexec ${witnessCli()} start auth-refresh-plan-1`)
+    const clock = fakeClock(START)
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), { maxSpawns: 2 }, clock)
+    expect(out.join('\n')).toContain(`drive: usage limit — waiting 1m · ${body}`)
+  }, 60000)
+
   it('a reset past the single wait stops the run', async () => {
     const repo = await planReady()
     autonomyOn(repo)
@@ -1189,6 +1284,18 @@ describe('the merge sniff (B2)', () => {
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo "ship: merge PR #7 on GitHub when ready — the lazy stamp flips plan → done · spec → live"') }, out), {})
     expect(out).toContain('wait: merge · a-plan-1 · PR #7')
     expect(out).toContain('  run: gh pr merge 7')
+  }, 60_000)
+  // Row 214. `mergeOwnPr` prints its line inside the agent's bash tool, so in production it is a
+  // tool's output — which print mode never wrote unless the agent quoted it.
+  it('the CLI\'s merge line inside a tool\'s output sets the flow aside (issue #64)', async () => {
+    const repo = await startedFlows(['a'], { shipping: 'a' })
+    patchConfig(repo, { harness: 'pi' })
+    const agent = script(say({ type: 'tool_execution_end', toolCallId: 'c1', toolName: 'bash', result: { content: [{ type: 'text', text: MERGE }] }, isError: false }))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
+    expect(out).toContain('wait: merge · a-plan-1 · PR #7')
+    expect(out).toContain('  run: gh pr merge 7')
+    expect(out.some((l) => /^\[\d+ [^\]]*\] ship: /.test(l))).toBe(false)
   }, 60_000)
 })
 

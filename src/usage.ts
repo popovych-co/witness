@@ -128,11 +128,16 @@ export function limitIn(text: string, now: number): Limit | undefined {
 }
 
 // A session's end reads as a limit only from its last three lines. A usage shape counts at
-// any exit code (claude may exit 0 on one); a transient shape only on a non-zero exit.
-export function sessionLimit(end: { code: number | null; tail: readonly string[] }, now: number): Limit | undefined {
+// any exit code (claude may exit 0 on one). A transient shape counts on a session that failed:
+// its stream ended in an error, which pi's JSON mode reports at exit 0 (row 214), or it exited
+// non-zero by itself. A session drive timed out ended on drive's signal, not on the 529 its
+// harness retried a while before and that still sits in its tail.
+export function sessionLimit(
+  end: { code: number | null; tail: readonly string[]; failed?: boolean; outcome?: string }, now: number,
+): Limit | undefined {
   const limit = limitIn(end.tail.slice(-3).join('\n'), now)
   if (!limit) return undefined
-  if (limit.kind === 'transient' && end.code === 0) return undefined
+  if (limit.kind === 'transient' && end.failed !== true && (end.code === 0 || end.outcome === 'timeout')) return undefined
   return limit
 }
 

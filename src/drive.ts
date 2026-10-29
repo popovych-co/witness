@@ -21,6 +21,7 @@ import { movesFlow } from './progress.js'
 import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
+import { passthrough, type WorkerLine, type WorkerStream } from './worker-stream.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
 } from './usage.js'
@@ -96,8 +97,9 @@ export type SpawnStep = Extract<DriveStep, { kind: 'spawn' }>
 export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
 // How a session ended. `tail` is the last three non-empty lines it printed on either pipe,
 // unprefixed, which is where a usage limit shows (row 182); `code` is null when it was
-// killed; `ms` runs from spawn to settle, less the time the host slept (row 210).
-export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number }
+// killed; `ms` runs from spawn to settle, less the time the host slept (row 210). `failed`: its
+// stream says its last answer was an error, which pi's JSON mode reports at exit 0 (row 214).
+export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean }
 const TAIL_LINES = 3
 
 // The prompt every spawned session gets. Not a plan, not a stage instruction: the same
@@ -127,19 +129,25 @@ function localBin(ctx: Ctx): string {
 
 // Line-buffered because a pipe's chunks split wherever the kernel felt like it: printing
 // chunks would interleave two streams mid-word and prefix half a line. Every complete
-// line is prefixed and forwarded as it arrives — drive is a terminal a human is watching,
-// and the child's own output IS the progress report (addendum §4).
-function lineSink(prefix: string, emit: (line: string) => void): { push: (chunk: string) => void; flush: () => void } {
+// record is forwarded as it arrives — drive is a terminal a human is watching (addendum §4).
+//
+// Row 214: one record per LF, a trailing CR dropped — the harnesses' JSON records end at LF alone,
+// and a CRLF would leave a CR on every line. A chunk with no LF is only appended: one record can
+// be megabytes (pi's agent_end carries the whole conversation), and splitting the whole buffer
+// again on every 64 KiB chunk was quadratic in it.
+export function lineSink(emit: (record: string) => void): { push(chunk: string): void; flush(): void } {
   let buf = ''
+  const record = (r: string) => emit(r.endsWith('\r') ? r.slice(0, -1) : r)
   return {
-    push: (chunk: string) => {
-      buf += chunk
-      const parts = buf.split('\n')
-      buf = parts.pop() ?? ''
-      for (const line of parts) emit(prefix + line)
+    push(chunk: string) {
+      const at = chunk.lastIndexOf('\n')
+      if (at === -1) { buf += chunk; return }
+      const records = (buf + chunk.slice(0, at)).split('\n')
+      buf = chunk.slice(at + 1)
+      records.forEach(record)
     },
-    flush: () => {
-      if (buf !== '') { emit(prefix + buf); buf = '' }
+    flush() {
+      if (buf !== '') { record(buf); buf = '' }
     },
   }
 }
@@ -167,17 +175,27 @@ export function signalSession(
 // the driver's: this is a programmatic spawn like the reviewer battery, not a statement
 // about which CLI a human is typing at. Ambient detection deciding what drive spawns would
 // make the same repo drive differently from two terminals.
+//
+// Row 214: `hear` gets every line the child wrote, shown or not — what the CLI printed, wherever
+// it landed; `root` is the repo, whose drive sessions a harness that can be told where to keep
+// them keeps in a folder of their own (D2); `stream` replaces the harness's renderer, a test seam
+// on `ticker`'s precedent.
 export async function spawnSession(
   step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number,
-  opts: { manual?: boolean; signal?: AbortSignal; ticker?: Ticker } = {},
+  opts: {
+    manual?: boolean; signal?: AbortSignal; ticker?: Ticker; hear?: (line: string) => void; root?: string
+    stream?: WorkerStream
+  } = {},
 ): Promise<SessionEnd> {
   const t0 = Date.now()
   const end = (outcome: SpawnOutcome, code: number | null = null, tail: string[] = []): SessionEnd =>
-    ({ outcome, code, tail, ms: Math.max(1, Date.now() - t0) })
+    ({ outcome, code, tail, ms: Math.max(1, Date.now() - t0), failed: false })
   if (opts.signal?.aborted) return end('stopped')
   const hxR = resolveJudge(ctx.env, cfg.harness)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
-  const { cmd, args, env } = hxR.value.harness.worker.spawn(opts.manual ? MANUAL_PROMPT : SESSION_PROMPT, step.model)
+  const { harness } = hxR.value
+  const transcripts = opts.root !== undefined ? harness.worker.transcripts?.(ctx.env, opts.root) : undefined
+  const { cmd, args, env } = harness.worker.spawn(opts.manual ? MANUAL_PROMPT : SESSION_PROMPT, step.model, transcripts)
   // Test-only seam, on WITNESS_TRUST_CMDS' precedent (decide.ts): the suite points this at
   // a scripted fake that performs real CLI acts. Never documented for users — a spawn
   // binary chosen by ambient env is exactly the identity confusion row 90 removed.
@@ -206,12 +224,35 @@ export async function spawnSession(
   if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `
   const tail: string[] = []
-  const emit = (l: string) => {
+  // Row 214. Three readers of one stream: the human (every shown line, under the prefix), the
+  // merge sniff (`hear`: shown lines, each line of a tool's output and stderr, unprefixed — what
+  // the CLI printed, wherever it landed) and row 182's limit check (the tail: the child's own
+  // lines, never drive's about it). Every line a child wrote is spelled out before anyone reads
+  // it (logSafe): the stream's lines by the renderer, stderr by `passthrough`.
+  const stream = opts.stream ?? harness.worker.stream(step.home)
+  // The child's own lines: into the tail row 182 reads, and to the merge sniff.
+  const show = (l: string) => {
     if (l.trim() !== '') { tail.push(l); if (tail.length > TAIL_LINES) tail.shift() }
     ctx.out(prefix + l)
+    opts.hear?.(l)
   }
-  const out = lineSink('', emit)
-  const err = lineSink('', emit)
+  // A renderer never throws (row 214), and drive holds it to that: a throw here is in a pipe's
+  // 'data' listener, which takes drive down and leaves the session running unwatched (P16). The
+  // record is then shown as any record that is no event is.
+  const out = lineSink((record) => {
+    let said: WorkerLine[]
+    try {
+      said = stream.line(record)
+    } catch {
+      said = [{ kind: 'show', text: passthrough(record) }]
+    }
+    for (const w of said) {
+      if (w.kind === 'show') show(w.text)
+      else if (w.kind === 'heard') opts.hear?.(w.text)
+      else ctx.out(`${prefix}session ${w.id}${transcripts !== undefined ? ` · ${transcripts}` : ''}`)
+    }
+  })
+  const err = lineSink((record) => show(passthrough(record)))
   return await new Promise<SessionEnd>((resolve) => {
     // Final review F11: its own process group, so a stop reaches the tools, shells and gates
     // the session started, not just the agent — an orphan would keep writing state after
@@ -251,7 +292,7 @@ export async function spawnSession(
       err.flush()
       child.stdout.destroy()
       child.stderr.destroy()
-      resolve({ outcome: o, code, tail: [...tail], ms: Math.max(1, clock.awakeMs()) })
+      resolve({ outcome: o, code, tail: [...tail], ms: Math.max(1, clock.awakeMs()), failed: stream.failed() })
     }
     const clock = sessionClock(cfg.drive.sessionTimeoutMs, opts.ticker ?? monotonicTicker, {
       expire: () => stop('timeout'),
@@ -344,7 +385,6 @@ export interface Aside {
   trust?: RunCommand[]   // row 205: a trust grant's commands, each with its source
 }
 
-const STREAM_PREFIX = /^\[\d+ [^\]]*\] /
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
 const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
 
@@ -569,16 +609,12 @@ export async function driveLoop(
     // human, so under autonomy this fires only where a human merges.
     // Final review F10: only the CLI's own line counts, and only for a flow with a PR — agent
     // prose that mentions a merge must never hand a human `gh pr merge` for a flow without one.
+    // Row 214: the line is read wherever the CLI printed it. The ship skill runs `witness ship` in
+    // the agent's bash tool, so in production it is a tool's output, which drive hears and never
+    // prints — the session's printed lines alone met it only when an agent happened to quote it.
     const pr = action.target !== undefined ? findById(canonNow, action.target)?.meta.pr : undefined
-    const childCtx: Ctx = {
-      ...ctx,
-      out: (l) => {
-        const line = l.replace(STREAM_PREFIX, '')
-        if (pr !== undefined && MERGE_LINE.exec(line)?.[1] === String(pr)) lane.merged = line
-        ctx.out(l)
-      },
-    }
-    lane.end = spawnSession(step, cfg, childCtx, n, { manual: flags.manual, signal: abort.signal })
+    const hear = (line: string) => { if (pr !== undefined && MERGE_LINE.exec(line)?.[1] === String(pr)) lane.merged = line }
+    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, hear, root })
     return lane
   }
 

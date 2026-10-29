@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, join } from 'node:path'
 import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { pinIn } from './version.js'
+import { claudeStream, piStream, type WorkerStream } from './worker-stream.js'
 
 export const HARNESSES = ['claude-code', 'pi'] as const
 export type HarnessName = (typeof HARNESSES)[number]
@@ -55,8 +58,15 @@ export interface Harness {
   // The prompt rides in argv (both CLIs accept a positional message), not stdin. `model` is the stage pin as
   // written in config — parsed HERE, through the same renderer the reviewer and the
   // handoff line use, because a second parse is a second answer.
+  //
+  // Row 214: the worker runs in its harness's event-stream mode, and `stream` is how drive reads
+  // it — the renderer for that mode's events lives beside the flags that chose the mode, so drive
+  // never imports a per-harness parser. `transcripts` is the folder a harness that can be told
+  // where to keep its sessions keeps drive's in, for the repo at `root`; `spawn` passes it on.
   worker: {
-    spawn(prompt: string, model?: string): HarnessSpawn
+    spawn(prompt: string, model?: string, transcripts?: string): HarnessSpawn
+    stream(home: string): WorkerStream
+    transcripts?(env: Record<string, string | undefined>, root: string): string
   }
 }
 
@@ -163,11 +173,17 @@ const REGISTRY: Record<HarnessName, Harness> = {
       // The REGISTRY self-reference resolves at CALL time (the const is initialized long
       // before any spawn), and it is what keeps the model flag rendered by the one
       // renderer instead of re-derived per entry.
+      //
+      // Row 214: text output is the result alone, at the end; stream-json writes every event as it
+      // happens (and print mode refuses it without --verbose). The session is saved in claude's own
+      // list, as any `claude -p` run's is: claude has no flag to keep it elsewhere.
       spawn: (prompt: string, model?: string): HarnessSpawn => ({
         cmd: 'claude',
-        args: ['-p', prompt, '--dangerously-skip-permissions', ...modelFlags(REGISTRY['claude-code'], model)],
+        args: ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions',
+          ...modelFlags(REGISTRY['claude-code'], model)],
         env: thinkingEnv(REGISTRY['claude-code'], model),
       }),
+      stream: (home: string): WorkerStream => claudeStream(home),
     },
   },
   pi: {
@@ -213,11 +229,34 @@ const REGISTRY: Record<HarnessName, Harness> = {
     worker: {
       // No bypass flag exists or is needed: pi's built-in tools are not approval-gated
       // (`pi --help` lists only --approve/--no-approve, which govern trusting
-      // project-local files). --no-session keeps a headless worker's run out of the user's
-      // session store; the worker otherwise keeps its skills and context files, which a
-      // drive session runs on.
-      spawn: (prompt: string, model?: string): HarnessSpawn =>
-        ({ cmd: 'pi', args: ['-p', prompt, '--no-session', ...modelFlags(REGISTRY.pi, model)], env: {} }),
+      // project-local files). The worker keeps its skills and context files, which a drive
+      // session runs on.
+      //
+      // Row 214: `--mode json` writes every event as it happens, where text mode wrote the last
+      // answer once the session ended, and drive renders it. And the session is kept, no longer
+      // `--no-session`: a drive session's transcript is the one record of what it did. Kept in a
+      // folder of drive's own, `<agent dir>/sessions/witness-drive/<repo>-<sha1 of its root>`
+      // (P14), not the repo's folder in pi's store, so `pi -c` and `pi -r` in the repo stay the
+      // human's; and never in the repo, where a worktree's transcript would ride into ship's
+      // `git add -A` — `--session-dir` outranks a `sessionDir` setting, which may be relative to
+      // the working directory. No `--name` or `--session-id`: only newer pi builds have them, and
+      // an older one would refuse every spawn — the stream's own header names the session.
+      spawn: (prompt: string, model?: string, transcripts?: string): HarnessSpawn => ({
+        cmd: 'pi',
+        args: ['-p', prompt, '--mode', 'json', ...modelFlags(REGISTRY.pi, model),
+          ...(transcripts !== undefined ? ['--session-dir', transcripts] : [])],
+        env: {},
+      }),
+      stream: (home: string): WorkerStream => piStream(home),
+      // The agent dir is pi's own rule: PI_CODING_AGENT_DIR, else `.pi/agent` in the home — HOME,
+      // else USERPROFILE (resolveSkills' precedent), else the OS's answer. Each rung skips an empty
+      // value, as pi's own lookup does: a relative folder would be the session's working
+      // directory, the one place a transcript must not land (P17).
+      transcripts: (env: Record<string, string | undefined>, root: string): string => join(
+        env.PI_CODING_AGENT_DIR || join(env.HOME || env.USERPROFILE || homedir(), '.pi', 'agent'),
+        'sessions', 'witness-drive',
+        `${basename(root).replace(/[^\w.-]/g, '-')}-${createHash('sha1').update(root).digest('hex').slice(0, 8)}`,
+      ),
     },
   },
 }
