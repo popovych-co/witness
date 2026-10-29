@@ -270,6 +270,19 @@ export function spawnAsync(
   })
 }
 
+// What a detached recorder (an opener, a notifier) wrote, once it has written a whole line.
+// The line is the event waited for: a shell's `>>` creates the file before the write, so the
+// file existing proved nothing (an empty read, CI-only). The deadline is a backstop for a
+// recorder that never ran, well inside the test timeout, never a guess at how long one takes.
+export async function waitForLine(log: string, ms = 30_000): Promise<string> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const text = existsSync(log) ? readFileSync(log, 'utf8') : ''
+    if (text.includes('\n') || Date.now() >= deadline) return text
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
 export function vitestBin(): string {
   const req = createRequire(import.meta.url)
   return join(dirname(req.resolve('vitest/package.json')), 'vitest.mjs')

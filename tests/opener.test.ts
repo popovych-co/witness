@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { openArtifact } from '../src/opener.js'
+import { waitForLine } from './helpers.js'
 
 // A recorder standing in for `open`/`xdg-open`: appends its argv to a file so the
 // test can assert WHICH path the CLI handed the platform. Spawn is detached and
@@ -16,22 +17,13 @@ function recorder(): { cmd: string; log: string } {
   return { cmd, log }
 }
 
-async function waitForLog(log: string, ms = 3000): Promise<string> {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    if (existsSync(log)) return readFileSync(log, 'utf8')
-    await new Promise((r) => setTimeout(r, 25))
-  }
-  return ''
-}
-
 describe('openArtifact', () => {
   it('spawns the declared opener with the absolute artifact path', async () => {
     const { cmd, log } = recorder()
     const res = openArtifact(cmd, '/tmp/look.html')
     expect(res.outcome).toBe('spawned')
     expect(res.command).toBe(cmd)
-    expect((await waitForLog(log)).trim()).toBe('/tmp/look.html')
+    expect((await waitForLine(log)).trim()).toBe('/tmp/look.html')
   })
 
   it('resolves a bare override off PATH, not just an absolute path', async () => {
