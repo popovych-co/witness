@@ -24,8 +24,10 @@ export const monotonicTicker: Ticker = {
 
 export interface SessionClock { awakeMs(): number; stop(): void }
 
+// Row 214: `tick` hears every check with the awake time, so what drive does once a second for a
+// running session (its quiet line, its journal watch) runs on this one clock, in awake time.
 export function sessionClock(
-  limitMs: number, ticker: Ticker, on: { expire(): void; slept(ms: number): void },
+  limitMs: number, ticker: Ticker, on: { expire(): void; slept(ms: number): void; tick?(awakeMs: number): void },
 ): SessionClock {
   const t0 = ticker.now()
   let last = t0          // when the pending check was armed
@@ -45,9 +47,11 @@ export function sessionClock(
     wait = Math.min(SESSION_TICK_MS, limitMs - awake)
     cancel = ticker.after(wait, check)
   }
+  // The next check is armed before `tick` runs: a tick that threw would otherwise leave the
+  // session with no limit at all, and one that stopped the clock cancels the check it armed.
   const check = () => {
     const awake = account(ticker.now())
-    if (awake < limitMs) { arm(awake); return }
+    if (awake < limitMs) { arm(awake); on.tick?.(awake); return }
     expired = true
     cancel = undefined
     on.expire()

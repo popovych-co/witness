@@ -83,6 +83,11 @@ const say = (event: object): string => `printf '%s\\n' '${JSON.stringify(event).
 const awaitFlag = (flag: string): string =>
   `i=0; while [ ! -f "${flag}" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; [ -f "${flag}" ] || exit 3`
 const MERGE = 'ship: "merge PR #7 on GitHub when ready — the lazy stamp flips plan → done, spec → live"'   // E2's real shape
+// Virtual awake time for a real child: each armed check fires on the next macrotask, `ms` later here.
+const fastTicker = (): Ticker => {
+  let now = 0
+  return { now: () => now, after: (ms, fn) => { const t = setTimeout(() => { now += ms; fn() }, 0); return () => clearTimeout(t) } }
+}
 
 describe('witness drive skeleton (D145)', () => {
   it('refuses without a TTY', async () => {
@@ -175,9 +180,11 @@ describe('spawnSession (D145 addendum §3-5)', () => {
   it('SIGTERMs a hung child at the configured timeout', async () => {
     const repo = await seededRepo()
     const bin = fakeAgent('sleep 60')
-    const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin } })
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin }, out: (l) => lines.push(l) })
     const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 100 } }
     expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).outcome).toBe('timeout')
+    expect(lines.some((l) => /\] ended \d\d:\d\d:\d\d · timed out · /.test(l))).toBe(true)
   }, 20000)
 
   it('a host sleep mid-session is not session time (row 210, issue #58)', async () => {
@@ -192,6 +199,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker })
     expect(end.outcome).toBe('exited')
     expect(lines).toContain('[1 implement/p1] host slept 9h — not counted against drive.sessionTimeoutMs')
+    expect(end.tail.some((l) => l.includes('host slept'))).toBe(false)
     expect(end.ms).toBeLessThan(60_000)
   }, 20000)
 
@@ -214,16 +222,18 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const started = Date.now()
     const res = await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 9)
     expect(res.outcome).toBe('exited')
-    expect(lines.join('\n')).toContain('started')
+    expect(lines.some((l) => /\] started$/.test(l))).toBe(true)
     expect(Date.now() - started).toBeLessThan(10000)
   }, 20000)
 
   it('reports spawn-failed when the binary is not there', async () => {
     const repo = await seededRepo()
+    const lines: string[] = []
     const ctx = fakeCtx(repo.root, {
-      tty: true, env: { WITNESS_DRIVE_AGENT_BIN: join(repo.root, 'no-such-agent') },
+      tty: true, env: { WITNESS_DRIVE_AGENT_BIN: join(repo.root, 'no-such-agent') }, out: (l) => lines.push(l),
     })
     expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 3)).outcome).toBe('spawn-failed')
+    expect(lines.some((l) => /\] (started|ended) /.test(l))).toBe(false)
   }, 20000)
 
   // Each harness names its own session on its own shell commands (P1, and pi's bash tool), so
@@ -252,7 +262,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
       env: { WITNESS_DRIVE_AGENT_BIN: bin, PI_CODING_AGENT: 'true', CLAUDECODE: '1' }, out: (l) => lines.push(l),
     })
     await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
-    expect(lines).toEqual(['[1 implement/p1] args=-p /witness --mode json pi=unset claude=unset'])
+    expect(lines.filter((l) => !/\] (started|ended) /.test(l))).toEqual(['[1 implement/p1] args=-p /witness --mode json pi=unset claude=unset'])
     expect(ctx.env).toMatchObject({ PI_CODING_AGENT: 'true', CLAUDECODE: '1' })
   }, 20000)
 
@@ -332,6 +342,84 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1, { stream })
     expect(end.outcome).toBe('exited')
     expect(lines).toContain('[1 implement/p1] {"type":"x"}')
+  }, 20000)
+})
+
+// Row 214. Drive's own lines frame each session, and never enter the tail row 182 reads.
+describe('drive says how a session goes (row 214)', () => {
+  it('says when a session started and how it ended (issue #64)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo hi') }, out: (l) => lines.push(l) })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1, { next: 'witness start p1' })
+    expect(lines[0]).toMatch(/^\[1 implement\/p1\] started \d\d:\d\d:\d\d · next: witness start p1$/)
+    expect(lines[1]).toBe('[1 implement/p1] hi')
+    expect(lines.at(-1)).toMatch(/^\[1 implement\/p1\] ended \d\d:\d\d:\d\d · exit 0 · \d+s$/)
+    expect(end.tail).toEqual(['hi'])
+  }, 20000)
+
+  it('ended names the outcome (issue #64)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('exit 3') }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(lines.at(-1)).toContain(' · exit 3 · ')
+    // pi's JSON mode exits 0 on a provider error (P2): the stream is what says so.
+    patchConfig(repo, { harness: 'pi' })
+    const error = say({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '529 overloaded' } })
+    const pi: string[] = []
+    const piCtx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(`${error}\nexit 0`) }, out: (l) => pi.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), piCtx, 2)
+    expect(pi.at(-1)).toContain(' · exit 0 (error) · ')
+  }, 20000)
+
+  // D8. The fake waits on the quiet line, so a drive that never printed one deadlocks it into exit 3.
+  it('a quiet session says it still runs and what it waits on (issue #64)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })
+    const flag = join(fakeScenario(), 'seen')
+    const bin = fakeAgent(`${say({ type: 'tool_execution_start', toolCallId: 'c1', toolName: 'bash', args: { command: 'cargo test discovery' } })}\n${awaitFlag(flag)}`)
+    let quiet: string | undefined
+    const ctx = fakeCtx(repo.root, {
+      env: { WITNESS_DRIVE_AGENT_BIN: bin },
+      out: (l) => {
+        if (quiet === undefined && l.includes('] still running · ') && l.endsWith('in: $ cargo test discovery')) { quiet = l; writeFileSync(flag, '') }
+      },
+    })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 7_200_000 } }
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker() })
+    expect(quiet).toMatch(/^\[1 implement\/p1\] still running · \d+m(\d+s)? of 2h · quiet 5m · in: \$ cargo test discovery$/)
+    expect(end.code).toBe(0)
+  }, 20000)
+
+  // Review Focus 1: a harness whose event shapes changed renders nothing, and drive still says so.
+  it('a session that renders nothing still says it runs (issue #64)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })
+    const flag = join(fakeScenario(), 'seen')
+    const bin = fakeAgent(`${say({ type: 'brand_new' })}\n${awaitFlag(flag)}`)
+    const lines: string[] = []
+    let quiet: string | undefined
+    const ctx = fakeCtx(repo.root, {
+      env: { WITNESS_DRIVE_AGENT_BIN: bin },
+      out: (l) => { lines.push(l); if (quiet === undefined && l.includes('] still running · ')) { quiet = l; writeFileSync(flag, '') } },
+    })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 7_200_000 } }
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker() })
+    expect(quiet).toMatch(/still running · \d+m(\d+s)? of 2h · quiet 5m$/)
+    expect(lines.some((l) => l.includes('brand_new'))).toBe(false)
+  }, 20000)
+
+  // Review Focus 4: drive's own lines carry text a child controls (its session id): one emitter
+  // spells out every line printed under a session's prefix.
+  it('a session id carrying an escape is spelled out (issue #64)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { harness: 'pi' })
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(say({ type: 'session', id: 'S\x1b[2J' })) }, out: (l) => lines.push(l) })
+    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
+    expect(lines).toContain('[1 implement/p1] session S\\x1b[2J')
+    expect(lines.some((l) => l.includes('\x1b'))).toBe(false)
   }, 20000)
 })
 
@@ -529,7 +617,7 @@ describe('sessions carry their target (B1 · B3)', () => {
     await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1)
     await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 2)
     expect(lines).toContain('[1 implement/p1] marker=p1')
-    expect(lines.find((l) => l.startsWith('[2 '))).toMatch(/marker=-$/)
+    expect(lines.find((l) => /^\[2 [^\]]*\] marker=/.test(l))).toMatch(/marker=-$/)
   }, 20000)
 
   it('reports the exit code and the last three lines', async () => {
@@ -749,6 +837,22 @@ describe('autonomy in the loop (B2)', () => {
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script(`echo "$WITNESS_DRIVE" >> "${seen}"`) }, out), { maxSpawns: 1 })
     expect(out).toContain(`decided: decompose ${repo.effort} → revise · policy · blocking-here`)
     expect(readFileSync(seen, 'utf8').trim()).toBe(repo.effort)
+  }, 60000)
+
+  // D13. A stop whose settle the CLI routed to a re-run is spawned for the target, whose own `next`
+  // prints the re-run: the session's `started` line names the re-run, not the decision it replaced.
+  it('started names the re-run a settle routed (issue #64)', async () => {
+    const repo = await plannedRepo({ autonomy: false })
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    expect((await repo.cli(['gate', 'plan', 'auth-refresh-plan-1'], { env: gateEnv(scenario) })).code).toBe(1)
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    expect((await writePlan(repo, 'auth-refresh-plan-1', {}, '## Step: s1\nRewritten.\n')).code).toBe(0)   // the verdict is stale
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 0') }, out), { maxSpawns: 1 })
+    expect(out.filter((l) => / started \d\d:\d\d:\d\d · /.test(l)))
+      .toEqual([expect.stringMatching(/^\[1 [^\]]*\] started \d\d:\d\d:\d\d · next: witness gate plan auth-refresh-plan-1$/)])
   }, 60000)
 
   it('a --manual run\'s stop waits for the human and is never settled', async () => {

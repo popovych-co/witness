@@ -35,6 +35,16 @@ function clock(limit: number) {
 }
 
 describe('sessionClock (row 210, issue #58)', () => {
+  // Row 214: drive's quiet line and journal watch run on this clock's check, in awake time. The
+  // next check is armed first, so a tick that throws never costs the session its limit.
+  it('ticks with the awake time, after re-arming (issue #64)', () => {
+    const h = host()
+    const ticks: Array<[number, number]> = []
+    sessionClock(10_000, h, { expire: () => {}, slept: () => {}, tick: (awake) => ticks.push([awake, h.armed.length]) })
+    h.run(3_000)
+    expect(ticks).toEqual([[1000, 2], [2000, 3], [3000, 4]])
+  })
+
   it('a check later than SUSPEND_GAP_MS is sleep: the limit and awakeMs skip it', () => {
     const { h, c, slept, expired } = clock(60_000)
     h.run(5_000); h.sleep(9 * HOUR); h.run(1_000)
