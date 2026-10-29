@@ -22,6 +22,12 @@ describe('awakeArgv (row 211, issue #59)', () => {
     expect(AWAKE_SCRIPT).toContain('Wait-Process -Id ([int]$env:WITNESS_AWAKE_PID)')
     expect(AWAKE_SCRIPT).not.toMatch(/WindowStyle|4242/)
   })
+  // Final review: under Constrained Language Mode a blocked Add-Type only ends its statement, so
+  // without Stop the helper reached Wait-Process holding nothing and never exited early.
+  it('stops at the first error, so a helper that cannot hold the host exits and is reported', () => {
+    expect(AWAKE_SCRIPT.split('\n')[0]).toBe("$ErrorActionPreference = 'Stop'")
+    expect(AWAKE_SCRIPT.split('\n').at(-1)).toContain('-ErrorAction SilentlyContinue')   // a pid already gone still ends quietly
+  })
   it('darwin keeps caffeinate and its line', () => {
     expect(awakeArgv({}, 'darwin', 4242)).toEqual({ file: 'caffeinate', args: ['-ims', '-w', '4242'],
       shown: 'caffeinate -ims -w 4242 — a closed lid on battery still sleeps' })

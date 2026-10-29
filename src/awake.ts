@@ -13,8 +13,13 @@ import { spawn, system32 } from './spawn.js'
 // that console; under --detach the spawn wrapper already hides it (row 201).
 //
 // `2147483649` is 0x80000001 written in decimal: PowerShell parses the hex literal as a
-// negative Int32, which will not cast to [uint32].
+// negative Int32, which will not cast to [uint32]. `Stop` comes first because a blocked
+// `Add-Type` (Constrained Language Mode, AppLocker, a failed compile) only ends its own statement
+// by default: the helper would reach `Wait-Process` holding nothing and never exit, so drive
+// could not say `keep-awake: lost`. With it, any error ends `-Command` with exit 1;
+// `Wait-Process`'s own `-ErrorAction` keeps a pid already gone a quiet end.
 export const AWAKE_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
   `$k = Add-Type -Name Awake -Namespace Witness -PassThru -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'`,
   'if ($k::SetThreadExecutionState([uint32]2147483649) -eq 0) { exit 3 }',
   'Wait-Process -Id ([int]$env:WITNESS_AWAKE_PID) -ErrorAction SilentlyContinue',

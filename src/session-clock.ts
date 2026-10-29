@@ -1,12 +1,14 @@
 // Row 210 (issue #58). A drive session's time is the time the host was awake.
 //
-// One `setTimeout(stop, sessionTimeoutMs)` measured the wrong thing on Windows, whose timers
-// count suspend: the issue's timer fired 10 s after a 9 h sleep, with about 24 s awake. libuv's
-// clock on macOS and Linux (`mach_absolute_time`, `CLOCK_MONOTONIC`) stands still in suspend, so
-// there the timer was probably right — but nothing here depends on which: a check that fires
-// more than SUSPEND_GAP_MS late slept through its lateness, on any platform. No check is armed
-// for more than SESSION_TICK_MS, so a limit past 2^31 ms cannot overflow Node's timer and fire
-// at once (P4), the bug `realClock.sleep` already slices around.
+// One `setTimeout(stop, sessionTimeoutMs)` measured the wrong thing wherever libuv's clock counts
+// suspend: on Windows the issue's timer fired 10 s after a 9 h sleep, with about 24 s awake, and
+// on macOS libuv reads `mach_continuous_time`, which counts sleep too (probed: `process.hrtime`
+// equals the wall time since boot on a Mac that slept 28 h). Linux's `CLOCK_MONOTONIC` stands still
+// in suspend, so there a sleep never reached the timer and leaves no late check (a reading). Nothing
+// here depends on which: a check that fires more than SUSPEND_GAP_MS late slept through its
+// lateness, on any platform. No check is armed for more than SESSION_TICK_MS, so a limit past
+// 2^31 ms cannot overflow Node's timer and fire at once (P4), the bug `realClock.sleep` already
+// slices around.
 //
 // Residual (C4): a drive event-loop stall longer than SUSPEND_GAP_MS also reads as sleep.
 

@@ -380,7 +380,8 @@ Operator notes, non-load-bearing — the design depends on none of them:
   Windows PowerShell for its lifetime (an explicit sleep — Start › Sleep, a closed lid —
   still sleeps); for a chat session, `caffeinate -dims`, or plug in and disable sleep.
   A sleep is not session time: drive counts neither `drive.sessionTimeoutMs` nor
-  `drive.caps.wallClockMs` across it, and its log says `host slept <duration>`.
+  `drive.caps.wallClockMs` across it, and on Windows and macOS its log says
+  `host slept <duration>`.
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW`** (set at CLI launch) lowers the harness's
   auto-compaction threshold, as belt-and-suspenders under the fill relay. Compaction
   stays the harness's continuity mechanism, never witness's; the variable is documented
