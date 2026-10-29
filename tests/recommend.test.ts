@@ -147,6 +147,10 @@ describe('the re-ask suffix promises only what the re-gate will do', () => {
     expect(recommend(ctxFor([malformed()], { stale: true }))!.options[0]!.why).not.toContain('re-asks')
     expect(recommend(ctxFor([malformed({ pin: 'm1', model: 'session-default' })]))!.options[0]!.why).not.toContain('re-asks')
   })
+  it('says nothing of a re-ask once a revise follows it — the re-gate is changed-nothing', () => {
+    const entries = [run(1, 'a', 'S'), { ...malformed(), round: 2, run_id: 'r-2' } as Entry, decision('revise')]
+    expect(recommend(ctxFor(entries))!.options[0]!.why ?? '').not.toContain('re-asks')
+  })
 })
 
 describe('the rule table is ordered and total', () => {

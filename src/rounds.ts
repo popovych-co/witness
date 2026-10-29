@@ -410,6 +410,22 @@ export type AppendKind =
   | { kind: 'repair'; from: GateRunEntry }
   | { kind: 'fresh' }
 
+const revisedAfter = (entries: Entry[], runIdx: number, gate: string): boolean =>
+  entries.slice(runIdx + 1).some((e) =>
+    isDecision(e, gate) && ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
+
+// Row 209: does a re-gate on unchanged content and setup repair the last run — re-ask only its
+// lenses with no verdict — rather than re-run, resume or refuse? appendKind's own rule, minus the
+// key only the gate can build, so the recommender's promise of a repair reads the same rule.
+export function repairsOnRegate(entries: Entry[], gate: string): boolean {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (!isRun(entries[i], gate)) continue
+    const last = entries[i] as unknown as GateRunEntry
+    return last.outcome === 'malformed' && !fellBack(last) && !revisedAfter(entries, i, gate)
+  }
+  return false
+}
+
 export function appendKind(entries: Entry[], gate: string, key: GateKey): AppendKind {
   let lastRunIdx = -1
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -429,10 +445,7 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     // re-ran nothing while its own block said re-running is free. A re-gate repairs it instead —
     // the lenses that answered are carried and the ones that did not are asked again.
     if (!fellBack(last) && sameKey(keyOf(last), key)) {
-      const revised = entries.slice(lastRunIdx + 1).some((e) =>
-        isDecision(e, gate) &&
-        ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
-      if (revised) return { kind: 'changed-nothing', entry: last }
+      if (revisedAfter(entries, lastRunIdx, gate)) return { kind: 'changed-nothing', entry: last }
       return last.outcome === 'malformed' ? { kind: 'repair', from: last } : { kind: 'resume', entry: last }
     }
   }
