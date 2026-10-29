@@ -7,7 +7,7 @@ import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { changedFiles, diffBase } from '../src/evidence.js'
 import { loadConfig } from '../src/config.js'
-import { callCount, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo, patchConfig } from './helpers.js'
+import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo, patchConfig } from './helpers.js'
 
 // Row 169: the battery launches every lens at once, and the journal must not be able to tell.
 // A feature plan on a non-ui spec: the battery is code-reviewer · silent-failure-hunter ·
@@ -80,5 +80,52 @@ describe('the battery runs its lenses at once', () => {
     expect(gateRuns(repo, planId)).toHaveLength(0)
     expect(errs.join('\n')).toContain('reviewer-invocation')
     expect(callCount(scenario)).toBeGreaterThanOrEqual(4)          // the other lenses still ran
+  })
+})
+
+describe('a re-gate after a malformed round (row 209)', () => {
+  const F = { fresh: false, manual: false }
+  it('re-asks only the lens that failed and carries the rest, in battery order', async () => {
+    const { repo, planId, files, scenario, ctx } = await batteryRepo()
+    putVerdict(scenario, { coverage: [], findings: [] }, 'pr-test')        // under the floor on both attempts
+    expect(await runGate(ctx, 'implement', planId, F)).toBe(1)
+    const r1 = lastRun(repo, planId)
+    expect(r1.outcome).toBe('malformed')
+    putVerdict(scenario, treeClean(files), 'pr-test')
+    const before = callCount(scenario)
+    const out: string[] = []
+    expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => out.push(l) }), 'implement', planId, F)).toBe(0)
+    const r2 = lastRun(repo, planId)
+    expect(callCount(scenario) - before).toBe(1)
+    expect(callFor(scenario, 'pr-test')).toMatch(new RegExp(`call-${before + 1}$`))
+    expect(r2.carried).toEqual({ run: r1.run_id, lenses: ['code-reviewer', 'silent-failure-hunter', 'type-design'] })
+    expect(r2.verdicts!.map((v) => v.reviewer)).toEqual(['code-reviewer', 'silent-failure-hunter', 'type-design', 'pr-test'])
+    expect([r2.round, r2.outcome]).toEqual([r1.round, 'passed'])
+    expect(out.join('\n')).toContain(`carried: code-reviewer · silent-failure-hunter · type-design — answered in run ${r1.run_id} on this content and prompts`)
+  })
+  it('a repair malformed again trips malformed-streak on the next run, without --fresh', async () => {
+    const { repo, planId, scenario, ctx } = await batteryRepo()
+    putVerdict(scenario, { coverage: [], findings: [] }, 'pr-test')
+    await runGate(ctx, 'implement', planId, F)
+    await runGate(ctx, 'implement', planId, F)
+    expect(gateRuns(repo, planId).map((r) => r.outcome)).toEqual(['malformed', 'malformed'])
+    const errs: string[] = []
+    expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => errs.push(l) }), 'implement', planId, F)).toBe(2)
+    expect(errs.join('\n')).toContain('malformed-streak')
+  })
+  // Review Focus 5
+  it('a repair whose re-asked lens falls back is a fallback round, and keeps what it carried', async () => {
+    const { repo, planId, files, scenario, ctx } = await batteryRepo()
+    patchConfig(repo, { gates: { implement: { model: 'test-model-1' } } })
+    putVerdict(scenario, { coverage: [], findings: [] }, 'pr-test')
+    expect(await runGate(ctx, 'implement', planId, F)).toBe(1)
+    const r1 = lastRun(repo, planId)
+    putVerdict(scenario, treeClean(files), 'pr-test')
+    writeFileSync(join(scenario, 'claude-fail-pr-test'), 'test-model-1')    // the pin stops answering pr-test
+    expect(await runGate(ctx, 'implement', planId, F)).toBe(1)
+    const r2 = lastRun(repo, planId)
+    expect(r2.carried).toEqual({ run: r1.run_id, lenses: ['code-reviewer', 'silent-failure-hunter', 'type-design'] })
+    expect([r2.model, r2.pin, r2.fallback]).toEqual(['session-default', 'test-model-1', ['test-model-1']])
+    expect(r2.standing).toContain('fallback — reviewers ran on session-default')
   })
 })

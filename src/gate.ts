@@ -127,6 +127,9 @@ export function renderGateRun(
   if (entry.skipped?.length) ctx.out(kv('skipped', entry.skipped.join(' · ')))
   if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
   if (entry.rerolled?.length) ctx.out(kv('rerolled', entry.rerolled.join(' · ')))
+  if (entry.carried) {
+    ctx.out(kv('carried', `${entry.carried.lenses.join(' · ')} — answered in run ${entry.carried.run} on this content and prompts`))
+  }
   ctx.out(rows('checks', ['name', 'ok', 'detail'],
     entry.checks.map((c) => ({ name: c.name, ok: String(c.ok), detail: c.detail ?? '' }))).join('\n'))
   // Row 179: what the lane did not run, beside the row that passed without it.
@@ -441,11 +444,17 @@ async function judge(
   // Holding the repo-global lock across a multi-minute LLM battery refuses every state
   // write in every other flow for its full duration, on a lock whose real job is a ~100ms
   // commit. The guarded window opens below, immediately before the journal append.
-  // Full review first: a delta is planned only for a round that will judge (the key is fresh).
-  const delta = kind.kind === 'fresh'
+  // Full review first: a delta is planned only for a round that will judge (the key is fresh,
+  // or a malformed round is being repaired).
+  const delta = kind.kind === 'fresh' || kind.kind === 'repair'
     ? planDelta(root, entries, spec.gate, { reviewedSha: input.reviewedSha, snapshot: input.snapshot, basis, reviewed: input.reviewed, inDelta })
     : undefined
   const block = delta ? deltaBlock(delta) : ''
+  const askedSha = delta ? promptsSha(lenses, setupText + block) : setupSha
+  // Row 209. A repair carries verdicts only when the question is the same: a moved delta base
+  // (git gc pruned it, a judged round landed) asks every lens what the malformed round did not.
+  if (kind.kind === 'repair' && kind.from.prompts_sha !== askedSha) kind = { kind: 'fresh' as const }
+  const repairFrom = kind.kind === 'repair' ? kind.from : undefined
   // A replayed delta verdict re-serves a round that already discharged all its silence could.
   const replayedDelta = kind.kind === 'cached' && kind.from.delta !== undefined
   let verdicts: ReviewerVerdict[] = []
@@ -454,6 +463,7 @@ async function judge(
   let rerolled: string[] = []
   let model = pin
   let cached = false
+  let carried: string[] = []
 
   if (kind.kind === 'cached') {
     verdicts = kind.from.verdicts ?? []
@@ -473,9 +483,17 @@ async function judge(
         prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${backstopText}${delta && inDelta(lens.name) ? block : ''}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
       }
     })
-    const ranR = await runBattery(ctx, harness, chain, composed, { cwd: root, ...extras })
+    // Row 209. A repair asks only the lenses with no verdict in the malformed round. A carried
+    // lens answered on the pin, rung 0, so this run's highest rung is the round's `model`.
+    const kept = new Map((repairFrom?.verdicts ?? []).map((rv) => [rv.reviewer, rv]))
+    const ranR = await runBattery(ctx, harness, chain, composed.filter((l) => !kept.has(l.name)), { cwd: root, ...extras })
     if (!ranR.ok) { renderRefusal(ranR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    ;({ verdicts, malformed, fallback, rerolled, model } = ranR.value)
+    ;({ malformed, fallback, model } = ranR.value)
+    const answered = new Map(ranR.value.verdicts.map((rv) => [rv.reviewer, rv]))
+    const names = lenses.map((l) => l.name)
+    verdicts = names.flatMap((n) => { const rv = kept.get(n) ?? answered.get(n); return rv ? [rv] : [] })
+    carried = names.filter((n) => kept.has(n))
+    rerolled = names.filter((n) => (kept.has(n) ? repairFrom?.rerolled ?? [] : ranR.value.rerolled).includes(n))
     // A malformed round judged nothing, so it demotes nothing.
     // A backstopping gate never demotes what it backstops: it promised the listed finding blocks here.
     if (delta && spec.demotes && malformed.length === 0) {
@@ -533,13 +551,14 @@ async function judge(
     const entry: GateRunEntry = {
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
-      reviewed_sha: input.reviewedSha, prompts_sha: delta ? promptsSha(lenses, setupText + block) : setupSha,
+      reviewed_sha: input.reviewedSha, prompts_sha: askedSha,
       witness: key.witness, model, pin, harness: harness.name, calibration: calibrationOf(model),
       ...(localR.value.reviewerExtensions.length ? { reviewer_extensions: localR.value.reviewerExtensions } : {}),
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
       ...(fallback.length ? { fallback } : {}),
       ...(rerolled.length ? { rerolled } : {}),
+      ...(repairFrom && carried.length ? { carried: { run: repairFrom.run_id, lenses: carried } } : {}),
       ...(dropped.length ? { skipped: dropped } : {}),
       ...(outcome === 'stopped' && standing ? { standing } : {}),
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),

@@ -133,6 +133,7 @@ describe('malformed-rerun emits a calibrate invocation the verb accepts (D152)',
     expect(d.rule).toBe('malformed-rerun')
     expect(d.options[1]!.command).toBe('witness calibrate m --only code-reviewer')
     expect(d.options[1]!.runnable).toBe(true)
+    expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
   })
 
   it('falls back to the reviewers suite when no lens is named', () => {

@@ -176,7 +176,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       key: 'next', rule: 'malformed-rerun',
       options: [
         opt(`witness gate ${gate} ${target}`, 'root', {
-          why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free`,
+          why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
+            last.malformed?.length ? `, and it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
           note: 'a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy',
         }),
         opt(((): string => {

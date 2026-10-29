@@ -66,6 +66,14 @@ describe('roundsSinceApprove', () => {
 })
 
 describe('appendKind', () => {
+  it('a malformed last round under the same key is a repair, not a resume (row 209)', () => {
+    const m = run('a', 'malformed', 1, { malformed: [{ reviewer: 'plan-critic', violations: [] }] })
+    expect(appendKind([m], 'plan', key('a'))).toEqual({ kind: 'repair', from: m })
+    expect(appendKind([m, revise(1)], 'plan', key('a')).kind).toBe('changed-nothing')
+    expect(appendKind([m], 'plan', key('b')).kind).toBe('fresh')
+    expect(appendKind([run('a', 'stopped', 1)], 'plan', key('a')).kind).toBe('resume')
+  })
+
   it('same sha, no intervening revise → resume', () => {
     const entries = [run('a', 'stopped', 1)]
     expect(appendKind(entries, 'plan', key('a')).kind).toBe('resume')

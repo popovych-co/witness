@@ -7,7 +7,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
-import { callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
 const F = { fresh: false, manual: false }
 const of = (root: string, id: string, gate: string) =>
@@ -15,8 +15,10 @@ const of = (root: string, id: string, gate: string) =>
 const all = (r: GateRunEntry) => (r.verdicts ?? []).flatMap((v) => v.findings)
 
 // round 1: every lens blocks at src/token.ts#nextToken · src/token.ts is edited · round 2: every lens blocks at `second`
-async function implementTwice(second: string, beforeRound2: (scenario: string) => void = () => {}) {
+// `dirty`: an uncommitted edit before round 1, so round 1's tree is reachable from no commit and gc can prune it
+async function implementTwice(second: string, beforeRound2: (scenario: string) => void = () => {}, opts: { dirty?: boolean } = {}) {
   const { repo, wt, planId } = await shippableRepo()
+  if (opts.dirty) appendFileSync(join(wt, 'src/token.ts'), '// round 1 is uncommitted\n')
   const cfg = loadConfig(repo.root)
   const files = () => { const b = diffBase(wt, cfg.ok ? cfg.value : (undefined as never)); return changedFiles(wt, b.ok ? b.value : '') }
   const at = (anchor: string) => ({ coverage: files().slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [{ blocking: true, anchor, claim: 'x' }] })
@@ -87,6 +89,20 @@ describe('delta review at the code gates (C3)', () => {
     const { scenario } = await implementTwice('src/token.ts')
     expect(readFileSync(join(callFor(scenario, 'code-reviewer')!, 'stdin'), 'utf8')).toContain(
       '### Files changed since round 1\n\n- src/token.ts\n\nCover at least 1 of these files, each with its own coverage anchor.\n\n')
+  }, 120_000)
+
+  // Review Focus 4
+  it('a repair whose delta base gc pruned asks every lens again and carries nothing', async () => {
+    const { repo, planId, scenario, ctx, at } = await implementTwice('tests/token.test.ts',
+      (s) => putVerdict(s, { coverage: [], findings: [] }, 'pr-test'), { dirty: true })
+    expect(of(repo.root, planId, 'implement')[1]!).toMatchObject({ outcome: 'malformed', delta: { round: 1 } })
+    repo.git('gc', '-q', '--prune=now')
+    putVerdict(scenario, at('tests/token.test.ts'), 'pr-test')
+    const before = callCount(scenario)
+    await runGate(ctx, 'implement', planId, F)
+    const r3 = of(repo.root, planId, 'implement')[2]!
+    expect(callCount(scenario) - before).toBe(4)
+    expect([r3.carried, r3.delta]).toEqual([undefined, undefined])
   }, 120_000)
 
   // Review Focus 3
