@@ -8,7 +8,14 @@ mkdir -p "$dir/pi-calls"
 # claim the next number atomically: mkdir without -p fails when the dir exists, so
 # lenses the gate launches together can never share a number
 n=1
-while ! mkdir "$dir/pi-calls/call-$n" 2>/dev/null; do n=$((n + 1)); done
+# Every invocation leaves its trail in pi-trace (one short line per append, so lines never
+# interleave): its pid, each claim attempt that failed with the error mkdir gave, the number it
+# claimed. tests/helpers.ts checks the trail against the dirs, so a call that ends up with no dir
+# of its own fails with the trail instead of as an off-by-one count (seen on CI only, 2026-10).
+trace="$dir/pi-trace"
+echo "start $$" >> "$trace"
+while ! err=$(mkdir "$dir/pi-calls/call-$n" 2>&1); do echo "taken $$ $n $err" >> "$trace"; n=$((n + 1)); done
+echo "claim $$ $n" >> "$trace"
 call="$dir/pi-calls/call-$n"
 if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
@@ -26,7 +33,7 @@ if [ -f "$dir/pi-barrier" ]; then
     for d in "$dir"/pi-calls/call-*; do [ -e "$d" ] && have=$((have + 1)); done
     [ "$have" -ge "$want" ] && break
     i=$((i + 1))
-    if [ "$i" -ge 50 ]; then echo "fake pi: barrier of $want not reached ($have in flight)" >&2; exit 1; fi
+    if [ "$i" -ge 50 ]; then echo "fake pi: barrier of $want not reached ($have in flight) · $(ls "$dir/pi-calls" | tr '\n' ' ')· $(tr '\n' ';' < "$trace")" >&2; exit 1; fi
     sleep 0.1
   done
 fi
@@ -69,3 +76,4 @@ node -e '
   process.stdout.write(JSON.stringify({ type: "agent_end", messages: [user, assistant] }) + "\n")
   process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\n")
 ' "$body"
+echo "end $$ $n" >> "$trace"

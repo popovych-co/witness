@@ -7,7 +7,14 @@ mkdir -p "$dir/claude-calls"
 # claim the next number atomically: mkdir without -p fails when the dir exists, so
 # lenses the gate launches together can never share a number
 n=1
-while ! mkdir "$dir/claude-calls/call-$n" 2>/dev/null; do n=$((n + 1)); done
+# Every invocation leaves its trail in claude-trace (one short line per append, so lines never
+# interleave): its pid, each claim attempt that failed with the error mkdir gave, the number it
+# claimed. tests/helpers.ts checks the trail against the dirs, so a call that ends up with no dir
+# of its own fails with the trail instead of as an off-by-one count (seen on CI only, 2026-10).
+trace="$dir/claude-trace"
+echo "start $$" >> "$trace"
+while ! err=$(mkdir "$dir/claude-calls/call-$n" 2>&1); do echo "taken $$ $n $err" >> "$trace"; n=$((n + 1)); done
+echo "claim $$ $n" >> "$trace"
 call="$dir/claude-calls/call-$n"
 # lock probe: records whether witness held its global lock while this reviewer ran.
 # Sound because acquireLock refuses exactly when this file exists with a live pid
@@ -31,7 +38,7 @@ if [ -f "$dir/claude-barrier" ]; then
     for d in "$dir"/claude-calls/call-*; do [ -e "$d" ] && have=$((have + 1)); done
     [ "$have" -ge "$want" ] && break
     i=$((i + 1))
-    if [ "$i" -ge 50 ]; then echo "fake claude: barrier of $want not reached ($have in flight)" >&2; exit 1; fi
+    if [ "$i" -ge 50 ]; then echo "fake claude: barrier of $want not reached ($have in flight) · $(ls "$dir/claude-calls" | tr '\n' ' ')· $(tr '\n' ';' < "$trace")" >&2; exit 1; fi
     sleep 0.1
   done
 fi
@@ -71,3 +78,4 @@ node -e '
   const result = fs.readFileSync(process.argv[1], "utf8")
   process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result }))
 ' "$body"
+echo "end $$ $n" >> "$trace"

@@ -39,7 +39,9 @@ describe.each(['claude', 'pi'] as const)('fake %s under a concurrent battery', (
     const dir = fakeScenario()
     putVerdict(dir, { coverage: [], findings: [] })
     await Promise.all(Array.from({ length: 6 }, (_, i) => runFakeAsync(bin, ['-p'], dir, `p${i}`)))
-    expect(readdirSync(join(dir, `${bin}-calls`)).sort()).toEqual(['call-1', 'call-2', 'call-3', 'call-4', 'call-5', 'call-6'])
+    // the fake's trail rides in the message: this lost a call on CI only (fixtures/fakebin/claude)
+    expect(readdirSync(join(dir, `${bin}-calls`)).sort(), readFileSync(join(dir, `${bin}-trace`), 'utf8'))
+      .toEqual(['call-1', 'call-2', 'call-3', 'call-4', 'call-5', 'call-6'])
   })
 
   it('records WITNESS_LENS and answers verdict-<lens>.json, a numbered verdict still winning', () => {

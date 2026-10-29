@@ -373,8 +373,25 @@ export function putVerdict(scenario: string, verdict: unknown, call?: number | s
 function callDirs(scenario: string, bin: 'claude' | 'pi'): Array<{ n: number; dir: string }> {
   const calls = join(scenario, `${bin}-calls`)
   if (!existsSync(calls)) return []
-  return readdirSync(calls).filter((d) => /^call-\d+$/.test(d))
+  const found = readdirSync(calls).filter((d) => /^call-\d+$/.test(d))
     .map((d) => ({ n: Number(d.slice('call-'.length)), dir: join(calls, d) }))
+  checkTrail(join(scenario, `${bin}-trace`), new Set(found.map((c) => c.n)))
+  return found
+}
+
+// The fake's own trail (fixtures/fakebin/claude). A number two calls claimed, or a claim whose
+// dir is gone, is the lost call seen on CI only — fail with the trail rather than as an
+// off-by-one count. Neither can arise while calls are still in flight: a claim is written
+// after its mkdir succeeded.
+function checkTrail(trace: string, dirs: Set<number>): void {
+  if (!existsSync(trace)) return
+  const lines = readFileSync(trace, 'utf8').trim().split('\n')
+  const claimed = lines.filter((l) => l.startsWith('claim ')).map((l) => Number(l.split(' ')[2]))
+  const twice = claimed.filter((n, i) => claimed.indexOf(n) !== i)
+  const missing = claimed.filter((n) => !dirs.has(n))
+  if (twice.length || missing.length) {
+    throw new Error(`fake call trail is inconsistent (claimed twice: ${twice.join(',') || 'none'} · claimed with no dir: ${missing.join(',') || 'none'}) — ${trace}:\n${lines.join('\n')}`)
+  }
 }
 
 // The latest call a lens made — a rerolled or fallen-back lens makes several.
