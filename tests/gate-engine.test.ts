@@ -237,6 +237,16 @@ describe('gate engine', () => {
     expect(runs(repo).length).toBe(3)
   })
 
+  it('a re-gate after a malformed round runs its lens again (P1, row 209)', async () => {
+    const { repo, scenario, ctx } = await gateRepo()
+    putVerdict(scenario, { coverage: [], findings: [] })
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(1)
+    putVerdict(scenario, CLEAN('auth-refresh'))
+    expect(await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(0)
+    expect(runs(repo).map((r) => r.outcome)).toEqual(['malformed', 'passed'])
+    expect(runs(repo)[1]).not.toHaveProperty('carried')
+  })
+
   it('a revise that lands identical content is an explicit changed-nothing stop', async () => {
     const { repo, scenario, ctx } = await gateRepo()
     putVerdict(scenario, BLOCKING('auth-refresh'))

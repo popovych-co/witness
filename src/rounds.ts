@@ -66,6 +66,9 @@ export interface GateRunEntry {
   // different blocks under one setup. `delta` names the round this one was judged against.
   setup_sha?: string
   delta?: { round: number; run: string }
+  // Row 209. The lenses whose verdicts this round re-served from run `run`, a malformed round
+  // asked the same question about the same bytes.
+  carried?: { run: string; lenses: string[] }
   checks: GateCheck[]
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
@@ -401,6 +404,7 @@ export type AppendKind =
   | { kind: 'resume'; entry: GateRunEntry }
   | { kind: 'changed-nothing'; entry: GateRunEntry }
   | { kind: 'cached'; from: GateRunEntry }
+  | { kind: 'repair'; from: GateRunEntry }
   | { kind: 'fresh' }
 
 export function appendKind(entries: Entry[], gate: string, key: GateKey): AppendKind {
@@ -418,11 +422,15 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     // Keeping it here traps the human exactly as row 107's own trap does: `resume`
     // never retries, and `changed-nothing` says `edit the artifact` about an artifact
     // that was never the problem. Re-SHOWING the entry is `decide --show`'s job.
+    // Row 209. A malformed round judged nothing, so there is nothing to resume: re-showing it
+    // re-ran nothing while its own block said re-running is free. A re-gate repairs it instead —
+    // the lenses that answered are carried and the ones that did not are asked again.
     if (!fellBack(last) && sameKey(keyOf(last), key)) {
       const revised = entries.slice(lastRunIdx + 1).some((e) =>
         isDecision(e, gate) &&
         ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
-      return revised ? { kind: 'changed-nothing', entry: last } : { kind: 'resume', entry: last }
+      if (revised) return { kind: 'changed-nothing', entry: last }
+      return last.outcome === 'malformed' ? { kind: 'repair', from: last } : { kind: 'resume', entry: last }
     }
   }
   for (let i = lastRunIdx - 1; i >= 0; i--) {

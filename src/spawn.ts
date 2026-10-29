@@ -35,6 +35,12 @@ export function envGet(env: Record<string, string | undefined>, name: string): s
   return key === undefined ? undefined : env[key]
 }
 
+// Row 211. A System32 binary by its absolute path, never one PATH could shadow (row 201) — the
+// one builder for resolveSpawn's cmd.exe, treeStop's taskkill, the toast and keep-awake helpers.
+export function system32(env: Record<string, string | undefined>, ...parts: string[]): string {
+  return win32.join(envGet(env, 'SYSTEMROOT') ?? 'C:\\Windows', 'System32', ...parts)
+}
+
 function isFile(p: string): boolean {
   try {
     return statSync(p).isFile()
@@ -116,7 +122,7 @@ export function resolveSpawn(
   }
   const line = [`"${file}"`, ...args.map((a) => caret(caret(crtQuote(a))))].join(' ')
   return ok({
-    file: win32.join(envGet(env, 'SYSTEMROOT') ?? 'C:\\Windows', 'System32', 'cmd.exe'),
+    file: system32(env, 'cmd.exe'),
     args: ['/d', '/v:off', '/s', '/c', `"${line}"`],
     env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' },
     windowsVerbatimArguments: true,
@@ -163,7 +169,7 @@ export const execSync = ((command: string, ...rest: unknown[]) =>
 // System32 `cmd.exe` precedent.
 export function treeStop(pid: number, env: Record<string, string | undefined>): { file: string; args: string[] } {
   return {
-    file: win32.join(envGet(env, 'SYSTEMROOT') ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
+    file: system32(env, 'taskkill.exe'),
     args: ['/PID', String(pid), '/T', '/F'],
   }
 }

@@ -25,6 +25,7 @@ import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
 } from './usage.js'
 import { keepAwake } from './awake.js'
+import { monotonicTicker, sessionClock, type Ticker } from './session-clock.js'
 import { driveReport, runStart } from './drive-report.js'
 import { notify } from './notify.js'
 import { writeLive, type EndReason, type LiveAside } from './live.js'
@@ -95,7 +96,7 @@ export type SpawnStep = Extract<DriveStep, { kind: 'spawn' }>
 export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
 // How a session ended. `tail` is the last three non-empty lines it printed on either pipe,
 // unprefixed, which is where a usage limit shows (row 182); `code` is null when it was
-// killed; `ms` runs from spawn to settle.
+// killed; `ms` runs from spawn to settle, less the time the host slept (row 210).
 export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number }
 const TAIL_LINES = 3
 
@@ -169,7 +170,8 @@ export function signalSession(
 // detection deciding what drive spawns would make the same repo drive differently from
 // two terminals.
 export async function spawnSession(
-  step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number, opts: { manual?: boolean; signal?: AbortSignal } = {},
+  step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number,
+  opts: { manual?: boolean; signal?: AbortSignal; ticker?: Ticker } = {},
 ): Promise<SessionEnd> {
   const t0 = Date.now()
   const end = (outcome: SpawnOutcome, code: number | null = null, tail: string[] = []): SessionEnd =>
@@ -197,6 +199,8 @@ export async function spawnSession(
   for (const variable of detectionVariables()) delete inherited[variable]
   const childEnv: Record<string, string | undefined> = {
     ...inherited, ...env, WITNESS_BIN: localBin(ctx), [DRIVE_ENV]: step.target ?? TARGETLESS,
+    // The earliest wall-clock time drive may stop this session — a sleep moves drive's stop
+    // later, never earlier (row 210).
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
   }
   // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
@@ -241,7 +245,7 @@ export async function spawnSession(
       if (settled) return
       settled = true
       if (child.pid !== undefined) LIVE_GROUPS.delete(child.pid)
-      clearTimeout(timer)
+      clock.stop()
       clearTimeout(killTimer)
       clearTimeout(grace)
       opts.signal?.removeEventListener('abort', onAbort)
@@ -249,9 +253,12 @@ export async function spawnSession(
       err.flush()
       child.stdout.destroy()
       child.stderr.destroy()
-      resolve(end(o, code, [...tail]))
+      resolve({ outcome: o, code, tail: [...tail], ms: Math.max(1, clock.awakeMs()) })
     }
-    const timer = setTimeout(() => stop('timeout'), cfg.drive.sessionTimeoutMs)
+    const clock = sessionClock(cfg.drive.sessionTimeoutMs, opts.ticker ?? monotonicTicker, {
+      expire: () => stop('timeout'),
+      slept: (ms) => ctx.out(`${prefix}host slept ${duration(ms)} — not counted against drive.sessionTimeoutMs`),
+    })
     opts.signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -706,16 +713,21 @@ export async function driveLoop(
   }
 
   const start = runStart(root)
-  let awake = keepAwake(ctx.env, process.platform, process.pid)
+  // Row 211. A helper that dies while drive still holds it says so; once a signal is stopping
+  // drive, the helper's end is that signal's, and no news.
+  const lostAwake = (why: string) => {
+    if (signalled === undefined) ctx.out(`keep-awake: lost — ${why} · keep the host awake yourself`)
+  }
+  let awake = keepAwake(ctx.env, process.platform, process.pid, lostAwake)
   let awakeHeld = true
-  ctx.out(awake.command !== undefined
-    ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
+  ctx.out(awake.shown !== undefined
+    ? `keep-awake: ${awake.shown}`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
   // Row 182, amended by row 202: held while a session runs, released while drive waits on the
   // human — a paused drive lets the machine sleep — and taken again before the next spawn.
   const holdAwake = () => {
     if (awakeHeld) return
-    awake = keepAwake(ctx.env, process.platform, process.pid)
+    awake = keepAwake(ctx.env, process.platform, process.pid, lostAwake)
     awakeHeld = true
   }
   const releaseAwake = () => {

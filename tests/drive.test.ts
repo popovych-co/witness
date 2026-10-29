@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { classifyAction, driveLoop, spawnSession } from '../src/drive.js'
+import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
@@ -171,6 +172,28 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const ctx = fakeCtx(repo.root, { tty: true, env: { WITNESS_DRIVE_AGENT_BIN: bin } })
     const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 100 } }
     expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 2)).outcome).toBe('timeout')
+  }, 20000)
+
+  it('a host sleep mid-session is not session time (row 210, issue #58)', async () => {
+    const repo = await seededRepo()
+    let offset = 0
+    const ticker: Ticker = { now: () => performance.now() + offset,
+      after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t) } }
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('echo napping\nsleep 3\necho up') },
+      out: (l) => { lines.push(l); if (l.endsWith(' napping')) offset += 9 * 3_600_000 } })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 60_000 } }
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker })
+    expect(end.outcome).toBe('exited')
+    expect(lines).toContain('[1 implement/p1] host slept 9h — not counted against drive.sessionTimeoutMs')
+    expect(end.ms).toBeLessThan(60_000)
+  }, 20000)
+
+  it('a session timeout past 2^31 ms does not stop the session at once (P4)', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 1\necho done') } })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 2 ** 31 } }
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfg, ctx, 1)).outcome).toBe('exited')
   }, 20000)
 
   it('returns when the session exits even if a grandchild still holds the pipe', async () => {
@@ -816,6 +839,16 @@ describe('surviving unattended (B4)', () => {
     expect(out.join('\n')).toContain(`keep-awake: ${awake} -ims -w ${process.pid} — a closed lid on battery still sleeps`)
     const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'))
     await expect.poll(() => { try { process.kill(pid, 0); return 'alive' } catch { return 'gone' } }, { timeout: 5_000 }).toBe('gone')
+  }, 60000)
+
+  it('says so when the keep-awake helper dies early (row 211)', async () => {
+    const repo = await planReady()
+    const dies = join(fakeScenario(), 'fake-awake')
+    writeFileSync(dies, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, { tty: true, out: (l) => out.push(l),
+      env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: dies, WITNESS_DRIVE_AGENT_BIN: script('sleep 0.5') }) }), { maxSpawns: 1 })
+    expect(out).toContain('keep-awake: lost — fake-awake exited 1 · keep the host awake yourself')
   }, 60000)
 })
 
