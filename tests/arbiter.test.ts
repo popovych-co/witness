@@ -10,7 +10,7 @@ import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededR
 
 const run = (round: number, sha: string, extra: Record<string, unknown> = {}, findings: unknown[] = []): Entry => ({
   v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round, run_id: `r-${round}`, reviewed_sha: sha,
-  prompts_sha: 'ps', witness: '0.16.0', model: 'm', pin: 'm', harness: 'claude-code', calibration: 'none',
+  prompts_sha: 'ps', witness: '0.16.0', model: 'm', pin: 'm', harness: 'claude-code',
   checks: [], outcome: 'stopped', verdicts: [{ reviewer: 'lens', coverage: [], findings }], ...extra,
 } as unknown as Entry)
 const blocking = (anchor: string) => [{ blocking: true, anchor, claim: 'x' }]
@@ -81,13 +81,13 @@ describe('arbitrate (A3)', () => {
     expect(!r.ok && r.violations[0]!.rule).toBe('arbiter-malformed')
     expect(callCount(scenario)).toBe(2)
   })
-  it('walks the gates.model chain like a lens', async () => {
+  it('a dead pin refuses with the invocation rows and the pin, asking no other model (row 212)', async () => {
     const { repo, scenario, ctx, cfg } = await setup('schema: 1\ngates:\n  model: test-model-1\n')
-    repo.write('.witness/calibration.local.yaml', 'models:\n  - test-model-2\n')
     writeFileSync(join(scenario, 'claude-fail-arbiter'), 'test-model-1')
-    putVerdict(scenario, { choice: 1, reason: 'fine' }, 'arbiter')
     const r = await arbitrate(ctx, repo.root, cfg, REQ)
-    expect(r.ok && r.value.model).toBe('test-model-2')
+    expect(!r.ok && r.violations.map((x) => x.rule)).toEqual(expect.arrayContaining(['reviewer-invocation', 'pin-unanswered']))
+    expect(!r.ok && r.violations.find((x) => x.rule === 'pin-unanswered')!.field).toBe('arbiter.model')
+    expect(callCount(scenario)).toBe(1)
   })
   it('refuses with the invocation rows once the chain is exhausted', async () => {
     const { repo, scenario, ctx, cfg } = await setup()

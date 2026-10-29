@@ -4,7 +4,7 @@ import { adoptedCommits } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { pctOf, readFill, windowLabel } from '../context.js'
 import {
-  DEFAULT_HARNESS, HARNESSES, judgeLine, loadHarness, resolveDriver, resolveJudge, resolveSkills, skillPins,
+  HARNESSES, judgeLine, loadHarness, resolveDriver, resolveJudge, resolveSkills, skillPins,
   type HarnessName,
 } from '../harness.js'
 import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadStale } from '../install.js'
@@ -22,7 +22,6 @@ import { basisMoved, planBasis, specBasis } from '../basis.js'
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
-import { modelFloorLines } from '../model.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
 import { pendingDecision } from '../rounds.js'
@@ -449,18 +448,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   // Every run, stated: a session without the reading is not broken canon, it runs on the step
   // budget (§4.7), and the line is how the human learns which one this session is on.
   ctx.out(kv('adapter', adapterLine(ctx.env, cfg.ok ? cfg.value.harness : undefined)))
-  // Judge first, then the floor computed FOR that judge: read top to bottom, the second
-  // line is a consequence of the first, and the pair answers "which reviewers will this
-  // repo spawn, and are they calibrated". Stated lines, never findings — neither touches
-  // the findings table nor the exit code, which is a contract about canon validity (101).
-  // The calibration state reads the same here as on `status` (D98a) — one renderer, so
-  // the fact the gate run no longer repeats still reaches both orientation surfaces.
+  // Judge first: the line answers which reviewers this repo spawns. A stated line, never a
+  // finding — it touches neither the findings table nor the exit code, which is a contract
+  // about canon validity (101).
   ctx.out(kv('judge', judgeLine(judgeR)))
-  if (cfg.ok) {
-    for (const line of modelFloorLines(root, cfg.value, judgeR.ok ? judgeR.value.harness.name : DEFAULT_HARNESS)) {
-      ctx.out(kv('model-floor', line))
-    }
-  }
   ctx.out(kv('checks', `${canon.docs.length} docs · ${auditStateCommits(root).length} commits audited · ${errors.length} errors`))
   return errors.length ? EXIT.FINDINGS : EXIT.OK
 }

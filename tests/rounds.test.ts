@@ -16,7 +16,7 @@ function run(sha: string, outcome: 'passed' | 'stopped' | 'malformed', round: nu
   return {
     v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
     run_id: `r-${round}`, reviewed_sha: sha, prompts_sha: KEY.prompts_sha,
-    witness: KEY.witness, model: MODEL, calibration: 'none',
+    witness: KEY.witness, model: MODEL,
     checks: [], verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [] }],
     outcome, ...extra,
   }

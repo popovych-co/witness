@@ -53,7 +53,7 @@ it('says nothing when the repo has not opted in', async () => {
 
 const run = (round: number, sha: string, extra: Record<string, unknown> = {}, findings: unknown[] = []): Entry => ({
   v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round, run_id: `r-${round}`, reviewed_sha: sha,
-  prompts_sha: 'ps', witness: '0.16.0', model: 'm', pin: 'm', harness: 'claude-code', calibration: 'none',
+  prompts_sha: 'ps', witness: '0.16.0', model: 'm', pin: 'm', harness: 'claude-code',
   checks: [], outcome: 'stopped', verdicts: [{ reviewer: 'lens', coverage: [], findings }], ...extra,
 } as unknown as Entry)
 const decision = (d: string, extra: Record<string, unknown> = {}): Entry =>
@@ -81,7 +81,6 @@ it('sends judgment to the arbiter', () => {
   expect(policy('plan', [run(1, 'a', {}, blocking('S')), decision('revise-upstream', { anchor: 'S' }),
     run(2, 'b', {}, blocking('S')), run(3, 'c', {}, blocking('S')), run(4, 'd', {}, blocking('S'))])).toEqual(ARBITER)
   expect(policy('plan', [run(1, 'a', {}, [{ blocking: true, anchor: 'S', claim: 'x', contradicts_pin: 1 }])])).toEqual(ARBITER)
-  expect(policy('plan', [run(1, 'a', { pin: 'pinned-model' }, NIT)])).toEqual(ARBITER)
 })
 it('keys standing stops by gate before rule (E8)', () => {
   const at = (gate: string, findings: unknown[] = [], extra = {}) => [run(1, 'a', { gate, standing: `${gate} always stops`, ...extra }, findings)]
@@ -126,6 +125,12 @@ it('re-runs a stale or malformed round before any standing or design arm (F2)', 
   expect(block.rule).toBe('malformed-rerun')
   expect(policyFor({ at: 'gate', gate: 'decompose', target: 'p1', entries, run: owed as unknown as GateRunEntry, block, untrusted: [] }))
     .toEqual(take('witness gate decompose p1'))
+})
+it('a fallen-back round 0.25.x journaled is re-run on its pin, never arbitrated (row 212)', () => {
+  const fell = { pin: 'm1', model: 'session-default', fallback: ['m1'],
+    standing: 'fallback — reviewers ran on session-default, not the pinned m1; the human decides whether that verdict counts' }
+  expect(policy('plan', [run(1, 'a', fell)])).toEqual(take('witness gate plan p1'))
+  expect(policy('ship', [run(1, 'a', { ...fell, gate: 'ship' })])).toEqual(take('witness gate ship p1'))   // ahead of the clean-standing arm
 })
 it('never offers an override decide would refuse as stale (F4)', () => {
   const S = blocking('S')

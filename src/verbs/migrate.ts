@@ -24,7 +24,7 @@ const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineVa
 // What an ambient setting meant while it was absent, so a `filled:` line says what it replaces.
 function filledWhy(path: string): string {
   if (path === 'harness') return "was undeclared · the open session's harness judged"
-  if (path.endsWith('.model')) return 'was unpinned · the calibration chain chose the model'
+  if (path.endsWith('.model')) return 'was unpinned · the harness default model answered'
   if (path === 'criteria.runner') return 'was unset · criteria could not run'
   return `was unset · ship reported ${path === 'ship.test' ? 'tests' : 'lint'} not configured`
 }

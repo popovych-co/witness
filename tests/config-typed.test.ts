@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig, type Config } from '../src/config.js'
-import { resolveModel } from '../src/model.js'
+import { stageModel } from '../src/model.js'
 import { DEFAULT_BATTERIES, GATE_NAMES } from '../src/settings.js'
 import { tmpRepo } from './helpers.js'
 
@@ -120,8 +120,7 @@ describe('typed config from the list (row 193, schema 1 read in memory)', () => 
 
   it('arbiter resolves the pin it used before', () => {
     const cfg = load(fixture('consumer-a.yaml'))
-    const r = resolveModel(cfg, { shipped: [], local: [] }, 'arbiter')
-    expect(r.ok && r.value.chain[0]).toBe('claude-opus-5-5')
+    expect(stageModel(cfg, 'arbiter')).toEqual({ ok: true, value: 'claude-opus-5-5' })
   })
 
   it('reads the 0.20.0 template as today: every gate and the arbiter on its one pin', () => {

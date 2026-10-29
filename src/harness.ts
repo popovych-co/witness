@@ -43,7 +43,7 @@ export interface Harness {
   payload: Array<{ from: string; to: string }>
   skills: { project: string; global: string }
   // The judgment lane: how THIS harness runs a headless reviewer and what its stdout
-  // means. spawn(undefined) is the session-default rung (no model flag). The exact flag
+  // means. spawn(undefined) is the session default (no model flag). The exact flag
   // set is part of the reviewer's identity.
   reviewer: {
     spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn
@@ -275,8 +275,8 @@ function walk(ladder: Array<Rung | undefined>): Result<{ harness: Harness; sourc
   return r.ok ? ok({ harness: r.value, source: rung.source }) : refuse(r.violations)
 }
 
-// THE JUDGE — which harness runs this repo's gate reviewers, reads its calibration matrix
-// and is probed for runnability. A committed declaration wins, because reviewer identity
+// THE JUDGE — which harness runs this repo's gate reviewers and is probed for
+// runnability. A committed declaration wins, because reviewer identity
 // is a property of the repo's evidence trail and must be comparable across machines; row
 // 88 already said an identity chosen by ambient environment is the opposite of a pin.
 export function resolveJudge(
@@ -295,10 +295,10 @@ export function resolveDriver(
   return walk([detectedRung(env), declaredRung(declared)])
 }
 
-// One renderer for both orientation surfaces, on modelFloorLines' precedent: the judge
-// must read identically on `check` and `status`, or the two screens disagree about which
-// binary judges the same repo. Provenance is RENDERED here, never stored — HarnessSource
-// stays a resolution fact and the wording stays a presentation one.
+// One renderer for both orientation surfaces: the judge must read identically on `check`
+// and `status`, or the two screens disagree about which binary judges the same repo.
+// Provenance is RENDERED here, never stored — HarnessSource stays a resolution fact and the
+// wording stays a presentation one.
 //
 // It prints in every state, including `declared`: that line read from a foreign session
 // is exactly what row 105 exists to surface, and a line that appeared only in the bad
@@ -319,7 +319,7 @@ export function judgeLine(r: Result<{ harness: Harness; source: HarnessSource }>
 // Decision 9: the model flag is a renderer, not a string. Pi's default provider is
 // `google`, so a bare `--model claude-opus-5` in a Pi handoff resolves wrong or not at
 // all — and a relay session silently running an unpinned model corrupts what row 83's
-// pins and the calibration story rest on.
+// pins rest on.
 //
 // Revision 9: the provider is the HARNESS's default, never a config key.
 //

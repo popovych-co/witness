@@ -185,7 +185,7 @@ describe('test-evidence --step', () => {
     const { repo, wt } = await startedThreeStepPlan()
     commitEntry(repo, P, {
       t: 'gate-run', gate: 'implement', artifact: P, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
-      prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+      prompts_sha: 'p', witness: '0', model: 'm', checks: [], verdicts: [], outcome: 'passed',
     })
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     const r = await repo.cli(['test-evidence', P, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })

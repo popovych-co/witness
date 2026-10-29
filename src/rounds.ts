@@ -37,9 +37,11 @@ export interface GateRunEntry {
   // is not reviewer identity, and keying on it would fragment verdicts across
   // teammates' auth setups.
   reviewer_extensions?: string[]
-  calibration: 'shipped' | 'local' | 'none'
   cached?: boolean
   manual?: boolean
+  // Row 212: written through 0.25.x only, when a lens that could not reach the pin fell back
+  // to another model. Read for those journals (the `fallback:` line); `fellBack` reads
+  // `pin`/`model`.
   fallback?: string[]
   rerolled?: string[]
   skipped?: string[]
@@ -151,10 +153,11 @@ export function sameKey(a: GateKey, b: GateKey): boolean {
 }
 
 // Rows 106 and 107: did this round's reviewers run on something other than what was
-// pinned? One definition for three consumers — the cache/resume exclusion below, the
-// budget exemption in roundsSinceApprove, and gate.ts's streak brake — because the
-// inline form inverts silently, and a flipped exemption is a budget that never spends.
-// False for every pre-0.8.0 entry by construction.
+// pinned? One definition for every reader — the cache/resume exclusion below, the budget
+// exemption in roundsSinceApprove, the caps, the delta base and autonomy's re-run arm —
+// because the inline form inverts silently, and a flipped exemption is a budget that never
+// spends. False for every pre-0.8.0 entry by construction, and for every round since row 212,
+// which asks the pin alone: only a 0.25.x journal holds a round it is true for.
 export function fellBack(run: GateRunEntry): boolean {
   return (run.pin ?? run.model) !== run.model
 }
@@ -187,7 +190,7 @@ function lastResetIndex(entries: Entry[], gate: string): number {
   return -1
 }
 
-// The window the round budget spans, and therefore the window the streak brakes guard:
+// The window the round budget spans, and therefore the window the malformed-streak brake guards:
 // an approve, a revise-upstream or a passed run settles everything before it, so runs on
 // the far side of one can neither spend budget nor trip a brake. gate.ts took the last two
 // runs in the WHOLE stream, so an approved pair of fallen-back rounds — the dismissal row
@@ -417,8 +420,8 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     // Row 106: a substituted round is not evidence for another one, and `resume` and
     // `changed-nothing` are both decisions about THIS run taken from THAT one without
     // invoking anything. Excluding it is what makes a re-gate retry the pin — a
-    // recovered pin yields a real verdict immediately, a dead one falls back again and
-    // row 107's fallback-streak brake stops it with the remedy that is actually true.
+    // recovered pin yields a real verdict immediately, and since row 212 a dead one refuses
+    // the gate naming the pin to fix.
     // Keeping it here traps the human exactly as row 107's own trap does: `resume`
     // never retries, and `changed-nothing` says `edit the artifact` about an artifact
     // that was never the problem. Re-SHOWING the entry is `decide --show`'s job.

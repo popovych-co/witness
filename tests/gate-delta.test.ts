@@ -156,7 +156,7 @@ describe('a demotion is shown (C3)', () => {
     await writeSpec(repo, 'auth-refresh'); approve(repo, 'auth-refresh'); await writePlan(repo, PLAN)
     appendEntry(repo.root, PLAN, {
       v: 1, t: 'gate-run', gate: 'implement', artifact: PLAN, round: 2, run_id: 'r-2', reviewed_sha: 'abcdef1234',
-      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'passed',
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'passed',
       delta: { round: 1, run: 'r-1' },
       verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings: [
         { blocking: false, anchor: 'tests/token.test.ts', claim: 'x', demoted: 1 },

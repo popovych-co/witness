@@ -105,6 +105,9 @@ const LOCAL_STATE_FILES = new Set([
   '.witness/drive.lock.steal',
   '.witness/txn.json',
   '.witness/allow.json',
+  // Row 212: `witness calibrate` wrote this through 0.25.x. Nothing reads it now, but a repo
+  // scaffolded before init ignored it may still hold one untracked, and an unrelated-dirty
+  // refusal there would block every state write.
   '.witness/calibration.local.yaml',
   // Row 90's machine-config file is this tier too, and the exemption is load-bearing
   // rather than belt-and-braces: init only gitignores it for repos scaffolded at

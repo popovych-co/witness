@@ -28,7 +28,7 @@ async function reopenedAfterApprove() {
   const s = repo.effort
   appendEntry(repo.root, s, {
     v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-    reviewed_sha: 'ba2f352', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+    reviewed_sha: 'ba2f352', prompts_sha: 'p', witness: '0', model: 'm',
     checks: [], outcome: 'stopped',
     verdicts: [{
       reviewer: 'slicing-critic',
@@ -76,7 +76,7 @@ describe('decide --show', () => {
     const current = effortReviewedSha(repo.root, loadCanon(repo.root), s).sha
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: current, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: current, prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',
@@ -96,7 +96,7 @@ describe('decide --show', () => {
     const s = repo.effort
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: 'deadbee', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: 'deadbee', prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',
@@ -117,7 +117,7 @@ describe('decide --show', () => {
     const s = repo.effort
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',
@@ -142,7 +142,7 @@ describe('decide --show', () => {
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1,
       run_id: 'r1', reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm',
-      calibration: 'none', checks: [], outcome: 'stopped',
+      checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'code-reviewer',
         coverage: [{ anchor: 'src/a.ts', note: 'read' }],
@@ -169,7 +169,7 @@ describe('decide --show', () => {
       appendEntry(repo.root, s, {
         v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r${round}`,
         reviewed_sha: round === 3 ? current : `sha-${round}`, prompts_sha: 'p', witness: '0',
-        model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+        model: 'm', checks: [], verdicts: [], outcome: 'stopped',
       })
     }
     const r = await repo.cli(['decide', 'decompose', s, '--show'])
@@ -210,7 +210,7 @@ describe('decide --approve staleness', () => {
       appendEntry(repo.root, s, {
         v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r${round}`,
         reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
-        calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+        checks: [], verdicts: [], outcome: 'stopped',
       })
     }
     const r = await repo.cli(['decide', 'decompose', s, '--approve', '--override'])
@@ -234,7 +234,7 @@ describe('--show tells the truth about a revised or reopened gate', () => {
     const sha = effortReviewedSha(repo.root, loadCanon(repo.root), s).sha
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
-      reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'slicing-critic',
@@ -283,7 +283,7 @@ it('at the bound with moved content, --show names the endgame minus approve', as
     appendEntry(repo.root, s, {
       v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round, run_id: `r-${round}`,
       reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
-      calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+      checks: [], verdicts: [], outcome: 'stopped',
     })
   }
   const r = await repo.cli(['decide', 'decompose', s, '--show'])

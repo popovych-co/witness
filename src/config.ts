@@ -65,7 +65,8 @@ export interface DriveConfig { sessionTimeoutMs: number; parallel: number; paral
 export const DEFAULT_REVIEWER_TIMEOUT_MS: number = listDefault('gates.reviewerTimeoutMs')
 
 // Row 193 §4.3: nothing inherited. Each gate states its own model and reviewers. `model` is
-// undefined only for an older file that never pinned one, read in memory: the chain decides.
+// undefined only for an older file that never pinned one, read in memory: the session
+// default answers.
 export interface GateSettings { model?: string; reviewers: Battery }
 export type GatesConfig = { reviewerTimeoutMs: number } & Record<GateName, GateSettings>
 
@@ -85,7 +86,7 @@ export const DEFAULT_CI_SETTLE_MS: number = listDefault('ship.ciSettleMs')
 export const MAX_CI_SETTLE_MS = 1_800_000
 
 // Every setting, typed. The optional members are undefined only for an older file read in
-// memory (its `ambient` settings: the judge ladder, the model chain, "not configured"); a
+// memory (its `ambient` settings: the judge ladder, the session default, "not configured"); a
 // schema-2 file states them all.
 export interface Config {
   schema: number

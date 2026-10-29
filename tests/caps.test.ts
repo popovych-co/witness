@@ -4,7 +4,7 @@ import type { Entry } from '../src/journal.js'
 
 const run = (gate: string, round: number, extra: Record<string, unknown> = {}) => ({
   v: 1, t: 'gate-run', gate, artifact: 'p1', round, run_id: `r-${gate}-${round}`, reviewed_sha: 's',
-  prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped', ...extra,
+  prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped', ...extra,
 })
 const decide = (gate: string, decision: string, extra: Record<string, unknown> = {}) =>
   ({ v: 1, t: 'human-decision', gate, artifact: 'p1', round: 1, decision, ...extra })

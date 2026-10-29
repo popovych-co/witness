@@ -124,7 +124,7 @@ it('at the bound the arbiter chooses from the endgame, never abandon', async () 
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
       run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-      model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+      model: 'm', checks: [], verdicts: [], outcome: 'stopped',
     })
   }
   const scenario = fakeScenario(); putVerdict(scenario, { choice: 1, reason: 'the plan is what is wrong' }, 'arbiter')
@@ -200,7 +200,7 @@ it('an arbiter choice the one door refuses parks the flow once, so no stop re-as
   for (const [round, anchor] of [[1, 'X1'], [2, 'X2'], [3, 'auth-refresh > ## Behavior']] as const) {
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
-      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], outcome: 'stopped', verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor, claim: 'x' }] }],
     })
   }

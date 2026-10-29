@@ -57,18 +57,18 @@ describe('the battery runs its lenses at once', () => {
     expect(run.verdicts!.slice(1).every((v) => v.findings.length === 0)).toBe(true)
   })
 
-  it('one lens failing on the pin makes a fallback round', async () => {
-    const { repo, planId, scenario, ctx } = await batteryRepo()
-    // two-rung chain · code-reviewer fails on the pin only
+  it('a lens that cannot reach the pin refuses the gate, journals nothing, asks no other model (row 212)', async () => {
+    const { repo, planId, scenario } = await batteryRepo()
     patchConfig(repo, { gates: { implement: { model: 'test-model-1' } } })
-    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
     writeFileSync(join(scenario, 'claude-fail-code-reviewer'), 'test-model-1')
-    expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(1)
-    const run = lastRun(repo, planId)
-    expect(run.model).toBe('test-model-2'); expect(run.pin).toBe('test-model-1')
-    expect(run.fallback).toEqual(['test-model-1'])
-    expect(run.standing).toContain('fallback — reviewers ran on test-model-2')
-    expect(run.verdicts).toHaveLength(4)
+    const errs: string[] = []
+    const c = fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => errs.push(l) })
+    expect(await runGate(c, 'implement', planId, { fresh: false, manual: false })).toBe(2)
+    expect(gateRuns(repo, planId)).toHaveLength(0)
+    expect(errs.join('\n')).toContain('reviewer-invocation')
+    expect(errs.join('\n')).toContain('gates.implement.model')
+    expect(errs.join('\n')).toContain('pin-unanswered')
+    expect(callCount(scenario)).toBe(4)                     // one call per lens, none on another model
   })
 
   it('one lens exhausting the chain refuses the gate and journals nothing', async () => {
@@ -114,7 +114,7 @@ describe('a re-gate after a malformed round (row 209)', () => {
     expect(errs.join('\n')).toContain('malformed-streak')
   })
   // Review Focus 5
-  it('a repair whose re-asked lens falls back is a fallback round, and keeps what it carried', async () => {
+  it('a repair whose re-asked lens cannot reach the pin refuses and journals nothing (row 212)', async () => {
     const { repo, planId, files, scenario, ctx } = await batteryRepo()
     patchConfig(repo, { gates: { implement: { model: 'test-model-1' } } })
     putVerdict(scenario, { coverage: [], findings: [] }, 'pr-test')
@@ -122,10 +122,9 @@ describe('a re-gate after a malformed round (row 209)', () => {
     const r1 = lastRun(repo, planId)
     putVerdict(scenario, treeClean(files), 'pr-test')
     writeFileSync(join(scenario, 'claude-fail-pr-test'), 'test-model-1')    // the pin stops answering pr-test
-    expect(await runGate(ctx, 'implement', planId, F)).toBe(1)
-    const r2 = lastRun(repo, planId)
-    expect(r2.carried).toEqual({ run: r1.run_id, lenses: ['code-reviewer', 'silent-failure-hunter', 'type-design'] })
-    expect([r2.model, r2.pin, r2.fallback]).toEqual(['session-default', 'test-model-1', ['test-model-1']])
-    expect(r2.standing).toContain('fallback — reviewers ran on session-default')
+    const errs: string[] = []
+    expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => errs.push(l) }), 'implement', planId, F)).toBe(2)
+    expect(gateRuns(repo, planId)).toHaveLength(1)          // the malformed round is still the last
+    expect(errs.join('\n')).toContain('pin-unanswered')
   })
 })

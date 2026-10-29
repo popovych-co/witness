@@ -6,7 +6,7 @@ import type { Entry } from '../src/journal.js'
 const run = (gate: string, outcome: 'passed' | 'stopped' = 'stopped', sha = 'sha-1') => ({
   v: 1, t: 'gate-run', gate, artifact: 'eff', round: 1, run_id: 'r1',
   reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm',
-  calibration: 'none', checks: [], verdicts: [], outcome,
+  checks: [], verdicts: [], outcome,
 }) as unknown as Entry
 
 const decide = (gate: string, decision: string, causedBy?: unknown) => ({

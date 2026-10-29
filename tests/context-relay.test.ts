@@ -175,7 +175,7 @@ describe('the rule at a step close', () => {
     ])
     commitEntry(repo, planId, {
       t: 'gate-run', gate: 'implement', artifact: planId, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
-      prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+      prompts_sha: 'p', witness: '0', model: 'm', checks: [], verdicts: [], outcome: 'passed',
     })
     const after = await green()
     expect(after.code).toBe(0)
@@ -535,7 +535,7 @@ describe('a legacy plan after a relay', () => {
     // After its implement gate the plan's steps are behind it: a re-gate is the gate's own row.
     commitEntry(repo, PLAN, {
       t: 'gate-run', gate: 'implement', artifact: PLAN, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
-      prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+      prompts_sha: 'p', witness: '0', model: 'm', checks: [], verdicts: [], outcome: 'passed',
     })
     const after = await repo.cli(['next'], { cwd: wt, env: measuredEnv('S2', 52_000, 200_000) })
     expect(lines(after)).toContain(`next: witness gate implement ${PLAN}`)

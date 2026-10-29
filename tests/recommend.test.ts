@@ -66,7 +66,7 @@ describe('renderDecision', () => {
 const run = (round: number, sha: string, anchor: string, extra: Record<string, unknown> = {}): Entry => ({
   v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round, run_id: `r-${round}`,
   reviewed_sha: sha, prompts_sha: 'ps', witness: '0.11.0', model: 'm', pin: 'm',
-  harness: 'claude-code', calibration: 'none', checks: [], outcome: 'stopped',
+  harness: 'claude-code', checks: [], outcome: 'stopped',
   verdicts: [{ reviewer: 'plan-critic', findings: [{ blocking: true, anchor, claim: 'x' }], coverage: [] }],
   ...extra,
 } as unknown as Entry)
@@ -168,7 +168,7 @@ describe('the rule table is ordered and total', () => {
     const d = recommend(ctxFor([{
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
       reviewed_sha: 'a', prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm',
-      harness: 'claude-code', calibration: 'none',
+      harness: 'claude-code',
       checks: [{ name: 'graph', ok: true, detail: '' }], outcome: 'stopped', verdicts: [],
     } as unknown as Entry], { stale: true }))!
     expect(d.rule).toBe('stale-below-bound')
@@ -383,7 +383,7 @@ describe('the decision records what was recommended', () => {
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round: 2, run_id: 'r-stale',
       reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0.11.0', model: 'm', pin: 'm',
-      harness: 'claude-code', calibration: 'none', checks: [], outcome: 'stopped',
+      harness: 'claude-code', checks: [], outcome: 'stopped',
       verdicts: [{
         reviewer: 'plan-critic', coverage: [],
         findings: [{ blocking: true, anchor: 'auth-refresh-plan-1 > ## Step: s1', claim: 'x' }],

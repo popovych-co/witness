@@ -172,7 +172,7 @@ describe('ship never demotes what it backstops (C3, final review)', () => {
     const { repo, scenario, ctx } = await spec()
     const imp = (round: number, findings: unknown[], extra: Record<string, unknown> = {}) => appendEntry(repo.root, 'auth-refresh', {
       v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh', round, run_id: `i-${round}`, reviewed_sha: `x${round}`,
-      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'passed',
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'passed',
       verdicts: [{ reviewer: 'pr-test', coverage: [], findings }], ...extra } as never)
     imp(1, [])
     imp(2, [{ blocking: false, anchor: DOC, claim: 'x', demoted: 1 }], { delta: { round: 1, run: 'i-1' } })

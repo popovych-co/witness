@@ -91,7 +91,7 @@ async function pinnedRepo(): Promise<{ repo: TestRepo; scenario: string }> {
   appendEntry(repo.root, PLAN_ID, {
     v: 1, t: 'gate-run', gate: 'implement', artifact: PLAN_ID, round: 1,
     run_id: 'r-1', reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0',
-    model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+    model: 'm', checks: [], verdicts: [], outcome: 'stopped',
   })
   const d = await repo.cli(['decide', 'implement', PLAN_ID, '--revise', '--note', 'fix',
     '--pin', 'render the service in full'])

@@ -304,7 +304,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `clean` | reap stale worktrees |
 | `sync` | pull --rebase + push state commits |
 | `recover [--complete\|--rollback]` | resolve a crashed write transaction |
-| `status` | orientation: flows, blocked docs, reconcile rows, pending gates, calibration state |
+| `status` | orientation: flows, blocked docs, reconcile rows, pending gates |
 | *(no verb)* | the same screen as `status` |
 
 ## Exit codes
@@ -317,7 +317,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 - **The journal is history** — `.witness/journal/<id>.jsonl`, append-only, committed, never compacted.
 - **Every state commit carries `Witness-State: 1`** — `witness check` audits that spec/plan diffs appear only in trailer-bearing commits.
 - **Canon roots are configurable** — `paths: { specs: docs/specs, plans: docs/plans }` in `witness.config.yaml` (defaults: `specs/`, `plans/`); scan, commit scoping, the guard hook, and criteria excludes all follow it. `git mv` existing docs when changing it.
-- Local, never committed: `.witness/{lock,txn.json,allow.json,calibration.local.yaml,drafts/}`.
+- Local, never committed: `.witness/{lock,txn.json,allow.json,drafts/}`.
 
 ## Development
 

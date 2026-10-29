@@ -8,7 +8,7 @@ describe('checkPin', () => {
     if (!alias.ok) {
       expect(alias.violations[0]).toEqual({
         field: 'gates.plan.model', rule: 'alias-refused', got: 'opus',
-        want: 'an exact model id — aliases re-point under the calibration (Decision 55)',
+        want: 'an exact model id — an alias re-points when its vendor ships a new model (Decision 55)',
       })
     }
     const bad = checkPin('arbiter.model', 'google/')

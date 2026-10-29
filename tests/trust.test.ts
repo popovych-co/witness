@@ -216,7 +216,7 @@ describe('the decision block prices trust (D154)', () => {
   const entries = [{
     v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r-1',
     reviewed_sha: 'a', prompts_sha: 'ps', witness: '0.13.0', model: 'm', pin: 'm',
-    harness: 'claude-code', calibration: 'none', checks: [{ name: 'c', ok: true }],
+    harness: 'claude-code', checks: [{ name: 'c', ok: true }],
     outcome: 'stopped', verdicts: [{ reviewer: 'plan-critic', findings: [], coverage: [] }],
   }] as unknown as Parameters<typeof recommend>[0]['entries']
 

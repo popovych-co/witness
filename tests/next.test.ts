@@ -137,7 +137,7 @@ describe('witness next — the ladder', () => {
       appendEntry(repo.root, planId, {
         v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round,
         run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-        model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+        model: 'm', checks: [], verdicts: [], outcome: 'stopped',
       })
       // Every round revises: under D124 a `stop` SETTLES its gate, so a stopped gate is
       // parked and no longer surfaces as a bound endgame at all. This test is about the
@@ -360,7 +360,7 @@ describe('next routes the next unfinished plan step', () => {
     expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
     commitEntry(repo, planId, {
       t: 'gate-run', gate: 'implement', artifact: planId, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
-      prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+      prompts_sha: 'p', witness: '0', model: 'm', checks: [], verdicts: [], outcome: 'passed',
     })
     const out = await lines(repo, wt)
     expect(out.find((l) => l.startsWith('next: '))).toBe(`next: witness gate implement ${planId}`)
@@ -389,7 +389,7 @@ describe('a judge that changes mid-flow is named', () => {
     appendEntry(repo.root, planId, {
       v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round: 1,
       run_id: 'r-1', reviewed_sha: 'sha-before', prompts_sha: 'p', witness: '0',
-      model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+      model: 'm', checks: [], verdicts: [], outcome: 'passed',
       ...(harness !== undefined ? { harness } : {}),
     })
   }
