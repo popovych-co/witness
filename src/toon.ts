@@ -1,6 +1,13 @@
 // A shell word is quoted only when it needs it, so the common line stays the one a human
 // types — a path in drive's watch line, a command in a `--cmd` grant (row 205).
 export const shellArg = (p: string): string => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`
+// Row 214. The same rule for a PowerShell word — drive's Windows watch line. Bare only when no
+// character in it means anything to PowerShell: a bare `,` builds an array, a leading `@` splats
+// and a leading `-` binds as a parameter, so none of them is bare here as in a POSIX word. Else
+// single-quoted, where nothing expands and the one special character is a single quote — any of
+// the five PowerShell reads as one (' ‘ ’ ‚ ‛) — written twice.
+export const psArg = (p: string): string =>
+  /^[\w%+=:./\\][\w%+=:./\\-]*$/.test(p) ? p : `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`
 
 // Security review. A command a human is asked to trust is repo-authored text: a carriage return
 // or an escape sequence could paint a different command over the real one, a bidi override

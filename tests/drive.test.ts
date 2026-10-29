@@ -8,6 +8,7 @@ import { loadConfig, type Config } from '../src/config.js'
 import { classifyAction, driveLoop, lineSink, spawnSession } from '../src/drive.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
+import { psArg } from '../src/toon.js'
 import { loadHarness } from '../src/harness.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { worktreePath } from '../src/worktree.js'
@@ -1112,7 +1113,14 @@ describe('one command (B1)', () => {
   it('names the stop the platform has (row 201)', () => {
     const h = { pid: 7, log: '/r/.witness/drive.log' }
     expect(watchLine(h, 'linux')).toBe('tail -f /r/.witness/drive.log · stop it: kill 7')
-    expect(watchLine(h, 'win32')).toBe('tail -f /r/.witness/drive.log · stop it: taskkill /PID 7 /T /F')
+    expect(watchLine(h, 'win32')).toBe('Get-Content -LiteralPath /r/.witness/drive.log -Wait -Tail 50 -Encoding UTF8 · stop it: taskkill /PID 7 /T /F')
+    // Row 214 (D12): a PowerShell word, bare only when nothing in it means anything to PowerShell.
+    expect(psArg('C:\\r\\.witness\\drive.log')).toBe('C:\\r\\.witness\\drive.log')
+    expect(psArg('C:\\a,b\\x')).toBe("'C:\\a,b\\x'")
+    expect(psArg("C:\\o'k\\x")).toBe("'C:\\o''k\\x'")
+    expect(psArg('C:\\o’k\\x')).toBe("'C:\\o’’k\\x'")
+    expect(psArg('@x')).toBe("'@x'")
+    expect(psArg('-x')).toBe("'-x'")
     expect(watchLine({ pid: 7 }, 'win32')).toBe('the terminal running witness drive · pid 7')
   })
 
