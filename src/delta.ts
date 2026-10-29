@@ -120,6 +120,7 @@ export interface DeltaPlan {
   view: DeltaView
   diff: string
   sections?: string[]         // doc gates only: the heading anchors whose section the change touched
+  paths?: string[]            // code gates only (row 208): the paths the change touched, canon left out
 }
 
 // Row 185. Whether this round reviews the change, and against what. The order is the decision:
@@ -144,18 +145,27 @@ export function planDelta(root: string, entries: Entry[], gate: string, cur: {
   const sections = cur.reviewed.kind === 'docs'
     ? cur.reviewed.docs.flatMap((d) => headingLines(d.body).map((h) => `${d.id} > ${h}`)).filter((a) => view.state(a) === 'changed')
     : undefined
+  // Row 208. What a delta lens's coverage floor counts. Canon is context at the code gates (the
+  // unit view says so too), so a canon edit is no file the change asks a lens to cover.
+  const canon = cur.reviewed.kind === 'tree' ? cur.reviewed.canonDirs ?? [] : []
+  const paths = cur.reviewed.kind === 'tree'
+    ? changedPaths(root, base.reviewed_tree, cur.snapshot.tree).filter((p) => !canon.some((d) => p === d || p.startsWith(`${d}/`)))
+    : undefined
   return {
     base, baseRound: base.round,
     prior: blocking.filter((f) => cur.inDelta(f.reviewer)),
     reported: reportedBy(blocking.map((f) => f.anchor), cur.reviewed.kind === 'tree'),
     view, diff,
     ...(sections ? { sections } : {}),
+    ...(paths?.length ? { paths } : {}),
   }
 }
 
 // The one block every delta-mode lens receives, between the open deferrals and the anchor
 // menu. It ends with a blank line so the menu starts on its own.
-export function deltaBlock(d: { baseRound: number; prior: readonly PriorFinding[]; diff: string; sections?: readonly string[] }): string {
+export function deltaBlock(d: {
+  baseRound: number; prior: readonly PriorFinding[]; diff: string; sections?: readonly string[]; paths?: readonly string[]
+}): string {
   const n = d.baseRound
   const anchor = (a: AnchorInput) => (typeof a === 'string' ? a : JSON.stringify(a))
   const prior = d.prior.length > 0
@@ -164,11 +174,19 @@ export function deltaBlock(d: { baseRound: number; prior: readonly PriorFinding[
   const sections = d.sections?.length
     ? `### Sections changed since round ${n}\n\n${d.sections.map((s) => `- ${s}`).join('\n')}\n\n`
     : ''
+  // Row 208. Without paths (the doc gates) the block is byte for byte row 185's.
+  const files = d.paths?.length
+    ? `### Files changed since round ${n}\n\n${d.paths.map((p) => `- ${p}`).join('\n')}\n\n` +
+      `Cover at least ${Math.min(5, d.paths.length)} of these files, each with its own coverage anchor.\n\n`
+    : ''
+  const contract = d.paths?.length
+    ? `the verdict contract applies to it unchanged — except the coverage floor, which counts only the files listed under "Files changed since round ${n}".`
+    : 'the verdict contract applies to it unchanged.'
   return `## Delta review — round ${n} to now\n\n` +
-    `Round ${n} reviewed this content in full. This round judges what changed since then. The reviewed content below is still the complete current content, and the verdict contract applies to it unchanged.\n\n` +
+    `Round ${n} reviewed this content in full. This round judges what changed since then. The reviewed content below is still the complete current content, and ${contract}\n\n` +
     `### Blocking findings from round ${n}\n\n${prior}\n\n` +
     'For each finding above, decide whether it still holds against the current content. If it does, report it again, copying its anchor exactly as listed while that anchor still resolves. If the change fixed it, leave it out of your findings.\n\n' +
-    sections +
+    sections + files +
     `### Change since round ${n}\n\n${d.diff}\n\n` +
     'Judge whether the changed parts are sound. Report every defect the change introduced or exposed. When the change caused a defect, anchor it at the changed code or section that caused it, even when its symptom shows elsewhere.\n\n'
 }

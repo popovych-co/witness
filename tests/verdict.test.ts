@@ -182,6 +182,31 @@ describe('verdictViolations — fail-closed', () => {
     }
     expect(verdictViolations(bogus, t).map((x) => x.rule)).toContain('anchor-unresolvable')
   })
+
+  describe('the delta floor (row 208)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'verdict-floor-'))
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(root, f), 'export const x = 1\n')
+    const tree = (paths?: string[]) => ({ kind: 'tree' as const, root, files: ['a.ts', 'b.ts', 'c.ts'],
+      ...(paths ? { floor: { round: 2, paths } } : {}) })
+    const cover = (...anchors: string[]) => ({ coverage: anchors.map((anchor) => ({ anchor, note: 'x' })), findings: [] })
+
+    it('counts only the paths the change touched', () => {
+      expect(verdictViolations(cover('a.ts'), tree(['a.ts']))).toEqual([])
+      expect(verdictViolations(cover('b.ts', 'c.ts'), tree(['a.ts'])).map((x) => [x.rule, x.got, x.want])).toEqual([[
+        'coverage-minimum', '0 distinct files the change touched covered',
+        '≥ 1 coverage anchors naming distinct files listed under "Files changed since round 2"',
+      ]])
+    })
+    it('a floor path with nothing on disk resolves by bare path, never by symbol', () => {
+      expect(verdictViolations(cover('gone.ts'), tree(['gone.ts']))).toEqual([])
+      const [row] = verdictViolations({ coverage: [{ anchor: 'gone.ts', note: 'x' }],
+        findings: [{ blocking: true, anchor: 'gone.ts#f', claim: 'x' }] }, tree(['gone.ts']))
+      expect([row!.rule, row!.want]).toEqual(['anchor-unresolvable', expect.stringContaining('anchor it by bare path')])
+    })
+    it('a full round keeps min(5, changed files)', () => {
+      expect(verdictViolations(cover('a.ts'), tree()).map((x) => x.want)).toEqual(['≥ 3 coverage anchors naming distinct changed files'])
+    })
+  })
 })
 
 describe('anchorMenu', () => {

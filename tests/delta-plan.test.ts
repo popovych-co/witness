@@ -57,6 +57,18 @@ describe('planDelta', () => {
     const { repo, base, cur } = stream()
     expect(planDelta(repo.root, [base], 'plan', cur())!.sections).toEqual(['p > ## Step: s1'])
   })
+  it('at a tree gate lists the paths the change touched, canon left out (row 208)', () => {
+    const s = stream()
+    const from = snapshotFiles(s.repo.root, [{ name: 'a.ts', content: '1' }, { name: 'specs', content: 'x' }, { name: 'b.ts', content: 'same' }])!
+    const to = snapshotFiles(s.repo.root, [{ name: 'a.ts', content: '2' }, { name: 'specs', content: 'y' }, { name: 'b.ts', content: 'same' }])!
+    const base = { ...(s.base as object), gate: 'implement', reviewed_tree: from } as unknown as Entry
+    const plan = planDelta(s.repo.root, [base], 'implement', {
+      reviewedSha: 'B', snapshot: { tree: to, context: 'c' }, basis: 'B1', inDelta: () => true,
+      reviewed: { kind: 'tree', root: s.repo.root, files: ['a.ts'], canonRoot: s.repo.root, canonDirs: ['specs'] },
+    })!
+    expect(plan.paths).toEqual(['a.ts'])
+    expect(planDelta(s.repo.root, [s.base], 'plan', s.cur())!.paths).toBeUndefined()
+  })
 })
 
 describe('deltaBlock', () => {
@@ -78,6 +90,12 @@ describe('deltaBlock', () => {
   it('names the touched sections before the diff when there are any', () => {
     const b = deltaBlock({ baseRound: 1, diff: 'DIFF', prior: [], sections: ['p > ## Step: s1', 'p > ### Detail'] })
     expect(b).toContain('### Sections changed since round 1\n\n- p > ## Step: s1\n- p > ### Detail\n\n### Change since round 1')
+  })
+  it('names the files the change touched and the floor before the diff (row 208)', () => {
+    const b = deltaBlock({ baseRound: 1, diff: 'DIFF', prior: [], paths: ['src/a.ts', 'src/gone.ts'] })
+    expect(b).toContain('the verdict contract applies to it unchanged — except the coverage floor, which counts only the files listed under "Files changed since round 1".\n\n')
+    expect(b).toContain('### Files changed since round 1\n\n- src/a.ts\n- src/gone.ts\n\nCover at least 2 of these files, each with its own coverage anchor.\n\n### Change since round 1')
+    expect(deltaBlock({ baseRound: 1, diff: 'D', prior: [] })).toContain('the verdict contract applies to it unchanged.\n\n')
   })
 })
 

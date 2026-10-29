@@ -463,7 +463,9 @@ async function judge(
     // Row 169: every lens at once — a round's wall clock is its slowest lens, not their sum.
     const composed: BatteryLens[] = lenses.map((lens) => {
       const ov = input.lensOverrides?.[lens.name]
-      const reviewed = ov?.reviewed ?? input.reviewed
+      // Row 208. A delta-mode lens's floor counts the change; an override lens reviews in full.
+      const reviewed = ov?.reviewed ?? (delta?.paths && input.reviewed.kind === 'tree'
+        ? { ...input.reviewed, floor: { round: delta.baseRound, paths: delta.paths } } : input.reviewed)
       const body = ov?.promptBody ?? input.promptBody
       const menu = anchorMenu(reviewed)
       return {

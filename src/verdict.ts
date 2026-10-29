@@ -21,6 +21,10 @@ export type Reviewed =
       // resolve against the primary root, or one legitimate citation malforms the whole
       // round. Optional: a caller that supplies neither keeps the pre-D151 behavior.
       canonRoot?: string; canonDirs?: string[]
+      // Row 208 (issue #60). A delta-mode lens's floor: the paths the change since round `round`
+      // touched. The floor counts these, and each resolves as a bare path the way a changed path
+      // does (D162). Absent everywhere else: the floor counts `files`.
+      floor?: { round: number; paths: string[] }
     }
   | { kind: 'design'; artifact: { ids: string[] }; spec: { id: string; body: string } }
   | { kind: 'screens'; captures: Array<{ name: string; path: string }> }
@@ -161,6 +165,10 @@ export function sectionText(body: string, segments: string[]): string | undefine
   return lines.slice(cursor, end).join('\n').replace(/\s+$/, '')
 }
 
+// Every path a tree review counts as changed: the diff vs base, plus a delta floor's (row 208).
+const changedOf = (r: Extract<Reviewed, { kind: 'tree' }>): string[] =>
+  r.floor ? [...r.files, ...r.floor.paths] : r.files
+
 function safeRel(rel: string): boolean {
   return !isAbsolute(rel) && !normalize(rel).split(/[\\/]/).includes('..')
 }
@@ -240,7 +248,7 @@ export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string |
     if (!safeRel(scope)) return `omission scope escapes the reviewed tree: ${scope}`
     // D162: a changed path is reviewed content even when nothing is left on disk (a deleted
     // file's un-migrated export is an omission scoped exactly there).
-    if (reviewed.kind === 'tree' && reviewed.files.includes(scope)) return undefined
+    if (reviewed.kind === 'tree' && changedOf(reviewed).includes(scope)) return undefined
     return existsSync(join(reviewed.root, scope))
       ? undefined
       : `omission scope "${scope}" is no file or directory in the reviewed tree`
@@ -249,7 +257,7 @@ export function resolveAnchor(anchor: AnchorInput, reviewed: Reviewed): string |
     const canon = reviewed.canonRoot !== undefined && reviewed.canonDirs !== undefined
       ? { root: reviewed.canonRoot, dirs: reviewed.canonDirs }
       : undefined
-    return resolveCodeAnchor(anchor, reviewed.root, reviewed.files, canon)
+    return resolveCodeAnchor(anchor, reviewed.root, changedOf(reviewed), canon)
   }
   const segments = anchor.split(' > ')
   if (!segments[0]!.startsWith('#')) {
@@ -318,16 +326,21 @@ export function verdictViolations(verdict: Verdict, reviewed: Reviewed): Violati
       }
     }
   } else {
+    const floor = reviewed.floor
+    const pool = floor?.paths ?? reviewed.files
     const distinct = new Set(
       verdict.coverage
         .filter((c): c is CoverageItem & { anchor: string } => typeof c.anchor === 'string')
         .map((c) => c.anchor.split('#')[0] ?? '')
-        .filter((f) => reviewed.files.includes(f)),
+        .filter((f) => pool.includes(f)),
     )
-    const want = Math.min(5, reviewed.files.length)
+    const want = Math.min(5, pool.length)
     if (distinct.size < want) {
-      violations.push(v('coverage', 'coverage-minimum', `${distinct.size} distinct changed files covered`,
-        `≥ ${want} coverage anchors naming distinct changed files`))
+      violations.push(floor
+        ? v('coverage', 'coverage-minimum', `${distinct.size} distinct files the change touched covered`,
+          `≥ ${want} coverage anchors naming distinct files listed under "Files changed since round ${floor.round}"`)
+        : v('coverage', 'coverage-minimum', `${distinct.size} distinct changed files covered`,
+          `≥ ${want} coverage anchors naming distinct changed files`))
     }
   }
   return violations
