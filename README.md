@@ -374,8 +374,10 @@ Operator notes, non-load-bearing — the design depends on none of them:
   "go". After a fix witness cannot see (code, a tool, an account), `witness retry <target>` tells
   drive to try a stuck or capped target again.
 - **Keep the host awake.** A suspend longer than an hour mid-run expires the prompt
-  cache; on wake the full agent context is re-written at cache-write price. On macOS:
+  cache; on wake the full agent context is re-written at cache-write price. On macOS
   `witness drive` holds `caffeinate -ims` for its own lifetime (a closed lid on battery
+  still sleeps); on Windows it holds a `SetThreadExecutionState` power request through
+  Windows PowerShell for its lifetime (an explicit sleep — Start › Sleep, a closed lid —
   still sleeps); for a chat session, `caffeinate -dims`, or plug in and disable sleep.
   A sleep is not session time: drive counts neither `drive.sessionTimeoutMs` nor
   `drive.caps.wallClockMs` across it, and its log says `host slept <duration>`.

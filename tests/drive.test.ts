@@ -840,6 +840,16 @@ describe('surviving unattended (B4)', () => {
     const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'))
     await expect.poll(() => { try { process.kill(pid, 0); return 'alive' } catch { return 'gone' } }, { timeout: 5_000 }).toBe('gone')
   }, 60000)
+
+  it('says so when the keep-awake helper dies early (row 211)', async () => {
+    const repo = await planReady()
+    const dies = join(fakeScenario(), 'fake-awake')
+    writeFileSync(dies, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), fakeCtx(repo.root, { tty: true, out: (l) => out.push(l),
+      env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: dies, WITNESS_DRIVE_AGENT_BIN: script('sleep 0.5') }) }), { maxSpawns: 1 })
+    expect(out).toContain('keep-awake: lost — fake-awake exited 1 · keep the host awake yourself')
+  }, 60000)
 })
 
 describe('coming back (B6)', () => {

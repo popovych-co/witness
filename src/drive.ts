@@ -713,16 +713,21 @@ export async function driveLoop(
   }
 
   const start = runStart(root)
-  let awake = keepAwake(ctx.env, process.platform, process.pid)
+  // Row 211. A helper that dies while drive still holds it says so; once a signal is stopping
+  // drive, the helper's end is that signal's, and no news.
+  const lostAwake = (why: string) => {
+    if (signalled === undefined) ctx.out(`keep-awake: lost — ${why} · keep the host awake yourself`)
+  }
+  let awake = keepAwake(ctx.env, process.platform, process.pid, lostAwake)
   let awakeHeld = true
-  ctx.out(awake.command !== undefined
-    ? `keep-awake: ${awake.command} — a closed lid on battery still sleeps`
+  ctx.out(awake.shown !== undefined
+    ? `keep-awake: ${awake.shown}`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
   // Row 182, amended by row 202: held while a session runs, released while drive waits on the
   // human — a paused drive lets the machine sleep — and taken again before the next spawn.
   const holdAwake = () => {
     if (awakeHeld) return
-    awake = keepAwake(ctx.env, process.platform, process.pid)
+    awake = keepAwake(ctx.env, process.platform, process.pid, lostAwake)
     awakeHeld = true
   }
   const releaseAwake = () => {

@@ -1,6 +1,5 @@
-import { win32 } from 'node:path'
 import { resolves } from './opener.js'
-import { envGet, spawn, spawnSync } from './spawn.js'
+import { spawn, spawnSync, system32 } from './spawn.js'
 
 // Row 184. The desktop notification an autonomous run ends with (design B6). A machine-local
 // `notify:` command receives the message as its one argument; otherwise the platform notifier.
@@ -31,7 +30,7 @@ export function notifyArgv(
   if (platform === 'linux') return { argv: ['notify-send', title, message] }
   if (platform === 'win32') {
     // Row 201's doctrine: a System32 binary by its absolute path, never one PATH could shadow.
-    const ps = win32.join(envGet(env, 'SYSTEMROOT') ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const ps = system32(env, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
     return {
       argv: [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', TOAST_SCRIPT],
       env: { WITNESS_NOTIFY_TITLE: title, WITNESS_NOTIFY_TEXT: message },

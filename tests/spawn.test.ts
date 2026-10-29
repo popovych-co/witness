@@ -11,7 +11,7 @@ import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { probe } from '../src/probe.js'
 import type { Result } from '../src/refusal.js'
 import { invokeReviewer } from '../src/reviewer.js'
-import { resolveSpawn, treeStop } from '../src/spawn.js'
+import { resolveSpawn, system32, treeStop } from '../src/spawn.js'
 import { fakeCtx, seededRepo } from './helpers.js'
 
 // A PATH directory holding the named files. Real files, not a predicate: resolution IS
@@ -350,5 +350,14 @@ process.stdin.on('end', () => {
     await defaultAgent(fakeCtx(wt, { env: envWith(dir) as Record<string, string>, err: (l) => errs.push(l) }), piHarness(), wt, 'line one\nline two')
     expect(existsSync(join(wt, 'argv.json'))).toBe(false)
     expect(errs.join('\n')).toContain('batch-argv-line-break')
+  })
+})
+
+describe('system32 (row 211)', () => {
+  it('builds a System32 path from SYSTEMROOT, whatever its case, else C:\\Windows', () => {
+    expect(system32({ SYSTEMROOT: 'D:\\Win' }, 'cmd.exe')).toBe('D:\\Win\\System32\\cmd.exe')
+    expect(system32({ SystemRoot: 'D:\\Win' }, 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
+      .toBe('D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(system32({}, 'taskkill.exe')).toBe('C:\\Windows\\System32\\taskkill.exe')
   })
 })
