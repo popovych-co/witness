@@ -7,7 +7,7 @@ import { appendEntry, readStream } from '../src/journal.js'
 import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
 import {
-  PLAN_BLOCKING, approve, autonomyOn, callCount, callFor, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict,
+  PLAN_BLOCKING, approve, autonomyOn, callCount, callFor, fakeCtx, fakeScenario, gateEnv, patchConfig, plannedRepo, putVerdict,
   seededRepo, shippableRepo, vitestBin, witnessDesign, writeDesign, writeSpec,
 } from './helpers.js'
 
@@ -124,7 +124,7 @@ it('at the bound the arbiter chooses from the endgame, never abandon', async () 
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
       run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-      model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+      model: 'm', checks: [], verdicts: [], outcome: 'stopped',
     })
   }
   const scenario = fakeScenario(); putVerdict(scenario, { choice: 1, reason: 'the plan is what is wrong' }, 'arbiter')
@@ -160,6 +160,16 @@ it('an arbiter that cannot be invoked leaves the stop for a human', async () => 
   expect(decisions(repo.root, 'auth-hardening')).toEqual([])
   expect(h.err()).toContain('reviewer-invocation')
   expect(h.out()).toContain('autonomy: left for a human — the arbiter could not be invoked')
+})
+
+it('a dead arbiter pin is named where the settle pass leaves the stop (row 212)', async () => {
+  const { repo, scenario } = await scoped()
+  patchConfig(repo, { arbiter: { model: 'test-model-9' } }); repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'arbiter pin')
+  writeFileSync(join(scenario, 'claude-fail-arbiter'), '')
+  const h = capture(repo.root, scenario)
+  expect(await runGate(h.ctx, 'decompose', 'auth-hardening', F)).toBe(2)          // left owed for the settle pass
+  const next = await repo.cli(['next'], { env: gateEnv(scenario) })               // which runs quiet
+  expect(next.stdout).toContain('arbiter.model · pin-unanswered (test-model-9)')
 })
 
 it('a granted command that really fails lands a round and is revised, never resumed forever (F3)', async () => {
@@ -200,7 +210,7 @@ it('an arbiter choice the one door refuses parks the flow once, so no stop re-as
   for (const [round, anchor] of [[1, 'X1'], [2, 'X2'], [3, 'auth-refresh > ## Behavior']] as const) {
     appendEntry(repo.root, 'auth-refresh-plan-1', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
-      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], outcome: 'stopped', verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor, claim: 'x' }] }],
     })
   }

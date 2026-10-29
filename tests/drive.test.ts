@@ -425,7 +425,7 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     for (let round = 2; round <= ROUND_BOUND; round++) {
       appendEntry(repo.root, repo.effort, {
         v: 1, t: 'gate-run', gate: 'decompose', artifact: repo.effort, round, run_id: `r${round}`,
-        reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+        reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm',
         checks: [], outcome: 'stopped',
         verdicts: [{
           reviewer: 'slicing-critic',
@@ -607,7 +607,7 @@ function pendingLook(repo: TestRepo, spec: string): void {
   const doc = findById(loadCanon(repo.root), spec)!
   appendEntry(repo.root, spec, {
     v: 1, t: 'gate-run', gate: 'design', artifact: spec, round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
-    prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+    prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped',
     standing: 'design always stops — the human judges the look',
     verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: `${spec} > ## Behavior`, note: 'read' }], findings: [] }],
   })
@@ -735,7 +735,7 @@ describe('caps (B5)', () => {
     for (const round of [1, 2]) {
       appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round,
         run_id: `ri${round}`, reviewed_sha: `s${round}`, prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
-        calibration: 'none', checks: [], outcome: 'stopped' })
+        checks: [], outcome: 'stopped' })
       appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'human-decision', gate: 'implement', artifact: 'a-plan-1', round, decision: 'revise' })
     }
     writeFileSync(join(worktreePath(repo.root, 'a-plan-1'), 'moved.txt'), 'the author kept working\n')
@@ -756,7 +756,7 @@ describe('caps (B5)', () => {
     const repo = await startedFlows(['a'])
     appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'implement', artifact: 'a-plan-1', round: 1,
       run_id: 'ri1', reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm',
-      calibration: 'none', checks: [], outcome: 'passed' })
+      checks: [], outcome: 'passed' })
     patchConfig(repo, { drive: { caps: { spawns: 1 } } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'caps')
@@ -1136,7 +1136,7 @@ describe('a limit in the settle pass is drive\'s pause (B4)', () => {
     putVerdict(scenario, { choice: 1, reason: 'one slice covers the recap' }, 'arbiter')
     const used = existsSync(join(scenario, 'claude-calls')) ? readdirSync(join(scenario, 'claude-calls')).length : 0
     writeFileSync(join(scenario, 'claude-error'), "You've hit your session limit · resets in 0m")
-    writeFileSync(join(scenario, 'claude-error-calls'), String(used + 2))   // the pinned rung and its fallback (row 169)
+    writeFileSync(join(scenario, 'claude-error-calls'), String(used + 1))   // one call: the arbiter asks its pin alone (row 212)
     const clock = fakeClock(Date.parse('2026-10-19T19:30:00Z'))
     const out: string[] = []
     const t0 = Date.now()

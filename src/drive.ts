@@ -119,9 +119,8 @@ const EXIT_GRACE_MS = 2_000
 // This CLI, for the child. A spawned session shells out to `witness` through
 // ${WITNESS_BIN:-npx …} in every stage skill, and an unset value means the child resolves
 // the PUBLISHED version while its parent runs an unpublished one — which the state floor
-// then refuses (cli-behind-state). calibrate.ts:520 sets it for its worker for exactly
-// this reason. An explicitly set value wins: a session that already knows its bin is
-// stating a fact drive has no better answer for.
+// then refuses (cli-behind-state). An explicitly set value wins: a session that already
+// knows its bin is stating a fact drive has no better answer for.
 function localBin(ctx: Ctx): string {
   return ctx.env.WITNESS_BIN ?? `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}`
 }
@@ -165,10 +164,9 @@ export function signalSession(
 // One headless session, in the action's home, streamed to the driver's terminal.
 //
 // The harness is the JUDGE ladder's answer (declared first, detection as fallback), not
-// the driver's: this is a programmatic spawn like the reviewer battery and the
-// calibration worker, not a statement about which CLI a human is typing at. Ambient
-// detection deciding what drive spawns would make the same repo drive differently from
-// two terminals.
+// the driver's: this is a programmatic spawn like the reviewer battery, not a statement
+// about which CLI a human is typing at. Ambient detection deciding what drive spawns would
+// make the same repo drive differently from two terminals.
 export async function spawnSession(
   step: SpawnStep, cfg: Config, ctx: Ctx, spawnN: number,
   opts: { manual?: boolean; signal?: AbortSignal; ticker?: Ticker } = {},

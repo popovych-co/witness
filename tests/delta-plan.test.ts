@@ -12,7 +12,7 @@ function stream() {
   const to = snapshotFiles(repo.root, [{ name: 'p.md', content: V2 }])!
   const base = {
     v: 1, t: 'gate-run', gate: 'plan', artifact: 'p', round: 1, run_id: 'r-1', reviewed_sha: 'A',
-    prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+    prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped',
     reviewed_tree: from, basis_sha: 'B1',
     verdicts: [
       { reviewer: 'plan-critic', coverage: [], findings: [
@@ -124,7 +124,7 @@ describe('demote', () => {
 describe('outstandingDemotions and demotionsBlock (ship backstops implement)', () => {
   const run = (round: number, findings: unknown[], extra: Record<string, unknown> = {}) => ({
     v: 1, t: 'gate-run', gate: 'implement', artifact: 'p', round, run_id: `r-${round}`, reviewed_sha: `s${round}`,
-    prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+    prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped',
     verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings }], ...extra,
   }) as unknown as Entry
   const dem = (anchor: unknown, since: number, claim = 'x') => ({ blocking: false, anchor, claim, demoted: since })

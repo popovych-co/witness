@@ -21,7 +21,7 @@ describe('the run report (B6)', () => {
     const start = runStart(repo.root)
     const add = (stream: string, e: Record<string, unknown>) => appendEntry(repo.root, stream, { v: 1, ...e } as never)
     const planRun = (plan: string, round: number) => add(plan, { t: 'gate-run', gate: 'plan', artifact: plan, round, run_id: `r-${plan}`,
-      reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], outcome: 'stopped' })
+      reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped' })
     add('auth-refresh-plan-1', { t: 'status', artifact: 'auth-refresh-plan-1', from: 'in-progress', to: 'done', cause: 'merge', pr: 7 })
     add('auth-refresh-plan-1', { t: 'deferral', id: 'd-1a2b3c4d', artifact: 'auth-refresh-plan-1', gate: 'ship', round: 1,
       anchor: 'src/token.ts#rotate', kind: 'artifact-debt', caused_by_run: 'r1' })

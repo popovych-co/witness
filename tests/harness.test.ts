@@ -83,7 +83,7 @@ describe('the session lane — resolveDriver, detection first', () => {
 
 describe('the judgment lane — resolveJudge, declaration first', () => {
   // Row 105. A repo declaring `harness: pi`, gated from a Claude Code session, spawned
-  // claude reviewers and read a different calibration matrix, and nothing refused. A
+  // claude reviewers, and nothing refused. A
   // committed key binds every teammate's gates, on the same argument that puts
   // gates.model in committed config: the evidence trail is comparable across machines.
   it('a declaration outranks the ambient session', () => {

@@ -5,8 +5,8 @@ import { extname, join, win32 } from 'node:path'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 // What child_process is handed to start `cmd args`, environment included. One answer for
-// every site that runs a harness CLI by name — probe, the gate reviewer, the calibrate and
-// drive workers — so the binary `check` vouches for is the binary a gate spawns.
+// every site that runs a harness CLI by name — probe, the gate reviewer, the drive worker —
+// so the binary `check` vouches for is the binary a gate spawns.
 export interface ResolvedSpawn {
   file: string
   args: string[]

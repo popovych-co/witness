@@ -47,7 +47,7 @@ export function checkPin(field: string, raw: string): Result<string> {
   if (!parsed.ok) return refuse(parsed.violations)
   if (MODEL_ALIASES.includes(parsed.value.model)) {
     return refuse([v(field, 'alias-refused', raw,
-      'an exact model id — aliases re-point under the calibration (Decision 55)')])
+      'an exact model id — an alias re-points when its vendor ships a new model (Decision 55)')])
   }
   return ok(raw)
 }

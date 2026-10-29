@@ -26,7 +26,7 @@ describe('needsYou (D203)', () => {
     await writePlan(repo, 'auth-refresh-plan-2')
     await writePlan(repo, 'auth-refresh-plan-3')
     appendEntry(repo.root, 'auth-refresh-plan-3', { v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-3', round: 1,
-      run_id: 'r', reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], outcome: 'stopped' } as never)
+      run_id: 'r', reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped' } as never)
     appendEntry(repo.root, 'auth-refresh-plan-3', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh-plan-3', round: 1,
       decision: 'stop', selected: 'policy', rule: 'cap-rounds', note: 'drive cap: plan ran 16 rounds' } as never)
     const items = needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root), [

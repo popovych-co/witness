@@ -80,11 +80,13 @@ export function policyFor(facts: StopFacts): Policy {
   if (untrusted.length > 0) return { kind: 'human', stop: 'trust-grant' }
   // A verdict that describes bytes no longer there, or a round that judged nothing, is a free
   // re-run before it is anything else: no human or arbiter can honestly act on it, and the
-  // standing and fallback arms below would hand it to one with the re-run filtered away.
+  // standing arms below would hand it to one with the re-run filtered away.
   if (block.rule === 'stale-below-bound' || block.rule === 'malformed-rerun') return first()
+  // Row 212. A 0.25.x round that fell back to a model nobody pinned is no verdict to weigh:
+  // re-run it on the pin (free — it never spent the budget), ahead of every arbiter arm.
+  if (fellBack(run)) return { kind: 'take', command: `witness gate ${gate} ${target}` }
   if (gate === 'design' && clean) return { kind: 'human', stop: 'design-look' }
   if ((gate === 'ship' || gate === 'decompose') && clean && run.standing !== undefined) return { kind: 'arbiter' }
-  if (fellBack(run)) return { kind: 'arbiter' }
   // A trust failure granted since the stop: the check never ran, so the fix is a re-run,
   // not a revise — sending the author back would have them "fix" a command nobody judged.
   if (failed.some((c) => (c.untrusted?.length ?? 0) > 0) && !boundReached(entries, gate)) {

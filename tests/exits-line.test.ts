@@ -125,7 +125,7 @@ describe('liveExits', () => {
   it('a stale verdict with a decision pending names every act that is legal there', () => {
     const entries = [{
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
-      reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0', model: 'm',
       checks: [], outcome: 'stopped',
       verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor: 'p1 > ## Step: s1', claim: 'x' }] }],
     }] as unknown as Entry[]
@@ -141,7 +141,7 @@ describe('liveExits', () => {
     // refuse with nothing-pending, so widening here would advertise three refusing acts
     const entries = [
       { v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r1',
-        reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0', model: 'm', calibration: 'none',
+        reviewed_sha: 'deadbee', prompts_sha: 'ps', witness: '0', model: 'm',
         checks: [], outcome: 'stopped', verdicts: [] },
       { v: 1, t: 'human-decision', gate: 'plan', artifact: 'p1', round: 1, decision: 'approve' },
     ] as unknown as Entry[]

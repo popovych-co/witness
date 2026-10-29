@@ -128,8 +128,7 @@ describe('witness status', () => {
     expect(help.stdout).toContain('status')
   })
 
-  // One fact, one wording, both orientation surfaces — modelFloorLines' own precedent,
-  // which row 105 cites by name.
+  // One fact, one wording, both orientation surfaces (row 105).
   it('prints the judge with its provenance, as check does', async () => {
     const repo = await seededRepo()
     patchConfig(repo, { harness: 'pi' })

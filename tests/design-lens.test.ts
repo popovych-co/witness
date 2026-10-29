@@ -199,19 +199,3 @@ describe('implement gate — design-reviewer wiring', () => {
     expect(readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length).toBe(before + 1)  // re-rolled, not resumed
   })
 })
-
-describe('calibration screens support', () => {
-  it('loads the design-reviewer suite and composes a screens reviewed', async () => {
-    const { composeReviewed, loadReviewerSuite, materialize } = await import('../src/calibrate.js')
-    const suiteR = loadReviewerSuite('design-reviewer')
-    expect(suiteR.ok).toBe(true)
-    if (!suiteR.ok) return
-    const { dir, files } = materialize(suiteR.value)
-    const { reviewed } = composeReviewed(suiteR.value, dir, files)
-    expect(reviewed.kind).toBe('screens')
-    if (reviewed.kind === 'screens') {
-      expect(reviewed.captures.length).toBeGreaterThan(0)
-      expect(reviewed.captures.every((c) => c.name.endsWith('.png'))).toBe(true)
-    }
-  })
-})

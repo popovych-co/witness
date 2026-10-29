@@ -36,8 +36,7 @@ from the critical path:
   from frontmatter plus world state, never from session memory.
 
 Status: all four slices landed — state core, deterministic evidence, gates &
-motion, plugin + calibration. Reviewer calibration is the remaining pre-1.0
-work (`docs/graduation.md`).
+motion, and the plugin. What remains before 1.0 is listed in `docs/graduation.md`.
 
 ## Prerequisite
 
@@ -209,8 +208,8 @@ the list the CLI reads (`src/settings.ts`).
 | `drive.caps.wallClockMs` | ms of session time one target may take in one run (16 h), then it is parked · ≥ 1 — accepts: an integer >= 1 — milliseconds of session time one target may take in one drive run | `57600000` |
 <!-- settings:end -->
 
-**The judge (`harness`).** Which harness runs this repo's gate reviewers and its arbiter, is
-measured by `calibrate`, and is probed by `check`. It is declared, never detected: `witness
+**The judge (`harness`).** Which harness runs this repo's gate reviewers and its arbiter, and
+is probed by `check`. It is declared, never detected: `witness
 init` writes the harness `--agent` names, else the one whose session runs `init`, else
 `claude-code`, and says which. Session lines (`next`'s handoff, `dispatch`'s relay, `init
 --agent auto`) resolve detection first, because those name the CLI you are about to type at.
@@ -304,9 +303,8 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `rename <old> <new>` | id rename across canon, refs, journal |
 | `clean` | reap stale worktrees |
 | `sync` | pull --rebase + push state commits |
-| `calibrate <model>` | run the reviewer calibration battery |
 | `recover [--complete\|--rollback]` | resolve a crashed write transaction |
-| `status` | orientation: flows, blocked docs, reconcile rows, pending gates, calibration state |
+| `status` | orientation: flows, blocked docs, reconcile rows, pending gates |
 | *(no verb)* | the same screen as `status` |
 
 ## Exit codes
@@ -319,7 +317,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 - **The journal is history** — `.witness/journal/<id>.jsonl`, append-only, committed, never compacted.
 - **Every state commit carries `Witness-State: 1`** — `witness check` audits that spec/plan diffs appear only in trailer-bearing commits.
 - **Canon roots are configurable** — `paths: { specs: docs/specs, plans: docs/plans }` in `witness.config.yaml` (defaults: `specs/`, `plans/`); scan, commit scoping, the guard hook, and criteria excludes all follow it. `git mv` existing docs when changing it.
-- Local, never committed: `.witness/{lock,txn.json,allow.json,calibration.local.yaml,drafts/}`.
+- Local, never committed: `.witness/{lock,txn.json,allow.json,drafts/}`.
 
 ## Development
 

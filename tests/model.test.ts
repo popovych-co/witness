@@ -1,8 +1,9 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
-import { loadMatrix, resolveModel, stagePin, SESSION_DEFAULT } from '../src/model.js'
+import { stageModel, stagePin, unansweredPin, SESSION_DEFAULT } from '../src/model.js'
+import { v } from '../src/refusal.js'
 import { seededRepo } from './helpers.js'
 
 async function refusalOf(gatesYaml: string) {
@@ -22,82 +23,30 @@ async function cfgWith(gatesYaml: string) {
   return { repo, cfg: cfg.value }
 }
 
-describe('resolveModel', () => {
+describe('stageModel (row 212)', () => {
   // Row 193: a pin is checked when the file loads, and again where it is used.
   it('refuses alias pins, at load under their own name and at use', async () => {
     expect(await refusalOf('gates:\n  model: opus\n')).toMatchObject({ field: 'gates.model', rule: 'alias-refused' })
-    const { repo, cfg } = await cfgWith('')
-    const r = resolveModel({ ...cfg, arbiter: { model: 'opus' } }, loadMatrix(repo.root, 'claude-code'), 'arbiter')
+    const { cfg } = await cfgWith('')
+    const r = stageModel({ ...cfg, arbiter: { model: 'opus' } }, 'arbiter')
     expect(!r.ok && r.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'alias-refused' })
-  })
-
-  it('pins first; an empty matrix warns as such (nothing is calibrated yet)', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
-    expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.value.chain[0]).toBe('test-model-1')
-    expect(r.value.chain[r.value.chain.length - 1]).toBe(SESSION_DEFAULT)
-    expect(r.value.calibrationOf('test-model-1')).toBe('none')
-    expect(r.value.warning).toContain('calibration matrix is empty')
-    expect(r.value.warning).toContain('test-model-1')
-  })
-
-  it('warns below-floor when the matrix is non-empty but the head is uncalibrated', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
-    mkdirSync(join(repo.root, '.witness'), { recursive: true })
-    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
-    expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.value.warning).toContain('below the model floor')
-  })
-
-  it('reads the local overlay: calibrated ids join the chain and stamp local', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n')
-    mkdirSync(join(repo.root, '.witness'), { recursive: true })
-    writeFileSync(join(repo.root, '.witness/calibration.local.yaml'), 'models:\n  - test-model-2\n')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
-    expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.value.chain).toEqual(['test-model-1', 'test-model-2', SESSION_DEFAULT])
-    expect(r.value.calibrationOf('test-model-2')).toBe('local')
-  })
-
-  it('per-gate pin wins over the global pin; other gates keep the global', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  model: test-model-1\n  decompose: { model: test-model-2 }\n')
-    const d = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'decompose')
-    expect(d.ok && d.value.chain[0]).toBe('test-model-2')
-    const p = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'plan')
-    expect(p.ok && p.value.chain[0]).toBe('test-model-1')
   })
 
   it('refuses an alias in a per-gate pin, naming the gate field', async () => {
     expect(await refusalOf('gates:\n  ship: { model: opus }\n')).toMatchObject({ field: 'gates.ship.model', rule: 'alias-refused' })
-    const { repo, cfg } = await cfgWith('')
-    const r = resolveModel({ ...cfg, gates: { ...cfg.gates, ship: { ...cfg.gates.ship, model: 'opus' } } },
-      loadMatrix(repo.root, 'claude-code'), 'ship')
+    const { cfg } = await cfgWith('')
+    const r = stageModel({ ...cfg, gates: { ...cfg.gates, ship: { ...cfg.gates.ship, model: 'opus' } } }, 'ship')
     expect(!r.ok && r.violations[0]).toMatchObject({ field: 'gates.ship.model', rule: 'alias-refused' })
   })
 
-  it('unpinned: chain is calibrated ids then session default, no refusal', async () => {
-    const { repo, cfg } = await cfgWith('')
-    const r = resolveModel(cfg, loadMatrix(repo.root, 'claude-code'), 'arbiter')
-    expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.value.chain).toEqual([SESSION_DEFAULT])
-    expect(r.value.warning).toContain('calibration matrix is empty')
+  it('asks the stage pin — a per-gate pin wins, other gates keep theirs', async () => {
+    const { cfg } = await cfgWith('gates:\n  model: test-model-1\n  decompose: { model: test-model-2 }\n')
+    expect(stageModel(cfg, 'decompose')).toEqual({ ok: true, value: 'test-model-2' })
+    expect(stageModel(cfg, 'plan')).toEqual({ ok: true, value: 'test-model-1' })
   })
-})
-
-describe('per-harness matrix', () => {
-  it('reads legacy top-level models as claude-code and matrices.<name> for pi', async () => {
-    const repo = await seededRepo()
-    mkdirSync(join(repo.root, '.witness'), { recursive: true })
-    writeFileSync(join(repo.root, '.witness', 'calibration.local.yaml'),
-      'models:\n  - claude-fable-5\nmatrices:\n  pi:\n    models:\n      - google/gemini-3.6-pro\n')
-    expect(loadMatrix(repo.root, 'claude-code').local).toEqual(['claude-fable-5'])
-    expect(loadMatrix(repo.root, 'pi').local).toEqual(['google/gemini-3.6-pro'])
+  it('asks the session default for a file that never pinned one', async () => {
+    const { cfg } = await cfgWith('')
+    expect(stageModel(cfg, 'arbiter')).toEqual({ ok: true, value: SESSION_DEFAULT })
   })
 })
 
@@ -116,22 +65,34 @@ describe('stagePin grammar', () => {
   })
 })
 
-// D98a: the empty matrix is a property of this witness BUILD (calibration.yaml ships
-// `models: []`), the floor is a property of the user's pin. Only the second is news
-// at gate-run time, so the two facts need distinguishing at the source.
-describe('warningKind', () => {
-  it('labels an empty matrix and a below-floor pin differently', async () => {
-    const { repo, cfg } = await cfgWith('gates:\n  model: claude-opus-5\n')
-
-    const empty = resolveModel(cfg, { shipped: [], local: [] }, 'implement')
-    expect(empty.ok && empty.value.warningKind).toBe('matrix-empty')
-
-    const populated = resolveModel(cfg, { shipped: ['claude-sonnet-5'], local: [] }, 'implement')
-    expect(populated.ok && populated.value.warningKind).toBe('below-floor')
-
-    const calibrated = resolveModel(cfg, { shipped: ['claude-opus-5'], local: [] }, 'implement')
-    expect(calibrated.ok && calibrated.value.warningKind).toBeUndefined()
-    expect(calibrated.ok && calibrated.value.warning).toBeUndefined()
-    void repo
+// Final review. The pin row is a human's call only when the harness's own error names the pinned
+// model as one it cannot run; a provider blip, a missing binary or an auth failure is named, not
+// blamed — re-running clears those, and the human trailer would say it cannot.
+describe('unansweredPin (row 212)', () => {
+  const inv = (got: string) => v('claude', 'reviewer-invocation', got, 'w')
+  it('adds nothing for the session default, or for a failure that is no invocation', () => {
+    expect(unansweredPin([inv('x')], 'gates.plan.model', SESSION_DEFAULT, 'claude-code')).toEqual([inv('x')])
+    const limit = v('claude', 'usage-limit', "You've hit your session limit", 'w')
+    expect(unansweredPin([limit], 'gates.plan.model', 'test-model-1', 'claude-code')).toEqual([limit])
+  })
+  it("is a human's call when the error names the pinned model as one it cannot run", () => {
+    for (const [pin, got] of [
+      ['test-model-1', "There's an issue with the selected model (test-model-1). It may not exist or you may not have access to it."],
+      ['test-model-1:high', 'API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: test-model-1"}}'],
+      ['anthropic/test-model-1', 'exit 1: Model not found: anthropic/test-model-1'],
+    ] as const) {
+      const rows = unansweredPin([inv(got)], 'gates.plan.model', pin, 'pi')
+      expect(rows.at(-1), got).toMatchObject({ field: 'gates.plan.model', rule: 'pin-unanswered', got: pin, human: true })
+    }
+  })
+  it('names the pin without blaming it when the error is about something else', () => {
+    for (const got of [
+      'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+      'spawn pi ENOENT', 'Invalid API key · Please run /login', 'Third-party apps now draw from your extra usage',
+    ]) {
+      const row = unansweredPin([inv(got)], 'gates.plan.model', 'test-model-1', 'claude-code').at(-1)!
+      expect(row.rule, got).toBe('pin-unanswered')
+      expect(row.human, got).toBeUndefined()
+    }
   })
 })

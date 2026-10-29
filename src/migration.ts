@@ -152,7 +152,7 @@ export function migrateValues(raw: Raw, from: number, opts: {
     }
   }
   // What is missing takes the current default. An ambient setting meant something else while
-  // absent (the judge ladder, the model chain, "not configured"), so only a write fills it —
+  // absent (the judge ladder, the session default, "not configured"), so only a write fills it —
   // the judge with the session's own harness — and names it `filled`.
   for (const s of list) {
     if (s.since > to || getIn(out, s.path) !== undefined || !fillable(out, s.path)) continue

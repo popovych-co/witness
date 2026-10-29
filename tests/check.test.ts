@@ -470,12 +470,14 @@ describe('witness check — the context adapter', () => {
   })
 })
 
-describe('witness check states the calibration fact', () => {
-  it('reports the empty matrix once, on the orientation surface', async () => {
+describe('the orientation surfaces state no calibration (row 212)', () => {
+  it('check and status print no model floor', async () => {
     const repo = await seededRepo()
-    const res = await repo.cli(['check'])
-    expect(res.code).toBe(0)
-    expect(res.stdout).toContain('calibration matrix is empty')
+    for (const verb of ['check', 'status']) {
+      const res = await repo.cli([verb])
+      expect(res.code, verb).toBe(0)
+      expect(res.stdout, verb).not.toMatch(/model-floor|calibrat/)
+    }
   })
 })
 

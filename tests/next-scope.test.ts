@@ -56,7 +56,7 @@ describe('computeNext scope (B3)', () => {
     const repo = await flowAndDraft()
     appendEntry(repo.root, 'auth-mfa-plan-1', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-mfa-plan-1', round: 1, run_id: 'r1',
-      reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+      reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped',
     })
     expect(derive(repo).line).toBe('witness ship auth-refresh-plan-1')
     expect(derive(repo, (t) => t === 'auth-mfa-plan-1').line).toBe('witness decide plan auth-mfa-plan-1 --show')
@@ -136,7 +136,7 @@ describe('the chat shows the human their stop (B1)', () => {
     const doc = findById(loadCanon(repo.root), 'billing-page')!
     appendEntry(repo.root, 'billing-page', {
       v: 1, t: 'gate-run', gate: 'design', artifact: 'billing-page', round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
-      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped',
       standing: 'design always stops — the human judges the look',
       verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: 'billing-page > ## Behavior', note: 'read' }], findings: [] }],
     } as never)
@@ -248,7 +248,7 @@ describe("the chat keeps the human's work (row 195)", () => {
     const doc = findById(loadCanon(repo.root), 'billing-page')!
     appendEntry(repo.root, 'billing-page', {
       v: 1, t: 'gate-run', gate: 'design', artifact: 'billing-page', round: 1, run_id: 'rd1', reviewed_sha: canonicalSha(doc.meta, doc.body),
-      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', calibration: 'none', checks: [], outcome: 'stopped',
+      prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped',
       standing: 'design always stops — the human judges the look',
       verdicts: [{ reviewer: 'design-critic', coverage: [{ anchor: 'billing-page > ## Behavior', note: 'read' }], findings: [] }],
     } as never)

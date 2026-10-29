@@ -61,20 +61,26 @@ async function stoppedGate() {
 const decisions = (repo: { root: string }, id = 'auth-refresh') =>
   readStream(repo.root, id).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
 
-// A genuine fallen-back round: pinned model dead, calibrated rung answers. One round, so
-// `claude-fail: 1` is exactly right — call-1 is the pin and call-2 is the rung.
+// The round 0.25.x journaled when the pinned model was dead and another model answered.
+// Row 212: no run falls back any more, so the round is journaled, not gated — its readers
+// (decide's standing stop, `--show`) stay for the repos that still hold one.
 async function fallenBackGate() {
   synthetic()
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   repo.write('witness.config.yaml', 'schema: 1\ngates:\n  model: test-model-1\n')
-  repo.write('.witness/calibration.local.yaml', 'models:\n  - test-model-2\n')
-  const scenario = fakeScenario()
-  putVerdict(scenario, { coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
-  writeFileSync(join(scenario, 'claude-fail'), '1')
-  const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-  await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
-  return { repo, scenario }
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'pin')
+  const doc = findById(loadCanon(repo.root), 'auth-refresh')!
+  appendEntry(repo.root, 'auth-refresh', {
+    v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: 1, run_id: 'r-0250',
+    reviewed_sha: canonicalSha(doc.meta, doc.body), prompts_sha: 'p', witness: '0.25.0',
+    model: 'test-model-2', pin: 'test-model-1', harness: 'claude-code', calibration: 'none', fallback: ['test-model-1'],
+    standing: 'fallback — reviewers ran on test-model-2, not the pinned test-model-1; the human decides whether that verdict counts',
+    checks: [{ name: 'synthetic', ok: true }], verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [] }], outcome: 'stopped',
+  } as never)
+  repo.git('add', '.witness/journal/auth-refresh.jsonl')
+  repo.git('commit', '-m', 'gate(auth-refresh): a 0.25.x fallback round', '-m', 'Witness-State: 1')
+  return { repo }
 }
 
 // three stopped rounds → bound reached, third round pending
@@ -87,7 +93,7 @@ async function boundRepo() {
     appendEntry(repo.root, 'auth-refresh', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
       run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-      model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+      model: 'm', checks: [], verdicts: [], outcome: 'stopped',
     })
   }
   return repo
@@ -103,7 +109,7 @@ async function stoppedImplement() {
   appendEntry(repo.root, 'auth-refresh-plan-1', {
     v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1,
     run_id: 'r-1', reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0',
-    model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+    model: 'm', checks: [], verdicts: [], outcome: 'stopped',
   })
   return { repo, planId: 'auth-refresh-plan-1' }
 }
@@ -233,7 +239,7 @@ describe('witness decide', () => {
       appendEntry(repo.root, 'auth-refresh', {
         v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
         run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-        model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'stopped',
+        model: 'm', checks: [], verdicts: [], outcome: 'stopped',
       })
     }
     expect((await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'x'])).code).toBe(2)

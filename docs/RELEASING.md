@@ -16,7 +16,7 @@ That is the whole procedure. The script performs the bump, the stamp, the commit
 | Step | Fact it asserts |
 |---|---|
 | `pnpm run sync-versions` + `git diff --exit-code` | every plugin pin, `plugin/.claude-plugin/plugin.json` and `plugin-context/.claude-plugin/plugin.json` already match `package.json`, and `plugin-context/hooks/context-core.mjs` is already a byte-identical copy of `plugin/hooks/context-core.mjs` |
-| `node scripts/release-gate.mjs` | the tag equals `v${package.json.version}`, and a 1.x release ships a calibration matrix |
+| `node scripts/release-gate.mjs` | the tag equals `v${package.json.version}` |
 
 Both are properties of the tagged commit. So the bump and the stamp must be **inside** that commit — a tag pushed before them names a tree that can never pass, no matter how many times CI is re-run. `scripts/release.mjs` derives the tag from `package.json`, which makes the two unable to disagree.
 

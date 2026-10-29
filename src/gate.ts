@@ -13,13 +13,13 @@ import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv, rows } from './toon.js'
-import { loadMatrix, resolveModel } from './model.js'
+import { stageModel, unansweredPin } from './model.js'
 import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
 import { basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy } from './delta.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, fellBack, lastGateRun, liveExits, roundBudget,
+  ROUND_BOUND, appendKind, boundReached, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
@@ -122,7 +122,7 @@ export function renderGateRun(
   ctx.out(kv('target', entry.artifact))
   ctx.out(kv('round', `${entry.round} of ${budget}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
   ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
-  ctx.out(kv('model', `${entry.model} · calibration: ${entry.calibration}${entry.cached ? ' · cached' : ''}`))
+  ctx.out(kv('model', `${entry.model}${entry.cached ? ' · cached' : ''}`))
   if (entry.delta) ctx.out(kv('review', `delta since round ${entry.delta.round}`))
   if (entry.skipped?.length) ctx.out(kv('skipped', entry.skipped.join(' · ')))
   if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
@@ -304,18 +304,13 @@ async function judge(
     timeoutMs: cfgR.value.gates.reviewerTimeoutMs,
     extensions: localR.value.reviewerExtensions,
   }
-  const modelR = resolveModel(cfgR.value, loadMatrix(root, harness.name), spec.gate)
+  const modelR = stageModel(cfgR.value, spec.gate)
   if (!modelR.ok) { renderRefusal(modelR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const { chain, calibrationOf, warning, warningKind } = modelR.value
-  // matrix-empty is a fact about this witness build, reported once by `status`/`check`
-  // (D98a). Only the caller's own pin being below the floor is news at run time.
-  if (warning && warningKind === 'below-floor') ctx.err(`warning: ${warning}`)
 
-  // Row 106: the key is built BEFORE invoking, so the only model knowable here is the one
-  // being asked for. Naming it `pin` is what stops the entry's `model` — what actually
-  // answered — from being compared against it by accident, which is how the streak brake
-  // below spent three releases never firing.
-  const pin = chain[0]!
+  // Row 106: the key is built BEFORE invoking, so the model it names is the one being asked
+  // for. Since row 212 that is the only model a lens is asked on, but a 0.25.x round's
+  // `model` may name a stand-in, so the brake below compares `pin`.
+  const pin = modelR.value
   const basis = basisSha(lenses, input.snapshot?.context ?? '', pin, harness.name)
   const backstopped = spec.backstops ? outstandingDemotions(entries, spec.backstops) : []
   const backstopText = spec.backstops ? demotionsBlock(spec.backstops, backstopped) : ''
@@ -406,22 +401,6 @@ async function judge(
     const tail = runsSinceReset(entries, spec.gate).slice(-2)
     const samePin = (r: GateRunEntry) =>
       (r.pin ?? r.model) === key.pin && (r.harness ?? 'claude-code') === key.harness
-    // Row 107. A fallen-back round does not spend the budget, and an exempt round that
-    // repeats forever is D67's livelock — the exemption and this trigger are one change.
-    // `prompts_sha` is deliberately NOT compared: a lens edit has nothing to do with
-    // whether a model answers, and comparing it would let an unrelated edit reset a brake
-    // on a dead pin. Checked first because when both hold, "the pinned model is not
-    // answering" is the true remedy and "your battery emits invalid verdicts" is not.
-    // No --fresh in the want: --fresh bypasses the brake and would spend a battery
-    // re-invoking the same dead pin. Fixing the pin moves key.pin, samePin goes false,
-    // and the battery runs — which is only reachable BECAUSE these rounds were exempt.
-    if (tail.length === 2 && tail.every((r) => fellBack(r) && samePin(r))) {
-      renderRefusal([v(`gates.${spec.gate}.model`, 'fallback-streak',
-        `${tail.length} consecutive rounds fell back from ${key.pin}`,
-        'a reachable gates.<gate>.model — the pinned model is not answering')])
-        .forEach((l) => ctx.err(l))
-      return EXIT.REFUSED
-    }
     // malformed rounds don't spend the bound either — this brake is what stops an
     // unreliable battery from re-running for free forever instead. Row 106: "same setup"
     // always meant the same PIN, and comparing the answering rung meant two malformed
@@ -459,7 +438,6 @@ async function judge(
   const replayedDelta = kind.kind === 'cached' && kind.from.delta !== undefined
   let verdicts: ReviewerVerdict[] = []
   let malformed: NonNullable<GateRunEntry['malformed']> = []
-  let fallback: string[] = []
   let rerolled: string[] = []
   let model = pin
   let cached = false
@@ -483,12 +461,17 @@ async function judge(
         prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${backstopText}${delta && inDelta(lens.name) ? block : ''}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
       }
     })
-    // Row 209. A repair asks only the lenses with no verdict in the malformed round. A carried
-    // lens answered on the pin, rung 0, so this run's highest rung is the round's `model`.
+    // Row 209. A repair asks only the lenses with no verdict in the malformed round. Both runs
+    // asked the pin alone (row 212; appendKind never repairs a 0.25.x fallen-back round), so
+    // the round's `model` stays the pin.
     const kept = new Map((repairFrom?.verdicts ?? []).map((rv) => [rv.reviewer, rv]))
-    const ranR = await runBattery(ctx, harness, chain, composed.filter((l) => !kept.has(l.name)), { cwd: root, ...extras })
-    if (!ranR.ok) { renderRefusal(ranR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    ;({ malformed, fallback, model } = ranR.value)
+    const pinField = `gates.${spec.gate}.model`
+    const ranR = await runBattery(ctx, harness, pin, composed.filter((l) => !kept.has(l.name)), { cwd: root, pinField, ...extras })
+    if (!ranR.ok) {
+      renderRefusal(unansweredPin(ranR.violations, pinField, pin, harness.name)).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    ;({ malformed } = ranR.value)
     const answered = new Map(ranR.value.verdicts.map((rv) => [rv.reviewer, rv]))
     const names = lenses.map((l) => l.name)
     verdicts = names.flatMap((n) => { const rv = kept.get(n) ?? answered.get(n); return rv ? [rv] : [] })
@@ -507,17 +490,6 @@ async function judge(
   const standing = [
     input.standingStop,
     pinConflicts > 0 ? 'contradicts-pin — a finding disputes a settled policy pin; the human decides which one dies' : undefined,
-    // Row 98c, specified by row 107. Composed HERE, after the battery, because whether a
-    // fallback happened is not knowable at resolve() time. Dismissed by a plain
-    // --approve: --override is reserved for the bound and this is a first-round event.
-    // The remedy is deliberately absent — on round one the honest statement is that a
-    // human decides whether the verdict counts; the remedy becomes true only once the pin
-    // proves persistently dead, which is what fallback-streak above prints. It REPLACES
-    // the stderr warning that fired on this same condition: unjournaled and non-blocking,
-    // it let a substituted verdict pass behind a line that scrolls by.
-    model !== pin
-      ? `fallback — reviewers ran on ${model}, not the pinned ${pin}; the human decides whether that verdict counts`
-      : undefined,
   ].filter((s): s is string => s !== undefined).join(' · ') || undefined
   const checksGreen = input.checks.every((c) => c.ok)
   const outcome: GateRunEntry['outcome'] =
@@ -552,11 +524,10 @@ async function judge(
       v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
       round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
       reviewed_sha: input.reviewedSha, prompts_sha: askedSha,
-      witness: key.witness, model, pin, harness: harness.name, calibration: calibrationOf(model),
+      witness: key.witness, model, pin, harness: harness.name,
       ...(localR.value.reviewerExtensions.length ? { reviewer_extensions: localR.value.reviewerExtensions } : {}),
       ...(cached ? { cached: true } : {}),
       ...(flags.manual ? { manual: true } : {}),
-      ...(fallback.length ? { fallback } : {}),
       ...(rerolled.length ? { rerolled } : {}),
       ...(repairFrom && carried.length ? { carried: { run: repairFrom.run_id, lenses: carried } } : {}),
       ...(dropped.length ? { skipped: dropped } : {}),

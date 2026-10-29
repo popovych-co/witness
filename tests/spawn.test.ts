@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { defaultAgent } from '../src/calibrate.js'
 import { loadConfig } from '../src/config.js'
 import { spawnSession } from '../src/drive.js'
 import { loadHarness, type Harness } from '../src/harness.js'
@@ -309,13 +308,6 @@ process.stdin.on('end', () => {
     }
   })
 
-  it('the calibrate worker starts pi.cmd in the worktree with the prompt in argv', async () => {
-    const dir = shimmed('pi', RECORD_ARGV)
-    const wt = mkdtempSync(join(tmpdir(), 'witness-wt-'))
-    await defaultAgent(fakeCtx(wt, { env: envWith(dir) as Record<string, string> }), piHarness(), wt, 'begin at "s1" & stop')
-    expect(JSON.parse(readFileSync(join(wt, 'argv.json'), 'utf8'))).toEqual(['-p', 'begin at "s1" & stop', '--no-session'])
-  })
-
   it('drive starts a .cmd agent session and streams it, prefixed, from the action home', async () => {
     const repo = await seededRepo()
     const cfg = loadConfig(repo.root)
@@ -342,15 +334,6 @@ process.stdin.on('end', () => {
     await new Promise((r) => setTimeout(r, 3_000))
     expect(existsSync(late)).toBe(false)
   }, 20000)
-
-  it('the calibrate worker refuses, out loud, a multi-line prompt no batch file can receive', async () => {
-    const dir = shimmed('pi', RECORD_ARGV)
-    const wt = mkdtempSync(join(tmpdir(), 'witness-wt-'))
-    const errs: string[] = []
-    await defaultAgent(fakeCtx(wt, { env: envWith(dir) as Record<string, string>, err: (l) => errs.push(l) }), piHarness(), wt, 'line one\nline two')
-    expect(existsSync(join(wt, 'argv.json'))).toBe(false)
-    expect(errs.join('\n')).toContain('batch-argv-line-break')
-  })
 })
 
 describe('system32 (row 211)', () => {

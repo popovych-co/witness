@@ -1,1 +1,0 @@
-{ "defect": "empty catch — failed upserts vanish, count still reported as synced" }

@@ -170,7 +170,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   })
 
   // 1 — malformed. D126 removed it from pendingDecision, so reaching here means a caller
-  // asked anyway; answer with the acts that actually help rather than four dispositions.
+  // asked anyway; answer with the act that actually helps rather than four dispositions.
+  // Since row 212 the re-run is the only one.
   if (last.outcome === 'malformed') {
     return {
       key: 'next', rule: 'malformed-rerun',
@@ -179,20 +180,6 @@ function recommendCore(ctx: GateContext): Decision | undefined {
           why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
             last.malformed?.length ? `, and it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
           note: 'a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy',
-        }),
-        opt(((): string => {
-          // D152 (issue #17). `--only` takes lens/skill names, never gate names — the old
-          // line was refused by the very verb it named, which is D129's "a rendered command
-          // runs" violated inside the recommender. The malformed rows name the lens that
-          // failed to parse, so use it; with none named, the whole reviewer suite is the
-          // honest scope.
-          const lens = last.malformed?.[0]?.reviewer
-          return lens
-            ? `witness calibrate ${last.model} --only ${lens}`
-            : `witness calibrate ${last.model} --suite reviewers`
-        })(), 'root', {
-          when: 'the battery has malformed more than once — the lens or the model is at fault, not the artifact',
-          tradeoff: 'spends a calibration run; nothing about this artifact changes',
         }),
       ],
     }

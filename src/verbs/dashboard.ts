@@ -6,9 +6,8 @@ import { departedStreams } from '../departure.js'
 import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
 import { divergence, primaryRoot } from '../gitio.js'
-import { DEFAULT_HARNESS, judgeLine, resolveJudge } from '../harness.js'
+import { judgeLine, resolveJudge } from '../harness.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
-import { modelFloorLines } from '../model.js'
 import { unmetNeeds } from '../needs.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
@@ -222,24 +221,17 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const root = rootRes.value
   const cfg = loadConfig(root)
   ctx.out(kv('witness', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
-  // Row 105's judgment lane, not its session lane: this feeds modelFloorLines, the one
-  // renderer shared with `check`, and a floor computed on a different ladder from the
-  // judge line above it would have `status` and `check` disagreeing about which
-  // reviewers the same repo spawns. `status` renders no handoff, so it has no driver.
-  // A broken harness config must not brick the dashboard — `check` reports that as a
-  // finding, so both lines degrade to claude-code and say so.
+  // Row 105's judgment lane, not its session lane: the judge line is the one `check` prints,
+  // and a judge resolved on a different ladder would have `status` and `check` disagreeing
+  // about which reviewers the same repo spawns. `status` renders no handoff, so it has no
+  // driver. A broken harness config must not brick the dashboard — `check` reports that as
+  // a finding, so the line degrades to claude-code and says so.
   //
   // Resolved ABOVE the config guard because the flows table below needs it too, and
   // resolving it twice is how one screen's two answers drift apart.
   const judgeR = resolveJudge(ctx.env, cfg.ok ? cfg.value.harness : undefined)
   if (cfg.ok) {
     ctx.out(kv('judge', judgeLine(judgeR)))
-    // One line per distinct warning, labelled with the gates it applies to — per-gate
-    // model pins can put each gate in a different calibration state. Shared with
-    // `check` (D98a): the calibration fact must read the same on both surfaces.
-    for (const line of modelFloorLines(root, cfg.value, judgeR.ok ? judgeR.value.harness.name : DEFAULT_HARNESS)) {
-      ctx.out(kv('model-floor', line))
-    }
   }
 
   const txn = pendingTxn(root)

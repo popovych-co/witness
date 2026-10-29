@@ -19,7 +19,7 @@ async function approvedEffort() {
   appendEntry(repo.root, repo.effort, {
     v: 1, t: 'gate-run', gate: 'decompose', artifact: repo.effort, round: 1,
     run_id: 'r1', reviewed_sha: 'stale-sha', prompts_sha: 'p', witness: '0',
-    model: 'm', calibration: 'none', checks: [], verdicts: [], outcome: 'passed',
+    model: 'm', checks: [], verdicts: [], outcome: 'passed',
   })
   return repo
 }

@@ -13,8 +13,8 @@ call="$dir/claude-calls/call-$n"
 # Sound because acquireLock refuses exactly when this file exists with a live pid
 # (src/lock.ts:16-37) — "absent" therefore proves another flow's acquire would succeed.
 # Gate runs have cwd = repo root (gate.ts:225 passes cwd: root), so the relative path
-# resolves there. NOTE: calibrate.ts:143 invokes this same fakebin with cwd = a fixture
-# dir, where the probe always reads `free`. No test may ever assert `held`.
+# resolves there. A call whose cwd is not the repo root reads `free` whatever the lock.
+# No test may ever assert `held`.
 if [ -e ".witness/lock" ]; then echo held > "$call/lock"; else echo free > "$call/lock"; fi
 printf '%s\n' "$@" > "$call/argv"
 cat > "$call/stdin"

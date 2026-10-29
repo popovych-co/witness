@@ -135,7 +135,12 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     const rule = ruling.violations[0]?.rule ?? 'unknown'
     renderRefusal(ruling.violations).forEach((l) => ctx.err(l))
     renderDecision(block).forEach((l) => ctx.out(l))
-    const why = `the arbiter could not be invoked (${rule})`
+    // Row 212: a refusal on a pinned arbiter carries the pin's row — name the setting here too,
+    // since the settle pass runs quiet and this line is all `next` and drive show of it.
+    const pinRow = ruling.violations.find((x) => x.rule === 'pin-unanswered')
+    const why = pinRow
+      ? `the arbiter could not be invoked on its pin — ${pinRow.field} · pin-unanswered (${pinRow.got})`
+      : `the arbiter could not be invoked (${rule})`
     ctx.out(leftLine(gate, target, why))
     // Final review F6: a usage limit is named, so drive can wait it out as its own pause.
     const limited = ruling.violations.find((x) => x.rule === 'usage-limit')

@@ -111,6 +111,13 @@ describe('stateCommit', () => {
     expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
   })
 
+  it('a calibration overlay 0.25.x left behind is still a witness local file (row 212)', () => {
+    const repo = tmpRepo()
+    repo.write('.witness/calibration.local.yaml', 'matrices: {}\n')
+    repo.write('specs/a.md', 'a')
+    expect(dirtyStatePaths(repo.root)).toEqual(['specs/a.md'])
+  })
+
   it('the runner turn is a witness local file — another worktree\'s suite never dirties a state write (B3)', () => {
     const repo = tmpRepo()
     mkdirSync(join(repo.root, '.witness'), { recursive: true })

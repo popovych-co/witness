@@ -6,7 +6,7 @@ import { openDeferrals } from './deferral.js'
 import { serializeDoc } from './fm.js'
 import { resolveJudge } from './harness.js'
 import { latestRecap, policyPins, type Entry } from './journal.js'
-import { loadMatrix, resolveModel, SESSION_DEFAULT } from './model.js'
+import { SESSION_DEFAULT, stageModel, unansweredPin } from './model.js'
 import { PLACEHOLDER, type Decision, type Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
@@ -16,11 +16,11 @@ import { findById, type Canon } from './scan.js'
 import { canonicalJson } from './sha.js'
 
 // Row 172. The arbiter is a LENS in the judgment lane (D48, D88): the repo's judge harness,
-// the `gates.model` chain, the hermetic reviewer spawn and a vendored prompt — never the
+// its own `arbiter.model` pin, the hermetic reviewer spawn and a vendored prompt — never the
 // session that wrote the work, and never anything it narrated. It picks one numbered
 // option from a menu the CLI already filtered to legal acts, reading evidence the CLI
-// composed. It runs on the chain with no per-gate pin, so one arbiter identity is
-// comparable across every gate it judges.
+// composed. It runs on that one pin with no per-gate pin, so one arbiter identity is
+// comparable across every gate it judges, and a pin it cannot invoke refuses (row 212).
 
 // Row 194: the recap check (row 177) is gone, so a decision is the one mode.
 export type ArbiterMode = 'decision'
@@ -81,30 +81,23 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
   const harness = hxR.value.harness
   const localR = loadLocalConfig(root)
   if (!localR.ok) return localR
-  const modelR = resolveModel(cfg, loadMatrix(root, harness.name), 'arbiter')
+  const modelR = stageModel(cfg, 'arbiter')
   if (!modelR.ok) return refuse(modelR.violations)
-  const chain = modelR.value.chain
+  const model = modelR.value
 
   let prompt = `${lens.contents}\n${req.evidence.map((s) => `\n## ${s.title}\n\n${s.body}\n`).join('')}\n## Options\n\n${renderOptions(req.menu)}\n`
-  let rung = 0
   for (let attempt = 0; ; attempt++) {
-    let text: string
-    for (;;) {
-      const id = chain[rung]!
-      const r = await invokeReviewerAsync(ctx, harness, {
-        cwd: root, prompt, model: id === SESSION_DEFAULT ? undefined : id, lens: 'arbiter',
-        timeoutMs: cfg.gates.reviewerTimeoutMs, extensions: localR.value.reviewerExtensions,
-      })
-      if (r.ok) { text = r.value.text; break }
-      if (rung >= chain.length - 1) return refuse(r.violations)
-      rung += 1
-    }
-    const ruling = readRuling(text, req.menu.length)
+    const r = await invokeReviewerAsync(ctx, harness, {
+      cwd: root, prompt, model: model === SESSION_DEFAULT ? undefined : model, pinField: 'arbiter.model', lens: 'arbiter',
+      timeoutMs: cfg.gates.reviewerTimeoutMs, extensions: localR.value.reviewerExtensions,
+    })
+    if (!r.ok) return refuse(unansweredPin(r.violations, 'arbiter.model', model, harness.name))
+    const ruling = readRuling(r.value.text, req.menu.length)
     if (ruling.ok) {
-      return ok({ ...ruling.value, model: chain[rung]!, prompts_sha: promptsSha([{ name: PROMPT_OF[req.mode], contents: lens.contents }]) })
+      return ok({ ...ruling.value, model, prompts_sha: promptsSha([{ name: PROMPT_OF[req.mode], contents: lens.contents }]) })
     }
     if (attempt === 0) {
-      // One self-repair reroll on the same rung, in the shape runBattery gives a lens.
+      // One self-repair reroll on the same model, in the shape runBattery gives a lens.
       prompt += `\n## Previous attempt rejected\n\n${
         ruling.violations.map((x) => `- ${x.field}: ${x.rule} — got ${x.got}; want ${x.want}`).join('\n')
       }\n\nRe-emit the complete corrected JSON object.\n`

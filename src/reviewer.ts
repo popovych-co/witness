@@ -102,8 +102,7 @@ export function promptsSha(lenses: Lens[], extra?: string): string {
 }
 
 // The two machine-resolved knobs, split out: every reviewer lane resolves them once at
-// its verb boundary (row 90 — invokeReviewer's own cwd is a temp dir under calibration,
-// so it can never load config itself) and threads them down through the fan-out.
+// its verb boundary (row 90) and threads them down through the fan-out.
 export interface InvokeExtras {
   timeoutMs?: number
   extensions?: readonly string[]
@@ -111,7 +110,9 @@ export interface InvokeExtras {
 
 // `lens` reaches the reviewer as WITNESS_LENS, the way runners get WITNESS_SCREENS_DIR: the
 // battery launches its lenses at once, so call order no longer says which lens a call was.
-export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; lens?: string; clock?: Clock }
+// `pinField` is the setting `model` came from, so a pin this harness cannot run is refused under
+// the key the reader edits (row 212), never the retired `gates.model`.
+export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; pinField?: string; lens?: string; clock?: Clock }
 
 // Row 182. Inside a drive session a usage-limited reviewer call waits for the reset and
 // retries, at most this long in all per invocation. Outside drive it refuses at once: an
@@ -122,9 +123,9 @@ const OUTSIDE_DRIVE_WANT = 'wait for the reset — witness drive waits it out on
 const SESSION_MARGIN_MS = 60_000
 
 const REVIEWER_TIMEOUT_MS = 600_000
-// One stalled call must not cost a whole run: a full calibration battery is ~200
-// invocations over hours, and treating a transient stall as fatal throws away every
-// sample already paid for. Retries are bounded so a genuinely wedged binary still ends.
+// One stalled call must not cost a whole run: a battery launches every lens at once, and
+// treating one transient stall as fatal throws away every verdict already paid for.
+// Retries are bounded so a genuinely wedged binary still ends.
 const TIMEOUT_RETRIES = 2
 const MAX_OUTPUT = 64 * 1024 * 1024
 const TERM_GRACE_MS = 5_000
@@ -155,7 +156,7 @@ interface Attempt {
 function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<Prepared> {
   let pin: ParsedPin | undefined
   if (opts.model !== undefined) {
-    const pinR = validatePin(harness, 'gates.model', opts.model)
+    const pinR = validatePin(harness, opts.pinField ?? 'model', opts.model)
     if (!pinR.ok) return refuse(pinR.violations)
     pin = pinR.value
   }
@@ -221,7 +222,7 @@ export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Re
       timedOut, error: timedOut ? undefined : r.error, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
     })
     if (c === 'retry') continue
-    // Calibration's lane never waits: it refuses a limit as an attended gate does.
+    // The sync lane (drift's) never waits: it refuses a limit as an attended gate does.
     const limit = usageLimitOf(c, Date.now())
     return limit ? refuse([v(p.cmd, 'usage-limit', limit.text, OUTSIDE_DRIVE_WANT)]) : c
   }

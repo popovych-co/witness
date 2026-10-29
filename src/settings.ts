@@ -41,7 +41,7 @@ export interface Setting {
   shape: Shape
   since: number                                  // first schema holding it
   defaults: Readonly<Record<number, unknown>>    // schema → default from that schema on
-  // Absent in an older file meant something else (detection, the calibration chain, "not
+  // Absent in an older file meant something else (detection, the session default, "not
   // configured"), so an in-memory read leaves it absent; only `migrate` fills it, and says so.
   ambient?: true
   // Read outside the CLI by a dependency-free hook (§4.9): its path never moves or renames.
@@ -225,7 +225,8 @@ export function settingAt(path: string, list: readonly Setting[] = SETTINGS): Se
 }
 
 // The default in force at `schema`: the entry under the greatest key ≤ schema. Undefined
-// before `since`, and for a schema that gave the setting no default (a pin at 1: the chain).
+// before `since`, and for a schema that gave the setting no default (a pin at 1: the
+// session default).
 export function defaultAt(s: Setting, schema: number): unknown {
   if (schema < s.since) return undefined
   const keys = Object.keys(s.defaults).map(Number).filter((k) => k <= schema)

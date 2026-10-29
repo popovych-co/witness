@@ -26,7 +26,7 @@ describe('the repair grant at the bound', () => {
       appendEntry(repo.root, 'auth-refresh-plan-1', {
         v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-1', round,
         run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-        model: 'm', calibration: 'none', checks: [],
+        model: 'm', checks: [],
         verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [] }], outcome: 'stopped',
       })
     }
@@ -66,7 +66,7 @@ describe('the repair grant at the bound', () => {
     // the granted round is spent → back at the bound, and the grant does not refresh
     appendEntry(repo.root, plan, {
       v: 1, t: 'gate-run', gate: 'plan', artifact: plan, round: 4, run_id: 'r-4',
-      reviewed_sha: 'sha-4', prompts_sha: 'p', witness: '0', model: 'm', calibration: 'none',
+      reviewed_sha: 'sha-4', prompts_sha: 'p', witness: '0', model: 'm',
       checks: [], verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [] }], outcome: 'stopped',
     })
     const spent = await repo.cli(['decide', 'plan', plan, '--revise', '--repair'])
