@@ -367,8 +367,22 @@ export function fakeClock(start: number): Clock & { slept: number[] } {
   }
 }
 
+// Every scenario this worker made, in order: tests/fake-trails.ts prints the fake calls' trails
+// of the ones a failing test made, since a gate run swallows the fake's own stderr.
+export const scenariosMade: string[] = []
+
 export function fakeScenario(): string {
-  return mkdtempSync(join(tmpdir(), 'witness-fake-'))
+  const dir = mkdtempSync(join(tmpdir(), 'witness-fake-'))
+  scenariosMade.push(dir)
+  return dir
+}
+
+// The fake calls' trails (fixtures/fakebin/claude) of the scenarios made from index `from` on.
+export function trailsSince(from: number): string {
+  return scenariosMade.slice(from).flatMap((dir) => (['claude', 'pi'] as const).flatMap((bin) => {
+    const trace = join(dir, `${bin}-trace`)
+    return existsSync(trace) ? [`fake ${bin} trail · ${trace}\n${readFileSync(trace, 'utf8').trimEnd()}`] : []
+  })).join('\n')
 }
 
 export function gateEnv(scenario: string, extra: Record<string, string> = {}): Record<string, string> {
