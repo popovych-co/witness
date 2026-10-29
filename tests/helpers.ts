@@ -407,9 +407,9 @@ function callDirs(scenario: string, bin: 'claude' | 'pi'): Array<{ n: number; di
 }
 
 // The fake's own trail (fixtures/fakebin/claude). A number two calls claimed, or a claim whose
-// dir is gone, is the lost call seen on CI only — fail with the trail rather than as an
-// off-by-one count. Neither can arise while calls are still in flight: a claim is written
-// after its mkdir succeeded.
+// dir is gone, is the lost call a racy mkdir utility once made on CI (row 213) — fail with the
+// trail rather than as an off-by-one count. Neither can arise while calls are still in flight:
+// a claim is written after its mkdir succeeded.
 function checkTrail(trace: string, dirs: Set<number>): void {
   if (!existsSync(trace)) return
   const lines = readFileSync(trace, 'utf8').trim().split('\n')

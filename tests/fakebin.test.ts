@@ -40,7 +40,7 @@ describe.each(['claude', 'pi'] as const)('fake %s under a concurrent battery', (
     const dir = fakeScenario()
     putVerdict(dir, { coverage: [], findings: [] })
     await Promise.all(Array.from({ length: 6 }, (_, i) => runFakeAsync(bin, ['-p'], dir, `p${i}`)))
-    // the fake's trail rides in the message: this lost a call on CI only (fixtures/fakebin/claude)
+    // the fake's trail rides in the message: this is where a racy claim shows (row 213)
     expect(readdirSync(join(dir, `${bin}-calls`)).sort(), readFileSync(join(dir, `${bin}-trace`), 'utf8'))
       .toEqual(['call-1', 'call-2', 'call-3', 'call-4', 'call-5', 'call-6'])
   })
