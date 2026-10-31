@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 import { spawnSession } from '../src/drive.js'
 import { loadHarness, type Harness } from '../src/harness.js'
+import { contained, jobHost } from '../src/contain.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { probe } from '../src/probe.js'
 import type { Result } from '../src/refusal.js'
@@ -253,6 +254,22 @@ describe.runIf(onWindows)('resolveSpawn against the real cmd.exe (win32 only)', 
     })
     expect(r.stderr).toBe('')
     expect(JSON.parse(r.stdout)).toEqual(ADVERSARIAL)
+  })
+
+  it('delivers every argument through the job host byte for byte (row 218)', () => {
+    const dir = shimmed('echoargs', ECHO_ARGV)
+    const host = jobHost(process.env)
+    const runs = [
+      resolveSpawn('echoargs', ADVERSARIAL, envWith(dir)),                                   // batch: verbatim
+      resolveSpawn(process.execPath, [join(dir, 'echoargs.js'), ...ADVERSARIAL], envWith(dir)), // image: libuv quoting
+    ]
+    for (const run of runs) {
+      if (!run.ok) throw new Error('resolve')
+      const hosted = contained(run.value, host)
+      const r = spawnSync(hosted.file, hosted.args, { env: hosted.env, encoding: 'utf8', windowsVerbatimArguments: hosted.windowsVerbatimArguments })
+      expect(r.stderr).toBe('')
+      expect(JSON.parse(r.stdout)).toEqual(ADVERSARIAL)
+    }
   })
 })
 
