@@ -18,13 +18,17 @@ describe('contained — the job host, built on any OS (row 218)', () => {
   it('a batch run goes through System32 PowerShell, its command line in the environment, verbatim', () => {
     expect(contained(batch, host)).toEqual({
       file: PS, args: ['-NoProfile', '-NonInteractive', '-Command', JOB_SCRIPT],
-      env: { A: '1', PSModulePath: 'C:\\m', WITNESS_JOB_FILE: batch.file, WITNESS_JOB_ARGS: batch.args.join(' '), WITNESS_JOB_PSMODULEPATH: 'C:\\m' },
+      env: {
+        A: '1', PSModulePath: 'C:\\m', WITNESS_JOB_FILE: batch.file, WITNESS_JOB_ARGS: batch.args.join(' '),
+        WITNESS_JOB_PSMODULEPATH: 'C:\\m', WITNESS_JOB_PATHEXT: '',
+      },
       windowsVerbatimArguments: false,
     })
   })
   it('an image run carries its arguments quoted the way libuv quotes them', () => {
     const run = { file: 'C:\\n\\node.exe', args: ['-e', 'a b', ''], env: {}, windowsVerbatimArguments: false }
-    expect(contained(run, host).env).toMatchObject({ WITNESS_JOB_ARGS: '-e "a b" ""', WITNESS_JOB_PSMODULEPATH: '' })
+    expect(contained({ ...run, env: { PathExt: '.EXE' } }, host).env).toMatchObject({ WITNESS_JOB_PATHEXT: '.EXE' })
+    expect(contained(run, host).env).toMatchObject({ WITNESS_JOB_ARGS: '-e "a b" ""', WITNESS_JOB_PSMODULEPATH: '', WITNESS_JOB_PATHEXT: '' })
   })
   it('with no host the run is the run', () => {
     expect(contained(batch, { ok: false, why: 'x' })).toBe(batch)
@@ -136,6 +140,19 @@ describe.runIf(process.platform === 'win32')('the job host on Windows (row 218)'
     expect(Object.keys(seen).filter((k) => k.toUpperCase() === 'PSEXECUTIONPOLICYPREFERENCE')).toEqual([])
     expect(seen.PSModulePath).toBe('C:\\caller')
     expect(seen.WitnessMixedCase).toBe('MiXeD')
+  })
+
+  // PowerShell appends .CPL to its own PATHEXT, and creates `PathEXT=.CPL` where there was none:
+  // handed on, a caller's minimal env left cmd.exe unable to find `node` at all.
+  it("the command sees the caller's PATHEXT, or none", () => {
+    const show = ['-e', 'process.stdout.write(JSON.stringify(process.env))']
+    const pathext = (env: Record<string, string | undefined>): string[] => {
+      const seen = JSON.parse(run(contained(nodeRun(show, env), live)).stdout) as Record<string, string>
+      return Object.entries(seen).filter(([k]) => k.toUpperCase() === 'PATHEXT').map(([k, v]) => `${k}=${v}`)
+    }
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PATHEXT'))
+    expect(pathext({ ...env, PATHEXT: '.COM;.EXE;.BAT;.CMD' })).toEqual(['PATHEXT=.COM;.EXE;.BAT;.CMD'])
+    expect(pathext({ PATH: process.env.PATH, HOME: 'x' })).toEqual([])
   })
 
   it('a job it cannot enter costs containment, never the run', () => {

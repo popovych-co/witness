@@ -41,8 +41,10 @@ const JOB_MEMBERS = [
 ].join('')
 
 // The host. The command arrives only through the environment (row 211: never in the script's
-// text) and leaves it before the command starts, with the caller's PSModulePath, which
-// PowerShell rewrites for itself at startup. No `-ExecutionPolicy` on the host's command line:
+// text) and leaves it before the command starts, with the caller's PSModulePath and PATHEXT,
+// both of which PowerShell rewrites for itself at startup: PATHEXT gains `.CPL`, and where the
+// caller had none it becomes `PathEXT=.CPL`, which left cmd.exe unable to find `node` (measured).
+// Every other variable reaches the command as the caller set it. No `-ExecutionPolicy` on the host's command line:
 // PowerShell would hand the command `PSExecutionPolicyPreference=Bypass`, and inline `-Command`
 // text is not subject to execution policy anyway. Its own words are ASCII — Windows PowerShell
 // writes a pipe in the OEM code page.
@@ -67,7 +69,8 @@ export const JOB_SCRIPT = [
   '$psi.Arguments = $env:WITNESS_JOB_ARGS',
   '$psi.UseShellExecute = $false',
   "if ($env:WITNESS_JOB_PSMODULEPATH) { $psi.EnvironmentVariables['PSModulePath'] = $env:WITNESS_JOB_PSMODULEPATH } else { $psi.EnvironmentVariables.Remove('PSModulePath') }",
-  "foreach ($n in 'WITNESS_JOB_FILE', 'WITNESS_JOB_ARGS', 'WITNESS_JOB_PSMODULEPATH') { $psi.EnvironmentVariables.Remove($n) }",
+  "if ($env:WITNESS_JOB_PATHEXT) { $psi.EnvironmentVariables['PATHEXT'] = $env:WITNESS_JOB_PATHEXT } else { $psi.EnvironmentVariables.Remove('PATHEXT') }",
+  "foreach ($n in 'WITNESS_JOB_FILE', 'WITNESS_JOB_ARGS', 'WITNESS_JOB_PSMODULEPATH', 'WITNESS_JOB_PATHEXT') { $psi.EnvironmentVariables.Remove($n) }",
   '$p = [System.Diagnostics.Process]::Start($psi)',
   '$p.WaitForExit()',
   'exit $p.ExitCode',
@@ -98,6 +101,7 @@ export function contained(run: ResolvedSpawn, host: JobHost): ResolvedSpawn {
       WITNESS_JOB_FILE: run.file,
       WITNESS_JOB_ARGS: jobTail(run),
       WITNESS_JOB_PSMODULEPATH: envGet(run.env, 'PSMODULEPATH') ?? '',
+      WITNESS_JOB_PATHEXT: envGet(run.env, 'PATHEXT') ?? '',
     },
     windowsVerbatimArguments: false,
   }
