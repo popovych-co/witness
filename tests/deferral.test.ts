@@ -68,7 +68,7 @@ describe('deferralsBlock is the inverse of a pin', () => {
 
   it('says silence is read as fixed — the rule the gate applies', () => {
     const text = deferralsBlock([mint('d-1') as unknown as DeferralEntry])
-    expect(text).toContain('Silence is read as fixed')
+    expect(text).toContain('The gate reads silence as fixed')
     expect(text).not.toContain('still present"')
   })
 
@@ -162,7 +162,7 @@ describe('open obligations reach the battery', () => {
     const prompt = ['argv', 'stdin'].map((f) => readFileSync(join(last, f), 'utf8')).join('\n')
     expect(prompt).toContain('Open deferrals')
     expect(prompt).toContain('auth-refresh-plan-1 > ## Step: s1')
-    expect(prompt).toMatch(/Silence is read as fixed/)
+    expect(prompt).toMatch(/The gate reads silence as fixed/)
   })
 })
 

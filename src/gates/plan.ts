@@ -24,6 +24,7 @@ const draftApproval = (plan: CanonDoc): Array<{ artifact: string; to: string }> 
 registerGate({
   gate: 'plan',
   targetKind: 'plan',
+  reads: 'docs',                                       // row 216
 
   async resolve(root, _ctx, canon, _cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)

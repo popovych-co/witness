@@ -10,6 +10,11 @@ import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { resolveSpawn, spawn, spawnSync } from './spawn.js'
 import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
+import type { Reviewed } from './verdict.js'
+
+// Rows 216/217. The kind of content a lens is handed: what a gate declares its lenses read, what
+// a debt's raising lens read, and what decides a reviewer's tools.
+export type ContentKind = Reviewed['kind']
 
 export const PROMPT_NAMES = [
   'slicing-critic', 'plan-critic', 'code-reviewer', 'silent-failure-hunter',

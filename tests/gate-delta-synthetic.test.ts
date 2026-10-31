@@ -30,10 +30,11 @@ function input(root: string, doc: { meta: Record<string, unknown>; body: string 
 // Registered before every test: an in-process `decide` imports gates/index.js, which puts the
 // real gates back for the rest of the file.
 beforeEach(() => {
-  registerGate({ gate: 'plan', targetKind: 'plan',
+  registerGate({ gate: 'plan', targetKind: 'plan', reads: 'docs',
     async resolve(root, _c, canon, _cfg, target) { return ok(input(root, findById(canon, target)!, target)) } })
   // Demotes as the real code gates do, over docs: the section-level cases of the rule reach gate.ts here.
   registerGate({ gate: 'ship', targetKind: 'plan', demotes: true, backstops: 'implement',
+    reads: 'docs', lensReads: { 'code-reviewer': 'screens' },
     async resolve(root, _c, canon, _cfg, target) {
       return ok(input(root, findById(canon, target)!, target, { checks: [{ name: 'synthetic', ok: true }],
         lensOverrides: { 'code-reviewer': { reviewed: { kind: 'screens', captures: [{ name: 'home.png', path: '/w/home.png' }] }, promptBody: 'READ /w/home.png' } } }))

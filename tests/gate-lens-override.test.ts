@@ -18,6 +18,8 @@ function registerSynthetic() {
   registerGate({
     gate: 'ship',
     targetKind: 'plan',
+    reads: 'docs',
+    lensReads: { 'code-reviewer': 'screens' },
     async resolve(root, _ctx, canon, _cfg, target) {
       const doc = findById(canon, target)!
       return ok<GateInput>({

@@ -8,16 +8,21 @@ import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry 
 import { untrustedCmdsFor } from './allowlist.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { criteriaOwner, loadCanon, findById, type Canon } from './scan.js'
-import { deferralsBlock, openDeferrals } from './deferral.js'
+import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js'
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv, rows } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
-import { docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt, type Lens, type LensDoc } from './reviewer.js'
+import {
+  docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt,
+  type ContentKind, type Lens, type LensDoc,
+} from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
-import { basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy } from './delta.js'
+import {
+  basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
+} from './delta.js'
 import {
   ROUND_BOUND, appendKind, boundReached, lastGateRun, liveExits, roundBudget,
   roundsSinceApprove, runsSinceReset,
@@ -93,12 +98,147 @@ export interface GateSpec {
   // Plan decision 16. The demoting gate this one is the full review for: every round here lists
   // that gate's outstanding demotions by name, and a re-reported one blocks here. Ship → implement.
   backstops?: GateName
+  // Row 216. What this gate's lenses read — the kind of `reviewed` its `resolve` hands over —
+  // and, per lens, the kind of an override that lens reads instead (implement's design-reviewer
+  // reads screens). A debt is asked of, and cleared by, only a lens that reads one of its kinds.
+  reads: ContentKind
+  lensReads?: Record<string, ContentKind>
 }
 
 const GATES = new Map<string, GateSpec>()
 
 export function registerGate(spec: GateSpec): void { GATES.set(spec.gate, spec) }
 export function gateSpec(name: string): GateSpec | undefined { return GATES.get(name) }
+
+// Row 216. What a lens at a gate reads: its override's kind, else the gate's. Undefined for a
+// gate nobody registered.
+export function readsOf(gate: string, lens?: string): ContentKind | undefined {
+  const spec = GATES.get(gate)
+  if (!spec) return undefined
+  return (lens !== undefined ? spec.lensReads?.[lens] : undefined) ?? spec.reads
+}
+
+// Row 216. The declaration is checked against what `resolve` actually handed over: a gate whose
+// content and declaration disagree would ask the wrong lenses about debts, so it is a witness
+// bug and fails loudly, before any lens runs.
+export function assertReads(spec: GateSpec, reviewed: Reviewed, overrides?: Record<string, LensOverride>): void {
+  if (reviewed.kind !== spec.reads) {
+    throw new Error(`gate ${spec.gate} declares it reads ${spec.reads}, but resolve handed over ${reviewed.kind}`)
+  }
+  for (const [lens, ov] of Object.entries(overrides ?? {})) {
+    if (ov.reviewed !== undefined && ov.reviewed.kind !== spec.lensReads?.[lens]) {
+      throw new Error(`gate ${spec.gate} declares ${lens} reads ${String(spec.lensReads?.[lens])}, but its override hands over ${ov.reviewed.kind}`)
+    }
+  }
+}
+
+// Row 216 (K2). A debt is of the kinds its raising lenses read, which neither a move nor a rename
+// changes: find the stream that minted it, the round there that raised it, and what each lens
+// with a blocking finding at its anchor read. `home` is the stream being judged — an unmoved
+// debt's minting stream, read from the entries in hand because `rename` leaves `artifact` stale.
+// A moved debt is walked back through each stream's FIRST entry for it, which names where it
+// arrived from: a take-back hands a debt home to a stream it already visited. Anything that will
+// not read, repeats or is missing falls back to the minting gate's kind.
+export function debtKinds(root: string, d: DeferralEntry, home: Entry[]): ContentKind[] {
+  const fallback = (): ContentKind[] => { const k = readsOf(d.gate); return k === undefined ? [] : [k] }
+  try {
+    let minting = home
+    if (d.moved_from !== undefined) {
+      const seen = new Set<string>()
+      let stream = d.moved_from
+      for (;;) {
+        if (seen.has(stream)) return fallback()
+        seen.add(stream)
+        const entries = readStream(root, stream)
+        const first = entries.find((e) => e.t === 'deferral' && e.id === d.id) as DeferralEntry | undefined
+        if (first === undefined) return fallback()
+        if (first.moved_from === undefined) { minting = entries; break }
+        stream = first.moved_from
+      }
+    }
+    const round = minting.find((e) => e.t === 'gate-run' && e.run_id === d.caused_by_run) as GateRunEntry | undefined
+    if (round === undefined) return fallback()
+    const kinds = new Set<ContentKind>()
+    for (const rv of round.verdicts ?? []) {
+      if (!rv.findings.some((f) => f.blocking && anchorKey(f.anchor) === d.anchor)) continue
+      const k = readsOf(round.gate, rv.reviewer)
+      if (k !== undefined) kinds.add(k)
+    }
+    return kinds.size > 0 ? [...kinds] : fallback()
+  } catch {
+    return fallback()
+  }
+}
+
+// Row 216 (K3). Some lens in this battery reads one of the debt's kinds, so its silence is evidence.
+export function judgeable(root: string, d: DeferralEntry, home: Entry[], gate: GateName, lenses: readonly string[]): boolean {
+  const kinds = debtKinds(root, d, home)
+  return lenses.some((l) => { const k = readsOf(gate, l); return k !== undefined && kinds.includes(k) })
+}
+
+// The gate's lenses for these battery names: each prompt, with the docs configured for it at this
+// gate and an override's living docs (which join prompts_sha). One home for the gate and a review.
+export function gateLenses(
+  root: string, cfg: Config, gate: GateName, names: string[], overrides?: Record<string, LensOverride>,
+): Result<Lens[]> {
+  const lenses: Lens[] = []
+  for (const name of names) {
+    const lensR = resolvePrompt(name)
+    if (!lensR.ok) return lensR
+    const lens = lensR.value
+    const docPaths = docKeysFor(gate, name).flatMap((k) => cfg.docs[k as DocKey] ?? [])
+    let docs: LensDoc[] = []
+    if (docPaths.length > 0) {
+      const docsR = loadLensDocs(root, docPaths)
+      if (!docsR.ok) return refuse(docsR.violations)
+      docs = docsR.value
+    }
+    const ov = overrides?.[name]
+    if (ov?.docs?.length) docs = [...docs, ...ov.docs]     // living design joins prompts_sha
+    if (docs.length) lens.docs = docs
+    lenses.push(lens)
+  }
+  return ok(lenses)
+}
+
+// Row 216 (K3). Each lens's own setup: the pins, then the open debts it can read, then the
+// backstop. D122: what a lens is asked joins `prompts_sha` — `text` is every lens's setup under
+// its name, sorted by name so the sha, like `promptsSha`, does not depend on battery order — so a
+// debt minted for a lens re-invokes the battery.
+export function gateSetup(
+  root: string, spec: GateSpec, entries: Entry[], lenses: readonly string[],
+): { forLens(name: string): string; text: string; backstopped: OutstandingDemotion[] } {
+  const pins = pinsBlock(policyPins(entries))
+  const debts = openDeferrals(entries).map((d) => ({ d, kinds: debtKinds(root, d, entries) }))
+  const backstopped = spec.backstops ? outstandingDemotions(entries, spec.backstops) : []
+  const backstop = spec.backstops ? demotionsBlock(spec.backstops, backstopped) : ''
+  const forLens = (name: string): string => {
+    const reads = spec.lensReads?.[name] ?? spec.reads
+    return pins + deferralsBlock(debts.filter((x) => x.kinds.includes(reads)).map((x) => x.d)) + backstop
+  }
+  const each = [...lenses].sort().map((n) => ({ n, s: forLens(n) }))
+  const text = each.every((x) => x.s === '') ? '' : each.map((x) => `### Lens ${x.n}\n\n${x.s}`).join('')
+  return { forLens, text, backstopped }
+}
+
+// One prompt assembly for the gate and a review (row 215): the lens, its docs, its setup, the
+// anchor menu, the content.
+export function lensPrompt(lens: Lens, setup: string, menu: string, body: string): string {
+  return `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${setup}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
+}
+
+export function findingRows(verdicts: ReviewerVerdict[]): Array<Record<string, string>> {
+  return verdicts.flatMap((rv) =>
+    rv.findings.map((f) => ({
+      reviewer: rv.reviewer, blocking: String(f.blocking),
+      pin: f.contradicts_pin !== undefined ? `#${f.contradicts_pin}` : '',
+      anchor: typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`, claim: f.claim,
+    })))
+}
+
+export function malformedRows(malformed: NonNullable<GateRunEntry['malformed']>): Array<Record<string, string>> {
+  return malformed.flatMap((m) => m.violations.map((x) => ({ reviewer: m.reviewer, field: x.field, rule: x.rule })))
+}
 
 // The gate's own reviewers for this class. Their shape — a non-empty list, or a map naming
 // every class — is refused when the file loads (row 13, amended by 193), so nothing is left
@@ -134,19 +274,13 @@ export function renderGateRun(
     entry.checks.map((c) => ({ name: c.name, ok: String(c.ok), detail: c.detail ?? '' }))).join('\n'))
   // Row 179: what the lane did not run, beside the row that passed without it.
   for (const h of entry.checks.flatMap((c) => c.held ?? [])) ctx.out(`held: ${h.criterion} — ${h.need} unmet · ${h.satisfy}`)
-  const findings = (entry.verdicts ?? []).flatMap((rv) =>
-    rv.findings.map((f) => ({
-      reviewer: rv.reviewer, blocking: String(f.blocking),
-      pin: f.contradicts_pin !== undefined ? `#${f.contradicts_pin}` : '',
-      anchor: typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`, claim: f.claim,
-    })))
+  const findings = findingRows(entry.verdicts ?? [])
   if (findings.length) ctx.out(rows('findings', ['reviewer', 'blocking', 'pin', 'anchor', 'claim'], findings).join('\n'))
   for (const f of (entry.verdicts ?? []).flatMap((rv) => rv.findings)) {
     if (f.demoted !== undefined) ctx.out(kv('demoted', `${anchorKey(f.anchor)} — unchanged since round ${f.demoted}`))
   }
   if (entry.malformed?.length) {
-    ctx.out(rows('malformed', ['reviewer', 'field', 'rule'],
-      entry.malformed.flatMap((m) => m.violations.map((x) => ({ reviewer: m.reviewer, field: x.field, rule: x.rule })))).join('\n'))
+    ctx.out(rows('malformed', ['reviewer', 'field', 'rule'], malformedRows(entry.malformed)).join('\n'))
   }
   if (entry.standing) ctx.out(kv('standing-stop', entry.standing))
   ctx.out(kv('outcome', entry.outcome))
@@ -261,6 +395,7 @@ async function judge(
   const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const input = inputR.value
+  assertReads(spec, input.reviewed, input.lensOverrides)              // row 216, before any lens runs
   // Resolved once for every render this run performs — the entry renderers stay pure
   // formatters (they take the id, they never look it up).
   const upstreamId = spec.upstreamOf?.(root, canon, target)
@@ -271,30 +406,15 @@ async function judge(
   const active = batteryR.value.filter((n) => !skip.has(n))
   const dropped = batteryR.value.filter((n) => skip.has(n)).map((n) => `${n} — ${skip.get(n)!}`)
   const entries = readStream(root, target)
-  const pins = policyPins(entries)
-  const pinsText = pinsBlock(pins)
+  const lensesR = gateLenses(root, cfgR.value, spec.gate, active, input.lensOverrides)
+  if (!lensesR.ok) { renderRefusal(lensesR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const lenses = lensesR.value
   // D122. Open obligations join the prompt exactly as pins do, and join `prompts_sha` for
   // the same reason: an obligation the battery did not see is an obligation nothing can
   // discharge. Minting one therefore guarantees the next round re-invokes the battery,
   // which is the intended cost of an override rather than an accident of the cache.
-  const deferralsText = deferralsBlock(openDeferrals(entries))
-  const lenses: Lens[] = []
-  for (const name of active) {
-    const lensR = resolvePrompt(name)
-    if (!lensR.ok) { renderRefusal(lensR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    const lens = lensR.value
-    const docPaths = docKeysFor(spec.gate, name).flatMap((k) => cfgR.value.docs[k as DocKey] ?? [])
-    let docs: LensDoc[] = []
-    if (docPaths.length > 0) {
-      const docsR = loadLensDocs(root, docPaths)
-      if (!docsR.ok) { renderRefusal(docsR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-      docs = docsR.value
-    }
-    const ov = input.lensOverrides?.[name]
-    if (ov?.docs?.length) docs = [...docs, ...ov.docs]     // living design joins prompts_sha
-    if (docs.length) lens.docs = docs
-    lenses.push(lens)
-  }
+  // Row 216: each lens is asked only about the debts it can read.
+  const setup = gateSetup(root, spec, entries, active)
   const hxR = resolveJudge(ctx.env, cfgR.value.harness)
   if (!hxR.ok) { renderRefusal(hxR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const harness = hxR.value.harness
@@ -312,10 +432,8 @@ async function judge(
   // `model` may name a stand-in, so the brake below compares `pin`.
   const pin = modelR.value
   const basis = basisSha(lenses, input.snapshot?.context ?? '', pin, harness.name)
-  const backstopped = spec.backstops ? outstandingDemotions(entries, spec.backstops) : []
-  const backstopText = spec.backstops ? demotionsBlock(spec.backstops, backstopped) : ''
-  const setupText = [pinsText, deferralsText, backstopText].filter((t) => t !== '').join('')
-  const setupSha = promptsSha(lenses, setupText || undefined)          // the full-review prompts_sha
+  const backstopped = setup.backstopped
+  const setupSha = promptsSha(lenses, setup.text || undefined)         // the full-review prompts_sha
   const fullKey: GateKey = {
     reviewed_sha: input.reviewedSha, gate: spec.gate, prompts_sha: setupSha, pin, witness: version(),
     harness: harness.name,
@@ -429,7 +547,7 @@ async function judge(
     ? planDelta(root, entries, spec.gate, { reviewedSha: input.reviewedSha, snapshot: input.snapshot, basis, reviewed: input.reviewed, inDelta })
     : undefined
   const block = delta ? deltaBlock(delta) : ''
-  const askedSha = delta ? promptsSha(lenses, setupText + block) : setupSha
+  const askedSha = delta ? promptsSha(lenses, setup.text + block) : setupSha
   // Row 209. A repair carries verdicts only when the question is the same: a moved delta base
   // (git gc pruned it, a judged round landed) asks every lens what the malformed round did not.
   if (kind.kind === 'repair' && kind.from.prompts_sha !== askedSha) kind = { kind: 'fresh' as const }
@@ -455,10 +573,9 @@ async function judge(
       const reviewed = ov?.reviewed ?? (delta?.paths && input.reviewed.kind === 'tree'
         ? { ...input.reviewed, floor: { round: delta.baseRound, paths: delta.paths } } : input.reviewed)
       const body = ov?.promptBody ?? input.promptBody
-      const menu = anchorMenu(reviewed)
       return {
         name: lens.name, reviewed,
-        prompt: `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${pinsText}${deferralsText}${backstopText}${delta && inDelta(lens.name) ? block : ''}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`,
+        prompt: lensPrompt(lens, setup.forLens(lens.name) + (delta && inDelta(lens.name) ? block : ''), anchorMenu(reviewed), body),
       }
     })
     // Row 209. A repair asks only the lenses with no verdict in the malformed round. Both runs
@@ -563,8 +680,11 @@ async function judge(
     // unchanged unit, or on context, is not evidence that anything was fixed.
     const silenceCounts = (anchor: string) =>
       !replayedDelta && (delta === undefined || delta.view.state(anchorFromKey(anchor)) === 'changed')
+    // Row 216. And only a debt some lens in this battery could read: silence on content no lens
+    // was handed is not evidence either.
     const discharged = entry.outcome === 'malformed' ? []
-      : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor) && silenceCounts(d.anchor))
+      : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor) && silenceCounts(d.anchor)
+        && judgeable(root, d, entriesNow, spec.gate, active))
         .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))
 
     const files = [

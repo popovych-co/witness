@@ -15,6 +15,7 @@ import { snapshotFiles } from '../snapshot.js'
 registerGate({
   gate: 'design',
   targetKind: 'spec',
+  reads: 'design',                                     // row 216
 
   async resolve(root, _ctx, canon, cfg, specId): Promise<Result<GateInput>> {
     const spec = findById(canon, specId)

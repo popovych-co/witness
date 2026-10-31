@@ -20,6 +20,7 @@ function stampsFor(docs: CanonDoc[]): Stamp[] {
 registerGate({
   gate: 'decompose',
   targetKind: 'effort',
+  reads: 'docs',                                       // row 216
 
   async resolve(root, _ctx, canon, _cfg, effort): Promise<Result<GateInput>> {
     if (!streamExists(root, effort)) {

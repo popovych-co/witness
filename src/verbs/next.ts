@@ -601,7 +601,7 @@ export function readyChoice(canon: Canon, ready: string[]): Decision {
 
 // D122. Orientation, never a ladder tier: routing the human to the dismissal verb would
 // teach closure-by-assertion at the one place the design means closure-by-evidence. The real
-// bite is the battery injection, which no round can skip. Applied once where the action is
+// bite is the injection into every lens that can read the debt (row 216). Applied once where the action is
 // finally produced rather than at each routing site — a per-branch copy would drift, and
 // there are eleven branches.
 export function withDeferralNote(root: string, canon: Canon, action: NextAction): NextAction {
