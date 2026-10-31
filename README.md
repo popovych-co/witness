@@ -255,7 +255,7 @@ an older file keeps working: witness reads it as `migrate` would, changes nothin
 There is no `provider:` key. `witness gate` spawns the DECLARED harness's headless
 mode for every reviewer (Decisions 88, 105): claude-code renders bare Anthropic ids, pi
 renders `provider/model[:thinking]` with the provider witness knows it needs. The pi
-reviewer runs hermetic (`--no-extensions --no-skills --no-context-files`); machine
+reviewer runs hermetic (`--no-extensions --no-skills --no-context-files`); claude's runs with `--safe-mode` (no hooks, `CLAUDE.md`, plugins or MCP servers) and saves no session; every reviewer gets no tools, or read-only file tools where it must open files, and witness refuses any verb but read, index, log and diff inside one; machine
 extensions it must keep — e.g. an OAuth adapter that supplies your Anthropic auth —
 are declared in machine config, not env:
 
@@ -280,7 +280,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `draft <key> [--file <json>]` | a grill's or design session's local draft — saved after every settled answer, read back to resume; never committed or journaled |
 | `write <id> --effort <e> --meta <json> --body <md>` | validated manifest → spec/plan on disk + journal entry; a spec's `covers` and `carries` map it to the recap's goals and decisions |
 | `diff <spec-id>` | delta since the last realized state (plan pin → empty), and the decisions that moved since that plan |
-| `read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts; `--decisions` prints the decisions a spec carries with its effort's constraints and non-goals, or an effort's whole recap |
+| `read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts, and for a look its controls and hidden states; `--decisions` prints the decisions a spec carries with its effort's constraints and non-goals, or an effort's whole recap |
 | `check` | schema, graph, invariants, needs, trailer audit, probes |
 | `index` | id · summary · status · depends across the canon, then each spec's plans |
 | `satisfy <id> --need <id\|n\|text>` | journal a manual need as met — the spec is never rewritten |
@@ -291,6 +291,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
 | `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |
 | `design <spec-id> --file <html>\|--open\|--reconfirm\|--preview <html>` | register/show a `ui` spec's approved look; `--preview` opens a page and records nothing |
+| `review design <spec-id> [--file <html>]` | the design gate's reviewers on a look — the registered one, or a page not yet registered — asking the gate's full-review question; journals nothing, decides nothing, and replays the gate's answer when the gate already judged the same bytes in full |
 | `start <plan-id>` | create/re-attach the plan's worktree (`.witness/worktrees/<id>`) — code only: the canon dirs are excluded from it, so a plan cannot go stale in there |
 | `next` | the one next action across every effort |
 | `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log` — each session's start, every command and file its agent touches, every act it journals for its flow, a `still running` line after 5 quiet minutes, and how it ended; drive's pi sessions are kept in pi's session store under `witness-drive/`; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
