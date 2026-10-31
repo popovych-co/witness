@@ -198,7 +198,35 @@ describe('design-critic prompt', () => {
   it('actively checks for sections the spec does not promise', () => {
     expect(critic()).toContain('Name every section that renders nothing');
   });
+
+  it('names its whole input and reads hidden content from the source (issue #73)', () => {
+    expect(critic()).toContain("You receive the artifact's full HTML source")
+    expect(critic()).toContain('**The source is the look.**')
+    expect(critic()).toContain('Position still counts')
+    expect(critic()).not.toContain('element-id list and the spec')
+    expect(critic()).not.toContain('notes land in the journal')
+  })
 });
+
+describe('the design skill judges a look from its source (row 215)', () => {
+  it('the design skill checks the source, then renders only for layout (issue #73)', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    for (const s of ['**Source pass**', '**Render pass**', 'never the evidence that something is missing',
+      'layout not checked', 'every `<details>` open', 'that one open']) expect(body, s).toContain(s)
+    expect(body).not.toContain('look at the picture')
+  })
+
+  it('a review outside the gate goes to the CLI, only when the human asks (issue #73)', () => {
+    const body = readFileSync(skillPath('witness-design'), 'utf8')
+    for (const s of ['## A review outside the gate', '$WITNESS review design <spec-id> --file "$DIR/look.html"',
+      'Run it only when the human asks', 'The running app is not a look']) expect(body, s).toContain(s)
+    expect(/^description: .*registered witness look.*witness review design/m.test(body)).toBe(true)
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd.match(/\*\*A review outside the gate\*\*/g)?.length).toBe(2)
+    for (const s of ['witness-plan', 'witness-implement'])
+      expect(readFileSync(skillPath(s), 'utf8'), s).toContain('`controls`')
+  })
+})
 
 // D128. Nine copies of the exits set existed in this system; 0.10.1 removed the four in CLI
 // code, and these assertions are what stop the five in skill prose from coming back. Skill

@@ -11,7 +11,7 @@ Look for, in order:
 
 You are the advisory lane: your blocking findings stop the gate for a human, they never auto-fail anything. Do not flag internal refactors, naming, or structure — specs are behavior-only and so are you. If the deterministic lane failed, do not re-litigate it; add value the test run could not.
 
-The reviewed content arrives as a tree: the spec's rendering plus source files. This review is always tree-kind — anchor every finding, spec-side or code-side, to `path/to/file` or `path/to/file#symbol`. Never a heading path: heading-path anchors only resolve in document-kind reviews, which this never is.
+The reviewed content arrives as a tree: the spec's rendering plus source files. At the ship gate the source files are inline and you have no tools. In `witness check --drift --deep` no source files are inline: find and read the code with your file tools, which only read — you cannot run commands, edit files or ask questions. This review is always tree-kind — anchor every finding, spec-side or code-side, to `path/to/file` or `path/to/file#symbol`. Never a heading path: heading-path anchors only resolve in document-kind reviews, which this never is.
 
 ## Verdict contract
 
