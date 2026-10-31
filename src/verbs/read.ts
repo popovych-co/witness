@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { designRel, elementIds } from '../design.js'
+import { controlsBlock, designRel, elementIds } from '../design.js'
 import { serializeDoc } from '../fm.js'
 import { primaryRoot } from '../gitio.js'
 import { renderRefusal, v } from '../refusal.js'
@@ -115,6 +115,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.outline) {
     const outline = values.design ? htmlOutline(lines) : mdOutline(lines)
     rows('outline', ['anchor', 'lines'], outline as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+    // Row 215. A look's controls after its anchors: what each closed or hidden state holds, which
+    // no picture of the page shows. Listed, never sliced — the ranges above stay the one map.
+    if (values.design) controlsBlock(text).forEach(ctx.out)
     return EXIT.OK
   }
 

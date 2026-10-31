@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { approve, seededRepo, writeDesign, writePlan, writeSpec } from './helpers.js'
+import { approve, DESIGN_HTML, seededRepo, writeDesign, writePlan, writeSpec } from './helpers.js'
+import { CONTROLS_NOTE } from '../src/design.js'
 import { worktreePath } from '../src/worktree.js'
 
 const PLAN_REL = 'plans/auth-refresh-plan-1.md'
@@ -13,11 +14,11 @@ async function planRepo() {
   return repo
 }
 
-async function uiRepo() {
+async function uiRepo(html = DESIGN_HTML) {
   const repo = await seededRepo()
   await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })
   approve(repo, 'booking-form')
-  await writeDesign(repo, 'booking-form')
+  await writeDesign(repo, 'booking-form', html)
   return repo
 }
 
@@ -101,6 +102,21 @@ describe('witness read', () => {
     expect(past.code).toBe(2)
     expect(past.stderr).toContain('bad-range')
   })
+
+  it("a look's outline lists its controls after the anchors, and names what markup cannot show (issue #73)", async () => {
+    const repo = await uiRepo(DESIGN_HTML.replace('<button>Save</button>',
+      '<select id="reason"><option>Unsafe code</option><option>Other</option></select><button>Save</button>'))
+    const r = await repo.cli(['read', 'booking-form', '--design', '--outline'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('controls[1]{anchor,line,kind,holds}:\n  reason,6,select,Unsafe code | Other')
+    expect(r.stdout).toContain(`controls-note: ${CONTROLS_NOTE}`)
+    expect(r.stdout.indexOf('outline[')).toBeLessThan(r.stdout.indexOf('controls['))
+  })
+
+  it('a look with no controls still prints the table and the note; a markdown outline has neither (issue #73)', async () => {
+    expect((await (await uiRepo()).cli(['read', 'booking-form', '--design', '--outline'])).stdout).toContain('controls[0]{anchor,line,kind,holds}:')
+    expect((await (await planRepo()).cli(['read', 'auth-refresh-plan-1', '--outline'])).stdout).not.toContain('controls-note:')
+  })
 })
 
 const LIMITS = {
@@ -160,4 +176,3 @@ describe('witness read --decisions (row 198)', () => {
       .toMatch(/^carried-by: none — no journaled write made this content/)
   })
 })
-
