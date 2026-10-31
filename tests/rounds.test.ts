@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, deltaBase, fellBack, keyOf, pendingDecision, repairGranted, roundBudget,
+  ROUND_BOUND, answersKey, appendKind, boundReached, deltaBase, fellBack, keyOf, pendingDecision, repairGranted, roundBudget,
   roundsSinceApprove,
   runsSinceReset, sameKey, type GateRunEntry,
 } from '../src/rounds.js'
@@ -299,5 +299,17 @@ describe('deltaBase (C3)', () => {
     expect(deltaBase([run('a', 'stopped', 1), approve(1)], 'plan', 'b')).toBeUndefined()
     expect(deltaBase([run('a', 'passed', 1)], 'plan', 'b')).toBeUndefined()
     expect(deltaBase([run('a', 'stopped', 1)], 'ship', 'b')).toBeUndefined()
+  })
+})
+
+describe('answersKey (row 215)', () => {
+  it('answersKey accepts only a judged, pinned run on the same key (issue #73)', () => {
+    const judged = run('a', 'stopped', 1)
+    expect(answersKey(judged, key('a'))).toBe(true)
+    expect(answersKey(run('a', 'malformed', 1), key('a'))).toBe(false)
+    expect(answersKey({ ...judged, verdicts: undefined }, key('a'))).toBe(false)
+    for (const moved of [{ reviewed_sha: 'b' }, { gate: 'ship' }, { prompts_sha: 'p2' }, { pin: 'm2' }, { witness: '0.2.0' }, { harness: 'pi' }])
+      expect(answersKey(judged, { ...key('a'), ...moved }), JSON.stringify(moved)).toBe(false)
+    expect(answersKey({ ...judged, model: 'm-standin', pin: 'm0' }, { ...key('a'), pin: 'm0' })).toBe(false)
   })
 })

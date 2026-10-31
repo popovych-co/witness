@@ -426,6 +426,13 @@ export function repairsOnRegate(entries: Entry[], gate: string): boolean {
   return false
 }
 
+// Row 215 (D3). Does this journaled run answer `key` — the one evidence rule for the gate's
+// cache and for a review's replay? A malformed round judged nothing; a fallen-back one was asked
+// of another model; a run with no verdicts said nothing.
+export function answersKey(run: GateRunEntry, key: GateKey): boolean {
+  return run.outcome !== 'malformed' && !fellBack(run) && (run.verdicts?.length ?? 0) > 0 && sameKey(keyOf(run), key)
+}
+
 export function appendKind(entries: Entry[], gate: string, key: GateKey): AppendKind {
   let lastRunIdx = -1
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -457,9 +464,7 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     // clean one over the same content share a key, so edit-then-revert would replay an
     // unpinned verdict into a passing run. Beside the malformed filter, which is here
     // for the identical reason — a round witness could not complete is not evidence.
-    if (run.outcome !== 'malformed' && !fellBack(run) && run.verdicts && sameKey(keyOf(run), key)) {
-      return { kind: 'cached', from: run }
-    }
+    if (answersKey(run, key)) return { kind: 'cached', from: run }
   }
   return { kind: 'fresh' }
 }

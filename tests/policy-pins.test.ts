@@ -68,6 +68,7 @@ function syntheticImplement() {
   registerGate({
     gate: 'implement',
     targetKind: 'plan',
+    reads: 'docs',
     async resolve(_root, _ctx, canon, _cfg, target) {
       const doc = findById(canon, target)!
       return ok<GateInput>({

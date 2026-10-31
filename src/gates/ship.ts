@@ -33,6 +33,7 @@ registerGate({
   targetKind: 'plan',
   demotes: true,
   backstops: 'implement',
+  reads: 'tree',                                       // row 216
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)

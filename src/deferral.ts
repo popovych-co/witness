@@ -42,8 +42,9 @@ export function openDeferrals(entries: Entry[]): DeferralEntry[] {
   return [...open.values()]
 }
 
-// Injected into every lens, exactly as `pinsBlock` is, and joined to `prompts_sha` so a new
-// obligation invalidates the verdict cache and the next round cannot judge without it.
+// Injected into every lens that can read the debt (row 216), beside `pinsBlock`, and joined to
+// `prompts_sha` so a new obligation invalidates the verdict cache and the next round cannot
+// judge without it.
 // Deliberately the INVERSE of a pin: a pin tells reviewers not to re-litigate, this tells
 // them to report the thing if it is still there. Pins suppress findings; obligations
 // solicit them — which is what makes the discharge automatic and evidence-shaped.
@@ -64,8 +65,8 @@ export function deferralsBlock(open: DeferralEntry[]): string {
   return '## Open deferrals (approved over findings — report these if they still hold)\n\n' +
     'This artifact was approved over the findings below rather than fixed. They are NOT settled ' +
     'policy and they are NOT pins. If a defect is still present, report it as a finding anchored ' +
-    'exactly as listed: that keeps its obligation open. Silence is read as fixed: an obligation ' +
-    'this round does not report is discharged.\n\n' +
+    'exactly as listed: that keeps its obligation open. The gate reads silence as fixed: an ' +
+    'obligation a gate round does not report is discharged.\n\n' +
     open.map(line).join('\n') + '\n\n'
 }
 

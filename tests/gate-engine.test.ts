@@ -24,6 +24,7 @@ function registerSynthetic() {
   registerGate({
     gate: 'plan',
     targetKind: 'plan',
+    reads: 'docs',
     async resolve(root, _ctx, canon, _cfg, target) {
       const doc = findById(canon, target)!
       return ok<GateInput>({

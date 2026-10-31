@@ -10,6 +10,19 @@ import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { resolveSpawn, spawn, spawnSync } from './spawn.js'
 import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
+import type { Reviewed } from './verdict.js'
+
+// Rows 216/217. The kind of content a lens is handed: what a gate declares its lenses read, what
+// a debt's raising lens read, and what decides a reviewer's tools.
+export type ContentKind = Reviewed['kind']
+
+// Row 217. A reviewer reads; it never acts. It gets read-only file tools only when its content
+// names files it must open — screenshots, by path — and otherwise none: everything else it may
+// consider is inline in its prompt.
+export type ToolPolicy = 'none' | 'read'
+export function toolsFor(reviewed: Reviewed): ToolPolicy {
+  return reviewed.kind === 'screens' ? 'read' : 'none'
+}
 
 export const PROMPT_NAMES = [
   'slicing-critic', 'plan-critic', 'code-reviewer', 'silent-failure-hunter',
@@ -112,7 +125,10 @@ export interface InvokeExtras {
 // battery launches its lenses at once, so call order no longer says which lens a call was.
 // `pinField` is the setting `model` came from, so a pin this harness cannot run is refused under
 // the key the reader edits (row 212), never the retired `gates.model`.
-export interface InvokeOpts extends InvokeExtras { cwd: string; prompt: string; model?: string; pinField?: string; lens?: string; clock?: Clock }
+// `tools` (row 217): what the reviewer may use — none unless its content names files to read.
+export interface InvokeOpts extends InvokeExtras {
+  cwd: string; prompt: string; model?: string; pinField?: string; lens?: string; clock?: Clock; tools?: ToolPolicy
+}
 
 // Row 182. Inside a drive session a usage-limited reviewer call waits for the reset and
 // retries, at most this long in all per invocation. Outside drive it refuses at once: an
@@ -160,7 +176,7 @@ function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result
     if (!pinR.ok) return refuse(pinR.violations)
     pin = pinR.value
   }
-  const { cmd, args, env } = harness.reviewer.spawn(pin, opts.extensions)
+  const { cmd, args, env } = harness.reviewer.spawn(pin, opts.extensions, opts.tools ?? 'none')
   // Row 164: on Windows the CLI may be a `.cmd` shim, which only cmd.exe can start. The
   // prompt rides stdin, so the shim's second parse of the command line never sees it. A
   // reviewer that cannot be started is an invocation failure on every platform: the

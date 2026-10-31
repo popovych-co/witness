@@ -79,6 +79,9 @@ registerGate({
   gate: 'implement',
   targetKind: 'plan',
   demotes: true,
+  // Row 216. The design-reviewer reads the screens override `resolve` builds for it below.
+  reads: 'tree',
+  lensReads: { 'design-reviewer': 'screens' },
 
   async resolve(root, ctx, canon, cfg, planId): Promise<Result<GateInput>> {
     const plan = findById(canon, planId)

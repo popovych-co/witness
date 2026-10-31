@@ -26,10 +26,20 @@ describe('witness retry (D207)', () => {
 
   it('refuses inside a drive session and inside a reviewer', async () => {
     const repo = await startedPlan()
-    for (const env of [{ WITNESS_DRIVE: 'auth-refresh-plan-1' }, { WITNESS_REVIEWER: '1' }]) {
+    for (const env of [{ WITNESS_DRIVE: 'auth-refresh-plan-1' }]) {
       const res = await repo.cli(['retry', 'auth-refresh-plan-1'], { env })
       expect(res.code).toBe(2)
       expect(res.stderr).toContain('retry-in-session')
+    }
+    expect(readStream(repo.root, 'auth-refresh-plan-1').some((e) => e.t === 'retry')).toBe(false)
+  })
+
+  it('a reviewer cannot retry, in a drive session or not (issue #73)', async () => {
+    const repo = await startedPlan()
+    for (const env of [{ WITNESS_REVIEWER: '1' }, { WITNESS_DRIVE: 'auth-refresh-plan-1', WITNESS_REVIEWER: '1' }]) {
+      const res = await repo.cli(['retry', 'auth-refresh-plan-1'], { env })
+      expect(res.code).toBe(2)
+      expect(res.stderr).toContain('reviewer-cannot')
     }
     expect(readStream(repo.root, 'auth-refresh-plan-1').some((e) => e.t === 'retry')).toBe(false)
   })

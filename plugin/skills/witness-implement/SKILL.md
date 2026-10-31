@@ -58,7 +58,7 @@ Protocol per step, in order — red/green/refactor with witnessed evidence:
 4. Run `$WITNESS test-evidence <plan-id> --phase green --step <step-id>` — it must record green. That green closes the step.
 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design. Then act on the `slice:` line the green printed (below).
 6. Early exit: if you have left the step's scope to fight infrastructure, the economy is to relay — finish the red→green you are in (never stop mid-red), report, and relay so a fresh context continues. Exceeding your slice is never the right economy.
-7. Fat artifacts (the living design, long docs) are read **by section** — `$WITNESS read <spec-id> --design --outline` names every anchor with its line range, then `--lines <a>-<b>` fetches the one you need — never whole into your context; you would re-pay their tokens on every subsequent request.
+7. Fat artifacts (the living design, long docs) are read **by section** — `$WITNESS read <spec-id> --design --outline` names every anchor with its line range and lists the look's `controls` — every closed or hidden state is one to build and to reach in a browser test, so fetch those lines too, then `--lines <a>-<b>` fetches the one you need — never whole into your context; you would re-pay their tokens on every subsequent request.
 
 **After each step closes, act on `slice:`.** A closing green prints three lines, and so does a `step-close`. Two closes in one session — the slice goes on at 12%, then ends at 17%, because the largest step so far would carry the next one past the limit:
 

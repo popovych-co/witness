@@ -1,6 +1,6 @@
 ---
 name: witness-design
-description: Produce a ui spec's living approved look — a design session that shows up to three rendered, checked directions, converges in the grill's question shape, saves a local draft, and ends in a self-contained designs/<spec-id>.html handed to witness design, then the design gate. Normally invoked by /witness with the spec id.
+description: Produce a ui spec's living approved look — a design session that shows up to three rendered, checked directions, converges in the grill's question shape, saves a local draft, and ends in a self-contained designs/<spec-id>.html handed to witness design, then the design gate. Also reviews a registered witness look when asked, through witness review design. Normally invoked by /witness with the spec id.
 ---
 
 # witness-design — spec → approved look → gate
@@ -24,7 +24,7 @@ WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.26.2}"
 - **Never edit `specs/**`, `plans/**`, or `designs/**`.** The CLI is the sole writer of state. Author HTML in `$(mktemp -d)` and hand it to `witness design`. (The canon guard blocks direct edits; the trailer audit catches end-runs.)
 - **Read canon with `witness read <id>`, never by path.** Canon lives at the primary root; inside a worktree the files are **absent by design**, so a path read finds nothing and a stale copy cannot be mistaken for the contract. Fat artifacts: `witness read <spec-id> --design --outline`, then `--lines <a>-<b>`.
 - **Read a file before your first edit of it in this session.** Relay boundaries, `verify-red`'s stash cycle, and worktree re-attach all change files under you — an edit against a remembered copy is how "modified since read" and partial applies happen. The CLI now prints `stale-reads:` when it churns the tree; treat that list as unread.
-- **Never invoke gate reviewers or relay verdicts.** `witness gate design` runs the design-critic itself and journals what it said.
+- **Never invoke gate reviewers or relay verdicts.** `witness gate design` runs the design-critic itself and journals what it said; `witness review design` runs it only when the human asks, and journals nothing.
 - **Refusal repair loop:** `witness design` exiting 2 prints structured violations (`field · rule · got · want`). Fix and retry — **3 total attempts**, then stop and show the human the list verbatim.
 - **A refused or hook-blocked command is a stop, not a step to drop.** Re-issue it on its own; if it still refuses, tell the human what was blocked and why. Never proceed by deleting the refused half of a compound command — a dropped step is silent, and silence is how a skipped check becomes a shipped defect.
 - **Re-entrancy:** derive position from `$WITNESS next` / the dashboard / `log`, never from conversation memory.
@@ -64,7 +64,7 @@ DIR=$(mktemp -d)
 
 1. **Context.** Name the screen's one job and primary user (from the spec's Motivation + Behavior). If a design canon is configured, read it — it governs hierarchy, framing, action placement, and component vocabulary. Report what you found before proposing.
 2. **Directions, rendered.** Up to three ranked structural directions (different hierarchies or groupings, never three skins of one idea), side by side on one self-contained comparison page, `$DIR/directions.html`, using the spec's real content. Each stays consistent with the canon.
-3. **Check before showing.** Screenshot the page with the machine's browser (for example headless Chrome: `--headless --screenshot`), look at the picture, fix what is broken, and check again. With no browser, say "not checked" when you open it — never claim a check that did not run.
+3. **Check before showing: the source, then a render.** A picture shows one state of a page, so it is never the evidence that something is missing, unlabeled or out of reach. **Source pass** — read the page you wrote: each direction carries the spec's real content, and no promised element is reachable only behind a closed control. **Render pass** — then render it with the machine's browser (for example headless Chrome: `--headless --screenshot --window-size=1024,900`) at the widths the canon names, else 1024 px, and judge only layout: overflow, wrapping, clipping. Fix what either pass finds, naming the element by its `id`, and check again. With no browser, say "layout not checked" when you open it — never claim a check that did not run.
 4. **Open it as a preview.** `$WITNESS design <spec-id> --preview "$DIR/directions.html"` opens the page through the configured opener; it registers nothing and journals nothing.
 5. **Converge** in the grill's question shape: up to three ranked answers, the pick first with its why, the others each with when it is better and its tradeoff — never padded. After each settled answer save the draft: the chosen `direction`, the settled `answers`, and `open`. A `draft-moved` refusal means another session saved answers since: read the draft back and continue from it.
 
@@ -75,7 +75,7 @@ EOF
 $WITNESS draft design-<spec-id> --file "$DIR/draft.json"
 ```
 
-6. **Author the full look** with every state the spec promises — every promised behavior visible and operable (the design-critic checks this as blocking coverage). One **self-contained** HTML file: inline all CSS/JS, embed assets as `data:` URIs, no external `src`/`href`. Give every section a stable, unique `id` (`id="essentials"`, `id="save-bar"`, …): these are the design-critic's anchors and must total **≥ 2**. Data-shape anchoring: when a section renders spec data, name the id after the data it shows, not its pixels. Check it the same way as step 3, and save the page in the draft as `page`.
+6. **Author the full look** with every state the spec promises — every promised behavior visible and operable (the design-critic checks this as blocking coverage). One **self-contained** HTML file: inline all CSS/JS, embed assets as `data:` URIs, no external `src`/`href`. Give every section a stable, unique `id` (`id="essentials"`, `id="save-bar"`, …): these are the design-critic's anchors and must total **≥ 2**. Data-shape anchoring: when a section renders spec data, name the id after the data it shows, not its pixels. Check it the same way as step 3, more deeply: the source pass confirms every state the spec promises, what each closed control holds (a select's options, a menu, popover, dialog or `<details>`), each control's accessible name, content past a scrolling pane's height, and the `id` of the element that shows each promised behavior; the render pass also renders a copy with every `<details>` open, and each `<dialog>` in a copy with that one open. Then save the page in the draft as `page`.
 7. **Register, show, gate** — the commands below.
 
 ```bash
@@ -109,6 +109,21 @@ $WITNESS gate design <spec-id>    # append --manual when the run asked for it
 - **Re-entered after `--revise`** → `witness decide design <spec-id> --show` reconstructs the verdict + note (findings anchor to `design#<id>` or `<spec-id> > ## Heading`). Re-author the HTML, re-run `witness design`, re-gate. The 3-round bound is the CLI's — surface it, never fight it. `--show` also emits `state:` and `exits:` — a `reopened` or `settled` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.
 - Findings implicate the **slicing** (the spec is wrong, not the look)? Tell the human `witness decide design <spec-id> --revise --upstream <effort>` reopens decompose (scope-level changes chain to `recap --amend`).
 - On approve the CLI stamps `design: {sha, spec}` on the spec, and the look's draft ends; the plan stage then requires that pin. You are done — hand back to `/witness`.
+
+## A review outside the gate
+
+When the human asks you to review or check a look — "check the UI for gaps", "review this screen" — the gate's own reviewers answer:
+
+```bash
+$WITNESS review design <spec-id>                          # the registered look
+$WITNESS review design <spec-id> --file "$DIR/look.html"  # the full look this session is drafting, not registered yet
+```
+
+- It reads the look's source, its controls, the canon and the spec, exactly as the gate does, and journals nothing: no round, no sight, no decision. Render its output verbatim and in full; each finding names its anchor.
+- Run it only when the human asks — never on your own, and never before showing, registering or gating a look: your own checks are steps 3 and 6. Once per ask: after fixing what it found, show the human the page instead of running it again. `--file` takes the full look you wrote, never the directions page or a file from elsewhere. On `outcome: malformed` run it once more; if it is malformed again, tell the human.
+- `answered:` means the gate already judged these bytes in full under this setup, and that round's verdict is the answer; `earlier:` names a round that judged them in delta mode or under another setup.
+- A screenshot may add layout notes (overflow, wrapping, clipping), each labeled as from a picture — never a claim that something is missing, unlabeled or out of reach.
+- The running app is not a look: read the screen's code and the browser's DOM against `$WITNESS read <spec-id> --design --outline`, and use pictures only for layout. The implement gate's `design-reviewer` judges its screens from the browser test's captures.
 
 ## A behavior answer
 

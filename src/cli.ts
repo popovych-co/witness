@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { configPath } from './config.js'
 import { journalStamp } from './context.js'
+import { isReviewer } from './drive-presence.js'
 import { stateFloor } from './floor.js'
 import { primaryRoot } from './gitio.js'
 import { withJournalCtx } from './journal.js'
@@ -52,6 +53,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   gate: () => import('./verbs/gate.js'),
   decide: () => import('./verbs/decide.js'),
   design: () => import('./verbs/design.js'),
+  // Row 215. The design gate's reviewers on demand: the gate's question, journaled nowhere.
+  review: () => import('./verbs/review.js'),
   start: () => import('./verbs/start.js'),
   // The orientation screen has a name (D101). Bare `witness` stays as its alias, but
   // an unnamed command cannot be referenced — commands/witness.md instructs the
@@ -100,6 +103,7 @@ const VERB_USAGE: Record<string, string> = {
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
   retry: 'witness retry <target>',
+  review: 'witness review design <spec-id> [--file <html>]',
   satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
@@ -112,6 +116,9 @@ const VERB_USAGE: Record<string, string> = {
   'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
   wait: 'witness wait [--since <token>] — blocks until something new needs you · the chat runs it under autonomy',
 }
+
+// Row 217. The verbs a reviewer may run: each only reads.
+const REVIEWER_VERBS: ReadonlySet<string> = new Set(['read', 'index', 'log', 'diff'])
 
 // Row 116 moved the body to version.ts, which journal.ts can import without closing a
 // cycle. Re-exported here because eleven call sites already ask the CLI shell for it and
@@ -162,6 +169,14 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
   // the human nothing they can act on.
   const helpRequested = verb === 'help' || verb === '--help'
     || rest.includes('--help') || rest.includes('-h')
+  // Row 217. A reviewer reads; it never acts. Its tools are already gone (the spawn flags); this tripwire
+  // refuses what a harness that ignored them could still run. Checked directly: a reviewer spawned inside
+  // a drive session carries both markers, and `sessionMarker` names the drive's first.
+  if (isReviewer(ctx.env) && !helpRequested && !REVIEWER_VERBS.has(verb ?? '')) {
+    renderRefusal([v('witness', 'reviewer-cannot', `${verb ?? '(no verb)'} under WITNESS_REVIEWER`,
+      'nothing — a reviewer reads and never acts; it may run witness read, index, log or diff')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   if (!helpRequested && verb !== 'floor') {
     const gateRoot = primaryRoot(ctx.cwd)
     if (gateRoot.ok) {

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
+import type { ToolPolicy } from './reviewer.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { pinIn } from './version.js'
 import { claudeStream, piStream, type WorkerStream } from './worker-stream.js'
@@ -49,7 +50,8 @@ export interface Harness {
   // means. spawn(undefined) is the session default (no model flag). The exact flag
   // set is part of the reviewer's identity.
   reviewer: {
-    spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn
+    // Row 217: `tools` is what the reviewer may use — none, or read-only file tools.
+    spawn(pin: ParsedPin | undefined, extensions?: readonly string[], tools?: ToolPolicy): ReviewerSpawn
     parseEnvelope(stdout: string): Result<{ text: string }>
   }
   // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
@@ -156,8 +158,14 @@ const REGISTRY: Record<HarnessName, Harness> = {
     ],
     skills: { project: '.claude/skills', global: '.claude/skills' },
     reviewer: {
-      spawn(pin: ParsedPin | undefined, _extensions?: readonly string[]): ReviewerSpawn {
-        const args = ['-p', '--output-format', 'json']
+      // Row 217. Sealed off from the repo it judges: --safe-mode loads none of its hooks, CLAUDE.md
+      // or plugins (P11; settings `env` and permissions survive it, P14), --strict-mcp-config none
+      // of its MCP servers, --no-session-persistence saves no session, and --tools names every
+      // tool the reviewer has. `--tools` is variadic, so nothing positional may follow it — the
+      // prompt rides stdin (P12).
+      spawn(pin: ParsedPin | undefined, _extensions?: readonly string[], tools: ToolPolicy = 'none'): ReviewerSpawn {
+        const args = ['-p', '--output-format', 'json', '--safe-mode', '--strict-mcp-config', '--no-session-persistence',
+          '--tools', tools === 'read' ? 'Read,Grep,Glob' : '']
         const env: Record<string, string> = {}
         if (pin !== undefined) {
           args.push('--model', pin.model)
@@ -214,13 +222,16 @@ const REGISTRY: Record<HarnessName, Harness> = {
     // worker below keeps full discovery on purpose: skills and context files are what
     // the implement seed measures; auth extensions ride along with everything else there.
     reviewer: {
-      spawn(pin: ParsedPin | undefined, extensions?: readonly string[]): ReviewerSpawn {
+      spawn(pin: ParsedPin | undefined, extensions?: readonly string[], tools: ToolPolicy = 'none'): ReviewerSpawn {
         const args = ['-p', '--mode', 'json', '--no-session', '--no-extensions']
         // Declared machine extensions ride INSIDE the hermetic set (row 89): pi's
         // --no-extensions disables discovery but explicit -e paths still load, so
         // auth-supplying adapters work without readmitting ambient machine state.
         for (const e of extensions ?? []) args.push('-e', e)
-        args.push('--no-skills', '--no-context-files', '--thinking', pin?.thinking ?? 'off')
+        args.push('--no-skills', '--no-context-files')
+        // Row 217: with no flag pi hands every session read, bash, edit and write, unapproved.
+        args.push(...(tools === 'read' ? ['--tools', 'read,grep,find,ls'] : ['--no-tools']))
+        args.push('--thinking', pin?.thinking ?? 'off')
         if (pin !== undefined) args.push('--model', `${pin.provider ?? 'anthropic'}/${pin.model}`)
         return { cmd: 'pi', args, env: {} }
       },

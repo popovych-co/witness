@@ -2,7 +2,7 @@ import type { Ctx } from './cli.js'
 import type { Harness } from './harness.js'
 import { SESSION_DEFAULT } from './model.js'
 import { ok, refuse, type Result, type Violation } from './refusal.js'
-import { invokeReviewerAsync, parseVerdictText, type InvokeExtras } from './reviewer.js'
+import { invokeReviewerAsync, parseVerdictText, toolsFor, type InvokeExtras } from './reviewer.js'
 import type { ReviewerVerdict } from './rounds.js'
 import { parseVerdict, verdictViolations, type Reviewed } from './verdict.js'
 
@@ -29,6 +29,7 @@ async function runLens(
   for (let attempt = 0; ; attempt++) {
     const r = await invokeReviewerAsync(ctx, harness, {
       ...opts, prompt, model: model === SESSION_DEFAULT ? undefined : model, lens: lens.name,
+      tools: toolsFor(lens.reviewed),          // row 217: read-only file tools only for content named by path
     })
     if (!r.ok) return refuse(r.violations)
     const rawR = parseVerdictText(r.value.text)

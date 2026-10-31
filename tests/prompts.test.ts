@@ -82,3 +82,19 @@ describe('the arbiter prompt (A3)', () => {
     expect(body).toContain('"The ask"')
   })
 })
+
+describe('reviewer tools in prompts (row 217)', () => {
+  it('a tool-less prompt says so, and the drift reviewer says when it reads (issue #73)', () => {
+    for (const n of ['design-critic', 'plan-critic', 'slicing-critic', 'arbiter'])
+      expect(readFileSync(promptPath(n), 'utf8'), n).toContain('You have no tools: you cannot read files, run commands or ask questions')
+    const drift = readFileSync(promptPath('drift-reviewer'), 'utf8')
+    expect(drift).toContain('At the ship gate the source files are inline and you have no tools')
+    expect(drift).toContain('your file tools, which only read')
+  })
+
+  it("the plan critic's tool sentence never cuts its lead-in from its list (issue #73)", () => {
+    const plan = readFileSync(promptPath('plan-critic'), 'utf8')
+    expect(plan).not.toContain('You judge: You have no tools')
+    expect(plan).toMatch(/You judge:\n\n1\. \*\*Delta faithfulness/)
+  })
+})

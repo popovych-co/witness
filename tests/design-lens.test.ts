@@ -198,4 +198,17 @@ describe('implement gate — design-reviewer wiring', () => {
     expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario2) }), 'implement', planId, { fresh: false, manual: false })).toBe(0)
     expect(readStream(repo.root, planId).filter((e) => e.t === 'gate-run').length).toBe(before + 1)  // re-rolled, not resumed
   })
+
+  it('the design-reviewer gets read-only file tools for its captures, a code lens none (issue #73)', async () => {
+    const { repo, wt, planId } = await uiPlanRepo()
+    const scenario = fakeScenario()
+    const cfg = (await import('../src/config.js')).loadConfig(repo.root)
+    const { diffBase, changedFiles } = await import('../src/evidence.js')
+    const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
+    putVerdict(scenario, treeClean(changedFiles(wt, base.ok ? base.value : '')))
+    putVerdict(scenario, { coverage: [{ anchor: 'initial.png', note: 'seen' }], findings: [] }, 'design-reviewer')
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
+    expect(readFileSync(join(callFor(scenario, 'design-reviewer')!, 'argv'), 'utf8')).toContain('--tools\nRead,Grep,Glob\n')
+    expect(readFileSync(join(callFor(scenario, 'code-reviewer')!, 'argv'), 'utf8')).toContain('--tools\n\n')
+  })
 })

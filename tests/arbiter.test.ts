@@ -74,6 +74,12 @@ describe('arbitrate (A3)', () => {
     expect(r.ok && r.value.choice).toBe(1)
     expect(readFileSync(join(scenario, 'claude-calls', 'call-2', 'stdin'), 'utf8')).toContain('## Previous attempt rejected')
   })
+  it('the arbiter is asked with no tools (issue #73)', async () => {
+    const { repo, scenario, ctx, cfg } = await setup()
+    putVerdict(scenario, { choice: 2, reason: 'nothing says how this converges' }, 'arbiter')
+    await arbitrate(ctx, repo.root, cfg, REQ)
+    expect(readFileSync(join(callFor(scenario, 'arbiter')!, 'argv'), 'utf8')).toContain('--tools\n\n')
+  })
   it('refuses arbiter-malformed after the second invalid answer', async () => {
     const { repo, scenario, ctx, cfg } = await setup()
     putVerdict(scenario, 'no ruling here', 'arbiter')

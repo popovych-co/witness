@@ -7,7 +7,7 @@ argument-hint: "[--manual] [what to build]"
 
 The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual` to **every** `witness gate` and `witness ship` command you run this session — caution is a per-run mood, never config. The mood outlives a relay: when you print a `relay:` line in an armed session, add that the fresh session starts with `/witness --manual`.
 
-Any other words in `$ARGUMENTS` are the human's ask: run `$WITNESS ask "<those words>"` once, before the first `next`. The CLI queues it and `next` routes it to brainstorm, so the ask outlives this session.
+Any other words in `$ARGUMENTS` are the human's ask: run `$WITNESS ask "<those words>"` once, before the first `next`. The CLI queues it and `next` routes it to brainstorm, so the ask outlives this session. Words that ask you to review or check a look are not an ask: answer them with the `witness-design` skill's **A review outside the gate**, and queue nothing.
 
 Resolve the CLI once:
 
@@ -74,3 +74,5 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 - A skill ended its turn for a gate stop — that stop is yours too; do not restart the loop until the human decides.
 
 **Never merge a PR** — merging is the human's act on GitHub; the lazy stamp finishes the lifecycle on the next scan. **Never edit `specs/` or `plans/`** (or wherever the repo's `paths:` config relocates them) — that is what the skills' write path is for. Run `$WITNESS status` — the orientation screen (flows, blocked docs, reconcile rows, pending gates) — when you need position rather than the next action; bare `$WITNESS` prints the same screen.
+
+A human asking you to review or check a look — the approved `designs/<spec-id>.html`, or the page a design session is drafting, never the running app — is answered by the `witness-design` skill's **A review outside the gate**, never from a screenshot.
