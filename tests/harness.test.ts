@@ -6,6 +6,7 @@ import {
   HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
   resolveDriver, resolveJudge, resolveSkills, skillPins, skillsVisibility, validatePin,
 } from '../src/harness.js'
+import { toolsFor } from '../src/reviewer.js'
 
 const hx = (name: string) => {
   const r = loadHarness(name)
@@ -192,19 +193,19 @@ describe('reviewer contract', () => {
   it('claude-code spawns claude -p json with model flag and thinking as env budget', () => {
     const s = claude.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'low' })
     expect(s.cmd).toBe('claude')
-    expect(s.args).toEqual(['-p', '--output-format', 'json', '--model', 'claude-fable-5'])
+    expect(s.args).toEqual(['-p', '--output-format', 'json', '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', '', '--model', 'claude-fable-5'])
     expect(s.env).toEqual({ MAX_THINKING_TOKENS: '4096' })
     const off = claude.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'off' })
     expect(off.env).toEqual({})
     const sessionDefault = claude.reviewer.spawn(undefined)
-    expect(sessionDefault.args).toEqual(['-p', '--output-format', 'json'])
+    expect(sessionDefault.args).toEqual(['-p', '--output-format', 'json', '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ''])
   })
 
   it('pi spawns hermetic print mode with pinned thinking and provider-qualified model', () => {
     const s = pi.reviewer.spawn({ provider: 'google', model: 'gemini-3.6-pro', thinking: 'low' })
     expect(s.cmd).toBe('pi')
     expect(s.args).toEqual(['-p', '--mode', 'json', '--no-session', '--no-extensions',
-      '--no-skills', '--no-context-files', '--thinking', 'low', '--model', 'google/gemini-3.6-pro'])
+      '--no-skills', '--no-context-files', '--no-tools', '--thinking', 'low', '--model', 'google/gemini-3.6-pro'])
     const bare = pi.reviewer.spawn({ provider: undefined, model: 'claude-fable-5', thinking: 'off' })
     expect(bare.args).toContain('anthropic/claude-fable-5')
     expect(bare.args).toContain('off')
@@ -218,10 +219,26 @@ describe('reviewer contract', () => {
       ['/home/u/.pi/agent/npm/node_modules/pi-claude-oauth-adapter'])
     expect(s.args).toEqual(['-p', '--mode', 'json', '--no-session', '--no-extensions',
       '-e', '/home/u/.pi/agent/npm/node_modules/pi-claude-oauth-adapter',
-      '--no-skills', '--no-context-files', '--thinking', 'off', '--model', 'anthropic/claude-fable-5'])
+      '--no-skills', '--no-context-files', '--no-tools', '--thinking', 'off', '--model', 'anthropic/claude-fable-5'])
     // claude-code accepts and ignores the param — the key is machine config, pi-only in effect
     const c = hx('claude-code').reviewer.spawn(undefined, ['/anything'])
     expect(c.args).not.toContain('-e')
+  })
+
+  it('a reviewer is spawned with no tools, or read-only ones (issue #73)', () => {
+    const pin = { provider: undefined, model: 'claude-fable-5', thinking: 'off' as const }
+    expect(claude.reviewer.spawn(pin, [], 'read').args)
+      .toEqual(['-p', '--output-format', 'json', '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', 'Read,Grep,Glob', '--model', 'claude-fable-5'])
+    const p = pi.reviewer.spawn(pin, [], 'read').args
+    expect(p.slice(p.indexOf('--tools'), p.indexOf('--tools') + 2)).toEqual(['--tools', 'read,grep,find,ls'])
+    expect(p).not.toContain('--no-tools')
+  })
+
+  it('toolsFor gives read only to content named by path (issue #73)', () => {
+    expect(toolsFor({ kind: 'screens', captures: [] })).toBe('read')
+    expect(toolsFor({ kind: 'tree', root: '/r', files: [] })).toBe('none')
+    expect(toolsFor({ kind: 'docs', docs: [] })).toBe('none')
+    expect(toolsFor({ kind: 'design', artifact: { ids: [] }, spec: { id: 's', body: '' } })).toBe('none')
   })
 
   it('pi maps the extra-usage 400 to the extensions remedy, other provider errors unchanged', () => {

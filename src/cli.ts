@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { configPath } from './config.js'
 import { journalStamp } from './context.js'
+import { isReviewer } from './drive-presence.js'
 import { stateFloor } from './floor.js'
 import { primaryRoot } from './gitio.js'
 import { withJournalCtx } from './journal.js'
@@ -116,6 +117,9 @@ const VERB_USAGE: Record<string, string> = {
   wait: 'witness wait [--since <token>] — blocks until something new needs you · the chat runs it under autonomy',
 }
 
+// Row 217. The verbs a reviewer may run: each only reads.
+const REVIEWER_VERBS: ReadonlySet<string> = new Set(['read', 'index', 'log', 'diff'])
+
 // Row 116 moved the body to version.ts, which journal.ts can import without closing a
 // cycle. Re-exported here because eleven call sites already ask the CLI shell for it and
 // the question they are asking has not changed.
@@ -165,6 +169,14 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
   // the human nothing they can act on.
   const helpRequested = verb === 'help' || verb === '--help'
     || rest.includes('--help') || rest.includes('-h')
+  // Row 217. A reviewer reads; it never acts. Its tools are already gone (the spawn flags); this tripwire
+  // refuses what a harness that ignored them could still run. Checked directly: a reviewer spawned inside
+  // a drive session carries both markers, and `sessionMarker` names the drive's first.
+  if (isReviewer(ctx.env) && !helpRequested && !REVIEWER_VERBS.has(verb ?? '')) {
+    renderRefusal([v('witness', 'reviewer-cannot', `${verb ?? '(no verb)'} under WITNESS_REVIEWER`,
+      'nothing — a reviewer reads and never acts; it may run witness read, index, log or diff')]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   if (!helpRequested && verb !== 'floor') {
     const gateRoot = primaryRoot(ctx.cwd)
     if (gateRoot.ok) {

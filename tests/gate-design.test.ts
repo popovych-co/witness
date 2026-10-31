@@ -68,6 +68,19 @@ describe('design gate', () => {
     expect(readStream(repo.root, 'booking-form').some((e) => e.t === 'design-stamp')).toBe(true)
   })
 
+  it('the design-critic runs sealed off, with no tools (issue #73)', async () => {
+    const { scenario, ctx } = await designed()
+    putVerdict(scenario, CLEAN)
+    const { runGate } = await import('../src/gate.js')
+    await import('../src/gates/index.js')
+    await runGate(ctx, 'design', 'booking-form', { fresh: false, manual: false })
+    const argv = readFileSync(join(scenario, 'claude-calls/call-1/argv'), 'utf8')
+    expect(argv).toContain('--safe-mode\n')
+    expect(argv).toContain('--strict-mcp-config\n')
+    expect(argv).toContain('--no-session-persistence\n')
+    expect(argv).toContain('--tools\n\n')
+  })
+
   it('stops when the artifact is missing', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'booking-form', { ui: true, criteria: [{ id: 'ac-rotate', test: '@spec:booking-form' }] })

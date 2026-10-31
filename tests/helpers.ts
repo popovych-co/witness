@@ -82,7 +82,7 @@ export function tmpRepo(): TestRepo {
         ...NO_SESSION,
         // a suite run inside a drive session or a runner turn must not inherit either:
         // the marker would scope every `next` and refuse every `drive` (row 180)
-        WITNESS_DRIVE: undefined, WITNESS_RUNNER_TURN: undefined,
+        WITNESS_DRIVE: undefined, WITNESS_REVIEWER: undefined, WITNESS_RUNNER_TURN: undefined,
         WITNESS_REGISTRY: 'off', ...opts.env,
       },
       isTTY: opts.tty ?? answers.length > 0,
@@ -310,7 +310,8 @@ export function measuredEnv(session: string, tokens: number | undefined, window:
 // The env for a CLI a test spawns as a process of its own, which tmpRepo's scrub never reaches:
 // this process's env without the session it runs in (NO_SESSION above), plus `extra`.
 export function hermeticEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-  return { ...process.env, ...NO_SESSION, ...extra }
+  // Row 217: a suite run inside a reviewer still runs — every verb refuses under its marker.
+  return { ...process.env, ...NO_SESSION, WITNESS_REVIEWER: undefined, ...extra }
 }
 
 export function fakeBinDir(): string {

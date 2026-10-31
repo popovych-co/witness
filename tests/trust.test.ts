@@ -129,9 +129,21 @@ describe('witness trust per command (D205)', () => {
     expect(allowed(repo)).toEqual(['pnpm test', 'pnpm lint', 'echo first', 'test -d .git'])
   })
 
+  it('a reviewer cannot grant trust, in a drive session or not (issue #73)', async () => {
+    const repo = await planWithCmdCriterion()
+    for (const env of [{ WITNESS_REVIEWER: '1' }, { WITNESS_DRIVE: 'ingest-plan-1', WITNESS_REVIEWER: '1' }]) {
+      for (const flag of [['--cmd', 'pnpm test'], ['--yes']]) {
+        const res = await repo.cli(['trust', 'ingest-plan-1', ...flag], { env, tty: true })
+        expect(res.code).toBe(2)
+        expect(res.stderr).toContain('reviewer-cannot')
+      }
+    }
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
   it('no session grants trust', async () => {
     const repo = await planWithCmdCriterion()
-    for (const env of [{ WITNESS_DRIVE: 'ingest-plan-1' }, { WITNESS_REVIEWER: '1' }]) {
+    for (const env of [{ WITNESS_DRIVE: 'ingest-plan-1' }]) {
       for (const flag of [['--cmd', 'pnpm test'], ['--yes']]) {
         const res = await repo.cli(['trust', 'ingest-plan-1', ...flag], { env, tty: true })
         expect(res.code).toBe(2)

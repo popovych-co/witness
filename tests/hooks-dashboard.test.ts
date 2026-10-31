@@ -38,6 +38,16 @@ describe('session-dashboard hook', () => {
     expect(r.stdout).toBe('');
   });
 
+  it('is silent inside a reviewer, in a drive session too (issue #73)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sfrev-'));
+    writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
+    for (const marks of [{ WITNESS_REVIEWER: '1' }, { WITNESS_DRIVE: 'p1', WITNESS_REVIEWER: '1' }]) {
+      const r = runHook(dir, { WITNESS_BIN: stubBin(dir), ...marks });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe('');
+    }
+  });
+
   it('swallows CLI failures (exit 0, session start must survive)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sffail-'));
     writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');

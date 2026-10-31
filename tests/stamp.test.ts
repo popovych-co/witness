@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { lazyStamp } from '../src/stamp.js'
@@ -89,5 +89,16 @@ describe('check --drift --deep', () => {
     const ci = await seed.repo.cli(['check', '--drift', '--deep', seed.specId], { env: { ...gateEnv(scenario), CI: '1' } })
     expect(ci.code).toBe(2)
     expect(ci.stdout + ci.stderr).toContain('deep-in-ci')
+  })
+
+  it('the deep drift reviewer finds the code with read-only file tools (issue #73)', async () => {
+    const seed = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [{ anchor: { kind: 'omission', scope: '.' }, note: 'walked the tree' }],
+      findings: [],
+    })
+    await seed.repo.cli(['check', '--drift', '--deep', seed.specId], { env: gateEnv(scenario) })
+    expect(readFileSync(join(scenario, 'claude-calls/call-1/argv'), 'utf8')).toContain('--tools\nRead,Grep,Glob\n')
   })
 })

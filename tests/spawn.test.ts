@@ -162,6 +162,12 @@ describe('resolveSpawn — the win32 algorithm, on any host', () => {
     expect(resolveSpawn('pi', ['-p', 'a\nb'], env, 'linux'))
       .toEqual({ ok: true, value: { file: 'pi', args: ['-p', 'a\nb'], env, windowsVerbatimArguments: false } })
   })
+
+  it('an empty argument survives the win32 batch shim (issue #73)', () => {
+    const dir = binDir('claude.cmd')
+    const r = resolveSpawn('claude', ['--tools', ''], winEnv(dir), 'win32')
+    expect(r.ok && r.value.args[4]).toContain(String.raw`^^^"--tools^^^" ^^^"^^^"`)
+  })
 })
 
 describe('treeStop (row 201)', () => {
@@ -263,7 +269,7 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(JSON.parse(r.value.text)).toEqual({
-        argv: ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills', '--no-context-files', '--thinking', 'off'],
+        argv: ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills', '--no-context-files', '--no-tools', '--thinking', 'off'],
         stdin: prompt,
       })
     }
@@ -301,7 +307,7 @@ process.stdin.on('end', () => {
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(JSON.parse(r.value.text)).toEqual({
-        argv: ['-p', '--output-format', 'json', '--model', 'claude-opus-4-6'],
+        argv: ['-p', '--output-format', 'json', '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', '', '--model', 'claude-opus-4-6'],
         budget: String(CLAUDE_THINKING_BUDGET.high),
         stdin: prompt,
       })

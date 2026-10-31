@@ -142,7 +142,8 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   if (!localR.ok) { renderRefusal(localR.violations).forEach(ctx.err); return EXIT.REFUSED }
   const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${criterionMark(c)}`).join(' · ') : 'unrunnable'})\n`
   const invoked = invokeReviewer(ctx, hxR.value.harness, {
-    cwd: root, prompt,
+    // Row 217: no source file is inline here, so the reviewer finds and reads the code itself.
+    cwd: root, prompt, tools: 'read',
     timeoutMs: cfgR.ok ? cfgR.value.gates.reviewerTimeoutMs : undefined,
     extensions: localR.value.reviewerExtensions,
   })

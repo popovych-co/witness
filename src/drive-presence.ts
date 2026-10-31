@@ -20,6 +20,12 @@ export function driveChild(env: Record<string, string | undefined>): { target: s
   return { target: marker === TARGETLESS ? undefined : marker }
 }
 
+// Row 217. Is this process a reviewer, or started by one? Read on its own: a reviewer spawned
+// inside a drive session carries both markers, and `sessionMarker` names the drive's first.
+export function isReviewer(env: Record<string, string | undefined>): boolean {
+  return (env.WITNESS_REVIEWER ?? '') !== ''
+}
+
 // Rows 173 and 207. A session acts for the human only through the chat it answers to: one
 // drive spawned, or a reviewer, never grants trust or un-sticks a target. Names the marker.
 export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | undefined {
