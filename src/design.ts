@@ -35,7 +35,9 @@ export type LookControl = { anchor: string; line: number; kind: ControlKind; hol
 export const CONTROLS_NOTE = 'from markup only — states a CSS class or a script draws, :hover and :focus styles, and content past a scrolling pane are not listed; read the source for those'
 
 type Attr = { v: string; quoted: boolean }
-type Open = { t: 'open'; name: string; attrs: Map<string, Attr>; start: number; end: number; self: boolean }
+// `html`: an HTML element, not one opened inside svg or math — a `<details>` or `<template>` there is
+// a foreign element a browser neither discloses nor makes inert.
+type Open = { t: 'open'; name: string; attrs: Map<string, Attr>; start: number; end: number; self: boolean; html: boolean }
 type Tok = Open | { t: 'close'; name: string; start: number } | { t: 'text'; start: number; end: number }
 
 const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript'])
@@ -186,12 +188,13 @@ function tokenize(src: string): Tok[] {
     if (foreign > 0 && BREAKOUT.has(name)) foreign = 0
     // `/>` closes only a foreign element; on an HTML one a browser ignores it.
     const self = slash && (foreign > 0 || name === 'svg' || name === 'math')
-    emit({ t: 'open', name, attrs, start: lt, end: j, self })
+    const html = foreign === 0 && name !== 'svg' && name !== 'math'
+    emit({ t: 'open', name, attrs, start: lt, end: j, self, html })
     i = textStart = j
     if (self) continue
     if (name === 'svg' || name === 'math') foreign++
-    else if (name === 'template') { if (inert++ === 0) foreignAtTemplate = foreign }
     else if (foreign > 0 && name !== 'script') continue
+    else if (name === 'template') { if (inert++ === 0) foreignAtTemplate = foreign }
     else if (name === 'plaintext') { i = n; break }                             // the rest is one text run
     else if (RAW_TEXT.has(name)) {
       const e = rawEnd(j, name)
@@ -273,12 +276,18 @@ export function lookControls(html: string): LookControl[] {
   // Line anchors: the `--outline`'s ids, per line as it reads them, at their source offsets.
   const nl: number[] = []
   for (let o = html.indexOf('\n'); o !== -1; o = html.indexOf('\n', o + 1)) nl.push(o)
+  // Each id is spelled out and cut once, here, so a long id over many controls costs its length
+  // once rather than once per row — and a row's anchor stays as short as its `holds`.
+  const shown = (id: string): string => {
+    const cps = Array.from(logSafe(id))
+    return cps.length > HOLDS_MAX ? cps.slice(0, HOLDS_MAX - 1).join('') + '…' : cps.join('')
+  }
   const hits: Array<{ at: number; line: number; id: string }> = []
   for (let l = 0, from = 0; l <= nl.length; l++) {
     const to = l < nl.length ? nl[l]! : html.length
     const re = new RegExp(ID_ATTR.source, 'g')
     const text = html.slice(from, to)
-    for (let m = re.exec(text); m !== null; m = re.exec(text)) hits.push({ at: from + m.index, line: l + 1, id: m[1]!.trim() })
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) hits.push({ at: from + m.index, line: l + 1, id: shown(m[1]!.trim()) })
     from = to + 1
   }
 
@@ -335,20 +344,20 @@ export function lookControls(html: string): LookControl[] {
   let hit = 0                                                                 // hits before the element
   let nextSelect = 0
   const selects: number[] = []
-  toks.forEach((tk, p) => { if (tk.t === 'open' && tk.name === 'select') selects.push(p) })
+  toks.forEach((tk, p) => { if (tk.t === 'open' && tk.html && tk.name === 'select') selects.push(p) })
   toks.forEach((tk, k) => {
     if (tk.t !== 'open' || NEVER.has(tk.name)) return
     const has = (a: string): boolean => tk.attrs.has(a)
     const role = lowerAscii(attr(tk, 'role').trim().split(/\s+/)[0]!)
     let kind: ControlKind | undefined
-    if (tk.name === 'select') kind = 'select'
-    else if (tk.name === 'details' && !has('open')) kind = 'details'
-    else if (tk.name === 'dialog' && !has('open')) kind = 'dialog'
-    else if (has('popover')) kind = 'popover'
+    if (tk.html && tk.name === 'select') kind = 'select'
+    else if (tk.html && tk.name === 'details' && !has('open')) kind = 'details'
+    else if (tk.html && tk.name === 'dialog' && !has('open')) kind = 'dialog'
+    else if (tk.html && has('popover')) kind = 'popover'
     else if (ROLES.has(role)) kind = role as ControlKind
     else if (lowerAscii(attr(tk, 'aria-expanded').trim()) === 'false') kind = 'collapsed'
     else if (has('hidden') || styleHides(attr(tk, 'style'))) kind = 'hidden'
-    else if (tk.name === 'template') kind = 'template'
+    else if (tk.html && tk.name === 'template') kind = 'template'
     if (kind === undefined) return
 
     let holds = ''
@@ -373,9 +382,10 @@ export function lookControls(html: string): LookControl[] {
         if (o.t === 'open') {
           if (o.name === 'option') { done(); cur = { raw: '', count: 0, label: attr(o, 'label') } }
           else if (o.name === 'optgroup' || o.name === 'hr') done()
-          else if (o.name === 'br' && cur !== undefined) { cur.raw += ' '; cur.count++ }
+          else if (BLOCK.has(o.name) && cur !== undefined) { cur.raw += ' '; cur.count++ }      // as in an element's text
         } else if (o.t === 'close') {
           if (o.name === 'option' || o.name === 'select') done()
+          else if (BLOCK.has(o.name) && cur !== undefined) { cur.raw += ' '; cur.count++ }
         } else if (cur !== undefined && cur.count < GATHER) {
           const [h, c, more] = head(html, o.start, o.end, GATHER - cur.count)
           cur.raw += blank[p] === 1 ? ' ' : h
@@ -410,7 +420,7 @@ export function lookControls(html: string): LookControl[] {
     else if (before?.line === line) anchor = before.id
     else if (after?.line === line) anchor = after.id
     else anchor = before?.id ?? '-'
-    out.push({ anchor: logSafe(anchor), line, kind, holds })
+    out.push({ anchor, line, kind, holds })
   })
   return out
 }

@@ -226,6 +226,12 @@ describe('the design skill judges a look from its source (row 215)', () => {
     for (const s of ['witness-plan', 'witness-implement'])
       expect(readFileSync(skillPath(s), 'utf8'), s).toContain('`controls`')
   })
+
+  it("/witness says a review ask is queued nowhere after, not inside, the ask rule (issue #73)", () => {
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).not.toContain('queue nothing. The CLI queues it')
+    expect(cmd).toContain('so the ask outlives this session. Words that ask you to review or check a look are not an ask')
+  })
 })
 
 // D128. Nine copies of the exits set existed in this system; 0.10.1 removed the four in CLI

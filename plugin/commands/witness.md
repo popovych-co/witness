@@ -7,7 +7,7 @@ argument-hint: "[--manual] [what to build]"
 
 The CLI decides, you act. If `$ARGUMENTS` contains `--manual`, append `--manual` to **every** `witness gate` and `witness ship` command you run this session — caution is a per-run mood, never config. The mood outlives a relay: when you print a `relay:` line in an armed session, add that the fresh session starts with `/witness --manual`.
 
-Any other words in `$ARGUMENTS` are the human's ask: run `$WITNESS ask "<those words>"` once, before the first `next`. Words that ask you to review or check a look are not an ask: answer them with the `witness-design` skill's **A review outside the gate**, and queue nothing. The CLI queues it and `next` routes it to brainstorm, so the ask outlives this session.
+Any other words in `$ARGUMENTS` are the human's ask: run `$WITNESS ask "<those words>"` once, before the first `next`. The CLI queues it and `next` routes it to brainstorm, so the ask outlives this session. Words that ask you to review or check a look are not an ask: answer them with the `witness-design` skill's **A review outside the gate**, and queue nothing.
 
 Resolve the CLI once:
 

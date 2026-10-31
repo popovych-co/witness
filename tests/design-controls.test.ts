@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lookControls } from '../src/design.js'
+import { controlsBlock, lookControls } from '../src/design.js'
 
 const page = (body: string) => '<!doctype html>\n<html><body>\n' + body + '\n</body></html>\n'
 const rows = (html: string) => lookControls(html).map((c) => [c.anchor, c.line, c.kind, c.holds])
@@ -82,6 +82,27 @@ describe('lookControls — a look\'s controls from markup (row 215)', () => {
   it('block elements with no whitespace between them never glue words; inline ones still join (issue #73)', () => {
     expect(rows(page('<main id="x"><div id="k" hidden><div class="mrow"><div class="k">Step 1</div><div class="v">Control-click the app</div></div><p>Use <b>Settings</b>.</p></div></main>')))
       .toEqual([['k', 3, 'hidden', 'Step 1 Control-click the app Use Settings.']])
+  })
+
+  it('an element opened inside svg or math is no HTML control: neither listed nor inert (issue #73)', () => {
+    expect(rows(page('<div id="a"><svg><template/><details><summary>x</summary></details><rect/></svg><p>q</p></div>'))).toEqual([])
+    expect(rows(page('<div id="a"><svg><template><rect/></svg><details><summary>S</summary></details><dialog aria-label="D"></dialog></div>')))
+      .toEqual([['a', 3, 'details', 'S'], ['a', 3, 'dialog', 'D']])
+  })
+
+  it('options whose markup is block elements never glue words (issue #73)', () => {
+    expect(rows(page('<select id="s"><option><div>Standard</div><div>5 days</div></option><option><div>Express</div><div>1 day</div></option></select>')))
+      .toEqual([['s', 3, 'select', 'Standard 5 days | Express 1 day']])
+  })
+
+  it('a long id over many controls stays linear and never throws, its anchor cut at 120 code points (issue #73)', () => {
+    const big = `<main id="${'a'.repeat(200_000)}">${'<i hidden></i>'.repeat(40_000)}</main>`
+    const t0 = performance.now()
+    const out = lookControls(page(big))
+    expect(performance.now() - t0).toBeLessThan(1500)
+    expect([...out[0]!.anchor]).toHaveLength(120)
+    expect(out[0]!.anchor.endsWith('…')).toBe(true)
+    expect(() => controlsBlock(page(big))).not.toThrow()
   })
 
   it('never lists an open dialog, a disabled, class-hidden or comment-styled element, aria-hidden, an option or a summary (issue #73)', () => {
