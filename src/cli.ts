@@ -52,6 +52,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   gate: () => import('./verbs/gate.js'),
   decide: () => import('./verbs/decide.js'),
   design: () => import('./verbs/design.js'),
+  // Row 215. The design gate's reviewers on demand: the gate's question, journaled nowhere.
+  review: () => import('./verbs/review.js'),
   start: () => import('./verbs/start.js'),
   // The orientation screen has a name (D101). Bare `witness` stays as its alias, but
   // an unnamed command cannot be referenced — commands/witness.md instructs the
@@ -100,6 +102,7 @@ const VERB_USAGE: Record<string, string> = {
   recover: 'witness recover [--complete | --rollback]',
   rename: 'witness rename <old-id> <new-id>',
   retry: 'witness retry <target>',
+  review: 'witness review design <spec-id> [--file <html>]',
   satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',

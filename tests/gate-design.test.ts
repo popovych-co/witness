@@ -43,6 +43,17 @@ describe('design gate', () => {
     expect((runs[0] as { standing?: string }).standing).toBeTruthy()
   })
 
+  it("the critic's input names the look and lists its controls (issue #73)", async () => {
+    const { scenario, ctx } = await designed()
+    putVerdict(scenario, CLEAN)
+    const { runGate } = await import('../src/gate.js')
+    await import('../src/gates/index.js')
+    await runGate(ctx, 'design', 'booking-form', { fresh: false, manual: false })
+    const call = readFileSync(join(scenario, 'claude-calls/call-1/stdin'), 'utf8')
+    expect(call).toContain('### Design artifact: the look for booking-form')
+    expect(call).toContain('controls[0]{anchor,line,kind,holds}:')
+  })
+
   it('decide --approve stamps design:{sha,spec} and journals it', async () => {
     const { repo, scenario, ctx } = await designed()
     putVerdict(scenario, CLEAN)

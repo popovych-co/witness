@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CanonPaths } from './config.js'
+import { serializeDoc } from './fm.js'
 import { latestRecap, readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
 import { effortOf } from './reviewed.js'
 import type { CanonDoc } from './scan.js'
 import { canonicalSha } from './sha.js'
 import { cmd, logSafe, rows } from './toon.js'
+import type { Reviewed } from './verdict.js'
 
 // What `--outline` and the critic's anchor menu call an id. `lookControls` reads the same
 // matches, so a control's anchor is always one the outline lists.
@@ -416,6 +418,21 @@ export function lookControls(html: string): LookControl[] {
 // The `--outline` block and the critic's input: the rows, then what markup cannot show.
 export function controlsBlock(html: string): string[] {
   return [...rows('controls', ['anchor', 'line', 'kind', 'holds'], lookControls(html)), cmd('controls-note', CONTROLS_NOTE)]
+}
+
+// Row 215 (D2). The one home for what the design critic reads, for the gate and for a review: the
+// look — named by its spec, never a path, so a scratch page and the same bytes registered are one
+// question — then its controls, then the spec. With no artifact the checks already fail-stop,
+// and the body still names what is missing.
+export function designReviewed(html: string | undefined, spec: CanonDoc): { reviewed: Reviewed; promptBody: string } {
+  const id = String(spec.meta.id)
+  const promptBody = [
+    `### Design artifact: the look for ${id}`, html ?? '(missing — no artifact to review)',
+    ...(html !== undefined ? ['### Controls in the look (from markup)', controlsBlock(html).join('\n')] : []),
+    `### Parent spec: ${id}`, serializeDoc({ meta: spec.meta, body: spec.body }),
+  ].join('\n\n')
+  const ids = html !== undefined ? elementIds(html) : []
+  return { reviewed: { kind: 'design', artifact: { ids }, spec: { id, body: spec.body } }, promptBody }
 }
 
 // A design artifact is a portable, self-contained mockup: it must render with no

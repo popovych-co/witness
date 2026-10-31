@@ -12,7 +12,7 @@ import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cmd, kv, rows } from './toon.js'
+import { cmd, kv, logSafe, rows } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
 import {
   docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt,
@@ -227,12 +227,14 @@ export function lensPrompt(lens: Lens, setup: string, menu: string, body: string
   return `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${setup}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
 }
 
+// A finding's anchor and claim are a reviewer's free text, printed on a human's terminal: spelled
+// out (`logSafe`) so an escape sequence or bidi override cannot paint over the row (row 215).
 export function findingRows(verdicts: ReviewerVerdict[]): Array<Record<string, string>> {
   return verdicts.flatMap((rv) =>
     rv.findings.map((f) => ({
       reviewer: rv.reviewer, blocking: String(f.blocking),
       pin: f.contradicts_pin !== undefined ? `#${f.contradicts_pin}` : '',
-      anchor: typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`, claim: f.claim,
+      anchor: logSafe(typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`), claim: logSafe(f.claim),
     })))
 }
 
