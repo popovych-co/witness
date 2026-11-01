@@ -60,10 +60,12 @@ git rebase origin/<ship-branch>   # the REMOTE tip — re-hits the conflict the 
 # resolve each conflicted file preserving BOTH intents — the branch's behavior
 # and what landed on main; a resolution that drops either is a silent revert
 git add -A && git rebase --continue
-<run the repo's tests locally — the resolution must be green before it travels>
+<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>
 git push --force-with-lease
 $WITNESS ship <plan-id>          # resume the watch
 ```
+
+Any test you run yourself — reproducing a failed lane, checking a resolution — goes through `$WITNESS turn -- <test command>`, so it takes turns with the other worktrees' runs.
 
 Conflicts touching `specs/` or `plans/` cannot happen (PR branches carry code only); if you see one, stop — something upstream is wrong, hand it to the human.
 
