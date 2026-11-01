@@ -18,8 +18,9 @@ import { effortReviewedSha } from '../src/reviewed.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
+import { containmentLine, jobHost } from '../src/contain.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -225,6 +226,15 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect(res.outcome).toBe('exited')
     expect(lines.some((l) => /\] started$/.test(l))).toBe(true)
     expect(Date.now() - started).toBeLessThan(10000)
+  }, 20000)
+
+  it.skipIf(process.platform === 'win32')('a session that exits on its own takes what it started with it (row 218)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 30 &\necho "bg $!"\nexit 0') }, out: (l) => lines.push(l) })
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1)).outcome).toBe('exited')
+    const pid = Number(lines.map((l) => /\] bg (\d+)$/.exec(l)?.[1]).find(Boolean))
+    expect(await awaitGone(pid)).toBe(true)
   }, 20000)
 
   it('reports spawn-failed when the binary is not there', async () => {
@@ -488,6 +498,15 @@ function actsOnceAgent(scenario: string, act: string): string {
 }
 
 describe('driveLoop (D145)', () => {
+  it('drive says what ends a session (row 218)', async () => {
+    const repo = await seededRepo()
+    const out: string[] = []
+    // The suite's no-op keep-awake is a sh script, which Windows cannot start; node can.
+    const awake: Record<string, string> = process.platform === 'win32' ? { WITNESS_KEEP_AWAKE_BIN: process.execPath } : {}
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, awake, out), { maxSpawns: 0 })
+    expect(out).toContain(containmentLine(jobHost(fixtureEnv())))
+  }, 60000)
+
   it('spawns, sees the journal grow, and stops when the action stops moving', async () => {
     const repo = await planReady()
     const bin = actsOnceAgent(fakeScenario(), 'start auth-refresh-plan-1')

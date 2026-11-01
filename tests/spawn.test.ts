@@ -12,7 +12,7 @@ import { probe } from '../src/probe.js'
 import type { Result } from '../src/refusal.js'
 import { invokeReviewer } from '../src/reviewer.js'
 import { resolveSpawn, system32, treeStop } from '../src/spawn.js'
-import { fakeCtx, seededRepo } from './helpers.js'
+import { awaitGone, fakeCtx, orphansIn, seededRepo, writeOrphanStarter } from './helpers.js'
 
 // A PATH directory holding the named files. Real files, not a predicate: resolution IS
 // a filesystem walk, and a fake predicate would test the walk against itself. These
@@ -357,6 +357,34 @@ process.stdin.on('end', () => {
     await new Promise((r) => setTimeout(r, 3_000))
     expect(existsSync(late)).toBe(false)
   }, 20000)
+
+  it('a .cmd agent session leaves no orphan behind \u2014 exited or timed out (row 218)', async () => {
+    const repo = await seededRepo()
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
+    const scratch = mkdtempSync(join(tmpdir(), 'witness-orphan-'))
+    const starter = writeOrphanStarter(scratch)
+    // The agent starts the suite's app through a starter that exits, then exits \u2014 or hangs.
+    const dir = shimmed('agent', `require('node:child_process').execFileSync(process.execPath, [${JSON.stringify(starter)}, process.env.ORPHAN_PIDS])
+if (process.env.HANG === '1') setInterval(() => {}, 1000)`)
+    const recorded: number[] = []
+    try {
+      for (const [hang, outcome, timeoutMs] of [['0', 'exited', 60_000], ['1', 'timeout', 3_000]] as const) {
+        const pidFile = join(scratch, `pids-${hang}`)
+        const env = { ...envWith(dir), WITNESS_DRIVE_AGENT_BIN: join(dir, 'agent.cmd'), ORPHAN_PIDS: pidFile, HANG: hang } as Record<string, string>
+        const c = { ...cfg.value, drive: { ...cfg.value.drive, sessionTimeoutMs: timeoutMs } }
+        expect((await spawnSession({ kind: 'spawn', home: repo.root }, c, fakeCtx(repo.root, { env }), 1)).outcome).toBe(outcome)
+        const pids = orphansIn(pidFile)
+        recorded.push(...pids)
+        expect(pids).toHaveLength(2)
+        for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
+      }
+    } finally {
+      for (const pid of recorded) {
+        try { process.kill(pid) } catch { /* already gone */ }
+      }
+    }
+  }, 60000)
 })
 
 describe('system32 (row 211)', () => {
