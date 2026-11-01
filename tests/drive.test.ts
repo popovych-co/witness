@@ -38,6 +38,9 @@ const fakeAgent = (body: string): string => {
 // A noop keep-awake by default: the real `caffeinate` must never run from the suite.
 const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
   fakeCtx(repo.root, { tty: true, env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+// That no-op is a sh script, which Windows cannot start, and stopping a helper that never started
+// throws there; node starts, and fails at once on the helper's arguments (row 218).
+const startableAwake: Record<string, string> = process.platform === 'win32' ? { WITNESS_KEEP_AWAKE_BIN: process.execPath } : {}
 // A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
 // harness: the assertion under test is the decision, not what follows it. It says `tick`
 // so a test can find its session by prefix.
@@ -501,10 +504,17 @@ describe('driveLoop (D145)', () => {
   it('drive says what ends a session (row 218)', async () => {
     const repo = await seededRepo()
     const out: string[] = []
-    // The suite's no-op keep-awake is a sh script, which Windows cannot start; node can.
-    const awake: Record<string, string> = process.platform === 'win32' ? { WITNESS_KEEP_AWAKE_BIN: process.execPath } : {}
-    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, awake, out), { maxSpawns: 0 })
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, startableAwake, out), { maxSpawns: 0 })
     expect(out).toContain(containmentLine(jobHost(fixtureEnv())))
+  }, 60000)
+
+  it('a turn a dead holder left is gone once drive has run (row 218)', async () => {
+    const repo = await seededRepo()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'runner.lock'), JSON.stringify({ pid: 999_999 }))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, startableAwake, out), { maxSpawns: 0 })
+    expect(existsSync(join(repo.root, '.witness', 'runner.lock'))).toBe(false)
   }, 60000)
 
   it('spawns, sees the journal grow, and stops when the action stops moving', async () => {

@@ -358,13 +358,13 @@ process.stdin.on('end', () => {
     expect(existsSync(late)).toBe(false)
   }, 20000)
 
-  it('a .cmd agent session leaves no orphan behind \u2014 exited or timed out (row 218)', async () => {
+  it('a .cmd agent session leaves no orphan behind — exited or timed out (row 218)', async () => {
     const repo = await seededRepo()
     const cfg = loadConfig(repo.root)
     if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
     const scratch = mkdtempSync(join(tmpdir(), 'witness-orphan-'))
     const starter = writeOrphanStarter(scratch)
-    // The agent starts the suite's app through a starter that exits, then exits \u2014 or hangs.
+    // The agent starts the suite's app through a starter that exits, then exits — or hangs.
     const dir = shimmed('agent', `require('node:child_process').execFileSync(process.execPath, [${JSON.stringify(starter)}, process.env.ORPHAN_PIDS])
 if (process.env.HANG === '1') setInterval(() => {}, 1000)`)
     const recorded: number[] = []

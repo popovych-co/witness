@@ -10,6 +10,7 @@ import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon, type Canon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
+import { releaseDeadTurn } from './runner-lock.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
@@ -1028,6 +1029,9 @@ export async function driveLoop(
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
   publish()
+  // Row 218. A runner turn whose holder died — a session drive stopped mid-run — is released
+  // now and after every session, before Windows hands its pid to another process.
+  releaseDeadTurn(root)
   try {
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
@@ -1088,6 +1092,7 @@ export async function driveLoop(
       const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
       settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
       lanes.delete(key)
+      releaseDeadTurn(root)
     }
 
     if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)

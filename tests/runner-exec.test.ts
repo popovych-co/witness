@@ -1,11 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { execCommand, runFiltered } from '../src/runner.js'
-import { withRunnerTurn } from '../src/runner-lock.js'
+import { releaseDeadTurn, runnerLockPath, withRunnerTurn } from '../src/runner-lock.js'
 import { system32 } from '../src/spawn.js'
 import { worktreePath } from '../src/worktree.js'
 import {
@@ -129,6 +129,15 @@ describe('test runs take turns across worktrees (B3)', () => {
     writeFileSync(join(repo.root, '.witness', 'runner.lock'), JSON.stringify({ pid: 999_999 }))
     expect(withRunnerTurn(repo.root, fakeCtx(repo.root), 'x', () => 42)).toBe(42)
     expect(existsSync(join(repo.root, '.witness', 'runner.lock'))).toBe(false)
+  })
+
+  it("releaseDeadTurn removes a dead holder's turn and nothing else (row 218)", () => {
+    const repo = tmpRepo()
+    const p = runnerLockPath(repo.root)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, JSON.stringify({ pid: 999_999 })); expect(releaseDeadTurn(repo.root)).toBe(true); expect(existsSync(p)).toBe(false)
+    writeFileSync(p, JSON.stringify({ pid: process.pid })); expect(releaseDeadTurn(repo.root)).toBe(false); expect(existsSync(p)).toBe(true)
+    writeFileSync(p, ''); expect(releaseDeadTurn(repo.root)).toBe(false); expect(existsSync(p)).toBe(true)
   })
 
   it('a witness run inside a turn re-enters it instead of waiting on its own parent', () => {
