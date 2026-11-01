@@ -5,6 +5,9 @@ import { resolve } from 'node:path'
 // and each used to rebuild it in its own beforeAll — in parallel forks, so one file's CLI could
 // load a dist another file's `tsc` was halfway through rewriting (CI 2026-10-21: "./version.js
 // does not provide an export named 'version'"). ~2 s, once per vitest run.
+// Row 218: the build runs the `tsc` that `npm run build` runs, through node itself — on Windows
+// `npm` is `npm.cmd`, which `execFileSync` cannot start (ENOENT), so no test ran there at all.
 export default function setup(): void {
-  execFileSync('npm', ['run', 'build'], { cwd: resolve(import.meta.dirname, '..'), stdio: 'ignore' })
+  const root = resolve(import.meta.dirname, '..')
+  execFileSync(process.execPath, [resolve(root, 'node_modules', 'typescript', 'bin', 'tsc')], { cwd: root, stdio: 'ignore' })
 }

@@ -168,6 +168,10 @@ describe('witness-implement', () => {
     expect(body()).toContain("**An `untrusted-` refusal is the human's.**");
     expect(body()).toContain('Never run `witness trust` — no session grants trust.');
   });
+  it('runs every test of its own through witness turn (row 218)', () => {
+    expect(body()).toContain('never the spec tag — through `$WITNESS turn -- <test command>`');
+    expect(body()).toContain('**Every test you run yourself goes through `$WITNESS turn --`**');
+  });
 });
 
 describe('witness-implement — capture mandate', () => {
@@ -190,6 +194,9 @@ describe('witness-ship', () => {
     expect(body()).toContain('semantic-conflict');
     expect(body()).toContain('--force-with-lease');
     expect(body()).toContain('Never merge');
+  });
+  it('checks a resolution through witness turn (row 218)', () => {
+    expect(body()).toContain("<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>");
   });
 });
 

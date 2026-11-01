@@ -1,13 +1,16 @@
-import { spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { afterEach, describe, expect, it } from 'vitest'
 import { execCommand, runFiltered } from '../src/runner.js'
-import { withRunnerTurn } from '../src/runner-lock.js'
+import { releaseDeadTurn, runnerLockPath, withRunnerTurn } from '../src/runner-lock.js'
+import { system32 } from '../src/spawn.js'
 import { worktreePath } from '../src/worktree.js'
 import {
-  approve, breakSingleFixture, copyFixture, fakeCtx, fakeScenario, fixtureEnv, seededRepo, tmpRepo, vitestBin,
-  writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
+  approve, awaitGone, breakSingleFixture, copyFixture, fakeCtx, fakeScenario, fixtureEnv, seededRepo, tmpRepo, vitestBin,
+  writePlan, writeSpec, type TestRepo, patchConfig, orphansIn, writeOrphanStarter } from './helpers.js'
 
 // D158 (#20). execSync at Node's 1 MiB default threw ENOBUFS into the catch, so a
 // chatty-but-GREEN suite was reported as a failed lane and blocked ship with a false red.
@@ -70,15 +73,21 @@ describe('runFiltered', () => {
 // Task 3b. The turn is per pid, so the two runs are separate processes: two in-process
 // `repo.cli` calls share one pid and would re-enter each other's turn.
 const REPO = resolve(import.meta.dirname, '..')
-function evidenceChild(cwd: string, plan: string): Promise<{ code: number | null; stderr: string }> {
+// tsx's ESM loader, by URL: on Windows an ESM specifier must be one, and `node_modules/.bin/tsx`
+// is a `.cmd` there, which a plain spawn cannot start (row 218).
+const TSX_LOADER = pathToFileURL(join(REPO, 'node_modules', 'tsx', 'dist', 'esm', 'index.mjs')).href
+// Every CLI child in this file: the source CLI under node itself.
+function cliChild(cwd: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
   return new Promise((done) => {
-    const child = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'test-evidence', plan, '--phase', 'red', '--step', 's1'],
+    const child = spawn(process.execPath, ['--import', TSX_LOADER, join(REPO, 'src', 'bin.ts'), ...args],
       { cwd, env: fixtureEnv() as NodeJS.ProcessEnv, stdio: ['ignore', 'ignore', 'pipe'] })
     let stderr = ''
     child.stderr!.on('data', (d) => { stderr += String(d) })
     child.on('close', (code) => done({ code, stderr }))
   })
 }
+const evidenceChild = (cwd: string, plan: string) => cliChild(cwd, ['test-evidence', plan, '--phase', 'red', '--step', 's1'])
+const turnChild = (cwd: string, cmd: string[]) => cliChild(cwd, ['turn', '--', ...cmd])
 
 // Two started plans, one worktree each. Each worktree's runner appends "start <id>" to one
 // shared log, sleeps a second and appends "end <id>".
@@ -128,6 +137,15 @@ describe('test runs take turns across worktrees (B3)', () => {
     expect(existsSync(join(repo.root, '.witness', 'runner.lock'))).toBe(false)
   })
 
+  it("releaseDeadTurn removes a dead holder's turn and nothing else (row 218)", () => {
+    const repo = tmpRepo()
+    const p = runnerLockPath(repo.root)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, JSON.stringify({ pid: 999_999 })); expect(releaseDeadTurn(repo.root)).toBe(true); expect(existsSync(p)).toBe(false)
+    writeFileSync(p, JSON.stringify({ pid: process.pid })); expect(releaseDeadTurn(repo.root)).toBe(false); expect(existsSync(p)).toBe(true)
+    writeFileSync(p, ''); expect(releaseDeadTurn(repo.root)).toBe(false); expect(existsSync(p)).toBe(true)
+  })
+
   it('a witness run inside a turn re-enters it instead of waiting on its own parent', () => {
     const repo = tmpRepo()
     const loader = join(REPO, 'node_modules', 'tsx', 'dist', 'esm', 'index.mjs')
@@ -149,5 +167,115 @@ describe('test runs take turns across worktrees (B3)', () => {
     expect(withRunnerTurn(repo.root, fakeCtx(repo.root), 'x', () => 42)).toBe(42)
     expect(Date.now() - t0).toBeLessThan(4_000)
     expect(() => lstatSync(join(repo.root, '.witness', 'runner.lock'))).toThrow()
+  })
+})
+
+// Row 218. A session's own test run takes the repo's turn through `witness turn`, as witness's
+// own runs do, and on Windows inside a job.
+describe('witness turn (row 218)', () => {
+  it("witness turn runs a command in the repo turn: two worktrees take turns, and its exit is the command's (row 218)", async () => {
+    const { log, wts } = await twoWorktrees()
+    const [a, b] = await Promise.all([turnChild(wts[0], ['sh', 'turn.sh', 'a']), turnChild(wts[1], ['sh', 'turn.sh', 'b'])])
+    expect([a.code, b.code]).toEqual([1, 1])
+    const marks = readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split(' ')[0])
+    expect(marks).toEqual(['start', 'end', 'start', 'end'])
+    expect(`${a.stderr}${b.stderr}`).toContain('runner: waiting for pid')
+  }, 60_000)
+
+  it('drive.parallelSuites: true lets witness turn runs overlap', async () => {
+    const { log, wts } = await twoWorktrees({ drive: { parallelSuites: true } })
+    await Promise.all([turnChild(wts[0], ['sh', 'turn.sh', 'a']), turnChild(wts[1], ['sh', 'turn.sh', 'b'])])
+    const marks = readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split(' ')[0])
+    expect(marks.slice(0, 2)).toEqual(['start', 'start'])
+  }, 60_000)
+
+  it('witness turn inside a turn re-enters it', () => {
+    const repo = tmpRepo()
+    // Bounds a deadlock as perl's alarm does in the sibling test, on every host.
+    const bounded = join(fakeScenario(), 'bounded.cjs')
+    writeFileSync(bounded, "const r = require('node:child_process').spawnSync(process.argv[3], process.argv.slice(4), { stdio: 'inherit', timeout: Number(process.argv[2]) }); process.exit(r.status ?? 124)")
+    const run = execCommand(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }),
+      `node "${bounded}" 15000 node --import ${TSX_LOADER} "${join(REPO, 'src', 'bin.ts')}" turn -- node -e "console.log('inner-ran')"`)
+    expect(run.output).toContain('inner-ran')
+    expect(run.exitZero).toBe(true)
+  }, 60_000)
+
+  it('refuses a turn with no command', async () => {
+    const repo = tmpRepo()
+    for (const argv of [['turn'], ['turn', '--']]) {
+      const r = await repo.cli(argv)
+      expect(r.code).toBe(2)
+      expect(r.stderr).toBe('usage: witness turn -- <command> [args…]')
+    }
+  })
+
+  it("flags after -- are the command's, never witness's help", async () => {
+    const repo = tmpRepo()
+    const script = join(fakeScenario(), 'four.cjs')
+    writeFileSync(script, 'process.exit(4)')
+    const r = await repo.cli(['turn', '--', 'node', script, '--help'])
+    expect(r.code).toBe(4)
+    expect(`${r.stdout}${r.stderr}`).not.toContain('usage:')
+  })
+
+  it.runIf(process.platform === 'win32')('what a witness turn run starts is gone when it returns', async () => {
+    const repo = tmpRepo()
+    const dir = mkdtempSync(join(tmpdir(), 'witness-turn-'))
+    const pidFile = join(dir, 'pids')
+    const r = await turnChild(repo.root, ['node', writeOrphanStarter(dir), pidFile])
+    const pids = orphansIn(pidFile)
+    try {
+      expect(r.code).toBe(0)
+      expect(pids).toHaveLength(2)
+      for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
+    } finally {
+      for (const pid of pids) {
+        try { process.kill(pid) } catch { /* already gone */ }
+      }
+    }
+  }, 60_000)
+})
+
+// Row 218. On Windows a suite starts its app detached, through a starter that exits; the run
+// must take it with it anyway — when the run ends, and when its turn holder is killed alone.
+describe.runIf(process.platform === 'win32')('a test run ends with what it started (row 218, win32)', () => {
+  const env = { ...process.env, ...fixtureEnv() } as Record<string, string>
+  const recorded: number[] = []
+  afterEach(() => {
+    for (const pid of recorded.splice(0)) {
+      try { process.kill(pid) } catch { /* already gone */ }
+    }
+  })
+  const scratch = (): { starter: string; pidFile: string } => {
+    const dir = mkdtempSync(join(tmpdir(), 'witness-run-'))
+    return { starter: writeOrphanStarter(dir), pidFile: join(dir, 'pids') }
+  }
+
+  it('an app the run started detached, through a starter that exited, is gone when execCommand returns', async () => {
+    const repo = tmpRepo()
+    const { starter, pidFile } = scratch()
+    const run = execCommand(repo.root, fakeCtx(repo.root, { env }), `node "${starter}" "${pidFile}"`)
+    const pids = orphansIn(pidFile)
+    recorded.push(...pids)
+    expect(run.exitZero).toBe(true)
+    expect(pids).toHaveLength(2)
+    for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
+  })
+
+  it('a turn holder killed alone takes its run with it', async () => {
+    const repo = tmpRepo()
+    const { starter, pidFile } = scratch()
+    const script = `import { execCommand } from ${JSON.stringify(pathToFileURL(join(REPO, 'src', 'runner.ts')).href)}; ` +
+      `execCommand(${JSON.stringify(repo.root)}, { cwd: ${JSON.stringify(repo.root)}, isTTY: false, out: () => {}, err: () => {}, ` +
+      `ask: async () => '', env: process.env }, ${JSON.stringify(`node "${starter}" "${pidFile}" stay`)})`
+    const child = spawn(process.execPath, ['--import', TSX_LOADER, '-e', script], { env, stdio: 'ignore' })
+    if (child.pid !== undefined) recorded.push(child.pid)
+    const until = Date.now() + 30_000
+    while (orphansIn(pidFile).length < 2 && Date.now() < until) await new Promise((r) => setTimeout(r, 100))
+    const pids = orphansIn(pidFile)
+    recorded.push(...pids)
+    expect(pids).toHaveLength(2)
+    spawnSync(system32(process.env, 'taskkill.exe'), ['/PID', String(child.pid), '/F'])
+    for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
   })
 })

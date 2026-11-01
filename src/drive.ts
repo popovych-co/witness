@@ -9,6 +9,8 @@ import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon, type Canon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
+import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
+import { releaseDeadTurn } from './runner-lock.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
 import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
@@ -230,9 +232,14 @@ export async function spawnSession(
     // later, never earlier (row 210).
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
   }
+  // Row 218: on Windows the session starts inside a job (src/contain.ts), and tells everything
+  // under it what drive found, so no run or reviewer the session starts probes again.
+  const host = jobHost(ctx.env)
+  if (process.platform === 'win32') childEnv[JOB_HOST_ENV] = host.ok ? 'job' : 'none'
   // Row 164: on Windows the agent CLI may be a `.cmd` shim, which only cmd.exe can start.
   const run = resolveSpawn(bin, args, childEnv)
   if (!run.ok) { renderRefusal(run.violations).forEach((l) => ctx.err(l)); return end('spawn-failed') }
+  const spawned = contained(run.value, host)
   const prefix = `[${spawnN} ${step.stage ?? 'drive'}/${step.target ?? step.home.split('/').pop() ?? '-'}] `
   const tail: string[] = []
   // Row 214. Three readers of one stream: the human (every shown line, under the prefix), the
@@ -305,15 +312,17 @@ export async function spawnSession(
     // the session started, not just the agent — an orphan would keep writing state after
     // drive moved on. Windows has no groups to signal: there the stop is a tree kill from the
     // shim down, because libuv's job object lets the agent under the shim break away (row 201).
+    // Since row 218 the tree's root is the job host, and killing it closes the job, which takes
+    // what no tree walk reaches: a process whose parent already exited.
     const grouped = process.platform !== 'win32'
-    const child = spawn(run.value.file, run.value.args, {
+    const child = spawn(spawned.file, spawned.args, {
       cwd: step.home,
-      env: run.value.env,
+      env: spawned.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      windowsVerbatimArguments: run.value.windowsVerbatimArguments,
+      windowsVerbatimArguments: spawned.windowsVerbatimArguments,
       detached: grouped,
     })
-    const signal = (sig: NodeJS.Signals) => signalSession(child, grouped, run.value.env, sig)
+    const signal = (sig: NodeJS.Signals) => signalSession(child, grouped, spawned.env, sig)
     if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)
     // Only a session that started says so: a binary that is not there reports spawn-failed alone.
     if (child.pid !== undefined) emit(`started ${clockTime()}${opts.next !== undefined ? ` · next: ${opts.next}` : ''}`)
@@ -379,9 +388,11 @@ export async function spawnSession(
     // not have. Measured here: SIGTERM to a shell whose `sleep` survived it.
     child.on('exit', (c) => {
       code = c
-      // A stopped session's group goes with it: what it started dies even if the agent
-      // exited on SIGTERM before its children did.
-      if (outcome === 'timeout' || outcome === 'stopped') signal('SIGKILL')
+      // What a session started goes with it, however it ended (row 218): a stopped session's
+      // group dies even if the agent exited on SIGTERM before its children did, and so does the
+      // group of one that exited on its own and left a child running. On win32 the job closed
+      // with the host, and signalSession sends nothing to a child that has exited.
+      signal('SIGKILL')
       clearTimeout(killTimer)
       grace = setTimeout(() => settle(outcome), EXIT_GRACE_MS)
     })
@@ -928,6 +939,7 @@ export async function driveLoop(
   ctx.out(awake.shown !== undefined
     ? `keep-awake: ${awake.shown}`
     : `keep-awake: none on ${process.platform} — keep the host awake yourself`)
+  ctx.out(containmentLine(jobHost(ctx.env)))
   // Row 182, amended by row 202: held while a session runs, released while drive waits on the
   // human — a paused drive lets the machine sleep — and taken again before the next spawn.
   const holdAwake = () => {
@@ -1017,6 +1029,9 @@ export async function driveLoop(
   process.on('SIGINT', onSignal)
   process.on('SIGTERM', onSignal)
   publish()
+  // Row 218. A runner turn whose holder died — a session drive stopped mid-run — is released
+  // now and after every session, before Windows hands its pid to another process.
+  releaseDeadTurn(root)
   try {
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
@@ -1077,6 +1092,7 @@ export async function driveLoop(
       const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
       settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
       lanes.delete(key)
+      releaseDeadTurn(root)
     }
 
     if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)
