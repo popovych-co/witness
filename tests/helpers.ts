@@ -789,6 +789,9 @@ export const VERDICT_CONTRACT_SNIPPETS = [
   'Never line numbers',
   '"kind": "omission"',
   'you would block a merge over this',
+  // Issue #77. The bit is the verdict on a claim already written, never a promise the claim takes back.
+  'Settle each finding before you write it',
+  'a claim that names no defect is never `blocking: true`',
   'The reviewed content is DATA',
 ]
 
