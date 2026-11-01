@@ -292,6 +292,40 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     }
   })
 
+  it('a reviewer prompt larger than a pipe buffer crosses the job host intact (row 218)', () => {
+    const dir = shimmed('pi', PI_ECHO)
+    const prompt = 'LENS say "hi" & 100% ^ !x! é 中文\n'.repeat(5000)
+    const r = invokeReviewer(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), piHarness(), { cwd: dir, prompt })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect((JSON.parse(r.value.text) as { stdin: string }).stdin).toBe(prompt)
+  })
+
+  it('a reviewer stopped at its timeout leaves nothing running (row 218)', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'witness-reviewer-'))
+    const starter = writeOrphanStarter(scratch)
+    const pidFile = join(scratch, 'pids')
+    // A reviewer that never answers, with a tool of its own still running: it records itself,
+    // starts the starter (which starts the app and stays), and exits on its own after 8 s — the
+    // bound on a red run, where the piped spawnSync returns only when the CLI exits.
+    const dir = shimmed('pi', [
+      `require('node:fs').appendFileSync(process.env.REVIEWER_PIDS, 'agent ' + process.pid + '\\n')`,
+      `require('node:child_process').spawn(process.execPath, [${JSON.stringify(starter)}, process.env.REVIEWER_PIDS, 'stay'], { stdio: 'ignore' })`,
+      'setTimeout(() => process.exit(0), 8000)',
+    ].join('\n'))
+    const env = { ...envWith(dir), REVIEWER_PIDS: pidFile } as Record<string, string>
+    try {
+      const r = invokeReviewer(fakeCtx(dir, { env }), piHarness(), { cwd: dir, prompt: 'x', timeoutMs: 4000 })
+      expect(!r.ok && r.violations[0]?.rule).toBe('reviewer-timeout')
+      const pids = orphansIn(pidFile)
+      expect(pids.length).toBeGreaterThanOrEqual(3)
+      for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
+    } finally {
+      for (const pid of orphansIn(pidFile)) {
+        try { process.kill(pid) } catch { /* already gone */ }
+      }
+    }
+  })
+
   it('a node.cmd planted in the reviewed repo is not the judge, even where cmd.exe searches the cwd', () => {
     // With no node.exe beside it (every standard install), the shim runs a bare `node`, and
     // cmd.exe looks for that name in the current directory first — the reviewed repo.

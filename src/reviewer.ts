@@ -8,6 +8,7 @@ import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { resolveSpawn, spawn, spawnSync } from './spawn.js'
+import { contained, jobHost } from './contain.js'
 import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
 import type { Reviewed } from './verdict.js'
@@ -187,9 +188,14 @@ function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result
     ...ctx.env, ...env, WITNESS_REVIEWER: '1', ...(opts.lens !== undefined ? { WITNESS_LENS: opts.lens } : {}),
   })
   if (!run.ok) return refuse(run.violations.map((x) => ({ ...x, rule: 'reviewer-invocation' })))
+  // Row 218. On Windows a stop — spawnSync's timeout, the async invoker's kill — ends one process,
+  // which was the `cmd.exe` shim: the agent under it kept running, and spending, and the piped
+  // spawnSync returned only when it exited on its own. Started in a job, the stop is the host's,
+  // and the job takes the agent and whatever it started with it.
+  const spawned = contained(run.value, jobHost(ctx.env))
   return ok({
-    cmd, file: run.value.file, args: run.value.args, env: run.value.env as NodeJS.ProcessEnv,
-    windowsVerbatimArguments: run.value.windowsVerbatimArguments,
+    cmd, file: spawned.file, args: spawned.args, env: spawned.env as NodeJS.ProcessEnv,
+    windowsVerbatimArguments: spawned.windowsVerbatimArguments,
     timeout: opts.timeoutMs ?? REVIEWER_TIMEOUT_MS,
   })
 }
