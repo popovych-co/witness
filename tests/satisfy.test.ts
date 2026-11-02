@@ -37,6 +37,26 @@ describe('witness satisfy', () => {
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
 
+  // Row 223. An unmet need is a kept stop: the human marks it met, never a session drive spawned.
+  // A reviewer is refused earlier still, by row 217's tripwire (`reviewer-cannot`).
+  it('refuses inside a drive session and inside a reviewer (#70)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh', WITH_MANUAL)
+    const head = repo.git('rev-parse', 'HEAD')
+    const cases = [
+      { env: { WITNESS_DRIVE: 'auth-refresh' }, rule: 'satisfy-in-session' },
+      { env: { WITNESS_DRIVE: '-' }, rule: 'satisfy-in-session' },
+      { env: { WITNESS_REVIEWER: '1' }, rule: 'reviewer-cannot' },
+    ]
+    for (const { env, rule } of cases) {
+      const res = await repo.cli(['satisfy', 'auth-refresh', '--need', '1'], { env })
+      expect(res.code).toBe(2)
+      expect(res.stderr).toContain(rule)
+    }
+    expect(readStream(repo.root, 'auth-refresh').some((e) => e.t === 'need-satisfied')).toBe(false)
+    expect(repo.git('rev-parse', 'HEAD')).toBe(head)
+  })
+
   it('refuses unknown docs and unknown needs', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh', WITH_MANUAL)

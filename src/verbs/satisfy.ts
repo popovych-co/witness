@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
+import { sessionMarker } from '../drive-presence.js'
 import { appendEntry, entryLine, journalRel } from '../journal.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { acquireLock } from '../lock.js'
@@ -18,6 +19,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const id = positionals[0]
   if (!id || !values.need) {
     renderRefusal([v('usage', 'required', 'missing id or --need', 'witness satisfy <doc-id> --need <id | index | text>')]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
+  // Row 223. An unmet need is a kept stop for the human: a session drive spawned, or a
+  // reviewer, never marks one met — the human does, from their own chat or terminal.
+  const marker = sessionMarker(ctx.env)
+  if (marker !== undefined) {
+    renderRefusal([v('satisfy', 'satisfy-in-session', marker, 'the human marks a need met from their own chat or terminal')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const rootRes = primaryRoot(ctx.cwd)
