@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
-import { grantCommands, untrustedCmdsFor } from '../allowlist.js'
+import { untrustedCmdsFor } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
@@ -18,7 +18,7 @@ import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon } from '../scan.js'
 import { newRunId } from '../drift.js'
-import { journalTrust } from './trust.js'
+import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, kv, rows } from '../toon.js'
@@ -676,12 +676,20 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
 
   // D154. After the decision is durable, never before: a refused or crashed decide must
   // not leave a grant behind that nobody chose.
+  // Row 220. Through the one locked grant, after decide's own lock is released above (the
+  // lock is not re-entrant across a release): the decision stands whatever the grant meets,
+  // and a grant it could not land is refused with its rows and the exit says so.
+  let grantExit: number = EXIT.OK
   if (trustCmds) {
     const granted = untrustedCmdsFor(root, criteriaOwner(canon, target))
     if (granted.length > 0) {
-      grantCommands(root, granted)
-      journalTrust(ctx, root, target, granted, 'decide')
-      ctx.out(kv('trusted', granted.join(' · ')))
+      const res = grantTrust(ctx, root, target, granted, 'decide')
+      if (res.ok) ctx.out(kv('trusted', granted.join(' · ')))
+      else {
+        renderRefusal(res.violations).forEach((l) => ctx.err(l))
+        ctx.err(`help: the decision landed; grant again once the repo is free — witness trust ${target}`)
+        grantExit = res.violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
+      }
     } else {
       ctx.out(kv('trusted', 'nothing to grant — every cmd: criterion was already trusted'))
     }
@@ -714,5 +722,5 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft amend-${target} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
   }
-  return EXIT.OK
+  return grantExit
 }
