@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { loadConfig } from '../src/config.js'
+import { needsYou } from '../src/needs-you.js'
+import { loadCanon } from '../src/scan.js'
+import { parkedGates } from '../src/verbs/next.js'
 import {
-  addOrigin, approve, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writePlan, writeSpec,
+  addOrigin, approve, commitEntry, fakeCtx, fakeScenario, gateEnv, putVerdict, recapEffort, SPEC_BODY, seededRepo,
+  shippableRepo, type TestRepo, writePlan, writeSpec,
 } from './helpers.js'
 
 export const BLOCKING = {
@@ -172,5 +177,76 @@ describe('a malformed round is not a disposition', () => {
     const d = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--approve'])
     expect(d.code).toBe(2)
     expect(d.stderr).toContain('nothing-pending')
+  })
+})
+
+// Row 225. A parked gate on work that no longer moves — a plan done or abandoned, an
+// effort abandoned — is owed to no one: nothing offers to reopen or approve it.
+const parkStop = (repo: TestRepo, stream: string, gate: string): void => {
+  commitEntry(repo, stream, { v: 1, t: 'gate-run', gate, artifact: stream, round: 1, run_id: `r-${gate}`,
+    reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped' })
+  commitEntry(repo, stream, { v: 1, t: 'human-decision', gate, artifact: stream, round: 1,
+    decision: 'stop', selected: 'policy', rule: 'cap-rounds', note: `drive cap: ${gate}` })
+}
+const cfgOf = (root: string) => {
+  const r = loadConfig(root)
+  if (!r.ok) throw new Error('config')
+  return r.value
+}
+const parkedOf = (repo: TestRepo) => {
+  const canon = loadCanon(repo.root)
+  return {
+    gates: parkedGates(repo.root, canon).map((p) => `${p.gate}:${p.target}`),
+    needs: needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), canon, [])
+      .filter((i) => i.kind === 'parked').map((i) => i.key),
+  }
+}
+
+describe('parked gates of terminal work are owed to no one (#81)', () => {
+  it('an abandoned plan with a parked implement gate is not listed', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    parkStop(repo, 'auth-refresh-plan-1', 'implement')
+    expect(parkedOf(repo)).toEqual({ gates: ['implement:auth-refresh-plan-1'], needs: ['parked:auth-refresh-plan-1:implement'] })
+    const a = await repo.cli(['abandon', 'auth-refresh-plan-1'])
+    expect(a.code, a.stderr).toBe(0)
+    expect(parkedOf(repo)).toEqual({ gates: [], needs: [] })
+    expect((await repo.cli(['status'])).stdout).not.toContain('parked')
+  })
+
+  it('a done plan with a parked ship gate is not listed', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    parkStop(repo, 'auth-refresh-plan-1', 'ship')
+    expect(parkedOf(repo).gates).toEqual(['ship:auth-refresh-plan-1'])
+    repo.flipStatus('auth-refresh-plan-1', 'done')
+    expect(parkedOf(repo)).toEqual({ gates: [], needs: [] })
+  })
+
+  it('an abandoned effort with a parked decompose gate is not listed', async () => {
+    const repo = await seededRepo()
+    await recapEffort(repo, 'billing')
+    await writeSpec(repo, 'invoices', {}, SPEC_BODY, 'billing')
+    parkStop(repo, 'billing', 'decompose')
+    expect(parkedOf(repo)).toEqual({ gates: ['decompose:billing'], needs: ['parked:billing:decompose'] })
+    const a = await repo.cli(['abandon', 'billing'])
+    expect(a.code, a.stderr).toBe(0)
+    expect(parkedOf(repo)).toEqual({ gates: [], needs: [] })
+  })
+
+  it('a parked gate on a live plan is still listed', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    await writePlan(repo, 'auth-refresh-plan-2')
+    parkStop(repo, 'auth-refresh-plan-1', 'implement')
+    parkStop(repo, 'auth-refresh-plan-2', 'implement')
+    expect((await repo.cli(['abandon', 'auth-refresh-plan-2'])).code).toBe(0)
+    expect(parkedOf(repo)).toEqual({ gates: ['implement:auth-refresh-plan-1'], needs: ['parked:auth-refresh-plan-1:implement'] })
   })
 })

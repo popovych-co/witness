@@ -534,9 +534,12 @@ export function parkedGates(
   root: string, canon: Canon,
 ): Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> {
   const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> = []
+  // Row 225. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
+  // effort abandoned, offers nothing to reopen or approve.
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
-    ...effortStreams(root).map((slug) => ({ id: slug, gates: ['decompose'] as const })),
-    ...canon.docs.filter((d) => d.meta.type === 'plan')
+    ...effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
+      .map((slug) => ({ id: slug, gates: ['decompose'] as const })),
+    ...canon.docs.filter((d) => d.meta.type === 'plan' && !planFinished(d))
       .map((d) => ({ id: String(d.meta.id), parent: String(d.meta.parent), gates: ['plan', 'implement', 'ship'] as const })),
     ...canon.docs.filter((d) => d.meta.type === 'spec')
       .map((d) => ({ id: String(d.meta.id), gates: ['design'] as const })),
