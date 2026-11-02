@@ -1438,9 +1438,11 @@ describe('drive takes back what a human moved (row 196)', () => {
     autonomyOn(repo)
     writeLocalConfig(repo.root, { notify: noopOpener() })
     const seen = join(fakeScenario(), 'seen')
+    // The human marks the need met from their own terminal while drive runs: a session may not
+    // (row 223), so the fake stands in for the human with drive's marker cleared.
     const agent = script([
       `echo "$WITNESS_DRIVE" >> "${seen}"`,
-      `if [ "$WITNESS_DRIVE" = auth-mfa-plan-1 ]; then ${witnessCli()} satisfy auth-refresh-plan-1 --need ses-prod; fi`,
+      `if [ "$WITNESS_DRIVE" = auth-mfa-plan-1 ]; then WITNESS_DRIVE= ${witnessCli()} satisfy auth-refresh-plan-1 --need ses-prod; fi`,
     ].join('\n'))
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
