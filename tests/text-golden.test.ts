@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { renderGateRun } from '../src/gate.js'
-import type { Entry } from '../src/journal.js'
+import { appendEntry, type Entry } from '../src/journal.js'
 import { needsYou, needsYouToken, type NeedYou } from '../src/needs-you.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { fakeCtx, seededRepo, type TestRepo } from './helpers.js'
-import { EVERY_LINE_RUN, cfgOf, decideRepo, needsYouRepo, norm, trustRepo, type DecideState } from './model-fixtures.js'
+import { fakeCtx, seededRepo, writeSpec, type TestRepo } from './helpers.js'
+import { EVERY_LINE_RUN, cfgOf, decideRepo, must, needsYouRepo, norm, trustRepo, type DecideState } from './model-fixtures.js'
 
 // Roadmap 1a.1. What needs you, `decide --show` and the `witness trust` listing become models
 // their text renders from (rows 139/203). These goldens are that text as 0.28.1 printed it,
@@ -122,10 +122,18 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
     `)
   })
 
+  // The live folder's asides carry no line: a brainstorm with no ask, and a merge whose target has
+  // no `pr` (unknown to canon, and a doc without one). Beside them, a park whose run named no
+  // anchor, so its reason falls back to the run's outcome.
   it('what needs you: a live-folder brainstorm and a merge with no PR', async () => {
     const repo = await seededRepo()
+    must(await writeSpec(repo, 'auth-refresh'), 'write auth-refresh')
+    const s = repo.effort
+    appendEntry(repo.root, s, { v: 1, t: 'gate-run', gate: 'decompose', artifact: s, round: 1, run_id: 'r1',
+      reviewed_sha: 'sha-1', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped' } as never)
+    appendEntry(repo.root, s, { v: 1, t: 'human-decision', gate: 'decompose', artifact: s, round: 1, decision: 'stop' } as never)
     const items = needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root),
-      [{ target: '-', kind: 'conversation' }, { target: 'x-plan-9', kind: 'merge' }])
+      [{ target: '-', kind: 'conversation' }, { target: 'x-plan-9', kind: 'merge' }, { target: 'auth-refresh', kind: 'merge' }])
     expect(inbox(repo, items)).toMatchInlineSnapshot(`
       "conversation:-
       wait: conversation · brainstorm
@@ -133,7 +141,14 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       merge:x-plan-9
       wait: merge · x-plan-9
-      token 8eb6b16c0449"
+
+      merge:auth-refresh
+      wait: merge · auth-refresh
+
+      parked:auth-hardening:decompose
+      parked: auth-hardening · decompose round 1 — parked at stopped
+        run: witness gate decompose auth-hardening --fresh
+      token b36f3cd4ff27"
     `)
   })
 

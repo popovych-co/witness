@@ -20,7 +20,7 @@ import {
 
 // A setup write the fixture depends on: a refusal here is silent unless asserted, and the
 // surface built on top of it would be some other state's.
-function must(r: CliResult, what: string): void {
+export function must(r: CliResult, what: string): void {
   if (r.code !== 0) throw new Error(`${what}: exit ${r.code}\n${r.stdout}\n${r.stderr}`)
 }
 
