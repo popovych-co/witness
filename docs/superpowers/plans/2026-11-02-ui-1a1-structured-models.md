@@ -566,3 +566,17 @@
 - `arbiter.ts`'s `menuFor` still screens options by `PLACEHOLDER` on the line. It could read `act.inputs` instead; the behaviour is the same except for a reviewer anchor holding `<effort>`.
 - The repo-wide trust listing counts an unsafe command once per row that lists it (`unsafe` above). This is kept byte for byte; counting each command once would change its wording.
 - A demoted finding's anchor prints raw on the `demoted:` line, where finding rows print it through `logSafe`. The view keeps the text's value, and the UI spells out all agent text anyway (spec §4.2).
+
+Found during execution (2026-11-03; the rulings are R1–R19 in the execution record):
+
+- **Security, existing in 0.28.1:** `decide --approve --trust-cmds` granted a `cmd:` criterion that holds a character outside printable ASCII, which bypassed row 205's rule. `witness write` accepts such a criterion, and `witness trust` already refused to grant it. Fixed on this branch in 19d5fc9 (ruling R16). It could also ship from `main` as a patch.
+- **Security follow-up, existing in 0.28.1, not fixed here:** `ensureTrusted` (src/allowlist.ts) prompts at a terminal with the raw command and grants on "y" with no printable-ASCII check. That is a second route around row 205, reached from criteria.ts, needs.ts, runner.ts and gates/ship.ts.
+- **Follow-up row (R5, R17):** the CLI's own text prints reviewer anchors raw in a note prefill, an option's `why`, `block.anchor`, the `demoted:` line and the parked row. Spelling them out is a deliberate text change. Until then, the models carry them as printed and renderers must spell them out (the comments in act.ts and decide-view.ts say so).
+- **`ID_RE` accepts ids that start with `-`** (R10). An id spelled `--note` or `--cmd` renders the next word under that flag's rule; the CLI's own parsers already read such an id as a flag. Rejecting a leading `-` closes it at the source.
+- **Journal entries that break their own type** (R14): a `delta` without `round`, or a non-array `skipped`/`fallback`/`rerolled`/`malformed`. Since Task 4 they throw or drop the line, where the old renderer degraded differently. Restoring the old `?.length` guards would make such entries degrade instead of crash.
+- **For 1b (row 228):**
+  - The models entry's signatures use types it does not name: `GateName`, `Result`, `Ctx`/`AsideFacts`, `LiveState`.
+  - `exports` blocks `./package.json`; add `"./package.json": "./package.json"` if tooling needs it.
+  - `decideView` is on demand; whether it joins the watch-driven refresh is 1b.3's decision.
+- **Untested wording:** decide's all-trusted message ("nothing to grant — every cmd: criterion was already trusted") is pinned by no test.
+- **History:** commits ee58bf4 and 479d22a add raw U+202E/U+2028 characters in their own diffs. The tree is clean (scan in 7061f62), so a squash merge drops them from history.
