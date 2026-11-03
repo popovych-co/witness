@@ -138,8 +138,8 @@ describe('a gate run is a view (rows 139/203)', () => {
 
   it("a finding's anchor and claim are spelled out, an omission's scope too (Review Focus 1)", () => {
     const verdicts = [{ reviewer: 'code-reviewer', coverage: [], findings: [
-      { blocking: true, anchor: 'src/\u001b[2Jtoken.ts', claim: 'expiry‮unbounded', contradicts_pin: 2 },
-      { blocking: false, anchor: { kind: 'omission' as const, scope: 'tests/ ' }, claim: 'no test' },
+      { blocking: true, anchor: 'src/\u001b[2Jtoken.ts', claim: 'expiry\u202eunbounded', contradicts_pin: 2 },
+      { blocking: false, anchor: { kind: 'omission' as const, scope: 'tests/\u2028' }, claim: 'no test' },
     ] }]
     expect(findingViews(verdicts)).toStrictEqual([
       { reviewer: 'code-reviewer', blocking: true, pin: 2, anchor: 'src/\\x1b[2Jtoken.ts', claim: 'expiry\\u{202e}unbounded' },

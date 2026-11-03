@@ -84,7 +84,7 @@
   - `settled-arbiter`: a decompose run at the effort's current sha, then `approve` with `selected: 'arbiter'`, `reason: 'the slice covers g1'`, `arbiter: { model: 'test-model-1', prompts_sha: 'p' }`, `rule: 'reserved-stop-clean'`.
   - `implement-revised`:
     - Spec `auth-refresh`, approved, with the needs and criteria of `needsYouRepo`. Plan `auth-refresh-plan-1` with `steps: [{ id: 's1', title: 't', criteria: ['ac-rotate', 'ac-prod'] }]`.
-    - An `implement` gate-run in round 1: `reviewed_sha: 'sha-impl'`, outcome `stopped`, `checks: [{ name: 'tests', ok: false, detail: 'ac-rotate:fail', held: [{ criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' }] }]` and `verdicts: [{ reviewer: 'code-reviewer', coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [{ blocking: true, anchor: 'src/token.ts', claim: 'expiry\u001b[2J‮unbounded' }] }]`.
+    - An `implement` gate-run in round 1: `reviewed_sha: 'sha-impl'`, outcome `stopped`, `checks: [{ name: 'tests', ok: false, detail: 'ac-rotate:fail', held: [{ criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' }] }]` and `verdicts: [{ reviewer: 'code-reviewer', coverage: [{ anchor: 'src/token.ts', note: 'read' }], findings: [{ blocking: true, anchor: 'src/token.ts', claim: 'expiry\u001b[2J\u202eunbounded' }] }]`.
     - A `policy-pin` with `ordinal: 1` and `text: 'render the service in full'`.
     - A `human-decision` `revise` with `note: 'fix the expiry'`.
   - `plan-trust-twin`: spec `auth-refresh`, approved, with criteria `[{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-e2e', cmd: 'npm run e2e' }]`, and plan `auth-refresh-plan-1`. Then a `plan` gate-run at `gateSpec('plan')!.currentSha?.(root, canon, cfg, id) ?? 'sha-plan'` with checks `[]` and one non-blocking finding, `{ blocking: false, anchor: 'auth-refresh-plan-1 > ## Steps', claim: 'hairline missing' }`.
@@ -404,7 +404,7 @@
       ['decide', 'implement', target, '--approve', '--override'],
       ['decide', 'implement', target, '--stop'],
     ])
-    expect(JSON.stringify(view)).not.toMatch(/[\u001b‮]/)
+    expect(JSON.stringify(view)).not.toMatch(/[\u001b\u202e]/)
     expect(JSON.parse(JSON.stringify(view))).toEqual(view)
   })
   it('each other state is its own shape', async () => {
