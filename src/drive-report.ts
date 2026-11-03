@@ -3,7 +3,7 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
 import { readStream, streamIds, type Entry } from './journal.js'
-import { needsYou, WAIT_KINDS } from './needs-you.js'
+import { needsYou, needYouRows, WAIT_KINDS } from './needs-you.js'
 import type { DecisionEntry } from './rounds.js'
 import { loadCanon } from './scan.js'
 
@@ -37,10 +37,10 @@ export function driveReport(
   // gates and the stuck targets: one derivation, read by the notifier and `witness wait` too.
   const items = needsYou(root, ctx, cfg, canon, aside)
   const waiting = items.filter((i) => WAIT_KINDS.has(i.kind))
-  const waits = waiting.flatMap((i) => i.rows)
-  const parked = items.filter((i) => i.kind === 'parked').flatMap((i) => i.rows)
+  const waits = waiting.flatMap((i) => needYouRows(i))
+  const parked = items.filter((i) => i.kind === 'parked').flatMap((i) => needYouRows(i))
   const stuckItems = items.filter((i) => i.kind === 'stuck' || i.kind === 'capped')
-  const stuck = stuckItems.flatMap((i) => i.rows)
+  const stuck = stuckItems.flatMap((i) => needYouRows(i))
   const obligations = since.filter(({ entry }) => entry.t === 'deferral').map(({ entry }) => {
     const d = entry as unknown as { id: string; artifact: string; anchor: string; kind: string }
     return `obligation: ${d.id} · ${d.artifact} · ${d.anchor} — ${d.kind}`

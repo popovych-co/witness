@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cliAct, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
 import { criteriaOwner, type Canon, type CanonDoc } from './scan.js'
-import { hasControl, shellArg, visible } from './toon.js'
+import { hasControl, visible } from './toon.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
@@ -61,9 +62,13 @@ export interface RunCommand { cmd: string; source: string }
 // drive's report, the chat — renders it here: escaped, beside its source, and with the grant
 // that names it only when the verb would take it (printable ASCII, `witness trust`).
 export const shownCmd = (c: RunCommand): string => `${visible(c.cmd)} (${visible(c.source)})`
-export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>): string => hasControl(c.cmd)
-  ? 'never granted here — rewrite it in printable ASCII where it is written'
-  : `witness trust ${target} --cmd ${shellArg(c.cmd)}`
+export const UNGRANTABLE = 'never granted here — rewrite it in printable ASCII where it is written'
+// Rows 139/203. The grant as an act: the raw command one argv word, so it runs without a shell.
+// A command the verb would not take has none, so no model ever holds an act for it.
+export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>): Act | undefined {
+  return hasControl(c.cmd) ? undefined : cliAct('trust', target, '--cmd', c.cmd)
+}
+export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>): string => grantAct(target, c)?.line ?? UNGRANTABLE
 
 // The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
 // runner IS `ship.test`, and a command listed twice is listed once, under its first source.

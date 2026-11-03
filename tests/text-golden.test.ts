@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderGateRun } from '../src/gate.js'
 import { appendEntry, type Entry } from '../src/journal.js'
-import { needsYou, needsYouToken, type NeedYou } from '../src/needs-you.js'
+import { needsYou, needsYouToken, needYouRows, type NeedYou } from '../src/needs-you.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { fakeCtx, seededRepo, writeSpec, type TestRepo } from './helpers.js'
@@ -12,10 +12,8 @@ import { EVERY_LINE_RUN, cfgOf, decideRepo, must, needsYouRepo, norm, trustRepo,
 // recorded once before any model existed: the contract the models must keep byte for byte. A
 // golden that changes is a regression to fix, never one to re-record with `-u`.
 
-const rowsOf = (i: NeedYou) => i.rows
-
 const inbox = (repo: TestRepo, items: NeedYou[]): string =>
-  norm(items.map((i) => [i.key, ...rowsOf(i)].join('\n')).join('\n\n') + '\ntoken ' + needsYouToken(items), repo, [])
+  norm(items.map((i) => [i.key, ...needYouRows(i)].join('\n')).join('\n\n') + '\ntoken ' + needsYouToken(items), repo, [])
 
 async function shown(state: DecideState): Promise<string> {
   const { repo, gate, target, shas } = await decideRepo(state)

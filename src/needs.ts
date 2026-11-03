@@ -93,6 +93,7 @@ export interface UnmetNeed {
   text: string                    // the manual text
   holds: string[]                 // criteria it holds while unmet · [] for a plan need
   blocks: 'start' | 'nothing'
+  ref: string                     // the need as `--need` takes it: its id · else its 1-based index among the manual needs
   satisfy: string                 // the human's command — the id when the need has one, else its index
 }
 
@@ -105,12 +106,15 @@ export function unmetNeeds(canon: Canon): UnmetNeed[] {
     const type = d.meta.type as 'spec' | 'plan'
     const needs = Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []
     const manuals = needs.filter((n) => typeof n.manual === 'string') as Array<{ id?: string; manual: string; satisfied?: boolean; holds?: unknown }>
-    return manuals.flatMap((n, i) => needMet(d, n) ? [] : [{
-      doc: id, type, need: needKey(n), text: n.manual,
-      holds: type === 'spec' && Array.isArray(n.holds) ? (n.holds as string[]) : [],
-      blocks: type === 'plan' ? 'start' as const : 'nothing' as const,
-      satisfy: satisfyCommand(id, n.id ?? String(i + 1)),
-    }])
+    return manuals.flatMap((n, i) => {
+      const ref = n.id ?? String(i + 1)
+      return needMet(d, n) ? [] : [{
+        doc: id, type, need: needKey(n), text: n.manual,
+        holds: type === 'spec' && Array.isArray(n.holds) ? (n.holds as string[]) : [],
+        blocks: type === 'plan' ? 'start' as const : 'nothing' as const,
+        ref, satisfy: satisfyCommand(id, ref),
+      }]
+    })
   })
 }
 

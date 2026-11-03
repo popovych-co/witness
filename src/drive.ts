@@ -34,7 +34,7 @@ import { monotonicTicker, sessionClock, type Ticker } from './session-clock.js'
 import { driveReport, runStart } from './drive-report.js'
 import { notify } from './notify.js'
 import { writeLive, type EndReason, type LiveAside } from './live.js'
-import { needsYou, needsYouToken, WAIT_LABEL, type NeedYou } from './needs-you.js'
+import { needsYou, needsYouToken, needYouRows, WAIT_LABEL, type NeedYou } from './needs-you.js'
 
 // D145. What drive does with the action `next` just derived. One step per turn of the
 // loop, and the loop's whole vocabulary — spawn a session, stop for a human, hand the
@@ -1001,7 +1001,7 @@ export async function driveLoop(
     const token = needsYouToken(items)
     if (token !== pausePrinted) {
       ctx.out(`drive: waiting on you — ${items.length} item(s)`)
-      items.flatMap((i) => i.rows).forEach((l) => ctx.out(l))
+      items.flatMap((i) => needYouRows(i)).forEach((l) => ctx.out(l))
       pausePrinted = token
     }
     notifyNew(items)

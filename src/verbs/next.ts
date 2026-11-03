@@ -24,7 +24,7 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { liveDrive } from '../live.js'
-import { HELD_KINDS, needsYou, needsYouToken } from '../needs-you.js'
+import { HELD_KINDS, needsYou, needsYouToken, needYouRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -1295,7 +1295,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // chat that starts beside a paused drive sees it rather than folding it into its wait token.
   const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
   for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) {
-    const [head, ...more] = i.rows
+    const [head, ...more] = needYouRows(i)
     ctx.out(cmd('waiting', [head!.replace(/^wait: /, ''), ...more.map((r) => r.trim())].join(' · ')))
   }
   // Row 205. Under autonomy each untrusted command is a kept stop, one raw line each (D120),
