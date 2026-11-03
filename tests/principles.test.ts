@@ -94,6 +94,27 @@ describe('principles are reviewed like specs (#66)', () => {
   })
 })
 
+// Final review I2. An abandoned effort owns nothing: its gate cannot approve what it left draft,
+// so the remedy is the one real exit — amend principles through a live feature or fix effort.
+describe('principles an abandoned effort left draft (#66)', () => {
+  it('names no abandoned owner, in the write\'s refusal or in next', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED)
+    expect((await repo.cli(['abandon', repo.effort])).code).toBe(0)
+    expect(statusOf(repo, 'principles')).toBe('draft')
+    const chore = { effort: 'c1', class: 'chore', goals: [{ id: 'g1', text: 'bump deps' }], non_goals: [], constraints: [], slices: [] }
+    repo.write('c1.json', JSON.stringify(chore))
+    expect((await repo.cli(['recap', '--file', 'c1.json'])).code).toBe(0)
+    const n = await repo.cli(['next'])
+    expect(n.stdout).toContain('note: principles.md is draft and no effort owns it')
+    expect(n.stdout).not.toContain('auth-hardening')
+    const w = await writePlan(repo, 'p1', CHORE_PLAN, '## Step: s1\nbump\n', 'c1')
+    expect(w.stderr).toContain('amend principles through a feature or fix effort')
+    expect(w.stderr).not.toContain('--effort auth-hardening')
+  })
+})
+
 describe('migrate stamps the untouched draft template (#66)', () => {
   it('stamps it approved in one trailer commit, journaled as the template; --dry-run names it', async () => {
     const repo = await seededRepo({ class: 'chore', slug: 'c1' })

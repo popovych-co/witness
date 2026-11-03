@@ -881,7 +881,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
           }
           return { line: 'witness check', note: owner === undefined
             ? 'principles.md is draft and no effort owns it — amend principles through a feature or fix effort: its decompose gate approves them'
-            : `principles.md is draft and ${owner}'s decompose is not owed — witness status names why` }
+            : `principles.md is draft and ${owner}'s decompose is not owed now — witness log ${owner} shows where its gate stands` }
         }
         return {
           line: `witness write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,

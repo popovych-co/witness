@@ -113,19 +113,17 @@ export function effortCanon(root: string, canon: Canon, effort: string): CanonDo
   return docs.sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
 }
 
-// Row 219. The effort that owns the principles as they stand: the one whose latest write of
-// them is the current content — its decompose gate approves them. A live effort before an
-// abandoned one, then by slug. None when no effort wrote this content (a hand edit adopted,
-// or an older init's template).
+// Row 219. The effort that owns the principles as they stand: the live one whose latest write
+// of them is the current content — its decompose gate approves them; by slug when several. None
+// when no live effort wrote this content (a hand edit adopted, an older init's template, or an
+// effort since abandoned, whose gate approves nothing): then a feature or fix effort amends them.
 export function principlesOwner(root: string, canon: Canon): string | undefined {
   const doc = findById(canon, 'principles')
   if (!doc) return undefined
   const current = canonicalSha(doc.meta, doc.body)
-  const owners = effortStreams(root)
-    .filter((e) => effortWrites(root, e).get('principles')?.sha === current)
-    .map((e) => ({ e, abandoned: effortAbandoned(readStream(root, e)) }))
-    .sort((a, b) => (a.abandoned === b.abandoned ? a.e.localeCompare(b.e) : a.abandoned ? 1 : -1))
-  return owners[0]?.e
+  return effortStreams(root)
+    .filter((e) => effortWrites(root, e).get('principles')?.sha === current && !effortAbandoned(readStream(root, e)))
+    .sort((a, b) => a.localeCompare(b))[0]
 }
 
 export function effortOf(root: string, artifactId: string): string | undefined {
