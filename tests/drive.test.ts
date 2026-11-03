@@ -536,6 +536,21 @@ describe('driveLoop (D145)', () => {
     expect(out.join('\n')).toMatch(/drive: spawn-timeout/)
   }, 30000)
 
+  // Row 222. The drive verb aborts the loop when its lease is lost (another drive took the
+  // lock over): the run ends as a signal ends it, its sessions stopped.
+  it('an outside stop ends the run as a signal does, its session stopped', async () => {
+    const repo = await planReady()
+    const bin = join(fakeScenario(), 'hang')
+    writeFileSync(bin, '#!/bin/sh\nsleep 60\n', { mode: 0o755 })
+    const out: string[] = []
+    const lease = new AbortController()
+    setTimeout(() => lease.abort(), 500)
+    const code = await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), { signal: lease.signal })
+
+    expect(code).not.toBe(0)
+    expect(out.join('\n')).toContain('drive: stopped — signal SIGTERM')
+  }, 30000)
+
   it('--flow refuses a plan that is not a flow', async () => {
     const repo = await planReady()
     const res = await repo.cli(['drive', '--flow', 'auth-refresh-plan-1'], { tty: true })

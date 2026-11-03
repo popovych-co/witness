@@ -3,7 +3,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig } from '../config.js'
 import { withoutSession } from '../context.js'
 import { detachDrive, driveLoop } from '../drive.js'
-import { acquireDriveLock, DRIVE_ENV, DRIVE_LOG_ENV, driveChild, driveHolder, watchLine } from '../drive-presence.js'
+import { acquireDriveLock, DRIVE_ENV, DRIVE_LOCK, DRIVE_LOG_ENV, driveChild, driveHolder, holdLease, watchLine } from '../drive-presence.js'
 import { primaryRoot } from '../gitio.js'
 import { withJournalCtx } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
@@ -91,13 +91,21 @@ async function drive(ctx: Ctx, argv: string[]): Promise<number> {
   const log = ctx.env[DRIVE_LOG_ENV]
   const lock = acquireDriveLock(root, log !== undefined ? { log } : {})
   if (!lock.ok) { renderRefusal(lock.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  // Row 222. The lock is a lease this drive renews for as long as it holds it; lost, the run stops.
+  const lost = new AbortController()
+  const stopLease = holdLease(root, () => {
+    ctx.err(`drive: lease lost — ${DRIVE_LOCK} is no longer this drive's · this drive stops`)
+    lost.abort()
+  })
   try {
     return await driveLoop(root, cfgR.value, ctx, {
       ...(values.flow !== undefined ? { flow: values.flow } : {}),
       ...(maxSpawns !== undefined ? { maxSpawns } : {}),
       ...(manual ? { manual } : {}),
+      signal: lost.signal,
     })
   } finally {
+    stopLease()
     lock.value()
   }
 }

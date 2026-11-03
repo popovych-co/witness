@@ -389,7 +389,8 @@ export async function spawnSession(
   })
 }
 
-export interface DriveFlags { flow?: string; maxSpawns?: number; manual?: boolean }
+// `signal`: a stop from outside the loop — the drive verb's, when the lease is lost (row 222).
+export interface DriveFlags { flow?: string; maxSpawns?: number; manual?: boolean; signal?: AbortSignal }
 
 // Twenty sessions per invocation, held in MEMORY and nowhere else (north star 2): a
 // ceiling that persisted would be state drive must clean up, and re-running is how a
@@ -642,6 +643,11 @@ export async function driveLoop(
     abort.abort()
   }
   const aborted = new Promise<void>((done) => abort.signal.addEventListener('abort', () => done(), { once: true }))
+  // Row 222. The lease lost — another drive holds the lock now: this run ends as a signal ends
+  // it, every session stopped, so two drives never work the repo at once.
+  const outside = () => { if (signalled === undefined) onSignal('SIGTERM') }
+  if (flags.signal?.aborted) outside()
+  else flags.signal?.addEventListener('abort', outside, { once: true })
 
   // Final review F2. A lane holds its whole flow: a spec and the plans written for it. The
   // plan queue's lane is keyed by the spec, and its session writes the plan and keeps working

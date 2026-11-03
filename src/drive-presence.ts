@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
@@ -44,11 +44,27 @@ export const DRIVE_LOG_ENV = 'WITNESS_DRIVE_LOG'
 
 export interface DriveHolder { pid: number; log?: string }
 
-function readHolder(root: string): DriveHolder | 'absent' | 'unreadable' {
+// Row 222 (#69). The drive lock is a lease. A pid alone outlives its drive: a drive stopped
+// hard (`taskkill /F`, `kill -9`, a reboot) never runs its `finally`, and once that pid is
+// reused the lock read as a running drive and its printed stop aimed at an unrelated tree. The
+// running drive renews the lock's mtime every DRIVE_RENEW_MS; a lock not renewed for
+// DRIVE_LEASE_MS is no drive, whatever its pid. A drive whose host slept renews within a
+// renewal of waking, so a new drive takes over a live pid's expired lease only after
+// DRIVE_TAKEOVER_GRACE_MS without a renewal — never one that wakes in time.
+export const DRIVE_LEASE_MS = 120_000
+export const DRIVE_RENEW_MS = 10_000
+export const DRIVE_TAKEOVER_GRACE_MS = 25_000
+
+type Held = DriveHolder & { renewed: number }
+
+function readHolder(root: string): Held | 'absent' | 'unreadable' {
   const p = join(root, DRIVE_LOCK)
   let text: string
+  let renewed: number
   try {
-    if (lstatSync(p).isSymbolicLink()) return 'unreadable'
+    const st = lstatSync(p)
+    if (st.isSymbolicLink()) return 'unreadable'
+    renewed = st.mtimeMs
     text = readFileSync(p, 'utf8')
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable'
@@ -59,23 +75,63 @@ function readHolder(root: string): DriveHolder | 'absent' | 'unreadable' {
     // The lock says only WHETHER a background log exists; its path is always derived. What
     // the file says is never printed: `watch:` is a line the engine acts on, and a path read
     // from a file could carry a newline and a forged `launch:` or `run:` line.
-    return { pid: h.pid, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
+    return { pid: h.pid, renewed, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
   } catch {
     return 'unreadable'
   }
 }
 
-// A live holder only: a dead one (a drive killed with SIGKILL) reads as none.
-export function driveHolder(root: string): DriveHolder | undefined {
+const leaseLive = (h: Held, now: number): boolean => now - h.renewed < DRIVE_LEASE_MS
+
+// A live holder only: a dead one (a drive killed with SIGKILL) reads as none, and so does a
+// live pid whose lease expired (row 222).
+export function driveHolder(root: string, now = Date.now()): DriveHolder | undefined {
   const h = readHolder(root)
-  return typeof h === 'object' && isAlive(h.pid) ? h : undefined
+  if (typeof h !== 'object' || !isAlive(h.pid) || !leaseLive(h, now)) return undefined
+  return { pid: h.pid, ...(h.log !== undefined ? { log: h.log } : {}) }
 }
 
-export function acquireDriveLock(root: string, info: { log?: string }, pid = process.pid): Result<() => void> {
+// Row 222. The running drive's renewal: the lock's mtime set to now when the lock is this
+// pid's. A link at the lock path is never followed (utimes would touch what it points at).
+// `false` says the lease is no longer this drive's — taken over, or removed — and the drive
+// that held it stops.
+export function renewDriveLock(root: string, pid = process.pid): boolean {
+  const h = readHolder(root)
+  if (typeof h !== 'object' || h.pid !== pid) return false
+  try {
+    const p = join(root, DRIVE_LOCK)
+    if (lstatSync(p).isSymbolicLink()) return false
+    const now = new Date()
+    utimesSync(p, now, now)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Row 222. The lock holder's renewal, from the moment it holds the lock to its release, so a
+// drive waiting on a session, a usage pause or a human's answer alike keeps its lease. The
+// timer never keeps the process alive. `onLost` runs once, when the lease is no longer this
+// pid's, and the renewal stops.
+export function holdLease(root: string, onLost: () => void, everyMs = DRIVE_RENEW_MS, pid = process.pid): () => void {
+  const timer = setInterval(() => {
+    if (renewDriveLock(root, pid)) return
+    clearInterval(timer)
+    onLost()
+  }, everyMs)
+  timer.unref()
+  return () => clearInterval(timer)
+}
+
+export function acquireDriveLock(
+  root: string, info: { log?: string }, pid = process.pid, graceMs = DRIVE_TAKEOVER_GRACE_MS,
+): Result<() => void> {
   const p = join(root, DRIVE_LOCK)
   mkdirSync(join(root, '.witness'), { recursive: true })
   const release = () => releaseIfMine(p, pid)
-  const t0 = Date.now()
+  let t0 = Date.now()
+  // Row 222. When this drive first saw a live pid's lease expired, and how renewed it was then.
+  let expired: { pid: number; renewed: number; since: number } | undefined
   for (;;) {
     try {
       writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}) }), { flag: 'wx' })
@@ -88,21 +144,37 @@ export function acquireDriveLock(root: string, info: { log?: string }, pid = pro
     }
     const h = readHolder(root)
     if (typeof h === 'object' && h.pid === pid) return ok(release)
-    if (typeof h === 'object' && isAlive(h.pid)) {
-      return refuse([v(DRIVE_LOCK, 'drive-running', `pid ${h.pid}`, `one drive per repo — ${watchLine(h)}`)])
+    const alive = typeof h === 'object' && isAlive(h.pid)
+    if (typeof h === 'object' && alive) {
+      const running: Result<() => void> = refuse([v(DRIVE_LOCK, 'drive-running', `pid ${h.pid}`, `one drive per repo — ${watchLine(h)}`)])
+      if (leaseLive(h, Date.now())) return running
+      // Expired, but the pid lives: a reused pid, a frozen drive — or a drive whose host just
+      // woke, which renews within DRIVE_RENEW_MS. Watched for the grace; a renewal refuses.
+      if (expired === undefined || expired.pid !== h.pid) expired = { pid: h.pid, renewed: h.renewed, since: Date.now() }
+      else if (h.renewed !== expired.renewed) return running
+      if (Date.now() - expired.since < graceMs) { pause(Math.min(250, graceMs)); continue }
+      t0 = Math.max(t0, expired.since + graceMs)
     }
     if (Date.now() - t0 > 5_000) {
       return refuse([v(DRIVE_LOCK, 'drive-running', 'the lock changed hands while it was being taken', 'run this again')])
     }
     // `wx` creates the file empty before the pid lands: an unreadable lock gets the repo
     // lock's grace before it counts as a dead drive's. A dead one is taken atomically
-    // (F15), so of several drives started at once exactly one gets in.
+    // (F15), so of several drives started at once exactly one gets in; an expired lease is
+    // taken only while it stays as the grace saw it (same pid, not renewed).
     if (h === 'unreadable') {
       pause(50)
       if (Date.now() - t0 < 1_000) continue
     }
     try {
-      const took = takeStale(p, (text) => typeof h === 'object' ? pidOf(text) === h.pid : pidOf(text) === undefined)
+      const stale = (text: string | undefined): boolean => {
+        if (typeof h !== 'object') return pidOf(text) === undefined
+        if (pidOf(text) !== h.pid) return false
+        if (!alive) return true
+        const now = readHolder(root)
+        return typeof now === 'object' && now.pid === h.pid && now.renewed === h.renewed
+      }
+      const took = takeStale(p, stale)
       if (took === 'busy') pause(50)
     } catch (e) {
       return refuse([v(DRIVE_LOCK, 'drive-lock-unwritable', (e as NodeJS.ErrnoException).code ?? String(e), 'a writable .witness directory')])
