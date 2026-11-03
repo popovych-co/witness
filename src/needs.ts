@@ -1,3 +1,4 @@
+import { cliAct } from './act.js'
 import { ensureTrusted } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { GateCheck } from './rounds.js'
@@ -54,8 +55,10 @@ export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[], do
   return out
 }
 
+// Rows 139/203. One builder: the inbox's need item carries this command as an act, and every
+// other surface prints that act's line.
 export function satisfyCommand(doc: string, need: string): string {
-  return `witness satisfy ${doc} --need ${need}`
+  return cliAct('satisfy', doc, '--need', need).line
 }
 
 // Row 179. What a spec's unmet manual needs hold: criterion id → the ids of the needs holding
