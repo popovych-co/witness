@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { exitsLine } from './act.js'
 import { grantOf, shownCmd } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -119,7 +120,7 @@ export function needsYou(root: string, ctx: Ctx, cfg: Config, canon: Canon, asid
       .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
     const why = stopped?.selected === 'policy' && stopped.note ? stopped.note : `parked at ${p.anchor}`
     items.push({ kind: 'parked', target: p.target, key: `parked:${p.target}:${p.gate}`,
-      rows: [`parked: ${p.target} · ${p.gate} round ${p.round} — ${why}`, `  run: ${p.reopen}`] })
+      rows: [`parked: ${p.target} · ${p.gate} round ${p.round} — ${why}`, `  run: ${exitsLine(p.reopen)}`] })
   }
   // A capped target the policy could not park carries no gate (drive.ts): it is stuck too. One
   // the policy parked is the parked row above, read from the journal.

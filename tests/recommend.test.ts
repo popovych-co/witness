@@ -955,3 +955,45 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
       `)
   })
 })
+
+// Rows 139/203. Every option that offers a command carries it as an act, and the act decides
+// what the block prints and whether it pastes: only a word that IS one of the CLI's own
+// placeholders makes an option unrunnable, never a reviewer's anchor that merely reads like one.
+describe('options carry their act (rows 139/203)', () => {
+  it('every option of every rule carries the act its command prints', () => {
+    for (const [name, c] of Object.entries(GOLDEN_CASES)) {
+      for (const o of recommend(c)!.options) {
+        expect(o.act, `${name}: ${o.command}`).toBeDefined()
+        expect(o.command, name).toBe(o.act!.line)
+        expect(o.runnable, `${name}: ${o.command}`).toBe(o.act!.inputs.length === 0)
+      }
+    }
+  })
+
+  it('names the upstream a human must fill when none resolves, and does not offer it to paste', () => {
+    const o = recommend(GOLDEN_CASES['bound-recurrence-no-upstream']!)!.options[0]!
+    expect(o.act).toEqual({
+      argv: ['decide', 'plan', 'p1', '--revise', '--upstream', '<effort>'],
+      inputs: [{ name: 'effort', at: 5 }],
+      line: 'witness decide plan p1 --revise --upstream <effort>',
+    })
+    expect(o.runnable).toBe(false)
+  })
+
+  // Review focus 3: a note prefill is the reviewer's anchor, so it may hold a quote, ` | ` or the
+  // literal text `<why>`. It stays one argv word, the option stays runnable, the line is today's.
+  it("keeps a reviewer's anchor one word of the note, whatever it holds", () => {
+    const o = recommend(ctxFor([run(1, 'a', 'src/a.ts "x" | <why>')]))!.options
+      .find((x) => x.act?.argv.includes('--note'))!
+    expect(o.act!.argv.at(-1)).toBe('1 blocking finding: src/a.ts "x" | <why>')
+    expect(o.runnable).toBe(true)
+    expect(o.command).toBe('witness decide plan p1 --revise --note "1 blocking finding: src/a.ts "x" | <why>"')
+  })
+
+  it("the trust twin is the plain approve's act plus the grant", () => {
+    const options = recommend(GOLDEN_CASES['non-blocking-trust-twin']!)!.options
+    const plain = options.find((o) => o.command === 'witness decide plan p1 --approve')!
+    const twin = options.find((o) => o.command === 'witness decide plan p1 --approve --trust-cmds')!
+    expect(twin.act!.argv).toEqual([...plain.act!.argv, '--trust-cmds'])
+  })
+})

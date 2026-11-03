@@ -1,3 +1,4 @@
+import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
   anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, pendingDecision, repairsOnRegate,
@@ -20,6 +21,9 @@ export interface Option {
   note?: string
   runnable: boolean
   judgeFirst?: string
+  // Rows 139/203. The command as data: `command` is its line. Absent only on a choose block's
+  // options, which name a spec, not a command (`readyChoice`).
+  act?: Act
 }
 
 export interface Decision {
@@ -73,10 +77,18 @@ const blockingAnchors = (r: GateRunEntry): string[] =>
 // The CLI's own placeholders, and only those. A finding's anchor is the reviewer's text and
 // may itself read `<SaveBar>`; matching any `<…>` made the prefilled revise "not runnable",
 // so the one fix the CLI recommends was the one act nobody could take.
+// An option reads the same two names off its act, as whole words (act.ts), so an anchor that
+// merely holds `<why>` no longer costs the revise its run: line. This test of the rendered
+// text stays for the arbiter's menu (arbiter.ts), which filters commands as lines.
 export const PLACEHOLDER = /<(why|effort)>/
 
-const opt = (command: string, depth: Depth, rest: Partial<Option> = {}): Option =>
-  ({ command, depth, runnable: !PLACEHOLDER.test(command), ...rest })
+// Rows 139/203. Every option that offers a command is built from its act: the block prints the
+// act's line, and the option pastes unless a word of it is one the human must fill.
+export function option(
+  act: Act, depth: Depth, rest: Partial<Pick<Option, 'why' | 'when' | 'tradeoff' | 'note' | 'judgeFirst'>> = {},
+): Option {
+  return { command: act.line, depth, runnable: act.inputs.length === 0, act, ...rest }
+}
 
 // The rule table is an ORDERED FIRST-MATCH list (D121). The id of the rule that matched is
 // what the journal records, so a wrong recommendation is attributable to one line here
@@ -97,7 +109,7 @@ function withTrustVariants(d: Decision, untrusted: string[]): Decision {
     options.push(o)
     // The obligation-minting `--approve --override` is deliberately excluded: D143 keeps
     // trust off nods, and stacking a grant onto the ledger act would bury it twice over.
-    if (!/ --approve$/.test(o.command)) continue
+    if (o.act?.argv.at(-1) !== '--approve') continue
     options[options.length - 1] = {
       ...o,
       tradeoff: [o.tradeoff, `the listed commands stay blocked at headless gates: ${listed}`]
@@ -105,7 +117,7 @@ function withTrustVariants(d: Decision, untrusted: string[]): Decision {
     }
     // The twin is the same stamp plus a grant, so it carries the stamp's depth: next to a
     // deferral approve (checks-failed) it is a deferral too, never a root fix.
-    options.push(opt(`${o.command} --trust-cmds`, o.depth, {
+    options.push(option(cliAct(...o.act.argv, '--trust-cmds'), o.depth, {
       when: 'you have read these commands and accept them running unattended at every later gate',
       tradeoff: `grants them repo-wide in .witness/allow.json (machine-local): ${listed}`,
       note: 'a bare affirmation never grants trust — this form must be named (D143)',
@@ -124,9 +136,9 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   const last = lastGateRun(entries, gate)
   if (!last) return undefined
 
-  const d = `witness decide ${gate} ${target}`
-  const up = upstream === undefined ? `${d} --revise --upstream <effort>` : `${d} --revise --upstream ${upstream}`
-  const note = `${d} --revise --note "${notePrefill(entries, gate)}"`
+  const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
+  const up = d('--revise', '--upstream', upstream ?? '<effort>')
+  const note = d('--revise', '--note', notePrefill(entries, gate))
   const atBound = boundReached(entries, gate)
   const budget = roundBudget(entries, gate)
   const spent = roundsSinceApprove(entries, gate)
@@ -139,9 +151,9 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   // and the prose differ. Omitted rather than flagged when no upstream resolves — `decide`
   // refuses that with `unknown-owner`, so it is an illegal act, not an unresolved one (D129).
   const upAlt = (when: string, tradeoff: string): Option[] =>
-    upstream === undefined ? [] : [opt(up, 'root', { when, tradeoff })]
+    upstream === undefined ? [] : [option(up, 'root', { when, tradeoff })]
 
-  const stopOpt = opt(`${d} --stop`, 'terminal', {
+  const stopOpt = option(d('--stop'), 'terminal', {
     when: 'this work should not continue as scoped',
     tradeoff: 'parks the flow — next stops offering it and reopening is an explicit act',
   })
@@ -152,7 +164,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   // nothing, which is the unaccounted band-aid D122 exists to prevent. Advertising it beside
   // an accounted one would make the block the place a human learns to skip the ledger, so
   // the block names one approve and it is the one that mints the obligation.
-  const overrideOpt = opt(`${d} --approve --override`, 'deferral', {
+  const overrideOpt = option(d('--approve', '--override'), 'deferral', {
     when: 'you have read the finding and judge it wrong',
     tradeoff: 'stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)',
   })
@@ -160,11 +172,11 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   // carries it unconditionally for a reason it states: nothing else offers it, and under D124
   // `--stop` parks rather than discards, so a bound screen without abandon offers no way to
   // end the work. The bound-recurrence branch omitted it and two existing tests caught that.
-  const abandonOpt = opt(`witness abandon ${target}`, 'terminal', {
+  const abandonOpt = option(cliAct('abandon', target), 'terminal', {
     when: 'this work should be discarded, not parked',
     tradeoff: 'irreversible — unlike --stop, nothing reopens it',
   })
-  const repairOpt = opt(`${d} --revise --repair`, 'deferral', {
+  const repairOpt = option(d('--revise', '--repair'), 'deferral', {
     when: 'the edit you just made is the fix and you want it verified rather than assumed',
     tradeoff: 'buys exactly one round; the discharge is that round passing, and the grant does not refresh until an approve, a revise-upstream or a passed run',
   })
@@ -176,7 +188,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'next', rule: 'malformed-rerun',
       options: [
-        opt(`witness gate ${gate} ${target}`, 'root', {
+        option(cliAct('gate', gate, target), 'root', {
           why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
             // A promise of what appendKind does (row 209): moved content is a fresh round, every
             // lens asked; a revise since makes it changed-nothing; a fallen-back round re-runs.
@@ -202,11 +214,11 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       // No anchor: the findings describe bytes that no longer exist, and pinning a decision
       // to one of them would file recurrence against a verdict nothing can still reproduce.
       options: [
-        opt(`witness gate ${gate} ${target}`, 'root', {
+        option(cliAct('gate', gate, target), 'root', {
           why: `the verdict judged @${last.reviewed_sha.slice(0, 7)} and the content has moved since — no battery has read the current bytes, so every finding above describes a tree that no longer exists`,
           tradeoff: `spends round ${nextRound} of ${budget}${nextRound >= budget ? ' — the last before the bound' : ''}`,
         }),
-        opt(note, 'root', {
+        option(note, 'root', {
           when: 'you already know the next edit and want no verdict on this state',
           tradeoff: 'spends no round now — the round is spent by the re-gate that follows it',
         }),
@@ -240,7 +252,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: 'bound-recurrence', anchor: primary,
       options: [
-        opt(up, 'root', { why: `${primary} survived ${recurrence} rounds across distinct reviewed shas — patching here has failed every time, and upstream is unspent for this anchor` }),
+        option(up, 'root', { why: `${primary} survived ${recurrence} rounds across distinct reviewed shas — patching here has failed every time, and upstream is unspent for this anchor` }),
         ...(stale ? [] : [overrideOpt]),
         ...(repairGranted(entries, gate) ? [] : [repairOpt]),
         stopOpt,
@@ -254,13 +266,13 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: stale ? 'bound-stale' : 'bound', anchor: primary,
       options: [
-        ...(stale ? [] : [opt(`${d} --approve --override`, 'deferral', {
+        ...(stale ? [] : [option(d('--approve', '--override'), 'deferral', {
           why: `the round budget is spent (${spent} of ${budget}) and the gate will not run again; nothing below the bound remains`,
           tradeoff: overrideOpt.tradeoff,
         })]),
         ...(stale
-          ? [opt(up, 'root', { why: 'verdict and content disagree, so --approve is not offered — no battery read the current bytes — and the gate will not re-run' })]
-          : [opt(up, 'root', { when: 'the parent artifact is what is wrong', tradeoff: 'reopens the parent stage and resets this budget' })]),
+          ? [option(up, 'root', { why: 'verdict and content disagree, so --approve is not offered — no battery read the current bytes — and the gate will not re-run' })]
+          : [option(up, 'root', { when: 'the parent artifact is what is wrong', tradeoff: 'reopens the parent stage and resets this budget' })]),
         ...(repairGranted(entries, gate) ? [] : [repairOpt]),
         stopOpt,
         abandonOpt,
@@ -273,8 +285,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: `anchor-recurrence-${recurrence}`, anchor: primary,
       options: [
-        opt(up, 'root', { why: `${primary} was found in ${recurrence} rounds across distinct reviewed shas — one honest fix already failed at this seam, so the likelier fault is above it` }),
-        opt(note, 'root', { when: 'the previous fix was the wrong fix and you now know the right one', tradeoff: `spends ${rounds}; recurring again leaves only the endgame set` }),
+        option(up, 'root', { why: `${primary} was found in ${recurrence} rounds across distinct reviewed shas — one honest fix already failed at this seam, so the likelier fault is above it` }),
+        option(note, 'root', { when: 'the previous fix was the wrong fix and you now know the right one', tradeoff: `spends ${rounds}; recurring again leaves only the endgame set` }),
         overrideOpt,
         stopOpt,
       ],
@@ -287,8 +299,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: 'pin-contradiction',
       options: [
-        opt(note, 'root', { why: `a finding contradicts policy pin #${pinned.contradicts_pin} — the gate escalated the conflict rather than burning a round on it, and only you can settle which side holds` }),
-        opt(`${d} --approve`, 'root', { when: 'the pin still holds and the finding is the thing that is wrong', tradeoff: 'the lens will raise it again on the next round unless the pin is restated' }),
+        option(note, 'root', { why: `a finding contradicts policy pin #${pinned.contradicts_pin} — the gate escalated the conflict rather than burning a round on it, and only you can settle which side holds` }),
+        option(d('--approve'), 'root', { when: 'the pin still holds and the finding is the thing that is wrong', tradeoff: 'the lens will raise it again on the next round unless the pin is restated' }),
         ...upAlt('the pin itself is what should change, and it was set at the stage above',
           'reopens the parent stage and resets this budget'),
         stopOpt,
@@ -303,8 +315,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       ? {
           key: 'decide', rule: 'blocking-parent', anchor: primary,
           options: [
-            opt(up, 'root', { why: `${anchors.length} of ${anchors.length} blocking findings anchor to ${upstream}, not to this artifact — it is faithful to a parent that is wrong` }),
-            opt(note, 'root', { when: 'this artifact can route around the parent gap without the parent changing', tradeoff: 'leaves the parent wrong for everything else that derives from it' }),
+            option(up, 'root', { why: `${anchors.length} of ${anchors.length} blocking findings anchor to ${upstream}, not to this artifact — it is faithful to a parent that is wrong` }),
+            option(note, 'root', { when: 'this artifact can route around the parent gap without the parent changing', tradeoff: 'leaves the parent wrong for everything else that derives from it' }),
             overrideOpt,
             stopOpt,
           ],
@@ -312,7 +324,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       : {
           key: 'decide', rule: 'blocking-here', anchor: primary,
           options: [
-            opt(note, 'root', { why: `${anchors.length} blocking finding${anchors.length === 1 ? '' : 's'} anchored inside this artifact (${anchors.slice(0, 2).join(', ')}); ${rounds}` }),
+            option(note, 'root', { why: `${anchors.length} blocking finding${anchors.length === 1 ? '' : 's'} anchored inside this artifact (${anchors.slice(0, 2).join(', ')}); ${rounds}` }),
             ...upAlt('the finding is only true because the parent asks for something unbuildable here',
               'reopens the parent stage and resets this budget; a wrong upstream spends a whole stage cycle'),
             overrideOpt,
@@ -337,8 +349,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
       return {
         key: 'decide', rule: 'checks-failed',
         options: [
-          opt(`${d} --approve`, 'root', { why: `the one failed check is amendment-ack — a spec was amended under in-progress plans · approving is the acknowledgement it asks for; ${rounds}` }),
-          opt(note, 'root', { when: 'the amendment should not land under the in-progress plans as it stands', tradeoff: `costs ${rounds}; the gate re-runs on your edit` }),
+          option(d('--approve'), 'root', { why: `the one failed check is amendment-ack — a spec was amended under in-progress plans · approving is the acknowledgement it asks for; ${rounds}` }),
+          option(note, 'root', { when: 'the amendment should not land under the in-progress plans as it stands', tradeoff: `costs ${rounds}; the gate re-runs on your edit` }),
           ...upAlt('what should change is the amendment the stage above made',
             'reopens the parent stage and resets this budget'),
           stopOpt,
@@ -348,10 +360,10 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: 'checks-failed',
       options: [
-        opt(note, 'root', { why: `${names.length} deterministic check${names.length === 1 ? '' : 's'} failed: ${names.join(' · ')} — no finding blocks · fix what the check names; ${rounds}` }),
+        option(note, 'root', { why: `${names.length} deterministic check${names.length === 1 ? '' : 's'} failed: ${names.join(' · ')} — no finding blocks · fix what the check names; ${rounds}` }),
         ...upAlt('the check fails because of what the stage above asked for',
           'reopens the parent stage and resets this budget'),
-        opt(`${d} --approve`, 'deferral', {
+        option(d('--approve'), 'deferral', {
           when: 'the failing check is wrong or cannot pass for a reason outside this artifact',
           tradeoff: 'stamps the artifact over a failed deterministic check · no obligation is minted — the failure stays visible only until a later gate run passes the check',
         }),
@@ -365,8 +377,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: 'non-blocking-only',
       options: [
-        opt(`${d} --approve`, 'root', { why: `${nonBlocking} finding${nonBlocking === 1 ? '' : 's'}, none blocking; all ${last.checks.length} checks green` }),
-        opt(note, 'root', { when: 'a non-blocking finding is one you want fixed before it becomes load-bearing', tradeoff: `spends ${rounds} on findings the battery already judged non-blocking` }),
+        option(d('--approve'), 'root', { why: `${nonBlocking} finding${nonBlocking === 1 ? '' : 's'}, none blocking; all ${last.checks.length} checks green` }),
+        option(note, 'root', { when: 'a non-blocking finding is one you want fixed before it becomes load-bearing', tradeoff: `spends ${rounds} on findings the battery already judged non-blocking` }),
         ...upAlt('the finding points at something the stage above got wrong',
           'reopens the parent stage and resets this budget'),
         stopOpt,
@@ -379,7 +391,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     return {
       key: 'decide', rule: 'reserved-stop-clean',
       options: [
-        opt(`${d} --approve`, 'root', {
+        option(d('--approve'), 'root', {
           why: `${last.checks.length} of ${last.checks.length} checks green, 0 findings — approve is what the evidence supports`,
           judgeFirst: RESERVED.has(gate)
             ? (gate === 'ship'
@@ -387,7 +399,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
               : 'the look itself — the critic judged canon-compliance and coverage, not whether this is the right design')
             : 'whether this cut is how you would ship it. Coverage is checked; the shape of the cut is not',
         }),
-        opt(note, 'root', { when: 'the evidence is right and the thing itself is wrong', tradeoff: `costs ${rounds}; the gate re-runs on your edit` }),
+        option(note, 'root', { when: 'the evidence is right and the thing itself is wrong', tradeoff: `costs ${rounds}; the gate re-runs on your edit` }),
         ...upAlt('what is wrong is what this stage was ASKED to build, not how it was built',
           'reopens the parent stage and resets this budget; the work here waits on that cycle'),
         stopOpt,
@@ -399,10 +411,10 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   return {
     key: 'decide', rule: 'manual-stop',
     options: [
-      opt(`${d} --approve`, 'root', {
+      option(d('--approve'), 'root', {
         why: `${last.checks.length - checksFailed.length} of ${last.checks.length} checks green, 0 blocking findings — nothing in the evidence stopped this round; the stop is the --manual flag armed for this run`,
       }),
-      opt(note, 'root', { when: 'you armed --manual because you expect the battery to miss something and you can name it', tradeoff: `spends ${rounds} on a round the evidence passed` }),
+      option(note, 'root', { when: 'you armed --manual because you expect the battery to miss something and you can name it', tradeoff: `spends ${rounds} on a round the evidence passed` }),
       ...upAlt('what you armed --manual to catch is a fault in the stage above',
         'reopens the parent stage and resets this budget'),
       stopOpt,
