@@ -102,13 +102,16 @@ export function effortSpecs(root: string, canon: Canon, effort: string): CanonDo
 }
 
 // Row 219. Principles are canon like a spec: the effort that changes them has them reviewed.
-// What an effort's decompose gate resolves, reviews and stamps — its written specs and its
-// written principles. `effortSpecs` stays for the callers that need specs only.
+// What an effort's decompose gate resolves, reviews and stamps — its written specs, and the
+// principles while its write is their current content. Every effort amends the one shared doc,
+// so a later effort's amendment is that effort's to have reviewed, and an earlier writer is not
+// reopened by it. `effortSpecs` stays for the callers that need specs only.
 export function effortCanon(root: string, canon: Canon, effort: string): CanonDoc[] {
   const docs: CanonDoc[] = []
-  for (const id of effortWrites(root, effort).keys()) {
+  for (const [id, w] of effortWrites(root, effort)) {
     const doc = findById(canon, id)
-    if (doc && (doc.meta.type === 'spec' || doc.meta.type === 'principles')) docs.push(doc)
+    if (!doc) continue
+    if (doc.meta.type === 'spec' || (doc.meta.type === 'principles' && w.sha === canonicalSha(doc.meta, doc.body))) docs.push(doc)
   }
   return docs.sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
 }

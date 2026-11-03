@@ -5,7 +5,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, type TestRepo, writePlan, writeSpec } from './helpers.js'
+import { callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, recapEffort, seededRepo, type TestRepo, writePlan, writeSpec } from './helpers.js'
 
 const PRINCIPLES = 'specs/principles.md'
 const statusOf = (repo: TestRepo, id: string): string => String(findById(loadCanon(repo.root), id)!.meta.status)
@@ -163,6 +163,23 @@ describe('the decompose critic reads principles as principles (#66)', () => {
     const prompt = critic(amended)
     expect(prompt).toContain('### Principles: principles')
     expect(prompt).toMatch(/principles are standing rules, not a slice/i)
+  })
+})
+
+// Final review F6. Principles belong to the effort whose write is their current content: a later
+// effort's amendment is that effort's to have reviewed, and an earlier one is not reopened.
+describe('a later amendment is the amending effort\'s alone (#66)', () => {
+  it('routes the amending effort\'s decompose, never the earlier writer\'s again', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED)
+    await decomposeApproved(repo)
+    await recapEffort(repo, 'e2')
+    expect((await writeSpec(repo, 'billing', { criteria: [{ id: 'ac-bill', test: '@spec:billing' }] }, undefined, 'e2')).code).toBe(0)
+    expect((await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED_AGAIN, 'e2')).code).toBe(0)
+    const n = await repo.cli(['next'])
+    expect(n.stdout).toContain('witness gate decompose --effort e2')
+    expect(n.stdout).not.toContain('--effort auth-hardening')
   })
 })
 
