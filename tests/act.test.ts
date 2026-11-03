@@ -17,6 +17,16 @@ describe('cliAct (rows 139/203)', () => {
     expect(cliAct('decide', 'plan', 'p1', '--revise', '--upstream', '<effort>').inputs).toEqual([{ name: 'effort', at: 5 }])
     expect(cliAct('decide', 'plan', 'p1', '--revise', '--note', '1 blocking finding: <why> in <SaveBar>').inputs).toEqual([])
   })
+  it('a placeholder is an input only in its own slot, so a command that reads like one stays literal', () => {
+    const grant = cliAct('trust', 'p1', '--cmd', '<why>')
+    expect(grant.inputs).toEqual([])
+    expect(grant.line).toBe("witness trust p1 --cmd '<why>'")
+    expect(cliAct('trust', 'p1', '--cmd', '<effort>').inputs).toEqual([])
+    const crossed = [cliAct('decide', 'plan', 'p1', '--revise', '--upstream', '<why>'), cliAct('decide', 'plan', 'p1', '--revise', '--note', '<effort>')]
+    expect(crossed.map((a) => a.inputs)).toEqual([[], []])
+    expect(crossed.map((a) => a.line))
+      .toEqual(["witness decide plan p1 --revise --upstream '<why>'", 'witness decide plan p1 --revise --note "<effort>"'])
+  })
   it('keeps every word as given, so it runs without a shell', () => {
     expect(cliAct('trust', 'p1', '--cmd', "echo 'hi' | wc").argv).toEqual(['trust', 'p1', '--cmd', "echo 'hi' | wc"])
   })

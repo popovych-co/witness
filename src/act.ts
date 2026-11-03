@@ -7,13 +7,22 @@ import { shellArg } from './toon.js'
 
 // The CLI's own placeholders, and only those — the names `PLACEHOLDER` matches in a line.
 export type ActInputName = 'why' | 'effort'
-// `argv[at]` is exactly `<name>`.
+// `argv[at]` is exactly `<name>`, and `argv[at - 1]` is the flag whose slot it fills.
 export interface ActInput { name: ActInputName; at: number }
 export interface Act { argv: readonly string[]; inputs: readonly ActInput[]; line: string }
 
-// A whole word, never a fragment: a reviewer's anchor inside a note prefill may read `<why>`
-// or `<SaveBar>`, and it is the reviewer's text, not a word the human must fill.
-const INPUT = /^<(why|effort)>$/
+// Rows 139/203. Inputs are positional: the CLI writes `<why>` only as a note and `<effort>` only
+// as an upstream, so those two words, whole and in those two slots, are the only ones a human
+// fills. Any other word is literal, even one that reads `<why>`: a reviewer's anchor inside a
+// note prefill (`… <why> in <SaveBar>`), or a repo-authored trust command, which stays a literal
+// grant and never becomes a slot to fill.
+const slotOf = (flag: string | undefined): ActInputName | undefined =>
+  flag === '--note' ? 'why' : flag === '--upstream' ? 'effort' : undefined
+
+function inputAt(argv: readonly string[], at: number): ActInputName | undefined {
+  const name = slotOf(argv[at - 1])
+  return name !== undefined && argv[at] === `<${name}>` ? name : undefined
+}
 
 // One word as the line prints it. The word after `--note` prints in double quotes, raw — D120's
 // grammar, which every screen has printed and `actOfCommand` reads back; a shell word's quoting
@@ -22,15 +31,15 @@ const INPUT = /^<(why|effort)>$/
 function word(argv: readonly string[], at: number): string {
   const w = argv[at]!
   if (argv[at - 1] === '--note') return `"${w}"`
-  return INPUT.test(w) ? w : shellArg(w)
+  return inputAt(argv, at) !== undefined ? w : shellArg(w)
 }
 
 const words = (argv: readonly string[]): string[] => argv.map((_, at) => word(argv, at))
 
 export function cliAct(...argv: string[]): Act {
-  const inputs = argv.flatMap((w, at): ActInput[] => {
-    const m = INPUT.exec(w)
-    return m ? [{ name: m[1] as ActInputName, at }] : []
+  const inputs = argv.flatMap((_, at): ActInput[] => {
+    const name = inputAt(argv, at)
+    return name !== undefined ? [{ name, at }] : []
   })
   return { argv, inputs, line: ['witness', ...words(argv)].join(' ') }
 }
