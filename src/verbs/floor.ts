@@ -43,7 +43,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal(violations).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
-    // Row 224 (#71). Committed state like every other decision: under the repo lock, one
+    // Row 226 (#71). Committed state like every other decision: under the repo lock, one
     // transaction appends the pin and lands its trailer commit, so the tree is clean after.
     // A pending transaction refuses it as it refuses every writer.
     const blocked = guardTxn(ctx, root)

@@ -11,7 +11,7 @@ import { registerGate, type GateInput, type Stamp } from '../gate.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
 import type { GateCheck } from '../rounds.js'
 
-// Row 219 (final review). The critic's lenses are written for slices; principles are not one.
+// Row 221 (final review). The critic's lenses are written for slices; principles are not one.
 const PRINCIPLES_LENSES = [
   'This effort also amends the repo\'s principles. Principles are standing rules, not a slice:',
   'work only coverage quality (does a rule really advance each goal it covers), non-goal violations,',
@@ -37,14 +37,14 @@ registerGate({
     }
     const recap = latestRecap(root, effort)
     if (!recap) return refuse([v('effort', 'unknown-effort', effort, 'a stream whose first entry is a recap')])
-    // Row 219 (final review). An abandoned effort's gate judges nothing: its specs went back, and
+    // Row 221 (final review). An abandoned effort's gate judges nothing: its specs went back, and
     // the principles it may have left are not its gate's to approve.
     if (effortAbandoned(readStream(root, effort))) {
       return refuse([v('effort', 'effort-abandoned', effort,
         'a live effort — an abandoned effort approves nothing; amend through a new feature or fix effort')])
     }
     const writes = effortWrites(root, effort)
-    // Row 219. Principles are canon like a spec: the effort that changes them has them reviewed
+    // Row 221. Principles are canon like a spec: the effort that changes them has them reviewed
     // here, and an approve stamps them with its specs.
     const docs = effortCanon(root, canon, effort)
     if (docs.length === 0) {
@@ -66,7 +66,7 @@ registerGate({
     for (const d of docs) {
       const covers = writes.get(String(d.meta.id))?.covers ?? []
       covers.forEach((g) => covered.add(g))
-      // Row 219. Principles count toward the goals they cover; only a spec must cover one.
+      // Row 221. Principles count toward the goals they cover; only a spec must cover one.
       if (covers.length === 0 && d.meta.type === 'spec') orphans.push(String(d.meta.id))
     }
     const missing = goals.filter((g: string) => !covered.has(g))
@@ -114,7 +114,7 @@ registerGate({
       '### Confirmed scope recap (latest)', canonicalJson(recap),
       '### Goal coverage (journaled)', coverageTable,
       ...(decisionTable !== undefined ? ['### Decision coverage (journaled)', decisionTable] : []),
-      // Row 219. Only when the effort wrote principles, so every other effort's prompt is today's.
+      // Row 221. Only when the effort wrote principles, so every other effort's prompt is today's.
       ...(docs.some((d) => d.meta.type === 'principles') ? ['### Principles in this effort', PRINCIPLES_LENSES] : []),
       ...docs.flatMap((d) => [`### ${d.meta.type === 'principles' ? 'Principles' : 'Spec'}: ${String(d.meta.id)}`, serializeDoc({ meta: d.meta, body: d.body })]),
     ].join('\n\n')

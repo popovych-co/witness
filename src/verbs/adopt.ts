@@ -111,7 +111,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   return reverify && !reverify.ok ? EXIT.FINDINGS : EXIT.OK
 }
 
-// Row 218 (#65). Position — status, drift, pr, design — is written by the CLI's own transitions
+// Row 220 (#65). Position — status, drift, pr, design — is written by the CLI's own transitions
 // alone, and the content sha leaves it out, so a hand edit of position alone read as unchanged
 // and adopt absolved it. Measured against the doc's last witnessed state (a trailered commit, or
 // one an earlier adopt absolved), followed through a hand move, when that state is this id's; a doc adopt

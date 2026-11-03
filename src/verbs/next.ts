@@ -317,7 +317,7 @@ function amendedSinceSettled(entries: Entry[]): boolean {
 // live specs (c2). A finished effort's change is a new effort.
 function effortFinished(specs: CanonDoc[], plans: CanonDoc[]): boolean {
   const ids = new Set(specs.map((d) => String(d.meta.id)))
-  // Row 219. Principles an effort wrote finish at approved: they never go live.
+  // Row 221. Principles an effort wrote finish at approved: they never go live.
   return specs.every((d) => String(d.meta.status) === (d.meta.type === 'principles' ? 'approved' : 'live')) &&
     !plans.some((p) => ids.has(String(p.meta.parent)) && !planFinished(p))
 }
@@ -339,7 +339,7 @@ function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: E
 
 // The step an effort's owed decompose takes: re-authoring when a revise is owed — the gate would
 // only say it changed nothing — else the gate. One derivation for the effort's own rung and for a
-// chore routed to the effort that owns its draft principles (row 219).
+// chore routed to the effort that owns its draft principles (row 221).
 function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, judge: string | undefined): NextAction {
   return authoringOwed(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha)
     ? {
@@ -350,7 +350,7 @@ function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: E
     : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug, ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
 }
 
-// Row 219. What approves draft principles — one derivation for `next`'s chore rung and for
+// Row 221. What approves draft principles — one derivation for `next`'s chore rung and for
 // `write`'s `parent-not-approved` remedy, so neither routes back to an act that is refused or
 // loops: an older init's untouched template → `witness migrate`; a live owner whose decompose is
 // owed → its step (`decomposeStep`); parked → its reopen; otherwise where its gate stands; no
@@ -586,7 +586,7 @@ export function parkedGates(
   root: string, canon: Canon,
 ): Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> {
   const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> = []
-  // Row 225. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
+  // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
   // effort abandoned, offers nothing to reopen or approve.
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
     ...effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
@@ -920,7 +920,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // gateable work, and they carry its goals — decompose is simply not owed here.
     if (latestRecap(root, e.slug)?.class === 'chore') {
       if (writes.size === 0) {
-        // Row 219. A chore's plan names the principles as its parent, which must be approved:
+        // Row 221. A chore's plan names the principles as its parent, which must be approved:
         // a draft one is the owner's decompose to approve, never the write `write` would refuse.
         const approval = principlesApproval(root, canon, judge)
         if (approval !== undefined) return approval.action

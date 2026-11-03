@@ -6,7 +6,7 @@ import { version } from '../src/version.js'
 import { seededRepo, type TestRepo } from './helpers.js'
 
 // A newer CLI's entry, committed as that CLI commits its state: `floor --set` lands its own
-// trailer commit (row 224), which an uncommitted state path would refuse as unrelated-dirty.
+// trailer commit (row 226), which an uncommitted state path would refuse as unrelated-dirty.
 function stampFuture(repo: TestRepo, pin = '99.0.0'): void {
   writeFileSync(join(repo.root, '.witness', 'journal', 'future.jsonl'),
     `{"v":1,"w":"${pin}","t":"status","artifact":"x","from":"a","to":"b","cause":"start"}\n`)
@@ -53,7 +53,7 @@ describe('witness floor', () => {
     expect((await repo.cli(['next'])).code).toBe(0)
   })
 
-  // Row 224 (#71). The rollback is a decision like any other: journaled under the lock and
+  // Row 226 (#71). The rollback is a decision like any other: journaled under the lock and
   // landed as its own trailer commit, so the tree is clean afterwards.
   it('commits its pin with the state trailer and leaves the tree clean (#71)', async () => {
     const repo = await seededRepo()

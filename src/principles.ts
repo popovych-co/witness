@@ -1,14 +1,14 @@
 import { tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
 
-// Row 219. The template `witness init` writes, born approved. An older init wrote it draft.
+// Row 221. The template `witness init` writes, born approved. An older init wrote it draft.
 export const PRINCIPLES_BODY = `# Principles
 
 Repo-wide rules and trade-offs. Amend via \`witness write\`; chores may name
 this doc as their plan's parent.
 `
 
-// Row 219. The principles an older init left: the template, still draft, its body untouched and
+// Row 221. The principles an older init left: the template, still draft, its body untouched and
 // its file clean — what `witness migrate` stamps approved. A changed body is content someone
 // wrote, which only a gate approves. One predicate for migrate, `next` and `write`'s refusal.
 export function templateDraft(root: string, doc: CanonDoc | undefined): doc is CanonDoc {

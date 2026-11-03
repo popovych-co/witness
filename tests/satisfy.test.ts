@@ -37,7 +37,7 @@ describe('witness satisfy', () => {
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
 
-  // Row 223. An unmet need is a kept stop: the human marks it met, never a session drive spawned.
+  // Row 225. An unmet need is a kept stop: the human marks it met, never a session drive spawned.
   // A reviewer is refused earlier still, by row 217's tripwire (`reviewer-cannot`).
   it('refuses inside a drive session and inside a reviewer (#70)', async () => {
     const repo = await seededRepo()

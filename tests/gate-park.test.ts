@@ -180,7 +180,7 @@ describe('a malformed round is not a disposition', () => {
   })
 })
 
-// Row 225. A parked gate on work that no longer moves — a plan done or abandoned, an
+// Row 227. A parked gate on work that no longer moves — a plan done or abandoned, an
 // effort abandoned — is owed to no one: nothing offers to reopen or approve it.
 const parkStop = (repo: TestRepo, stream: string, gate: string): void => {
   commitEntry(repo, stream, { v: 1, t: 'gate-run', gate, artifact: stream, round: 1, run_id: `r-${gate}`,

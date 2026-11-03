@@ -21,7 +21,7 @@ const value = <T>(r: { ok: true; value: T } | { ok: false }): T => {
   return r.value
 }
 
-// Row 221 (#68). `drive --detach` under WITNESS_BIN starts the bin itself on Windows, where
+// Row 223 (#68). `drive --detach` under WITNESS_BIN starts the bin itself on Windows, where
 // there is no /bin/sh: split as a command line, resolved like every other spawn.
 describe('detachArgv', () => {
   it('posix keeps exec through /bin/sh, so the printed pid is the CLI\'s own', () => {

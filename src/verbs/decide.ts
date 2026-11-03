@@ -676,7 +676,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
 
   // D154. After the decision is durable, never before: a refused or crashed decide must
   // not leave a grant behind that nobody chose.
-  // Row 220. Through the one locked grant, after decide's own lock is released above (the
+  // Row 222. Through the one locked grant, after decide's own lock is released above (the
   // lock is not re-entrant across a release): the decision stands whatever the grant meets,
   // and a grant it could not land is refused with its rows and the exit says so.
   let grantExit: number = EXIT.OK

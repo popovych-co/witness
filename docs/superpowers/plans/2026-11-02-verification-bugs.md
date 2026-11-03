@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Renumbered on merge with 0.28.0** (main took rows 218–219): this plan's rows 218–225 are DESIGN rows 220–227, and the UI design's 226–234 are 228–236.
+
 **Goal:** Fix the eight CLI bugs found while verifying the witness UI design, each with a test that fails first, and release them as one patch before any UI work.
 
 **Architecture:** Eight independent root fixes in the CLI, one task each, plus one docs task. No new dependency, no new config key. Every human-facing refusal keeps the `{field, rule, got, want}` shape.

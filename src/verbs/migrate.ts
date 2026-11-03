@@ -23,10 +23,10 @@ import { templateDraft } from '../principles.js'
 // Row 193 §4.6, the verb row 23 reserved: bring witness.config.yaml to this CLI's schema and
 // make it complete — every setting with its comment, every value that is a choice kept, every
 // comment a human wrote kept — and name each change. Config only (row 23), with one exception
-// row 219 made: the untouched principles template an older init wrote draft is stamped approved,
+// row 221 made: the untouched principles template an older init wrote draft is stamped approved,
 // journaled as the template, in the same trailer commit.
 
-// Row 219. The untouched template an older init left draft, stamped approved as the template.
+// Row 221. The untouched template an older init left draft, stamped approved as the template.
 function templateStamp(root: string): PreparedStamp | undefined {
   const doc = findById(loadCanon(root), 'principles')
   return templateDraft(root, doc) ? prepareStamp(doc, 'approved', 'template') : undefined

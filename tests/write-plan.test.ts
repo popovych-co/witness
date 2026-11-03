@@ -78,7 +78,7 @@ describe('witness write (plan)', () => {
   })
 
   it('allows principles parents for chores only', async () => {
-    const chore = await seededRepo({ slug: 'dep-bump', class: 'chore' })   // init's principles are born approved (row 219)
+    const chore = await seededRepo({ slug: 'dep-bump', class: 'chore' })   // init's principles are born approved (row 221)
     const ok = await writePlan(chore, 'bump-plan', {
       type: 'plan', parent: 'principles', depends: [], needs: [],
       steps: [{ id: 's1', title: 'bump deps', scaffolding: true }],

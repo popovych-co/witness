@@ -191,7 +191,7 @@ export function decisionEvidence(
       if (parent) scope.push(`### The spec: ${String(parent.meta.id)}\n\n${serializeDoc({ meta: parent.meta, body: parent.body })}`)
       if (plan) scope.push(`### The plan: ${target}\n\n${serializeDoc({ meta: plan.meta, body: plan.body })}`)
     } else {
-      // Row 219. What the decompose gate judged: the effort's specs and the principles it wrote.
+      // Row 221. What the decompose gate judged: the effort's specs and the principles it wrote.
       for (const s of effortCanon(root, canon, target)) {
         const kind = s.meta.type === 'principles' ? 'The principles (standing rules, not a slice)' : 'The spec'
         scope.push(`### ${kind}: ${String(s.meta.id)}\n\n${serializeDoc({ meta: s.meta, body: s.body })}`)

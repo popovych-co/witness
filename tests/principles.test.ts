@@ -14,7 +14,7 @@ const AMENDED_AGAIN = '# Principles\n\n## Rules\nPrefer boring technology. Measu
 const PRINCIPLES_META = { type: 'principles', summary: undefined, criteria: undefined, covers: ['g1'] }
 const CHORE_PLAN = { type: 'plan', parent: 'principles', depends: [], needs: [], steps: [{ id: 's1', title: 'bump deps', scaffolding: true }] }
 
-// The old init's principles: the template, born draft (before row 219).
+// The old init's principles: the template, born draft (before row 221).
 function legacyDraft(repo: TestRepo, body?: string): void {
   let text = repo.read(PRINCIPLES).replace('status: approved', 'status: draft')
   if (body !== undefined) text = text.replace(/\n---\n[\s\S]*$/, `\n---\n${body}`)
@@ -34,7 +34,7 @@ async function decomposeApproved(repo: TestRepo): Promise<void> {
   expect(d.code, d.stderr).toBe(0)
 }
 
-// Row 219 (#66). Principles are canon like a spec: the effort that changes them has them
+// Row 221 (#66). Principles are canon like a spec: the effort that changes them has them
 // reviewed by its decompose gate, which stamps them approved. Init's empty template is born
 // approved, and migrate stamps an older repo's untouched draft template.
 describe('principles are reviewed like specs (#66)', () => {
@@ -184,7 +184,7 @@ describe('a later amendment is the amending effort\'s alone (#66)', () => {
 })
 
 // Final review F4. An abandoned effort's decompose judges nothing: its specs went back, and what
-// it left (principles) is not its gate's to approve — the gate refuses, as it did before row 219.
+// it left (principles) is not its gate's to approve — the gate refuses, as it did before row 221.
 describe('an abandoned effort\'s decompose refuses (#66)', () => {
   it('runs no reviewer and stamps nothing', async () => {
     const repo = await seededRepo()

@@ -148,7 +148,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   return EXIT.OK
 }
 
-// Row 220 (#67). A grant is a state write like every other: under the repo lock, one
+// Row 222 (#67). A grant is a state write like every other: under the repo lock, one
 // transaction appends the `trust` entry and lands its trailer commit, and only then does
 // allow.json take the commands — D154's order, a grant follows the durable record, so a
 // refused commit or a crash before it leaves no grant nobody journaled. allow.json is

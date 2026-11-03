@@ -193,7 +193,7 @@ describe('witness adopt — held criteria (A10)', () => {
   })
 })
 
-// Row 218 (#65). Frontmatter's position — status, drift, pr, design — is written by the CLI's
+// Row 220 (#65). Frontmatter's position — status, drift, pr, design — is written by the CLI's
 // own transitions alone. The content sha leaves it out, so a hand edit of position alone read
 // as "unchanged" and adopt absolved it: a draft forged live with a fabricated design stamp.
 describe('adopt refuses a moved position (#65)', () => {

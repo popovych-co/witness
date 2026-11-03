@@ -44,7 +44,7 @@ export const DRIVE_LOG_ENV = 'WITNESS_DRIVE_LOG'
 
 export interface DriveHolder { pid: number; log?: string }
 
-// Row 222 (#69). The drive lock is a lease. A pid alone outlives its drive: a drive stopped
+// Row 224 (#69). The drive lock is a lease. A pid alone outlives its drive: a drive stopped
 // hard (`taskkill /F`, `kill -9`, a reboot) never runs its `finally`, and once that pid is
 // reused the lock read as a running drive and its printed stop aimed at an unrelated tree. The
 // running drive renews the lock's mtime every DRIVE_RENEW_MS; a lock not renewed for
@@ -56,7 +56,7 @@ export const DRIVE_RENEW_MS = 10_000
 export const DRIVE_TAKEOVER_GRACE_MS = 25_000
 
 // `leased`: the lock carries `lease: 1`, written by a drive that renews it. A lock without the
-// mark was written by a drive from before row 222 (0.27.0), which never renews: it is read by
+// mark was written by a drive from before row 224 (0.27.0), which never renews: it is read by
 // its pid alone, as then, so an upgrade while it runs never lets a second drive take its lock.
 type Held = DriveHolder & { renewed: number; leased: boolean }
 
@@ -87,14 +87,14 @@ function readHolder(root: string): Held | 'absent' | 'unreadable' {
 const leaseLive = (h: Held, now: number): boolean => !h.leased || now - h.renewed < DRIVE_LEASE_MS
 
 // A live holder only: a dead one (a drive killed with SIGKILL) reads as none, and so does a
-// live pid whose lease expired (row 222).
+// live pid whose lease expired (row 224).
 export function driveHolder(root: string, now = Date.now()): DriveHolder | undefined {
   const h = readHolder(root)
   if (typeof h !== 'object' || !isAlive(h.pid) || !leaseLive(h, now)) return undefined
   return { pid: h.pid, ...(h.log !== undefined ? { log: h.log } : {}) }
 }
 
-// Row 222. The running drive's renewal: the lock's mtime set to now when the lock is this
+// Row 224. The running drive's renewal: the lock's mtime set to now when the lock is this
 // pid's. A link at the lock path is never followed (utimes would touch what it points at).
 // `false` says the lease is no longer this drive's — taken over, or removed — and the drive
 // that held it stops. A renewal that fails while the lock still names this pid (a scanner
@@ -116,7 +116,7 @@ export function renewDriveLock(root: string, pid = process.pid): boolean {
   return true
 }
 
-// Row 222. The lock holder's renewal, from the moment it holds the lock to its release, so a
+// Row 224. The lock holder's renewal, from the moment it holds the lock to its release, so a
 // drive waiting on a session, a usage pause or a human's answer alike keeps its lease. The
 // timer never keeps the process alive. `onLost` runs once, when the lease is no longer this
 // pid's, and the renewal stops.
@@ -137,7 +137,7 @@ export function acquireDriveLock(
   mkdirSync(join(root, '.witness'), { recursive: true })
   const release = () => releaseIfMine(p, pid)
   let t0 = Date.now()
-  // Row 222. When this drive first saw a live pid's lease expired, and how renewed it was then.
+  // Row 224. When this drive first saw a live pid's lease expired, and how renewed it was then.
   let expired: { pid: number; renewed: number; since: number } | undefined
   for (;;) {
     try {

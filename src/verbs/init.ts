@@ -111,7 +111,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (!existing.includes('.witness/lock')) {
         writeFileSync(gi, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + GITIGNORE_BLOCK)
       }
-      // Row 219. Born approved: the empty template has nothing to judge, and a chore's plan
+      // Row 221. Born approved: the empty template has nothing to judge, and a chore's plan
       // names it as its parent from the first day. An effort that amends it has it reviewed.
       writeDoc(join(root, 'specs', 'principles.md'), {
         meta: { id: 'principles', type: 'principles', status: 'approved', depends: [], needs: [] },

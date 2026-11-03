@@ -389,7 +389,7 @@ export async function spawnSession(
   })
 }
 
-// `signal`: a stop from outside the loop — the drive verb's, when the lease is lost (row 222).
+// `signal`: a stop from outside the loop — the drive verb's, when the lease is lost (row 224).
 export interface DriveFlags { flow?: string; maxSpawns?: number; manual?: boolean; signal?: AbortSignal }
 
 // Twenty sessions per invocation, held in MEMORY and nowhere else (north star 2): a
@@ -643,7 +643,7 @@ export async function driveLoop(
     abort.abort()
   }
   const aborted = new Promise<void>((done) => abort.signal.addEventListener('abort', () => done(), { once: true }))
-  // Row 222. The lease lost — another drive holds the lock now: this run ends as a signal ends
+  // Row 224. The lease lost — another drive holds the lock now: this run ends as a signal ends
   // it, every session stopped, so two drives never work the repo at once.
   const outside = () => { if (signalled === undefined) onSignal('SIGTERM') }
   if (flags.signal?.aborted) outside()
@@ -1111,7 +1111,7 @@ export async function driveLoop(
   }
 }
 
-// Row 221 (#68). What `--detach` starts. With no WITNESS_BIN, this CLI's own bin.js under this
+// Row 223 (#68). What `--detach` starts. With no WITNESS_BIN, this CLI's own bin.js under this
 // node. On posix a WITNESS_BIN runs through `/bin/sh -c 'exec <bin> "$@"'`, so the printed pid
 // is the CLI's own and no shell sits between it and a `kill`. Windows has no /bin/sh: the bin
 // is split as a command line (a quoted first word may carry spaces — an install under Program
@@ -1135,7 +1135,7 @@ export function detachArgv(
 }
 
 // Row 180. `--detach`: this CLI again, as `witness drive <args>`, in the background at the
-// root, appending to `.witness/drive.log` — started as `detachArgv` says (row 221). The child
+// root, appending to `.witness/drive.log` — started as `detachArgv` says (row 223). The child
 // takes the drive lock itself and records its log there.
 export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Result<{ pid: number; log: string }> {
   const log = join(root, DRIVE_LOG)

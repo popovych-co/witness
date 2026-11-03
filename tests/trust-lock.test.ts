@@ -40,7 +40,7 @@ const allowed = (repo: TestRepo): string[] =>
     ? (JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }).commands : []
 const trustEntries = (repo: TestRepo): number => readStream(repo.root, repo.effort).filter((e) => e.t === 'trust').length
 
-// Row 220 (#67). A grant writes allow.json and journals its `trust` entry under the repo lock,
+// Row 222 (#67). A grant writes allow.json and journals its `trust` entry under the repo lock,
 // like every other state write: a concurrent reader never sees an unlocked transaction marker
 // (read as a crash), and two grants at once never lose one.
 describe('trust grants take the repo lock (#67)', () => {

@@ -333,7 +333,7 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
     violations.push(v('parent', 'kind', String(parent.meta.type), 'a spec (or principles for chores)'))
   }
   if (parent.meta.status === 'draft') {
-    // Row 219. Draft principles name what approves them (`principlesApproval`, the derivation
+    // Row 221. Draft principles name what approves them (`principlesApproval`, the derivation
     // `next` routes by), so the remedy never routes back to this refused write.
     const approval = parent.meta.type === 'principles' ? principlesApproval(root, canon) : undefined
     violations.push(v('parent', 'parent-not-approved', String(parentId), approval?.remedy

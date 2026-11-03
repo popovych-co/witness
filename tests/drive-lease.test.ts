@@ -30,7 +30,7 @@ async function liveOther(lock?: string, wakeAfterMs = 0, renewEveryMs = 0): Prom
   return child
 }
 
-// Row 222 (#69). The drive lock is a lease: a live pid is not enough, the lock must have been
+// Row 224 (#69). The drive lock is a lease: a live pid is not enough, the lock must have been
 // renewed within DRIVE_LEASE_MS. A lock left by a drive stopped hard (taskkill /F, kill -9, a
 // reboot) expires, so a reused pid never reads as a running drive or gets a printed stop.
 describe('the drive lock is a lease (#69)', () => {

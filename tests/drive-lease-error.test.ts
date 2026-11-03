@@ -20,7 +20,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 // Final review M3. A renewal that fails while the lock is still this drive's is retried on the
 // next tick, never read as a lost lease: a lost lease stops the drive and every session.
-describe('a renewal error is not a lost lease (row 222)', () => {
+describe('a renewal error is not a lost lease (row 224)', () => {
   it('keeps the lease when utimes fails on the drive\'s own lock', async () => {
     const repo = await seededRepo()
     mkdirSync(join(repo.root, '.witness'), { recursive: true })

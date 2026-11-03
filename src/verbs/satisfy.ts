@@ -21,7 +21,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('usage', 'required', 'missing id or --need', 'witness satisfy <doc-id> --need <id | index | text>')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
-  // Row 223. An unmet need is a kept stop for the human: a session drive spawned, or a
+  // Row 225. An unmet need is a kept stop for the human: a session drive spawned, or a
   // reviewer, never marks one met — the human does, from their own chat or terminal.
   const marker = sessionMarker(ctx.env)
   if (marker !== undefined) {

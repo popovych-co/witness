@@ -7,7 +7,7 @@ import { canonicalSha, VOLATILE_FIELDS } from './sha.js'
 
 export type Position = Record<(typeof VOLATILE_FIELDS)[number], unknown>
 
-// `commit`: the git commit that holds the witnessed state. `position` (row 218): its volatile
+// `commit`: the git commit that holds the witnessed state. `position` (row 220): its volatile
 // fields — the doc's position, which the content sha leaves out and only the CLI writes.
 export interface Witnessed {
   sha: string
@@ -26,7 +26,7 @@ const hasTrailer = (root: string, sha: string): boolean =>
 const commitsTouching = (root: string, rel: string): string[] =>
   git(root, 'log', '--format=%H', '--', rel).split('\n').filter(Boolean)
 
-// Row 218. The same walk through a move: each commit with the path the file had in it, so a
+// Row 220. The same walk through a move: each commit with the path the file had in it, so a
 // doc moved by hand (`git mv`, D167) is measured against the state it was witnessed in before.
 function commitsFollowing(root: string, rel: string): Array<{ sha: string; path: string }> {
   return git(root, 'log', '--follow', '--format=%x00%H', '--name-only', '--', rel).split('\0').flatMap((chunk) => {
@@ -37,7 +37,7 @@ function commitsFollowing(root: string, rel: string): Array<{ sha: string; path:
 
 // `absolved`: commits an `adopt` entry took in (`adoptedCommits`), which count as witnessed too —
 // a hand commit that `adopt` absolved is the doc's witnessed state from then on. `follow` walks
-// the file's history through a move (row 218's position baseline).
+// the file's history through a move (row 220's position baseline).
 export function lastWitnessed(
   root: string, rel: string, absolved: Set<string> = new Set(), opts: { follow?: boolean } = {},
 ): Witnessed | undefined {
