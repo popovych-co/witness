@@ -336,6 +336,19 @@ function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: E
     !gateParked(e.entries, 'decompose')
 }
 
+// The step an effort's owed decompose takes: re-authoring when a revise is owed — the gate would
+// only say it changed nothing — else the gate. One derivation for the effort's own rung and for a
+// chore routed to the effort that owns its draft principles (row 219).
+function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, judge: string | undefined): NextAction {
+  return authoringOwed(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha)
+    ? {
+        line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+        stage: 'decompose', target: e.slug,
+        note: 'revise owed — re-author, then the gate has something new to judge',
+      }
+    : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug, ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
+}
+
 // Row 205. The trust act: the human names, in the chat, each command to trust. The listing
 // form of the verb, which grants nothing, so a routed line run verbatim cannot over-grant.
 export function trustAction(target: string, owed: RunCommand[]): NextAction {
@@ -876,8 +889,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
           const owner = principlesOwner(root, canon)
           const owned = owner === undefined ? undefined : efforts.find((o) => o.slug === owner)
           if (owned !== undefined && decomposeOwed(root, canon, owned, effortCanon(root, canon, owned.slug), plans)) {
-            return { line: `witness gate decompose --effort ${owned.slug}`, target: owned.slug,
-              note: `principles.md is draft — ${owned.slug} amended it and its decompose gate approves it` }
+            const step = decomposeStep(root, canon, owned, judge)
+            return { ...step, note: [`principles.md is draft — ${owned.slug} amended it and its decompose gate approves it`, step.note].filter(Boolean).join(' · ') }
           }
           return { line: 'witness check', note: owner === undefined
             ? 'principles.md is draft and no effort owns it — amend principles through a feature or fix effort: its decompose gate approves them'
@@ -897,17 +910,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
         stage: 'decompose', target: e.slug,
       }
     }
-    if (decomposeOwed(root, canon, e, effortCanon(root, canon, e.slug), plans)) {
-      const effortSha = effortReviewedSha(root, canon, e.slug).sha
-      return authoringOwed(e.entries, 'decompose', effortSha)
-        ? {
-            line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
-            stage: 'decompose', target: e.slug,
-            note: 'revise owed — re-author, then the gate has something new to judge',
-          }
-        : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug,
-            ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
-    }
+    if (decomposeOwed(root, canon, e, effortCanon(root, canon, e.slug), plans)) return decomposeStep(root, canon, e, judge)
   }
 
   // Row 52 (Builder's call 8). While an effort owes the re-slice an amendment re-armed, the specs

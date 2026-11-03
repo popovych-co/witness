@@ -115,6 +115,29 @@ describe('principles an abandoned effort left draft (#66)', () => {
   })
 })
 
+// Final review I3. The owner's decompose is routed as the owner's own rung routes it: after a
+// revise the gate would only say it changed nothing, so the line is the re-authoring write.
+describe('a chore routes the owner\'s decompose as the owner would (#66)', () => {
+  it('routes the owner\'s re-authoring after a revise, never the gate again', async () => {
+    const repo = await seededRepo({ slug: 'zz-owner' })
+    await writeSpec(repo, 'auth-refresh')
+    await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED)
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }, { anchor: 'principles > ## Rules', note: 'read' }],
+      findings: [{ blocking: true, anchor: 'principles > ## Rules', claim: 'the rule is vague' }],
+    })
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'decompose', 'zz-owner', { fresh: false, manual: false })
+    expect((await repo.cli(['decide', 'decompose', 'zz-owner', '--revise', '--note', 'sharpen the rule'])).code).toBe(0)
+    const chore = { effort: 'aa-chore', class: 'chore', goals: [{ id: 'g1', text: 'bump deps' }], non_goals: [], constraints: [], slices: [] }
+    repo.write('aa.json', JSON.stringify(chore))
+    expect((await repo.cli(['recap', '--file', 'aa.json'])).code).toBe(0)
+    const n = await repo.cli(['next'])
+    expect(n.stdout).toContain('next: witness write <spec-id> --effort zz-owner')
+    expect(n.stdout).not.toContain('witness gate decompose')
+  })
+})
+
 describe('migrate stamps the untouched draft template (#66)', () => {
   it('stamps it approved in one trailer commit, journaled as the template; --dry-run names it', async () => {
     const repo = await seededRepo({ class: 'chore', slug: 'c1' })
