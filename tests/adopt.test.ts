@@ -192,3 +192,63 @@ describe('witness adopt — held criteria (A10)', () => {
     expect(res.stdout).toContain('reverify: lane green · 1 held — stays live')
   })
 })
+
+// Row 218 (#65). Frontmatter's position — status, drift, pr, design — is written by the CLI's
+// own transitions alone. The content sha leaves it out, so a hand edit of position alone read
+// as "unchanged" and adopt absolved it: a draft forged live with a fabricated design stamp.
+describe('adopt refuses a moved position (#65)', () => {
+  const UI = 'specs/sp1.md'
+  async function draftUiSpec(): Promise<TestRepo> {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'sp1', { ui: true, criteria: [{ id: 'ac-sp1', test: '@spec:sp1' }] })).code).toBe(0)
+    return repo
+  }
+  const handCommit = (repo: TestRepo, rel: string, fn: Parameters<typeof editDoc>[2]): void => {
+    editDoc(repo, rel, fn)
+    repo.git('add', rel)
+    repo.git('commit', '-q', '-m', 'hand edit')
+  }
+
+  it('refuses a draft forged live with a design stamp, naming each moved field; check still flags the commit', async () => {
+    const repo = await draftUiSpec()
+    handCommit(repo, UI, (meta, body) => ({ meta: { ...meta, status: 'live', design: { sha: 'a'.repeat(64), spec: 'b'.repeat(64) } }, body }))
+    const r = await repo.cli(['adopt', UI])
+    expect(r.code).toBe(2)
+    const rows = r.stderr.split('\n').filter((l) => l.includes('position-moved'))
+    expect(rows.map((l) => l.trim().split(',')[0])).toEqual(['status', 'design'])
+    expect(rows[0]).toContain('draft → live')
+    expect(readStream(repo.root, 'sp1').some((e) => e.t === 'adopt')).toBe(false)
+    expect((await repo.cli(['check'])).stdout).toContain('untrailered-commit')
+  })
+
+  it('refuses a hand edit that moves only drift, or only pr', async () => {
+    const repo = await liveRepo()
+    handCommit(repo, SPEC, (meta, body) => ({ meta: { ...meta, drift: { sha: 'c'.repeat(64) } }, body }))
+    const drift = await repo.cli(['adopt', SPEC], { env: fixtureEnv() })
+    expect(drift.code).toBe(2)
+    expect(drift.stderr).toMatch(/^\s*drift,position-moved,/m)
+    repo.git('reset', '-q', '--hard', 'HEAD~1')
+    handCommit(repo, SPEC, (meta, body) => ({ meta: { ...meta, pr: 42 }, body }))
+    const pr = await repo.cli(['adopt', SPEC], { env: fixtureEnv() })
+    expect(pr.code).toBe(2)
+    expect(pr.stderr).toMatch(/^\s*pr,position-moved,/m)
+  })
+
+  it('still adopts a body-only hand edit of the draft', async () => {
+    const repo = await draftUiSpec()
+    handCommit(repo, UI, (meta, body) => ({ meta, body: `${body}\nHand-polished.\n` }))
+    const r = await repo.cli(['adopt', UI])
+    expect(r.code, r.stderr).toBe(0)
+  })
+
+  it('a hand-made doc adopt has never seen is born draft, with no position stamps', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const made = repo.read(SPEC).replace('id: auth-refresh', 'id: auth-made').replace('@spec:auth-refresh', '@spec:auth-made')
+      .replace('status: draft', 'status: approved')
+    repo.write('specs/auth-made.md', made)
+    const r = await repo.cli(['adopt', 'specs/auth-made.md'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toMatch(/^\s*status,position-moved,draft → approved,/m)
+  })
+})
