@@ -2,9 +2,10 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
-import { grantCommands, trustListing } from '../src/allowlist.js'
+import { grantCommands, sourced, trustListing } from '../src/allowlist.js'
 import { decideView } from '../src/decide-view.js'
 import { readStream } from '../src/journal.js'
+import { needsYou } from '../src/needs-you.js'
 import { recommend } from '../src/recommend.js'
 import { renderRefusal } from '../src/refusal.js'
 import { loadCanon } from '../src/scan.js'
@@ -317,6 +318,50 @@ describe('the trust listing is a model (rows 139/203)', () => {
     if (!one.ok) throw new Error('listing')
     expect(one.value).toMatchObject({ untrusted: 0, unsafe: 1, pending: [] })
     expect(one.value.rows).toHaveLength(3)
+  })
+
+  // Every repo-authored field a row or a grant shows is escaped, here on a hand-edited spec (`witness
+  // write` refuses such ids) whose own id, criterion id and need id hold an escape and a bidi
+  // override. The one raw field is the target the caller named (R15), as its grants print it.
+  it("a hand-edited doc's ids are escaped in every row and grant source, the target raw (R15)", async () => {
+    const repo = await planWithCmdCriterion()
+    const evil = '\u001b[2K\u202e'
+    const shown = '\\x1b[2K\\u{202e}'
+    const id = `ingest${evil}`
+    repo.setMeta('ingest', {
+      id, criteria: [{ id: 'ac-i', test: '@spec:ingest' }, { id: `ac-a${evil}`, cmd: 'echo first' }],
+      needs: [{ id: `n${evil}`, cmd: 'test -d .git' }],
+    })
+    const cfg = cfgOf(repo.root)
+    const canon = loadCanon(repo.root)
+    const all = trustListing(repo.root, cfg, canon)
+    if (!all.ok) throw new Error('listing')
+    expect(all.value.rows.slice(2)).toEqual([
+      { cmd: 'echo first', source: `cmd: ac-a${shown}`, doc: `ingest${shown}`, status: 'untrusted' },
+      { cmd: 'test -d .git', source: `need: n${shown}`, doc: `ingest${shown}`, status: 'untrusted' },
+    ])
+    expect(controlStrings(all.value)).toEqual([])
+    const one = trustListing(repo.root, cfg, canon, id)
+    if (!one.ok) throw new Error('listing')
+    expect(one.value.rows.slice(2)).toEqual([
+      { cmd: 'echo first', source: `cmd: ac-a${shown}`, status: 'untrusted' },
+      { cmd: 'test -d .git', source: `need: n${shown}`, status: 'untrusted' },
+    ])
+    expect(controlStrings(one.value.rows)).toEqual([])
+    // R15: the target stays raw, in the listing and in the grants it offers, and nothing else does
+    expect(one.value.target).toBe(id)
+    expect(one.value.pending.at(-1)).toEqual(cliAct('trust', id, '--cmd', 'test -d .git'))
+    expect(controlStrings(one.value)).toEqual([id, ...one.value.pending.flatMap((a) => [a.argv[1], a.line])])
+    // the inbox's trust grant, from the sources drive hands it
+    const items = needsYou(repo.root, { env: {} }, cfg, canon, [
+      { target: id, kind: 'kept', stop: 'trust-grant', trust: sourced(cfg, canon, id, ['echo first', 'test -d .git']) },
+    ])
+    const grant = items.find((i) => i.kind === 'trust-grant')
+    if (grant?.kind !== 'trust-grant') throw new Error('no trust grant')
+    expect(grant.commands?.map(({ cmd, source }) => ({ cmd, source }))).toEqual([
+      { cmd: 'echo first', source: `cmd: ac-a${shown}` },
+      { cmd: 'test -d .git', source: `need: n${shown}` },
+    ])
   })
 
   // The guard the listing's test leans on, seen to hit: a walk that never reports a string
