@@ -94,7 +94,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
         run: witness gate plan auth-refresh-plan-2 --fresh
 
       parked:auth-refresh-plan-3:plan
-      parked: auth-refresh-plan-3 · plan round 3 — parked at stopped
+      parked: auth-refresh-plan-3 · plan round 3 — parked at auth-refresh-plan-3 > ## Steps
         run: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
 
       stuck:x-plan-1
@@ -119,6 +119,21 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       "conversation:-
       nothing queued — /witness <what to build> in a chat
       token da39a3ee5e6b"
+    `)
+  })
+
+  it('what needs you: a live-folder brainstorm and a merge with no PR', async () => {
+    const repo = await seededRepo()
+    const items = needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root),
+      [{ target: '-', kind: 'conversation' }, { target: 'x-plan-9', kind: 'merge' }])
+    expect(inbox(repo, items)).toMatchInlineSnapshot(`
+      "conversation:-
+      wait: conversation · brainstorm
+        run: cd '<root>' && claude '/witness'
+
+      merge:x-plan-9
+      wait: merge · x-plan-9
+      token 8eb6b16c0449"
     `)
   })
 
@@ -372,10 +387,11 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
         tests,false,ac-rotate:fail
         lint,true,
       held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod
-      findings[2]{reviewer,blocking,pin,anchor,claim}:
+      findings[3]{reviewer,blocking,pin,anchor,claim}:
         code-reviewer,true,#1,src/token.ts,collapses the service the pin renders in full
-        code-reviewer,false,,src/session.ts,expiry unbounded
-      demoted: src/session.ts — unchanged since round 1
+        code-reviewer,true,,omission:tests/,no test covers rotation before expiry
+        code-reviewer,false,,omission:src/session.ts,expiry unbounded
+      demoted: omission:src/session.ts — unchanged since round 1
       malformed[1]{reviewer,field,rule}:
         x,f,r
       standing-stop: reserved

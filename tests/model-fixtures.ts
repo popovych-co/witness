@@ -48,9 +48,9 @@ const HELD_SPEC = {
 // `write` refuses a plan that leaves one of its spec's criteria unrealized.
 const HELD_PLAN = { steps: [{ id: 's1', title: 't', criteria: ['ac-rotate', 'ac-prod'] }] }
 
-const planRun = (artifact: string, round: number, sha: string) => ({
+const planRun = (artifact: string, round: number, sha: string, extra: Record<string, unknown> = {}) => ({
   v: 1, t: 'gate-run', gate: 'plan', artifact, round, run_id: `r${round}`,
-  reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped',
+  reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped', ...extra,
 }) as never
 
 // Every kind of item `needsYou` derives, each in both aside forms where it has two: drive's, with
@@ -66,8 +66,11 @@ export async function needsYouRepo(): Promise<{ repo: TestRepo; asides: AsideFac
   appendEntry(repo.root, 'auth-refresh-plan-2', planRun('auth-refresh-plan-2', 1, 'sha-1'))
   appendEntry(repo.root, 'auth-refresh-plan-2', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh-plan-2', round: 1,
     decision: 'stop', selected: 'policy', note: 'drive cap: plan ran 16 rounds' } as never)
-  // plan-3: parked at the bound, where the way back is the endgame set
-  for (const round of [1, 2, 3]) appendEntry(repo.root, 'auth-refresh-plan-3', planRun('auth-refresh-plan-3', round, `sha-${round}`))
+  // plan-3: parked at the bound on the anchor all three rounds blocked on, where the way back is
+  // the endgame set
+  const steps = { verdicts: [{ reviewer: 'plan-critic', coverage: [{ anchor: 'auth-refresh-plan-3 > ## Steps', note: 'read' }],
+    findings: [{ blocking: true, anchor: 'auth-refresh-plan-3 > ## Steps', claim: 'step is untestable' }] }] }
+  for (const round of [1, 2, 3]) appendEntry(repo.root, 'auth-refresh-plan-3', planRun('auth-refresh-plan-3', round, `sha-${round}`, steps))
   appendEntry(repo.root, 'auth-refresh-plan-3', { v: 1, t: 'human-decision', gate: 'plan', artifact: 'auth-refresh-plan-3', round: 3,
     decision: 'stop' } as never)
   // plan-4: a PR named in frontmatter, for the merge aside that carries no line
@@ -221,7 +224,8 @@ export async function trustRepo(shipTest = 'pnpm test'): Promise<TestRepo> {
 
 // A gate run carrying every optional line `renderGateRun` prints, in one resumed round: the
 // review mode, the lens bookkeeping, a check with its held criterion and one without a detail,
-// a pin contradiction, a demoted finding, a malformed lens and a standing stop.
+// a pin contradiction, an omission, a demoted omission, a malformed lens and a standing stop. An
+// omission's anchor is an object, printed as `omission:<scope>`.
 export const EVERY_LINE_RUN: GateRunEntry = {
   v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 2, run_id: 'r2',
   reviewed_sha: 'c0ffee1', prompts_sha: 'p', witness: '0', model: 'm', harness: 'claude-code',
@@ -236,7 +240,8 @@ export const EVERY_LINE_RUN: GateRunEntry = {
     reviewer: 'code-reviewer', coverage: [{ anchor: 'src/token.ts', note: 'read' }],
     findings: [
       { blocking: true, anchor: 'src/token.ts', claim: 'collapses the service the pin renders in full', contradicts_pin: 1 },
-      { blocking: false, anchor: 'src/session.ts', claim: 'expiry unbounded', demoted: 1 },
+      { blocking: true, anchor: { kind: 'omission', scope: 'tests/' }, claim: 'no test covers rotation before expiry' },
+      { blocking: false, anchor: { kind: 'omission', scope: 'src/session.ts' }, claim: 'expiry unbounded', demoted: 1 },
     ],
   }],
   malformed: [{ reviewer: 'x', violations: [{ field: 'f', rule: 'r', got: 'g', want: 'w' }] }],
