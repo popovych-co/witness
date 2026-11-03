@@ -9,7 +9,7 @@ describe('witness init', () => {
     expect(repo.read('witness.config.yaml')).toContain('schema: 2 ')
     expect(repo.read('witness.config.yaml')).toContain('gates:')
     expect(repo.read('specs/principles.md')).toContain('type: principles')
-    expect(repo.read('specs/principles.md')).toContain('status: draft')
+    expect(repo.read('specs/principles.md')).toContain('status: approved')
     expect(repo.read('.gitignore')).toContain('.witness/lock')
     expect(repo.read('.gitignore')).toContain('.witness/txn.json')
     expect(repo.read('.gitignore')).toContain('.witness/config.local.yaml')

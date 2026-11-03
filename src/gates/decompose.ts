@@ -5,7 +5,7 @@ import { contextDigest } from '../delta.js'
 import { snapshotFiles } from '../snapshot.js'
 import { latestRecap, streamExists } from '../journal.js'
 import { findCycle, findById, type CanonDoc } from '../scan.js'
-import { effortReviewedSha, effortSpecs, effortWrites } from '../reviewed.js'
+import { effortCanon, effortReviewedSha, effortWrites } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput, type Stamp } from '../gate.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
@@ -29,10 +29,12 @@ registerGate({
     const recap = latestRecap(root, effort)
     if (!recap) return refuse([v('effort', 'unknown-effort', effort, 'a stream whose first entry is a recap')])
     const writes = effortWrites(root, effort)
-    const docs = effortSpecs(root, canon, effort)
+    // Row 219. Principles are canon like a spec: the effort that changes them has them reviewed
+    // here, and an approve stamps them with its specs.
+    const docs = effortCanon(root, canon, effort)
     if (docs.length === 0) {
       return refuse([v('effort', 'nothing-to-gate', effort,
-        `written specs — run: witness write <id> --effort ${effort} --meta m.json --body b.md`)])
+        `written specs or principles — run: witness write <id> --effort ${effort} --meta m.json --body b.md`)])
     }
 
     const checks: GateCheck[] = []
@@ -49,7 +51,8 @@ registerGate({
     for (const d of docs) {
       const covers = writes.get(String(d.meta.id))?.covers ?? []
       covers.forEach((g) => covered.add(g))
-      if (covers.length === 0) orphans.push(String(d.meta.id))
+      // Row 219. Principles count toward the goals they cover; only a spec must cover one.
+      if (covers.length === 0 && d.meta.type === 'spec') orphans.push(String(d.meta.id))
     }
     const missing = goals.filter((g: string) => !covered.has(g))
     checks.push({ name: 'goal-coverage', ok: missing.length === 0,
@@ -96,7 +99,7 @@ registerGate({
       '### Confirmed scope recap (latest)', canonicalJson(recap),
       '### Goal coverage (journaled)', coverageTable,
       ...(decisionTable !== undefined ? ['### Decision coverage (journaled)', decisionTable] : []),
-      ...docs.flatMap((d) => [`### Spec: ${String(d.meta.id)}`, serializeDoc({ meta: d.meta, body: d.body })]),
+      ...docs.flatMap((d) => [`### ${d.meta.type === 'principles' ? 'Principles' : 'Spec'}: ${String(d.meta.id)}`, serializeDoc({ meta: d.meta, body: d.body })]),
     ].join('\n\n')
 
     const { sha } = effortReviewedSha(root, canon, effort)
@@ -124,6 +127,6 @@ registerGate({
   },
 
   approveStamps(root, canon, effort) {
-    return stampsFor(effortSpecs(root, canon, effort))
+    return stampsFor(effortCanon(root, canon, effort))
   },
 })

@@ -10,7 +10,7 @@ import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
+import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
@@ -316,7 +316,8 @@ function amendedSinceSettled(entries: Entry[]): boolean {
 // live specs (c2). A finished effort's change is a new effort.
 function effortFinished(specs: CanonDoc[], plans: CanonDoc[]): boolean {
   const ids = new Set(specs.map((d) => String(d.meta.id)))
-  return specs.every((d) => String(d.meta.status) === 'live') &&
+  // Row 219. Principles an effort wrote finish at approved: they never go live.
+  return specs.every((d) => String(d.meta.status) === (d.meta.type === 'principles' ? 'approved' : 'live')) &&
     !plans.some((p) => ids.has(String(p.meta.parent)) && !planFinished(p))
 }
 
@@ -868,6 +869,20 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // gateable work, and they carry its goals — decompose is simply not owed here.
     if (latestRecap(root, e.slug)?.class === 'chore') {
       if (writes.size === 0) {
+        // Row 219. A chore's plan names the principles as its parent, which must be approved:
+        // a draft one is the owner's decompose to approve, never the write `write` would refuse.
+        const principles = findById(canon, 'principles')
+        if (principles !== undefined && String(principles.meta.status) === 'draft') {
+          const owner = principlesOwner(root, canon)
+          const owned = owner === undefined ? undefined : efforts.find((o) => o.slug === owner)
+          if (owned !== undefined && decomposeOwed(root, canon, owned, effortCanon(root, canon, owned.slug), plans)) {
+            return { line: `witness gate decompose --effort ${owned.slug}`, target: owned.slug,
+              note: `principles.md is draft — ${owned.slug} amended it and its decompose gate approves it` }
+          }
+          return { line: 'witness check', note: owner === undefined
+            ? 'principles.md is draft and no effort owns it — amend principles through a feature or fix effort: its decompose gate approves them'
+            : `principles.md is draft and ${owner}'s decompose is not owed — witness status names why` }
+        }
         return {
           line: `witness write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,
           stage: 'plan', target: e.slug,
@@ -882,7 +897,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
         stage: 'decompose', target: e.slug,
       }
     }
-    if (decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans)) {
+    if (decomposeOwed(root, canon, e, effortCanon(root, canon, e.slug), plans)) {
       const effortSha = effortReviewedSha(root, canon, e.slug).sha
       return authoringOwed(e.entries, 'decompose', effortSha)
         ? {
@@ -904,7 +919,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // admit can still owe it here. Flows, draft-plan gates and starts keep row 18's soft lock.
   const reslicing = efforts
     .filter((e) => !admits(e.slug) && latestRecap(root, e.slug)?.class !== 'chore' && effortWrites(root, e.slug).size > 0)
-    .filter((e) => amendedSinceSettled(e.entries) && decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans))
+    .filter((e) => amendedSinceSettled(e.entries) && decomposeOwed(root, canon, e, effortCanon(root, canon, e.slug), plans))
   const resliced = new Set(reslicing.flatMap((e) => [...effortWrites(root, e.slug).keys()]))
 
   for (const spec of specs) {

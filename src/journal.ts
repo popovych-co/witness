@@ -50,7 +50,8 @@ export interface RecapEntry extends Entry {
   ask?: string   // row 176: the ask this recap answers
 }
 
-export type StatusCause = 'gate-approve' | 'start' | 'ship' | 'merge' | 'abandon' | 'supersede'
+// 'template' (row 219): `migrate` stamping the untouched principles template an older init wrote draft.
+export type StatusCause = 'gate-approve' | 'start' | 'ship' | 'merge' | 'abandon' | 'supersede' | 'template'
 
 export interface StatusEntry {
   v: 1

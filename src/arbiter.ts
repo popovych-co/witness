@@ -10,7 +10,7 @@ import { SESSION_DEFAULT, stageModel, unansweredPin } from './model.js'
 import { PLACEHOLDER, type Decision, type Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
-import { effortOf, effortSpecs } from './reviewed.js'
+import { effortCanon, effortOf } from './reviewed.js'
 import { anchorRecurrence, gateRuns, roundBudget, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { canonicalJson } from './sha.js'
@@ -191,8 +191,10 @@ export function decisionEvidence(
       if (parent) scope.push(`### The spec: ${String(parent.meta.id)}\n\n${serializeDoc({ meta: parent.meta, body: parent.body })}`)
       if (plan) scope.push(`### The plan: ${target}\n\n${serializeDoc({ meta: plan.meta, body: plan.body })}`)
     } else {
-      for (const s of effortSpecs(root, canon, target)) {
-        scope.push(`### The spec: ${String(s.meta.id)}\n\n${serializeDoc({ meta: s.meta, body: s.body })}`)
+      // Row 219. What the decompose gate judged: the effort's specs and the principles it wrote.
+      for (const s of effortCanon(root, canon, target)) {
+        const kind = s.meta.type === 'principles' ? 'The principles' : 'The spec'
+        scope.push(`### ${kind}: ${String(s.meta.id)}\n\n${serializeDoc({ meta: s.meta, body: s.body })}`)
       }
     }
     sections.push({ title: 'Scope', body: scope.join('\n\n') })
