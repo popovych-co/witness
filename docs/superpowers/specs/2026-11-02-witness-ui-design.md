@@ -1,6 +1,6 @@
 # The witness UI: a local cockpit with the chat inside it
 
-Date: 2026-11-02 · Status: approved 2026-11-02 (grill 2026-10-29 → 2026-11-02, one question at a time, every pick the stated recommendation; two verification passes of three opus reviews each plus a state-machine inventory, every finding re-run by me; look approved on the canvas after a local render check; this doc then checked against HEAD 0.27.0 by one more opus review — 13 findings, all folded in) · Rows 218–226 · Depends on the bug-fix release for #65–#71 and #81 · Look: https://claude.ai/artifact/3RNpsf68v8sSQMoESJdz3n (private canvas, row 2 "Cockpit")
+Date: 2026-11-02 · Status: approved 2026-11-02 (grill 2026-10-29 → 2026-11-02, one question at a time, every pick the stated recommendation; two verification passes of three opus reviews each plus a state-machine inventory, every finding re-run by me; look approved on the canvas after a local render check; this doc then checked against HEAD 0.27.0 by one more opus review — 13 findings, all folded in) · Rows 226–234 · Depends on the bug-fix release for #65–#71 and #81 · Look: https://claude.ai/artifact/3RNpsf68v8sSQMoESJdz3n (private canvas, row 2 "Cockpit")
 
 ## 1. Why
 
@@ -56,7 +56,7 @@ Two verification passes (2026-10-29): pass 1 attacked the first draft against th
 - **Launcher `witness ui`** (verb in `@popovych.co/witness`). Resolves the primary root (works from a worktree); refuses without `witness.config.yaml` ("init first"), inside a session marker, without a TTY, and inside a UI terminal tab (`WITNESS_UI_TAB`). Resolves the CLI the way the engine and drive do: `WITNESS_BIN` if set, else the pin all *in-use* homes agree on — the engine pins of the harnesses `harness:` and the chat use, their global skills, and Claude Code's user-scope plugin engine — refusing when they disagree or sit below `stateFloor`, naming each pin and the remedy. Re-execs itself at that pin when it is not running it. A start lock admits one launch at a time; a live UI (§4.3) is reopened, not restarted.
 - **Server** (`@popovych.co/witness-ui`, the same version, exact dependency on the CLI). Started the way `detachDrive` starts drive — detached, with `WITNESS_NO_CONSOLE` — because on Windows a non-detached child dies with its parent's job object, and the no-console mode is what keeps row 201's windows hidden. Its env is scrubbed of npx's leftovers (`npm_config_*`, `_npx` PATH entries). It binds 127.0.0.1 on a port derived from the repo root (next free on collision), so the page's origin is stable across restarts. It exits if its launch code is never exchanged and it has no session.
 - **Reads** run in a worker thread from the CLI's own pure functions — `loadCanon`, `readStream`, `needsYou`, `computeNext` (never `next`), `readLive`, `lastEnd`, `stateFloor`, `unmetNeeds`, `owedDecisions`, `parkedGates` — inside `withoutConsole`. On fewhats `computeNext` takes about 1 s and `needsYou` about 0.2 s (11 MB journal), so the main thread stays free for the terminal and `/presence`. Never called: `next` (lazy stamp, and under autonomy the arbiter), `status` (lazy stamp, `git fetch`, auto-sync), `check` (the same, and it runs `cmd:` needs), `diff` (temp dirs), the trust listing at a TTY.
-- **Refresh**: directory watches (file watches die after a rename) on the UI's own set — row 202's signature set (journal, specs, plans, designs, `witness.config.yaml`, `.witness/allow.json`, `.witness/config.local.yaml`) plus `.witness/txn.json`, `.witness/lock`, `.witness/drive.lock`, `.witness/live/{drive,ui,waiter}.json`, `.witness/live/runs/*.json` and `.witness/live/chats/*` — debounced, plus a 5 s liveness poll, because a crash or a killed drive writes nothing. `drive.log` and every `*.jsonl` stream are tailed to the page and never trigger a recompute: since row 214 they change on every stream event, and each recompute costs about a second. Floor and config schema are checked on every recompute: past the UI's version the page freezes to the refusal and offers a restart.
+- **Refresh**: directory watches (file watches die after a rename) on the UI's own set — row 202's signature set (journal, specs, plans, designs, `witness.config.yaml`, `.witness/allow.json`, `.witness/config.local.yaml`) plus `.witness/txn.json`, `.witness/lock`, `.witness/drive.lock`, `.witness/live/{drive,ui,waiter}.json`, `.witness/live/runs/*.json` and `.witness/live/chats/*` — debounced, plus a 5 s liveness poll, because a crash or a killed drive writes nothing. `drive.log` and every `*.jsonl` stream are tailed to the page and never trigger a recompute: since row 214 they change on every stream event, and each recompute costs about a second. Nor does `drive.lock`'s mtime alone: since row 222 the running drive renews it every 10 s as its lease, so only a change of its content (a new holder, or none) recomputes, and the liveness poll reads the lease through `driveHolder`. Floor and config schema are checked on every recompute: past the UI's version the page freezes to the refusal and offers a restart.
 - **Acts** run one at a time per repo, each a child CLI started through `spawn.ts` with the no-console marker, non-TTY, cwd the root. Each act carries its inbox item's key and anchor; the server re-derives the inbox before running it.
 
 ### 4.2 Security *(my call, threat model stated)*
@@ -111,15 +111,15 @@ The repo becomes a pnpm workspace with `@popovych.co/witness-ui` beside the CLI,
 
 ## 5. DESIGN.md rows
 
-- **218 — The UI is a door and a renderer, never a writer.** `witness ui` serves a local page from `@popovych.co/witness-ui` at the repo's own pin; every act is a CLI child, every read the CLI's own pure computation; never `next`, `status`, `check` or `diff` on a refresh. Security per §4.2. Amends 116 (in-process reads honour the floor).
-- **219 — Who presents what.** UI presence, one ownership function, the `ui:` line, `wait`'s endings, chat state from the add-on, re-arming, one notifier. Amends 180, 195, 202, 203, 204 and the engine rows.
-- **220 — An act carries what it was shown.** `--run` on decide and gate --fresh, in every printed option; item key and anchor on every UI act.
-- **221 — A look shown in the UI is a look shown.** `design --open --in-ui --sha`; the skill's `--open` and `--preview` hand to a present UI; Review look as a button. Amends 72, 194, 200.
-- **222 — The human's merge is a verb.** `witness merge`, merge or stamp, never settles; a read-only poll triggers it.
-- **223 — Drive stops gently and says it is limited.** `drive --stop`, `{limited, until}`. Amends 145, 182, 201, 203, 214.
-- **224 — Every agent run is visible.** The run registry (one entry per process, with its lens), derived paths, streaming reviewers and arbiter, the tee as a reviewer's only transcript. Amends 88, 180, 203, 210, 214, 215 (a review now leaves local live files), 217.
-- **225 — The machine is a table the writers obey.** §4.7's transition table, derived-state registry, commit oracle and `computeNext` trace.
-- **226 — Undo for the human's own marks.** `satisfy --withdraw`, `trust --revoke --cmd`.
+- **226 — The UI is a door and a renderer, never a writer.** `witness ui` serves a local page from `@popovych.co/witness-ui` at the repo's own pin; every act is a CLI child, every read the CLI's own pure computation; never `next`, `status`, `check` or `diff` on a refresh. Security per §4.2. Amends 116 (in-process reads honour the floor).
+- **227 — Who presents what.** UI presence, one ownership function, the `ui:` line, `wait`'s endings, chat state from the add-on, re-arming, one notifier. Amends 180, 195, 202, 203, 204 and the engine rows.
+- **228 — An act carries what it was shown.** `--run` on decide and gate --fresh, in every printed option; item key and anchor on every UI act.
+- **229 — A look shown in the UI is a look shown.** `design --open --in-ui --sha`; the skill's `--open` and `--preview` hand to a present UI; Review look as a button. Amends 72, 194, 200.
+- **230 — The human's merge is a verb.** `witness merge`, merge or stamp, never settles; a read-only poll triggers it.
+- **231 — Drive stops gently and says it is limited.** `drive --stop`, `{limited, until}`. Amends 145, 182, 201, 203, 214.
+- **232 — Every agent run is visible.** The run registry (one entry per process, with its lens), derived paths, streaming reviewers and arbiter, the tee as a reviewer's only transcript. Amends 88, 180, 203, 210, 214, 215 (a review now leaves local live files), 217.
+- **233 — The machine is a table the writers obey.** §4.7's transition table, derived-state registry, commit oracle and `computeNext` trace.
+- **234 — Undo for the human's own marks.** `satisfy --withdraw`, `trust --revoke --cmd`.
 
 ## 6. Probes (2026-10-29 to 2026-11-02, this Mac, Node 24.11.1, pi 0.85.1)
 
@@ -150,9 +150,9 @@ Server and models: vitest, keeping row 213's event-loop rule. The page: browser 
 ## 9. Build order *(my call)*
 
 1. The bug-fix release: #65–#71 and #81 (patch).
-2. Release 1a, the CLI foundations — rows 219–224; each testable without the UI (minor).
-3. Release 1b, the UI package and `witness ui` — row 218, with the two-package release flow and the manual first publish of witness-ui (minor).
-4. Release 2, the state explorer — rows 225 and 226 (its undo verbs ship with it). Release 3, journal, gate rounds, evidence. Release 4, the machine room and housekeeping.
+2. Release 1a, the CLI foundations — rows 227–232; each testable without the UI (minor).
+3. Release 1b, the UI package and `witness ui` — row 226, with the two-package release flow and the manual first publish of witness-ui (minor).
+4. Release 2, the state explorer — rows 233 and 234 (its undo verbs ship with it). Release 3, journal, gate rounds, evidence. Release 4, the machine room and housekeeping.
 
 ## 10. Left to the builder
 
