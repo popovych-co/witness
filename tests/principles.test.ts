@@ -183,6 +183,26 @@ describe('a later amendment is the amending effort\'s alone (#66)', () => {
   })
 })
 
+// Final review F4. An abandoned effort's decompose judges nothing: its specs went back, and what
+// it left (principles) is not its gate's to approve — the gate refuses, as it did before row 219.
+describe('an abandoned effort\'s decompose refuses (#66)', () => {
+  it('runs no reviewer and stamps nothing', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED)
+    expect((await repo.cli(['abandon', repo.effort])).code).toBe(0)
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: 'principles > ## Rules', note: 'read' }], findings: [] })
+    const runs = () => readStream(repo.root, repo.effort).filter((e) => e.t === 'gate-run').length
+    const before = runs()
+    const g = await repo.cli(['gate', 'decompose', '--effort', repo.effort], { env: gateEnv(scenario) })
+    expect(g.code).toBe(2)
+    expect(g.stderr).toContain('effort-abandoned')
+    expect(runs()).toBe(before)
+    expect(statusOf(repo, 'principles')).toBe('draft')
+  })
+})
+
 describe('migrate stamps the untouched draft template (#66)', () => {
   it('stamps it approved in one trailer commit, journaled as the template; --dry-run names it', async () => {
     const repo = await seededRepo({ class: 'chore', slug: 'c1' })

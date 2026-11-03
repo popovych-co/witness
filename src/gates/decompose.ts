@@ -3,7 +3,7 @@ import { serializeDoc } from '../fm.js'
 import { canonicalJson } from '../sha.js'
 import { contextDigest } from '../delta.js'
 import { snapshotFiles } from '../snapshot.js'
-import { latestRecap, streamExists } from '../journal.js'
+import { effortAbandoned, latestRecap, readStream, streamExists } from '../journal.js'
 import { findCycle, findById, type CanonDoc } from '../scan.js'
 import { effortCanon, effortReviewedSha, effortWrites } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
@@ -37,6 +37,12 @@ registerGate({
     }
     const recap = latestRecap(root, effort)
     if (!recap) return refuse([v('effort', 'unknown-effort', effort, 'a stream whose first entry is a recap')])
+    // Row 219 (final review). An abandoned effort's gate judges nothing: its specs went back, and
+    // the principles it may have left are not its gate's to approve.
+    if (effortAbandoned(readStream(root, effort))) {
+      return refuse([v('effort', 'effort-abandoned', effort,
+        'a live effort — an abandoned effort approves nothing; amend through a new feature or fix effort')])
+    }
     const writes = effortWrites(root, effort)
     // Row 219. Principles are canon like a spec: the effort that changes them has them reviewed
     // here, and an approve stamps them with its specs.
