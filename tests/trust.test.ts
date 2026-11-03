@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
-import { SPEC_META, approve, patchConfig, seededRepo, stampLive, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, seededRepo, stampLive, writeSpec } from './helpers.js'
+import { trustRepo as planWithCmdCriterion } from './model-fixtures.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
 // `!isTTY → blocked`) — the Aug 1 all-four-`ac-*`-fail false negative. Approvals are
@@ -82,20 +83,8 @@ describe('witness trust (D154)', () => {
 // Row 205 (issue #56). A plan carries no criteria of its own, so the verb read nothing for it
 // even when its spec runs a command; and the config commands every flow runs — the runner,
 // ship.test, ship.lint — were invisible to it. Grants are per named command, never a nod, and
-// never a session's.
-async function planWithCmdCriterion(shipTest = 'pnpm test') {
-  const repo = await seededRepo()
-  patchConfig(repo, { criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' }, ship: { test: shipTest, lint: 'pnpm lint' } })
-  repo.git('add', 'witness.config.yaml')
-  repo.git('commit', '-m', 'full-suite')
-  await writeSpec(repo, 'ingest', {
-    criteria: [{ id: 'ac-i', test: '@spec:ingest' }, { id: 'ac-a', cmd: 'echo first' }],
-    needs: [{ cmd: 'test -d .git' }],
-  })
-  approve(repo, 'ingest')
-  await writePlan(repo, 'ingest-plan-1', { parent: 'ingest', steps: [{ id: 's1', title: 'ingest', criteria: ['ac-i', 'ac-a'] }] })
-  return repo
-}
+// never a session's. The repo these run on, `planWithCmdCriterion`, is the fixtures' `trustRepo`,
+// which the text goldens list too.
 const allowed = (repo: { read: (rel: string) => string }): string[] =>
   (JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }).commands
 

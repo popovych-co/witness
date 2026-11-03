@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
-import { recommend, renderDecision, type Decision } from '../src/recommend.js'
+import { recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
@@ -563,5 +563,395 @@ describe('a demoted finding is non-blocking everywhere (C3)', () => {
     const d = recommend(ctxFor([run(1, 'a', 'T'), demoted(2, 'b', 'S')]))!
     expect(d.rule).toBe('non-blocking-only')
     expect(d.options[0]!.command).toBe('witness decide plan p1 --approve')
+  })
+})
+
+// Roadmap 1a.1. Every rule of the table, rendered: the text the block must keep byte for byte
+// once its options carry their acts. Recorded once, before any change; a change here is a
+// regression, never a re-record. No anchor holds `<why>` or `<effort>`, the CLI's own placeholders.
+const judged = (findings: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}): Entry =>
+  run(1, 'a', 'S', { verdicts: [{ reviewer: 'plan-critic', coverage: [], findings }], ...extra })
+
+const GOLDEN_CASES: Record<string, GateContext> = {
+  'malformed': ctxFor([run(1, 'a', 'S', { outcome: 'malformed', malformed: [{ reviewer: 'code-reviewer', violations: [] }] })]),
+  'stale-below-bound': ctxFor([run(1, 'a', 'S')], { stale: true }),
+  'stale-no-facts': ctxFor([failedRun({ checks: [] })], { stale: true }),
+  'ladder-spent': ctxFor([run(1, 'a', 'S'), decision('revise-upstream', { anchor: 'S' }), run(2, 'b', 'S')]),
+  'bound-recurrence': ctxFor([run(1, 'a', 'S'), run(2, 'b', 'S'), run(3, 'c', 'S')]),
+  // a literal context: ctxFor defaults the upstream
+  'bound-recurrence-no-upstream': {
+    gate: 'plan', target: 'p1', entries: [run(1, 'a', 'S'), run(2, 'b', 'S'), run(3, 'c', 'S')], upstream: undefined, stale: false,
+  },
+  'bound': ctxFor([run(1, 'a', 'S1'), run(2, 'b', 'S2'), run(3, 'c', 'S3')]),
+  'bound-stale': ctxFor([run(1, 'a', 'S1'), run(2, 'b', 'S2'), run(3, 'c', 'S3')], { stale: true }),
+  'anchor-recurrence-2': ctxFor([run(1, 'a', 'S'), run(2, 'b', 'S')]),
+  'pin-contradiction': ctxFor([judged([{ blocking: true, anchor: 'S', claim: 'x', contradicts_pin: 1 }])]),
+  'blocking-parent': ctxFor([run(1, 'a', 'auth-refresh > ## Behavior')]),
+  'blocking-here': ctxFor([run(1, 'a', 'src/a.ts')]),
+  'checks-failed-ack': ctxFor([failedRun({ checks: [{ name: 'amendment-ack', ok: false }] })]),
+  'checks-failed': ctxFor([failedRun()]),
+  'non-blocking-only': ctxFor([judged([{ blocking: false, anchor: 'S', claim: 'x' }])]),
+  'non-blocking-trust-twin': { ...ctxFor([judged([{ blocking: false, anchor: 'S', claim: 'x' }])]), untrustedCmds: ['npm run e2e'] },
+  'reserved-stop-clean': ctxFor([judged([], { standing: 'reserved' })]),
+  'manual-stop': ctxFor([judged([])]),
+}
+
+// The rule a case fires where its name is not the rule's own: a case that drifted to another
+// rule would pin that rule's text under this one's name.
+const GOLDEN_RULE: Record<string, string> = {
+  'malformed': 'malformed-rerun', 'stale-no-facts': 'stale-below-bound', 'bound-recurrence-no-upstream': 'bound-recurrence',
+  'checks-failed-ack': 'checks-failed', 'non-blocking-trust-twin': 'non-blocking-only',
+}
+
+describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
+  it('each case renders its block', () => {
+    expect(Object.values(GOLDEN_CASES).map((c) => recommend(c)?.rule))
+      .toEqual(Object.keys(GOLDEN_CASES).map((k) => GOLDEN_RULE[k] ?? k))
+    expect(Object.entries(GOLDEN_CASES).map(([k, c]) => [k, ...renderDecision(recommend(c)!)].join('\n')).join('\n\n'))
+      .toMatchInlineSnapshot(`
+        "malformed
+        next: 1 option · 1 is recommended
+        1 · recommended · root
+           witness gate plan p1
+           why: the battery emitted 1 schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free, and on unchanged content and setup it re-asks only code-reviewer
+           note: a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy
+        run: witness gate plan p1
+
+        stale-below-bound
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness gate plan p1
+           why: the verdict judged @a and the content has moved since — no battery has read the current bytes, so every finding above describes a tree that no longer exists
+           tradeoff: spends round 2 of 3
+        2 · root
+           witness decide plan p1 --revise --note "1 blocking finding: S"
+           when: you already know the next edit and want no verdict on this state
+           tradeoff: spends no round now — the round is spent by the re-gate that follows it
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the parent artifact is what is wrong, whatever the current bytes say
+           tradeoff: reopens the parent stage and resets this budget
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness gate plan p1
+
+        stale-no-facts
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness gate plan p1
+           why: the verdict judged @a and the content has moved since — no battery has read the current bytes, so every finding above describes a tree that no longer exists
+           tradeoff: spends round 2 of 3
+        2 · root · not runnable
+           witness decide plan p1 --revise --note "<why>"
+           when: you already know the next edit and want no verdict on this state
+           tradeoff: spends no round now — the round is spent by the re-gate that follows it
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the parent artifact is what is wrong, whatever the current bytes say
+           tradeoff: reopens the parent stage and resets this budget
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness gate plan p1
+
+        ladder-spent
+        decide: 2 options · 1 is recommended
+        1 · recommended · terminal
+           witness decide plan p1 --stop
+           why: S has recurred across budget windows and the upstream reset already happened for it — the stage above was re-authored and the finding survived, so the depth ladder is spent
+        2 · deferral
+           witness decide plan p1 --approve --override
+           when: the recurring finding comes from one lens while the content genuinely changed each round — that pattern is a lens problem, files a lens suspicion rather than a debt against the artifact
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        run: witness decide plan p1 --stop
+
+        bound-recurrence
+        decide: 5 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           why: S survived 3 rounds across distinct reviewed shas — patching here has failed every time, and upstream is unspent for this anchor
+        2 · deferral
+           witness decide plan p1 --approve --override
+           when: you have read the finding and judge it wrong
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        3 · deferral
+           witness decide plan p1 --revise --repair
+           when: the edit you just made is the fix and you want it verified rather than assumed
+           tradeoff: buys exactly one round; the discharge is that round passing, and the grant does not refresh until an approve, a revise-upstream or a passed run
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        5 · terminal
+           witness abandon p1
+           when: this work should be discarded, not parked
+           tradeoff: irreversible — unlike --stop, nothing reopens it
+        run: witness decide plan p1 --revise --upstream auth-refresh
+
+        bound-recurrence-no-upstream
+        decide: 5 options · 1 is recommended
+        1 · recommended · root · not runnable
+           witness decide plan p1 --revise --upstream <effort>
+           why: S survived 3 rounds across distinct reviewed shas — patching here has failed every time, and upstream is unspent for this anchor
+        2 · deferral
+           witness decide plan p1 --approve --override
+           when: you have read the finding and judge it wrong
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        3 · deferral
+           witness decide plan p1 --revise --repair
+           when: the edit you just made is the fix and you want it verified rather than assumed
+           tradeoff: buys exactly one round; the discharge is that round passing, and the grant does not refresh until an approve, a revise-upstream or a passed run
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        5 · terminal
+           witness abandon p1
+           when: this work should be discarded, not parked
+           tradeoff: irreversible — unlike --stop, nothing reopens it
+
+        bound
+        decide: 5 options · 1 is recommended
+        1 · recommended · deferral
+           witness decide plan p1 --approve --override
+           why: the round budget is spent (3 of 3) and the gate will not run again; nothing below the bound remains
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        2 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the parent artifact is what is wrong
+           tradeoff: reopens the parent stage and resets this budget
+        3 · deferral
+           witness decide plan p1 --revise --repair
+           when: the edit you just made is the fix and you want it verified rather than assumed
+           tradeoff: buys exactly one round; the discharge is that round passing, and the grant does not refresh until an approve, a revise-upstream or a passed run
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        5 · terminal
+           witness abandon p1
+           when: this work should be discarded, not parked
+           tradeoff: irreversible — unlike --stop, nothing reopens it
+        run: witness decide plan p1 --approve --override
+
+        bound-stale
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           why: verdict and content disagree, so --approve is not offered — no battery read the current bytes — and the gate will not re-run
+        2 · deferral
+           witness decide plan p1 --revise --repair
+           when: the edit you just made is the fix and you want it verified rather than assumed
+           tradeoff: buys exactly one round; the discharge is that round passing, and the grant does not refresh until an approve, a revise-upstream or a passed run
+        3 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        4 · terminal
+           witness abandon p1
+           when: this work should be discarded, not parked
+           tradeoff: irreversible — unlike --stop, nothing reopens it
+        run: witness decide plan p1 --revise --upstream auth-refresh
+
+        anchor-recurrence-2
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           why: S was found in 2 rounds across distinct reviewed shas — one honest fix already failed at this seam, so the likelier fault is above it
+        2 · root
+           witness decide plan p1 --revise --note "1 blocking finding: S"
+           when: the previous fix was the wrong fix and you now know the right one
+           tradeoff: spends round 2 of 3; recurring again leaves only the endgame set
+        3 · deferral
+           witness decide plan p1 --approve --override
+           when: you have read the finding and judge it wrong
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --revise --upstream auth-refresh
+
+        pin-contradiction
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --note "1 blocking finding: S"
+           why: a finding contradicts policy pin #1 — the gate escalated the conflict rather than burning a round on it, and only you can settle which side holds
+        2 · root
+           witness decide plan p1 --approve
+           when: the pin still holds and the finding is the thing that is wrong
+           tradeoff: the lens will raise it again on the next round unless the pin is restated
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the pin itself is what should change, and it was set at the stage above
+           tradeoff: reopens the parent stage and resets this budget
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --revise --note "1 blocking finding: S"
+
+        blocking-parent
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           why: 1 of 1 blocking findings anchor to auth-refresh, not to this artifact — it is faithful to a parent that is wrong
+        2 · root
+           witness decide plan p1 --revise --note "1 blocking finding: auth-refresh > ## Behavior"
+           when: this artifact can route around the parent gap without the parent changing
+           tradeoff: leaves the parent wrong for everything else that derives from it
+        3 · deferral
+           witness decide plan p1 --approve --override
+           when: you have read the finding and judge it wrong
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --revise --upstream auth-refresh
+
+        blocking-here
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --note "1 blocking finding: src/a.ts"
+           why: 1 blocking finding anchored inside this artifact (src/a.ts); round 1 of 3
+        2 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the finding is only true because the parent asks for something unbuildable here
+           tradeoff: reopens the parent stage and resets this budget; a wrong upstream spends a whole stage cycle
+        3 · deferral
+           witness decide plan p1 --approve --override
+           when: you have read the finding and judge it wrong
+           tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --revise --note "1 blocking finding: src/a.ts"
+
+        checks-failed-ack
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --approve
+           why: the one failed check is amendment-ack — a spec was amended under in-progress plans · approving is the acknowledgement it asks for; round 1 of 3
+        2 · root
+           witness decide plan p1 --revise --note "failed checks: amendment-ack"
+           when: the amendment should not land under the in-progress plans as it stands
+           tradeoff: costs round 1 of 3; the gate re-runs on your edit
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: what should change is the amendment the stage above made
+           tradeoff: reopens the parent stage and resets this budget
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --approve
+
+        checks-failed
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --revise --note "failed checks: drift-lane"
+           why: 1 deterministic check failed: drift-lane — no finding blocks · fix what the check names; round 1 of 3
+        2 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the check fails because of what the stage above asked for
+           tradeoff: reopens the parent stage and resets this budget
+        3 · deferral
+           witness decide plan p1 --approve
+           when: the failing check is wrong or cannot pass for a reason outside this artifact
+           tradeoff: stamps the artifact over a failed deterministic check · no obligation is minted — the failure stays visible only until a later gate run passes the check
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --revise --note "failed checks: drift-lane"
+
+        non-blocking-only
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --approve
+           why: 1 finding, none blocking; all 0 checks green
+        2 · root · not runnable
+           witness decide plan p1 --revise --note "<why>"
+           when: a non-blocking finding is one you want fixed before it becomes load-bearing
+           tradeoff: spends round 1 of 3 on findings the battery already judged non-blocking
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the finding points at something the stage above got wrong
+           tradeoff: reopens the parent stage and resets this budget
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --approve
+
+        non-blocking-trust-twin
+        decide: 5 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --approve
+           why: 1 finding, none blocking; all 0 checks green
+           tradeoff: the listed commands stay blocked at headless gates: npm run e2e
+        2 · root
+           witness decide plan p1 --approve --trust-cmds
+           when: you have read these commands and accept them running unattended at every later gate
+           tradeoff: grants them repo-wide in .witness/allow.json (machine-local): npm run e2e
+           note: a bare affirmation never grants trust — this form must be named (D143)
+        3 · root · not runnable
+           witness decide plan p1 --revise --note "<why>"
+           when: a non-blocking finding is one you want fixed before it becomes load-bearing
+           tradeoff: spends round 1 of 3 on findings the battery already judged non-blocking
+        4 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: the finding points at something the stage above got wrong
+           tradeoff: reopens the parent stage and resets this budget
+        5 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --approve
+
+        reserved-stop-clean
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --approve
+           why: 0 of 0 checks green, 0 findings — approve is what the evidence supports
+           judge-first: whether this cut is how you would ship it. Coverage is checked; the shape of the cut is not
+        2 · root · not runnable
+           witness decide plan p1 --revise --note "<why>"
+           when: the evidence is right and the thing itself is wrong
+           tradeoff: costs round 1 of 3; the gate re-runs on your edit
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: what is wrong is what this stage was ASKED to build, not how it was built
+           tradeoff: reopens the parent stage and resets this budget; the work here waits on that cycle
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --approve
+
+        manual-stop
+        decide: 4 options · 1 is recommended
+        1 · recommended · root
+           witness decide plan p1 --approve
+           why: 0 of 0 checks green, 0 blocking findings — nothing in the evidence stopped this round; the stop is the --manual flag armed for this run
+        2 · root · not runnable
+           witness decide plan p1 --revise --note "<why>"
+           when: you armed --manual because you expect the battery to miss something and you can name it
+           tradeoff: spends round 1 of 3 on a round the evidence passed
+        3 · root
+           witness decide plan p1 --revise --upstream auth-refresh
+           when: what you armed --manual to catch is a fault in the stage above
+           tradeoff: reopens the parent stage and resets this budget
+        4 · terminal
+           witness decide plan p1 --stop
+           when: this work should not continue as scoped
+           tradeoff: parks the flow — next stops offering it and reopening is an explicit act
+        run: witness decide plan p1 --approve"
+      `)
   })
 })
