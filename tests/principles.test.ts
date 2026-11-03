@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, type TestRepo, writePlan, writeSpec } from './helpers.js'
+import { callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, type TestRepo, writePlan, writeSpec } from './helpers.js'
 
 const PRINCIPLES = 'specs/principles.md'
 const statusOf = (repo: TestRepo, id: string): string => String(findById(loadCanon(repo.root), id)!.meta.status)
@@ -135,6 +137,32 @@ describe('a chore routes the owner\'s decompose as the owner would (#66)', () =>
     const n = await repo.cli(['next'])
     expect(n.stdout).toContain('next: witness write <spec-id> --effort zz-owner')
     expect(n.stdout).not.toContain('witness gate decompose')
+  })
+})
+
+// Final review I4. The critic is told what principles are — standing rules, never a slice — so
+// it judges them for clarity, contradictions and honest coverage, not slice shape or criteria.
+// An effort that writes no principles keeps today's prompt.
+describe('the decompose critic reads principles as principles (#66)', () => {
+  const critic = (scenario: string): string => readFileSync(join(callFor(scenario, 'slicing-critic')!, 'stdin'), 'utf8')
+  it('says principles are no slice when the effort wrote them, and nothing when it did not', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const plain = fakeScenario()
+    putVerdict(plain, { coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }], findings: [] })
+    await runGate(fakeCtx(repo.root, { env: gateEnv(plain) }), 'decompose', repo.effort, { fresh: false, manual: false })
+    expect(critic(plain)).not.toContain('not a slice')
+
+    await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED)
+    const amended = fakeScenario()
+    putVerdict(amended, {
+      coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }, { anchor: 'principles > ## Rules', note: 'read' }],
+      findings: [],
+    })
+    await runGate(fakeCtx(repo.root, { env: gateEnv(amended) }), 'decompose', repo.effort, { fresh: false, manual: false })
+    const prompt = critic(amended)
+    expect(prompt).toContain('### Principles: principles')
+    expect(prompt).toMatch(/principles are standing rules, not a slice/i)
   })
 })
 

@@ -193,7 +193,7 @@ export function decisionEvidence(
     } else {
       // Row 219. What the decompose gate judged: the effort's specs and the principles it wrote.
       for (const s of effortCanon(root, canon, target)) {
-        const kind = s.meta.type === 'principles' ? 'The principles' : 'The spec'
+        const kind = s.meta.type === 'principles' ? 'The principles (standing rules, not a slice)' : 'The spec'
         scope.push(`### ${kind}: ${String(s.meta.id)}\n\n${serializeDoc({ meta: s.meta, body: s.body })}`)
       }
     }

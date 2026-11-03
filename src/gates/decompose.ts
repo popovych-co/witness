@@ -11,6 +11,15 @@ import { registerGate, type GateInput, type Stamp } from '../gate.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
 import type { GateCheck } from '../rounds.js'
 
+// Row 219 (final review). The critic's lenses are written for slices; principles are not one.
+const PRINCIPLES_LENSES = [
+  'This effort also amends the repo\'s principles. Principles are standing rules, not a slice:',
+  'work only coverage quality (does a rule really advance each goal it covers), non-goal violations,',
+  'decision fidelity, contradictions (within the principles and against every spec) and duplicated facts',
+  'over them. Never judge them for slice shape, summary, criteria, ui flag or depends — they carry none.',
+  'A goal the principles cover is covered.',
+].join(' ')
+
 function stampsFor(docs: CanonDoc[]): Stamp[] {
   return docs
     .filter((d) => String(d.meta.status) === 'draft')
@@ -99,6 +108,8 @@ registerGate({
       '### Confirmed scope recap (latest)', canonicalJson(recap),
       '### Goal coverage (journaled)', coverageTable,
       ...(decisionTable !== undefined ? ['### Decision coverage (journaled)', decisionTable] : []),
+      // Row 219. Only when the effort wrote principles, so every other effort's prompt is today's.
+      ...(docs.some((d) => d.meta.type === 'principles') ? ['### Principles in this effort', PRINCIPLES_LENSES] : []),
       ...docs.flatMap((d) => [`### ${d.meta.type === 'principles' ? 'Principles' : 'Spec'}: ${String(d.meta.id)}`, serializeDoc({ meta: d.meta, body: d.body })]),
     ].join('\n\n')
 
