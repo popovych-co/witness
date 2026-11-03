@@ -206,6 +206,20 @@ export async function decideRepo(state: DecideState): Promise<{ repo: TestRepo; 
   return { repo, ...(await DECIDE_STATES[state](repo)) }
 }
 
+// Every state above, read off the builders, so a test over all of them covers one added later.
+export const DECIDE_STATE_NAMES = Object.keys(DECIDE_STATES) as DecideState[]
+
+// Every string anywhere in a model that holds a character `logSafe` spells out: control and format
+// characters, and the line and paragraph separators (src/toon.ts). `JSON.stringify` escapes C0
+// controls as text, so its output searched for a raw ESC can never fail: this walks the value.
+const UNLOGGABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+export function controlStrings(x: unknown): string[] {
+  if (typeof x === 'string') return UNLOGGABLE.test(x) ? [x] : []
+  if (Array.isArray(x)) return x.flatMap((v) => controlStrings(v))
+  if (x !== null && typeof x === 'object') return Object.values(x).flatMap((v) => controlStrings(v))
+  return []
+}
+
 // Row 205 (issue #56). A plan whose spec runs a `cmd:` criterion and a `cmd:` need, in a repo whose
 // runner is full-suite, so the config commands the flow runs are `ship.test` and `ship.lint`.
 export async function trustRepo(shipTest = 'pnpm test'): Promise<TestRepo> {
