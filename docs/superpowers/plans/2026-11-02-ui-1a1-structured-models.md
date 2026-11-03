@@ -159,10 +159,11 @@
   export function exitsLine(acts: readonly Act[]): string
   ```
   - `argv` holds the words after `witness`, exactly as given.
-  - `line` is `'witness '` plus each word, rendered three ways:
+  - `line` is `'witness '` plus each word, rendered as today's text rendered it (amended by rulings R6 and R8 during execution):
     - the word after `--note`: in double quotes, raw (D120's grammar);
-    - an input: bare;
-    - any other word: through `shellArg` (ids match `ID_RE`, so they print bare as today).
+    - the word after `--cmd`: through `shellArg` (the only word today's text shell-quotes: `grantOf` and the trust verb's `run:` lines);
+    - any other word: raw, as written. `loadCanon` keeps invalid docs, so an id is not guaranteed to match `ID_RE`.
+  - `inputs` are positional (R6): only `--note`'s value when it is exactly `<why>`, and `--upstream`'s value when it is exactly `<effort>`. Any other word reading `<why>` is literal.
   - `exitsLine` joins the acts' lines with ` | `. When an act's first three words equal the previous act's and its first word is `decide`, it prints only the words after them. This is `liveExits`' grammar.
 - Produces, in `src/recommend.ts`:
   - `Option` gains `act?: Act`. It is absent only on a choose block's options, which name a spec, not a command (`readyChoice`).
