@@ -3,11 +3,15 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stateFloor } from '../src/floor.js'
 import { version } from '../src/version.js'
-import { seededRepo } from './helpers.js'
+import { seededRepo, type TestRepo } from './helpers.js'
 
-function stampFuture(root: string, pin = '99.0.0'): void {
-  writeFileSync(join(root, '.witness', 'journal', 'future.jsonl'),
+// A newer CLI's entry, committed as that CLI commits its state: `floor --set` lands its own
+// trailer commit (row 226), which an uncommitted state path would refuse as unrelated-dirty.
+function stampFuture(repo: TestRepo, pin = '99.0.0'): void {
+  writeFileSync(join(repo.root, '.witness', 'journal', 'future.jsonl'),
     `{"v":1,"w":"${pin}","t":"status","artifact":"x","from":"a","to":"b","cause":"start"}\n`)
+  repo.git('add', '.witness/journal/future.jsonl')
+  repo.git('commit', '-q', '-m', 'journal: future', '-m', 'Witness-State: 1')
 }
 
 function stripStamps(root: string): void {
@@ -39,7 +43,7 @@ describe('witness floor', () => {
   // back. Without it one broken publish strands every repository that ran it once.
   it('lets an explicit pin lower the bound below the derived maximum', async () => {
     const repo = await seededRepo()
-    stampFuture(repo.root)
+    stampFuture(repo)
     expect(stateFloor(repo.root)?.pin).toBe('99.0.0')
     expect((await repo.cli(['next'])).code).toBe(2)
 
@@ -47,6 +51,27 @@ describe('witness floor', () => {
     expect(res.code).toBe(0)
     expect(stateFloor(repo.root)?.pin).toBe('0.5.0')
     expect((await repo.cli(['next'])).code).toBe(0)
+  })
+
+  // Row 226 (#71). The rollback is a decision like any other: journaled under the lock and
+  // landed as its own trailer commit, so the tree is clean afterwards.
+  it('commits its pin with the state trailer and leaves the tree clean (#71)', async () => {
+    const repo = await seededRepo()
+    const res = await repo.cli(['floor', '--set', '0.1.0', '--note', 'rollback'])
+    expect(res.code).toBe(0)
+    expect(repo.git('status', '--porcelain')).toBe('')
+    const msg = repo.git('log', '-1', '--format=%B')
+    expect(msg).toContain('floor(0.1.0): rollback')
+    expect(msg).toContain('Witness-State: 1')
+  })
+
+  // A pending transaction refuses the pin as it refuses every writer; nothing is journaled.
+  it('refuses while a transaction is pending, journaling nothing (#71)', async () => {
+    const repo = await seededRepo()
+    repo.write('.witness/txn.json', JSON.stringify({ op: 'write(a)', files: ['specs/a.md'], pid: 999_999 }))
+    const res = await repo.cli(['floor', '--set', '0.1.0', '--note', 'rollback'])
+    expect(res.code).not.toBe(0)
+    expect(stateFloor(repo.root)?.pin).not.toBe('0.1.0')
   })
 
   // The latest decision is the state — the same doctrine D94 applies to gate decisions.
@@ -61,7 +86,7 @@ describe('witness floor', () => {
   // valve is welded shut exactly when it is needed.
   it('runs even when the CLI is below the floor', async () => {
     const repo = await seededRepo()
-    stampFuture(repo.root)
+    stampFuture(repo)
     expect((await repo.cli(['floor', '--show'])).code).toBe(0)
   })
 

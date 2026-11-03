@@ -8,9 +8,10 @@ import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
+import { templateDraft } from '../principles.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { diffReviewedSha, effortOf, effortReviewedSha, effortSpecs, effortWrites, implementReviewedSha, planPairSha } from '../reviewed.js'
+import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
@@ -316,7 +317,8 @@ function amendedSinceSettled(entries: Entry[]): boolean {
 // live specs (c2). A finished effort's change is a new effort.
 function effortFinished(specs: CanonDoc[], plans: CanonDoc[]): boolean {
   const ids = new Set(specs.map((d) => String(d.meta.id)))
-  return specs.every((d) => String(d.meta.status) === 'live') &&
+  // Row 221. Principles an effort wrote finish at approved: they never go live.
+  return specs.every((d) => String(d.meta.status) === (d.meta.type === 'principles' ? 'approved' : 'live')) &&
     !plans.some((p) => ids.has(String(p.meta.parent)) && !planFinished(p))
 }
 
@@ -333,6 +335,56 @@ function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: E
     (!amendedSinceSettled(e.entries) || effortFinished(specs, plans))
   return !specsApproved && !gateSettled(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha) &&
     !gateParked(e.entries, 'decompose')
+}
+
+// The step an effort's owed decompose takes: re-authoring when a revise is owed — the gate would
+// only say it changed nothing — else the gate. One derivation for the effort's own rung and for a
+// chore routed to the effort that owns its draft principles (row 221).
+function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, judge: string | undefined): NextAction {
+  return authoringOwed(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha)
+    ? {
+        line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+        stage: 'decompose', target: e.slug,
+        note: 'revise owed — re-author, then the gate has something new to judge',
+      }
+    : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug, ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
+}
+
+// Row 221. What approves draft principles — one derivation for `next`'s chore rung and for
+// `write`'s `parent-not-approved` remedy, so neither routes back to an act that is refused or
+// loops: an older init's untouched template → `witness migrate`; a live owner whose decompose is
+// owed → its step (`decomposeStep`); parked → its reopen; otherwise where its gate stands; no
+// live owner → a new feature or fix effort amends them. `undefined` when principles are not draft.
+export function principlesApproval(
+  root: string, canon: Canon, judge?: string,
+): { action: NextAction; remedy: string } | undefined {
+  const doc = findById(canon, 'principles')
+  if (doc === undefined || String(doc.meta.status) !== 'draft') return undefined
+  if (templateDraft(root, doc)) {
+    const note = 'principles.md is the untouched template an older witness init left draft — witness migrate stamps it approved'
+    return { action: { line: 'witness migrate', note }, remedy: `${note} — run: witness migrate` }
+  }
+  const owner = principlesOwner(root, canon)
+  if (owner === undefined) {
+    const note = 'principles.md is draft and no effort owns it — amend principles through a feature or fix effort: its decompose gate approves them'
+    return { action: { line: 'witness check', note }, remedy: note }
+  }
+  const e = { slug: owner, entries: readStream(root, owner) }
+  const plans = canon.docs.filter((d) => d.meta.type === 'plan')
+  const amended = `principles.md is draft — ${owner} amended it and its decompose gate approves it`
+  if (gateParked(e.entries, 'decompose')) {
+    const reopen = reopenCommand('decompose', owner, e.entries, upstreamFor(root, 'decompose', owner))
+    return {
+      action: { line: 'witness check', note: `${amended} · its decompose is parked — witness status names its reopen` },
+      remedy: `${amended} · its decompose is parked — reopen it: ${reopen}`,
+    }
+  }
+  if (decomposeOwed(root, canon, e, effortCanon(root, canon, owner), plans)) {
+    const step = decomposeStep(root, canon, e, judge)
+    return { action: { ...step, note: [amended, step.note].filter(Boolean).join(' · ') }, remedy: `${amended} — run: ${step.line}` }
+  }
+  const note = `principles.md is draft and ${owner}'s decompose is not owed now — witness log ${owner} shows where its gate stands`
+  return { action: { line: 'witness check', note }, remedy: note }
 }
 
 // Row 205. The trust act: the human names, in the chat, each command to trust. The listing
@@ -534,9 +586,12 @@ export function parkedGates(
   root: string, canon: Canon,
 ): Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> {
   const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> = []
+  // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
+  // effort abandoned, offers nothing to reopen or approve.
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
-    ...effortStreams(root).map((slug) => ({ id: slug, gates: ['decompose'] as const })),
-    ...canon.docs.filter((d) => d.meta.type === 'plan')
+    ...effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
+      .map((slug) => ({ id: slug, gates: ['decompose'] as const })),
+    ...canon.docs.filter((d) => d.meta.type === 'plan' && !planFinished(d))
       .map((d) => ({ id: String(d.meta.id), parent: String(d.meta.parent), gates: ['plan', 'implement', 'ship'] as const })),
     ...canon.docs.filter((d) => d.meta.type === 'spec')
       .map((d) => ({ id: String(d.meta.id), gates: ['design'] as const })),
@@ -865,6 +920,10 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // gateable work, and they carry its goals — decompose is simply not owed here.
     if (latestRecap(root, e.slug)?.class === 'chore') {
       if (writes.size === 0) {
+        // Row 221. A chore's plan names the principles as its parent, which must be approved:
+        // a draft one is the owner's decompose to approve, never the write `write` would refuse.
+        const approval = principlesApproval(root, canon, judge)
+        if (approval !== undefined) return approval.action
         return {
           line: `witness write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,
           stage: 'plan', target: e.slug,
@@ -879,17 +938,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
         stage: 'decompose', target: e.slug,
       }
     }
-    if (decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans)) {
-      const effortSha = effortReviewedSha(root, canon, e.slug).sha
-      return authoringOwed(e.entries, 'decompose', effortSha)
-        ? {
-            line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
-            stage: 'decompose', target: e.slug,
-            note: 'revise owed — re-author, then the gate has something new to judge',
-          }
-        : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug,
-            ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
-    }
+    if (decomposeOwed(root, canon, e, effortCanon(root, canon, e.slug), plans)) return decomposeStep(root, canon, e, judge)
   }
 
   // Row 52 (Builder's call 8). While an effort owes the re-slice an amendment re-armed, the specs
@@ -901,7 +950,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // admit can still owe it here. Flows, draft-plan gates and starts keep row 18's soft lock.
   const reslicing = efforts
     .filter((e) => !admits(e.slug) && latestRecap(root, e.slug)?.class !== 'chore' && effortWrites(root, e.slug).size > 0)
-    .filter((e) => amendedSinceSettled(e.entries) && decomposeOwed(root, canon, e, effortSpecs(root, canon, e.slug), plans))
+    .filter((e) => amendedSinceSettled(e.entries) && decomposeOwed(root, canon, e, effortCanon(root, canon, e.slug), plans))
   const resliced = new Set(reslicing.flatMap((e) => [...effortWrites(root, e.slug).keys()]))
 
   for (const spec of specs) {

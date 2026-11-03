@@ -14,10 +14,23 @@ import { renderRefusal, v, type Violation } from '../refusal.js'
 import { GATE_NAMES, SETTINGS, getIn, settingAt } from '../settings.js'
 import { execFileSync } from '../spawn.js'
 import { kv } from '../toon.js'
+import { journalRel } from '../journal.js'
+import { findById, loadCanon } from '../scan.js'
+import { prepareStamp, writeStamp, type PreparedStamp } from '../stamp.js'
+import { crashPoint, withTxn } from '../txn.js'
+import { templateDraft } from '../principles.js'
 
 // Row 193 §4.6, the verb row 23 reserved: bring witness.config.yaml to this CLI's schema and
 // make it complete — every setting with its comment, every value that is a choice kept, every
-// comment a human wrote kept — and name each change. Config only, never journals (row 23).
+// comment a human wrote kept — and name each change. Config only (row 23), with one exception
+// row 221 made: the untouched principles template an older init wrote draft is stamped approved,
+// journaled as the template, in the same trailer commit.
+
+// Row 221. The untouched template an older init left draft, stamped approved as the template.
+function templateStamp(root: string): PreparedStamp | undefined {
+  const doc = findById(loadCanon(root), 'principles')
+  return templateDraft(root, doc) ? prepareStamp(doc, 'approved', 'template') : undefined
+}
 
 const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineValue(val))
 
@@ -168,25 +181,40 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   // Line ends and a BOM are the checkout's, not the file's: with core.autocrlf a Windows working
   // copy of an up-to-date file reads CRLF, and is still up to date.
-  if (newText === oldText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')) {
-    ctx.out(kv('config', `schema ${schema} · up to date`))
-    return EXIT.OK
+  const current = newText === oldText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  const stamp = templateStamp(root)
+  if (current) ctx.out(kv('config', `schema ${schema} · up to date`))
+  else {
+    changeLines(changes, schema).forEach((l) => ctx.out(l))
+    const kept = humanLines(comments.human).length - comments.moved
+    ctx.out(kv('comments', `kept ${kept} · moved ${comments.moved} · dropped ${comments.legacy} old template lines`))
+    ctx.out(kv('config', `schema ${schema} → ${SCHEMA_VERSION}`))
   }
-  changeLines(changes, schema).forEach((l) => ctx.out(l))
-  const kept = humanLines(comments.human).length - comments.moved
-  ctx.out(kv('comments', `kept ${kept} · moved ${comments.moved} · dropped ${comments.legacy} old template lines`))
-  ctx.out(kv('config', `schema ${schema} → ${SCHEMA_VERSION}`))
+  if (stamp !== undefined) ctx.out(kv('principles', 'draft → approved — the untouched template an older init wrote draft'))
+  if (current && stamp === undefined) return EXIT.OK
   if (dryRun) {
-    ctx.out('diff:')
-    diffOf(oldText, newText).forEach((l) => ctx.out(l))
+    if (!current) {
+      ctx.out('diff:')
+      diffOf(oldText, newText).forEach((l) => ctx.out(l))
+    }
     return EXIT.OK
   }
 
+  const files = [...(current ? [] : ['witness.config.yaml']), ...(stamp !== undefined ? [stamp.rel, journalRel(stamp.stream)] : [])]
+  const subject = [
+    ...(current ? [] : [`config schema ${schema} → ${SCHEMA_VERSION}`]),
+    ...(stamp !== undefined ? ['principles approved (the untouched template)'] : []),
+  ].join(' · ')
   const lock = acquireLock(root)
   if (!lock.ok) { renderRefusal(lock.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
   try {
-    writeFileSync(p, newText)
-    const commit = commitWithTrailer(root, ['witness.config.yaml'], `migrate: config schema ${schema} → ${SCHEMA_VERSION}`)
+    const marker = { op: 'migrate', files, ...(stamp !== undefined ? { journal: { stream: stamp.stream, line: stamp.line } } : {}) }
+    const commit = withTxn(root, marker, () => {
+      if (!current) writeFileSync(p, newText)
+      if (stamp !== undefined) writeStamp(root, stamp)
+      crashPoint(ctx.env, 'migrate-write')
+      return commitWithTrailer(root, files, `migrate: ${subject}`)
+    })
     if (!commit.ok) return refused(commit.violations)
   } finally {
     lock.value()

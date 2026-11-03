@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, version, type Ctx } from '../cli.js'
+import { PRINCIPLES_BODY } from '../principles.js'
 import { configPath, loadConfig } from '../config.js'
 import { renderConfig } from '../config-file.js'
 import { writeDoc } from '../fm.js'
@@ -28,12 +29,6 @@ const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/screens/
 .witness/drafts/
 .witness/live/
-`
-
-const PRINCIPLES_BODY = `# Principles
-
-Repo-wide rules and trade-offs. Amend via \`witness write\`; chores may name
-this doc as their plan's parent.
 `
 
 const USAGE = 'usage: witness init [--agent claude-code|pi|auto]'
@@ -116,8 +111,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (!existing.includes('.witness/lock')) {
         writeFileSync(gi, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + GITIGNORE_BLOCK)
       }
+      // Row 221. Born approved: the empty template has nothing to judge, and a chore's plan
+      // names it as its parent from the first day. An effort that amends it has it reviewed.
       writeDoc(join(root, 'specs', 'principles.md'), {
-        meta: { id: 'principles', type: 'principles', status: 'draft', depends: [], needs: [] },
+        meta: { id: 'principles', type: 'principles', status: 'approved', depends: [], needs: [] },
         body: PRINCIPLES_BODY,
       })
       files.push('witness.config.yaml', '.gitignore', 'specs/principles.md',
@@ -192,7 +189,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
 
     if (!scaffolded) {
       ctx.out(kv('initialized', root))
-      ctx.out(kv('canon', 'specs/principles.md (draft)'))
+      ctx.out(kv('canon', 'specs/principles.md (approved)'))
       if (judge !== undefined) ctx.out(kv('harness', `${judge.name} · ${judge.from}`))
     } else {
       // Row 193 §4.8. `init --agent` is the upgrade command, so an older file says here what

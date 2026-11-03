@@ -1,10 +1,12 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { FLOOR_KEY, FLOOR_STREAM, stateFloor } from '../floor.js'
-import { primaryRoot } from '../gitio.js'
-import { appendEntry } from '../journal.js'
+import { primaryRoot, stateCommit } from '../gitio.js'
+import { appendEntry, entryLine, journalRel } from '../journal.js'
+import { acquireLock } from '../lock.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { kv } from '../toon.js'
+import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { compareTriple, version } from '../version.js'
 
 // Row 116's safety valve. The floor is derived from what the state has seen, which is
@@ -41,8 +43,28 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       renderRefusal(violations).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
-    appendEntry(root, FLOOR_STREAM, { t: 'policy-pin', key: FLOOR_KEY, pin: values.set, note: values.note })
-    ctx.out(kv('floor', `${values.set} — set by hand: ${values.note}`))
+    // Row 226 (#71). Committed state like every other decision: under the repo lock, one
+    // transaction appends the pin and lands its trailer commit, so the tree is clean after.
+    // A pending transaction refuses it as it refuses every writer.
+    const blocked = guardTxn(ctx, root)
+    if (blocked !== undefined) return blocked
+    const pin = values.set
+    const note = values.note ?? ''
+    const lock = acquireLock(root)
+    if (!lock.ok) { renderRefusal(lock.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
+    try {
+      const entry = { t: 'policy-pin' as const, key: FLOOR_KEY, pin, note }
+      const rel = journalRel(FLOOR_STREAM)
+      const res = withTxn(root, { op: `floor(${pin})`, files: [rel], journal: { stream: FLOOR_STREAM, line: entryLine(entry) } }, () => {
+        appendEntry(root, FLOOR_STREAM, entry)
+        crashPoint(ctx.env, 'journal-append')
+        return stateCommit(root, [rel], `floor(${pin}): ${note.slice(0, 60)}`)
+      })
+      if (!res.ok) { renderRefusal(res.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    } finally {
+      lock.value()
+    }
+    ctx.out(kv('floor', `${pin} — set by hand: ${note}`))
     return EXIT.OK
   }
 

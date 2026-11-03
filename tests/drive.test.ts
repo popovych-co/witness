@@ -565,6 +565,21 @@ describe('driveLoop (D145)', () => {
     expect(out.join('\n')).toMatch(/drive: spawn-timeout/)
   }, 30000)
 
+  // Row 224. The drive verb aborts the loop when its lease is lost (another drive took the
+  // lock over): the run ends as a signal ends it, its sessions stopped.
+  it('an outside stop ends the run as a signal does, its session stopped', async () => {
+    const repo = await planReady()
+    const bin = join(fakeScenario(), 'hang')
+    writeFileSync(bin, '#!/bin/sh\nsleep 60\n', { mode: 0o755 })
+    const out: string[] = []
+    const lease = new AbortController()
+    setTimeout(() => lease.abort(), 500)
+    const code = await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, { WITNESS_DRIVE_AGENT_BIN: bin }, out), { signal: lease.signal })
+
+    expect(code).not.toBe(0)
+    expect(out.join('\n')).toContain('drive: stopped — signal SIGTERM')
+  }, 30000)
+
   it('--flow refuses a plan that is not a flow', async () => {
     const repo = await planReady()
     const res = await repo.cli(['drive', '--flow', 'auth-refresh-plan-1'], { tty: true })
@@ -1467,9 +1482,11 @@ describe('drive takes back what a human moved (row 196)', () => {
     autonomyOn(repo)
     writeLocalConfig(repo.root, { notify: noopOpener() })
     const seen = join(fakeScenario(), 'seen')
+    // The human marks the need met from their own terminal while drive runs: a session may not
+    // (row 225), so the fake stands in for the human with drive's marker cleared.
     const agent = script([
       `echo "$WITNESS_DRIVE" >> "${seen}"`,
-      `if [ "$WITNESS_DRIVE" = auth-mfa-plan-1 ]; then ${witnessCli()} satisfy auth-refresh-plan-1 --need ses-prod; fi`,
+      `if [ "$WITNESS_DRIVE" = auth-mfa-plan-1 ]; then WITNESS_DRIVE= ${witnessCli()} satisfy auth-refresh-plan-1 --need ses-prod; fi`,
     ].join('\n'))
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})

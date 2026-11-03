@@ -12,6 +12,7 @@ import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
+import { principlesApproval } from './next.js'
 import { baseForSpec, contentAtSha } from '../history.js'
 import { findById, findCycle, loadCanon, planFinished, plansOn, type Canon, type CanonDoc } from '../scan.js'
 import { canonicalJson, canonicalSha, short } from '../sha.js'
@@ -332,8 +333,11 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
     violations.push(v('parent', 'kind', String(parent.meta.type), 'a spec (or principles for chores)'))
   }
   if (parent.meta.status === 'draft') {
-    violations.push(v('parent', 'parent-not-approved', String(parentId),
-      'a parent stamped approved by its gate — run: witness gate decompose --effort <slug>'))
+    // Row 221. Draft principles name what approves them (`principlesApproval`, the derivation
+    // `next` routes by), so the remedy never routes back to this refused write.
+    const approval = parent.meta.type === 'principles' ? principlesApproval(root, canon) : undefined
+    violations.push(v('parent', 'parent-not-approved', String(parentId), approval?.remedy
+      ?? 'a parent stamped approved by its gate — run: witness gate decompose --effort <slug>'))
   }
   const computed = canonicalSha(parent.meta, parent.body)
   const supplied = manifest['derives-from']

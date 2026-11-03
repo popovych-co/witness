@@ -251,7 +251,10 @@ parked.
 After each witness upgrade, run `witness migrate --dry-run` to see what the new version adds or
 changes, then `witness migrate`: it brings `witness.config.yaml` to the current schema, keeps
 every value you chose and every comment you wrote, names each change, and commits the file. A
-value still at an old default moves to the new one, and the output says so. Until you migrate,
+value still at an old default moves to the new one, and the output says so. It also stamps
+`specs/principles.md` approved when it is still the empty template an older `witness init` wrote
+as a draft — a principles file you changed is approved only by the decompose gate of the effort
+that amended it. Until you migrate,
 an older file keeps working: witness reads it as `migrate` would, changes nothing in it, and warns
 (`witness check` shows `older-schema`). A file from a newer witness refuses: upgrade witness.
 
@@ -286,7 +289,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]` | print a spec/plan/design from the primary root — the read route, since a worktree carries no canon copy; `--outline` names each anchor's line range for fat artifacts, and for a look its controls and hidden states; `--decisions` prints the decisions a spec carries with its effort's constraints and non-goals, or an effort's whole recap |
 | `check` | schema, graph, invariants, needs, trailer audit, probes |
 | `index` | id · summary · status · depends across the canon, then each spec's plans |
-| `satisfy <id> --need <id\|n\|text>` | journal a manual need as met — the spec is never rewritten |
+| `satisfy <id> --need <id\|n\|text>` | journal a manual need as met — the spec is never rewritten; refused inside a session, since the human marks a need met |
 | `trust [<id>] [--cmd '<exact command>']… [--yes]` | list every command a target's flow runs (the runner, `ship.test`, `ship.lint`, its spec's `cmd:` criteria, its `cmd:` needs) with its source; `--cmd` grants exactly the named command, `--yes` grants all only at a terminal; no session grants trust · with no id, everything the repo runs |
 | `retry <target>` | ask drive to try a set-aside target again, after a fix that leaves no record of its own (code, a tool, an account); refused inside a session |
 | `wait [--since <token>]` | under autonomy, block until something new needs you, drive stops with work left, a merge lands on GitHub, or a newer chat takes over — the `/witness` chat runs it; journals nothing |
@@ -302,7 +305,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `test-evidence <plan-id> --phase red\|green [--step <id>]` / `verify-red <plan-id> [--base <ref>] [--step <id>]` | journal red/green criteria evidence from a worktree; `--step` names the plan step the cycle closes — required before the plan's first implement gate (on a plan with a criteria step), left off for a fix round after it. A green that closes a step prints `context:`, `steps:` and `slice:` |
 | `turn -- <command> [args…]` | run one command in the repo's test turn — it waits while another worktree's test run holds it, unless `drive.parallelSuites: true` — and on Windows inside a job object, so whatever it starts ends with it; exits with the command's code · the implement and ship skills run every test a session runs itself through it |
 | `step-close <plan-id> --step <id>` | close a scaffolding step, which has no red→green to witness; prints `context:`, `steps:` and `slice:` as a closing green does, and closing it again changes nothing |
-| `adopt <path>` | absolve a finished hand-edit into the journal |
+| `adopt <path>` | absolve a finished hand-edit into the journal — content only: a hand edit that moves `status`, `drift`, `pr` or `design` is refused, since only witness writes a doc's position |
 | `abandon <plan-id \| effort-slug…>` | wind a plan/effort down; reverts only specs that effort itself wrote — several efforts go as one act, so a split or an amendment they share goes back together |
 | `dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n>` | journal a session slice's telemetry |
 | `rename <old> <new>` | id rename across canon, refs, journal |

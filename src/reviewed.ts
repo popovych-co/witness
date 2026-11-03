@@ -101,6 +101,34 @@ export function effortSpecs(root: string, canon: Canon, effort: string): CanonDo
   return docs.sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
 }
 
+// Row 221. Principles are canon like a spec: the effort that changes them has them reviewed.
+// What an effort's decompose gate resolves, reviews and stamps — its written specs, and the
+// principles while its write is their current content. Every effort amends the one shared doc,
+// so a later effort's amendment is that effort's to have reviewed, and an earlier writer is not
+// reopened by it. `effortSpecs` stays for the callers that need specs only.
+export function effortCanon(root: string, canon: Canon, effort: string): CanonDoc[] {
+  const docs: CanonDoc[] = []
+  for (const [id, w] of effortWrites(root, effort)) {
+    const doc = findById(canon, id)
+    if (!doc) continue
+    if (doc.meta.type === 'spec' || (doc.meta.type === 'principles' && w.sha === canonicalSha(doc.meta, doc.body))) docs.push(doc)
+  }
+  return docs.sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
+}
+
+// Row 221. The effort that owns the principles as they stand: the live one whose latest write
+// of them is the current content — its decompose gate approves them; by slug when several. None
+// when no live effort wrote this content (a hand edit adopted, an older init's template, or an
+// effort since abandoned, whose gate approves nothing): then a feature or fix effort amends them.
+export function principlesOwner(root: string, canon: Canon): string | undefined {
+  const doc = findById(canon, 'principles')
+  if (!doc) return undefined
+  const current = canonicalSha(doc.meta, doc.body)
+  return effortStreams(root)
+    .filter((e) => effortWrites(root, e).get('principles')?.sha === current && !effortAbandoned(readStream(root, e)))
+    .sort((a, b) => a.localeCompare(b))[0]
+}
+
 export function effortOf(root: string, artifactId: string): string | undefined {
   const hits: Array<{ effort: string; abandoned: boolean }> = []
   for (const effort of effortStreams(root)) {
@@ -124,7 +152,7 @@ export function effortReviewedSha(
   root: string, canon: Canon, effort: string,
 ): { sha: string; docs: CanonDoc[] } {
   const recap = latestRecap(root, effort)
-  const docs = effortSpecs(root, canon, effort)
+  const docs = effortCanon(root, canon, effort)   // row 221: principles an effort wrote are judged content too
   const writes = effortWrites(root, effort)
   // Row 198 (Builder's call 7). The decision mapping is judged content, so a carries-only
   // rewrite moves the identity rather than resuming into row 112's `cached` replay — a spec

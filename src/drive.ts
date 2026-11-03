@@ -8,7 +8,7 @@ import { sessionHash, withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon, type Canon } from './scan.js'
-import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop } from './spawn.js'
+import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop, type ResolvedSpawn } from './spawn.js'
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
 import { releaseDeadTurn } from './runner-lock.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
@@ -400,7 +400,8 @@ export async function spawnSession(
   })
 }
 
-export interface DriveFlags { flow?: string; maxSpawns?: number; manual?: boolean }
+// `signal`: a stop from outside the loop — the drive verb's, when the lease is lost (row 224).
+export interface DriveFlags { flow?: string; maxSpawns?: number; manual?: boolean; signal?: AbortSignal }
 
 // Twenty sessions per invocation, held in MEMORY and nowhere else (north star 2): a
 // ceiling that persisted would be state drive must clean up, and re-running is how a
@@ -653,6 +654,11 @@ export async function driveLoop(
     abort.abort()
   }
   const aborted = new Promise<void>((done) => abort.signal.addEventListener('abort', () => done(), { once: true }))
+  // Row 224. The lease lost — another drive holds the lock now: this run ends as a signal ends
+  // it, every session stopped, so two drives never work the repo at once.
+  const outside = () => { if (signalled === undefined) onSignal('SIGTERM') }
+  if (flags.signal?.aborted) outside()
+  else flags.signal?.addEventListener('abort', outside, { once: true })
 
   // Final review F2. A lane holds its whole flow: a spec and the plans written for it. The
   // plan queue's lane is keyed by the spec, and its session writes the plan and keeps working
@@ -1121,10 +1127,32 @@ export async function driveLoop(
   }
 }
 
+// Row 223 (#68). What `--detach` starts. With no WITNESS_BIN, this CLI's own bin.js under this
+// node. On posix a WITNESS_BIN runs through `/bin/sh -c 'exec <bin> "$@"'`, so the printed pid
+// is the CLI's own and no shell sits between it and a `kill`. Windows has no /bin/sh: the bin
+// is split as a command line (a quoted first word may carry spaces — an install under Program
+// Files) and its first word resolved like every other spawn, an npm `.cmd` shim through
+// System32's cmd.exe (row 201). A bin nothing answers to is refused here, not at the spawn.
+export function detachArgv(
+  bin: string | undefined, args: readonly string[], env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): Result<ResolvedSpawn> {
+  if (bin === undefined) {
+    return ok({ file: process.execPath, args: [join(dirname(fileURLToPath(import.meta.url)), 'bin.js'), 'drive', ...args], env, windowsVerbatimArguments: false })
+  }
+  if (platform !== 'win32') {
+    return ok({ file: '/bin/sh', args: ['-c', `exec ${bin} "$@"`, 'witness', 'drive', ...args], env, windowsVerbatimArguments: false })
+  }
+  const [first, ...rest] = splitArgv(bin)
+  if (first === undefined) {
+    return refuse([v('WITNESS_BIN', 'bin-empty', JSON.stringify(bin), 'the command that runs witness, e.g. node C:\\path\\to\\bin.js — or unset it')])
+  }
+  return resolveSpawn(first, [...rest, 'drive', ...args], env, 'win32')
+}
+
 // Row 180. `--detach`: this CLI again, as `witness drive <args>`, in the background at the
-// root, appending to `.witness/drive.log`. With WITNESS_BIN set it runs through
-// `exec <bin> "$@"`, so the printed pid is the CLI's own and no shell sits between it and a
-// `kill`. The child takes the drive lock itself and records its log there.
+// root, appending to `.witness/drive.log` — started as `detachArgv` says (row 223). The child
+// takes the drive lock itself and records its log there.
 export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Result<{ pid: number; log: string }> {
   const log = join(root, DRIVE_LOG)
   mkdirSync(dirname(log), { recursive: true })
@@ -1143,14 +1171,14 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
     return refuse([v(DRIVE_LOG, 'drive-log-unsafe', 'not a regular file',
       'a regular file at .witness/drive.log — remove whatever is there and run this again')])
   }
+  const how = detachArgv(ctx.env.WITNESS_BIN, args, ctx.env)
+  if (!how.ok) { closeSync(fd); return how }
+  const { file, args: argv, env, windowsVerbatimArguments } = how.value
   writeSync(fd, `--- witness drive ${new Date().toISOString()} ---\n`)
-  const [file, argv] = ctx.env.WITNESS_BIN !== undefined
-    ? ['/bin/sh', ['-c', `exec ${ctx.env.WITNESS_BIN} "$@"`, 'witness', 'drive', ...args]]
-    : [process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'bin.js'), 'drive', ...args]]
   try {
-    const child = spawn(file, argv as string[], {
-      cwd: root, detached: true, stdio: ['ignore', fd, fd],
-      env: { ...ctx.env, [DRIVE_LOG_ENV]: log, [NO_CONSOLE_ENV]: '1' } as NodeJS.ProcessEnv,
+    const child = spawn(file, argv, {
+      cwd: root, detached: true, stdio: ['ignore', fd, fd], windowsVerbatimArguments,
+      env: { ...env, [DRIVE_LOG_ENV]: log, [NO_CONSOLE_ENV]: '1' } as NodeJS.ProcessEnv,
     })
     if (child.pid === undefined) return refuse([v('--detach', 'spawn-failed', file, 'a runnable witness CLI')])
     child.on('error', () => {})

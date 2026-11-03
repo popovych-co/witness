@@ -5,11 +5,12 @@ import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel } from '../journal.js'
-import { renderRefusal, v } from '../refusal.js'
+import { acquireLock } from '../lock.js'
+import { ok, renderRefusal, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
 import { cmd as cmdLine, hasControl, kv, rows, shellArg, visible } from '../toon.js'
-import { guardTxn, withTxn } from '../txn.js'
+import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]"
 
@@ -138,22 +139,37 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.FINDINGS
   }
 
-  grantCommands(root, grant)
-  journalTrust(ctx, root, id, grant)
+  const granted = grantTrust(ctx, root, id, grant, 'verb')
+  if (!granted.ok) {
+    renderRefusal(granted.violations).forEach((l) => ctx.err(l))
+    return granted.violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
+  }
   ctx.out(kv('trusted', grant.join(' · ')))
   return EXIT.OK
 }
 
-// Journaled like every other human act. Best-effort on the txn, `journalRefusal`'s
-// precedent: a blocked transaction costs the record, never the grant that already landed —
-// allow.json is machine-local and gitignored, so it is not part of the state commit.
-export function journalTrust(ctx: Ctx, root: string, artifact: string, cmds: string[], via: 'verb' | 'decide' = 'verb'): void {
-  const stream = effortOf(root, artifact) ?? artifact
-  const entry = { t: 'trust' as const, artifact, cmds, via }
-  const rel = journalRel(stream)
-  const res = withTxn(root, { op: `trust(${artifact})`, files: [rel], journal: { stream, line: entryLine(entry) } }, () => {
-    appendEntry(root, stream, entry)
-    return stateCommit(root, [rel], `trust(${artifact}): ${cmds.length} command(s)`)
-  })
-  if (!res.ok) ctx.err('warn: trust grant could not be journaled (state paths dirty)')
+// Row 222 (#67). A grant is a state write like every other: under the repo lock, one
+// transaction appends the `trust` entry and lands its trailer commit, and only then does
+// allow.json take the commands — D154's order, a grant follows the durable record, so a
+// refused commit or a crash before it leaves no grant nobody journaled. allow.json is
+// machine-local and gitignored, so it rides the lock, never the commit; the lock is what
+// keeps two grants' read-modify-write of it from losing one.
+export function grantTrust(ctx: Ctx, root: string, artifact: string, cmds: string[], via: 'verb' | 'decide'): Result<void> {
+  const lock = acquireLock(root)
+  if (!lock.ok) return lock
+  try {
+    const stream = effortOf(root, artifact) ?? artifact
+    const entry = { t: 'trust' as const, artifact, cmds, via }
+    const rel = journalRel(stream)
+    const res = withTxn(root, { op: `trust(${artifact})`, files: [rel], journal: { stream, line: entryLine(entry) } }, () => {
+      appendEntry(root, stream, entry)
+      crashPoint(ctx.env, 'trust-journal')
+      const committed = stateCommit(root, [rel], `trust(${artifact}): ${cmds.length} command(s)`)
+      if (committed.ok) grantCommands(root, cmds)
+      return committed
+    })
+    return res.ok ? ok(undefined) : res
+  } finally {
+    lock.value()
+  }
 }
