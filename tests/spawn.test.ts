@@ -6,12 +6,13 @@ import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 import { spawnSession } from '../src/drive.js'
 import { loadHarness, type Harness } from '../src/harness.js'
+import { contained, jobHost } from '../src/contain.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { probe } from '../src/probe.js'
 import type { Result } from '../src/refusal.js'
 import { invokeReviewer } from '../src/reviewer.js'
 import { resolveSpawn, system32, treeStop } from '../src/spawn.js'
-import { fakeCtx, seededRepo } from './helpers.js'
+import { awaitGone, fakeCtx, orphansIn, seededRepo, writeOrphanStarter } from './helpers.js'
 
 // A PATH directory holding the named files. Real files, not a predicate: resolution IS
 // a filesystem walk, and a fake predicate would test the walk against itself. These
@@ -254,6 +255,22 @@ describe.runIf(onWindows)('resolveSpawn against the real cmd.exe (win32 only)', 
     expect(r.stderr).toBe('')
     expect(JSON.parse(r.stdout)).toEqual(ADVERSARIAL)
   })
+
+  it('delivers every argument through the job host byte for byte (row 218)', () => {
+    const dir = shimmed('echoargs', ECHO_ARGV)
+    const host = jobHost(process.env)
+    const runs = [
+      resolveSpawn('echoargs', ADVERSARIAL, envWith(dir)),                                   // batch: verbatim
+      resolveSpawn(process.execPath, [join(dir, 'echoargs.js'), ...ADVERSARIAL], envWith(dir)), // image: libuv quoting
+    ]
+    for (const run of runs) {
+      if (!run.ok) throw new Error('resolve')
+      const hosted = contained(run.value, host)
+      const r = spawnSync(hosted.file, hosted.args, { env: hosted.env, encoding: 'utf8', windowsVerbatimArguments: hosted.windowsVerbatimArguments })
+      expect(r.stderr).toBe('')
+      expect(JSON.parse(r.stdout)).toEqual(ADVERSARIAL)
+    }
+  })
 })
 
 describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)', () => {
@@ -272,6 +289,40 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
         argv: ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills', '--no-context-files', '--no-tools', '--thinking', 'off'],
         stdin: prompt,
       })
+    }
+  })
+
+  it('a reviewer prompt larger than a pipe buffer crosses the job host intact (row 218)', () => {
+    const dir = shimmed('pi', PI_ECHO)
+    const prompt = 'LENS say "hi" & 100% ^ !x! é 中文\n'.repeat(5000)
+    const r = invokeReviewer(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), piHarness(), { cwd: dir, prompt })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect((JSON.parse(r.value.text) as { stdin: string }).stdin).toBe(prompt)
+  })
+
+  it('a reviewer stopped at its timeout leaves nothing running (row 218)', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'witness-reviewer-'))
+    const starter = writeOrphanStarter(scratch)
+    const pidFile = join(scratch, 'pids')
+    // A reviewer that never answers, with a tool of its own still running: it records itself,
+    // starts the starter (which starts the app and stays), and exits on its own after 8 s — the
+    // bound on a red run, where the piped spawnSync returns only when the CLI exits.
+    const dir = shimmed('pi', [
+      `require('node:fs').appendFileSync(process.env.REVIEWER_PIDS, 'agent ' + process.pid + '\\n')`,
+      `require('node:child_process').spawn(process.execPath, [${JSON.stringify(starter)}, process.env.REVIEWER_PIDS, 'stay'], { stdio: 'ignore' })`,
+      'setTimeout(() => process.exit(0), 8000)',
+    ].join('\n'))
+    const env = { ...envWith(dir), REVIEWER_PIDS: pidFile } as Record<string, string>
+    try {
+      const r = invokeReviewer(fakeCtx(dir, { env }), piHarness(), { cwd: dir, prompt: 'x', timeoutMs: 4000 })
+      expect(!r.ok && r.violations[0]?.rule).toBe('reviewer-timeout')
+      const pids = orphansIn(pidFile)
+      expect(pids.length).toBeGreaterThanOrEqual(3)
+      for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
+    } finally {
+      for (const pid of orphansIn(pidFile)) {
+        try { process.kill(pid) } catch { /* already gone */ }
+      }
     }
   })
 
@@ -340,6 +391,34 @@ process.stdin.on('end', () => {
     await new Promise((r) => setTimeout(r, 3_000))
     expect(existsSync(late)).toBe(false)
   }, 20000)
+
+  it('a .cmd agent session leaves no orphan behind — exited or timed out (row 218)', async () => {
+    const repo = await seededRepo()
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
+    const scratch = mkdtempSync(join(tmpdir(), 'witness-orphan-'))
+    const starter = writeOrphanStarter(scratch)
+    // The agent starts the suite's app through a starter that exits, then exits — or hangs.
+    const dir = shimmed('agent', `require('node:child_process').execFileSync(process.execPath, [${JSON.stringify(starter)}, process.env.ORPHAN_PIDS])
+if (process.env.HANG === '1') setInterval(() => {}, 1000)`)
+    const recorded: number[] = []
+    try {
+      for (const [hang, outcome, timeoutMs] of [['0', 'exited', 60_000], ['1', 'timeout', 3_000]] as const) {
+        const pidFile = join(scratch, `pids-${hang}`)
+        const env = { ...envWith(dir), WITNESS_DRIVE_AGENT_BIN: join(dir, 'agent.cmd'), ORPHAN_PIDS: pidFile, HANG: hang } as Record<string, string>
+        const c = { ...cfg.value, drive: { ...cfg.value.drive, sessionTimeoutMs: timeoutMs } }
+        expect((await spawnSession({ kind: 'spawn', home: repo.root }, c, fakeCtx(repo.root, { env }), 1)).outcome).toBe(outcome)
+        const pids = orphansIn(pidFile)
+        recorded.push(...pids)
+        expect(pids).toHaveLength(2)
+        for (const pid of pids) expect(await awaitGone(pid)).toBe(true)
+      }
+    } finally {
+      for (const pid of recorded) {
+        try { process.kill(pid) } catch { /* already gone */ }
+      }
+    }
+  }, 60000)
 })
 
 describe('system32 (row 211)', () => {

@@ -59,6 +59,16 @@ describe('all seven prompts', () => {
   }
 });
 
+describe('a finding is settled before its bit (issue #77)', () => {
+  for (const name of PROMPT_NAMES) {
+    it(`${name} shows every finding with blocking after claim`, () => {
+      const body = readFileSync(promptPath(name), 'utf8');
+      expect(body, name).not.toMatch(/"blocking": (true|false), "anchor"/);
+      expect(body, name).toMatch(/"findings": \[\{ "anchor": "<[^>]+>", "claim": "<[^>]+>", "blocking": true \}\]/);
+    });
+  }
+});
+
 describe('vendored prompts', () => {
   for (const [name, source] of Object.entries(VENDORED)) {
     it(`${name} carries the Apache-2.0 attribution header`, () => {

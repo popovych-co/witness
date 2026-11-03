@@ -15,7 +15,7 @@ model can. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.27.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.28.0}"
 ```
 
 - **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
@@ -60,10 +60,12 @@ git rebase origin/<ship-branch>   # the REMOTE tip — re-hits the conflict the 
 # resolve each conflicted file preserving BOTH intents — the branch's behavior
 # and what landed on main; a resolution that drops either is a silent revert
 git add -A && git rebase --continue
-<run the repo's tests locally — the resolution must be green before it travels>
+<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>
 git push --force-with-lease
 $WITNESS ship <plan-id>          # resume the watch
 ```
+
+Any test you run yourself — reproducing a failed lane, checking a resolution — goes through `$WITNESS turn -- <test command>`, so it takes turns with the other worktrees' runs.
 
 Conflicts touching `specs/` or `plans/` cannot happen (PR branches carry code only); if you see one, stop — something upstream is wrong, hand it to the human.
 

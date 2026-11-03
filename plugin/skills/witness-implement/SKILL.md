@@ -15,7 +15,7 @@ tests carry the parent spec's tag in their NAME. See NOTICE.md. -->
 Resolve the CLI once per session:
 
 ```bash
-WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.27.0}"
+WITNESS="${WITNESS_BIN:-npx -y @popovych.co/witness@0.28.0}"
 ```
 
 - **Render the CLI's decision output verbatim and in full — every line, unmodified.** Never print a command set you remember; never recompose, reformat, summarise or reorder what the CLI emitted. Which decisions are live, how they rank, and what each costs are the CLI's answers, and they change with the round, the bound, the repair grant and the content sha — a remembered set is wrong in more states than it is right.
@@ -52,13 +52,15 @@ Each step's evidence cycle names the step: `--phase red --step <step-id>`, then 
 
 Protocol per step, in order — red/green/refactor with witnessed evidence:
 
-1. Write the failing test FIRST. The test's NAME carries the tag `@spec:<parent-id>` (in the title string — never a comment; e.g. `it("rotates token before expiry @spec:auth-refresh")`). Run the inner TDD loop against exactly the test under work — `-t` with the test's own name, never the spec tag. Rerunning a failing test is legal; rerunning the suite to watch one test is not. The tagged suite runs only inside the witnessed evidence cycle (the `test-evidence` phases below) at step close — "check nothing broke mid-step" duplicates a run the CLI already witnesses.
+1. Write the failing test FIRST. The test's NAME carries the tag `@spec:<parent-id>` (in the title string — never a comment; e.g. `it("rotates token before expiry @spec:auth-refresh")`). Run the inner TDD loop against exactly the test under work — `-t` with the test's own name, never the spec tag — through `$WITNESS turn -- <test command>`. Rerunning a failing test is legal; rerunning the suite to watch one test is not. The tagged suite runs only inside the witnessed evidence cycle (the `test-evidence` phases below) at step close — "check nothing broke mid-step" duplicates a run the CLI already witnesses.
 2. Run `$WITNESS test-evidence <plan-id> --phase red --step <step-id>` from the worktree. It must record a genuine red. If it reports the test passes before implementation (`vacuous`), STOP — never proceed to green on a vacuous red. First suspect the runner: a filter that never reaches the tagged tests (e.g. a dropped trailing `--` in the root test script) makes every phase lie. Then the test: one that asserts nothing passes everywhere. Fix the runner or the test until red genuinely fails, then re-record — a later genuine red supersedes the vacuous one (the gate judges the latest cycle). A `filter-matched-nothing` refusal is the same stop signal with the diagnosis built in. If neither applies, the behavior already exists: when this plan's code put it there before its red, `verify-red` reconstructs the red (below); when it predates the plan, report instead of implementing.
 3. Write the minimal code to make it pass. No speculative generality.
 4. Run `$WITNESS test-evidence <plan-id> --phase green --step <step-id>` — it must record green. That green closes the step.
 5. Refactor freely while green; leave everything uncommitted — the worktree stays dirty by design. Then act on the `slice:` line the green printed (below).
 6. Early exit: if you have left the step's scope to fight infrastructure, the economy is to relay — finish the red→green you are in (never stop mid-red), report, and relay so a fresh context continues. Exceeding your slice is never the right economy.
 7. Fat artifacts (the living design, long docs) are read **by section** — `$WITNESS read <spec-id> --design --outline` names every anchor with its line range and lists the look's `controls` — every closed or hidden state is one to build and to reach in a browser test, so fetch those lines too, then `--lines <a>-<b>` fetches the one you need — never whole into your context; you would re-pay their tokens on every subsequent request.
+
+**Every test you run yourself goes through `$WITNESS turn --`** — the inner loop, a probe test, a rerun. Suites share what a machine has one of (a port, an installed build, a certificate): `turn` makes two worktrees' runs take turns, waiting while another holds it, and on Windows ends whatever the run started. Lint and typecheck need no turn; `test-evidence` takes it itself.
 
 **After each step closes, act on `slice:`.** A closing green prints three lines, and so does a `step-close`. Two closes in one session — the slice goes on at 12%, then ends at 17%, because the largest step so far would carry the next one past the limit:
 

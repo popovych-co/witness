@@ -5,8 +5,9 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { contained, JOB_HOST_ENV, jobHost, type JobHost } from './contain.js'
 import { withRunnerTurn } from './runner-lock.js'
-import { execSync } from './spawn.js'
+import { execFileSync, execSync, system32 } from './spawn.js'
 
 export type RunnerConfig =
   | { mode: 'filtered'; template: string; reportGlob?: string }
@@ -46,12 +47,46 @@ export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome 
   return withRunnerTurn(runRoot, ctx, cmd, (env) => runCommand(runRoot, { ...ctx, env }, cmd))
 }
 
+// Row 218. Said once per process, by every run that starts on win32 without a job host.
+let saidNoJob = false
+export function sayNoJob(ctx: Ctx, host: JobHost): void {
+  if (host.ok || saidNoJob) return
+  saidNoJob = true
+  ctx.err(`runner: no job (${host.why}) — what this run starts may outlive it`)
+}
+
+// D158. Suite stdout is unbounded and only the last 4000 chars are kept — but at
+// Node's 1 MiB default a chatty GREEN suite threw ENOBUFS into the catch and read
+// as a failed lane. 64 MiB: the same bound the reviewer spawn uses.
+const MAX_BUFFER = 64 * 1024 * 1024
+
+// Row 218. On win32 the run starts in a job (src/contain.ts), so whatever the suite starts —
+// its app detached, an installer that starts it and exits — ends when the run does, and with
+// the turn's holder if that is killed alone: libuv's own job takes the host, the host's job
+// the rest. The shell is System32's cmd.exe with Node's own argv for execSync, never ComSpec,
+// which may name a shell with other syntax (row 164). Elsewhere the run is execSync's.
 function runCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
   try {
-    // D158. Suite stdout is unbounded and only the last 4000 chars are kept — but at
-    // Node's 1 MiB default a chatty GREEN suite threw ENOBUFS into the catch and read
-    // as a failed lane. 64 MiB: the same bound the reviewer spawn uses.
-    const out = execSync(cmd, { cwd: runRoot, env: ctx.env as NodeJS.ProcessEnv, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 })
+    let out: Buffer | string
+    if (process.platform === 'win32') {
+      const host = jobHost(ctx.env)
+      sayNoJob(ctx, host)
+      const run = contained({
+        file: system32(ctx.env, 'cmd.exe'),
+        args: ['/d', '/s', '/c', `"${cmd}"`],
+        env: { ...ctx.env, [JOB_HOST_ENV]: host.ok ? 'job' : 'none' },
+        windowsVerbatimArguments: true,
+      }, host)
+      // execFileSync hands its options to spawnSync, which reads windowsVerbatimArguments;
+      // @types/node leaves it off ExecFileSyncOptions, so they travel as a variable
+      const opts = {
+        cwd: runRoot, env: run.env as NodeJS.ProcessEnv, stdio: 'pipe' as const, maxBuffer: MAX_BUFFER,
+        windowsVerbatimArguments: run.windowsVerbatimArguments,
+      }
+      out = execFileSync(run.file, run.args, opts)
+    } else {
+      out = execSync(cmd, { cwd: runRoot, env: ctx.env as NodeJS.ProcessEnv, stdio: 'pipe', maxBuffer: MAX_BUFFER })
+    }
     return { exitZero: true, output: String(out).slice(-4000) }
   } catch (e) {
     const err = e as { stdout?: unknown; stderr?: unknown }

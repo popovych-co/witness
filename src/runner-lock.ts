@@ -96,6 +96,18 @@ function takeTurn(root: string, ctx: Ctx, label: string): (() => void) | undefin
   }
 }
 
+// Row 218. A holder killed mid-run skips its `finally` and leaves its pid behind. The next taker
+// steals such a turn anyway, but Windows reuses pids within minutes, and a reused pid reads as a
+// live holder that every later run waits on. Drive calls this when it starts and after every
+// session, so the leftover goes before its pid is likely to name another process. Only a dead
+// holder's turn goes: a live one, one being written, or none at all is left alone.
+export function releaseDeadTurn(root: string): boolean {
+  const p = runnerLockPath(root)
+  const holder = holderOf(p)
+  if (typeof holder !== 'number' || isAlive(holder)) return false
+  return drop(p, (text) => pidOf(text) === holder) === 'taken'
+}
+
 function suitesMayOverlap(root: string): boolean {
   const cfg = loadConfig(root)
   return cfg.ok && cfg.value.drive.parallelSuites

@@ -45,6 +45,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   dismiss: () => import('./verbs/dismiss.js'),
   log: () => import('./verbs/log.js'),
   'test-evidence': () => import('./verbs/evidence.js'),
+  // Row 218. A session's own test run, in the repo's test turn and, on Windows, a job.
+  turn: () => import('./verbs/turn.js'),
   'verify-red': () => import('./verbs/evidence.js').then((m) => ({ run: m.runVerifyRed })),
   'dispatch-report': () => import('./verbs/dispatch.js'),
   // Row 191 §4.3. The close of a scaffolding step, the one plan step with no evidence to witness.
@@ -113,6 +115,7 @@ const VERB_USAGE: Record<string, string> = {
   sync: 'witness sync',
   trust: "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]",
   'test-evidence': 'witness test-evidence <plan-id> --phase red|green [--step <id>]',
+  turn: 'witness turn -- <command> [args…]',
   'verify-red': 'witness verify-red <plan-id> [--base <ref>] [--step <id>]',
   wait: 'witness wait [--since <token>] — blocks until something new needs you · the chat runs it under autonomy',
 }
@@ -167,8 +170,12 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
   // repository that refuses every verb must still be able to run the one that unrefuses it.
   // An explicit help request is information, and refusing to print a usage line teaches
   // the human nothing they can act on.
+  //
+  // Row 218. Only what precedes a `--` is witness's: after it the arguments are a command's,
+  // and `witness turn -- vitest --help` runs vitest's help, not turn's usage line.
+  const own = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
   const helpRequested = verb === 'help' || verb === '--help'
-    || rest.includes('--help') || rest.includes('-h')
+    || own.includes('--help') || own.includes('-h')
   // Row 217. A reviewer reads; it never acts. Its tools are already gone (the spawn flags); this tripwire
   // refuses what a harness that ignored them could still run. Checked directly: a reviewer spawned inside
   // a drive session carries both markers, and `sessionMarker` names the drive's first.
@@ -206,7 +213,7 @@ export async function main(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.OK
   }
   const load = VERBS[verb]
-  if (load && (rest.includes('--help') || rest.includes('-h'))) {
+  if (load && (own.includes('--help') || own.includes('-h'))) {
     ctx.out(`usage: ${VERB_USAGE[verb] ?? `witness ${verb} [flags]`}`)
     return EXIT.OK
   }

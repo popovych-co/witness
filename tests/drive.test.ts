@@ -18,8 +18,9 @@ import { effortReviewedSha } from '../src/reviewed.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
+import { containmentLine, jobHost } from '../src/contain.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -37,6 +38,9 @@ const fakeAgent = (body: string): string => {
 // A noop keep-awake by default: the real `caffeinate` must never run from the suite.
 const ttyCtx = (repo: TestRepo, env: Record<string, string>, out: string[]): Ctx =>
   fakeCtx(repo.root, { tty: true, env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), ...env }), out: (l) => out.push(l) })
+// That no-op is a sh script, which Windows cannot start, and stopping a helper that never started
+// throws there; node starts, and fails at once on the helper's arguments (row 218).
+const startableAwake: Record<string, string> = process.platform === 'win32' ? { WITNESS_KEEP_AWAKE_BIN: process.execPath } : {}
 // A no-op agent, so whatever the loop routes to AFTER the decision cannot spawn a real
 // harness: the assertion under test is the decision, not what follows it. It says `tick`
 // so a test can find its session by prefix.
@@ -225,6 +229,15 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect(res.outcome).toBe('exited')
     expect(lines.some((l) => /\] started$/.test(l))).toBe(true)
     expect(Date.now() - started).toBeLessThan(10000)
+  }, 20000)
+
+  it.skipIf(process.platform === 'win32')('a session that exits on its own takes what it started with it (row 218)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 30 &\necho "bg $!"\nexit 0') }, out: (l) => lines.push(l) })
+    expect((await spawnSession({ kind: 'spawn', home: repo.root }, cfgOf(repo), ctx, 1)).outcome).toBe('exited')
+    const pid = Number(lines.map((l) => /\] bg (\d+)$/.exec(l)?.[1]).find(Boolean))
+    expect(await awaitGone(pid)).toBe(true)
   }, 20000)
 
   it('reports spawn-failed when the binary is not there', async () => {
@@ -488,6 +501,22 @@ function actsOnceAgent(scenario: string, act: string): string {
 }
 
 describe('driveLoop (D145)', () => {
+  it('drive says what ends a session (row 218)', async () => {
+    const repo = await seededRepo()
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, startableAwake, out), { maxSpawns: 0 })
+    expect(out).toContain(containmentLine(jobHost(fixtureEnv())))
+  }, 60000)
+
+  it('a turn a dead holder left is gone once drive has run (row 218)', async () => {
+    const repo = await seededRepo()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'runner.lock'), JSON.stringify({ pid: 999_999 }))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), ttyCtx(repo, startableAwake, out), { maxSpawns: 0 })
+    expect(existsSync(join(repo.root, '.witness', 'runner.lock'))).toBe(false)
+  }, 60000)
+
   it('spawns, sees the journal grow, and stops when the action stops moving', async () => {
     const repo = await planReady()
     const bin = actsOnceAgent(fakeScenario(), 'start auth-refresh-plan-1')

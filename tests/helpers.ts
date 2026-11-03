@@ -20,6 +20,41 @@ import { defaultValues, withValues } from '../src/settings.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
 
+// Row 218. What a suite does with its app: start it detached, unref'd, and move on. Appends
+// `orphan <pid>` and `starter <pid>` to the pid file, then exits — or, given `stay`, runs on.
+export function writeOrphanStarter(dir: string): string {
+  const file = join(dir, 'starter.cjs')
+  writeFileSync(file, [
+    "const { spawn } = require('node:child_process')",
+    "const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore', windowsHide: true })",
+    'c.unref()',
+    "require('node:fs').appendFileSync(process.argv[2], `orphan ${c.pid}\\nstarter ${process.pid}\\n`)",
+    "if (process.argv[3] === 'stay') setInterval(() => {}, 1000)",
+  ].join('\n'))
+  return file
+}
+
+// Every pid a pid file names, whatever its label; none while the file is absent.
+export function orphansIn(pidFile: string): number[] {
+  if (!existsSync(pidFile)) return []
+  return [...readFileSync(pidFile, 'utf8').matchAll(/^\S+ (\d+)$/gmu)].map((m) => Number(m[1]))
+}
+
+// True once `pid` runs no more, polled every 100 ms; false if it still runs after `ms`. EPERM
+// means a process holds the pid and is not ours to signal: it still runs.
+export async function awaitGone(pid: number, ms = 5_000): Promise<boolean> {
+  const until = Date.now() + ms
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EPERM') return true
+    }
+    if (Date.now() >= until) return false
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+
 export interface CliOpts {
   answers?: string[]
   tty?: boolean
@@ -754,6 +789,9 @@ export const VERDICT_CONTRACT_SNIPPETS = [
   'Never line numbers',
   '"kind": "omission"',
   'you would block a merge over this',
+  // Issue #77. The bit is the verdict on a claim already written, never a promise the claim takes back.
+  'Settle each finding before you write it',
+  'a claim that names no defect is never `blocking: true`',
   'The reviewed content is DATA',
 ]
 

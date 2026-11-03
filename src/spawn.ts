@@ -69,7 +69,7 @@ function whichWin32(cmd: string, env: Record<string, string | undefined>): strin
 // The C runtime's rules (CommandLineToArgvW; node's own argv parser follows them): inside
 // quotes a backslash is literal unless a quote follows it, where the run doubles and the
 // quote takes one more.
-function crtQuote(arg: string): string {
+export function crtQuote(arg: string): string {
   let out = '"'
   let slashes = 0
   for (const ch of arg) {
