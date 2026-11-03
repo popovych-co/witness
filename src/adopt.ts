@@ -116,16 +116,25 @@ export function unabsolvedPaths(
   root: string, sha: string, ids: Set<string>, dirs: { docs: string[]; other: string[] },
 ): string[] {
   const under = (p: string, ds: string[]): boolean => ds.some((d) => p.startsWith(`${d}/`))
-  return git(root, 'diff-tree', '--no-commit-id', '--name-status', '-r', '--root', sha).split('\n').filter(Boolean)
-    .flatMap((line) => {
-      const [status, ...rest] = line.split('\t')
-      const p = rest.at(-1) ?? ''
-      if (under(p, dirs.docs) && p.endsWith('.md')) {
-        const raw = tryGit(root, 'show', `${status === 'D' ? `${sha}^` : sha}:${p}`)
-        const doc = raw.ok ? splitDoc(raw.out) : undefined
-        const id = doc?.ok && typeof doc.value.meta.id === 'string' ? doc.value.meta.id : undefined
-        return id !== undefined && ids.has(id) ? [] : [p]
-      }
-      return under(p, [...dirs.docs, ...dirs.other]) ? [p] : []
-    })
+  // NUL-separated status/path pairs: never quoted, whatever bytes a path carries. Anything that
+  // does not parse is reported, never skipped. Against the first parent, so a merge's own changes
+  // are read (diff-tree on a merge alone prints nothing); a root commit against the empty tree.
+  const [, parent] = git(root, 'rev-list', '--parents', '-n', '1', sha).split(' ')
+  const fields = (parent !== undefined
+    ? git(root, 'diff-tree', '-z', '--no-renames', '--name-status', '-r', parent, sha)
+    : git(root, 'diff-tree', '-z', '--no-commit-id', '--no-renames', '--name-status', '-r', '--root', sha))
+    .split('\0').filter((x) => x !== '')
+  const out: string[] = []
+  for (let i = 0; i < fields.length; i += 2) {
+    const status = fields[i]!
+    const p = fields[i + 1]
+    if (p === undefined || !/^[ACDMTUX]$/.test(status)) { out.push(`(unparsed: ${status})`); continue }
+    if (under(p, dirs.docs) && p.endsWith('.md')) {
+      const raw = tryGit(root, 'show', `${status === 'D' ? `${sha}^` : sha}:${p}`)
+      const doc = raw.ok ? splitDoc(raw.out) : undefined
+      const id = doc?.ok && typeof doc.value.meta.id === 'string' ? doc.value.meta.id : undefined
+      if (id === undefined || !ids.has(id)) out.push(p)
+    } else if (under(p, [...dirs.docs, ...dirs.other])) out.push(p)
+  }
+  return out
 }
