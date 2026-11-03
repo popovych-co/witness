@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { commandsRun, grantCommands, trustListing, trustStatus, trustedCommands, unsafeLeft } from '../allowlist.js'
+import { commandsRun, grantCommands, pendingCmds, trustListing, unsafeLeft } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -88,8 +88,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.FINDINGS
   }
 
-  // The grant flow takes the raw commands the target's flow runs, which the listing holds only
-  // escaped: a grant is of the exact bytes. The listing resolved the target.
+  // A named command is checked against the raw commands the target's flow runs, which the listing's
+  // rows hold only escaped: a grant is of the exact bytes. The listing resolved the target.
   const listed = commandsRun(cfgR.value, canon, findById(canon, id)!)
   const cmds = [...new Set(listed.map((c) => c.cmd))]
   const unsafe = named.find(hasControl)
@@ -110,9 +110,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   show(['cmd', 'source', 'status'])
   if (listing.untrusted === 0) return settled(listing.unsafe)
-  // An unsafe command is listed and never pending: no flag and no prompt grants it.
-  const trusted = new Set(trustedCommands(root))
-  const pending = cmds.filter((c) => trustStatus(trusted, c) === 'untrusted')
+  // Row 205. What is pending is the listing's, read from allow.json once with its rows: a grant
+  // landing since cannot make the grant disagree with the rows just printed. An unsafe command is
+  // listed and never pending: no flag and no prompt grants it.
+  const pending = pendingCmds(listing)
 
   // One command at a time, because a blanket yes is a different act from four considered ones:
   // the named ones, all at a terminal's --yes, or the terminal's own per-command prompt.

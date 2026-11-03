@@ -139,9 +139,14 @@ export interface TrustListing {
 }
 
 // A trusted command is trusted whatever it holds; an untrusted one is grantable only in
-// printable ASCII. The listing and the verb's grant flow both read a command's status here.
-export const trustStatus = (trusted: ReadonlySet<string>, cmd: string): TrustStatus =>
+// printable ASCII.
+const trustStatus = (trusted: ReadonlySet<string>, cmd: string): TrustStatus =>
   trusted.has(cmd) ? 'trusted' : hasControl(cmd) ? 'unsafe' : 'untrusted'
+
+// Row 205. The commands a target listing offers to grant, as exact bytes: each pending act's
+// `--cmd` word (`grantAct`: `trust <target> --cmd <cmd>`). Read off the listing, so a grant flow
+// grants from the same allow.json snapshot its rows were read from.
+export const pendingCmds = (listing: TrustListing): string[] => listing.pending.map((a) => a.argv[3]!)
 
 export function trustListing(root: string, cfg: Config, canon: Canon, target?: string): Result<TrustListing> {
   if (target === undefined) return ok(listingOf(root, repoCommands(cfg, canon)))
