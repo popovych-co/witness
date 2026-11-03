@@ -10,7 +10,7 @@ const TEN_MIN = 10 * 60_000
 const lockPath = (root: string) => join(root, '.witness', 'drive.lock')
 const writeLock = (root: string, pid: number, ageMs = 0): void => {
   mkdirSync(join(root, '.witness'), { recursive: true })
-  writeFileSync(lockPath(root), JSON.stringify({ pid, log: join(root, '.witness', 'drive.log') }))
+  writeFileSync(lockPath(root), JSON.stringify({ pid, log: join(root, '.witness', 'drive.log'), lease: 1 }))
   const at = (Date.now() - ageMs) / 1000
   utimesSync(lockPath(root), at, at)
 }
@@ -112,5 +112,19 @@ describe('the drive lock is a lease (#69)', () => {
     } finally {
       stop()
     }
+  })
+
+  // Final review I1. A drive started by 0.27.0 wrote {pid, log} and never renews it: read by its
+  // pid alone, as it was then, so an upgrade mid-run never lets a second drive take its lock.
+  it('a lock a pre-lease drive wrote is read by its pid alone', async () => {
+    const repo = await seededRepo()
+    const legacy = await liveOther()
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(lockPath(repo.root), JSON.stringify({ pid: legacy.pid, log: join(repo.root, '.witness', 'drive.log') }))
+    const old = (Date.now() - TEN_MIN) / 1000
+    utimesSync(lockPath(repo.root), old, old)
+    expect(driveHolder(repo.root)?.pid).toBe(legacy.pid)
+    const r = acquireDriveLock(repo.root, {}, process.pid, 300)
+    expect(r.ok ? 'taken' : r.violations[0]!.rule).toBe('drive-running')
   })
 })

@@ -55,7 +55,10 @@ export const DRIVE_LEASE_MS = 120_000
 export const DRIVE_RENEW_MS = 10_000
 export const DRIVE_TAKEOVER_GRACE_MS = 25_000
 
-type Held = DriveHolder & { renewed: number }
+// `leased`: the lock carries `lease: 1`, written by a drive that renews it. A lock without the
+// mark was written by a drive from before row 222 (0.27.0), which never renews: it is read by
+// its pid alone, as then, so an upgrade while it runs never lets a second drive take its lock.
+type Held = DriveHolder & { renewed: number; leased: boolean }
 
 function readHolder(root: string): Held | 'absent' | 'unreadable' {
   const p = join(root, DRIVE_LOCK)
@@ -70,18 +73,18 @@ function readHolder(root: string): Held | 'absent' | 'unreadable' {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable'
   }
   try {
-    const h = JSON.parse(text) as { pid?: unknown; log?: unknown }
+    const h = JSON.parse(text) as { pid?: unknown; log?: unknown; lease?: unknown }
     if (typeof h.pid !== 'number' || !Number.isInteger(h.pid) || h.pid < 1) return 'unreadable'
     // The lock says only WHETHER a background log exists; its path is always derived. What
     // the file says is never printed: `watch:` is a line the engine acts on, and a path read
     // from a file could carry a newline and a forged `launch:` or `run:` line.
-    return { pid: h.pid, renewed, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
+    return { pid: h.pid, renewed, leased: h.lease === 1, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
   } catch {
     return 'unreadable'
   }
 }
 
-const leaseLive = (h: Held, now: number): boolean => now - h.renewed < DRIVE_LEASE_MS
+const leaseLive = (h: Held, now: number): boolean => !h.leased || now - h.renewed < DRIVE_LEASE_MS
 
 // A live holder only: a dead one (a drive killed with SIGKILL) reads as none, and so does a
 // live pid whose lease expired (row 222).
@@ -94,19 +97,23 @@ export function driveHolder(root: string, now = Date.now()): DriveHolder | undef
 // Row 222. The running drive's renewal: the lock's mtime set to now when the lock is this
 // pid's. A link at the lock path is never followed (utimes would touch what it points at).
 // `false` says the lease is no longer this drive's — taken over, or removed — and the drive
-// that held it stops.
+// that held it stops. A renewal that fails while the lock still names this pid (a scanner
+// holding the file, EBUSY) is retried on the next tick, never read as lost: a lease left
+// unrenewed that long expires, and the next renewal then finds the successor's lock.
 export function renewDriveLock(root: string, pid = process.pid): boolean {
   const h = readHolder(root)
   if (typeof h !== 'object' || h.pid !== pid) return false
+  const p = join(root, DRIVE_LOCK)
   try {
-    const p = join(root, DRIVE_LOCK)
     if (lstatSync(p).isSymbolicLink()) return false
-    const now = new Date()
-    utimesSync(p, now, now)
-    return true
   } catch {
     return false
   }
+  try {
+    const now = new Date()
+    utimesSync(p, now, now)
+  } catch { /* still this drive's lock: retried on the next tick */ }
+  return true
 }
 
 // Row 222. The lock holder's renewal, from the moment it holds the lock to its release, so a
@@ -134,7 +141,7 @@ export function acquireDriveLock(
   let expired: { pid: number; renewed: number; since: number } | undefined
   for (;;) {
     try {
-      writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}) }), { flag: 'wx' })
+      writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}), lease: 1 }), { flag: 'wx' })
       return ok(release)
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
