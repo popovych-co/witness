@@ -1,6 +1,6 @@
 import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { absolutions, docsTouched } from '../adopt.js'
+import { absolutions, unabsolvedPaths } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { pctOf, readFill, windowLabel } from '../context.js'
 import {
@@ -266,18 +266,23 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
   }
 
-  // Final review F1. An untrailered commit is absolved only for the docs an adopt absolved it
-  // for: one that also changed another doc no adopt took in is still a hand edit to report.
+  // Final review F1 and the security review. An untrailered commit is absolved only when every
+  // state path it changed is a doc an adopt took in: one that also changed another doc, deleted
+  // one, or touched the journal or a design by hand is still a hand edit to report, by path.
   const absolved = absolutions(root)
   const paths = canonPaths(root)
-  const dirs = [paths.specs, paths.plans]
-  const covered = (sha: string): boolean => {
-    const ids = absolved.get(sha)
-    return ids !== undefined && docsTouched(root, sha, dirs).every((id) => ids.has(id))
-  }
+  const dirs = { docs: [paths.specs, paths.plans], other: [paths.designs, '.witness/journal'] }
   auditStateCommits(root).forEach((c) => {
-    if (!c.trailered && !covered(c.sha)) {
+    if (c.trailered) return
+    const ids = absolved.get(c.sha)
+    if (ids === undefined) {
       findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit', `${c.subject} — adopt: witness adopt <path> · or revert`))
+      return
+    }
+    const left = unabsolvedPaths(root, c.sha, ids, dirs)
+    if (left.length > 0) {
+      findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit',
+        `${c.subject} — not absolved: ${left.join(' ')} · adopt each doc left (witness adopt <path>) · revert a journal or design edit`))
     }
   })
   if (pendingTxn(root)) {

@@ -108,16 +108,24 @@ export function absolutions(root: string): Map<string, Set<string>> {
   return out
 }
 
-// The canon docs (by id, as they stood in that commit) a commit changed under the specs and
-// plans dirs — what an adopt of each would have to absolve. A doc the commit deleted names none.
-export function docsTouched(root: string, sha: string, dirs: string[]): string[] {
-  const paths = git(root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', sha).split('\n')
-    .filter((p) => p.endsWith('.md') && dirs.some((d) => p.startsWith(`${d}/`)))
-  return paths.flatMap((p) => {
-    const raw = tryGit(root, 'show', `${sha}:${p}`)
-    if (!raw.ok) return []
-    const doc = splitDoc(raw.out)
-    return doc.ok && typeof doc.value.meta.id === 'string' ? [doc.value.meta.id] : []
-  })
+// Security review. The state paths a commit changed that no adopt absolved it for: a spec or
+// plan whose id (as it stood there, or in the parent for a deletion) is not among `ids`, and
+// every other audited path — a journal line or a design file is never a hand edit adopt takes in.
+// Empty means the commit is absolved whole.
+export function unabsolvedPaths(
+  root: string, sha: string, ids: Set<string>, dirs: { docs: string[]; other: string[] },
+): string[] {
+  const under = (p: string, ds: string[]): boolean => ds.some((d) => p.startsWith(`${d}/`))
+  return git(root, 'diff-tree', '--no-commit-id', '--name-status', '-r', '--root', sha).split('\n').filter(Boolean)
+    .flatMap((line) => {
+      const [status, ...rest] = line.split('\t')
+      const p = rest.at(-1) ?? ''
+      if (under(p, dirs.docs) && p.endsWith('.md')) {
+        const raw = tryGit(root, 'show', `${status === 'D' ? `${sha}^` : sha}:${p}`)
+        const doc = raw.ok ? splitDoc(raw.out) : undefined
+        const id = doc?.ok && typeof doc.value.meta.id === 'string' ? doc.value.meta.id : undefined
+        return id !== undefined && ids.has(id) ? [] : [p]
+      }
+      return under(p, [...dirs.docs, ...dirs.other]) ? [p] : []
+    })
 }
-

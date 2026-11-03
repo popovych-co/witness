@@ -269,4 +269,28 @@ describe('adopt refuses a moved position (#65)', () => {
     expect(again.stderr).toMatch(/^\s*status,position-moved,draft → approved,/m)
     expect((await repo.cli(['check'])).stdout).toContain('untrailered-commit')
   })
+
+  // Security review. Adopting a doc clears a commit only when every state path it changed is a
+  // doc some adopt took in: a hand-forged journal line, a design edit or another doc's deletion
+  // riding the same commit keeps it reported.
+  it('a commit that also forged a journal line or deleted a doc stays reported', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'sp1', { criteria: [{ id: 'ac-sp1', test: '@spec:sp1' }] })
+    await writeSpec(repo, 'sp2', { criteria: [{ id: 'ac-sp2', test: '@spec:sp2' }] })
+    editDoc(repo, 'specs/sp2.md', (meta, body) => ({ meta, body: `${body}\nMore.\n` }))
+    appendEntry(repo.root, 'sp1', { t: 'status', artifact: 'sp1', from: 'draft', to: 'approved', cause: 'gate-approve' })
+    repo.git('add', 'specs/sp2.md', journalRel('sp1'))
+    repo.git('commit', '-q', '-m', 'hand edit: a body and a forged journal line')
+    expect((await repo.cli(['adopt', 'specs/sp2.md'])).code).toBe(0)
+    const forged = await repo.cli(['check'])
+    expect(forged.stdout).toContain('untrailered-commit')
+    expect(forged.stdout).toContain(journalRel('sp1'))
+
+    editDoc(repo, 'specs/sp2.md', (meta, body) => ({ meta, body: `${body}\nEven more.\n` }))
+    repo.git('rm', '-q', 'specs/sp1.md')
+    repo.git('add', 'specs/sp2.md')
+    repo.git('commit', '-q', '-m', 'hand edit: a body and a deleted doc')
+    expect((await repo.cli(['adopt', 'specs/sp2.md'])).code).toBe(0)
+    expect((await repo.cli(['check'])).stdout).toContain('specs/sp1.md')
+  })
 })
