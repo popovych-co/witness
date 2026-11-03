@@ -4,7 +4,8 @@ import { cliAct, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
-import { criteriaOwner, type Canon, type CanonDoc } from './scan.js'
+import { ok, refuse, v, type Result } from './refusal.js'
+import { criteriaOwner, findById, type Canon, type CanonDoc } from './scan.js'
 import { hasControl, visible } from './toon.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
@@ -116,6 +117,53 @@ export function repoCommands(cfg: Config, canon: Canon): Array<RunCommand & { do
     ...configCommands(cfg).map((c) => ({ ...c, doc: '-' })),
     ...canon.docs.flatMap((d) => [...cmdCriteria(d), ...cmdNeeds(d)].map((c) => ({ ...c, doc: String(d.meta.id) }))),
   ]
+}
+
+// Rows 139/203. The listing `witness trust [<id>]` prints, as a model: every command a target's
+// flow runs, or with no target every command the repo runs. A row holds what the text shows,
+// escaped, since each field is repo-authored: a criterion's or a need's id rides in `source`.
+// A target listing offers each untrusted command's grant as an act; an unsafe command is listed
+// and never offered, so the model holds neither its raw bytes nor an act for it.
+export type TrustStatus = 'trusted' | 'untrusted' | 'unsafe'
+export interface TrustRow { cmd: string; source: string; doc?: string; status: TrustStatus }   // cmd, source, doc: visible()
+export interface TrustListing {
+  target?: string        // absent: every command the repo runs, each doc's under its id (`doc`)
+  rows: TrustRow[]       // the listing's order
+  pending: Act[]         // a target listing's untrusted commands, once each, as their grants · [] for the repo listing
+  untrusted: number      // untrusted commands, once each
+  unsafe: number         // never granted here: the target listing counts each command once; the repo listing counts rows, as the verb always has
+}
+
+// A trusted command is trusted whatever it holds; an untrusted one is grantable only in
+// printable ASCII. The listing and the verb's grant flow both read a command's status here.
+export const trustStatus = (trusted: ReadonlySet<string>, cmd: string): TrustStatus =>
+  trusted.has(cmd) ? 'trusted' : hasControl(cmd) ? 'unsafe' : 'untrusted'
+
+export function trustListing(root: string, cfg: Config, canon: Canon, target?: string): Result<TrustListing> {
+  if (target === undefined) return ok(listingOf(root, repoCommands(cfg, canon)))
+  const doc = findById(canon, target)
+  if (!doc) return refuse([v('artifact', 'unknown-artifact', target, 'an existing canon doc id', 'witness index')])
+  return ok(listingOf(root, commandsRun(cfg, canon, doc), target))
+}
+
+// The counts are of the raw commands, never of their escaped rows: two commands can escape to
+// the same text.
+function listingOf(root: string, listed: ReadonlyArray<RunCommand & { doc?: string }>, target?: string): TrustListing {
+  const trusted = new Set(load(root))
+  const status = (cmd: string): TrustStatus => trustStatus(trusted, cmd)
+  const once = [...new Set(listed.map((c) => c.cmd))]
+  const untrusted = once.filter((c) => status(c) === 'untrusted')
+  return {
+    ...(target !== undefined ? { target } : {}),
+    rows: listed.map((c): TrustRow => ({
+      cmd: visible(c.cmd), source: visible(c.source), ...(c.doc !== undefined ? { doc: visible(c.doc) } : {}), status: status(c.cmd),
+    })),
+    pending: target === undefined ? [] : untrusted.flatMap((cmd) => grantAct(target, { cmd }) ?? []),
+    untrusted: untrusted.length,
+    // A residual kept byte for byte: the repo listing counts rows, so a command two docs run
+    // counts twice.
+    unsafe: (target === undefined ? listed.map((c) => c.cmd) : once).filter((c) => status(c) === 'unsafe').length,
+  }
 }
 
 // Row 205 (issue #56, P5). The commands the routed action's verb runs that this machine does

