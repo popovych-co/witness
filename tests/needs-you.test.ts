@@ -7,7 +7,7 @@ import { appendEntry } from '../src/journal.js'
 import { type NeedYou, needsYou, needsYouToken, needYouRows } from '../src/needs-you.js'
 import { loadCanon } from '../src/scan.js'
 import { approve, autonomyOn, fakeCtx, hermeticEnv, seededRepo, writePlan, writeSpec } from './helpers.js'
-import { needsYouRepo } from './model-fixtures.js'
+import { controlStrings, needsYouRepo } from './model-fixtures.js'
 
 const cfgOf = (root: string) => {
   const r = loadConfig(root)
@@ -115,10 +115,9 @@ describe('what needs you is a model (rows 139/203)', () => {
       { cmd: 'bad\\x1bcmd', source: 'ship.lint' },
     ] })
     expect(grant?.kind === 'trust-grant' && grant.commands?.[1]?.grant).toBeFalsy()
-    expect(JSON.stringify(items)).not.toContain('\u001b')
-    // JSON.stringify spells a raw ESC as `\u001b`, so the line above alone could never fail: no
-    // field anywhere in the model may hold the raw byte.
-    expect(JSON.stringify(items)).not.toContain('\\u001b')
+    // R7: no string anywhere in the model holds a raw control or bidi character. Searching
+    // JSON.stringify's text for a raw ESC could never fail: it spells C0 controls out as `\u001b`.
+    expect(controlStrings(items)).toEqual([])
   })
 
   it('an aside read from the live folder still builds a whole model (Review Focus 4)', async () => {
