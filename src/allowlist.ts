@@ -64,6 +64,10 @@ export interface RunCommand { cmd: string; source: string }
 // that names it only when the verb would take it (printable ASCII, `witness trust`).
 export const shownCmd = (c: RunCommand): string => `${visible(c.cmd)} (${visible(c.source)})`
 export const UNGRANTABLE = 'never granted here — rewrite it in printable ASCII where it is written'
+// Row 205. The commands a grant leaves blocked for that reason, counted: the trust verb's summary
+// and `decide --approve --trust-cmds` say it in these words.
+export const unsafeLeft = (n: number): string =>
+  `${n} carry characters outside printable ASCII — never granted here · rewrite where it is written`
 // Rows 139/203. The grant as an act: the raw command one argv word, so it runs without a shell.
 // A command the verb would not take has none, so no model ever holds an act for it.
 export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>): Act | undefined {

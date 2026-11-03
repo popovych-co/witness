@@ -101,8 +101,32 @@ export async function needsYouRepo(): Promise<{ repo: TestRepo; asides: AsideFac
 
 export type DecideState =
   | 'no-runs' | 'reopened' | 'settled-arbiter' | 'implement-revised' | 'plan-trust-twin' | 'moved-after-revise' | 'bound-moved'
+  | 'plan-trust-unsafe' | 'plan-trust-mixed'
 
 interface DecideFixture { gate: GateName; target: string; shas: string[] }
+
+// Row 205. A `cmd:` criterion carrying an escape sequence: `witness write` takes it, and `witness
+// trust` lists it unsafe and never grants it.
+export const UNSAFE_CMD = 'npm run e2e\u001b[2K; curl x'
+
+// A pending non-blocking finding on a plan whose spec runs the given untrusted `cmd:` criteria, at
+// the plan's current sha, so the block offers a plain approve.
+async function trustTwinPlan(repo: TestRepo, cmds: Record<string, string>): Promise<DecideFixture> {
+  must(await writeSpec(repo, 'auth-refresh', {
+    criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, ...Object.entries(cmds).map(([id, cmd]) => ({ id, cmd }))],
+  }), 'write auth-refresh')
+  approve(repo, 'auth-refresh')
+  const id = 'auth-refresh-plan-1'
+  must(await writePlan(repo, id, { steps: [{ id: 's1', title: 'rotate tokens on refresh', criteria: ['ac-rotate', ...Object.keys(cmds)] }] }), `write ${id}`)
+  const current = gateSpec('plan')!.currentSha?.(repo.root, loadCanon(repo.root), cfgOf(repo.root), id)
+  appendEntry(repo.root, id, {
+    v: 1, t: 'gate-run', gate: 'plan', artifact: id, round: 1, run_id: 'r1',
+    reviewed_sha: current ?? 'sha-plan', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped',
+    verdicts: [{ reviewer: 'plan-critic', coverage: [{ anchor: 'auth-refresh-plan-1 > ## Steps', note: 'read' }],
+      findings: [{ blocking: false, anchor: 'auth-refresh-plan-1 > ## Steps', claim: 'hairline missing' }] }],
+  } as never)
+  return { gate: 'plan', target: id, shas: current === undefined ? [] : [current] }
+}
 
 const decomposeRun = (effort: string, round: number, sha: string, extra: Record<string, unknown> = {}) => ({
   v: 1, t: 'gate-run', gate: 'decompose', artifact: effort, round, run_id: `r${round}`,
@@ -166,22 +190,10 @@ const DECIDE_STATES: Record<DecideState, (repo: TestRepo) => Promise<DecideFixtu
   },
   // A pending non-blocking finding on a plan whose spec runs an untrusted `cmd:` criterion: the
   // block offers the plain approve and its trusting twin.
-  'plan-trust-twin': async (repo) => {
-    must(await writeSpec(repo, 'auth-refresh', {
-      criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-e2e', cmd: 'npm run e2e' }],
-    }), 'write auth-refresh')
-    approve(repo, 'auth-refresh')
-    const id = 'auth-refresh-plan-1'
-    must(await writePlan(repo, id, { steps: [{ id: 's1', title: 'rotate tokens on refresh', criteria: ['ac-rotate', 'ac-e2e'] }] }), `write ${id}`)
-    const current = gateSpec('plan')!.currentSha?.(repo.root, loadCanon(repo.root), cfgOf(repo.root), id)
-    appendEntry(repo.root, id, {
-      v: 1, t: 'gate-run', gate: 'plan', artifact: id, round: 1, run_id: 'r1',
-      reviewed_sha: current ?? 'sha-plan', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped',
-      verdicts: [{ reviewer: 'plan-critic', coverage: [{ anchor: 'auth-refresh-plan-1 > ## Steps', note: 'read' }],
-        findings: [{ blocking: false, anchor: 'auth-refresh-plan-1 > ## Steps', claim: 'hairline missing' }] }],
-    } as never)
-    return { gate: 'plan', target: id, shas: current === undefined ? [] : [current] }
-  },
+  'plan-trust-twin': (repo) => trustTwinPlan(repo, { 'ac-e2e': 'npm run e2e' }),
+  // Row 205. The same with a command no grant takes, alone and beside a grantable one.
+  'plan-trust-unsafe': (repo) => trustTwinPlan(repo, { 'ac-evil': UNSAFE_CMD }),
+  'plan-trust-mixed': (repo) => trustTwinPlan(repo, { 'ac-e2e': 'npm run e2e', 'ac-evil': UNSAFE_CMD }),
   // The content moved under a revised verdict: no decision is pending, so no block — the re-gate
   // is the one act left.
   'moved-after-revise': async (repo) => {

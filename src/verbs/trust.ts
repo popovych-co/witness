@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { commandsRun, grantCommands, trustListing, trustStatus, trustedCommands } from '../allowlist.js'
+import { commandsRun, grantCommands, trustListing, trustStatus, trustedCommands, unsafeLeft } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -77,7 +77,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Nothing left to grant is not "all trusted" while an unsafe command stays blocked.
   const settled = (unsafe: number): number => {
     if (unsafe === 0) { ctx.out(kv('trust', 'every command is already trusted')); return EXIT.OK }
-    ctx.out(kv('trust', `${unsafe} carry characters outside printable ASCII — never granted here · rewrite where it is written`))
+    ctx.out(kv('trust', unsafeLeft(unsafe)))
     return EXIT.FINDINGS
   }
 

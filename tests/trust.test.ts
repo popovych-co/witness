@@ -1,12 +1,15 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
 import { grantCommands, trustListing } from '../src/allowlist.js'
+import { decideView } from '../src/decide-view.js'
 import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
 import { renderRefusal } from '../src/refusal.js'
 import { loadCanon } from '../src/scan.js'
-import { SPEC_META, seededRepo, stampLive, writeSpec } from './helpers.js'
-import { cfgOf, controlStrings, must, trustRepo as planWithCmdCriterion } from './model-fixtures.js'
+import { SPEC_META, seededRepo, stampLive, writeSpec, type TestRepo } from './helpers.js'
+import { UNSAFE_CMD, cfgOf, controlStrings, decideRepo, must, trustRepo as planWithCmdCriterion } from './model-fixtures.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
 // `!isTTY → blocked`) — the Aug 1 all-four-`ac-*`-fail false negative. Approvals are
@@ -341,5 +344,65 @@ describe('the decision block prices trust (D154)', () => {
       gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false, untrustedCmds: ['echo ok'],
     })!
     expect(d.options.some((o) => o.command.includes('--override --trust-cmds'))).toBe(false)
+  })
+
+  // Row 205. The twin grants what `witness trust` would: a command outside printable ASCII stays
+  // listed among those left blocked, spelled out, and is never priced as a grant.
+  it('lists an unsafe command spelled out and offers the twin only for grantable ones', () => {
+    const mixed = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false, untrustedCmds: ['echo ok', 'bad\u001bcmd'],
+    })!
+    expect(mixed.options.find((o) => o.command === 'witness decide plan p1 --approve')!.tradeoff)
+      .toContain('the listed commands stay blocked at headless gates: echo ok · bad\\x1bcmd')
+    expect(mixed.options.find((o) => o.command === 'witness decide plan p1 --approve --trust-cmds')!.tradeoff)
+      .toBe('grants them repo-wide in .witness/allow.json (machine-local): echo ok')
+    const unsafe = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false, untrustedCmds: ['bad\u001bcmd'],
+    })!
+    expect(unsafe.options.some((o) => o.act?.argv.at(-1) === '--trust-cmds')).toBe(false)
+    expect(controlStrings([mixed, unsafe])).toEqual([])
+  })
+})
+
+// Row 205. `decide --approve --trust-cmds` grants what `witness trust` would grant and nothing
+// else: a `cmd:` criterion holding a character outside printable ASCII is named spelled out,
+// stays blocked at headless gates, and no view publishes an act that grants it.
+describe('the decide twin grants only what the trust verb would (row 205)', () => {
+  const allowedNow = (repo: TestRepo): string[] =>
+    existsSync(join(repo.root, '.witness', 'allow.json')) ? allowed(repo) : []
+  const UNSAFE_LINE = 'trust: 1 carry characters outside printable ASCII — never granted here · rewrite where it is written'
+
+  it('an unsafe command alone: no twin, the command spelled out, and the grant grants nothing', async () => {
+    const { repo, gate, target } = await decideRepo('plan-trust-unsafe')
+    const view = decideView(repo.root, cfgOf(repo.root), loadCanon(repo.root), gate, target)
+    if (view.state !== 'actionable') throw new Error(view.state)
+    expect(view.block?.options.some((o) => o.act?.argv.at(-1) === '--trust-cmds')).toBe(false)
+    expect(view.block?.options[0]).toMatchObject({ command: `witness decide plan ${target} --approve`,
+      tradeoff: 'the listed commands stay blocked at headless gates: npm run e2e\\x1b[2K; curl x' })
+    expect(controlStrings(view)).toEqual([])
+    const res = await repo.cli(['decide', gate, target, '--approve', '--trust-cmds'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain(`trusted: nothing to grant\n${UNSAFE_LINE}\ndecided: plan ${target} → approve`)
+    expect(res.stdout).not.toContain('\u001b')
+    expect(allowedNow(repo)).not.toContain(UNSAFE_CMD)
+    expect(readStream(repo.root, repo.effort).some((e) => e.t === 'trust')).toBe(false)
+  })
+
+  it('beside a printable command: the twin grants that one alone and reports the other', async () => {
+    const { repo, gate, target } = await decideRepo('plan-trust-mixed')
+    const view = decideView(repo.root, cfgOf(repo.root), loadCanon(repo.root), gate, target)
+    if (view.state !== 'actionable') throw new Error(view.state)
+    expect(view.block?.options.slice(0, 2)).toMatchObject([
+      { command: `witness decide plan ${target} --approve`,
+        tradeoff: 'the listed commands stay blocked at headless gates: npm run e2e · npm run e2e\\x1b[2K; curl x' },
+      { command: `witness decide plan ${target} --approve --trust-cmds`,
+        tradeoff: 'grants them repo-wide in .witness/allow.json (machine-local): npm run e2e' },
+    ])
+    expect(controlStrings(view)).toEqual([])
+    const res = await repo.cli(['decide', gate, target, '--approve', '--trust-cmds'])
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain(`trusted: npm run e2e\n${UNSAFE_LINE}\ndecided: plan ${target} → approve`)
+    expect(allowedNow(repo)).toEqual(['npm run e2e'])
+    expect(readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')?.cmds).toEqual(['npm run e2e'])
   })
 })

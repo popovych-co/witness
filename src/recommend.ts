@@ -4,6 +4,7 @@ import {
   anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, pendingDecision, repairsOnRegate,
   repairGranted, roundBudget, roundsSinceApprove, type GateRunEntry,
 } from './rounds.js'
+import { hasControl, visible } from './toon.js'
 
 // D121. The block: every set of live options renders ranked, with runnable commands.
 // This module is PURE — it takes journal entries and ids the caller already resolved and
@@ -98,12 +99,17 @@ export function option(
 //        checks-failed · non-blocking-only · reserved-stop-clean · manual-stop
 // D154. Trust must never be the toll for approval. Where a plain `--approve` is offered
 // and the artifact carries untrusted `cmd:` criteria, the block renders BOTH forms — plain
-// first, so approving without granting stays the easy path — and names the commands
-// verbatim, because a grant the human cannot read is not one they made. Applied once, over
-// the finished option list, rather than at each of the five rules that offer an approve.
+// first, so approving without granting stays the easy path — and names the commands, because
+// a grant the human cannot read is not one they made. Applied once, over the finished option
+// list, rather than at each of the five rules that offer an approve.
+// Row 205. The twin grants what `witness trust` would and nothing else: a command holding a
+// character outside printable ASCII is never granted. So the plain approve names every untrusted
+// command, each spelled out (`visible`), since all of them stay blocked; the twin is offered only
+// while one is grantable, and prices only those.
 function withTrustVariants(d: Decision, untrusted: string[]): Decision {
   if (untrusted.length === 0) return d
-  const listed = untrusted.join(' · ')
+  const listed = untrusted.map(visible).join(' · ')
+  const grantable = untrusted.filter((c) => !hasControl(c))
   const options: Option[] = []
   for (const o of d.options) {
     options.push(o)
@@ -115,11 +121,12 @@ function withTrustVariants(d: Decision, untrusted: string[]): Decision {
       tradeoff: [o.tradeoff, `the listed commands stay blocked at headless gates: ${listed}`]
         .filter(Boolean).join(' · '),
     }
+    if (grantable.length === 0) continue
     // The twin is the same stamp plus a grant, so it carries the stamp's depth: next to a
     // deferral approve (checks-failed) it is a deferral too, never a root fix.
     options.push(option(cliAct(...o.act.argv, '--trust-cmds'), o.depth, {
       when: 'you have read these commands and accept them running unattended at every later gate',
-      tradeoff: `grants them repo-wide in .witness/allow.json (machine-local): ${listed}`,
+      tradeoff: `grants them repo-wide in .witness/allow.json (machine-local): ${grantable.join(' · ')}`,
       note: 'a bare affirmation never grants trust — this form must be named (D143)',
     }))
   }
