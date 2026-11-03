@@ -18,7 +18,7 @@ import { journalRel } from '../journal.js'
 import { findById, loadCanon } from '../scan.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from '../stamp.js'
 import { crashPoint, withTxn } from '../txn.js'
-import { PRINCIPLES_BODY } from './init.js'
+import { templateDraft } from '../principles.js'
 
 // Row 193 §4.6, the verb row 23 reserved: bring witness.config.yaml to this CLI's schema and
 // make it complete — every setting with its comment, every value that is a choice kept, every
@@ -26,15 +26,10 @@ import { PRINCIPLES_BODY } from './init.js'
 // row 219 made: the untouched principles template an older init wrote draft is stamped approved,
 // journaled as the template, in the same trailer commit.
 
-// Row 219. The principles an older init left: the template, still draft, its body untouched and
-// its file clean. A changed body is content someone wrote, which only a gate approves.
+// Row 219. The untouched template an older init left draft, stamped approved as the template.
 function templateStamp(root: string): PreparedStamp | undefined {
   const doc = findById(loadCanon(root), 'principles')
-  if (doc === undefined || doc.meta.type !== 'principles' || String(doc.meta.status) !== 'draft') return undefined
-  const norm = (t: string): string => t.replace(/\r\n?/g, '\n').trim()
-  if (norm(doc.body) !== norm(PRINCIPLES_BODY)) return undefined
-  if (tryGit(root, 'status', '--porcelain', '--', doc.rel).out.trim() !== '') return undefined
-  return prepareStamp(doc, 'approved', 'template')
+  return templateDraft(root, doc) ? prepareStamp(doc, 'approved', 'template') : undefined
 }
 
 const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineValue(val))

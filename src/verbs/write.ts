@@ -12,7 +12,7 @@ import { dirtyStatePaths, primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel, latestRecap, readStream, streamExists, type RecapEntry } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { humanCall, renderRefusal, v, type Violation } from '../refusal.js'
-import { principlesOwner } from '../reviewed.js'
+import { principlesApproval } from './next.js'
 import { baseForSpec, contentAtSha } from '../history.js'
 import { findById, findCycle, loadCanon, planFinished, plansOn, type Canon, type CanonDoc } from '../scan.js'
 import { canonicalJson, canonicalSha, short } from '../sha.js'
@@ -333,14 +333,11 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
     violations.push(v('parent', 'kind', String(parent.meta.type), 'a spec (or principles for chores)'))
   }
   if (parent.meta.status === 'draft') {
-    // Row 219. A draft principles is approved by the decompose gate of the effort that wrote
-    // it — named, so the remedy never routes back to this refused write.
-    const owner = parent.meta.type === 'principles' ? principlesOwner(root, canon) : undefined
-    violations.push(v('parent', 'parent-not-approved', String(parentId), parent.meta.type !== 'principles'
-      ? 'a parent stamped approved by its gate — run: witness gate decompose --effort <slug>'
-      : owner !== undefined
-        ? `principles are approved by the decompose gate of the effort that wrote them — run: witness gate decompose --effort ${owner}`
-        : 'principles no effort owns — amend principles through a feature or fix effort: its decompose gate approves them'))
+    // Row 219. Draft principles name what approves them (`principlesApproval`, the derivation
+    // `next` routes by), so the remedy never routes back to this refused write.
+    const approval = parent.meta.type === 'principles' ? principlesApproval(root, canon) : undefined
+    violations.push(v('parent', 'parent-not-approved', String(parentId), approval?.remedy
+      ?? 'a parent stamped approved by its gate — run: witness gate decompose --effort <slug>'))
   }
   const computed = canonicalSha(parent.meta, parent.body)
   const supplied = manifest['derives-from']

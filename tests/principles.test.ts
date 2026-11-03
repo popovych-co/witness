@@ -203,6 +203,41 @@ describe('an abandoned effort\'s decompose refuses (#66)', () => {
   })
 })
 
+// Final review F3 and F5. Draft principles name what approves them, in `next` and in the write's
+// refusal alike: an older init's untouched template → `witness migrate`; an owner whose
+// decompose is parked → its reopen, never the gate/decide pair that loops on a stopped run.
+describe('draft principles name what approves them (#66)', () => {
+  it('an older init\'s template names witness migrate', async () => {
+    const repo = await seededRepo({ class: 'chore', slug: 'c1' })
+    legacyDraft(repo)
+    const n = await repo.cli(['next'])
+    expect(n.stdout).toContain('next: witness migrate')
+    const w = await writePlan(repo, 'p1', CHORE_PLAN, '## Step: s1\nbump\n', 'c1')
+    expect(w.code).toBe(2)
+    expect(w.stderr).toContain('run: witness migrate')
+  })
+
+  it('an owner whose decompose is parked names its reopen', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    await writeSpec(repo, 'principles', PRINCIPLES_META, AMENDED)
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }, { anchor: 'principles > ## Rules', note: 'read' }],
+      findings: [{ blocking: true, anchor: 'principles > ## Rules', claim: 'the rule is vague' }],
+    })
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'decompose', repo.effort, { fresh: false, manual: false })
+    expect((await repo.cli(['decide', 'decompose', repo.effort, '--stop'])).code).toBe(0)
+    const chore = { effort: 'c1', class: 'chore', goals: [{ id: 'g1', text: 'bump deps' }], non_goals: [], constraints: [], slices: [] }
+    repo.write('c1.json', JSON.stringify(chore))
+    expect((await repo.cli(['recap', '--file', 'c1.json'])).code).toBe(0)
+    const w = await writePlan(repo, 'p1', CHORE_PLAN, '## Step: s1\nbump\n', 'c1')
+    expect(w.code).toBe(2)
+    expect(w.stderr).toContain(`witness gate decompose ${repo.effort} --fresh`)
+    expect(w.stderr).not.toContain(`run: witness gate decompose --effort ${repo.effort}`)
+  })
+})
+
 describe('migrate stamps the untouched draft template (#66)', () => {
   it('stamps it approved in one trailer commit, journaled as the template; --dry-run names it', async () => {
     const repo = await seededRepo({ class: 'chore', slug: 'c1' })

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, version, type Ctx } from '../cli.js'
+import { PRINCIPLES_BODY } from '../principles.js'
 import { configPath, loadConfig } from '../config.js'
 import { renderConfig } from '../config-file.js'
 import { writeDoc } from '../fm.js'
@@ -28,14 +29,6 @@ const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/screens/
 .witness/drafts/
 .witness/live/
-`
-
-// Row 219. The template init writes. Exported for `migrate`, which stamps an older init's
-// untouched draft of it approved.
-export const PRINCIPLES_BODY = `# Principles
-
-Repo-wide rules and trade-offs. Amend via \`witness write\`; chores may name
-this doc as their plan's parent.
 `
 
 const USAGE = 'usage: witness init [--agent claude-code|pi|auto]'
