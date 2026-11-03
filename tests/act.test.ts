@@ -25,7 +25,13 @@ describe('cliAct (rows 139/203)', () => {
     const crossed = [cliAct('decide', 'plan', 'p1', '--revise', '--upstream', '<why>'), cliAct('decide', 'plan', 'p1', '--revise', '--note', '<effort>')]
     expect(crossed.map((a) => a.inputs)).toEqual([[], []])
     expect(crossed.map((a) => a.line))
-      .toEqual(["witness decide plan p1 --revise --upstream '<why>'", 'witness decide plan p1 --revise --note "<effort>"'])
+      .toEqual(['witness decide plan p1 --revise --upstream <why>', 'witness decide plan p1 --revise --note "<effort>"'])
+  })
+  it("every word but --note's and --cmd's prints as written, as today's text did", () => {
+    expect(cliAct('decide', 'plan', 'über plan', '--show').line).toBe('witness decide plan über plan --show')
+    expect(cliAct('satisfy', 'Auth Refresh', '--need', 'prod access').line).toBe('witness satisfy Auth Refresh --need prod access')
+    expect(cliAct('satisfy', 'auth-refresh', '--need', '').line).toBe('witness satisfy auth-refresh --need ')
+    expect(cliAct('trust', 'Auth Refresh', '--cmd', 'npm test').line).toBe("witness trust Auth Refresh --cmd 'npm test'")
   })
   it('keeps every word as given, so it runs without a shell', () => {
     expect(cliAct('trust', 'p1', '--cmd', "echo 'hi' | wc").argv).toEqual(['trust', 'p1', '--cmd', "echo 'hi' | wc"])

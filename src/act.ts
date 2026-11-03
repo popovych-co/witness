@@ -24,14 +24,18 @@ function inputAt(argv: readonly string[], at: number): ActInputName | undefined 
   return name !== undefined && argv[at] === `<${name}>` ? name : undefined
 }
 
-// One word as the line prints it. The word after `--note` prints in double quotes, raw — D120's
-// grammar, which every screen has printed and `actOfCommand` reads back; a shell word's quoting
-// would change that text. An input prints bare, as the slot it is. Anything else is a shell
-// word: ids match ID_RE and print bare, a trust command prints single-quoted.
+// One word as the line prints it: today's per-word rendering, byte for byte, so a line is the
+// text every screen printed before acts existed. The word after `--note` prints in double
+// quotes, raw — D120's grammar, which `actOfCommand` reads back. The word after `--cmd` is the
+// one word today's text shell-quoted (`grantOf`, the trust verb's `run:` lines): a repo-authored
+// command the verb takes as one word, which must paste as one whatever quotes or spaces it
+// holds. Every other word prints as written — flags, ids, an input bare as the slot it is — as
+// the templates printed them: a malformed id stays as unpasteable as it was, and `argv` keeps
+// what runs exact.
 function word(argv: readonly string[], at: number): string {
   const w = argv[at]!
   if (argv[at - 1] === '--note') return `"${w}"`
-  return inputAt(argv, at) !== undefined ? w : shellArg(w)
+  return argv[at - 1] === '--cmd' ? shellArg(w) : w
 }
 
 const words = (argv: readonly string[]): string[] => argv.map((_, at) => word(argv, at))
