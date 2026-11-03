@@ -44,6 +44,7 @@ export type NeedYou = ItemBase & (
   | { kind: 'decision'; gate: string; show: Act }
   | { kind: 'conversation'; ask?: string; handoff?: string }
   | { kind: 'merge'; pr?: string }
+  // why: the policy's note, or `parked at <anchor>` with a reviewer's anchor as printed (R5/R17): a renderer spells it out
   | { kind: 'parked'; gate: string; round: number; why: string; reopen: Act[] }
   | { kind: 'stuck'; why?: string; retry?: Act }
   | { kind: 'capped'; why?: string; retry?: Act })                       // two members, so `Extract` narrows each

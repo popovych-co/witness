@@ -5,7 +5,9 @@ import { findingRows, findingViews, gateRunLines, gateRunView, type GateRunView 
 import type { Entry } from '../src/journal.js'
 import { ROUND_BOUND, type GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { DECIDE_STATE_NAMES, EVERY_LINE_RUN, cfgOf, controlStrings, decideRepo, type DecideState } from './model-fixtures.js'
+import {
+  DECIDE_STATE_NAMES, EVERY_LINE_RUN, REVIEWER_ANCHOR, cfgOf, controlPaths, controlStrings, decideRepo, type DecideState,
+} from './model-fixtures.js'
 
 // Rows 139/203. `decide --show` is a model its text renders from, and so is the gate run it
 // shows: the values every line prints, the acts every command is. The verb prints the view's
@@ -36,6 +38,28 @@ describe('decide --show is a view (rows 139/203)', () => {
     // R7: no string anywhere in the view holds a raw control or bidi character
     expect(controlStrings(view)).toEqual([])
     expect(JSON.parse(JSON.stringify(view))).toEqual(view)
+  })
+
+  // R5/R17. A reviewer's anchor is spelled out in the findings table and nowhere else: the block
+  // and the exits carry it exactly as the text prints it — the note prefill (the option's command
+  // and act, and the exits' note act), the option's why and the block's anchor. A renderer spells
+  // those out (spec §4.2); the UI runs an act's argv, never its line.
+  it("a reviewer's anchor is spelled out in the findings and carried as printed in the block and exits (Review Focus 1)", async () => {
+    const { view, target } = await viewOf('implement-anchor')
+    if (view.state !== 'actionable') throw new Error(view.state)
+    expect(view.run.findings.map((f) => f.anchor)).toEqual(['src/\\x1b[2Jtoken\\u{202e}.ts'])
+    expect(view.block?.anchor).toBe(REVIEWER_ANCHOR)
+    const note = view.block!.options[0]!
+    expect(note.act!.argv).toEqual(['decide', 'implement', target, '--revise', '--note', `1 blocking finding: ${REVIEWER_ANCHOR}`])
+    expect(note.command).toBe(`witness decide implement ${target} --revise --note "1 blocking finding: ${REVIEWER_ANCHOR}"`)
+    expect(note.act!.line).toBe(note.command)
+    expect(note.why).toBe(`1 blocking finding anchored inside this artifact (${REVIEWER_ANCHOR}); round 1 of 3`)
+    expect(view.exits[1]).toEqual(note.act)
+    // exactly these fields hold the raw characters, and no other
+    expect(controlPaths(view).sort()).toEqual([
+      'block.anchor', 'block.options.0.act.argv.5', 'block.options.0.act.line', 'block.options.0.command', 'block.options.0.why',
+      'exits.1.argv.5', 'exits.1.line',
+    ])
   })
 
   describe('each other state is its own shape', () => {

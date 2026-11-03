@@ -101,9 +101,12 @@ export async function needsYouRepo(): Promise<{ repo: TestRepo; asides: AsideFac
 
 export type DecideState =
   | 'no-runs' | 'reopened' | 'settled-arbiter' | 'implement-revised' | 'plan-trust-twin' | 'moved-after-revise' | 'bound-moved'
-  | 'plan-trust-unsafe' | 'plan-trust-mixed'
+  | 'implement-anchor' | 'plan-trust-unsafe' | 'plan-trust-mixed'
 
 interface DecideFixture { gate: GateName; target: string; shas: string[] }
+
+// Review Focus 1. A reviewer's anchor with an erase-screen sequence and a right-to-left override.
+export const REVIEWER_ANCHOR = 'src/\u001b[2Jtoken\u202e.ts'
 
 // Row 205. A `cmd:` criterion carrying an escape sequence: `witness write` takes it, and `witness
 // trust` lists it unsafe and never grants it.
@@ -188,6 +191,21 @@ const DECIDE_STATES: Record<DecideState, (repo: TestRepo) => Promise<DecideFixtu
       ordinal: 1, text: 'render the service in full' } as never)
     return { gate: 'implement', target: id, shas: [] }
   },
+  // R5/R17. A reviewer's anchor carrying an escape sequence and a bidi override, on a blocking
+  // finding pending a decision: the findings table spells it out, the block carries it as printed.
+  'implement-anchor': async (repo) => {
+    must(await writeSpec(repo, 'auth-refresh'), 'write auth-refresh')
+    approve(repo, 'auth-refresh')
+    const id = 'auth-refresh-plan-1'
+    must(await writePlan(repo, id), `write ${id}`)
+    appendEntry(repo.root, id, {
+      v: 1, t: 'gate-run', gate: 'implement', artifact: id, round: 1, run_id: 'r1',
+      reviewed_sha: 'sha-impl', prompts_sha: 'p', witness: '0', model: 'm', outcome: 'stopped', checks: [],
+      verdicts: [{ reviewer: 'code-reviewer', coverage: [{ anchor: REVIEWER_ANCHOR, note: 'read' }],
+        findings: [{ blocking: true, anchor: REVIEWER_ANCHOR, claim: 'expiry unbounded' }] }],
+    } as never)
+    return { gate: 'implement', target: id, shas: [] }
+  },
   // A pending non-blocking finding on a plan whose spec runs an untrusted `cmd:` criterion: the
   // block offers the plain approve and its trusting twin.
   'plan-trust-twin': (repo) => trustTwinPlan(repo, { 'ac-e2e': 'npm run e2e' }),
@@ -229,6 +247,16 @@ export function controlStrings(x: unknown): string[] {
   if (typeof x === 'string') return UNLOGGABLE.test(x) ? [x] : []
   if (Array.isArray(x)) return x.flatMap((v) => controlStrings(v))
   if (x !== null && typeof x === 'object') return Object.values(x).flatMap((v) => controlStrings(v))
+  return []
+}
+
+// The same walk, naming where each such string sits (`block.anchor`, `exits.1.argv.5`), so a test
+// can pin exactly which fields of a model carry text as printed.
+export function controlPaths(x: unknown, at = ''): string[] {
+  const under = (k: string | number): string => (at === '' ? String(k) : `${at}.${k}`)
+  if (typeof x === 'string') return UNLOGGABLE.test(x) ? [at] : []
+  if (Array.isArray(x)) return x.flatMap((v, i) => controlPaths(v, under(i)))
+  if (x !== null && typeof x === 'object') return Object.entries(x).flatMap(([k, v]) => controlPaths(v, under(k)))
   return []
 }
 

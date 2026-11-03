@@ -25,7 +25,7 @@
 
 ## Review Focus
 
-1. **Control and bidi characters in a reviewer's anchor or claim** (`\x1b[2J`, U+202E). The decide view carries them spelled out, the same bytes the text prints. Task 4.
+1. **Control and bidi characters in a reviewer's anchor or claim** (`\x1b[2J`, U+202E). The decide view carries the same bytes the text prints: the findings table (`run.findings`) carries anchors and claims spelled out, while option commands and acts, `why`, `block.anchor` and the exits keep the text's raw form (R5/R17), and renderers spell those out (spec §4.2). Task 4.
 2. **A trust command with a single quote, beside one with an escape character.** The quoted command's act holds the raw command as one argv word, so it runs without a shell, and its line is today's `'…'\''…'` form. The unsafe one is escaped in every row and has no act anywhere. Tasks 3 and 5.
 3. **A note prefill (a reviewer's anchor) holding `"`, ` | ` or the literal text `<why>`.** The option's act keeps it as one argv word, the option stays runnable, and its line is unchanged. Task 2.
 4. **A live-folder aside with no line, no why and no commands.** Every kind still builds a whole model: a trust grant with no commands but its listing act, a brainstorm with no ask, a merge whose PR comes from frontmatter. Task 3.

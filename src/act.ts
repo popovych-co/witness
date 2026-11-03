@@ -9,6 +9,10 @@ import { shellArg } from './toon.js'
 export type ActInputName = 'why' | 'effort'
 // `argv[at]` is exactly `<name>`, and `argv[at - 1]` is the flag whose slot it fills.
 export interface ActInput { name: ActInputName; at: number }
+// Rows 139/203. Reviewer text reaches the model as the text prints it, unescaped (R5/R17): a note
+// prefill (a reviewer's anchor, raw in `argv` and `line`), an option's `why`, a block's `anchor`,
+// a parked item's `why` and a gate run's `demoted` anchor — only the findings table spells it out.
+// A renderer must spell it out (spec §4.2), and the UI runs `argv`, never `line`.
 export interface Act { argv: readonly string[]; inputs: readonly ActInput[]; line: string }
 
 // Rows 139/203. Inputs are positional: the CLI writes `<why>` only as a note and `<effort>` only
