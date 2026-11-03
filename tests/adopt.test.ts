@@ -251,4 +251,22 @@ describe('adopt refuses a moved position (#65)', () => {
     expect(r.code).toBe(2)
     expect(r.stderr).toMatch(/^\s*status,position-moved,draft → approved,/m)
   })
+
+  // Final review F1. An adopt absolves a commit for the doc it adopted. One hand commit that
+  // forges sp1's position and edits sp2's body: adopting sp2 must not launder sp1's move.
+  it('adopting a sibling the same commit touched launders nothing', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'sp1', { criteria: [{ id: 'ac-sp1', test: '@spec:sp1' }] })
+    await writeSpec(repo, 'sp2', { criteria: [{ id: 'ac-sp2', test: '@spec:sp2' }] })
+    editDoc(repo, 'specs/sp1.md', (meta, body) => ({ meta: { ...meta, status: 'approved' }, body }))
+    editDoc(repo, 'specs/sp2.md', (meta, body) => ({ meta, body: `${body}\nMore.\n` }))
+    repo.git('add', 'specs/sp1.md', 'specs/sp2.md')
+    repo.git('commit', '-q', '-m', 'hand edit: two docs')
+    expect((await repo.cli(['adopt', 'specs/sp1.md'])).code).toBe(2)
+    expect((await repo.cli(['adopt', 'specs/sp2.md'])).code).toBe(0)
+    const again = await repo.cli(['adopt', 'specs/sp1.md'])
+    expect(again.code).toBe(2)
+    expect(again.stderr).toMatch(/^\s*status,position-moved,draft → approved,/m)
+    expect((await repo.cli(['check'])).stdout).toContain('untrailered-commit')
+  })
 })

@@ -73,3 +73,51 @@ export function adoptedCommits(root: string): Set<string> {
   }
   return out
 }
+
+// Final review F1. An adopt absolves its commits for the doc it adopted — the stream it is
+// journaled on — never for every doc those commits touched: one hand commit that forged one doc's
+// position and edited another's body was laundered by adopting the innocent one.
+export function adoptedCommitsFor(root: string, id: string): Set<string> {
+  const out = new Set<string>()
+  for (const entry of readStream(root, id)) {
+    if (entry.t !== 'adopt' || !Array.isArray(entry.commits)) continue
+    for (const sha of entry.commits as string[]) out.add(sha)
+  }
+  return out
+}
+
+// For the trailer audit: each absolved commit and the doc ids it was absolved for (the stream,
+// and the entry's artifact, which a later rename may leave apart).
+export function absolutions(root: string): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>()
+  const dir = join(root, '.witness', 'journal')
+  if (!existsSync(dir)) return out
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith('.jsonl')) continue
+    const stream = file.slice(0, -'.jsonl'.length)
+    for (const entry of readStream(root, stream)) {
+      if (entry.t !== 'adopt' || !Array.isArray(entry.commits)) continue
+      for (const sha of entry.commits as string[]) {
+        const ids = out.get(sha) ?? new Set<string>()
+        ids.add(stream)
+        if (typeof entry.artifact === 'string') ids.add(entry.artifact)
+        out.set(sha, ids)
+      }
+    }
+  }
+  return out
+}
+
+// The canon docs (by id, as they stood in that commit) a commit changed under the specs and
+// plans dirs — what an adopt of each would have to absolve. A doc the commit deleted names none.
+export function docsTouched(root: string, sha: string, dirs: string[]): string[] {
+  const paths = git(root, 'diff-tree', '--no-commit-id', '--name-only', '-r', '--root', sha).split('\n')
+    .filter((p) => p.endsWith('.md') && dirs.some((d) => p.startsWith(`${d}/`)))
+  return paths.flatMap((p) => {
+    const raw = tryGit(root, 'show', `${sha}:${p}`)
+    if (!raw.ok) return []
+    const doc = splitDoc(raw.out)
+    return doc.ok && typeof doc.value.meta.id === 'string' ? [doc.value.meta.id] : []
+  })
+}
+

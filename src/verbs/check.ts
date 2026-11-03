@@ -1,6 +1,6 @@
 import { readdirSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { adoptedCommits } from '../adopt.js'
+import { absolutions, docsTouched } from '../adopt.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { pctOf, readFill, windowLabel } from '../context.js'
 import {
@@ -11,7 +11,7 @@ import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadStale } from '../ins
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
-import { loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
+import { canonPaths, loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
 import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
@@ -266,9 +266,17 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
   }
 
-  const absolved = adoptedCommits(root)
+  // Final review F1. An untrailered commit is absolved only for the docs an adopt absolved it
+  // for: one that also changed another doc no adopt took in is still a hand edit to report.
+  const absolved = absolutions(root)
+  const paths = canonPaths(root)
+  const dirs = [paths.specs, paths.plans]
+  const covered = (sha: string): boolean => {
+    const ids = absolved.get(sha)
+    return ids !== undefined && docsTouched(root, sha, dirs).every((id) => ids.has(id))
+  }
   auditStateCommits(root).forEach((c) => {
-    if (!c.trailered && !absolved.has(c.sha)) {
+    if (!c.trailered && !covered(c.sha)) {
       findings.push(f('error', 'audit', c.sha.slice(0, 7), 'untrailered-commit', `${c.subject} — adopt: witness adopt <path> · or revert`))
     }
   })

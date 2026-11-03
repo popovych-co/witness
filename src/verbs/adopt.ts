@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { adoptedCommits, lastWitnessed, positionOf, untrailedCommitsFor } from '../adopt.js'
+import { adoptedCommitsFor, lastWitnessed, positionOf, untrailedCommitsFor } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { canonPaths } from '../config.js'
 import { runCriteria, type CriterionOutcome } from '../criteria.js'
@@ -61,7 +61,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const currentSha = canonicalSha(meta, body)
   const changed = witnessed?.sha !== currentSha
   const criteriaChanged = JSON.stringify(meta.criteria ?? null) !== JSON.stringify(witnessed?.criteria ?? null)
-  const commits = untrailedCommitsFor(root, rel).filter((sha) => !adoptedCommits(root).has(sha))
+  const absolved = adoptedCommitsFor(root, id)   // final review F1: absolved for this doc, not any
+  const commits = untrailedCommitsFor(root, rel).filter((sha) => !absolved.has(sha))
   const dirty = dirtyStatePaths(root).includes(rel)
   if (!changed && !dirty && commits.length === 0) {
     ctx.out(kv('adopt', `${id}: nothing to adopt — content matches the last witnessed state`))
@@ -116,7 +117,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 // one an earlier adopt absolved), followed through a hand move, when that state is this id's; a doc adopt
 // has never seen is born draft, with no stamps. Every moved field is named in the one refusal.
 function positionMoves(root: string, rel: string, id: string, meta: Record<string, unknown>): Violation[] {
-  const base = lastWitnessed(root, rel, adoptedCommits(root), { follow: true })
+  const base = lastWitnessed(root, rel, adoptedCommitsFor(root, id), { follow: true })
   const seen = base !== undefined && base.id === id ? base : undefined
   const was = seen?.position ?? positionOf({ status: 'draft' })
   const now = positionOf(meta)
