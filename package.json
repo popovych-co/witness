@@ -43,6 +43,12 @@
   "bin": {
     "witness": "dist/bin.js"
   },
+  "exports": {
+    "./models": {
+      "types": "./dist/models.d.ts",
+      "default": "./dist/models.js"
+    }
+  },
   "files": [
     "dist",
     "prompts",
