@@ -7,7 +7,7 @@ import { loadConfig } from '../config.js'
 import { relayLine, resolveDriver } from '../harness.js'
 import { findById, loadCanon } from '../scan.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
-import { kv } from '../toon.js'
+import { cmd, kv } from '../toon.js'
 
 const FLAGS = ['--steps-assigned', '--steps-completed', '--tokens', '--tool-uses', '--duration-ms'] as const
 
@@ -82,7 +82,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // skill stops for the human.
     const cfgR = loadConfig(root)
     const hxR = resolveDriver(ctx.env, cfgR.ok ? cfgR.value.harness : undefined)
-    if (hxR.ok) ctx.out(kv('relay', relayLine(hxR.value.harness)))
+    if (hxR.ok) ctx.out(cmd('relay', relayLine(hxR.value.harness)))
     return EXIT.OK
   } finally {
     lock.ok && lock.value()

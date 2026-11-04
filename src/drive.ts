@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cliAct } from './act.js'
 import { EXIT, main, type Ctx } from './cli.js'
 import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
 import { sessionHash, withoutSession } from './context.js'
@@ -738,7 +739,7 @@ export async function driveLoop(
   const stuck = (key: string, action: NextAction) => {
     ctx.out(`drive: no progress — ${action.line}`)
     ctx.out(action.target !== undefined
-      ? `help: ${action.target} is set aside until its record moves — read its stream above · after a fix witness cannot see: witness retry ${action.target}`
+      ? `help: ${action.target} is set aside until its record moves — read its stream above · after a fix witness cannot see: ${cliAct('retry', action.target).line}`
       : 'help: untargeted work is set aside until its record moves — read its stream above')
     setAside(key, { kind: 'stuck', line: action.line, why: `no progress on ${action.line}`, key0: keyOf(action) })
   }
@@ -893,7 +894,7 @@ export async function driveLoop(
         })
       } else if (s.kind === 'left') {
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
-        setAside(r.target, { kind: 'decision', line: `witness decide ${r.gate} ${r.target} --show`, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
+        setAside(r.target, { kind: 'decision', line: cliAct('decide', r.gate, r.target, '--show').line, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'routed') {
         routed.set(r.target, s.line.replace(/^autonomy: re-run owed — /, ''))
       }

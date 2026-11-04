@@ -7,6 +7,7 @@ import { needYouRows, type NeedYou } from '../src/needs-you.js'
 import { recommend, renderDecision } from '../src/recommend.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
 import { shellLine } from '../src/toon.js'
+import { commitEntry, RECAP, seededRepo } from './helpers.js'
 import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
 // Row 239. A pasted line runs only what witness wrote. Each row builds lines with witness's own
@@ -48,6 +49,20 @@ function exitLines(p: string): Pasteable[] {
   return [...exitActs('plan', `p1${p}`, rounds(p, 1), false, `up${p}`), ...atBound].map(pasteable)
 }
 
+// K3: the `next:` value offered for an effort stream committed by hand and named for the payload.
+// A stream's slug is its file's name, and any stream that opens with a recap is an effort. The
+// value is a shape: pasted, its `<spec-id>` redirect fails, so the row checks inertness only.
+async function forgedNext(p: string): Promise<Pasteable[]> {
+  const repo = await seededRepo({ noRecap: true })
+  commitEntry(repo, `e${p}`, { t: 'recap', ...RECAP, effort: `e${p}` })
+  const res = await repo.cli(['next'])
+  const line = res.stdout.split('\n').find((l) => l.startsWith('next: '))?.slice('next: '.length)
+  if (line === undefined || !line.includes('witness write <spec-id> --effort ')) {
+    throw new Error(`K3: next offered no write shape\n${res.stdout}${res.stderr}`)
+  }
+  return [{ line }]
+}
+
 // K6: every command an inbox row offers, its `run:` or `then:` label cut, beside the act it prints.
 const OFFERED = /^ {2}(?:run|then): /
 function inboxLines(p: string): Pasteable[] {
@@ -82,6 +97,7 @@ const ROWS: Row[] = [
   ['K1 the decision block, a hostile target and upstream', (p) => decisionLines(p, `p1${p}`, `up${p}`)],
   ['K2 exits below and at the bound', exitLines],
   ['K2 a reopen', (p) => reopenActs('plan', `p1${p}`, parked(p), `up${p}`).map(pasteable)],
+  ['K3 a next: shape from a forged effort stream', forgedNext],
   ['K6 an inbox row', inboxLines],
   ['K7 a satisfy', (p) => [{ line: satisfyCommand(`p1${p}`, `n${p}`), calls: [['witness', 'satisfy', `p1${p}`, '--need', `n${p}`]] }]],
   ['K10 a trust grant', (p) => [{ line: grantAct(`p1${p}`, { cmd: p })!.line, calls: [['witness', 'trust', `p1${p}`, '--cmd', p]] }]],

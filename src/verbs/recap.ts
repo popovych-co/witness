@@ -11,7 +11,7 @@ import { primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, effortAbandoned, entryLine, journalRel, readStream, streamExists } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
-import { kv } from '../toon.js'
+import { cmd, kv, shellWord } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 export interface RecapInput {
@@ -157,7 +157,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (recap.decisions?.length) ctx.out(kv('decisions', recap.decisions.length))
     if (recap.ask !== undefined) ctx.out(kv('ask', `${recap.ask} — answered`))
     if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage and decisions re-validate against it'))
-    ctx.out(`next: witness write --effort ${recap.effort} --meta <m.json> --body <b.md> <spec-id>`)
+    ctx.out(cmd('next', `witness write --effort ${shellWord(recap.effort)} --meta <m.json> --body <b.md> <spec-id>`))
     return EXIT.OK
   } finally {
     lock.value()

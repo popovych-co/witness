@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
 import { cpSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadConfig } from '../src/config.js'
+import { effortReviewedSha } from '../src/reviewed.js'
+import { loadCanon } from '../src/scan.js'
+import { computeNext, type NextAction } from '../src/verbs/next.js'
 import { worktreePath } from '../src/worktree.js'
 import {
-  SPEC_META, TOKEN_BROKEN, TOKEN_FIXED, approve, autonomyOn, commitEntry, evidenceCycle, fakeScenario, fixtureEnv, fixturePath,
-  gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, singleConfig, stampLive, startedThreeStepPlan, untaggedRed,
+  RECAP, SPEC_META, TOKEN_BROKEN, TOKEN_FIXED, approve, autonomyOn, commitEntry, evidenceCycle, fakeCtx, fakeScenario, fixtureEnv,
+  fixturePath, gateEnv, nextLine, putVerdict, seededRepo, shippableRepo, singleConfig, stampLive, startedThreeStepPlan, untaggedRed,
   witnessDesign, writeDesign, writeSpec, writePlan, type TestRepo, patchConfig, trustConfig,
 } from './helpers.js'
 
@@ -152,6 +156,81 @@ describe('witness next — the ladder', () => {
     expect(out).toContain(`decide implement ${planId}`)
     expect(out).toContain('bound')
     expect(out).not.toContain('test-evidence')
+  })
+})
+
+// Row 239 (the plan's B8). A `next:` line is one command. A runnable one carries its act and is
+// printed from it; a shape, with a placeholder or a file to author, carries none and quotes each
+// foreign word it holds.
+describe('next: lines are acts, one command each (row 239)', () => {
+  const derive = (repo: TestRepo): NextAction => {
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
+    return computeNext(repo.root, fakeCtx(repo.root), loadCanon(repo.root), cfg.value)
+  }
+
+  it("every runnable next: line is its act's line, and a shape line carries none (row 239)", async () => {
+    const repo = await seededRepo()
+    trustConfig(repo)
+    const shape = derive(repo)                              // a decompose with no spec written
+    expect(shape.act).toBeUndefined()
+    expect(shape.line).toMatch(/^witness write <spec-id> --effort /)
+
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    const gate = derive(repo)                               // a draft plan's gate owed
+    expect(gate.act?.argv).toEqual(['gate', 'plan', 'auth-refresh-plan-1'])
+    expect(gate.line).toBe(gate.act?.line)
+
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    const start = derive(repo)                              // an approved plan to start
+    expect(start.act?.argv).toEqual(['start', 'auth-refresh-plan-1'])
+    expect(start.line).toBe(start.act?.line)
+  })
+
+  it('at the round bound next names decide --show, one command (row 239)', async () => {
+    // tests/drive.test.ts's gatedEffort: a real decompose round whose one finding blocks
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
+      findings: [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'no rotation window stated' }],
+    })
+    const g = await repo.cli(['gate', 'decompose', '--effort', repo.effort], { env: gateEnv(scenario) })
+    if (g.code > 1) throw new Error(`gate failed: ${g.stdout}\n${g.stderr}`)
+    // Rounds 2 and 3 on the current sha, their anchors distinct, reach the bound; a revise of the
+    // third leaves no decision pending, so the bound rung is what answers.
+    const sha = effortReviewedSha(repo.root, loadCanon(repo.root), repo.effort).sha
+    const anchors = ['auth-refresh > ## Motivation', 'auth-refresh > ## Constraints']
+    for (const round of [2, 3]) {
+      appendEntry(repo.root, repo.effort, {
+        v: 1, t: 'gate-run', gate: 'decompose', artifact: repo.effort, round, run_id: `r${round}`,
+        reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm',
+        checks: [], outcome: 'stopped',
+        verdicts: [{
+          reviewer: 'slicing-critic',
+          coverage: [{ anchor: anchors[round - 2]!, note: 'read' }],
+          findings: [{ blocking: true, anchor: anchors[round - 2]!, claim: 'still unstated' }],
+        }],
+      })
+    }
+    appendEntry(repo.root, repo.effort, { v: 1, t: 'human-decision', gate: 'decompose', artifact: repo.effort, round: 3, decision: 'revise' })
+
+    const lines = (await nextLine(repo)).split('\n')
+    expect(lines).toContain(`next: witness decide decompose ${repo.effort} --show`)
+    expect(lines).toContain('note: round bound reached — human decision required')
+    expect(lines.filter((l) => l.startsWith('next: ') && l.includes(' | '))).toEqual([])
+  })
+
+  it('a next: or run: value holding a comma prints raw, never TOON-quoted (row 239, D120)', async () => {
+    // An effort stream committed by hand: its file name is its slug, and it opens with a recap.
+    const repo = await seededRepo({ noRecap: true })
+    commitEntry(repo, 'e,x', { t: 'recap', ...RECAP, effort: 'e,x' })
+    const out = await nextLine(repo)
+    expect(out.split('\n').filter((l) => l.startsWith('next: ')))
+      .toEqual(['next: witness write <spec-id> --effort e,x --meta m.json --body b.md'])
   })
 })
 
