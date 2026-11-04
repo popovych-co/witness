@@ -97,21 +97,29 @@ export async function pasteIn(mode: Mode, line: string, cwd?: string): Promise<P
   }
 }
 
-// One shell run of `line`, settled once the shell has exited: its stubs ran in the foreground, so
-// their calls are all logged by then. Its stdin is the line for an interactive mode and empty
-// otherwise, and its output is read and dropped, so a full pipe never stalls it. A run still going
-// after 10 s is killed and fails: an interactive bash or zsh ignores SIGTERM, so it gets SIGKILL
-// (probed 2026-11-04: `sleep 3` under a 500 ms limit came back after 3020 ms with SIGTERM, and
-// after 504 ms with SIGKILL).
+// One shell run of `line`, settled once its pipes close, not when the shell exits. Row 239: a
+// process the line put in the background holds the shell's stdout and stderr until it ends, so
+// waiting for them, as spawnSync did, finds what it made (probed 2026-11-04: settled on `exit`,
+// `(sleep 0.3; touch M9) &` came back after 5 ms and its marker appeared 600 ms later; spawnSync
+// saw it after 321 ms). Its stdin is the line for an interactive mode and empty otherwise, and its
+// output is read and dropped, so a full pipe never stalls it. A run still open after 10 s is killed
+// and fails: an interactive bash or zsh ignores SIGTERM, so it gets SIGKILL (probed 2026-11-04:
+// `sleep 3` under a 500 ms limit came back after 3020 ms with SIGTERM, and after 504 ms with
+// SIGKILL), and its pipes are destroyed, as spawnSync's kill closes them, since a background
+// process the signal never reached may still hold them.
 function ran(mode: Mode, line: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
   const run = RUN[mode]
   return new Promise((resolve, reject) => {
     const fail = (why: string) => reject(new Error(`${mode} did not run ${JSON.stringify(line)}: ${why}`))
     const child = spawn(run.shell, run.args(line), { cwd, env })
     let killed = false
-    const limit = setTimeout(() => { killed = true; child.kill('SIGKILL') }, 10_000)
+    const limit = setTimeout(() => {
+      killed = true
+      child.kill('SIGKILL')
+      for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe.destroy()
+    }, 10_000)
     child.on('error', (e) => { clearTimeout(limit); fail(e.message) })
-    child.on('exit', () => { clearTimeout(limit); if (killed) fail('killed after 10 s'); else resolve() })
+    child.on('close', () => { clearTimeout(limit); if (killed) fail('killed after 10 s'); else resolve() })
     child.stdout.resume()
     child.stderr.resume()
     // A shell that exits before it reads its stdin breaks the pipe: nothing is lost.

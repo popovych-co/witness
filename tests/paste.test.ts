@@ -157,6 +157,12 @@ describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote 
     }
   })
 
+  // Row 239. A payload may put its effect in the background, after the shell has exited: the
+  // paste waits for the pipes the background job holds, as spawnSync did, so its marker is found.
+  it.skipIf(!MODES.includes('bash'))('a line that backgrounds its effect is still caught (row 239)', async () => {
+    expect(await pasteIn('bash', 'witness x; (sleep 0.3; touch M9) &')).toEqual({ markers: ['M9'], calls: [['witness', 'x']] })
+  })
+
   it('each payload runs its code where it is meant to bite (row 239)', async () => {
     expect(BITES.map(([p]) => p)).toEqual([...PAYLOADS, ...REF_PAYLOADS])
     const zsh = MODES.some((m) => m.startsWith('zsh'))
