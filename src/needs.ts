@@ -1,9 +1,10 @@
 import { cliAct } from './act.js'
-import { ensureTrusted } from './allowlist.js'
+import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { GateCheck } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { execSync } from './spawn.js'
+import { hasControl } from './toon.js'
 
 export interface NeedResult {
   label: string
@@ -38,9 +39,12 @@ export async function evaluateNeeds(root: string, ctx: Ctx, needs: unknown[], do
     } else if (typeof n.cmd === 'string') {
       const trust = await ensureTrusted(root, ctx, n.cmd)
       if (trust !== 'trusted') {
+        // Row 237. No grant exists for a command outside printable ASCII, so its remedy says so
+        // rather than send the human to `witness next` for one.
+        const blocked = hasControl(n.cmd) ? UNGRANTABLE : 'untrusted on this machine — witness next names the grant to make'
         out.push({
           label: n.cmd, kind: 'cmd', status: trust,
-          detail: trust === 'blocked' ? 'untrusted on this machine — witness next names the grant to make' : 'trust declined',
+          detail: trust === 'blocked' ? blocked : 'trust declined',
         })
         continue
       }

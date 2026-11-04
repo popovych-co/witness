@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { ensureTrusted } from './allowlist.js'
+import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
@@ -8,6 +8,7 @@ import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { contained, JOB_HOST_ENV, jobHost, type JobHost } from './contain.js'
 import { withRunnerTurn } from './runner-lock.js'
 import { execFileSync, execSync, system32 } from './spawn.js'
+import { hasControl } from './toon.js'
 
 export type RunnerConfig =
   | { mode: 'filtered'; template: string; reportGlob?: string }
@@ -103,6 +104,9 @@ export function untrustedOf(violations: readonly Violation[]): string | undefine
 // Row 205. The runner knows no target, so it names the verb that does: `next` prints the grant
 // to make, and the human names the command in the chat. The env var is the automation route.
 const UNTRUSTED_WANT = 'a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation'
+// Row 237. No grant exists for a command outside printable ASCII, so its refusal says so rather
+// than send the human to `witness next` for one.
+const blockedWant = (cmd: string): string => hasControl(cmd) ? UNGRANTABLE : UNTRUSTED_WANT
 
 export async function runFiltered(
   runRoot: string, ctx: Ctx, template: string, specId: string, trustRoot = runRoot,
@@ -110,7 +114,7 @@ export async function runFiltered(
   const trust = await ensureTrusted(trustRoot, ctx, template)
   if (trust !== 'trusted') {
     return refuse([v('criteria.runner', `untrusted-${trust}`, template,
-      trust === 'blocked' ? UNTRUSTED_WANT : 'trust was declined')])
+      trust === 'blocked' ? blockedWant(template) : 'trust was declined')])
   }
   return ok(execCommand(runRoot, ctx, template.replaceAll('{id}', specId)))
 }
@@ -121,7 +125,7 @@ export async function runFullSuite(
   const trust = await ensureTrusted(trustRoot, ctx, rc.suiteCmd)
   if (trust !== 'trusted') {
     return refuse([v('ship.test', `untrusted-${trust}`, rc.suiteCmd,
-      trust === 'blocked' ? UNTRUSTED_WANT : 'trust was declined')])
+      trust === 'blocked' ? blockedWant(rc.suiteCmd) : 'trust was declined')])
   }
   for (const f of reportFiles(runRoot, rc.reportGlob)) rmSync(join(runRoot, f))
   const run = execCommand(runRoot, ctx, rc.suiteCmd)

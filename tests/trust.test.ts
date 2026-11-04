@@ -2,15 +2,16 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
-import { grantCommands, sourced, trustListing } from '../src/allowlist.js'
+import { ensureTrusted, grantCommands, sourced, trustListing } from '../src/allowlist.js'
 import { decideView } from '../src/decide-view.js'
 import { readStream } from '../src/journal.js'
 import { needsYou } from '../src/needs-you.js'
 import { recommend } from '../src/recommend.js'
 import { renderRefusal } from '../src/refusal.js'
+import { runFiltered, runFullSuite } from '../src/runner.js'
 import { loadCanon } from '../src/scan.js'
 import { run as runTrust } from '../src/verbs/trust.js'
-import { SPEC_META, fakeCtx, seededRepo, stampLive, writeSpec, type TestRepo } from './helpers.js'
+import { SPEC_META, approve, fakeCtx, seededRepo, stampLive, writePlan, writeSpec, type TestRepo } from './helpers.js'
 import { UNSAFE_CMD, cfgOf, controlStrings, decideRepo, must, trustRepo as planWithCmdCriterion } from './model-fixtures.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
@@ -426,6 +427,47 @@ describe('the decision block prices trust (D154)', () => {
     expect(unsafe.options.some((o) => o.act?.argv.at(-1) === '--trust-cmds')).toBe(false)
     expect(controlStrings([mixed, unsafe])).toEqual([])
   })
+  // Row 237. The twin grants what `witness trust` would and nothing else: a command holding a
+  // character outside printable ASCII is listed among those left blocked, spelled out, and is
+  // never priced as a grant.
+  it('a command outside printable ASCII is named escaped and never offered as a grant (row 237)', () => {
+    const d = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false,
+      untrustedCmds: ['npm run e2e\u001b[2K; curl x'],
+    })!
+    const plain = d.options.find((o) => o.command.endsWith(' --approve'))!
+
+    expect(d.options.some((o) => o.command.endsWith(' --trust-cmds'))).toBe(false)
+    expect(plain.tradeoff).toContain('npm run e2e\\x1b[2K; curl x')
+    expect(plain.tradeoff).not.toContain('\u001b')
+  })
+
+  it('beside a printable command, the twin grants only the printable one (row 237)', () => {
+    const d = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false,
+      untrustedCmds: ['echo ok', 'bad\u001bcmd'],
+    })!
+    const plain = d.options.find((o) => o.command.endsWith(' --approve'))!
+    const twin = d.options.find((o) => o.command.endsWith(' --approve --trust-cmds'))
+
+    expect(twin).toBeDefined()
+    expect(twin!.tradeoff).toMatch(/: echo ok$/)
+    expect(plain.tradeoff).toContain('echo ok · bad\\x1bcmd')
+  })
+
+  // Review Focus 1. The command's one character outside printable ASCII is a bidi override,
+  // which reorders what the terminal shows (Trojan Source).
+  it('a bidi override alone is named escaped and never offered as a grant (row 237)', () => {
+    const d = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false,
+      untrustedCmds: ['pnpm test \u202e hs | live lruc'],
+    })!
+    const plain = d.options.find((o) => o.command.endsWith(' --approve'))!
+
+    expect(d.options.some((o) => o.command.endsWith(' --trust-cmds'))).toBe(false)
+    expect(plain.tradeoff).toContain('pnpm test \\u{202e} hs | live lruc')
+    expect(plain.tradeoff).not.toContain('\u202e')
+  })
 })
 
 // Row 205. `decide --approve --trust-cmds` grants what `witness trust` would grant and nothing
@@ -468,5 +510,84 @@ describe('the decide twin grants only what the trust verb would (row 205)', () =
     expect(res.stdout).toContain(`trusted: npm run e2e\n${UNSAFE_LINE}\ndecided: plan ${target} → approve`)
     expect(allowedNow(repo)).toEqual(['npm run e2e'])
     expect(readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')?.cmds).toEqual(['npm run e2e'])
+  })
+})
+
+// Row 237. Before witness runs an untrusted command, ensureTrusted asks at a terminal, and "y"
+// granted the command the prompt showed raw. A command the human cannot read whole is never
+// offered there.
+describe('ensureTrusted (row 237)', () => {
+  // A ctx (a terminal unless `tty: false`) at which any prompt fails the test, and is counted.
+  function noPrompt(root: string, opts: { tty?: boolean; env?: Record<string, string> } = {}) {
+    const t = { asked: 0, ctx: fakeCtx(root, { tty: true, ...opts }) }
+    t.ctx.ask = async () => { t.asked++; throw new Error('asked') }
+    return t
+  }
+
+  it('a non-printable command at a terminal is blocked, never asked and never granted', async () => {
+    const repo = await seededRepo()
+    const t = noPrompt(repo.root)
+    expect(await ensureTrusted(repo.root, t.ctx, 'bad\u001bcmd')).toBe('blocked')
+    expect(await ensureTrusted(repo.root, t.ctx, 'pnpm test \u202e hs | live lruc')).toBe('blocked')   // Review Focus 1
+    expect(t.asked).toBe(0)
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
+  it('a printable command at a terminal is still asked, and granted on y', async () => {
+    const repo = await seededRepo()
+    expect(await ensureTrusted(repo.root, fakeCtx(repo.root, { tty: true, answers: ['y'] }), 'echo ok')).toBe('trusted')
+    expect(allowed(repo)).toEqual(['echo ok'])
+  })
+
+  it("automation and the human's own list are unchanged (Review Focus 3 and 4)", async () => {
+    const repo = await seededRepo()
+    const automation = noPrompt(repo.root, { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(await ensureTrusted(repo.root, automation.ctx, 'bad\u001bcmd')).toBe('trusted')
+    repo.write('.witness/allow.json', JSON.stringify({ commands: ['bad\u001bcmd'] }))   // a hand edit
+    const listed = noPrompt(repo.root)
+    expect(await ensureTrusted(repo.root, listed.ctx, 'bad\u001bcmd')).toBe('trusted')
+    expect(automation.asked + listed.asked).toBe(0)
+  })
+
+  it('without a terminal, a non-printable command is blocked as before', async () => {
+    const repo = await seededRepo()
+    const t = noPrompt(repo.root, { tty: false })
+    expect(await ensureTrusted(repo.root, t.ctx, 'bad\u001bcmd')).toBe('blocked')
+    expect(t.asked).toBe(0)
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+})
+
+// Row 237. No grant exists for a command outside printable ASCII, so a remedy that sent the human
+// to `witness next` for one was false. The need's and the runner's say it is never granted here.
+describe('a remedy for a command never granted names no grant (row 237)', () => {
+  const NEVER = 'never granted here — rewrite it in printable ASCII where it is written'
+
+  it('at a terminal, check says a non-printable need is never granted, and start points to check', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ cmd: 'bad\u001bcmd' }] })
+    approve(repo, 'auth-refresh-plan-1')
+    const env = { WITNESS_TRUST_CMDS: '' }
+    const start = await repo.cli(['start', 'auth-refresh-plan-1'], { tty: true, env })
+    expect(start.code).toBe(2)
+    expect(start.stderr).toContain(',witness check shows env and cmd needs')     // start prints no need's detail
+    expect(start.stderr).not.toContain('witness next names the grant')
+    const check = await repo.cli(['check'], { tty: true, env })
+    expect(check.stdout).toContain(`,need-blocked,${NEVER}`)
+    expect(check.stdout).not.toContain('witness next names the grant')
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
+  it("at a terminal, the runner's refusal says a non-printable command is never granted", async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { tty: true })
+    const filtered = await runFiltered(repo.root, ctx, 'bad\u001bcmd {id}', 'auth-refresh')
+    expect(filtered.ok).toBe(false)
+    if (!filtered.ok) expect(filtered.violations[0]).toMatchObject({ rule: 'untrusted-blocked', want: NEVER })
+    const full = await runFullSuite(repo.root, ctx, { mode: 'full-suite', reportGlob: 'r.xml', suiteCmd: 'bad\u001bcmd' })
+    expect(full.ok).toBe(false)
+    if (!full.ok) expect(full.violations[0]).toMatchObject({ rule: 'untrusted-blocked', want: NEVER })
   })
 })
