@@ -723,6 +723,48 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     expect(lastDecision(repo)).toBeUndefined()
   }, 30000)
 
+  // Row 239. A word after `--note` is the note whatever it reads: typed, it never sets the flag
+  // it spells.
+  it('a typed note that reads like a flag is the note, never the flag (row 239)', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, [`witness decide decompose ${repo.effort} --revise --note --override`], out), { maxSpawns: 1 })
+    const d = lastDecision(repo)
+    expect(d).toMatchObject({ decision: 'revise', note: '--override' })
+    expect(d).not.toHaveProperty('override')
+  }, 30000)
+
+  // Row 239. The printed slot typed back as it stands is refused at the one door, not journaled.
+  it('a typed answer that leaves the <why> slot unfilled is refused, and decides nothing (row 239)', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    const err: string[] = []
+    const typed = `witness decide decompose ${repo.effort} --revise --note "<why>"`
+    const ctx = fakeCtx(repo.root, {
+      tty: true, answers: [typed], out: (l) => out.push(l), err: (l) => err.push(l),
+      env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent(), WITNESS_KEEP_AWAKE_BIN: noopOpener() }),
+    })
+    await driveLoop(repo.root, cfgOf(repo), ctx, { maxSpawns: 1 })
+    expect(err.join('\n')).toContain('slot-unfilled')
+    expect(out).toContain(`drive: decision refused — ${typed}`)
+    expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
+
+  // Row 239. `--via affirmation` is decide's record that a nod chose: any other recommended act
+  // runs as named. Recover's strict parse refused the fork's `--complete` with it appended.
+  it('a nod at the recovery fork runs the act as named, and the transaction completes (row 239)', async () => {
+    const repo = await seededRepo()
+    const line = '{"v":1,"t":"status","artifact":"p","to":"done"}'
+    repo.write('.witness/journal/p.jsonl', `{"seed":1}\n${line}\n`)
+    repo.write('.witness/txn.json', JSON.stringify({ op: 'merge-stamp', files: ['.witness/journal/p.jsonl'], journalMulti: [{ stream: 'p', line }] }))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['y'], out), { maxSpawns: 1 })
+    expect(out).toContain('recover: 2 options · 1 is recommended')
+    expect(out).toContain('drive: running — witness recover --complete')
+    expect(out.some((l) => l.startsWith('recovered: completed as '))).toBe(true)
+    expect(existsSync(join(repo.root, '.witness', 'txn.json'))).toBe(false)
+  }, 30000)
+
   // D143: the block a human reads at `decide>` is the one they would read in a chat session.
   it('decide> prints decide --show byte for byte (row 239, D143)', async () => {
     const repo = await gatedEffort()

@@ -81,12 +81,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       // same model call to reach the same refusal (F4). It parks instead — once, reversibly,
       // as the policy's act — exactly as a second malformed answer does. A lock or a pending
       // transaction is transient (exit 3), so that stop is left to be tried again.
-      if (by === 'arbiter' && code === EXIT.REFUSED) {
-        return settle({
-          gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id,
-          note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
-        }, 'policy')
-      }
+      if (by === 'arbiter' && code === EXIT.REFUSED) return parkRefused(rule)
       const why = `the ${by} decision was refused (${rule ?? `exit ${code}`})`
       ctx.out(leftLine(gate, target, why))
       return { kind: 'left', why, code }
@@ -96,17 +91,17 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       decision: act.decision === 'revise' && act.upstream !== undefined ? 'revise-upstream' : act.decision,
     }
   }
-  // Row 239. A decide act runs as its argv, through the parse the verb gives it. A shape the parse
-  // refuses is no decision the CLI can take, so the stop is left for a human, with the refusal.
+  const parkRefused = (rule: string | undefined): Promise<Settled> => settle({
+    gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id,
+    note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
+  }, 'policy')
+  // Row 239. A decide act runs as its argv, through the parse the verb gives it, which prints its
+  // refusal. A shape the parse refuses is no decision the CLI can take: the policy's stop is left
+  // for a human, and the arbiter's parks (F4).
   const parsed = (argv: readonly string[]): Result<DecisionAct> => {
     const actR = decisionAct(argv.slice(1))
     if (!actR.ok) renderRefusal(actR.violations).forEach((l) => ctx.err(l))
     return actR
-  }
-  const unread = (by: 'policy' | 'arbiter'): Settled => {
-    const why = `the ${by} chose an option the CLI could not read`
-    ctx.out(leftLine(gate, target, why))
-    return { kind: 'left', why, code: EXIT.REFUSED }
   }
 
   if (policy.kind === 'human') {
@@ -130,7 +125,11 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       return { kind: 'routed', act, line }
     }
     const actR = parsed(act.argv)
-    if (!actR.ok) return unread('policy')
+    if (!actR.ok) {
+      const why = 'the policy chose an option the CLI could not read'
+      ctx.out(leftLine(gate, target, why))
+      return { kind: 'left', why, code: EXIT.REFUSED }
+    }
     return settle({ ...actR.value, selected: 'policy', runId: owed.run_id }, 'policy')
   }
 
@@ -165,14 +164,16 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     return { kind: 'left', why, code: EXIT.REFUSED, ...(limited ? { limit: limited.got } : {}) }
   }
   // The one placeholder the arbiter may fill (A3): `<why>`, with its note or its reason. Row 239:
-  // filled in a copy of the chosen act's argv, so the note runs as one word whatever it holds. An
-  // option with no slot carries no note: a bare revise journals the prefill `decide` derives, and
-  // the reason is journaled beside either.
+  // filled in a copy of the chosen act's argv, as the value of its `--note`, which `decisionAct`
+  // reads as the note whatever words it holds and never as a flag. A note that is the bare `<why>`
+  // leaves the slot unfilled, which the door refuses, and the flow parks (F4). An option with no
+  // slot carries no note: a bare revise journals the prefill `decide` derives, and the reason is
+  // journaled beside either.
   const chosen = menu[ruling.value.choice - 1]!.act
   const argv = [...chosen.argv]
   for (const i of chosen.inputs) if (i.name === 'why') argv[i.at] = ruling.value.note ?? ruling.value.reason
   const actR = parsed(argv)
-  if (!actR.ok) return unread('arbiter')
+  if (!actR.ok) return parkRefused(actR.violations[0]?.rule)
   return settle({
     ...actR.value, selected: 'arbiter', reason: ruling.value.reason,
     arbiter: { model: ruling.value.model, prompts_sha: ruling.value.prompts_sha },

@@ -1252,6 +1252,9 @@ function selectOption(answer: string, options: Selectable[]): Pick {
     if (excluded !== undefined) {
       return { refuse: `nod-cannot: ${excluded} is never taken on an affirmation — name the option (D143)` }
     }
+    // Row 239. `--via affirmation` is decide's record that a nod chose, so only a decide act
+    // carries it; any other recommended act (the recovery fork's) runs exactly as named.
+    if (rec.act.argv[0] !== 'decide') return { argv: rec.act.argv, line: rec.act.line }
     return { argv: [...rec.act.argv, '--via', 'affirmation'], line: `${rec.act.line} --via affirmation` }
   }
   if (/^\d+$/.test(answer)) {

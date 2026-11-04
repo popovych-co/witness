@@ -66,6 +66,37 @@ it('the arbiter fills the <why> slot through argv (row 239)', async () => {
   })
 })
 
+// Row 239. The filled note is the value of `--note`: a note that reads like a flag is
+// journaled as the note and sets no flag, so the arbiter's text can never take an override,
+// a repair grant, a trust grant or a second decision.
+it('an arbiter note that reads like a flag is the note, and sets no flag (row 239)', async () => {
+  for (const note of ['--override', '--repair', '--trust-cmds', '--approve', '--stop']) {
+    const { repo, scenario } = await scoped()
+    putVerdict(scenario, { choice: 2, reason: 'the cut ships g1 in pieces', note }, 'arbiter')
+    expect(await runGate(capture(repo.root, scenario).ctx, 'decompose', 'auth-hardening', F), note).toBe(1)
+    const d = decisions(repo.root, 'auth-hardening').at(-1)
+    expect(d, note).toMatchObject({ decision: 'revise', selected: 'arbiter', note })
+    expect(d, note).not.toHaveProperty('override')
+    expect(d, note).not.toHaveProperty('repair')
+  }
+}, 60000)
+
+// Row 239. A note that is the bare `<why>` leaves the slot unfilled, which the one door refuses:
+// the flow parks once, as for any arbiter choice the door refuses (F4), and no model is asked again.
+it('an arbiter note that is the bare slot parks the flow once (row 239, F4)', async () => {
+  const { repo, scenario } = await scoped()
+  putVerdict(scenario, { choice: 2, reason: 'the cut ships g1 in pieces', note: '<why>' }, 'arbiter')
+  const h = capture(repo.root, scenario)
+  expect(await runGate(h.ctx, 'decompose', 'auth-hardening', F)).toBe(1)
+  const d = decisions(repo.root, 'auth-hardening').at(-1)!
+  expect(d).toMatchObject({ decision: 'stop', selected: 'policy' })
+  expect(d.note).toContain('slot-unfilled')
+  expect(h.err()).toContain('slot-unfilled')
+  const asked = callCount(scenario)
+  await repo.cli(['next'], { env: gateEnv(scenario) })
+  expect(callCount(scenario)).toBe(asked)
+})
+
 it('the policy revises a blocking finding and asks nobody (A2)', async () => {
   const repo = await plannedRepo(); const scenario = fakeScenario(); putVerdict(scenario, PLAN_BLOCKING)
   const h = capture(repo.root, scenario)

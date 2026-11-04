@@ -41,13 +41,27 @@ function trustFor(ctx: Ctx, target: string): string[] {
 
 const asEntry = (e: DecisionEntry) => e as unknown as { t: 'human-decision'; [k: string]: unknown }
 
-function flagValue(argv: string[], flag: string): string | undefined {
-  const i = argv.indexOf(flag)
-  return i >= 0 ? argv[i + 1] : undefined
-}
+// The flags whose next word is their value.
+const VALUED = new Set(['--note', '--upstream', '--pin', '--via'])
 
-function flagValues(argv: string[], flag: string): string[] {
-  return argv.flatMap((a, i) => (a === flag && argv[i + 1] !== undefined ? [argv[i + 1]!] : []))
+// Row 239. argv read left to right, the one way `decide` reads it: each word is a flag, the value
+// of the valued flag before it, or a positional. A flag is read only where a flag stands, so a
+// value is never one, whatever it spells: a note a human or the arbiter wrote may read
+// `--override`, and it is the note. `values` keeps each valued flag's values in order.
+interface DecideWords { positional: string[]; flags: Set<string>; values: Map<string, string[]> }
+function decideWords(argv: readonly string[]): DecideWords {
+  const out: DecideWords = { positional: [], flags: new Set(), values: new Map() }
+  for (let i = 0; i < argv.length; i++) {
+    const w = argv[i]!
+    if (!w.startsWith('--')) { out.positional.push(w); continue }
+    out.flags.add(w)
+    const value = argv[i + 1]
+    if (VALUED.has(w) && value !== undefined) {
+      out.values.set(w, [...(out.values.get(w) ?? []), value])
+      i++
+    }
+  }
+  return out
 }
 
 // Row 108. The bound is the designed terminus, not a malfunction, and renderRefusal
@@ -107,44 +121,52 @@ export type DecisionAct = DecisionCore & (
 // SHAPE of the request; every refusal about the state it acts on is `applyDecision`'s. A
 // flag absent from argv is absent from the act — no field carries `false`.
 export function decisionAct(argv: string[]): Result<DecisionAct> {
-  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' &&
-    argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin' && argv[i - 1] !== '--via')
+  const { positional, flags, values } = decideWords(argv)
   const [gate, target] = positional
   if (!gate || !target) {
     return refuse([v('decide', 'usage', argv.join(' ') || '(none)', 'witness decide <gate> <target> --approve|--revise|--stop')])
   }
-  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => argv.includes(f))
+  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => flags.has(f))
   if (picked.length !== 1) {
     return refuse([v('decision', 'one-of-required', picked.join(' ') || '(none)', '--approve | --revise | --stop')])
   }
-  const via = flagValue(argv, '--via')
+  const via = values.get('--via')?.[0]
   if (via !== undefined && via !== 'affirmation') {
     return refuse([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
   }
-  const note = flagValue(argv, '--note')
-  const upstream = flagValue(argv, '--upstream')
-  const pins = flagValues(argv, '--pin')
+  const note = values.get('--note')?.[0]
+  const upstream = values.get('--upstream')?.[0]
+  const pins = values.get('--pin') ?? []
+  // Row 239. The CLI's own placeholders are slots a human fills, never a value: the printed
+  // `--note "<why>"` or `--upstream <effort>`, run as it stands, decides nothing.
+  const unfilled = [
+    ...(note === '<why>' ? [v('--note', 'slot-unfilled', '<why>', 'the note itself — <why> is a slot the human fills')] : []),
+    ...(upstream === '<effort>' ? [v('--upstream', 'slot-unfilled', '<effort>', 'the upstream itself — <effort> is a slot the human fills')] : []),
+  ]
+  if (unfilled.length > 0) return refuse(unfilled)
   return ok({
     gate, target, decision: picked[0]!.slice(2) as DecisionCore['decision'],
-    ...(argv.includes('--override') ? { override: true } : {}),
-    ...(argv.includes('--repair') ? { repair: true } : {}),
+    ...(flags.has('--override') ? { override: true } : {}),
+    ...(flags.has('--repair') ? { repair: true } : {}),
     ...(note !== undefined ? { note } : {}),
     ...(upstream !== undefined ? { upstream } : {}),
     ...(pins.length > 0 ? { pins } : {}),
-    ...(argv.includes('--trust-cmds') ? { trustCmds: true } : {}),
+    ...(flags.has('--trust-cmds') ? { trustCmds: true } : {}),
     ...(via === 'affirmation' ? { selected: 'affirmation' as const } : {}),
   })
 }
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
-  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin')
+  // Row 239. The same reading as `decisionAct`'s, so the two never disagree about which word is
+  // the gate, the target or `--show`.
+  const { positional, flags } = decideWords(argv)
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
     ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
-  if (argv.includes('--show')) return show(ctx, spec.gate, target)
+  if (flags.has('--show')) return show(ctx, spec.gate, target)
   const act = decisionAct(argv)
   if (!act.ok) { renderRefusal(act.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const code = await applyDecision(ctx, act.value)

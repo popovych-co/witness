@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ok } from '../src/refusal.js'
+import { ok, refuse, v } from '../src/refusal.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import { notePrefill, type DecisionEntry, type GateRunEntry } from '../src/rounds.js'
@@ -167,6 +167,45 @@ describe('witness decide', () => {
 
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('unknown-via')
+  })
+
+  // Row 239. A flag is read only where a flag stands: the word after `--note`, `--upstream`,
+  // `--pin` or `--via` is that flag's value whatever it reads, so text a human or the arbiter
+  // wrote never sets a flag.
+  it('a value that reads like a flag is the value, never a flag (row 239)', () => {
+    for (const word of ['--override', '--repair', '--trust-cmds', '--approve', '--stop']) {
+      expect(decisionAct(['ship', 'p1', '--revise', '--note', word]), word).toEqual(ok({ gate: 'ship', target: 'p1', decision: 'revise', note: word }))
+    }
+    expect(decisionAct(['plan', 'p1', '--revise', '--upstream', '--stop'])).toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', upstream: '--stop' }))
+    expect(decisionAct(['implement', 'p1', '--approve', '--pin', '--override'])).toEqual(ok({ gate: 'implement', target: 'p1', decision: 'approve', pins: ['--override'] }))
+    expect(decisionAct(['plan', 'p1', '--revise', '--via', '--stop'])).toEqual(refuse([v('--via', 'unknown-via', '--stop', 'affirmation — the only selection source the CLI defines')]))
+  })
+
+  // The verb's own parse reads argv the same way: a note of `--show` is a note, and the
+  // decision is taken.
+  it('a note typed as --show is the note, and decide decides (row 239)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', '--show'])
+
+    expect(res.code, res.stderr).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'revise', note: '--show' })
+  })
+
+  // Row 239. The CLI's own placeholders are slots a human fills, never a value: the printed
+  // `--note "<why>"` or `--upstream <effort>`, run as it stands, decides nothing.
+  it('an unfilled slot is refused at the one door, and journals nothing (row 239)', async () => {
+    expect(decisionAct(['plan', 'p1', '--revise', '--note', '<why>']))
+      .toEqual(refuse([v('--note', 'slot-unfilled', '<why>', 'the note itself — <why> is a slot the human fills')]))
+    expect(decisionAct(['plan', 'p1', '--revise', '--upstream', '<effort>']))
+      .toEqual(refuse([v('--upstream', 'slot-unfilled', '<effort>', 'the upstream itself — <effort> is a slot the human fills')]))
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', '<why>'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('slot-unfilled')
+    expect(decisions(repo)).toEqual([])
   })
 
   // D154. Trust is granted where a human decides. The grant runs only after the decision
