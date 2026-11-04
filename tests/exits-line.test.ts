@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { cliAct, exitsLine } from '../src/act.js'
+import { actOn, cliAct, exitsLine } from '../src/act.js'
 import { gateSpec, runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream, type Entry } from '../src/journal.js'
@@ -189,6 +189,11 @@ describe('the exits line renders the live acts (rows 139/203)', () => {
   it('the exits name the bare revise below the bound (row 239)', () => {
     expect(liveExits('plan', 'p1', [judged(1, 'a')], false, 'auth-refresh'))
       .toBe('witness decide plan p1 --approve | --revise | --revise --upstream auth-refresh | --stop')
+  })
+
+  it('a Windows exits line shares the prefix the same way (row 239)', () => {
+    const d = (...rest: string[]) => actOn('win32', ['decide', 'plan', 'p1', ...rest])
+    expect(exitsLine([d('--approve'), d('--stop')], 'win32')).toBe('witness decide plan p1 --approve | --stop')
   })
 
   it('reopens with a fresh run below the bound and with the endgame acts at it', () => {

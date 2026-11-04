@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
-import { recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
+import { actOn } from '../src/act.js'
+import { option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
@@ -1012,5 +1013,15 @@ describe('options carry their act (rows 139/203)', () => {
     const plain = options.find((o) => o.command === 'witness decide plan p1 --approve')!
     const twin = options.find((o) => o.command === 'witness decide plan p1 --approve --trust-cmds')!
     expect(twin.act!.argv).toEqual([...plain.act!.argv, '--trust-cmds'])
+  })
+
+  // Row 239. Windows shows the command and says why it is not offered: a pasted `&` reaches cmd.exe.
+  it('a withheld act is shown and never a runnable option (row 239)', () => {
+    const o = option(actOn('win32', ['trust', 'p1', '--cmd', 'a&b']), 'root', { note: 'n' })
+    expect(o.runnable).toBe(false)
+    expect(o.note).toBe('n · not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text')
+    const lines = renderDecision({ key: 'decide', rule: 'blocking-here', options: [o] })
+    expect(lines).toContain('1 · recommended · root · not runnable')
+    expect(lines.filter((l) => l.startsWith('run: '))).toEqual([])
   })
 })

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
-import { ensureTrusted, grantCommands, sourced, trustListing } from '../src/allowlist.js'
+import { ensureTrusted, grantCommands, grantOf, sourced, trustListing, UNGRANTABLE } from '../src/allowlist.js'
 import { decideView } from '../src/decide-view.js'
 import { readStream } from '../src/journal.js'
 import { needsYou } from '../src/needs-you.js'
@@ -589,5 +589,17 @@ describe('a remedy for a command never granted names no grant (row 237)', () => 
     const full = await runFullSuite(repo.root, ctx, { mode: 'full-suite', reportGlob: 'r.xml', suiteCmd: 'bad\u001bcmd' })
     expect(full.ok).toBe(false)
     if (!full.ok) expect(full.violations[0]).toMatchObject({ rule: 'untrusted-blocked', want: NEVER })
+  })
+})
+
+// Row 239. A grant Windows withholds is never offered to be pasted, so its line names the listing,
+// which keeps the command pending and asks for it at a terminal.
+describe('a grant Windows withholds names the listing instead (row 239)', () => {
+  it("grantOf keeps today's answers, and names the listing for a withheld grant", () => {
+    expect(grantOf('p1', { cmd: 'npm test' }, 'win32')).toBe("witness trust p1 --cmd 'npm test'")
+    expect(grantOf('p1', { cmd: 'bad\u001bcmd' }, 'win32')).toBe(UNGRANTABLE)
+    expect(grantOf('p1', { cmd: 'npm test && npm run lint' }, 'darwin')).toBe("witness trust p1 --cmd 'npm test && npm run lint'")
+    expect(grantOf('p1', { cmd: 'npm test && npm run lint' }, 'win32')).toBe('not offered on Windows — it holds &, which ' +
+      'cmd.exe or Windows PowerShell can read as more than text · at a terminal, witness trust p1 asks for each command')
   })
 })

@@ -84,11 +84,17 @@ const blockingAnchors = (r: GateRunEntry): string[] =>
 export const PLACEHOLDER = /<(why|effort)>/
 
 // Rows 139/203. Every option that offers a command is built from its act: the block prints the
-// act's line, and the option pastes unless a word of it is one the human must fill.
+// act's line, and the option pastes unless a word of it is one the human must fill. Row 239: nor
+// when Windows withholds it (`Act.withheld`). The command is still shown, and its note says why.
 export function option(
   act: Act, depth: Depth, rest: Partial<Pick<Option, 'why' | 'when' | 'tradeoff' | 'note' | 'judgeFirst'>> = {},
 ): Option {
-  return { command: act.line, depth, runnable: act.inputs.length === 0, act, ...rest }
+  const { note: given, ...shown } = rest
+  const note = [given, act.withheld].filter((n) => n !== undefined).join(' · ')
+  return {
+    command: act.line, depth, runnable: act.inputs.length === 0 && act.withheld === undefined, act, ...shown,
+    ...(note !== '' ? { note } : {}),
+  }
 }
 
 // The rule table is an ORDERED FIRST-MATCH list (D121). The id of the rule that matched is

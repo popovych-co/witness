@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cliAct, type Act } from './act.js'
+import { actOn, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { criteriaOwner, findById, type Canon, type CanonDoc } from './scan.js'
-import { hasControl, visible } from './toon.js'
+import { hasControl, visible, type Platform } from './toon.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
@@ -70,10 +70,18 @@ export const unsafeLeft = (n: number): string =>
   `${n} carry characters outside printable ASCII — never granted here · rewrite where it is written`
 // Rows 139/203. The grant as an act: the raw command one argv word, so it runs without a shell.
 // A command the verb would not take has none, so no model ever holds an act for it.
-export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>): Act | undefined {
-  return hasControl(c.cmd) ? undefined : cliAct('trust', target, '--cmd', c.cmd)
+export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): Act | undefined {
+  return hasControl(c.cmd) ? undefined : actOn(platform, ['trust', target, '--cmd', c.cmd])
 }
-export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>): string => grantAct(target, c)?.line ?? UNGRANTABLE
+// The grant's line, or why there is none. Row 239: a grant Windows withholds (`Act.withheld`) is
+// never offered to be pasted, so the line names the listing instead, which grants nothing by
+// itself: the command stays pending, and at a terminal the listing asks for each one.
+export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): string => {
+  const act = grantAct(target, c, platform)
+  if (act === undefined) return UNGRANTABLE
+  return act.withheld === undefined ? act.line
+    : `${act.withheld} · at a terminal, ${actOn(platform, ['trust', target]).line} asks for each command`
+}
 
 // The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
 // runner IS `ship.test`, and a command listed twice is listed once, under its first source.

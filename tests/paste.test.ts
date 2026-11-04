@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { cliAct, type Act } from '../src/act.js'
+import { grantAct } from '../src/allowlist.js'
 import type { Entry } from '../src/journal.js'
+import { satisfyCommand } from '../src/needs.js'
+import { needYouRows, type NeedYou } from '../src/needs-you.js'
 import { recommend, renderDecision } from '../src/recommend.js'
+import { exitActs, reopenActs } from '../src/rounds.js'
 import { shellLine } from '../src/toon.js'
 import { MODES, type Mode, PAYLOADS, type Pasteable, type Pasted, pasteIn, REF_PAYLOADS } from './shells.js'
 
@@ -14,22 +19,61 @@ const turn = (): Promise<unknown> => new Promise((r) => setImmediate(r))
 // A row's own payload list replaces PAYLOADS.
 type Row = [name: string, build: (payload: string) => Pasteable[] | Promise<Pasteable[]>, payloads?: readonly string[]]
 
-// One stopped plan run whose one blocking finding a reviewer anchored where it liked.
-const anchoredRun = (anchor: string): Entry => ({
-  v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r-1', reviewed_sha: 'a', prompts_sha: 'ps',
+// One stopped plan run whose one blocking finding a reviewer anchored where it liked, at its
+// round: three in a row reach the bound.
+const anchoredRun = (anchor: string, round = 1): Entry => ({
+  v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round, run_id: `r-${round}`, reviewed_sha: `s${round}`, prompts_sha: 'ps',
   witness: '0', model: 'm', pin: 'm', harness: 'claude-code', checks: [], outcome: 'stopped',
   verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor, claim: 'x' }] }],
 } as unknown as Entry)
+// The first `n` rounds of that run's game, and the same first round parked by a stop.
+const rounds = (p: string, n: number): Entry[] => Array.from({ length: n }, (_, i) => anchoredRun(`p1 > ## Notes ${p}`, i + 1))
+const parked = (p: string): Entry[] =>
+  [...rounds(p, 1), { v: 1, t: 'human-decision', gate: 'plan', artifact: 'p1', round: 1, decision: 'stop' } as unknown as Entry]
+
+// One act as the human pastes it: its line, which must hand `witness` exactly its argv.
+const pasteable = (a: Act): Pasteable => ({ line: a.line, calls: [['witness', ...a.argv]] })
 
 // K1: every runnable option the block offers, and its `run:` line, each as the human pastes it.
-function decisionLines(p: string): Pasteable[] {
-  const d = recommend({ gate: 'plan', target: 'p1', entries: [anchoredRun(`p1 > ## Notes ${p}`)], upstream: 'auth-refresh', stale: false })!
+function decisionLines(p: string, target = 'p1', upstream = 'auth-refresh'): Pasteable[] {
+  const d = recommend({ gate: 'plan', target, entries: [anchoredRun(`p1 > ## Notes ${p}`)], upstream, stale: false })!
   const run = renderDecision(d).find((l) => l.startsWith('run: '))
   if (run === undefined) throw new Error(`K1: the ${d.rule} block printed no run: line`)
   return [
     ...d.options.filter((o) => o.runnable).map((o) => ({ line: o.command, calls: [['witness', ...o.act!.argv]] })),
     { line: run.slice('run: '.length), calls: [['witness', ...d.options[0]!.act!.argv]] },
   ]
+}
+
+// K2: each act the exits name, below the bound and at it.
+function exitLines(p: string): Pasteable[] {
+  const atBound = exitActs('plan', `p1${p}`, rounds(p, 3), false, `up${p}`)
+  if (atBound.at(-1)?.argv[0] !== 'abandon') throw new Error('K2: three rounds did not reach the bound')
+  return [...exitActs('plan', `p1${p}`, rounds(p, 1), false, `up${p}`), ...atBound].map(pasteable)
+}
+
+// K6: every command an inbox row offers, its `run:` or `then:` label cut, beside the act it prints.
+const OFFERED = /^ {2}(?:run|then): /
+function inboxLines(p: string): Pasteable[] {
+  const target = `p1${p}`
+  const show = cliAct('decide', 'plan', target, '--show')
+  const open = cliAct('design', target, '--open')
+  const look = cliAct('decide', 'design', target, '--show')
+  const satisfy = cliAct('satisfy', target, '--need', `n${p}`)
+  const retry = cliAct('retry', target)
+  const reopen = reopenActs('plan', target, parked(p), `up${p}`)
+  const items: Array<[NeedYou, Act[]]> = [
+    [{ kind: 'decision', target, key: 'decision', gate: 'plan', show }, [show]],
+    [{ kind: 'design-look', target, key: 'design-look', open, show: look }, [open, look]],
+    [{ kind: 'need', target, key: 'need', need: `n${p}`, text: 'prod access', holds: [], satisfy }, [satisfy]],
+    [{ kind: 'stuck', target, key: 'stuck', retry }, [retry]],
+    [{ kind: 'parked', target, key: 'parked', gate: 'plan', round: 1, why: 'parked at p1 > ## Notes', reopen }, reopen],
+  ]
+  return items.flatMap(([item, acts]) => {
+    const lines = needYouRows(item).filter((r) => OFFERED.test(r)).map((r) => r.replace(OFFERED, ''))
+    if (lines.length !== acts.length) throw new Error(`K6: the ${item.kind} rows offered ${lines.length} commands`)
+    return lines.map((line, i) => ({ line, calls: [['witness', ...acts[i]!.argv]] }))
+  })
 }
 
 const ROWS: Row[] = [
@@ -39,6 +83,12 @@ const ROWS: Row[] = [
   // PowerShell's quoting, pasted into a POSIX shell (Git Bash), is lossy for `'`: inert only
   ['quoter: the Windows form in a POSIX shell', (p) => [{ line: shellLine(['witness', 'x', p], 'win32') }]],
   ["K1 the decision block, a reviewer's anchor", decisionLines],
+  ['K1 the decision block, a hostile target and upstream', (p) => decisionLines(p, `p1${p}`, `up${p}`)],
+  ['K2 exits below and at the bound', exitLines],
+  ['K2 a reopen', (p) => reopenActs('plan', `p1${p}`, parked(p), `up${p}`).map(pasteable)],
+  ['K6 an inbox row', inboxLines],
+  ['K7 a satisfy', (p) => [{ line: satisfyCommand(`p1${p}`, `n${p}`), calls: [['witness', 'satisfy', `p1${p}`, '--need', `n${p}`]] }]],
+  ['K10 a trust grant', (p) => [{ line: grantAct(`p1${p}`, { cmd: p })!.line, calls: [['witness', 'trust', `p1${p}`, '--cmd', p]] }]],
 ]
 
 // Row 239. Where each payload was built to bite (the inventory's "Which payload bites where"), as
