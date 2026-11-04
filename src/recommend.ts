@@ -34,8 +34,9 @@ export interface Decision {
   anchor?: string
 }
 
-// Commands are emitted raw (D120): `esc` would quote the `--note "…"` argument and the
-// line would paste into a shell as an empty note.
+// Commands are emitted raw (D120). Row 239: each is its act's line, which the quoter already
+// made one pasteable command; `esc` would wrap a line holding a `"` in TOON's quotes, and pasted
+// inside them it is one word, not a command.
 export function renderDecision(d: Decision): string[] {
   const n = d.options.length
   const out = [`${d.key}: ${n} option${n === 1 ? '' : 's'} · 1 is recommended`]
@@ -74,14 +75,6 @@ const RESERVED = new Set(['ship', 'design'])
 const blockingAnchors = (r: GateRunEntry): string[] =>
   (r.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking)
     .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
-
-// The CLI's own placeholders, and only those. A finding's anchor is the reviewer's text and
-// may itself read `<SaveBar>`; matching any `<…>` made the prefilled revise "not runnable",
-// so the one fix the CLI recommends was the one act nobody could take.
-// An option reads the same two names off its act, as whole words (act.ts), so an anchor that
-// merely holds `<why>` no longer costs the revise its run: line. This test of the rendered
-// text stays for the arbiter's menu (arbiter.ts), which filters commands as lines.
-export const PLACEHOLDER = /<(why|effort)>/
 
 // Rows 139/203. Every option that offers a command is built from its act: the block prints the
 // act's line, and the option pastes unless a word of it is one the human must fill. Row 239: nor

@@ -5,8 +5,8 @@ import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
-import { gateSpec, liveExits, renderGateRun, type GateSpec } from '../gate.js'
-import { decideView, decideViewLines } from '../decide-view.js'
+import { gateSpec, liveExits, renderGateRun } from '../gate.js'
+import { decideView, decideViewLines, type DecideView } from '../decide-view.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
 import { recommend, renderDecision } from '../recommend.js'
 import { writeDoc } from '../fm.js'
@@ -136,18 +136,6 @@ export function decisionAct(argv: string[]): Result<DecisionAct> {
   })
 }
 
-// A block's rendered `witness decide …` command, read back into the act the verb would
-// parse. The note is the trailing `--note "(.*)"$` — the block's grammar (recommend.ts),
-// where commands are emitted raw (D120) — so a note may itself contain quotes.
-export function actOfCommand(command: string): Result<DecisionAct> {
-  const m = /^witness decide (.*)$/.exec(command)
-  if (!m) return refuse([v('command', 'not-a-decision', command, 'a rendered witness decide <gate> <target> … command')])
-  const noted = / --note "(.*)"$/.exec(m[1]!)
-  const argv = (noted ? m[1]!.slice(0, noted.index) : m[1]!).split(/\s+/).filter((a) => a !== '')
-  const act = decisionAct(argv)
-  return act.ok && noted ? ok({ ...act.value, note: noted[1]! }) : act
-}
-
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin')
   const [gate, target] = positional
@@ -156,7 +144,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
-  if (argv.includes('--show')) return show(ctx, spec, target)
+  if (argv.includes('--show')) return show(ctx, spec.gate, target)
   const act = decisionAct(argv)
   if (!act.ok) { renderRefusal(act.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const code = await applyDecision(ctx, act.value)
@@ -168,11 +156,26 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   return code
 }
 
-// Rows 139/203. The screen is the decide view's lines (src/decide-view.ts); the verb keeps the
-// refusals that come before any state can be read.
-function show(ctx: Ctx, spec: GateSpec, target: string): number {
+// Rows 139/203. The screen is the decide view's lines (src/decide-view.ts).
+function show(ctx: Ctx, gate: string, target: string): number {
+  const view = shownView(ctx, gate, target)
+  if (view === undefined) return EXIT.REFUSED
+  decideViewLines(view).forEach((l) => ctx.out(l))
+  return EXIT.OK
+}
+
+// Row 239 (the plan's B10). The view `--show` prints, after the refusals that come before any
+// state can be read, each rendered to `ctx.err`: `undefined` once one refused. The verb prints
+// its lines, and drive's `decide>` prints the same lines and runs the options' acts it holds,
+// so the block a human answers there is the one they would read in a chat (D143).
+export function shownView(ctx: Ctx, gate: string, target: string): DecideView | undefined {
+  const spec = gateSpec(gate)
+  if (!spec) {
+    renderRefusal([v('gate', 'unknown-gate', gate, 'decompose | plan | implement | ship | design')]).forEach((l) => ctx.err(l))
+    return undefined
+  }
   const rootR = primaryRoot(ctx.cwd)
-  if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return undefined }
   const root = rootR.value
 
   // Hoisted above `--show` (D94): both the anchor rule below and `--show`'s staleness
@@ -180,15 +183,14 @@ function show(ctx: Ctx, spec: GateSpec, target: string): number {
   // cannot read the config cannot honestly report state either, so refusing here — and
   // for `--show` too — is the correct order rather than a regression.
   const cfgR = loadConfig(root)
-  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  decideViewLines(decideView(root, cfgR.value, loadCanon(root), spec.gate, target)).forEach((l) => ctx.out(l))
-  return EXIT.OK
+  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return undefined }
+  return decideView(root, cfgR.value, loadCanon(root), spec.gate, target)
 }
 
 // Row 173. The ONE writer of a disposition. The verb parses argv into an act; every
-// autonomous path (the gate's tail, `next`, drive) builds one from a block's rendered
-// command. One door means one set of refusals: a policy cannot reach a stamp the verb
-// would refuse, and a human cannot reach one the policy would.
+// autonomous path (the gate's tail, `next`, drive) builds one from an option's act, run as
+// its argv (row 239). One door means one set of refusals: a policy cannot reach a stamp the
+// verb would refuse, and a human cannot reach one the policy would.
 export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number> {
   const { gate, target, decision } = act
   const spec = gateSpec(gate)

@@ -6,7 +6,8 @@ import { shellWord, withheldOn, type Platform } from './toon.js'
 // act and a reader of the text are handed the same command. Row 239: the line is printed for the
 // shell its platform pastes into, and pasted there it runs exactly `argv`.
 
-// The CLI's own placeholders, and only those — the names `PLACEHOLDER` matches in a line.
+// The CLI's own placeholders, and only those — the names an act's inputs carry. Row 239: every
+// reader finds them on the act (`inputs`), and none matches them in a printed line.
 export type ActInputName = 'why' | 'effort'
 // `argv[at]` is exactly `<name>`, and `argv[at - 1]` is the flag whose slot it fills.
 export interface ActInput { name: ActInputName; at: number }

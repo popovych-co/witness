@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { cliAct } from './act.js'
+import { cliAct, type Act } from './act.js'
 import { EXIT, main, type Ctx } from './cli.js'
 import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
 import { sessionHash, withoutSession } from './context.js'
@@ -13,6 +13,9 @@ import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop, type ResolvedSpawn } fro
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
 import { releaseDeadTurn } from './runner-lock.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
+import { shownView } from './verbs/decide.js'
+import { decideViewLines } from './decide-view.js'
+import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { isAlive, pause } from './lock.js'
@@ -25,7 +28,7 @@ import { movesFlow } from './progress.js'
 import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
-import { logSafe } from './toon.js'
+import { logSafe, shellWords } from './toon.js'
 import { passthrough, type WorkerLine, type WorkerStream } from './worker-stream.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
@@ -42,7 +45,7 @@ import { needsYou, needsYouToken, needYouRows, WAIT_LABEL, type NeedYou } from '
 // work to a conversation, report the merge, or find nothing to do.
 export type DriveStep =
   | { kind: 'spawn'; home: string; stage?: string; target?: string; model?: string }
-  | { kind: 'decision'; gate?: string; target?: string; block?: string[] }
+  | { kind: 'decision'; gate?: string; target?: string; block?: Decision }
   | { kind: 'conversation'; line: string }
   | { kind: 'merge'; line: string }
   // Row 205. A config command the step runs is untrusted on this machine: the human's grant.
@@ -62,13 +65,11 @@ export type DriveStep =
 // in both modes.
 export function classifyAction(action: NextAction, root: string, opts: { autonomy?: boolean } = {}): DriveStep {
   const { line } = action
-  // Both decision surfaces render `witness decide <gate> <target> …`: tier 2's pending
-  // decision (`--show`) and the bound endgame (`liveExits`, which joins several decide
-  // verbs with ` | `). The first two tokens after the verb are the gate and the target in
-  // both, because `decide`'s own positional parser reads them the same way.
-  if (line.startsWith('witness decide ')) {
-    const [, , gate, target] = line.split(' ')
-    return { kind: 'decision', gate, target: target ?? action.target }
+  // Row 239. A decision is a `decide` act: tier 2's pending decision and the bound endgame both
+  // name `witness decide <gate> <target> --show` (the plan's B8), and the gate and the target are
+  // the act's first two words after the verb, as `decide`'s own positional parser reads them.
+  if (action.act?.argv[0] === 'decide') {
+    return { kind: 'decision', gate: action.act.argv[1], target: action.act.argv[2] ?? action.target }
   }
   // Row 205 (issue #56). A step whose runner, ship lanes or cmd: need this machine does not
   // trust would only be refused inside the session — the refusal journaled nothing, so drive
@@ -874,7 +875,7 @@ export async function driveLoop(
   // the pass leaves for a human, drive sets aside. The pass never waits inside a reviewer
   // (F6: that wait was silent, uncounted and deaf to a signal): an arbiter refused by a usage
   // limit becomes drive's own pause, and the stop is judged again after it.
-  const routed = new Map<string, string>()            // target → the re-run its settle routed
+  const routed = new Map<string, Act>()               // target → the re-run its settle routed (row 239: its act)
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
     for (const r of await settleOwed(ctx, root, cfg, { scope: admits })) {
@@ -896,7 +897,7 @@ export async function driveLoop(
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
         setAside(r.target, { kind: 'decision', line: cliAct('decide', r.gate, r.target, '--show').line, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'routed') {
-        routed.set(r.target, s.line.replace(/^autonomy: re-run owed — /, ''))
+        routed.set(r.target, s.act)
       }
     }
   }
@@ -1064,8 +1065,8 @@ export async function driveLoop(
         // Only then: `routed` keeps a target's re-run for the whole run.
         let next = action.line
         if (step.kind === 'decision' && autonomous && rerun !== undefined) {
-          step = conversationStage({ line: rerun }) ? { kind: 'conversation', line: rerun } : { kind: 'spawn', home: root, target: action.target }
-          next = rerun
+          step = conversationStage({ line: rerun.line }) ? { kind: 'conversation', line: rerun.line } : { kind: 'spawn', home: root, target: action.target }
+          next = rerun.line
         }
         if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
         if (spawns >= ceiling) {
@@ -1197,81 +1198,78 @@ export function detachDrive(root: string, ctx: Ctx, args: readonly string[]): Re
   }
 }
 
-export interface BlockOption {
-  n: number
-  command: string
-  recommended: boolean
-  runnable: boolean
-}
-
-// Read back what `renderDecision` printed (recommend.ts:33): a `<n> · [recommended ·]
-// <depth>[ · not runnable]` tag line, then the command indented under it. Parsed rather
-// than recomputed on purpose — the human decides against the bytes on their screen, so
-// the option drive runs must be the option they read, not a second derivation of it.
-export function parseBlock(lines: string[]): BlockOption[] {
-  const out: BlockOption[] = []
-  lines.forEach((line, i) => {
-    const m = /^(\d+) · (.+)$/.exec(line)
-    if (!m) return
-    const command = (lines[i + 1] ?? '').trim()
-    if (!command.startsWith('witness ')) return
-    const tags = m[2]!.split(' · ')
-    out.push({
-      n: Number(m[1]), command,
-      recommended: tags.includes('recommended'), runnable: !tags.includes('not runnable'),
-    })
-  })
-  return out
-}
-
 // D143's exclusions, verbatim: an obligation-minting override (D122's ledger must not
 // open on an "ok"), terminal acts, and trust grants (D154). `decide` refuses these with
-// `nod-cannot` anyway — drive names the act instead of burning the round-trip.
-function nodExcluded(command: string): string | undefined {
-  if (command.startsWith('witness abandon ')) return 'witness abandon'
-  return ['--override', '--stop', '--trust-cmds'].find((f) => command.includes(f))
+// `nod-cannot` anyway — drive names the act instead of burning the round-trip. Row 239: read
+// off the act's words, so a flag is one only where the act holds it as one.
+function nodExcluded(act: Act): string | undefined {
+  if (act.argv[0] === 'abandon') return 'witness abandon'
+  return ['--override', '--stop', '--trust-cmds'].find((f) => act.argv.includes(f))
 }
 
 const AFFIRMATIONS = new Set(['y', 'yes', 'ok', 'okay', 'go'])
+
+// Row 239 (the plan's B10). An option a human can select at `decide>`: one the CLI built from an
+// act, numbered by its place in the block, so an option without one (a choose block's spec) is
+// skipped and the numbers stay the ones the block printed. The first is the recommendation.
+// `runnable` reads the act's inputs, never `Option.runnable`: drive runs the argv with no shell,
+// so a line Windows withholds from a paste still runs here (the plan's B4).
+interface Selectable { n: number; act: Act; recommended: boolean; runnable: boolean }
+const selectable = (options: readonly Option[]): Selectable[] =>
+  options.flatMap((o, i) => o.act ? [{ n: i + 1, act: o.act, recommended: i === 0, runnable: o.act.inputs.length === 0 }] : [])
 
 // The option verbs a human can name instead of a number — `approve`, `revise`, `stop`,
 // `abandon`, `override`, `repair`. Ambiguity is reported, never guessed: two options can
 // share a verb (a plain approve beside an approve --trust-cmds), and picking one for the
 // human is authoring their decision.
-function byVerb(word: string, options: BlockOption[]): BlockOption[] {
-  return options.filter((o) => o.command.includes(`--${word}`) || o.command.startsWith(`witness ${word} `))
+function byVerb(word: string, options: Selectable[]): Selectable[] {
+  return options.filter((o) => o.act.argv.includes(`--${word}`) || o.act.argv[0] === word)
 }
 
-type Pick = { command: string } | { refuse: string }
+// What drive runs, as argv, and the line it says it runs.
+type Pick = { argv: readonly string[]; line: string } | { refuse: string }
 
-function selectOption(answer: string, options: BlockOption[]): Pick {
-  if (answer.startsWith('witness ')) return { command: answer }    // typed out, byte-for-byte
+// An option with an input is the human's to fill: picked by a nod, a number or its verb, it is
+// refused, never run with the placeholder for its word.
+function taken(o: Selectable): Pick {
+  return o.runnable ? { argv: o.act.argv, line: o.act.line } : { refuse: `option ${o.n} needs an id you must fill in — type it out` }
+}
+
+function selectOption(answer: string, options: Selectable[]): Pick {
+  // Typed out, and read by the grammar its words are quoted for (`shellWords`), so a note typed
+  // as `'it'\''s'` or `"don't ship"` is the one word it says. POSIX quoting alone, by design: on
+  // Windows a word PowerShell's quoting wrote (`'o''b'`) reads back lossily (`ob`), and the
+  // measured Windows pass owns that (residual R1).
+  if (answer.startsWith('witness ')) {
+    const words = shellWords(answer)
+    return words === undefined ? { refuse: 'its quotes do not close — type the command again' } : { argv: words.slice(1), line: answer }
+  }
   if (AFFIRMATIONS.has(answer.toLowerCase())) {
     const rec = options.find((o) => o.recommended)
     if (!rec) return { refuse: 'this block carries no recommendation — name the option (D143)' }
     if (!rec.runnable) return { refuse: 'the recommended option needs an id you must fill in — type it out' }
-    const excluded = nodExcluded(rec.command)
+    const excluded = nodExcluded(rec.act)
     if (excluded !== undefined) {
       return { refuse: `nod-cannot: ${excluded} is never taken on an affirmation — name the option (D143)` }
     }
-    return { command: `${rec.command} --via affirmation` }
+    return { argv: [...rec.act.argv, '--via', 'affirmation'], line: `${rec.act.line} --via affirmation` }
   }
   if (/^\d+$/.test(answer)) {
     const picked = options.find((o) => o.n === Number(answer))
-    if (!picked) return { refuse: `no option ${answer} in this block` }
-    if (!picked.runnable) return { refuse: `option ${answer} needs an id you must fill in — type it out` }
-    return { command: picked.command }
+    return picked === undefined ? { refuse: `no option ${answer} in this block` } : taken(picked)
   }
   const matches = byVerb(answer.toLowerCase(), options)
-  if (matches.length === 1) return { command: matches[0]!.command }
+  if (matches.length === 1) return taken(matches[0]!)
   if (matches.length > 1) {
     return { refuse: `${answer} matches options ${matches.map((o) => o.n).join(', ')} — name the number` }
   }
   return { refuse: `not an option: ${answer} — answer with a number, an option verb, or the command itself` }
 }
 
-// Split a rendered command into argv, honoring the double quotes `--note "…"` arrives in.
-// The block emits commands raw for exactly this reason (recommend.ts:31).
+// Split a WITNESS_BIN command line into argv, honoring double quotes: on Windows `detachArgv`
+// starts the bin it names with no shell, and a first word quoted for its spaces (an install
+// under Program Files) is one word. Row 239: its one use. A printed decision is never read back
+// through it, and a typed answer at `decide>` reads by `shellWords`.
 export function splitArgv(command: string): string[] {
   const argv: string[] = []
   let cur = ''
@@ -1295,30 +1293,30 @@ export function splitArgv(command: string): string[] {
 // gives up is a worse treadmill than the one drive exists to end.
 const ASK_LIMIT = 3
 
-// The judgment stop, in the driver's own terminal. Rendering goes through the decide
-// verb's `--show` so the block a human reads here is byte-identical to the one they would
-// read in a chat session — D143 is one rule across surfaces, not two implementations.
+// The judgment stop, in the driver's own terminal. The screen is the one `decide --show`
+// prints, from the view it prints (`shownView`), so the block a human reads here is
+// byte-identical to the one they would read in a chat session — D143 is one rule across
+// surfaces, not two implementations. Row 239: an answer runs the chosen option's act as argv,
+// from the same view, so no printed line is parsed back to learn what to run.
 //
 // `executed` when the decision ran (the loop derives again), `stands` when the human left it
 // standing, `refused` when the render or the chosen command refused.
 async function resolveDecision(
   step: Extract<DriveStep, { kind: 'decision' }>, action: NextAction, ctx: Ctx,
 ): Promise<'executed' | 'stands' | 'refused'> {
-  const rendered: string[] = []
-  const echo: Ctx = {
-    ...ctx,
-    out: (l) => { rendered.push(l); ctx.out(l) },
-    err: (l) => { rendered.push(l); ctx.err(l) },
-  }
+  let options: readonly Option[] = []
   if (step.block !== undefined) {
-    step.block.forEach((l) => echo.out(l))
+    renderDecision(step.block).forEach((l) => ctx.out(l))
+    options = step.block.options
   } else if (step.gate !== undefined && step.target !== undefined) {
-    const code = await main(echo, ['decide', step.gate, step.target, '--show'])
-    if (code !== EXIT.OK) return 'refused'
+    const view = shownView(ctx, step.gate, step.target)
+    if (view === undefined) return 'refused'
+    decideViewLines(view).forEach((l) => ctx.out(l))
+    if (view.state === 'actionable') options = view.block?.options ?? []
   } else {
     ctx.out(`drive: decision — ${action.line}`)
   }
-  const options = parseBlock(rendered)
+  const picks = selectable(options)
   for (let asked = 0; asked < ASK_LIMIT; asked++) {
     const answer = (await ctx.ask('decide>')).trim()
     // Empty is a human declining to decide now. One re-ask (the prompt may have scrolled
@@ -1328,12 +1326,12 @@ async function resolveDecision(
       ctx.out('help: answer with an option number, an option verb, or a bare y to take the recommendation — empty leaves the stop standing')
       continue
     }
-    const pick = selectOption(answer, options)
+    const pick = selectOption(answer, picks)
     if ('refuse' in pick) { ctx.out(`help: ${pick.refuse}`); continue }
-    ctx.out(`drive: running — ${pick.command}`)
-    const code = await main(ctx, splitArgv(pick.command).slice(1))
+    ctx.out(`drive: running — ${pick.line}`)
+    const code = await main(ctx, [...pick.argv])
     if (code !== EXIT.OK) {
-      ctx.out(`drive: decision refused — ${pick.command}`)
+      ctx.out(`drive: decision refused — ${pick.line}`)
       return 'refused'
     }
     return 'executed'

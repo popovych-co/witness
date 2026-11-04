@@ -1,3 +1,4 @@
+import type { Act } from './act.js'
 import { askOf, askText } from './ask.js'
 import type { Ctx } from './cli.js'
 import { decidedBy } from './autonomy.js'
@@ -7,7 +8,7 @@ import { serializeDoc } from './fm.js'
 import { resolveJudge } from './harness.js'
 import { latestRecap, policyPins, type Entry } from './journal.js'
 import { SESSION_DEFAULT, stageModel, unansweredPin } from './model.js'
-import { PLACEHOLDER, type Decision, type Option } from './recommend.js'
+import type { Decision, Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
 import { effortCanon, effortOf } from './reviewed.js'
@@ -116,14 +117,17 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
 // The design gate is the exception that holds whatever the evidence says: the look is the
 // human's (§3 G2), so no approve of it is ever offered — at the bound or past a spent ladder
 // the arbiter may revise, reset upstream, repair or park, never stamp.
-export function menuFor(block: Decision, run: GateRunEntry): Option[] {
+// Row 239. Read off each option's act, never its printed line: an option the CLI built from no
+// act is not offered, a word is a flag only where the act holds it as one, and the one input the
+// arbiter may fill is the `<why>` slot (settle fills it through argv).
+export function menuFor(block: Decision, run: GateRunEntry): Array<Option & { act: Act }> {
   const failed = run.checks.filter((c) => !c.ok)
   const approveBarred = run.gate === 'design' || (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))
-  return block.options.filter((o) =>
-    o.command.startsWith('witness decide ') &&
-    !/ --trust-cmds\b/.test(o.command) &&
-    !PLACEHOLDER.test(o.command.replace(' --note "<why>"', '')) &&
-    !(approveBarred && / --approve\b/.test(o.command)))
+  return block.options.filter((o): o is Option & { act: Act } =>
+    o.act?.argv[0] === 'decide' &&
+    !o.act.argv.includes('--trust-cmds') &&
+    o.act.inputs.every((i) => i.name === 'why') &&
+    !(approveBarred && o.act.argv.includes('--approve')))
 }
 
 const anchorText = (a: string | { scope: string }) => (typeof a === 'string' ? a : `omission:${a.scope}`)

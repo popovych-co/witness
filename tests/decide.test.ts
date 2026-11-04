@@ -7,7 +7,7 @@ import { registerGate, runGate, type GateInput } from '../src/gate.js'
 import { notePrefill, type DecisionEntry, type GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { actOfCommand, applyDecision, decisionAct } from '../src/verbs/decide.js'
+import { applyDecision, decisionAct } from '../src/verbs/decide.js'
 import { SPEC_META, approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const BLOCKING = {
@@ -616,12 +616,14 @@ describe('applyDecision — the one door (A4)', () => {
     expect(decisions(repo)).toEqual([])
   })
 
-  it('reads a rendered command into the same act the verb parses', () => {
-    expect(actOfCommand('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1 "quoted""'))
-      .toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: '1 blocking finding: p1 > ## Step: s1 "quoted"' }))
-    expect(actOfCommand('witness decide implement p1 --approve --override')).toEqual(ok({ gate: 'implement', target: 'p1', decision: 'approve', override: true }))
-    expect(actOfCommand('witness gate plan p1').ok).toBe(false)
+  it('parses --via affirmation into the act the verb hands the one door', () => {
     expect(decisionAct(['plan', 'p1', '--revise', '--note', 'x', '--via', 'affirmation'])).toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: 'x', selected: 'affirmation' }))
+  })
+  // Row 239. settle, the arbiter and drive run an option's argv, so nothing reads a printed
+  // decision back into one: the readers that did are gone.
+  it('no reader parses a printed decision back (row 239)', async () => {
+    expect(Object.keys(await import('../src/verbs/decide.js'))).not.toContain('actOfCommand')
+    expect(Object.keys(await import('../src/drive.js'))).not.toContain('parseBlock')
   })
 })
 

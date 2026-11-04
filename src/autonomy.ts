@@ -1,3 +1,4 @@
+import { cliAct, type Act } from './act.js'
 import type { Config } from './config.js'
 import type { Entry } from './journal.js'
 import type { Decision } from './recommend.js'
@@ -38,17 +39,20 @@ export function unmetNeedLine(needs: ReadonlyArray<{ text: string; satisfy: stri
   return keptStopLine('unmet-need', [...needs.map((u) => u.text), ...needs.map((u) => u.satisfy)].join(' · '))
 }
 
-// Row 171. What the policy does with a stop: take a rendered command (a `witness decide`
-// the CLI executes, or a re-run it only names), hand the stop to the arbiter, or leave it
-// for a human because it is a kept stop.
-export type Policy = { kind: 'take'; command: string } | { kind: 'arbiter' } | { kind: 'human'; stop: KeptStop }
+// Row 171. What the policy does with a stop: take an act (a `witness decide` the CLI
+// executes, or a re-run it only names), pick a spec, hand the stop to the arbiter, or leave it
+// for a human because it is a kept stop. Row 239 (the plan's B7): an act, run as its argv, and
+// never a printed line read back; `pick` answers a choose block, whose options name specs, not
+// commands (`readyChoice`).
+export type Policy = { kind: 'take'; act: Act } | { kind: 'pick'; id: string } | { kind: 'arbiter' } | { kind: 'human'; stop: KeptStop }
 
 // `untrusted` is caller-resolved — the commands a failed check of `run` names that the repo
 // STILL does not trust — so this module never reads allow.json (D154's precedent for
 // `untrustedCmds`).
 export type StopFacts =
   | { at: 'gate'; gate: string; target: string; entries: Entry[]; run: GateRunEntry; block: Decision; untrusted: readonly string[] }
-  | { at: 'choose' | 'recover'; block: Decision }
+  | { at: 'choose'; block: Decision }
+  | { at: 'recover'; block: Decision }
   | { at: 'start'; target: string; unmet: readonly string[] }
 
 // The rules whose recommendation the CLI takes as it stands (design §7 A2's table). Each is
@@ -63,18 +67,25 @@ const TAKEN = new Set(['blocking-here', 'blocking-parent', 'bound-recurrence', '
 // would approve the one look the user kept for themselves.
 export function policyFor(facts: StopFacts): Policy {
   if (facts.at === 'start') return { kind: 'human', stop: 'unmet-need' }
-  if (facts.at !== 'gate') return { kind: 'take', command: facts.block.options[0]!.command }
+  if (facts.at === 'choose') return { kind: 'pick', id: facts.block.options[0]!.command }
+  // `recoverChoice` builds every option from an act; one without an act is no command to take.
+  if (facts.at === 'recover') {
+    const act = facts.block.options[0]?.act
+    return act !== undefined ? { kind: 'take', act } : { kind: 'arbiter' }
+  }
 
   const { gate, target, entries, run, block, untrusted } = facts
   const failed = run.checks.filter((c) => !c.ok)
   const blocks = (run.verdicts ?? []).some((rv) => rv.findings.some((f) => f.blocking))
   const clean = failed.length === 0 && !blocks
-  // Option 1 only when it pastes: a placeholder (`<effort>`) means no upstream resolved,
-  // and filling an id is exactly what the arbiter may never do either — but it can pick
-  // another option, so the stop goes there rather than to a command that would refuse.
+  // Option 1 only when it has no word to fill: a placeholder (`<effort>`) means no upstream
+  // resolved, and filling an id is exactly what the arbiter may never do either — but it can
+  // pick another option, so the stop goes there rather than to a command that would refuse.
+  // Row 239 (the plan's B4): read off the act's inputs, not `runnable`, which Windows also
+  // clears for a line it will not offer to paste; the CLI runs the argv with no shell.
   const first = (): Policy => {
-    const o = block.options[0]
-    return o !== undefined && o.runnable ? { kind: 'take', command: o.command } : { kind: 'arbiter' }
+    const act = block.options[0]?.act
+    return act !== undefined && act.inputs.length === 0 ? { kind: 'take', act } : { kind: 'arbiter' }
   }
 
   if (untrusted.length > 0) return { kind: 'human', stop: 'trust-grant' }
@@ -84,13 +95,13 @@ export function policyFor(facts: StopFacts): Policy {
   if (block.rule === 'stale-below-bound' || block.rule === 'malformed-rerun') return first()
   // Row 212. A 0.25.x round that fell back to a model nobody pinned is no verdict to weigh:
   // re-run it on the pin (free — it never spent the budget), ahead of every arbiter arm.
-  if (fellBack(run)) return { kind: 'take', command: `witness gate ${gate} ${target}` }
+  if (fellBack(run)) return { kind: 'take', act: cliAct('gate', gate, target) }
   if (gate === 'design' && clean) return { kind: 'human', stop: 'design-look' }
   if ((gate === 'ship' || gate === 'decompose') && clean && run.standing !== undefined) return { kind: 'arbiter' }
   // A trust failure granted since the stop: the check never ran, so the fix is a re-run,
   // not a revise — sending the author back would have them "fix" a command nobody judged.
   if (failed.some((c) => (c.untrusted?.length ?? 0) > 0) && !boundReached(entries, gate)) {
-    return { kind: 'take', command: `witness gate ${gate} ${target}` }
+    return { kind: 'take', act: cliAct('gate', gate, target) }
   }
   if (block.rule === 'checks-failed') {
     // amendment-ack is the one check an approve clears, so approving is a judgment about the

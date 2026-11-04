@@ -52,6 +52,20 @@ it('the scope stop goes to the arbiter, which approves the slicing (A2 · A3)', 
   expect(asked).toContain('1. witness decide decompose auth-hardening --approve')
 })
 
+// Row 239. The one placeholder the arbiter may fill (A3) is filled in its option's argv, not in a
+// printed line read back, so a note holding a quote is journaled exactly as the arbiter wrote it.
+it('the arbiter fills the <why> slot through argv (row 239)', async () => {
+  const { repo, scenario } = await scoped()
+  putVerdict(scenario, { choice: 2, reason: 'the cut ships g1 in pieces', note: 'it\'s wrong' }, 'arbiter')
+  const h = capture(repo.root, scenario)
+  expect(await runGate(h.ctx, 'decompose', 'auth-hardening', F)).toBe(1)
+  const asked = readFileSync(join(callFor(scenario, 'arbiter')!, 'stdin'), 'utf8')
+  expect(asked).toContain('2. witness decide decompose auth-hardening --revise --note "<why>"')
+  expect(decisions(repo.root, 'auth-hardening').at(-1)).toMatchObject({
+    decision: 'revise', selected: 'arbiter', rule: 'reserved-stop-clean', note: "it's wrong", reason: 'the cut ships g1 in pieces',
+  })
+})
+
 it('the policy revises a blocking finding and asks nobody (A2)', async () => {
   const repo = await plannedRepo(); const scenario = fakeScenario(); putVerdict(scenario, PLAN_BLOCKING)
   const h = capture(repo.root, scenario)

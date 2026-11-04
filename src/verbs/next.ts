@@ -277,8 +277,9 @@ export interface NextAction {
   // D121. Ranked options for a choice the ROUTING row cannot express: `next` names one
   // action, and where several are equally routable the human is choosing, not being told.
   // Printed after the contiguous next:/stage:/target:/note: unit the stage skills read
-  // verbatim, so it adds a screen rather than changing one.
-  block?: string[]
+  // verbatim, so it adds a screen rather than changing one. Row 239 (the plan's B8): the block
+  // itself, rendered where it prints, so drive runs its options' acts and reads no line back.
+  block?: Decision
   ask?: { id: string; text: string }   // row 176: the ask a brainstorm action answers
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
@@ -829,14 +830,15 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     const choice = recoverChoice(root, txn)
     // Row 173. Under autonomy the fork is routing, not a disposition: the policy takes the
     // CLI's own pick and the commit it causes is what the journal keeps.
+    // Row 239. Option 1's line from its act (`recoverChoice` builds every option from one), and
+    // from its command should it carry none.
+    const first = choice.options[0]!
+    const line = first.act !== undefined ? runs(first.act) : { line: first.command }
     if (cfg.autonomy) {
       const p = policyFor({ at: 'recover', block: choice })
-      return {
-        line: p.kind === 'take' ? p.command : choice.options[0]!.command,
-        note: `policy took 1 of ${choice.options.length} — ${choice.rule}`,
-      }
+      return { ...(p.kind === 'take' ? runs(p.act) : line), note: `policy took 1 of ${choice.options.length} — ${choice.rule}` }
     }
-    return { ...runs(choice.options[0]!.act!), block: renderDecision(choice) }
+    return { ...line, block: choice }
   }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
     return runs(cliAct('check'))
@@ -1032,7 +1034,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     if (cfg.autonomy && planless.length > 1) {
       const choice = readyChoice(canon, bookable.length > 0 ? bookable : planless)
       const p = policyFor({ at: 'choose', block: choice })
-      const id = p.kind === 'take' ? p.command : choice.options[0]!.command
+      const id = p.kind === 'pick' ? p.id : choice.options[0]!.command
       const act = planWriteAction(root, efforts, nextPlanId(plans, id), id, id)
       return { ...act, ...noteOf(act.note, `${planless.length} ready — policy took ${id} (${choice.rule})`) }
     }
@@ -1042,7 +1044,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // The note said `multiple ready — choose: a b c`, which is a list, not a ranking: it
     // named the alternatives without saying which one to take or what taking another costs.
     const choice = readyChoice(canon, planless)
-    return { ...act, ...noteOf(act.note, `${planless.length} ready — ranked below`), block: renderDecision(choice) }
+    return { ...act, ...noteOf(act.note, `${planless.length} ready — ranked below`), block: choice }
   }
 
   // plans-first: every written plan gates before any plan starts or advances —
@@ -1230,7 +1232,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // own stops: two drive sessions settling repo-wide would both judge one stop.
   const marked = driveChild(ctx.env)
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
-  let routed: { command: string; target: string } | undefined
+  // Row 239 (the plan's B9): the re-run as its act, never its line read back.
+  let routed: { act: Act; target: string } | undefined
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
@@ -1238,9 +1241,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     for (const r of reports) {
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)
-      if (routed === undefined && r.settled.kind === 'routed') {
-        routed = { command: r.settled.line.replace(/^autonomy: re-run owed — /, ''), target: r.target }
-      }
+      if (routed === undefined && r.settled.kind === 'routed') routed = { act: r.settled.act, target: r.target }
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1274,7 +1275,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // verdict, but the gate that would re-judge it is runnable now.
   if (routed !== undefined && action.line.startsWith('witness decide ')) {
     // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
-    action = { line: routed.command, target: routed.target, ...(routed.command.startsWith('witness gate design ') ? { stage: 'design' } : {}) }
+    const design = routed.act.argv[0] === 'gate' && routed.act.argv[1] === 'design'
+    action = { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
   }
   action = withDeferralNote(root, canon, action)
   // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the
@@ -1324,7 +1326,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const draft = conversationDraft(root, action)
   if (draft !== undefined) ctx.out(kv('draft', draft))
   if (action.note) ctx.out(kv('note', action.note))
-  if (action.block) action.block.forEach((l) => ctx.out(l))
+  if (action.block) renderDecision(action.block).forEach((l) => ctx.out(l))
   // Whether this session is already in `home:` is a fact the CLI holds both halves of, so
   // it answers it here rather than printing the handoff and leaving the comparison to the
   // model. A `run:` line that cds to the directory it was printed in is row 129's defect —

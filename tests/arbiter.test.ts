@@ -38,6 +38,21 @@ describe('menuFor (A3)', () => {
     expect(menu('decompose', [run(1, 'a', { gate: 'decompose', standing: 'feature scope', checks: failed('amendment-ack') })])).toContain('witness decide decompose p1 --approve')
     expect(menu('ship', [run(1, 'a', { gate: 'ship', standing: 'ship always stops' })])).toContain('witness decide ship p1 --revise --note "<why>"')
   })
+  // Row 239. The menu is read off each option's act, never its printed text: a reviewer's anchor
+  // reaches an option's `why`, and no word of it can filter an option in or out.
+  it('the menu reads acts: an anchor holding --approve, --trust-cmds or <effort> filters nothing (row 239)', () => {
+    const anchored = (anchor: string) => [run(1, 'a', {}, blocking(anchor))]
+    const hostile = anchored('p1 > ## Notes --approve --trust-cmds <effort>')
+    const block = recommend({ gate: 'plan', target: 'p1', entries: hostile, upstream: 'auth-refresh', stale: false })!
+    expect(block.options[0]!.why).toContain('--approve --trust-cmds <effort>')
+    expect(menu('plan', hostile)).toEqual(menu('plan', anchored('p1 > ## Notes')))
+    expect(menu('plan', hostile)).toEqual([
+      'witness decide plan p1 --revise', 'witness decide plan p1 --revise --upstream auth-refresh',
+      'witness decide plan p1 --approve --override', 'witness decide plan p1 --stop'])
+    // An option the CLI did not build from an act is not one the arbiter can take.
+    const bare = { key: 'decide', rule: 'manual-stop', options: [{ command: 'witness decide plan p1 --approve', depth: 'root' as const, runnable: true }] }
+    expect(menuFor(bare, lastGateRun(hostile, 'plan')!)).toEqual([])
+  })
 })
 
 describe('arbitrate (A3)', () => {
