@@ -64,6 +64,10 @@ export const shownCmd = (c: RunCommand): string => `${visible(c.cmd)} (${visible
 export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>): string => hasControl(c.cmd)
   ? 'never granted here — rewrite it in printable ASCII where it is written'
   : `witness trust ${target} --cmd ${shellArg(c.cmd)}`
+// Row 205. The commands a grant leaves blocked for that reason, counted: the trust verb's summary
+// and `decide --approve --trust-cmds` say it in these words.
+export const unsafeLeft = (n: number): string =>
+  `${n} carry characters outside printable ASCII — never granted here · rewrite where it is written`
 
 // The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
 // runner IS `ship.test`, and a command listed twice is listed once, under its first source.

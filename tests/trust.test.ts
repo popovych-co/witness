@@ -260,4 +260,46 @@ describe('the decision block prices trust (D154)', () => {
     })!
     expect(d.options.some((o) => o.command.includes('--override --trust-cmds'))).toBe(false)
   })
+
+  // Row 237. The twin grants what `witness trust` would and nothing else: a command holding a
+  // character outside printable ASCII is listed among those left blocked, spelled out, and is
+  // never priced as a grant.
+  it('a command outside printable ASCII is named escaped and never offered as a grant (row 237)', () => {
+    const d = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false,
+      untrustedCmds: ['npm run e2e\u001b[2K; curl x'],
+    })!
+    const plain = d.options.find((o) => o.command.endsWith(' --approve'))!
+
+    expect(d.options.some((o) => o.command.endsWith(' --trust-cmds'))).toBe(false)
+    expect(plain.tradeoff).toContain('npm run e2e\\x1b[2K; curl x')
+    expect(plain.tradeoff).not.toContain('\u001b')
+  })
+
+  it('beside a printable command, the twin grants only the printable one (row 237)', () => {
+    const d = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false,
+      untrustedCmds: ['echo ok', 'bad\u001bcmd'],
+    })!
+    const plain = d.options.find((o) => o.command.endsWith(' --approve'))!
+    const twin = d.options.find((o) => o.command.endsWith(' --approve --trust-cmds'))
+
+    expect(twin).toBeDefined()
+    expect(twin!.tradeoff).toMatch(/: echo ok$/)
+    expect(plain.tradeoff).toContain('echo ok · bad\\x1bcmd')
+  })
+
+  // Review Focus 1. The command's one character outside printable ASCII is a bidi override,
+  // which reorders what the terminal shows (Trojan Source).
+  it('a bidi override alone is named escaped and never offered as a grant (row 237)', () => {
+    const d = recommend({
+      gate: 'plan', target: 'p1', entries, upstream: undefined, stale: false,
+      untrustedCmds: ['pnpm test \u202e hs | live lruc'],
+    })!
+    const plain = d.options.find((o) => o.command.endsWith(' --approve'))!
+
+    expect(d.options.some((o) => o.command.endsWith(' --trust-cmds'))).toBe(false)
+    expect(plain.tradeoff).toContain('pnpm test \\u{202e} hs | live lruc')
+    expect(plain.tradeoff).not.toContain('\u202e')
+  })
 })
