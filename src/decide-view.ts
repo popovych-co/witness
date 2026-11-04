@@ -28,11 +28,10 @@ export type Disposition = Pick<DecisionEntry, 'decision' | 'selected' | 'arbiter
 // one no act: the gate is terminal there. An actionable run is pending a decision or revised by
 // its author; `block` ranks its options, and with no block `exits` is the whole live set.
 // The view holds what the text prints, as printed. Only `run.findings` spells a reviewer's anchor
-// and claim out (logSafe); the same anchor reaches the model raw (R5/R17) in a note prefill (an
-// option's `command`, `act.argv` and `act.line`, and the exits' note act), an option's `why`,
-// `block.anchor` and a `run.demoted` anchor. A disposition's `note` and `reason` and a pin's `text`
-// are kept as printed too. A renderer must spell them out (spec §4.2); the UI runs an act's `argv`,
-// never its `line`.
+// and claim out (logSafe); the same anchor reaches the model raw (R5/R17) in an option's `why`,
+// `block.anchor` and a `run.demoted` anchor, and in no act: since row 239 the revise carries no
+// note. A disposition's `note` and `reason` and a pin's `text` are kept as printed too. A renderer
+// must spell them out (spec §4.2); the UI runs an act's `argv`, never its `line`.
 export type DecideView = { gate: string; target: string; autonomy: boolean } & (
   | { state: 'no-runs' }
   | { state: 'reopened'; by: { gate: string; artifact: string; round: number }; note?: string; last: LastRun; disposition?: Disposition; exits: Act[] }

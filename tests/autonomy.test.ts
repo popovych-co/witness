@@ -69,11 +69,11 @@ const take = (command: string) => ({ kind: 'take', command })
 const ARBITER = { kind: 'arbiter' }
 
 it('takes the recommendation where the table says the CLI takes it', () => {
-  expect(policy('plan', [run(1, 'a', {}, blocking('p1 > ## Step: s1'))])).toEqual(take('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1"'))
+  expect(policy('plan', [run(1, 'a', {}, blocking('p1 > ## Step: s1'))])).toEqual(take('witness decide plan p1 --revise'))
   expect(policy('plan', [run(1, 'a', {}, blocking('auth-refresh > ## Behavior'))])).toEqual(take('witness decide plan p1 --revise --upstream auth-refresh'))
   expect(policy('plan', [run(1, 'a', {}, blocking('S')), run(2, 'b', {}, blocking('S'))])).toEqual(take('witness decide plan p1 --revise --upstream auth-refresh'))
   expect(policy('plan', [run(1, 'a', {}, NIT)])).toEqual(take('witness decide plan p1 --approve'))
-  expect(policy('plan', [run(1, 'a', { checks: failed('drift-lane') })])).toEqual(take('witness decide plan p1 --revise --note "failed checks: drift-lane"'))
+  expect(policy('plan', [run(1, 'a', { checks: failed('drift-lane') })])).toEqual(take('witness decide plan p1 --revise'))
   expect(policy('plan', [run(1, 'a', {}, blocking('S'))], { stale: true })).toEqual(take('witness gate plan p1'))
 })
 it('sends judgment to the arbiter', () => {
@@ -89,13 +89,13 @@ it('keys standing stops by gate before rule (E8)', () => {
   expect(policy('decompose', at('decompose'))).toEqual(ARBITER)
   expect(policy('design', at('design'))).toEqual({ kind: 'human', stop: 'design-look' })
   expect(policy('design', at('design', NIT))).toEqual({ kind: 'human', stop: 'design-look' })
-  expect(policy('design', at('design', blocking('design#save-bar')))).toEqual(take('witness decide design p1 --revise --note "1 blocking finding: design#save-bar"'))
-  expect(policy('design', at('design', [], { checks: failed('template') }))).toEqual(take('witness decide design p1 --revise --note "failed checks: template"'))
+  expect(policy('design', at('design', blocking('design#save-bar')))).toEqual(take('witness decide design p1 --revise'))
+  expect(policy('design', at('design', [], { checks: failed('template') }))).toEqual(take('witness decide design p1 --revise'))
 })
 it('routes failed checks by kind', () => {
   expect(policy('decompose', [run(1, 'a', { gate: 'decompose', standing: 'feature scope', checks: failed('amendment-ack') })])).toEqual(ARBITER)
   expect(policy('decompose', [run(1, 'a', { gate: 'decompose', checks: failed('amendment-ack', 'goal-coverage') })]))
-    .toEqual(take('witness decide decompose p1 --revise --note "failed checks: amendment-ack, goal-coverage"'))
+    .toEqual(take('witness decide decompose p1 --revise'))
   const blocked = (round: number, findings: unknown[] = []) => run(round, `s${round}`, {
     gate: 'implement', checks: [{ name: 'drift-lane', ok: false, detail: 'ac-smoke:fail', untrusted: ['pnpm verify'] }] }, findings)
   expect(policy('implement', [blocked(1, blocking('src/a.ts'))], { untrusted: ['pnpm verify'] })).toEqual({ kind: 'human', stop: 'trust-grant' })
@@ -144,5 +144,5 @@ it('never offers an override decide would refuse as stale (F4)', () => {
 })
 it('an anchor that reads like a placeholder still leaves the CLI\'s revise runnable (F13)', () => {
   expect(policy('plan', [run(1, 'a', {}, blocking('p1 > ## Rendering <SaveBar>'))]))
-    .toEqual(take('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Rendering <SaveBar>"'))
+    .toEqual(take('witness decide plan p1 --revise'))
 })

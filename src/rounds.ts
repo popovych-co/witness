@@ -284,12 +284,13 @@ export function ladderSpent(entries: Entry[], gate: string, anchor: string): boo
 const PREFILL_MAX = 120
 const PREFILL_ANCHORS = 3
 
-// What goes inside `--revise --note "…"`. An index of the anchoring run, never a judgment:
-// the author already receives the whole verdict in `decide`'s revise-context, so this
-// exists to make the command runnable (D129), not to tell them anything new. `<why>` is
-// the honest fallback when the run holds no facts — a clean standing stop, where the
-// reason is the human's and the CLI has none. That placeholder is removed in 0.11.0 by the
-// flagged-option rendering, which needs the option-row block to express it.
+// Row 239. What `decide` journals as the note of a bare `--revise`. An index of the anchoring
+// run, never a judgment: the author already receives the whole verdict in `decide`'s
+// revise-context. It no longer rides a command. As `--note "…"` (D129) it carried a
+// reviewer's anchor onto a line a human pastes, so the revise is offered bare and `decide`
+// derives the note from the same journal. `<why>` means the run holds no facts — a clean
+// standing stop, where the reason is the human's and the CLI has none — and there the revise
+// keeps its `<why>` slot (`reviseAct`), and a bare one journals no note.
 export function notePrefill(entries: Entry[], gate: string): string {
   const last = lastGateRun(entries, gate)
   if (!last) return '<why>'
@@ -309,6 +310,15 @@ export function notePrefill(entries: Entry[], gate: string): string {
   return text.slice(0, PREFILL_MAX)
 }
 
+// Row 239. The revise an exits line or a block offers, carrying no text from a reviewer. Where
+// the run holds facts it is a bare `--revise`, and `decide` journals the prefill itself; where
+// it holds none it keeps the `<why>` slot the human fills, printed as it always was.
+export function reviseAct(gate: string, target: string, entries: Entry[]): Act {
+  return notePrefill(entries, gate) !== '<why>'
+    ? cliAct('decide', gate, target, '--revise')
+    : cliAct('decide', gate, target, '--revise', '--note', '<why>')
+}
+
 // Which decisions are legal RIGHT NOW is a pure function of journal state, so it lives
 // where the state is — it was in `gate.ts`, which `next.ts` cannot import back (gate.ts
 // already imports next.ts), and that one-way edge is precisely why `next` grew three
@@ -325,7 +335,7 @@ export function exitActs(
 ): Act[] {
   const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
   const up = upstream === undefined ? [] : [d('--revise', '--upstream', upstream)]
-  const note = d('--revise', '--note', notePrefill(entries, gate))
+  const note = reviseAct(gate, target, entries)
   // The bound outranks staleness: at the bound the gate short-circuits and will not run
   // again (gate.ts), so "re-gate" is the D67 lie whatever the sha says. Stale content only
   // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery

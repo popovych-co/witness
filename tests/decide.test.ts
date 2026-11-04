@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { registerGate, runGate, type GateInput } from '../src/gate.js'
-import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
+import { notePrefill, type DecisionEntry, type GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { actOfCommand, applyDecision, decisionAct } from '../src/verbs/decide.js'
@@ -14,6 +14,10 @@ const BLOCKING = {
   coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
   findings: [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'expiry unbounded' }],
 }
+// Row 239. The synthetic gate's upstream is its target, so BLOCKING's anchor reads as the
+// parent's (`blocking-parent`). A heading with no doc id is the one anchor inside it.
+const HERE = { ...BLOCKING, findings: [{ blocking: true, anchor: '## Behavior', claim: 'expiry unbounded' }] }
+const CLEAN = { ...BLOCKING, findings: [] }
 
 // Re-registers on every call (not once-guarded): repo.cli(['decide', ...]) dynamically
 // imports gates/index.js, which registers the real 'plan' gate and would otherwise
@@ -49,14 +53,14 @@ function synthetic() {
   })
 }
 
-async function stoppedGate() {
+async function stoppedGate(verdict: unknown = BLOCKING, manual = false) {
   synthetic()
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   const scenario = fakeScenario()
-  putVerdict(scenario, BLOCKING)
+  putVerdict(scenario, verdict)
   const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-  await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+  await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual })
   return { repo, scenario, ctx }
 }
 const decisions = (repo: { root: string }, id = 'auth-refresh') =>
@@ -85,7 +89,7 @@ async function fallenBackGate() {
 }
 
 // three stopped rounds → bound reached, third round pending
-async function boundRepo() {
+async function boundRepo(verdicts: unknown[] = []) {
   const { repo } = await stoppedGate()
   for (const round of [1, 2]) {
     appendEntry(repo.root, 'auth-refresh', {
@@ -94,7 +98,7 @@ async function boundRepo() {
     appendEntry(repo.root, 'auth-refresh', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
       run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-      model: 'm', checks: [], verdicts: [], outcome: 'stopped',
+      model: 'm', checks: [], verdicts, outcome: 'stopped',
     })
   }
   return repo
@@ -268,6 +272,55 @@ describe('witness decide', () => {
     const show = await repo.cli(['decide', 'plan', 'auth-refresh', '--show'])
     expect(show.code).toBe(0)
     expect(show.stdout).toContain('expiry unbounded')
+  })
+
+  // Row 239. The block offers a bare `--revise` where the run holds facts, so the note it used
+  // to carry is the one `decide` journals; a run with none journals no note, as before.
+  it('a bare --revise journals the prefill the block used to carry (row 239)', async () => {
+    const { repo } = await stoppedGate()
+    const prefill = notePrefill(readStream(repo.root, 'auth-refresh'), 'plan')
+    expect(prefill).toBe('1 blocking finding: auth-refresh > ## Behavior')
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise'])
+    expect(r.code).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'revise', note: prefill })
+    expect(r.stdout).toContain('note: 1 blocking finding:')
+  })
+
+  it('a bare --revise on a run with no facts journals no note (row 239)', async () => {
+    const { repo } = await stoppedGate(CLEAN, true)
+    expect(notePrefill(readStream(repo.root, 'auth-refresh'), 'plan')).toBe('<why>')
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise'])
+    expect(r.code).toBe(0)
+    expect(decisions(repo).at(-1)!.decision).toBe('revise')
+    expect(decisions(repo).at(-1)).not.toHaveProperty('note')
+  })
+
+  // Each run below holds facts, so a derived note would show: none may.
+  it('--note, --upstream and --repair journal what they did before (row 239)', async () => {
+    const noted = (await stoppedGate()).repo
+    expect((await noted.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'fixit'])).code).toBe(0)
+    expect(decisions(noted).at(-1)!.note).toBe('fixit')
+
+    const up = (await stoppedGate()).repo
+    expect(notePrefill(readStream(up.root, 'auth-refresh'), 'plan')).not.toBe('<why>')
+    expect((await up.cli(['decide', 'plan', 'auth-refresh', '--revise', '--upstream', 'auth-refresh'])).code).toBe(0)
+    const child = decisions(up).at(-1)!
+    const reopen = decisions(up, up.effort).find((d) => d.caused_by !== undefined)!
+    expect(child.decision).toBe('revise-upstream')
+    expect(child).not.toHaveProperty('note')
+    expect(reopen).not.toHaveProperty('note')
+
+    const bound = await boundRepo([{ reviewer: 'plan-critic', coverage: [], findings: BLOCKING.findings }])
+    expect(notePrefill(readStream(bound.root, 'auth-refresh'), 'plan')).not.toBe('<why>')
+    expect((await bound.cli(['decide', 'plan', 'auth-refresh', '--revise', '--repair'])).code).toBe(0)
+    expect(decisions(bound).at(-1)).toMatchObject({ decision: 'revise', repair: true })
+    expect(decisions(bound).at(-1)).not.toHaveProperty('note')
+  })
+
+  it('recommended is option 1\'s verb, read off its argv (row 239)', async () => {
+    const { repo } = await stoppedGate(HERE)
+    expect((await repo.cli(['decide', 'plan', 'auth-refresh', '--stop'])).code).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'stop', rule: 'blocking-here', recommended: 'revise' })
   })
 
   it('at the bound: revise refused, approve needs --override', async () => {

@@ -16,7 +16,7 @@ const D: Decision = {
   anchor: 'p1 > ## Step: s1',
   options: [
     {
-      command: 'witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1"',
+      command: 'witness decide plan p1 --revise',
       depth: 'root', runnable: true,
       why: '1 blocking finding anchored inside this plan; round 1 of 3',
     },
@@ -36,7 +36,7 @@ describe('renderDecision', () => {
     const lines = renderDecision(D)
     expect(lines[0]).toBe('decide: 3 options · 1 is recommended')
     expect(lines[1]).toBe('1 · recommended · root')
-    expect(lines[2]).toBe('   witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1"')
+    expect(lines[2]).toBe('   witness decide plan p1 --revise')
     expect(lines[3]).toBe('   why: 1 blocking finding anchored inside this plan; round 1 of 3')
   })
 
@@ -157,7 +157,7 @@ describe('the rule table is ordered and total', () => {
   it('blocking-here: one blocking finding anchored in this artifact', () => {
     const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')]))!
     expect(d.rule).toBe('blocking-here')
-    expect(d.options[0]!.command).toContain('--revise --note')
+    expect(d.options[0]!.command).toContain('--revise')
     expect(d.options[0]!.depth).toBe('root')
     expect(d.anchor).toBe('p1 > ## Step: s1')
   })
@@ -170,7 +170,7 @@ describe('the rule table is ordered and total', () => {
     expect(d.options[0]!.tradeoff).toContain('round 2 of 3')
     expect(d.options.map((o) => o.command)).toEqual([
       'witness gate plan p1',
-      'witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1"',
+      'witness decide plan p1 --revise',
       'witness decide plan p1 --revise --upstream auth-refresh',
       'witness decide plan p1 --stop',
     ])
@@ -218,7 +218,7 @@ describe('the rule table is ordered and total', () => {
     const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1'), run(2, 'b', 'p1 > ## Step: s1')]))!
     expect(d.rule).toBe('anchor-recurrence-2')
     expect(d.options[0]!.command).toContain('--revise --upstream auth-refresh')
-    expect(d.options[1]!.command).toContain('--revise --note')
+    expect(d.options[1]!.command).toContain('--revise')
   })
 
   it('ladder-spent: upstream already taken for this anchor', () => {
@@ -256,7 +256,7 @@ describe('the rule table is ordered and total', () => {
   it('checks-failed: a failed check with no blocking finding recommends revise', () => {
     const d = recommend(ctxFor([failedRun()]))!
     expect(d.rule).toBe('checks-failed')
-    expect(d.options[0]!.command).toBe('witness decide plan p1 --revise --note "failed checks: drift-lane"')
+    expect(d.options[0]!.command).toBe('witness decide plan p1 --revise')
     expect(d.options[0]!.why).toContain('drift-lane')
     expect(d.options[0]!.why).not.toContain('--manual')
     expect(d.options[0]!.why).not.toContain(',')
@@ -284,7 +284,7 @@ describe('the rule table is ordered and total', () => {
     expect(d.options[0]!.depth).toBe('root')
     expect(d.options[0]!.why).toContain('amendment-ack')
     expect(d.options[0]!.why).not.toContain(',')
-    expect(d.options.some((o) => o.command.startsWith('witness decide decompose p1 --revise --note'))).toBe(true)
+    expect(d.options.some((o) => o.command.startsWith('witness decide decompose p1 --revise'))).toBe(true)
   })
 
   it('checks-failed: amendment-ack beside another failed check still leads with revise', () => {
@@ -292,7 +292,7 @@ describe('the rule table is ordered and total', () => {
       { name: 'amendment-ack', ok: false, detail: 'amended under in-progress plans (approve = explicit ack): p9' },
       { name: 'goal-coverage', ok: false, detail: 'g1 uncovered' }] })
     const d = recommend({ ...ctxFor([r]), gate: 'decompose' })!
-    expect(d.options[0]!.command).toMatch(/--revise --note/)
+    expect(d.options[0]!.command).toMatch(/--revise/)
   })
 
   it('the trust twin of a deferral approve is a deferral too', () => {
@@ -624,7 +624,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            why: the verdict judged @a and the content has moved since — no battery has read the current bytes, so every finding above describes a tree that no longer exists
            tradeoff: spends round 2 of 3
         2 · root
-           witness decide plan p1 --revise --note "1 blocking finding: S"
+           witness decide plan p1 --revise
            when: you already know the next edit and want no verdict on this state
            tradeoff: spends no round now — the round is spent by the re-gate that follows it
         3 · root
@@ -762,7 +762,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            witness decide plan p1 --revise --upstream auth-refresh
            why: S was found in 2 rounds across distinct reviewed shas — one honest fix already failed at this seam, so the likelier fault is above it
         2 · root
-           witness decide plan p1 --revise --note "1 blocking finding: S"
+           witness decide plan p1 --revise
            when: the previous fix was the wrong fix and you now know the right one
            tradeoff: spends round 2 of 3; recurring again leaves only the endgame set
         3 · deferral
@@ -778,7 +778,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
         pin-contradiction
         decide: 4 options · 1 is recommended
         1 · recommended · root
-           witness decide plan p1 --revise --note "1 blocking finding: S"
+           witness decide plan p1 --revise
            why: a finding contradicts policy pin #1 — the gate escalated the conflict rather than burning a round on it, and only you can settle which side holds
         2 · root
            witness decide plan p1 --approve
@@ -792,7 +792,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            witness decide plan p1 --stop
            when: this work should not continue as scoped
            tradeoff: parks the flow — next stops offering it and reopening is an explicit act
-        run: witness decide plan p1 --revise --note "1 blocking finding: S"
+        run: witness decide plan p1 --revise
 
         blocking-parent
         decide: 4 options · 1 is recommended
@@ -800,7 +800,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            witness decide plan p1 --revise --upstream auth-refresh
            why: 1 of 1 blocking findings anchor to auth-refresh, not to this artifact — it is faithful to a parent that is wrong
         2 · root
-           witness decide plan p1 --revise --note "1 blocking finding: auth-refresh > ## Behavior"
+           witness decide plan p1 --revise
            when: this artifact can route around the parent gap without the parent changing
            tradeoff: leaves the parent wrong for everything else that derives from it
         3 · deferral
@@ -816,7 +816,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
         blocking-here
         decide: 4 options · 1 is recommended
         1 · recommended · root
-           witness decide plan p1 --revise --note "1 blocking finding: src/a.ts"
+           witness decide plan p1 --revise
            why: 1 blocking finding anchored inside this artifact (src/a.ts); round 1 of 3
         2 · root
            witness decide plan p1 --revise --upstream auth-refresh
@@ -830,7 +830,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            witness decide plan p1 --stop
            when: this work should not continue as scoped
            tradeoff: parks the flow — next stops offering it and reopening is an explicit act
-        run: witness decide plan p1 --revise --note "1 blocking finding: src/a.ts"
+        run: witness decide plan p1 --revise
 
         checks-failed-ack
         decide: 4 options · 1 is recommended
@@ -838,7 +838,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            witness decide plan p1 --approve
            why: the one failed check is amendment-ack — a spec was amended under in-progress plans · approving is the acknowledgement it asks for; round 1 of 3
         2 · root
-           witness decide plan p1 --revise --note "failed checks: amendment-ack"
+           witness decide plan p1 --revise
            when: the amendment should not land under the in-progress plans as it stands
            tradeoff: costs round 1 of 3; the gate re-runs on your edit
         3 · root
@@ -854,7 +854,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
         checks-failed
         decide: 4 options · 1 is recommended
         1 · recommended · root
-           witness decide plan p1 --revise --note "failed checks: drift-lane"
+           witness decide plan p1 --revise
            why: 1 deterministic check failed: drift-lane — no finding blocks · fix what the check names; round 1 of 3
         2 · root
            witness decide plan p1 --revise --upstream auth-refresh
@@ -868,7 +868,7 @@ describe('every rule renders byte for byte (roadmap 1a.1 golden)', () => {
            witness decide plan p1 --stop
            when: this work should not continue as scoped
            tradeoff: parks the flow — next stops offering it and reopening is an explicit act
-        run: witness decide plan p1 --revise --note "failed checks: drift-lane"
+        run: witness decide plan p1 --revise
 
         non-blocking-only
         decide: 4 options · 1 is recommended
@@ -980,14 +980,31 @@ describe('options carry their act (rows 139/203)', () => {
     expect(o.runnable).toBe(false)
   })
 
-  // Review focus 3: a note prefill is the reviewer's anchor, so it may hold a quote, ` | ` or the
-  // literal text `<why>`. It stays one argv word, the option stays runnable, the line is today's.
-  it("keeps a reviewer's anchor one word of the note, whatever it holds", () => {
-    const o = recommend(ctxFor([run(1, 'a', 'src/a.ts "x" | <why>')]))!.options
-      .find((x) => x.act?.argv.includes('--note'))!
-    expect(o.act!.argv.at(-1)).toBe('1 blocking finding: src/a.ts "x" | <why>')
+  // Review focus 3, row 239: a reviewer's anchor may hold a quote, ` | ` or the literal text
+  // `<why>`. It is a fact all the same, so the revise is bare and no command carries the anchor.
+  it("a reviewer's anchor is in no command, whatever it holds", () => {
+    const d = recommend(ctxFor([run(1, 'a', 'src/a.ts "x" | <why>')]))!
+    const o = d.options.find((x) => x.act?.argv[3] === '--revise' && x.act.argv[4] !== '--upstream')!
+    expect(o.act!.argv).toEqual(['decide', 'plan', 'p1', '--revise'])
     expect(o.runnable).toBe(true)
-    expect(o.command).toBe('witness decide plan p1 --revise --note "1 blocking finding: src/a.ts "x" | <why>"')
+    expect(d.options.filter((x) => x.command.includes('src/a.ts'))).toEqual([])
+  })
+
+  // Row 239. A reviewer's anchor reaches no command: where the run holds facts the revise is bare
+  // and `decide` journals the prefill itself, and where it holds none the human fills `<why>`.
+  it('the revise option carries no reviewer text: bare where the run holds facts, the <why> slot where it holds none (row 239)', () => {
+    const revise = (d: Decision) => d.options.find((o) => o.act?.argv[3] === '--revise' &&
+      !o.act.argv.includes('--upstream') && !o.act.argv.includes('--repair'))!
+    const here = recommend(ctxFor([run(1, 'a', 'p1 > ## Notes $(touch M1)')]))!
+    expect(here.rule).toBe('blocking-here')
+    expect(revise(here).act!.argv).toEqual(['decide', 'plan', 'p1', '--revise'])
+    expect(revise(here).command).toBe('witness decide plan p1 --revise')
+    expect(revise(here).runnable).toBe(true)
+    expect(here.options.filter((o) => o.command.includes('$('))).toEqual([])
+    const nit = recommend(ctxFor([judged([{ blocking: false, anchor: 'S', claim: 'x' }])]))!
+    expect(nit.rule).toBe('non-blocking-only')
+    expect(revise(nit).act!.argv.slice(-3)).toEqual(['--revise', '--note', '<why>'])
+    expect(revise(nit).runnable).toBe(false)
   })
 
   it("the trust twin is the plain approve's act plus the grant", () => {

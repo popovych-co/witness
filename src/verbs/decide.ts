@@ -23,7 +23,7 @@ import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, hasControl, kv, rows } from '../toon.js'
 import {
-  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, pendingDecision, repairGranted,
+  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, notePrefill, pendingDecision, repairGranted,
   roundsSinceApprove, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
@@ -211,7 +211,11 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   const canon = loadCanon(root)
   const upstreamId = spec.upstreamOf?.(root, canon, target)
 
-  const note = act.note
+  // Row 239. The block's revise carries no reviewer text, so a bare `--revise` journals the
+  // prefill it used to carry, derived from the same journal. A revise sent upstream or bought
+  // with a repair grant journals none, as before, and a run with no facts (`<why>`) leaves none.
+  const prefill = notePrefill(entries, gate)
+  const note = act.note ?? (decision === 'revise' && act.upstream === undefined && act.repair !== true && prefill !== '<why>' ? prefill : undefined)
   const override = act.override === true
   const repair = act.repair === true
   const upstream = act.upstream
@@ -429,8 +433,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // D121. Recorded, never consumed: divergence between what the block recommended and what
   // the human chose is the only feedback loop the recommender has, and without the record it
   // is transcript archaeology. `recommended` is the VERB of option 1 — the shape of
-  // `decision` — so the two are directly comparable in a log query. The full command would
-  // carry a prefilled note that changes with the findings, which would make two identical
+  // `decision` — so the two are directly comparable in a log query. The full command once
+  // carried a prefilled note that changed with the findings, which made two identical
   // recommendations look different.
   const rec = recommend({
     gate, target, entries, upstream: upstreamId,
@@ -439,7 +443,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // misattributes — D130's audit was reporting rules that were never rendered.
     stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0,
   })
-  const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
+  // Row 239. Read off the act's words, never its printed line.
+  const recommendedVerb = rec?.options[0]?.act?.argv.find((w) => w === '--approve' || w === '--revise' || w === '--stop')?.slice(2)
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,

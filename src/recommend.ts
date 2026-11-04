@@ -1,8 +1,8 @@
 import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
-  anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, pendingDecision, repairsOnRegate,
-  repairGranted, roundBudget, roundsSinceApprove, type GateRunEntry,
+  anchorRecurrence, boundReached, ladderSpent, lastGateRun, pendingDecision, repairsOnRegate,
+  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry,
 } from './rounds.js'
 import { hasControl, visible } from './toon.js'
 
@@ -145,7 +145,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
 
   const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
   const up = d('--revise', '--upstream', upstream ?? '<effort>')
-  const note = d('--revise', '--note', notePrefill(entries, gate))
+  // Row 239. Bare where the run holds facts: no reviewer text reaches a command.
+  const note = reviseAct(gate, target, entries)
   const atBound = boundReached(entries, gate)
   const budget = roundBudget(entries, gate)
   const spent = roundsSinceApprove(entries, gate)

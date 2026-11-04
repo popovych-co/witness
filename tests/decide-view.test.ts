@@ -30,7 +30,7 @@ describe('decide --show is a view (rows 139/203)', () => {
     expect(view.disposition).toStrictEqual({ decision: 'revise', note: 'fix the expiry' })
     expect(view.block?.rule).toBe('blocking-here')
     expect(view.block?.options.map((o) => o.act?.argv)).toEqual([
-      ['decide', 'implement', target, '--revise', '--note', '1 blocking finding: src/token.ts'],
+      ['decide', 'implement', target, '--revise'],
       ['decide', 'implement', target, '--revise', '--upstream', target],     // implement's upstream is the plan
       ['decide', 'implement', target, '--approve', '--override'],
       ['decide', 'implement', target, '--stop'],
@@ -40,26 +40,23 @@ describe('decide --show is a view (rows 139/203)', () => {
     expect(JSON.parse(JSON.stringify(view))).toEqual(view)
   })
 
-  // R5/R17. A reviewer's anchor is spelled out in the findings table and nowhere else: the block
-  // and the exits carry it exactly as the text prints it — the note prefill (the option's command
-  // and act, and the exits' note act), the option's why and the block's anchor. A renderer spells
-  // those out (spec §4.2); the UI runs an act's argv, never its line.
-  it("a reviewer's anchor is spelled out in the findings and carried as printed in the block and exits (Review Focus 1)", async () => {
+  // R5/R17, row 239. A reviewer's anchor is spelled out in the findings table, and carried as the
+  // text prints it only in the block's anchor and the option's why. It is in no command: the
+  // revise is bare, and `decide` journals the prefill itself. A renderer spells those out (spec
+  // §4.2); the UI runs an act's argv, never its line.
+  it("a reviewer's anchor is spelled out in the findings and is in no command (Review Focus 1)", async () => {
     const { view, target } = await viewOf('implement-anchor')
     if (view.state !== 'actionable') throw new Error(view.state)
     expect(view.run.findings.map((f) => f.anchor)).toEqual(['src/\\x1b[2Jtoken\\u{202e}.ts'])
     expect(view.block?.anchor).toBe(REVIEWER_ANCHOR)
     const note = view.block!.options[0]!
-    expect(note.act!.argv).toEqual(['decide', 'implement', target, '--revise', '--note', `1 blocking finding: ${REVIEWER_ANCHOR}`])
-    expect(note.command).toBe(`witness decide implement ${target} --revise --note "1 blocking finding: ${REVIEWER_ANCHOR}"`)
+    expect(note.act!.argv).toEqual(['decide', 'implement', target, '--revise'])
+    expect(note.command).toBe(`witness decide implement ${target} --revise`)
     expect(note.act!.line).toBe(note.command)
     expect(note.why).toBe(`1 blocking finding anchored inside this artifact (${REVIEWER_ANCHOR}); round 1 of 3`)
     expect(view.exits[1]).toEqual(note.act)
     // exactly these fields hold the raw characters, and no other
-    expect(controlPaths(view).sort()).toEqual([
-      'block.anchor', 'block.options.0.act.argv.5', 'block.options.0.act.line', 'block.options.0.command', 'block.options.0.why',
-      'exits.1.argv.5', 'exits.1.line',
-    ])
+    expect(controlPaths(view).sort()).toEqual(['block.anchor', 'block.options.0.why'])
   })
 
   describe('each other state is its own shape', () => {

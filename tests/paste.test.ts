@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import type { Entry } from '../src/journal.js'
+import { recommend, renderDecision } from '../src/recommend.js'
 import { shellLine } from '../src/toon.js'
 import { MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
@@ -12,12 +14,31 @@ const turn = (): Promise<unknown> => new Promise((r) => setImmediate(r))
 // A row's own payload list replaces PAYLOADS.
 type Row = [name: string, build: (payload: string) => Pasteable[] | Promise<Pasteable[]>, payloads?: readonly string[]]
 
+// One stopped plan run whose one blocking finding a reviewer anchored where it liked.
+const anchoredRun = (anchor: string): Entry => ({
+  v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round: 1, run_id: 'r-1', reviewed_sha: 'a', prompts_sha: 'ps',
+  witness: '0', model: 'm', pin: 'm', harness: 'claude-code', checks: [], outcome: 'stopped',
+  verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor, claim: 'x' }] }],
+} as unknown as Entry)
+
+// K1: every runnable option the block offers, and its `run:` line, each as the human pastes it.
+function decisionLines(p: string): Pasteable[] {
+  const d = recommend({ gate: 'plan', target: 'p1', entries: [anchoredRun(`p1 > ## Notes ${p}`)], upstream: 'auth-refresh', stale: false })!
+  const run = renderDecision(d).find((l) => l.startsWith('run: '))
+  if (run === undefined) throw new Error(`K1: the ${d.rule} block printed no run: line`)
+  return [
+    ...d.options.filter((o) => o.runnable).map((o) => ({ line: o.command, calls: [['witness', ...o.act!.argv]] })),
+    { line: run.slice('run: '.length), calls: [['witness', ...d.options[0]!.act!.argv]] },
+  ]
+}
+
 const ROWS: Row[] = [
   ['quoter: a POSIX word', (p) => [{ line: shellLine(['witness', 'x', p], 'darwin'), calls: [['witness', 'x', p]] }]],
   // zsh reads a bare `=ls` as the path of `ls`
   ['quoter: a word starting with =', (p) => [{ line: shellLine(['witness', p], 'darwin'), calls: [['witness', p]] }], ['=ls']],
   // PowerShell's quoting, pasted into a POSIX shell (Git Bash), is lossy for `'`: inert only
   ['quoter: the Windows form in a POSIX shell', (p) => [{ line: shellLine(['witness', 'x', p], 'win32') }]],
+  ["K1 the decision block, a reviewer's anchor", decisionLines],
 ]
 
 // Row 239. Where each payload was built to bite (the inventory's "Which payload bites where"), as
