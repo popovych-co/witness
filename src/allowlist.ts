@@ -61,8 +61,9 @@ export interface RunCommand { cmd: string; source: string }
 // drive's report, the chat — renders it here: escaped, beside its source, and with the grant
 // that names it only when the verb would take it (printable ASCII, `witness trust`).
 export const shownCmd = (c: RunCommand): string => `${visible(c.cmd)} (${visible(c.source)})`
+export const UNGRANTABLE = 'never granted here — rewrite it in printable ASCII where it is written'
 export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>): string => hasControl(c.cmd)
-  ? 'never granted here — rewrite it in printable ASCII where it is written'
+  ? UNGRANTABLE
   : `witness trust ${target} --cmd ${shellArg(c.cmd)}`
 // Row 205. The commands a grant leaves blocked for that reason, counted: the trust verb's summary
 // and `decide --approve --trust-cmds` say it in these words.

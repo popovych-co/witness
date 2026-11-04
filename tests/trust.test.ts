@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ensureTrusted } from '../src/allowlist.js'
 import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
+import { runFiltered, runFullSuite } from '../src/runner.js'
 import { SPEC_META, approve, fakeCtx, patchConfig, seededRepo, stampLive, writePlan, writeSpec } from './helpers.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
@@ -347,5 +348,39 @@ describe('ensureTrusted (row 237)', () => {
     expect(await ensureTrusted(repo.root, t.ctx, 'bad\u001bcmd')).toBe('blocked')
     expect(t.asked).toBe(0)
     expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+})
+
+// Row 237. No grant exists for a command outside printable ASCII, so a remedy that sent the human
+// to `witness next` for one was false. The need's and the runner's say it is never granted here.
+describe('a remedy for a command never granted names no grant (row 237)', () => {
+  const NEVER = 'never granted here — rewrite it in printable ASCII where it is written'
+
+  it('at a terminal, check says a non-printable need is never granted, and start points to check', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ cmd: 'bad\u001bcmd' }] })
+    approve(repo, 'auth-refresh-plan-1')
+    const env = { WITNESS_TRUST_CMDS: '' }
+    const start = await repo.cli(['start', 'auth-refresh-plan-1'], { tty: true, env })
+    expect(start.code).toBe(2)
+    expect(start.stderr).toContain(',witness check shows env and cmd needs')     // start prints no need's detail
+    expect(start.stderr).not.toContain('witness next names the grant')
+    const check = await repo.cli(['check'], { tty: true, env })
+    expect(check.stdout).toContain(`,need-blocked,${NEVER}`)
+    expect(check.stdout).not.toContain('witness next names the grant')
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
+  it("at a terminal, the runner's refusal says a non-printable command is never granted", async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { tty: true })
+    const filtered = await runFiltered(repo.root, ctx, 'bad\u001bcmd {id}', 'auth-refresh')
+    expect(filtered.ok).toBe(false)
+    if (!filtered.ok) expect(filtered.violations[0]).toMatchObject({ rule: 'untrusted-blocked', want: NEVER })
+    const full = await runFullSuite(repo.root, ctx, { mode: 'full-suite', reportGlob: 'r.xml', suiteCmd: 'bad\u001bcmd' })
+    expect(full.ok).toBe(false)
+    if (!full.ok) expect(full.violations[0]).toMatchObject({ rule: 'untrusted-blocked', want: NEVER })
   })
 })
