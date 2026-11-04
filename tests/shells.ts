@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -51,33 +51,43 @@ const STUBS = ['witness', 'git', 'gh', 'claude', 'pi', 'tail']
 const STUB = `#!/bin/sh\nprintf '%s\\0' "\${0##*/}" "$@" >> "$ARGVLOG"; printf '\\n' >> "$ARGVLOG"\n`
 const MARKER = /^M\d$/
 
-// Synchronous, and clean for the next mode: fresh stubs every time, the markers found deleted,
-// the stubs and any default `cwd` removed.
-export function pasteIn(mode: Mode, line: string, cwd?: string): Pasted {
+// Row 239. The stub, written on the first paste: each paste's stubs are links to it, one per
+// program, so `$0` still names the program. Measured 2026-11-04 on this Mac: a newly written
+// script's first run took 140–190 ms, and eight first runs at once took 1037 ms, so a fresh script
+// per paste serialized a row's pastes however many ran at once; a fresh link to one script ran in
+// 13 ms, and eight at once in 21 ms. A file that pastes calls `dropStub` once its tests are done:
+// vitest stops its worker with no `exit` event to clean up on.
+let script: { dir: string; path: string } | undefined
+function stubScript(): string {
+  if (script === undefined) {
+    const dir = mkdtempSync(join(tmpdir(), 'witness-paste-stub-'))
+    script = { dir, path: join(dir, 'stub') }
+    writeFileSync(script.path, STUB)
+    chmodSync(script.path, 0o755)
+  }
+  return script.path
+}
+export function dropStub(): void {
+  if (script !== undefined) rmSync(script.dir, { recursive: true, force: true })
+  script = undefined
+}
+
+// Row 239. Asynchronous, so a row's pastes run side by side while the worker's event loop stays
+// free, and clean for the next paste: a fresh stub directory and a fresh ARGVLOG every time, so
+// two pastes at once never share either, the markers found deleted, the stub directory and any
+// default `cwd` removed. Two pastes into one `cwd` at once would see each other's markers: a
+// caller pastes those in turn.
+export async function pasteIn(mode: Mode, line: string, cwd?: string): Promise<Pasted> {
   const stubs = mkdtempSync(join(tmpdir(), 'witness-paste-'))
   const dir = cwd ?? mkdtempSync(join(tmpdir(), 'witness-paste-cwd-'))
   try {
     const bin = join(stubs, 'bin')
     mkdirSync(bin)
-    for (const name of STUBS) {
-      writeFileSync(join(bin, name), STUB)
-      chmodSync(join(bin, name), 0o755)
-    }
+    for (const name of STUBS) symlinkSync(stubScript(), join(bin, name))
     const log = join(stubs, 'argv.log')
-    const run = RUN[mode]
-    const r = spawnSync(run.shell, run.args(line), {
-      cwd: dir,
-      // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
-      // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
-      env: { PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null' },
-      input: run.stdin ? `${line}\n` : '',
-      // An interactive bash or zsh ignores SIGTERM, the default, so a hung paste would hold the
-      // worker to its end. Probed 2026-11-04: `sleep 3` under a 500 ms timeout came back after
-      // 3020 ms with SIGTERM, and after 504 ms with SIGKILL.
-      timeout: 10_000,
-      killSignal: 'SIGKILL',
-    })
-    if (r.error !== undefined) throw new Error(`${mode} did not run ${JSON.stringify(line)}: ${r.error.message}`)
+    // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
+    // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
+    await ran(mode, line, dir, { PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null' })
     const markers = markersUnder(dir)
     for (const m of markers) rmSync(join(dir, m), { recursive: true, force: true })
     return { markers, calls: existsSync(log) ? callsIn(readFileSync(log, 'utf8')) : [] }
@@ -85,6 +95,29 @@ export function pasteIn(mode: Mode, line: string, cwd?: string): Pasted {
     rmSync(stubs, { recursive: true, force: true })
     if (cwd === undefined) rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// One shell run of `line`, settled once the shell has exited: its stubs ran in the foreground, so
+// their calls are all logged by then. Its stdin is the line for an interactive mode and empty
+// otherwise, and its output is read and dropped, so a full pipe never stalls it. A run still going
+// after 10 s is killed and fails: an interactive bash or zsh ignores SIGTERM, so it gets SIGKILL
+// (probed 2026-11-04: `sleep 3` under a 500 ms limit came back after 3020 ms with SIGTERM, and
+// after 504 ms with SIGKILL).
+function ran(mode: Mode, line: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const run = RUN[mode]
+  return new Promise((resolve, reject) => {
+    const fail = (why: string) => reject(new Error(`${mode} did not run ${JSON.stringify(line)}: ${why}`))
+    const child = spawn(run.shell, run.args(line), { cwd, env })
+    let killed = false
+    const limit = setTimeout(() => { killed = true; child.kill('SIGKILL') }, 10_000)
+    child.on('error', (e) => { clearTimeout(limit); fail(e.message) })
+    child.on('exit', () => { clearTimeout(limit); if (killed) fail('killed after 10 s'); else resolve() })
+    child.stdout.resume()
+    child.stderr.resume()
+    // A shell that exits before it reads its stdin breaks the pipe: nothing is lost.
+    child.stdin.on('error', () => {})
+    child.stdin.end(run.stdin ? `${line}\n` : '')
+  })
 }
 
 // Every entry named `M<n>` under `dir`, at any depth (a line may `cd` before its payload runs),

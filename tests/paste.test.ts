@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { cliAct, type Act } from '../src/act.js'
 import { grantAct } from '../src/allowlist.js'
 import type { Entry } from '../src/journal.js'
@@ -7,11 +7,7 @@ import { needYouRows, type NeedYou } from '../src/needs-you.js'
 import { recommend, renderDecision } from '../src/recommend.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
 import { shellLine } from '../src/toon.js'
-import { MODES, type Mode, PAYLOADS, type Pasteable, type Pasted, pasteIn, REF_PAYLOADS } from './shells.js'
-
-// Back-to-back `spawnSync` calls hold the worker's event loop, and vitest's worker RPC fails a
-// run whose loop is held 60 s (tests/loop-watch.ts), so a loop of pastes yields after each one.
-const turn = (): Promise<unknown> => new Promise((r) => setImmediate(r))
+import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
 // Row 239. A pasted line runs only what witness wrote. Each row builds lines with witness's own
 // code around a hostile payload, and each line is pasted alone into every shell here: it must
@@ -111,16 +107,37 @@ const BITES: ReadonlyArray<readonly [payload: string, line: (p: string) => strin
   ...REF_PAYLOADS.map((p) => [p, bare, MODES] as const),
 ]
 
+// Row 239. A row's pastes run at most this many at a time, each result at its job's index. A job
+// that fails starts no more, and the first failure throws once every running job has settled, so
+// no paste outlives its test.
+const AT_ONCE = 8
+async function pooled<T, R>(jobs: readonly T[], run: (job: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = []
+  let next = 0
+  let failed: { error: unknown } | undefined
+  const lane = async (): Promise<void> => {
+    while (failed === undefined && next < jobs.length) {
+      const at = next++
+      try { out[at] = await run(jobs[at]!) } catch (error) { failed ??= { error } }
+    }
+  }
+  await Promise.all(Array.from({ length: AT_ONCE }, lane))
+  if (failed !== undefined) throw failed.error
+  return out
+}
+
 describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote (row 239)', () => {
+  afterAll(dropStub)
+
   // Without it, a broken harness would pass every row. Each mode must see a line that does run
   // code, and an interactive one must expand history, as a human's paste meets it: there `!#`
   // inserts the line typed so far, opening quote included, so `;touch M6;` runs outside quotes.
-  it('the harness sees a line that does run code', () => {
+  it('the harness sees a line that does run code', async () => {
     for (const mode of MODES) {
-      expect(pasteIn(mode, 'witness x $(touch M1)'), mode).toEqual({ markers: ['M1'], calls: [['witness', 'x']] })
+      expect(await pasteIn(mode, 'witness x $(touch M1)'), mode).toEqual({ markers: ['M1'], calls: [['witness', 'x']] })
     }
     for (const mode of MODES.filter((m) => m.endsWith('-i'))) {
-      expect(pasteIn(mode, 'witness x "!#;touch M6;\\"').markers, mode).toEqual(['M6'])
+      expect((await pasteIn(mode, 'witness x "!#;touch M6;\\"')).markers, mode).toEqual(['M6'])
     }
   })
 
@@ -134,32 +151,31 @@ describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote 
       const marker = /M\d/.exec(p)![0]
       const fired: Mode[] = []
       for (const mode of modes) {
-        if (pasteIn(mode, line(p)).markers.includes(marker)) fired.push(mode)
-        await turn()
+        if ((await pasteIn(mode, line(p))).markers.includes(marker)) fired.push(mode)
       }
       expect(fired, line(p)).not.toEqual([])
     }
   }, 120_000)
 
-  // Built once per payload (a build may need a repo, which is async), then pasted alone into every
-  // mode. Row 239: a row pastes a line into a shell once. Pasted again with no `cwd`, it would run
-  // the same way, so a repeat is checked against the first paste's result; a line with a `cwd`
-  // always pastes.
+  // Built once per payload, in turn (a build may need a repo, which is async), then pasted alone
+  // into every mode. Row 239: a row pastes a line into a shell once. Pasted again with no `cwd`, it
+  // would run the same way, so a repeat is checked against the first paste's result. Those pastes
+  // run `AT_ONCE` at a time; a line with a `cwd` always pastes, and in turn, since its markers are
+  // scanned under that directory and deleted after each paste.
   it.each(ROWS)('%s', async (_, build, payloads = PAYLOADS) => {
-    const seen = new Map<string, Pasted>()
+    const items: Array<{ mode: Mode; x: Pasteable }> = []
     for (const p of payloads) {
-      const items = await build(p)
-      for (const mode of MODES) for (const x of items) {
-        const key = `${mode}\0${x.line}`
-        let pasted = x.cwd === undefined ? seen.get(key) : undefined
-        if (pasted === undefined) {
-          pasted = pasteIn(mode, x.line, x.cwd)
-          await turn()
-          if (x.cwd === undefined) seen.set(key, pasted)
-        }
-        expect(pasted.markers, `${mode}: ${x.line}`).toEqual([])
-        if (x.calls !== undefined) expect(pasted.calls, `${mode}: ${x.line}`).toEqual(x.calls)
-      }
+      const xs = await build(p)
+      for (const mode of MODES) for (const x of xs) items.push({ mode, x })
+    }
+    const key = ({ mode, x }: { mode: Mode; x: Pasteable }): string => `${mode}\0${x.line}`
+    const once = [...new Map(items.filter(({ x }) => x.cwd === undefined).map((i) => [key(i), i])).values()]
+    const pastes = await pooled(once, ({ mode, x }) => pasteIn(mode, x.line))
+    const seen = new Map(once.map((i, at) => [key(i), pastes[at]!]))
+    for (const i of items) {
+      const pasted = i.x.cwd === undefined ? seen.get(key(i))! : await pasteIn(i.mode, i.x.line, i.x.cwd)
+      expect(pasted.markers, `${i.mode}: ${i.x.line}`).toEqual([])
+      if (i.x.calls !== undefined) expect(pasted.calls, `${i.mode}: ${i.x.line}`).toEqual(i.x.calls)
     }
   }, 120_000)
 })
