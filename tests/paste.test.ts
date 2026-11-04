@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import { recommend, renderDecision } from '../src/recommend.js'
 import { shellLine } from '../src/toon.js'
-import { MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
+import { MODES, type Mode, PAYLOADS, type Pasteable, type Pasted, pasteIn, REF_PAYLOADS } from './shells.js'
 
 // Back-to-back `spawnSync` calls hold the worker's event loop, and vitest's worker RPC fails a
 // run whose loop is held 60 s (tests/loop-watch.ts), so a loop of pastes yields after each one.
@@ -91,13 +91,22 @@ describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote 
     }
   }, 120_000)
 
-  // Built once per payload (a build may need a repo, which is async), then pasted alone into every mode.
+  // Built once per payload (a build may need a repo, which is async), then pasted alone into every
+  // mode. Row 239: a row pastes a line into a shell once. Pasted again with no `cwd`, it would run
+  // the same way, so a repeat is checked against the first paste's result; a line with a `cwd`
+  // always pastes.
   it.each(ROWS)('%s', async (_, build, payloads = PAYLOADS) => {
+    const seen = new Map<string, Pasted>()
     for (const p of payloads) {
       const items = await build(p)
       for (const mode of MODES) for (const x of items) {
-        const pasted = pasteIn(mode, x.line, x.cwd)
-        await turn()
+        const key = `${mode}\0${x.line}`
+        let pasted = x.cwd === undefined ? seen.get(key) : undefined
+        if (pasted === undefined) {
+          pasted = pasteIn(mode, x.line, x.cwd)
+          await turn()
+          if (x.cwd === undefined) seen.set(key, pasted)
+        }
         expect(pasted.markers, `${mode}: ${x.line}`).toEqual([])
         if (x.calls !== undefined) expect(pasted.calls, `${mode}: ${x.line}`).toEqual(x.calls)
       }
