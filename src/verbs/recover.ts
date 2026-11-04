@@ -1,7 +1,8 @@
 import { parseArgs } from 'node:util'
+import { cliAct } from '../act.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { dirtyStatePaths, primaryRoot } from '../gitio.js'
-import { renderDecision, type Decision } from '../recommend.js'
+import { option, renderDecision, type Decision } from '../recommend.js'
 import { kv } from '../toon.js'
 import { renderRefusal } from '../refusal.js'
 import { completeTxn, landedJournal, pendingTxn, rollbackTxn, type TxnMarker } from '../txn.js'
@@ -23,18 +24,18 @@ export function recoverChoice(root: string, marker: TxnMarker): Decision {
     key: 'recover', rule: complete ? 'txn-write-landed' : 'txn-write-partial',
     options: complete
       ? [
-          { command: 'witness recover --complete', depth: 'root', runnable: true,
-            why: `${landed} of ${total} journal line(s) are already on disk and ${marker.files.length} file(s) are written — the transaction finished and only the state commit is missing; completing makes git match what the journal already records` },
-          { command: 'witness recover --rollback', depth: 'root', runnable: true,
+          option(cliAct('recover', '--complete'), 'root', {
+            why: `${landed} of ${total} journal line(s) are already on disk and ${marker.files.length} file(s) are written — the transaction finished and only the state commit is missing; completing makes git match what the journal already records` }),
+          option(cliAct('recover', '--rollback'), 'root', {
             when: 'you no longer want the operation that was interrupted',
-            tradeoff: `reverts ${marker.files.length} file(s) and drops the journal append — the operation must be retaken` },
+            tradeoff: `reverts ${marker.files.length} file(s) and drops the journal append — the operation must be retaken` }),
         ]
       : [
-          { command: 'witness recover --rollback', depth: 'root', runnable: true,
-            why: `only ${landed} of ${total} journal line(s) landed — the transaction was interrupted mid-write, and rolling back to a known state is safer than committing a partial one` },
-          { command: 'witness recover --complete', depth: 'root', runnable: true,
+          option(cliAct('recover', '--rollback'), 'root', {
+            why: `only ${landed} of ${total} journal line(s) landed — the transaction was interrupted mid-write, and rolling back to a known state is safer than committing a partial one` }),
+          option(cliAct('recover', '--complete'), 'root', {
             when: 'you have inspected the files and the partial state is what you want',
-            tradeoff: 'commits a transaction that never finished writing; the journal and the tree may disagree' },
+            tradeoff: 'commits a transaction that never finished writing; the journal and the tree may disagree' }),
         ],
   }
 }

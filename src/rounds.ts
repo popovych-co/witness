@@ -1,3 +1,4 @@
+import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import type { HeldRow } from './needs.js'
 import type { Violation } from './refusal.js'
@@ -319,12 +320,12 @@ export function notePrefill(entries: Entry[], gate: string): string {
 // which shipped an unrunnable command on every screen (D129). `undefined` means no
 // upstream exists — `decide` refuses that with `unknown-owner`, so the option is not legal
 // and is omitted rather than printed as a placeholder.
-export function liveExits(
+export function exitActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
-): string {
-  const d = `witness decide ${gate} ${target}`
-  const up = upstream === undefined ? [] : [`--revise --upstream ${upstream}`]
-  const note = `--revise --note "${notePrefill(entries, gate)}"`
+): Act[] {
+  const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
+  const up = upstream === undefined ? [] : [d('--revise', '--upstream', upstream)]
+  const note = d('--revise', '--note', notePrefill(entries, gate))
   // The bound outranks staleness: at the bound the gate short-circuits and will not run
   // again (gate.ts), so "re-gate" is the D67 lie whatever the sha says. Stale content only
   // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
@@ -338,32 +339,45 @@ export function liveExits(
     // printed it (`help: or discard the plan`) and nothing else offers it — and under D124
     // `--stop` becomes *park*, which would otherwise leave the bound screen with no
     // discarding act at all.
-    const repair = repairGranted(entries, gate) ? [] : ['--revise --repair']
-    const approve = stale ? [] : ['--approve --override']
-    return [`${d} ${[...approve, ...up, ...repair, '--stop'].join(' | ')}`,
-      `witness abandon ${target}`].join(' | ')
+    const repair = repairGranted(entries, gate) ? [] : [d('--revise', '--repair')]
+    const approve = stale ? [] : [d('--approve', '--override')]
+    return [...approve, ...up, ...repair, d('--stop'), cliAct('abandon', target)]
   }
   // Stale removes --approve and nothing else: `decide` refuses that one with `stale-verdict`
   // because a stamp asserts about current content, while a stop or a revise judges the work.
   // Both halves are measured (2026-08-12). The pending check is what separates this from the
   // reopened and revised screens, where no anchor resolves and every decide verb refuses.
   if (stale) {
-    if (pendingDecision(entries, gate) === undefined) return `witness gate ${gate} ${target}`
-    return [`witness gate ${gate} ${target}`, `${d} ${[note, ...up, '--stop'].join(' | ')}`].join(' | ')
+    if (pendingDecision(entries, gate) === undefined) return [cliAct('gate', gate, target)]
+    return [cliAct('gate', gate, target), note, ...up, d('--stop')]
   }
-  return `${d} ${['--approve', note, ...up, '--stop'].join(' | ')}`
+  return [d('--approve'), note, ...up, d('--stop')]
+}
+
+// Rows 139/203. The exits line: `exitActs` rendered in one line.
+export function liveExits(
+  gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
+): string {
+  return exitsLine(exitActs(gate, target, entries, stale, upstream))
 }
 
 // What un-parks a gate stopped under D124. Below the bound a fresh run is the act — the
 // content is unchanged, so a plain re-gate would answer `changed-nothing`. At the bound
 // the gate short-circuits before invoking anything, so `--fresh` is the D67 lie: the only
-// live acts there are the endgame set, which liveExits already knows.
+// live acts there are the endgame set, which exitActs already knows.
+export function reopenActs(
+  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+): Act[] {
+  return boundReached(entries, gate)
+    ? exitActs(gate, target, entries, false, upstream)
+    : [cliAct('gate', gate, target, '--fresh')]
+}
+
+// Rows 139/203. The reopen as one line: `reopenActs` rendered.
 export function reopenCommand(
   gate: string, target: string, entries: Entry[], upstream: string | undefined,
 ): string {
-  return boundReached(entries, gate)
-    ? liveExits(gate, target, entries, false, upstream)
-    : `witness gate ${gate} ${target} --fresh`
+  return exitsLine(reopenActs(gate, target, entries, upstream))
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {

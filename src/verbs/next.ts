@@ -24,17 +24,18 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { liveDrive } from '../live.js'
-import { HELD_KINDS, needsYou, needsYouToken } from '../needs-you.js'
+import { HELD_KINDS, needsYou, needsYouToken, needYouRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { cmd, kv, rows } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
+import type { Act } from '../act.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantOf, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
-import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
 
@@ -584,8 +585,8 @@ function lastDisposition(entries: Entry[], gate: string, from: number): Decision
 // the human parked something specific, and "parked" without "on what" is not a report.
 export function parkedGates(
   root: string, canon: Canon,
-): Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> {
-  const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: string }> = []
+): Array<{ gate: string; target: string; round: number; anchor: string; reopen: Act[] }> {
+  const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: Act[] }> = []
   // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
   // effort abandoned, offers nothing to reopen or approve.
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
@@ -608,7 +609,7 @@ export function parkedGates(
       out.push({
         gate, target: id, round: last.round,
         anchor: anchors[0] ?? last.standing ?? last.outcome,
-        reopen: reopenCommand(gate, id, entries, upstreamFor(root, gate, id, parent)),
+        reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent)),
       })
     }
   }
@@ -1294,7 +1295,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // chat that starts beside a paused drive sees it rather than folding it into its wait token.
   const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
   for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) {
-    const [head, ...more] = i.rows
+    const [head, ...more] = needYouRows(i)
     ctx.out(cmd('waiting', [head!.replace(/^wait: /, ''), ...more.map((r) => r.trim())].join(' · ')))
   }
   // Row 205. Under autonomy each untrusted command is a kept stop, one raw line each (D120),

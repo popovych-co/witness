@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { exitsLine } from '../act.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { ASK_STREAM, askQueue, askText } from '../ask.js'
 import { loadConfig } from '../config.js'
@@ -276,7 +277,7 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   const parked = parkedGates(root, canon)
   if (parked.length > 0) {
     rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],
-      parked as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+      parked.map((p) => ({ ...p, reopen: exitsLine(p.reopen) }))).forEach(ctx.out)
   }
   const debts = deferralRows(root, canon)
   if (debts.length > 0) {

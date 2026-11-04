@@ -2,10 +2,11 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { cliAct, exitsLine } from '../src/act.js'
 import { gateSpec, runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream, type Entry } from '../src/journal.js'
-import { liveExits, notePrefill } from '../src/rounds.js'
+import { exitActs, liveExits, notePrefill, reopenActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { runShip } from '../src/ship.js'
 import { cmd, kv } from '../src/toon.js'
@@ -150,6 +151,45 @@ describe('liveExits', () => {
 
   it('falls back to <why> when the run offers no facts', () => {
     expect(notePrefill([], 'plan')).toBe('<why>')
+  })
+})
+
+// Rows 139/203. The exits line is the live acts laid out, and these are its five states as
+// 0.28.1 printed them: the line must not move when the acts become the source.
+const judged = (round: number, sha: string): Entry => ({
+  v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round, run_id: `r${round}`,
+  reviewed_sha: sha, prompts_sha: 'ps', witness: '0', model: 'm', checks: [], outcome: 'stopped',
+  verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor: 'p1 > ## Step: s1', claim: 'x' }] }],
+} as unknown as Entry)
+const decided = (decision: string): Entry =>
+  ({ v: 1, t: 'human-decision', gate: 'plan', artifact: 'p1', round: 1, decision } as unknown as Entry)
+const BOUND = [judged(1, 'a'), judged(2, 'b'), judged(3, 'c')]
+
+describe('the exits line renders the live acts (rows 139/203)', () => {
+  it('prints each state as it always did, from exitActs', () => {
+    const states: Array<[string, Entry[], boolean, string]> = [
+      ['below the bound', [judged(1, 'a')], false,
+        'witness decide plan p1 --approve | --revise --note "1 blocking finding: p1 > ## Step: s1" | --revise --upstream auth-refresh | --stop'],
+      ['stale with a decision pending', [judged(1, 'a')], true,
+        'witness gate plan p1 | witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1" | --revise --upstream auth-refresh | --stop'],
+      ['stale with none pending', [judged(1, 'a'), decided('approve')], true, 'witness gate plan p1'],
+      ['the bound', BOUND, false,
+        'witness decide plan p1 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon p1'],
+      ['the bound when stale', BOUND, true,
+        'witness decide plan p1 --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon p1'],
+    ]
+    for (const [name, entries, stale, line] of states) {
+      expect(liveExits('plan', 'p1', entries, stale, 'auth-refresh'), name).toBe(line)
+      expect(exitsLine(exitActs('plan', 'p1', entries, stale, 'auth-refresh')), name).toBe(line)
+    }
+  })
+
+  it('reopens with a fresh run below the bound and with the endgame acts at it', () => {
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh'))
+      .toEqual([cliAct('gate', 'plan', 'p1', '--fresh')])
+    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], 'auth-refresh')
+    expect(atBound).toEqual(exitActs('plan', 'p1', [...BOUND, decided('stop')], false, 'auth-refresh'))
+    expect(atBound.at(-1)).toEqual(cliAct('abandon', 'p1'))
   })
 })
 

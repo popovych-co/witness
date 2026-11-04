@@ -6,9 +6,9 @@ import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
 import { gateSpec, liveExits, renderGateRun, type GateSpec } from '../gate.js'
+import { decideView, decideViewLines } from '../decide-view.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
 import { recommend, renderDecision } from '../recommend.js'
-import { autonomyLines, decidedBy } from '../autonomy.js'
 import { writeDoc } from '../fm.js'
 import { acquireLock } from '../lock.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
@@ -23,7 +23,7 @@ import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, hasControl, kv, rows } from '../toon.js'
 import {
-  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
+  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, pendingDecision, repairGranted,
   roundsSinceApprove, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
@@ -31,9 +31,9 @@ import { handOverIfDue } from '../slice.js'
 
 
 // D154. The untrusted `cmd:` list for a block, resolved from the ctx alone — `renderBound`
-// and `--show` both render without a `root` in scope, and gate.ts's renderChoices took the
-// same route for the same reason. Best-effort: a root that will not resolve costs the trust
-// variants, never the block.
+// renders without a `root` in scope, and gate.ts's renderChoices took the same route for the
+// same reason (`--show`'s view is handed its root, src/decide-view.ts). Best-effort: a root
+// that will not resolve costs the trust variants, never the block.
 function trustFor(ctx: Ctx, target: string): string[] {
   const r = primaryRoot(ctx.cwd)
   return r.ok ? untrustedCmdsFor(r.value, criteriaOwner(loadCanon(r.value), target)) : []
@@ -156,7 +156,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
-  if (argv.includes('--show')) return show(ctx, spec, gate, target)
+  if (argv.includes('--show')) return show(ctx, spec, target)
   const act = decisionAct(argv)
   if (!act.ok) { renderRefusal(act.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const code = await applyDecision(ctx, act.value)
@@ -168,12 +168,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   return code
 }
 
-function show(ctx: Ctx, spec: GateSpec, gate: string, target: string): number {
+// Rows 139/203. The screen is the decide view's lines (src/decide-view.ts); the verb keeps the
+// refusals that come before any state can be read.
+function show(ctx: Ctx, spec: GateSpec, target: string): number {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const root = rootR.value
-  const entries = readStream(root, target)
-  const last = lastGateRun(entries, gate)
 
   // Hoisted above `--show` (D94): both the anchor rule below and `--show`'s staleness
   // line need `spec.currentSha`, which takes canon and config. A decision verb that
@@ -181,67 +181,7 @@ function show(ctx: Ctx, spec: GateSpec, gate: string, target: string): number {
   // for `--show` too — is the correct order rather than a regression.
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  const canon = loadCanon(root)
-  const upstreamId = spec.upstreamOf?.(root, canon, target)
-
-  autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
-  if (!last) { ctx.out(kv('decide', `no gate-runs for ${gate} ${target}`)); return EXIT.OK }
-  const reopen = openReopen(entries, gate)
-  const decisionsAfter = entries
-    .slice(entries.lastIndexOf(last as unknown as Entry) + 1)
-    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-    .map((e) => e as unknown as DecisionEntry)
-  // A caused_by decision is a REOPEN, not a disposition — it can never settle the run
-  // above it, and pairing the two is what presented 15 settled findings as current.
-  // The LAST disposition is the state (D94): `find` returned the first, so a
-  // revise→approve reported `decision: revise` on a gate that is settled.
-  const disposition = decisionsAfter.filter((d) => d.caused_by === undefined).at(-1)
-  // Staleness is a fact about content, not about being reopened. Hardcoding it printed
-  // `witness gate …` in the one state where the gate answers changed-nothing. An
-  // uncomputable sha is NOT staleness — same doctrine as the approve-time check.
-  const shownSha = spec.currentSha?.(root, canon, cfgR.value, target)
-  const stale = (shownSha !== undefined && shownSha !== last.reviewed_sha) ||
-    liftedHolds(criteriaOwner(canon, target), last).length > 0
-
-  if (reopen) {
-    ctx.out(kv('gate', gate))
-    ctx.out(kv('target', target))
-    ctx.out(kv('state', 'reopened — the gate must run again'))
-    ctx.out(kv('reopened-by', `${reopen.caused_by!.gate} ${reopen.caused_by!.artifact} (round ${reopen.caused_by!.round})`))
-    if (reopen.note) ctx.out(kv('note', reopen.note))
-    ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome}${disposition ? `, ${disposition.decision}` : ''} · witness log ${target}`))
-    ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
-    return EXIT.OK
-  }
-  if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
-    ctx.out(kv('gate', gate))
-    ctx.out(kv('target', target))
-    ctx.out(kv('state', `settled — ${disposition.decision}`))
-    ctx.out(kv('decided-by', decidedBy(disposition)))
-    if (disposition.reason) ctx.out(kv('reason', disposition.reason))
-    if (disposition.note) ctx.out(kv('note', disposition.note))
-    ctx.out(kv('last-run', `round ${last.round} @${short(last.reviewed_sha)} — ${last.outcome} · witness log ${target}`))
-    // no exits: the gate is genuinely terminal here. Point at the one verb that owns
-    // what comes next rather than re-deriving routing in a second place (D101).
-    ctx.out('help: witness next')
-    return EXIT.OK
-  }
-  // pending (no disposition) or revise (the author's input): the verdict is actionable
-  renderGateRun(ctx, last, 'ran', { entries, help: false, upstream: upstreamId })
-  const shownPins = policyPins(entries)
-  if (shownPins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], shownPins as unknown as Array<Record<string, unknown>>).join('\n'))
-  if (disposition) {
-    ctx.out(kv('decision', disposition.decision))
-    ctx.out(kv('decided-by', decidedBy(disposition)))
-    if (disposition.reason) ctx.out(kv('reason', disposition.reason))
-    if (disposition.note) ctx.out(kv('note', disposition.note))
-  }
-  // The surface a human actually reads while deciding, so it is the one that most owes a
-  // ranking rather than a menu. `undefined` is stale with no decision pending, where no
-  // act but the re-gate is legal and the exits line already says exactly that (D131).
-  const shown = recommend({ gate, target, entries, upstream: upstreamId, stale, untrustedCmds: trustFor(ctx, target) })
-  if (shown) renderDecision(shown).forEach((l) => ctx.out(l))
-  else ctx.out(cmd('exits', liveExits(gate, target, entries, stale, upstreamId)))
+  decideViewLines(decideView(root, cfgR.value, loadCanon(root), spec.gate, target)).forEach((l) => ctx.out(l))
   return EXIT.OK
 }
 

@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { commandsRun, grantCommands, repoCommands, trustedCommands, unsafeLeft } from '../allowlist.js'
+import { commandsRun, grantCommands, pendingCmds, trustListing, unsafeLeft } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -9,7 +9,7 @@ import { acquireLock } from '../lock.js'
 import { ok, renderRefusal, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
-import { cmd as cmdLine, hasControl, kv, rows, shellArg, visible } from '../toon.js'
+import { cmd as cmdLine, hasControl, kv, rows, visible } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]"
@@ -67,36 +67,30 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const canon = loadCanon(root)
-  const trusted = new Set(trustedCommands(root))
-  const status = (cmd: string) => trusted.has(cmd) ? 'trusted' : hasControl(cmd) ? 'unsafe' : 'untrusted'
+  // Rows 139/203. The listing is a model the verb prints: its rows, its counts and the grants it
+  // offers. An unknown target is its refusal.
   // Every repo-authored field is shown escaped: a criterion's or a need's id rides in `source`.
-  const shown = (c: { cmd: string; source: string; doc?: string }): Record<string, unknown> => ({
-    ...c, cmd: visible(c.cmd), source: visible(c.source), ...(c.doc !== undefined ? { doc: visible(c.doc) } : {}), status: status(c.cmd),
-  })
+  const listingR = trustListing(root, cfgR.value, canon, id)
+  if (!listingR.ok) { renderRefusal(listingR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  const listing = listingR.value
+  const show = (fields: string[]) => rows('commands', fields, listing.rows.map((r) => ({ ...r }))).forEach((l) => ctx.out(l))
   // Nothing left to grant is not "all trusted" while an unsafe command stays blocked.
-  const settled = (cmds: string[]): number => {
-    const unsafe = cmds.filter((c) => status(c) === 'unsafe').length
+  const settled = (unsafe: number): number => {
     if (unsafe === 0) { ctx.out(kv('trust', 'every command is already trusted')); return EXIT.OK }
     ctx.out(kv('trust', unsafeLeft(unsafe)))
     return EXIT.FINDINGS
   }
 
   if (id === undefined) {
-    const all = repoCommands(cfgR.value, canon)
-    rows('commands', ['cmd', 'source', 'doc', 'status'], all.map(shown)).forEach((l) => ctx.out(l))
-    const pending = [...new Set(all.map((c) => c.cmd).filter((c) => status(c) === 'untrusted'))]
-    if (pending.length === 0) return settled(all.map((c) => c.cmd))
-    ctx.out(kv('trust', `${pending.length} untrusted — grant each from the target that runs it: witness trust <id> --cmd '<cmd>'`))
+    show(['cmd', 'source', 'doc', 'status'])
+    if (listing.untrusted === 0) return settled(listing.unsafe)
+    ctx.out(kv('trust', `${listing.untrusted} untrusted — grant each from the target that runs it: witness trust <id> --cmd '<cmd>'`))
     return EXIT.FINDINGS
   }
 
-  const doc = findById(canon, id)
-  if (!doc) {
-    renderRefusal([v('artifact', 'unknown-artifact', id, 'an existing canon doc id', 'witness index')])
-      .forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
-  }
-  const listed = commandsRun(cfgR.value, canon, doc)
+  // A named command is checked against the raw commands the target's flow runs, which the listing's
+  // rows hold only escaped: a grant is of the exact bytes. The listing resolved the target.
+  const listed = commandsRun(cfgR.value, canon, findById(canon, id)!)
   const cmds = [...new Set(listed.map((c) => c.cmd))]
   const unsafe = named.find(hasControl)
   if (unsafe !== undefined) {
@@ -114,10 +108,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('trust', `${id} runs no command — nothing to trust`))
     return EXIT.OK
   }
-  rows('commands', ['cmd', 'source', 'status'], listed.map(shown)).forEach((l) => ctx.out(l))
-  // An unsafe command is listed and never pending: no flag and no prompt grants it.
-  const pending = cmds.filter((c) => status(c) === 'untrusted')
-  if (pending.length === 0) return settled(cmds)
+  show(['cmd', 'source', 'status'])
+  if (listing.untrusted === 0) return settled(listing.unsafe)
+  // Row 205. What is pending is the listing's, read from allow.json once with its rows: a grant
+  // landing since cannot make the grant disagree with the rows just printed. An unsafe command is
+  // listed and never pending: no flag and no prompt grants it.
+  const pending = pendingCmds(listing)
 
   // One command at a time, because a blanket yes is a different act from four considered ones:
   // the named ones, all at a terminal's --yes, or the terminal's own per-command prompt.
@@ -134,8 +130,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (named.length > 0) { ctx.out(kv('trust', `already trusted: ${named.join(' · ')}`)); return EXIT.OK }
     // Listing is the honest answer for a caller that granted nothing: exiting 0 would say the
     // opposite. Each line pastes as one argument, whatever quotes the command carries.
-    ctx.out(kv('trust', `${pending.length} untrusted — the human names each to trust it`))
-    for (const c of pending) ctx.out(cmdLine('run', `witness trust ${id} --cmd ${shellArg(c)}`))
+    ctx.out(kv('trust', `${listing.untrusted} untrusted — the human names each to trust it`))
+    for (const a of listing.pending) ctx.out(cmdLine('run', a.line))
     return EXIT.FINDINGS
   }
 

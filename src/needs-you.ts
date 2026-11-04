@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { grantOf, shownCmd } from './allowlist.js'
+import { cliAct, exitsLine, type Act } from './act.js'
+import { grantAct, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
@@ -7,9 +8,10 @@ import { TARGETLESS } from './drive-presence.js'
 import { handoffLine, resolveDriver } from './harness.js'
 import { readStream } from './journal.js'
 import { unmetNeeds } from './needs.js'
+import type { Decision } from './recommend.js'
 import type { DecisionEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
-import { hasControl } from './toon.js'
+import { visible } from './toon.js'
 import { pendingTxn } from './txn.js'
 import { owedDecisions, parkedGates } from './verbs/next.js'
 import { recoverChoice } from './verbs/recover.js'
@@ -20,16 +22,34 @@ import { recoverChoice } from './verbs/recover.js'
 // row falls back to a template rendered here from canon. The key never depends on that text:
 // drive, `next` and `wait` compute the same token for the same state.
 
-export type WaitKind =
-  | 'pending-txn' | 'design-look' | 'trust-grant' | 'need' | 'decision' | 'conversation' | 'merge'
-  | 'parked' | 'stuck' | 'capped'
+// Rows 139/203. A command a trust grant names, escaped as every row prints it, beside its source,
+// with the grant only when the verb would take it: a model never holds the raw bytes of an unsafe
+// command, nor an act for one.
+export interface TrustGrant { cmd: string; source: string; grant?: Act }   // cmd, source: visible(); no grant when unsafe
 
-export interface NeedYou {
-  kind: WaitKind; target: string; rows: string[]; key: string
+interface ItemBase {
+  target: string; key: string
   // A line the report says but nobody waits on (a grill with nothing queued): never counted,
   // notified or woken for, and outside the token.
   notice?: true
 }
+
+// Rows 139/203. Each item is a model: the facts its rows print and the acts its commands are, so a
+// reader of the model is handed what the text offers. `needYouRows` lays it out.
+export type NeedYou = ItemBase & (
+  | { kind: 'pending-txn'; op: string; recover: Decision }
+  | { kind: 'design-look'; open: Act; show: Act }
+  | { kind: 'trust-grant'; commands?: TrustGrant[]; list: Act }          // no commands: read from the live folder
+  | { kind: 'need'; need: string; text: string; holds: string[]; satisfy: Act }
+  | { kind: 'decision'; gate: string; show: Act }
+  | { kind: 'conversation'; ask?: string; handoff?: string }
+  | { kind: 'merge'; pr?: string }
+  // why: the policy's note, or `parked at <anchor>` with a reviewer's anchor as printed (R5/R17): a renderer spells it out
+  | { kind: 'parked'; gate: string; round: number; why: string; reopen: Act[] }
+  | { kind: 'stuck'; why?: string; retry?: Act }
+  | { kind: 'capped'; why?: string; retry?: Act })                       // two members, so `Extract` narrows each
+
+export type WaitKind = NeedYou['kind']
 
 export type AsideFacts = Pick<Aside, 'target' | 'kind'> & Partial<Pick<Aside, 'gate' | 'stop' | 'line' | 'why' | 'trust'>>
 
@@ -47,48 +67,40 @@ export const WAIT_KINDS: ReadonlySet<WaitKind> =
 
 const prOf = (line: string): string | undefined => /PR #(\d+)/.exec(line)?.[1]
 
-// Row 205. One wait per command, each with its source and the grant that names it. A command
-// the verb would not take (anything outside printable ASCII) gets a note, never a `run:`. An
-// aside with no commands (one read from the live folder) names the listing form.
-function trustRows(a: AsideFacts): string[] {
-  if (a.trust === undefined || a.trust.length === 0) return [`wait: trust grant · ${a.target}`, `  run: witness trust ${a.target}`]
-  return a.trust.flatMap((c) => [
-    `wait: trust grant · ${a.target} · ${shownCmd(c)}`,
-    `  ${hasControl(c.cmd) ? 'note' : 'run'}: ${grantOf(a.target, c)}`,
-  ])
-}
-
-export function needsYou(root: string, ctx: Ctx, cfg: Config, canon: Canon, aside: readonly AsideFacts[]): NeedYou[] {
+export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[]): NeedYou[] {
   const items: NeedYou[] = []
   const named = new Set<string>()
-  const add = (kind: WaitKind, target: string, rows: string[], key = `${kind}:${target}`) => {
-    named.add(target)
-    items.push({ kind, target, rows, key })
+  const add = (item: NeedYou) => {
+    named.add(item.target)
+    items.push(item)
   }
   // A crash no session could recover blocks every write: it is named first (F4).
   const txn = pendingTxn(root)
   if (txn !== undefined) {
-    items.push({ kind: 'pending-txn', target: TARGETLESS, key: 'pending-txn:-',
-      rows: [`wait: pending transaction · ${txn.op}`, `  run: ${recoverChoice(root, txn).options[0]!.command}`] })
+    items.push({ kind: 'pending-txn', target: TARGETLESS, key: 'pending-txn:-', op: txn.op, recover: recoverChoice(root, txn) })
   }
   for (const a of aside.filter((x) => x.kind === 'kept' && (x.stop === 'design-look' || x.stop === 'trust-grant'))) {
     if (named.has(a.target)) continue
+    const t = a.target
     if (a.stop === 'design-look') {
-      add('design-look', a.target,
-        [`wait: design look · ${a.target}`, `  run: witness design ${a.target} --open`, `  then: witness decide design ${a.target} --show`])
-    } else add('trust-grant', a.target, trustRows(a))
+      add({ kind: 'design-look', target: t, key: `design-look:${t}`,
+        open: cliAct('design', t, '--open'), show: cliAct('decide', 'design', t, '--show') })
+    } else {
+      const commands = (a.trust ?? []).map((c): TrustGrant => {
+        const grant = grantAct(t, c)
+        return { cmd: visible(c.cmd), source: visible(c.source), ...(grant !== undefined ? { grant } : {}) }
+      })
+      add({ kind: 'trust-grant', target: t, key: `trust-grant:${t}`, ...(commands.length > 0 ? { commands } : {}), list: cliAct('trust', t) })
+    }
   }
   for (const u of unmetNeeds(canon)) {
-    const held = u.type === 'spec' && u.holds.length > 0
-    add('need', u.doc, [
-      held ? `wait: held criterion · ${u.doc} · ${u.text} holds ${u.holds.join(' · ')}` : `wait: unmet need · ${u.doc} · ${u.text}`,
-      `  run: ${u.satisfy}`,
-    ], `need:${u.doc}:${u.need}`)
+    add({ kind: 'need', target: u.doc, key: `need:${u.doc}:${u.need}`, need: u.need, text: u.text, holds: u.holds,
+      satisfy: cliAct('satisfy', u.doc, '--need', u.ref) })
   }
   for (const o of owedDecisions(root, canon)) {
     if (named.has(o.target)) continue
-    add('decision', o.target, [`wait: decision · ${o.gate} ${o.target}`, `  run: witness decide ${o.gate} ${o.target} --show`],
-      `decision:${o.target}:${o.gate}`)
+    add({ kind: 'decision', target: o.target, key: `decision:${o.target}:${o.gate}`, gate: o.gate,
+      show: cliAct('decide', o.gate, o.target, '--show') })
   }
   const driver = resolveDriver(ctx.env, cfg.harness)
   for (const a of aside.filter((x) => x.kind === 'conversation' || x.kind === 'merge')) {
@@ -100,17 +112,15 @@ export function needsYou(root: string, ctx: Ctx, cfg: Config, canon: Canon, asid
       // queued ask.
       const ask = a.target === TARGETLESS && a.line !== undefined ? / --ask (\S+)/.exec(a.line)?.[1] : undefined
       if (a.target === TARGETLESS && a.line !== undefined && ask === undefined) {
-        items.push({ kind: 'conversation', target: TARGETLESS, key: 'conversation:-', notice: true,
-          rows: ['nothing queued — /witness <what to build> in a chat'] })
+        items.push({ kind: 'conversation', target: TARGETLESS, key: 'conversation:-', notice: true })
         continue
       }
-      const who = a.target === TARGETLESS ? `brainstorm${ask !== undefined ? ` · ask ${ask}` : ''}` : a.target
-      add('conversation', a.target, [`wait: conversation · ${who}`,
-        ...(driver.ok ? [`  run: ${handoffLine(driver.value.harness, root, undefined)}`] : [])])
+      add({ kind: 'conversation', target: a.target, key: `conversation:${a.target}`, ...(ask !== undefined ? { ask } : {}),
+        ...(driver.ok ? { handoff: handoffLine(driver.value.harness, root, undefined) } : {}) })
     } else {
       const meta = findById(canon, a.target)?.meta.pr
       const pr = (a.line !== undefined ? prOf(a.line) : undefined) ?? (meta !== undefined ? String(meta) : undefined)
-      add('merge', a.target, [`wait: merge · ${a.target}${pr ? ` · PR #${pr}` : ''}`, ...(pr ? [`  run: gh pr merge ${pr}`] : [])])
+      add({ kind: 'merge', target: a.target, key: `merge:${a.target}`, ...(pr ? { pr } : {}) })
     }
   }
   for (const p of parkedGates(root, canon)) {
@@ -119,17 +129,65 @@ export function needsYou(root: string, ctx: Ctx, cfg: Config, canon: Canon, asid
       .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
     const why = stopped?.selected === 'policy' && stopped.note ? stopped.note : `parked at ${p.anchor}`
     items.push({ kind: 'parked', target: p.target, key: `parked:${p.target}:${p.gate}`,
-      rows: [`parked: ${p.target} · ${p.gate} round ${p.round} — ${why}`, `  run: ${p.reopen}`] })
+      gate: p.gate, round: p.round, why, reopen: p.reopen })
   }
   // A capped target the policy could not park carries no gate (drive.ts): it is stuck too. One
   // the policy parked is the parked row above, read from the journal.
   for (const a of aside.filter((x) => x.kind === 'stuck' || (x.kind === 'capped' && x.gate === undefined))) {
     // Final review: the way back is named — a fix witness cannot see is the human's `retry`.
     items.push({ kind: a.kind as 'stuck' | 'capped', target: a.target, key: `${a.kind}:${a.target}`,
-      rows: [`stuck: ${a.target} — ${a.why ?? `witness log ${a.target}`}`,
-        ...(a.target !== TARGETLESS ? [`  run: witness retry ${a.target}`] : [])] })
+      ...(a.why !== undefined ? { why: a.why } : {}),
+      ...(a.target !== TARGETLESS ? { retry: cliAct('retry', a.target) } : {}) })
   }
   return items
+}
+
+// Row 205. One wait per command, each with its source and the grant that names it. A command
+// the verb would not take (anything outside printable ASCII) gets a note, never a `run:`. An
+// aside with no commands (one read from the live folder) names the listing form.
+function trustRows(item: Extract<NeedYou, { kind: 'trust-grant' }>): string[] {
+  if (item.commands === undefined || item.commands.length === 0) {
+    return [`wait: trust grant · ${item.target}`, `  run: ${item.list.line}`]
+  }
+  return item.commands.flatMap((c) => [
+    `wait: trust grant · ${item.target} · ${c.cmd} (${c.source})`,
+    c.grant !== undefined ? `  run: ${c.grant.line}` : `  note: ${UNGRANTABLE}`,
+  ])
+}
+
+// Rows 139/203. An item's rows, laid out from its facts: every command a row offers is an act's
+// line, and only labels, separators and prose pointers are added here.
+export function needYouRows(item: NeedYou): string[] {
+  switch (item.kind) {
+    case 'pending-txn':
+      return [`wait: pending transaction · ${item.op}`, `  run: ${item.recover.options[0]!.command}`]
+    case 'design-look':
+      return [`wait: design look · ${item.target}`, `  run: ${item.open.line}`, `  then: ${item.show.line}`]
+    case 'trust-grant':
+      return trustRows(item)
+    case 'need':
+      return [
+        item.holds.length > 0
+          ? `wait: held criterion · ${item.target} · ${item.text} holds ${item.holds.join(' · ')}`
+          : `wait: unmet need · ${item.target} · ${item.text}`,
+        `  run: ${item.satisfy.line}`,
+      ]
+    case 'decision':
+      return [`wait: decision · ${item.gate} ${item.target}`, `  run: ${item.show.line}`]
+    case 'conversation': {
+      if (item.notice === true) return ['nothing queued — /witness <what to build> in a chat']
+      const who = item.target === TARGETLESS ? `brainstorm${item.ask !== undefined ? ` · ask ${item.ask}` : ''}` : item.target
+      return [`wait: conversation · ${who}`, ...(item.handoff !== undefined ? [`  run: ${item.handoff}`] : [])]
+    }
+    case 'merge':
+      return [`wait: merge · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''}`, ...(item.pr ? [`  run: gh pr merge ${item.pr}`] : [])]
+    case 'parked':
+      return [`parked: ${item.target} · ${item.gate} round ${item.round} — ${item.why}`, `  run: ${exitsLine(item.reopen)}`]
+    case 'stuck':
+    case 'capped':
+      return [`stuck: ${item.target} — ${item.why ?? `witness log ${item.target}`}`,
+        ...(item.retry !== undefined ? [`  run: ${item.retry.line}`] : [])]
+  }
 }
 
 // The first 12 hex of a sha1 over the sorted keys of what is owed: order-free, text-free.

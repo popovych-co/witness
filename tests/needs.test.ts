@@ -89,9 +89,9 @@ describe('unmetNeeds (A10)', () => {
       steps: [{ id: 's1', title: 't', criteria: ['ac-rotate', 'ac-prod'] }],
     })
     expect(unmetNeeds(loadCanon(repo.root))).toEqual([
-      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', satisfy: 'witness satisfy auth-refresh --need prod' },
-      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', satisfy: 'witness satisfy auth-refresh --need 2' },
-      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1' },
+      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', ref: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' },
+      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', ref: '2', satisfy: 'witness satisfy auth-refresh --need 2' },
+      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', ref: '1', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1' },
     ])
   })
   it('a satisfied need and a started plan need are not listed', async () => {

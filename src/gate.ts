@@ -12,19 +12,20 @@ import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cmd, kv, logSafe, rows } from './toon.js'
+import { cmd, kv } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
 import {
   docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt,
   type ContentKind, type Lens, type LensDoc,
 } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
+import { gateRunLines, gateRunView } from './gate-run-view.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
 import {
   basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
 } from './delta.js'
 import {
-  ROUND_BOUND, appendKind, boundReached, lastGateRun, liveExits, roundBudget,
+  appendKind, boundReached, lastGateRun, liveExits,
   roundsSinceApprove, runsSinceReset,
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
@@ -227,21 +228,6 @@ export function lensPrompt(lens: Lens, setup: string, menu: string, body: string
   return `${lens.contents}\n\n${docsBlock(lens.docs ?? [])}${setup}${menu ? `${menu}\n\n` : ''}## Reviewed content\n\n${body}\n`
 }
 
-// A finding's anchor and claim are a reviewer's free text, printed on a human's terminal: spelled
-// out (`logSafe`) so an escape sequence or bidi override cannot paint over the row (row 215).
-export function findingRows(verdicts: ReviewerVerdict[]): Array<Record<string, string>> {
-  return verdicts.flatMap((rv) =>
-    rv.findings.map((f) => ({
-      reviewer: rv.reviewer, blocking: String(f.blocking),
-      pin: f.contradicts_pin !== undefined ? `#${f.contradicts_pin}` : '',
-      anchor: logSafe(typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`), claim: logSafe(f.claim),
-    })))
-}
-
-export function malformedRows(malformed: NonNullable<GateRunEntry['malformed']>): Array<Record<string, string>> {
-  return malformed.flatMap((m) => m.violations.map((x) => ({ reviewer: m.reviewer, field: x.field, rule: x.rule })))
-}
-
 // The gate's own reviewers for this class. Their shape — a non-empty list, or a map naming
 // every class — is refused when the file loads (row 13, amended by 193), so nothing is left
 // to refuse here.
@@ -252,54 +238,19 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 
 // `entries` is the stream AS OF AFTER this entry: without it the renderer cannot tell the
 // round that spends the budget from any other, and rows 109/110 are both about that round.
-// `help: false` is for callers that render their own `exits:` line (`decide --show`).
+// `help: false` is for callers that render their own `exits:` line (`decide --show`, which
+// prints the run's view itself — `gateRunLines` — and never reaches this tail).
+// Rows 139/203. The run's lines come from its view (src/gate-run-view.ts); only the help tail,
+// which loads canon and the trust list, stays here.
 export function renderGateRun(
   ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume',
   opts: { entries?: Entry[]; help?: boolean; upstream?: string } = {},
 ): void {
-  const entries = opts.entries ?? []
-  const budget = opts.entries ? roundBudget(entries, entry.gate) : ROUND_BOUND
-  const atBound = opts.entries !== undefined && boundReached(entries, entry.gate)
-  ctx.out(kv('gate', entry.gate))
-  ctx.out(kv('target', entry.artifact))
-  ctx.out(kv('round', `${entry.round} of ${budget}${mode === 'resume' ? ' (resume — content unchanged)' : ''}`))
-  ctx.out(kv('reviewed', entry.reviewed_sha.slice(0, 7)))
-  ctx.out(kv('model', `${entry.model}${entry.cached ? ' · cached' : ''}`))
-  if (entry.delta) ctx.out(kv('review', `delta since round ${entry.delta.round}`))
-  if (entry.skipped?.length) ctx.out(kv('skipped', entry.skipped.join(' · ')))
-  if (entry.fallback?.length) ctx.out(kv('fallback', entry.fallback.join(' → ')))
-  if (entry.rerolled?.length) ctx.out(kv('rerolled', entry.rerolled.join(' · ')))
-  if (entry.carried) {
-    ctx.out(kv('carried', `${entry.carried.lenses.join(' · ')} — answered in run ${entry.carried.run} on this content and prompts`))
-  }
-  ctx.out(rows('checks', ['name', 'ok', 'detail'],
-    entry.checks.map((c) => ({ name: c.name, ok: String(c.ok), detail: c.detail ?? '' }))).join('\n'))
-  // Row 179: what the lane did not run, beside the row that passed without it.
-  for (const h of entry.checks.flatMap((c) => c.held ?? [])) ctx.out(`held: ${h.criterion} — ${h.need} unmet · ${h.satisfy}`)
-  const findings = findingRows(entry.verdicts ?? [])
-  if (findings.length) ctx.out(rows('findings', ['reviewer', 'blocking', 'pin', 'anchor', 'claim'], findings).join('\n'))
-  for (const f of (entry.verdicts ?? []).flatMap((rv) => rv.findings)) {
-    if (f.demoted !== undefined) ctx.out(kv('demoted', `${anchorKey(f.anchor)} — unchanged since round ${f.demoted}`))
-  }
-  if (entry.malformed?.length) {
-    ctx.out(rows('malformed', ['reviewer', 'field', 'rule'], malformedRows(entry.malformed)).join('\n'))
-  }
-  if (entry.standing) ctx.out(kv('standing-stop', entry.standing))
-  ctx.out(kv('outcome', entry.outcome))
-  if (entry.outcome !== 'passed') {
-    // Row 110. The round that SPENDS the budget is the one that has to say so. It rendered
-    // like any other, so the natural next act — fix the finding, re-gate — was advertised
-    // by the help line below and then refused twice: the gate short-circuits, and the edit
-    // that answered the finding forfeits `--approve` under D75. Nothing warned, and the
-    // finding is itself an instruction to edit. Printed above the `help:` suppression, not
-    // inside it: `decide --show` renders its own exits and is the surface a human reads
-    // while deciding — the one place this warning is most owed.
-    if (atBound) {
-      ctx.out(kv('last-round', 'the round budget is spent — the gate will not run again, and an edit from here forfeits --approve (the verdict would describe an older tree)'))
-    }
-    // Without `entries` this stays a pure formatter over the entry it was handed, and the
-    // off-bound triple is the right answer; with them it tells the truth at the bound too.
-    if (opts.help !== false) renderChoices(ctx, entry.gate, entry.artifact, entries, opts.upstream)
+  gateRunLines(gateRunView(entry, mode, opts.entries)).forEach((l) => ctx.out(l))
+  // Without `entries` this stays a pure formatter over the entry it was handed, and the
+  // off-bound triple is the right answer; with them it tells the truth at the bound too.
+  if (entry.outcome !== 'passed' && opts.help !== false) {
+    renderChoices(ctx, entry.gate, entry.artifact, opts.entries ?? [], opts.upstream)
   }
 }
 

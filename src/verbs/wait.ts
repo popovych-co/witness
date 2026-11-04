@@ -6,7 +6,7 @@ import { driveHolder, sessionMarker } from '../drive-presence.js'
 import { resolveDriver } from '../harness.js'
 import { primaryRoot } from '../gitio.js'
 import { lastEnd, liveDrive, takeWaiter, waiterState, type EndReason } from '../live.js'
-import { needsYou, needsYouToken, type NeedYou } from '../needs-you.js'
+import { needsYou, needsYouToken, needYouRows, type NeedYou } from '../needs-you.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { prState } from '../stamp.js'
@@ -52,7 +52,7 @@ export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { sinc
   }
   // The token names the list the chat last saw: anything else is news, said at once.
   if (opts.since !== undefined && needsYouToken(items) !== opts.since) {
-    return say(`wait: needs you — ${items.length} item(s)`, items.flatMap((i) => i.rows))
+    return say(`wait: needs you — ${items.length} item(s)`, items.flatMap((i) => needYouRows(i)))
   }
   const seen = new Set(items.map((i) => i.key))
   let prAt = clock.now()
@@ -72,7 +72,7 @@ export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { sinc
       if (items.length === 0) { ctx.out('wait: nothing owed'); return EXIT.OK }
     }
     const fresh: NeedYou[] = items.filter((i) => !seen.has(i.key))
-    if (fresh.length > 0) return say(`wait: needs you — ${fresh.length} item(s)`, fresh.flatMap((i) => i.rows))
+    if (fresh.length > 0) return say(`wait: needs you — ${fresh.length} item(s)`, fresh.flatMap((i) => needYouRows(i)))
     for (const k of [...seen]) if (!items.some((i) => i.key === k)) seen.delete(k)    // settled: silent
     // A merge left to the human: drive stamps nothing, so the chat is told and its `next`
     // stamps it. Read-only and slow.
