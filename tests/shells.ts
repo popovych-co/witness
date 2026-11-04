@@ -67,9 +67,15 @@ export function pasteIn(mode: Mode, line: string, cwd?: string): Pasted {
     const run = RUN[mode]
     const r = spawnSync(run.shell, run.args(line), {
       cwd: dir,
-      env: { PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir },
+      // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
+      // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
+      env: { PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null' },
       input: run.stdin ? `${line}\n` : '',
+      // An interactive bash or zsh ignores SIGTERM, the default, so a hung paste would hold the
+      // worker to its end. Probed 2026-11-04: `sleep 3` under a 500 ms timeout came back after
+      // 3020 ms with SIGTERM, and after 504 ms with SIGKILL.
       timeout: 10_000,
+      killSignal: 'SIGKILL',
     })
     if (r.error !== undefined) throw new Error(`${mode} did not run ${JSON.stringify(line)}: ${r.error.message}`)
     const markers = markersUnder(dir)
