@@ -138,4 +138,4 @@ Both routes take the verb's rule. The first is a backport of commit 19d5fc9 from
 
 - [ ] **Step 1:** Push `trust-printable` and open a PR against `main` in the house format (PR #82's: summary, What changes, Review, Verification).
 - [ ] **Step 2:** After it merges, the user runs `pnpm release patch` (0.28.2).
-- [ ] **Step 3:** Then merge `main` into `structured-models` (PR #83) and resolve `src/recommend.ts`, `src/verbs/decide.ts`, `src/allowlist.ts`, `src/verbs/trust.ts` and the two test files. Keep the branch's act-based code, which implements the same rule, and keep this patch's `ensureTrusted` change and row 237.
+- [ ] **Step 3:** Then merge `main` into `structured-models` (PR #83) and resolve `src/recommend.ts`, `src/verbs/decide.ts`, `src/allowlist.ts`, `src/verbs/trust.ts`, `src/needs.ts` and the two test files. Keep the branch's act-based code, which implements the same rule, and keep this patch's `ensureTrusted` change and row 237. In `src/needs.ts` the conflict is its import line: keep both the branch's `cliAct` import and this patch's `UNGRANTABLE`, the remedy a blocked `cmd:` need now carries when its command is not printable ASCII.
