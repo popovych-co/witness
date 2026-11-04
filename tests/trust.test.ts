@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { ensureTrusted } from '../src/allowlist.js'
 import { readStream } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
-import { SPEC_META, approve, patchConfig, seededRepo, stampLive, writePlan, writeSpec } from './helpers.js'
+import { SPEC_META, approve, fakeCtx, patchConfig, seededRepo, stampLive, writePlan, writeSpec } from './helpers.js'
 
 // D154. Headless gates block every untrusted per-criterion command (`allowlist.ts`,
 // `!isTTY → blocked`) — the Aug 1 all-four-`ac-*`-fail false negative. Approvals are
@@ -301,5 +302,50 @@ describe('the decision block prices trust (D154)', () => {
     expect(d.options.some((o) => o.command.endsWith(' --trust-cmds'))).toBe(false)
     expect(plain.tradeoff).toContain('pnpm test \\u{202e} hs | live lruc')
     expect(plain.tradeoff).not.toContain('\u202e')
+  })
+})
+
+// Row 237. Before witness runs an untrusted command, ensureTrusted asks at a terminal, and "y"
+// granted the command the prompt showed raw. A command the human cannot read whole is never
+// offered there.
+describe('ensureTrusted (row 237)', () => {
+  // A ctx (a terminal unless `tty: false`) at which any prompt fails the test, and is counted.
+  function noPrompt(root: string, opts: { tty?: boolean; env?: Record<string, string> } = {}) {
+    const t = { asked: 0, ctx: fakeCtx(root, { tty: true, ...opts }) }
+    t.ctx.ask = async () => { t.asked++; throw new Error('asked') }
+    return t
+  }
+
+  it('a non-printable command at a terminal is blocked, never asked and never granted', async () => {
+    const repo = await seededRepo()
+    const t = noPrompt(repo.root)
+    expect(await ensureTrusted(repo.root, t.ctx, 'bad\u001bcmd')).toBe('blocked')
+    expect(await ensureTrusted(repo.root, t.ctx, 'pnpm test \u202e hs | live lruc')).toBe('blocked')   // Review Focus 1
+    expect(t.asked).toBe(0)
+    expect(() => repo.read('.witness/allow.json')).toThrow()
+  })
+
+  it('a printable command at a terminal is still asked, and granted on y', async () => {
+    const repo = await seededRepo()
+    expect(await ensureTrusted(repo.root, fakeCtx(repo.root, { tty: true, answers: ['y'] }), 'echo ok')).toBe('trusted')
+    expect(allowed(repo)).toEqual(['echo ok'])
+  })
+
+  it("automation and the human's own list are unchanged (Review Focus 3 and 4)", async () => {
+    const repo = await seededRepo()
+    const automation = noPrompt(repo.root, { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(await ensureTrusted(repo.root, automation.ctx, 'bad\u001bcmd')).toBe('trusted')
+    repo.write('.witness/allow.json', JSON.stringify({ commands: ['bad\u001bcmd'] }))   // a hand edit
+    const listed = noPrompt(repo.root)
+    expect(await ensureTrusted(repo.root, listed.ctx, 'bad\u001bcmd')).toBe('trusted')
+    expect(automation.asked + listed.asked).toBe(0)
+  })
+
+  it('without a terminal, a non-printable command is blocked as before', async () => {
+    const repo = await seededRepo()
+    const t = noPrompt(repo.root, { tty: false })
+    expect(await ensureTrusted(repo.root, t.ctx, 'bad\u001bcmd')).toBe('blocked')
+    expect(t.asked).toBe(0)
+    expect(() => repo.read('.witness/allow.json')).toThrow()
   })
 })

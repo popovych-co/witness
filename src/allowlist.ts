@@ -149,6 +149,10 @@ export async function ensureTrusted(root: string, ctx: Ctx, cmd: string): Promis
   if (ctx.env.WITNESS_TRUST_CMDS === '1') return 'trusted'
   const commands = load(root)
   if (commands.includes(cmd)) return 'trusted'
+  // Row 237. The prompt is where a human reads the command, so a command they cannot read whole —
+  // one holding any character outside printable ASCII — is never offered, and so never granted
+  // here. Automation and the human's own list, above, still answer first.
+  if (hasControl(cmd)) return 'blocked'
   if (!ctx.isTTY) return 'blocked'
   const answer = await ctx.ask(`witness wants to run: ${cmd}\ntrust this command? saves to .witness/allow.json (gitignored) [y/N]`)
   if (!answer.trim().toLowerCase().startsWith('y')) return 'declined'
