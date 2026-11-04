@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/refusal.js'
@@ -181,6 +181,45 @@ describe('witness decide', () => {
     expect(allow.commands).toContain('echo ok')
     const entry = readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')
     expect(entry?.via).toBe('decide')
+  })
+
+  // Row 237. The grant takes what `witness trust` would and nothing else: a `cmd:` criterion
+  // holding a character outside printable ASCII stays blocked, and the output counts it.
+  const UNSAFE_LINE = 'trust: 1 carry characters outside printable ASCII — never granted here · rewrite where it is written'
+
+  it('--trust-cmds grants only printable commands and names what stays blocked (row 237)', async () => {
+    const { repo } = await stoppedGate()
+    const written = await writeSpec(repo, 'auth-refresh', {
+      ...SPEC_META, criteria: [{ id: 'ac-smoke', cmd: 'echo ok' }, { id: 'ac-bad', cmd: 'bad\u001bcmd' }],
+    })
+    expect(written.code).toBe(0)
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve', '--trust-cmds'])
+
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain(`trusted: echo ok\n${UNSAFE_LINE}\n`)
+    expect(res.stdout).not.toContain('\u001b')
+    const allow = JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }
+    expect(allow.commands).toEqual(['echo ok'])
+    expect(readStream(repo.root, repo.effort).findLast((e) => e.t === 'trust')?.cmds).toEqual(['echo ok'])
+  })
+
+  it('with only a non-printable command, --trust-cmds grants nothing (row 237)', async () => {
+    const { repo } = await stoppedGate()
+    const written = await writeSpec(repo, 'auth-refresh', {
+      ...SPEC_META, criteria: [{ id: 'ac-bad', cmd: 'bad\u001bcmd' }],
+    })
+    expect(written.code).toBe(0)
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--approve', '--trust-cmds'])
+
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain(`trusted: nothing to grant\n${UNSAFE_LINE}\n`)
+    expect(res.stdout).not.toContain('already trusted')
+    expect(res.stdout).not.toContain('\u001b')
+    const allowed = existsSync(join(repo.root, '.witness', 'allow.json'))
+      ? (JSON.parse(repo.read('.witness/allow.json')) as { commands: string[] }).commands : []
+    expect(allowed).not.toContain('bad\u001bcmd')
   })
 
   it('a grant rides an approval and nothing else (D154)', async () => {

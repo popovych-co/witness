@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
-import { untrustedCmdsFor } from '../allowlist.js'
+import { unsafeLeft, untrustedCmdsFor } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
@@ -21,7 +21,7 @@ import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
-import { cmd, kv, rows } from '../toon.js'
+import { cmd, hasControl, kv, rows } from '../toon.js'
 import {
   ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, openReopen, pendingDecision, repairGranted,
   roundsSinceApprove, type DecisionEntry, type GateRunEntry,
@@ -681,7 +681,12 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // and a grant it could not land is refused with its rows and the exit says so.
   let grantExit: number = EXIT.OK
   if (trustCmds) {
-    const granted = untrustedCmdsFor(root, criteriaOwner(canon, target))
+    // Row 205. The grant takes what `witness trust` would and nothing else: a command holding a
+    // character outside printable ASCII is never granted, so it stays blocked and is counted, and
+    // "nothing to grant" claims every criterion trusted only when none is left that way.
+    const untrusted = untrustedCmdsFor(root, criteriaOwner(canon, target))
+    const granted = untrusted.filter((c) => !hasControl(c))
+    const unsafe = untrusted.length - granted.length
     if (granted.length > 0) {
       const res = grantTrust(ctx, root, target, granted, 'decide')
       if (res.ok) ctx.out(kv('trusted', granted.join(' · ')))
@@ -691,8 +696,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
         grantExit = res.violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
       }
     } else {
-      ctx.out(kv('trusted', 'nothing to grant — every cmd: criterion was already trusted'))
+      ctx.out(kv('trusted', unsafe === 0 ? 'nothing to grant — every cmd: criterion was already trusted' : 'nothing to grant'))
     }
+    if (unsafe > 0) ctx.out(kv('trust', unsafeLeft(unsafe)))
   }
   // Row 173: a decision nobody typed says so, with the rule it acted on.
   const by = act.selected === 'policy' || act.selected === 'arbiter'
