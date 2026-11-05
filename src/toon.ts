@@ -12,13 +12,21 @@ const spell = (c: string): string =>
   c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
     : c.codePointAt(0)! < 0x100 ? `\\x${c.codePointAt(0)!.toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0)!.toString(16)}}`
 
-// Row 239 (ruling R24). A character that would split the line a word prints on: a control character
-// (a newline, a carriage return, a tab, ESC, a C1 control) or the line and paragraph separators
-// U+2028/U+2029, which editors and some terminals render as a line break. A physical line that
-// starts `run:` is a line the skills run, so a word holding one is never offered (`withheldOn`), on
-// any platform, and the quoter spells it out (`shellWord`), so the line shown stays one line.
+// A command a human is asked to trust, or any word offered to be pasted, is repo-authored text: a
+// carriage return or an escape sequence could paint a different command over the real one, a bidi
+// override reorder it (Trojan Source), an invisible filler hide a second command beside it. A
+// denylist always misses one, so the rule is an allowlist: printable ASCII shows as it is, anything
+// else is spelled out (rows 205/237, ruling R27), and a word carrying any of it is never offered.
+const UNSHOWABLE = /[^\x20-\x7e]/u
+export const hasControl = (s: string): boolean => UNSHOWABLE.test(s)
+export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), spell)
+
+// Row 239 (ruling R24). The subset of the unshowable that would split the line a word prints on: a
+// control character (a newline, a carriage return, a tab, ESC, a C1 control) or the line and
+// paragraph separators U+2028/U+2029, which editors and some terminals render as a line break. A
+// physical line that starts `run:` is a line the skills run. Its message takes precedence in
+// `withheldOn`, since it is the sharper reason, but every unshowable word is withheld all the same.
 const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u
-const LINE_BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/gu
 
 // A shell word is quoted only when it needs it, so the common line stays the one a human
 // types — a path in drive's watch line, a command in a `--cmd` grant (row 205). Row 239: never
@@ -45,21 +53,36 @@ export const psArg = (p: string): string =>
 // Ruling R22. On Windows a line is also run through the agent's Bash tool, which is Git Bash: a
 // skill runs a grant or the canon guard's adopt there. A backslash means nothing to PowerShell and
 // escapes the next character in Git Bash, which reads a bare `C:\w` as `C:w`, so a word holding one
-// prints single-quoted, where both read it as written. With each quote-like withheld (`withheldOn`),
-// every word Windows offers reads the same in PowerShell and in Git Bash.
-// Ruling R24. A character that would split the line is spelled out first, so a word holding one
-// prints quoted on one line. Such a word is never offered, so its line need not be exact.
+// prints single-quoted, where both read it as written.
 export type Platform = NodeJS.Platform
 const WINDOWS_FLAG = /^--?[A-Za-z][A-Za-z0-9-]*$/
+// The quoting alone, for a word taken as given: bare in the platform's safe set, else quoted.
+function quoteWord(w: string, platform: Platform): string {
+  if (platform !== 'win32') return shellArg(w)
+  return WINDOWS_FLAG.test(w) ? w : w.includes('\\') ? psQuoted(w) : psArg(w)
+}
+// Row 239. One quoter for every word witness prints on a line offered to be pasted. Off Windows the
+// line is pasted into bash, zsh or dash and a word prints as `shellArg` prints it; on win32 into
+// PowerShell and it prints as `psArg` prints it, but for a flag (B2) and a `\` word (R22). Ruling
+// R27: every character outside printable ASCII is spelled out first (`visible`), as the trust grant
+// has shown a command since rows 205/237 — a byte above 0x7f is a Meta key to an interactive shell's
+// line editor (probed), and a control character splits the line (R24). Such a word is withheld
+// (`withheldOn`), so this spelled form is only ever shown, never pasted, and need not be exact.
 export function shellWord(w: string, platform: Platform = process.platform): string {
-  const shown = w.replace(LINE_BREAKS, spell)
-  if (platform !== 'win32') return shellArg(shown)
-  return WINDOWS_FLAG.test(shown) ? shown : shown.includes('\\') ? psQuoted(shown) : psArg(shown)
+  return quoteWord(visible(w), platform)
 }
 
 // Row 239. Every word quoted, safe or not, as the handoff prints its path and `/witness`.
 export function quotedWord(w: string, platform: Platform = process.platform): string {
   return platform === 'win32' ? psQuoted(w) : posixQuoted(w)
+}
+
+// Row 239 (ruling R27). The quoting with the bytes kept, for the one line a foreign word never
+// reaches and that is never withheld: the watch line's local log path (the plan's B5). It holds no
+// `$(…)`, so an interactive shell's line editor can rearrange it but run nothing, and a human needs
+// the real path to read. The handoff's path is kept the same way, through `quotedWord`.
+export function shellWordExact(w: string, platform: Platform = process.platform): string {
+  return quoteWord(w, platform)
 }
 
 // Row 239. Another tool's command as a line to paste.
@@ -80,9 +103,10 @@ export function shellLine(argv: readonly string[], platform: Platform = process.
 // as strings side by side (probed: a grant of `echo 'x; …'` named `echo x; …` there). Elsewhere the
 // quoter alone makes every word text.
 const WINDOWS_RISKY = ['&', '|', '^', '<', '>', '"', '%', '!']
-const QUOTE_LIKES = ["'", '\u2018', '\u2019', '\u201a', '\u201b']
+const QUOTE_LIKES = ["'"]
 export function withheldOn(words: readonly string[], platform: Platform = process.platform): string | undefined {
   if (words.some((w) => LINE_BREAKING.test(w))) return 'not offered — it holds a control or line-break character, which would split the line'
+  if (words.some((w) => hasControl(w))) return "not offered — it holds a character outside printable ASCII, which a terminal's line editor can read as a command"
   if (platform !== 'win32') return undefined
   const held = (set: readonly string[]): string[] => set.filter((c) => words.some((w) => w.includes(c)))
   const risky = held(WINDOWS_RISKY)
@@ -137,15 +161,6 @@ export function shellWords(line: string): string[] | undefined {
   if (started) words.push(cur)
   return words
 }
-
-// Security review. A command a human is asked to trust is repo-authored text: a carriage return
-// or an escape sequence could paint a different command over the real one, a bidi override
-// reorder it (Trojan Source), an invisible filler hide a second command beside it. A denylist of
-// such characters always misses one, so the rule is an allowlist: printable ASCII shows as it
-// is, anything else is spelled out, and a command carrying any of it is never granted.
-const UNSHOWABLE = /[^\x20-\x7e]/u
-export const hasControl = (s: string): boolean => UNSHOWABLE.test(s)
-export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), spell)
 
 // Row 214. What a session drive runs wrote, on the human's terminal and in .witness/drive.log: the
 // same paint-over and reorder attacks, from text an agent controls (a command, a path, its prose).

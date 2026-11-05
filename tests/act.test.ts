@@ -28,7 +28,12 @@ describe('cliAct (rows 139/203)', () => {
       .toEqual(["witness decide plan p1 --revise --upstream '<why>'", "witness decide plan p1 --revise --note '<effort>'"])
   })
   it("every word but the CLI's own slots prints through the quoter", () => {
-    expect(cliAct('decide', 'plan', 'über plan', '--show').line).toBe("witness decide plan 'über plan' --show")
+    // Ruling R27: a non-ASCII target (the real one is an id) is never offered — withheld on every
+    // platform, its line shown with the character spelled out (`visible`), its argv run as given.
+    const u = cliAct('decide', 'plan', 'über plan', '--show')
+    expect(u.line).toBe("witness decide plan '\\xfcber plan' --show")
+    expect(u.withheld).toBe("not offered — it holds a character outside printable ASCII, which a terminal's line editor can read as a command")
+    expect(u.argv).toEqual(['decide', 'plan', 'über plan', '--show'])
     expect(cliAct('satisfy', 'Auth Refresh', '--need', 'prod access').line).toBe("witness satisfy 'Auth Refresh' --need 'prod access'")
     expect(cliAct('satisfy', 'auth-refresh', '--need', '').line).toBe("witness satisfy auth-refresh --need ''")
     expect(cliAct('trust', 'Auth Refresh', '--cmd', 'npm test').line).toBe("witness trust 'Auth Refresh' --cmd 'npm test'")

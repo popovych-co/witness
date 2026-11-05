@@ -93,7 +93,11 @@ export function dropStub(): void {
 // two pastes at once never share either, the markers found deleted, the stub directory and any
 // default `cwd` removed. Two pastes into one `cwd` at once would see each other's markers: a
 // caller pastes those in turn.
-export async function pasteIn(mode: Mode, line: string, cwd?: string): Promise<Pasted> {
+// Ruling R27: `cLocale` drops the 8-bit-clean INPUTRC, so an interactive bash runs in the C locale,
+// where readline reads a byte above 0x7f as a Meta key — the state a minimal container or SSH
+// session lands in. An offered line holds no such byte (they are withheld), so it runs there exactly;
+// the dedicated test uses this to prove it.
+export async function pasteIn(mode: Mode, line: string, cwd?: string, opts: { cLocale?: boolean } = {}): Promise<Pasted> {
   const stubs = mkdtempSync(join(tmpdir(), 'witness-paste-'))
   const dir = cwd ?? mkdtempSync(join(tmpdir(), 'witness-paste-cwd-'))
   try {
@@ -105,7 +109,8 @@ export async function pasteIn(mode: Mode, line: string, cwd?: string): Promise<P
     // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
     // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
     await ran(mode, line, dir, {
-      PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null', INPUTRC: inputrc,
+      PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null',
+      ...(opts.cLocale ? {} : { INPUTRC: inputrc }),
     })
     const markers = markersUnder(dir)
     for (const m of markers) rmSync(join(dir, m), { recursive: true, force: true })

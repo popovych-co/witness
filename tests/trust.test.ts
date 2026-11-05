@@ -349,10 +349,13 @@ describe('the trust listing is a model (rows 139/203)', () => {
       { cmd: 'test -d .git', source: `need: n${shown}`, status: 'untrusted' },
     ])
     expect(controlStrings(one.value.rows)).toEqual([])
-    // R15: the target stays raw, in the listing and in the grants it offers, and nothing else does
+    // R15: the target stays raw in the listing's `target` and in each pending grant's `argv`, which
+    // runs with no shell. Ruling R27: the grant's printed `line` is now spelled (the id is not ASCII,
+    // so the grant is withheld and shown spelled), so no shown string holds a control or bidi
+    // character — only the raw `target` and the raw `argv` do.
     expect(one.value.target).toBe(id)
     expect(one.value.pending.at(-1)).toEqual(cliAct('trust', id, '--cmd', 'test -d .git'))
-    expect(controlStrings(one.value)).toEqual([id, ...one.value.pending.flatMap((a) => [a.argv[1], a.line])])
+    expect(controlStrings(one.value)).toEqual([id, ...one.value.pending.map((a) => a.argv[1])])
     // the inbox's trust grant, from the sources drive hands it
     const items = needsYou(repo.root, { env: {} }, cfg, canon, [
       { target: id, kind: 'kept', stop: 'trust-grant', trust: sourced(cfg, canon, id, ['echo first', 'test -d .git']) },

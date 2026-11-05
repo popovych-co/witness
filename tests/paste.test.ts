@@ -385,6 +385,28 @@ describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote 
     }
   })
 
+  // Row 239 (ruling R27). A line witness offers is pasted into an interactive bash in the C locale,
+  // where readline reads a byte above 0x7f as a Meta key and can run a line-editing command — the
+  // state a minimal container or SSH session lands in, with no 8-bit-clean INPUTRC. Every offered
+  // line is printable ASCII (a word holding any other character is withheld), so the line editor
+  // only self-inserts it: each offered line below carries a hostile ASCII payload that runs code if
+  // it is not quoted, and pasted into a C-locale bash -i it makes no marker and hands its stub
+  // exactly the argv witness composed.
+  it.skipIf(!MODES.includes('bash-i'))('every offered line runs exactly in a C-locale interactive bash (row 239, ruling R27)', async () => {
+    const offered: Pasteable[] = []
+    for (const p of ['$(touch M1)', '`touch M2`', ';touch M5;']) {
+      offered.push({ line: cliAct('satisfy', `p1${p}`, '--need', `n${p}`).line, calls: [['witness', 'satisfy', `p1${p}`, '--need', `n${p}`]] })
+      offered.push({ line: grantAct('p1', { cmd: p })!.line, calls: [['witness', 'trust', 'p1', '--cmd', p]] })
+      offered.push({ line: offeredLine(['git', 'checkout', '--', `designs/${p}.html`], 'darwin')!, calls: [['git', 'checkout', '--', `designs/${p}.html`]] })
+    }
+    for (const x of offered) {
+      expect(x.line, x.line).not.toMatch(/[^\x20-\x7e]/u)
+      const pasted = await pasteIn('bash-i', x.line, undefined, { cLocale: true })
+      expect(pasted.markers, x.line).toEqual([])
+      expect(pasted.calls, x.line).toEqual(x.calls)
+    }
+  }, 120_000)
+
   // Row 239. A payload may put its effect in the background, after the shell has exited: the
   // paste waits for the pipes the background job holds, as spawnSync did, so its marker is found.
   it.skipIf(!MODES.includes('bash'))('a line that backgrounds its effect is still caught (row 239)', async () => {

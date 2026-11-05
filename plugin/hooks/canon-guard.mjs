@@ -214,39 +214,41 @@ function stateTargetRel(root, cwd, token, dirs) {
 }
 
 // Row 239. The quoter's twin. A word of a line offered to be pasted prints as src/toon.ts's
-// `shellWord` prints it, and a line its `withheldOn` withholds — a word that would split the line,
-// or on Windows one cmd.exe, Windows PowerShell or Git Bash would read as more than text — is shown
-// and never offered. This file imports nothing from witness (Decision 13), so the two are copied
-// here, and tests/canon-guard.test.ts holds them equal to toon.ts's over a corpus of hostile words
-// on each platform: change both or neither.
+// `shellWord` prints it, and a line its `withheldOn` withholds — a word holding a character outside
+// printable ASCII on any platform, or on Windows one cmd.exe, Windows PowerShell or Git Bash would
+// read as more than text — is shown and never offered. This file imports nothing from witness
+// (Decision 13), so the two are copied here, and tests/canon-guard.test.ts holds them equal to
+// toon.ts's over a corpus of hostile words on each platform: change both or neither.
 // Off Windows a word is bare in POSIX's safe set and never when it starts with `=` (zsh reads a
 // bare `=ls` as a command's path), else single-quoted; on Windows a flag stays bare, a word holding
 // `\` is single-quoted, since Git Bash, where an agent runs the line, reads a bare one as an escape
-// (ruling R22), and any other word is bare in PowerShell's safe set, else single-quoted with each of
-// its five quotes doubled. Ruling R24: a control, line-separator or paragraph-separator character
-// would split the line, so it is spelled out first, and a word holding one is never offered, on any
-// platform; on Windows nor is one holding a quote-like, which PowerShell and Git Bash read
-// differently (R22).
+// (ruling R22), and any other word is bare in PowerShell's safe set, else single-quoted. Ruling R27:
+// every character outside printable ASCII is spelled out first (`visible`), as the trust grant has
+// shown a command since rows 205/237, and a word holding one is never offered, on any platform — an
+// interactive shell's line editor reads a byte above 0x7f as a Meta key (probed). A control or
+// line-break character splits the line (R24), and on Windows a quote-like, which PowerShell and Git
+// Bash read differently (R22), gets its own message; each takes precedence over the general one.
 const posixQuoted = (p) => `'${p.replaceAll("'", "'\\''")}'`;
 const psQuoted = (p) => `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`;
 const spell = (c) =>
   c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
     : c.codePointAt(0) < 0x100 ? `\\x${c.codePointAt(0).toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0).toString(16)}}`;
+const hasControl = (s) => /[^\x20-\x7e]/u.test(s);
+const visible = (s) => s.replace(/[^\x20-\x7e]/gu, spell);
 const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u;
-const LINE_BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
-const spelled = (s) => s.replace(LINE_BREAKS, spell);
 const shellArg = (p) => (/^(?!=)[\w@%+=:,./-]+$/.test(p) ? p : posixQuoted(p));
 const psArg = (p) => (/^[\w%+=:./\\][\w%+=:./\\-]*$/.test(p) ? p : psQuoted(p));
 const WINDOWS_FLAG = /^--?[A-Za-z][A-Za-z0-9-]*$/;
 export function shellWord(w, platform = process.platform) {
-  const shown = spelled(w);
+  const shown = visible(w);
   if (platform !== 'win32') return shellArg(shown);
   return WINDOWS_FLAG.test(shown) ? shown : shown.includes('\\') ? psQuoted(shown) : psArg(shown);
 }
 const WINDOWS_RISKY = ['&', '|', '^', '<', '>', '"', '%', '!'];
-const QUOTE_LIKES = ["'", '\u2018', '\u2019', '\u201a', '\u201b'];
+const QUOTE_LIKES = ["'"];
 export function withheldOn(words, platform = process.platform) {
   if (words.some((w) => LINE_BREAKING.test(w))) return 'not offered — it holds a control or line-break character, which would split the line';
+  if (words.some((w) => hasControl(w))) return "not offered — it holds a character outside printable ASCII, which a terminal's line editor can read as a command";
   if (platform !== 'win32') return undefined;
   const held = (set) => set.filter((c) => words.some((w) => w.includes(c)));
   const risky = held(WINDOWS_RISKY);
@@ -283,7 +285,7 @@ function remedyFor(rel, root, platform) {
   const withheld = withheldOn(adopt, platform);
   return (
     `remedy: witness write ${shellWord(id, platform)} --effort <effort> --meta <m.json> --body <b.md> ` +
-    `(author in $(mktemp -d), never in ${spelled(kind)}/) · already hand-edited?\n` +
+    `(author in $(mktemp -d), never in ${visible(kind)}/) · already hand-edited?\n` +
     (withheld === undefined ? `run: ${line}` : `${line} — ${withheld}`)
   );
 }
@@ -292,7 +294,7 @@ function remedyFor(rel, root, platform) {
 // in it would start a line of its own, which could read `run:`.
 function reasonFor(what, rel, root, platform) {
   return (
-    `witness: ${spelled(what)} is CLI-written state — use the witness CLI (write / design / adopt), ` +
+    `witness: ${visible(what)} is CLI-written state — use the witness CLI (write / design / adopt), ` +
     'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs. ' +
     remedyFor(rel, root, platform)
   );
