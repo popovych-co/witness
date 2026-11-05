@@ -15,10 +15,10 @@ export interface ActInput { name: ActInputName; at: number }
 // option's `why`, a block's `anchor`, a parked item's `why` and a gate run's `demoted` anchor —
 // only the findings table spells it out. No act carries it: since row 239 the revise carries no
 // note. A renderer must spell it out (spec §4.2), and the UI runs `argv`, never `line`.
-// Row 239 (the plan's B4). `withheld` is why the line is never offered to be pasted, set on
-// Windows only: a word other than an input holds a character cmd.exe or Windows PowerShell can
-// read as more than text (`withheldOn`). The line is still shown, and `argv`, run with no shell,
-// runs as given.
+// Row 239 (the plan's B4; rulings R22, R24). `withheld` is why the line is never offered to be
+// pasted (`withheldOn`): a word other than an input holds a character that would split the line,
+// on any platform, or on Windows one that cmd.exe, Windows PowerShell or Git Bash can read as more
+// than text. The line is still shown, and `argv`, run with no shell, runs as given.
 export interface Act { argv: readonly string[]; inputs: readonly ActInput[]; line: string; withheld?: string }
 
 // Rows 139/203. Inputs are positional: the CLI writes `<why>` only as a note and `<effort>` only
@@ -67,7 +67,7 @@ export function cliAct(...argv: string[]): Act {
 }
 
 // Row 239 (the plan's B4, ruling R16(b)). An act as the row printed under the line it belongs to:
-// `run: <line>`, or `then:` for the step after it. An act Windows withholds is shown with why on a
+// `run: <line>`, or `then:` for the step after it. An act that is withheld is shown with why on a
 // `note:` row, which offers nothing to paste. Every `run:` and `then:` row printed from an act goes
 // through here, so no printer can forget the check, but one: a decision block's own `run:` line
 // (`renderDecision`), which prints only an option `option()` made `runnable`, and `option()` never

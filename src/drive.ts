@@ -1213,7 +1213,7 @@ const AFFIRMATIONS = new Set(['y', 'yes', 'ok', 'okay', 'go'])
 // act, numbered by its place in the block, so an option without one (a choose block's spec) is
 // skipped and the numbers stay the ones the block printed. The first is the recommendation.
 // `runnable` reads the act's inputs, never `Option.runnable`: drive runs the argv with no shell,
-// so a line Windows withholds from a paste still runs here (the plan's B4).
+// so a line withheld from a paste still runs here (the plan's B4).
 interface Selectable { n: number; act: Act; recommended: boolean; runnable: boolean }
 const selectable = (options: readonly Option[]): Selectable[] =>
   options.flatMap((o, i) => o.act ? [{ n: i + 1, act: o.act, recommended: i === 0, runnable: o.act.inputs.length === 0 }] : [])

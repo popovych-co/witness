@@ -85,8 +85,8 @@ export function policyFor(facts: StopFacts): Policy {
   // Option 1 only when it has no word to fill: a placeholder (`<effort>`) means no upstream
   // resolved, and filling an id is exactly what the arbiter may never do either — but it can
   // pick another option, so the stop goes there rather than to a command that would refuse.
-  // Row 239 (the plan's B4): read off the act's inputs, not `runnable`, which Windows also
-  // clears for a line it will not offer to paste; the CLI runs the argv with no shell.
+  // Row 239 (the plan's B4): read off the act's inputs, not `runnable`, which is also cleared
+  // for a line that is withheld from a paste; the CLI runs the argv with no shell.
   const first = (): Policy => {
     const act = block.options[0]?.act
     return act !== undefined && act.inputs.length === 0 ? { kind: 'take', act } : { kind: 'arbiter' }

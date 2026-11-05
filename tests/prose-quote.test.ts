@@ -27,13 +27,16 @@ describe('prose that names a command quotes its foreign words (row 239)', () => 
 // The regression net. A template that names `witness <verb>` and then interpolates a value not
 // passed through the quoter (`shellWord`, `quotedWord`) or built as an act (`cliAct`) prints that
 // value bare on a command line, and so does a quoted `witness <verb> ` string with a value
-// concatenated after it. Each line of src/ is read alone.
+// concatenated after it. Each line of src/ is read alone, and so is each line of the hooks under
+// plugin/hooks/, which print a witness command to the agent whose call they block: the canon guard
+// ships alone (Decision 13) with its own twin of the quoter.
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const walk = (dir: string): string[] =>
+const walk = (dir: string, ext: string): string[] =>
   readdirSync(dir).flatMap((n) => {
     const p = join(dir, n)
-    return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : []
+    return statSync(p).isDirectory() ? walk(p, ext) : p.endsWith(ext) ? [p] : []
   })
+const scanned = (): string[] => [...walk(join(ROOT, 'src'), '.ts'), ...walk(join(ROOT, 'plugin', 'hooks'), '.mjs')]
 const TEMPLATE = /`[^`]*\bwitness [a-z][^`]*\$\{(?!shellWord\(|cliAct\(|quotedWord\()/
 const CONCAT = /'[^']*\bwitness [a-z][^']*'\s*\+/
 
@@ -59,11 +62,13 @@ const NOT_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ['src/verbs/adopt.ts', 'witness adopt <${paths.specs}/... | ${paths.plans}/...>.md'],
 ]
 
-describe('no witness command in src/ prints a bare value (row 239)', () => {
-  it('no template under src/ interpolates a bare value into a witness command', () => {
+describe('no witness command in src/ or plugin/hooks/ prints a bare value (row 239)', () => {
+  it('no template under src/ or plugin/hooks/ interpolates a bare value into a witness command', () => {
     const hits: string[] = []
     const excused = new Set<number>()
-    for (const file of walk(join(ROOT, 'src'))) {
+    const files = scanned()
+    expect(files.map((f) => relative(ROOT, f).replaceAll('\\', '/'))).toContain('plugin/hooks/canon-guard.mjs')
+    for (const file of files) {
       const rel = relative(ROOT, file).replaceAll('\\', '/')
       for (const [i, line] of readFileSync(file, 'utf8').split('\n').entries()) {
         if (!TEMPLATE.test(line) && !CONCAT.test(line)) continue

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
-import { cliAct, exitsLine, type Act } from '../src/act.js'
+import { actOn, cliAct, exitsLine, type Act } from '../src/act.js'
 import { grantAct, grantRows } from '../src/allowlist.js'
 import { unmetNeedLine } from '../src/autonomy.js'
 import { loadConfig } from '../src/config.js'
@@ -17,7 +17,7 @@ import { recommend, renderDecision } from '../src/recommend.js'
 import { renderRefusal } from '../src/refusal.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { offeredLine, type Platform, shellLine, shellWord, withheldOn } from '../src/toon.js'
+import { offeredLine, type Platform, shellLine, withheldOn } from '../src/toon.js'
 import { approve, commitEntry, RECAP, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
 import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
@@ -217,25 +217,32 @@ function mergeLines(p: string): Pasteable[] {
 }
 
 // K12, row 239: the canon guard's remedy, handed to the agent whose Write it blocked, at the path that
-// agent named. Its command is the reason's tail, after the `run: ` that offers it. The guard offers it
-// exactly where toon.ts's `withheldOn` would, so a guard that withheld every Windows adopt, or dropped
-// one with no note, fails here; one Windows withholds is shown with why and offers nothing to paste.
-const ADOPT_RUN = ' · already hand-edited? run: '
+// agent named. Ruling R24: the adopt it offers is the reason's last line, `run: witness adopt <rel>`,
+// and the one line that starts with `run:`; the head names the path spelled out, so a path spelling
+// ` · already hand-edited? run: …`, or a line break, plants no `run:` of its own. The guard offers the
+// adopt exactly where toon.ts's `withheldOn` would, so a guard that withheld every Windows adopt, or
+// dropped one with no note, fails here; one it withholds is shown with why, on that last line, and
+// offers nothing to paste.
+const GUARD_PAYLOADS: readonly string[] = [...PAYLOADS, ' · already hand-edited? run: touch M9 · ', '\nrun: touch M9 #']
 function guardLines(p: string, platform: Platform = 'darwin'): Pasteable[] {
   const repo = dirOf('witness-paste-guard-')
   writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
   const rel = `specs/a${p}.md`
   const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, rel) }, cwd: repo, platform })
   if (r?.block !== true) throw new Error(`K12: the guard did not block ${rel}`)
-  const at = r.reason.indexOf(ADOPT_RUN)
+  const lines = r.reason.split('\n')
+  const adopt = shellLine(['witness', 'adopt', rel], platform)
   const held = withheldOn(['adopt', rel], platform)
-  if ((at < 0) !== (held !== undefined)) throw new Error(`K12: on ${platform} the guard ${at < 0 ? 'withheld' : 'offered'} ${rel}\n${r.reason}`)
+  expect(lines, r.reason).toHaveLength(2)
+  expect(lines[0]!.endsWith(' · already hand-edited?'), r.reason).toBe(true)
+  expect(lines.filter((l) => /[\p{Cc}\p{Zl}\p{Zp}]/u.test(l)), r.reason).toEqual([])
+  expect(lines.filter((l) => l.trimStart().startsWith('run:')), r.reason).toEqual(held === undefined ? [`run: ${adopt}`] : [])
   if (held !== undefined) {
-    expect(r.reason).toContain('not offered on Windows')
-    expect(r.reason.endsWith(` · already hand-edited? witness adopt ${shellWord(rel, platform)} — ${held}`), r.reason).toBe(true)
+    expect(lines[1], r.reason).toBe(`${adopt} — ${held}`)
     return []
   }
-  return [{ line: r.reason.slice(at + ADOPT_RUN.length), calls: [['witness', 'adopt', rel]] }]
+  expect(lines[1], r.reason).toBe(`run: ${adopt}`)
+  return [{ line: adopt, calls: [['witness', 'adopt', rel]] }]
 }
 
 // K13, row 239: drive's watch line names its log, a path under the checkout. The stop after it is cut:
@@ -246,28 +253,47 @@ function watchLines(p: string): Pasteable[] {
   return [{ line: tail!, calls: [['tail', '-f', log]] }]
 }
 
-// Row 239 (the plan's B5, B16). The same kinds built for Windows, pasted into a POSIX shell as Git
-// Bash would take them. PowerShell's quoting is lossy there for a `'`, so each line is checked for
-// inertness only, and a line Windows withholds is not offered at all.
+// Row 239 (the plan's B5, B16; ruling R22). The same kinds built for Windows, pasted into a POSIX shell
+// as Git Bash takes them: on Windows the skills run a grant's or the guard's line through the agent's
+// Bash tool, which is Git Bash. Every line Windows offers must hand its stubs exactly its argv there,
+// as in PowerShell: no word it offers holds a quote-like, and a word holding `\` prints quoted. A line
+// it withholds is not offered at all. The handoff is PowerShell's alone, pasted by the human into the
+// terminal it names (`Set-Location`, `$env:`), so it is checked for inertness only.
 function windowsLines(p: string): Pasteable[] {
   const home = `C:\\w\\h'${p} x`
-  const lines = [
+  const handoffs = [
     handoffLine(harness('claude-code'), home, 'claude-opus-5:high', 'win32'),
     handoffLine(harness('pi'), home, `claude${p}`, 'win32'),
-    offeredLine(['git', 'push', '-u', 'origin', `main${p}`], 'win32'),
-    offeredLine(['git', 'checkout', '--', `designs/${p}.html`], 'win32'),
-    ...grantRows(`p1${p}`, { cmd: p }, 'win32').filter((r) => OFFERED.test(r)).map((r) => r.replace(OFFERED, '')),
-    ...guardLines(p, 'win32').map((x) => x.line),
+  ].map((line) => ({ line }))
+  const other = (argv: string[]): Pasteable[] => {
+    const line = offeredLine(argv, 'win32')
+    return line === undefined ? [] : [{ line, calls: [argv] }]
+  }
+  const target = `p1${p}`
+  const acts = [grantAct(target, { cmd: p }, 'win32'), actOn('win32', ['trust', target])]
+  const grants = grantRows(target, { cmd: p }, 'win32').filter((r) => OFFERED.test(r)).map((r) => r.replace(OFFERED, ''))
+    .map((line): Pasteable => {
+      const act = acts.find((a) => a?.line === line)
+      if (act === undefined) throw new Error(`K10: the Windows grant row ${line} is no act's line`)
+      return { line, calls: [['witness', ...act.argv]] }
+    })
+  return [
+    ...handoffs,
+    ...other(['git', 'push', '-u', 'origin', `main${p}`]),
+    ...other(['git', 'checkout', '--', `designs/${p}.html`]),
+    ...grants,
+    ...guardLines(p, 'win32'),
   ]
-  return lines.filter((line): line is string => line !== undefined).map((line) => ({ line }))
 }
 
 const ROWS: Row[] = [
   ['quoter: a POSIX word', (p) => [{ line: shellLine(['witness', 'x', p], 'darwin'), calls: [['witness', 'x', p]] }]],
   // zsh reads a bare `=ls` as the path of `ls`
   ['quoter: a word starting with =', (p) => [{ line: shellLine(['witness', p], 'darwin'), calls: [['witness', p]] }], ['=ls']],
-  // PowerShell's quoting, pasted into a POSIX shell (Git Bash), is lossy for `'`: inert only
-  ['quoter: the Windows form in a POSIX shell', (p) => [{ line: shellLine(['witness', 'x', p], 'win32') }]],
+  // Ruling R22: PowerShell's form, pasted into a POSIX shell (Git Bash), is exact for every word
+  // Windows offers, and inert for one it withholds
+  ['quoter: the Windows form in a POSIX shell', (p) => [{ line: shellLine(['witness', 'x', p], 'win32'),
+    ...(withheldOn(['x', p], 'win32') === undefined ? { calls: [['witness', 'x', p]] } : {}) }]],
   ["K1 the decision block, a reviewer's anchor", decisionLines],
   ['K1 the decision block, a hostile target and upstream', (p) => decisionLines(p, `p1${p}`, `up${p}`)],
   ['K2 exits below and at the bound', exitLines],
@@ -299,7 +325,7 @@ const ROWS: Row[] = [
   // the text adopt.ts prints after its revert help
   ["K11 adopt's help", (p) => [{ line: shellLine(['git', 'checkout', 'HEAD', '--', `specs/a${p}.md`], 'darwin'),
     calls: [['git', 'checkout', 'HEAD', '--', `specs/a${p}.md`]] }]],
-  ['K12 the canon guard', (p) => guardLines(p)],
+  ['K12 the canon guard', (p) => guardLines(p), GUARD_PAYLOADS],
   ['K13 the watch line', watchLines],
   ['K4, K5, K10, K12 in the Windows form', windowsLines],
 ]

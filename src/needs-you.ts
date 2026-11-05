@@ -167,7 +167,7 @@ function trustRows(item: Extract<NeedYou, { kind: 'trust-grant' }>): string[] {
 
 // Rows 139/203. An item's rows, laid out from its facts: every command a row offers is an act's
 // line, and only labels, separators and prose pointers are added here. Row 239 (ruling R16): each
-// such row is `runRow`'s, which a Windows-withheld act turns into a note, and the prose a repo, a
+// such row is `runRow`'s, which a withheld act turns into a note, and the prose a repo, a
 // journal or a reviewer wrote on a head line — a need's text and holds, a park's or a stop's why —
 // is spelled out (`logSafe`) where it holds a line break, which would start a `run:` row of its own.
 export function needYouRows(item: NeedYou): string[] {

@@ -7,6 +7,19 @@
 const posixQuoted = (p: string): string => `'${p.replaceAll("'", "'\\''")}'`
 const psQuoted = (p: string): string => `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`
 
+// One character spelled out: the one spelling `shellWord`, `visible` and `logSafe` share.
+const spell = (c: string): string =>
+  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
+    : c.codePointAt(0)! < 0x100 ? `\\x${c.codePointAt(0)!.toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0)!.toString(16)}}`
+
+// Row 239 (ruling R24). A character that would split the line a word prints on: a control character
+// (a newline, a carriage return, a tab, ESC, a C1 control) or the line and paragraph separators
+// U+2028/U+2029, which editors and some terminals render as a line break. A physical line that
+// starts `run:` is a line the skills run, so a word holding one is never offered (`withheldOn`), on
+// any platform, and the quoter spells it out (`shellWord`), so the line shown stays one line.
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u
+const LINE_BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/gu
+
 // A shell word is quoted only when it needs it, so the common line stays the one a human
 // types — a path in drive's watch line, a command in a `--cmd` grant (row 205). Row 239: never
 // bare when it starts with `=`, which zsh's EQUALS option, on by default, reads as the path of a
@@ -29,11 +42,19 @@ export const psArg = (p: string): string =>
 // then letters, digits and `-`. It holds no `.`, `:`, `%` or `=`: PowerShell splits `-a.b` for a
 // native command, and `--%` stops its parsing. A lone `--` is no flag here and prints `'--'`,
 // which reads the same either way.
+// Ruling R22. On Windows a line is also run through the agent's Bash tool, which is Git Bash: a
+// skill runs a grant or the canon guard's adopt there. A backslash means nothing to PowerShell and
+// escapes the next character in Git Bash, which reads a bare `C:\w` as `C:w`, so a word holding one
+// prints single-quoted, where both read it as written. With each quote-like withheld (`withheldOn`),
+// every word Windows offers reads the same in PowerShell and in Git Bash.
+// Ruling R24. A character that would split the line is spelled out first, so a word holding one
+// prints quoted on one line. Such a word is never offered, so its line need not be exact.
 export type Platform = NodeJS.Platform
 const WINDOWS_FLAG = /^--?[A-Za-z][A-Za-z0-9-]*$/
 export function shellWord(w: string, platform: Platform = process.platform): string {
-  if (platform !== 'win32') return shellArg(w)
-  return WINDOWS_FLAG.test(w) ? w : psArg(w)
+  const shown = w.replace(LINE_BREAKS, spell)
+  if (platform !== 'win32') return shellArg(shown)
+  return WINDOWS_FLAG.test(shown) ? shown : shown.includes('\\') ? psQuoted(shown) : psArg(shown)
 }
 
 // Row 239. Every word quoted, safe or not, as the handoff prints its path and `/witness`.
@@ -46,23 +67,34 @@ export function shellLine(argv: readonly string[], platform: Platform = process.
   return argv.map((w) => shellWord(w, platform)).join(' ')
 }
 
-// Row 239. Why a command is not offered to be pasted, or `undefined` when it is. On Windows a
-// pasted line can reach cmd.exe after PowerShell, because npm's `witness.cmd` and `npx.cmd` shims
-// pass their arguments through it. PowerShell passes a word holding no space unquoted, and cmd.exe
-// then reads `&`, `|`, `<` and `>` in it as new commands or redirections, `^` as its escape, and
-// `%NAME%` (`!NAME!` under delayed expansion) as a variable. Windows PowerShell 5.1 also passes an
-// embedded `"` unescaped, which moves cmd.exe's argument boundaries. No quoting reads as text to
-// both, so a command holding any of these is shown and never offered (the user's call,
-// 2026-11-04: "Refuse risky words now"). Elsewhere the quoter alone makes every word text.
+// Row 239. Why a command is not offered to be pasted, or `undefined` when it is. Ruling R24: on every
+// platform, a word holding a character that would split the line (`LINE_BREAKING`) withholds it,
+// whatever else the word holds. On Windows a pasted line can reach cmd.exe after PowerShell, because
+// npm's `witness.cmd` and `npx.cmd` shims pass their arguments through it. PowerShell passes a word
+// holding no space unquoted, and cmd.exe then reads `&`, `|`, `<` and `>` in it as new commands or
+// redirections, `^` as its escape, and `%NAME%` (`!NAME!` under delayed expansion) as a variable.
+// Windows PowerShell 5.1 also passes an embedded `"` unescaped, which moves cmd.exe's argument
+// boundaries. No quoting reads as text to both, so a command holding any of these is shown and never
+// offered (the user's call, 2026-11-04: "Refuse risky words now"). Ruling R22: nor one holding a
+// quote-like, which PowerShell's quoting writes twice and Git Bash, where the skills run a line, reads
+// as strings side by side (probed: a grant of `echo 'x; …'` named `echo x; …` there). Elsewhere the
+// quoter alone makes every word text.
 const WINDOWS_RISKY = ['&', '|', '^', '<', '>', '"', '%', '!']
+const QUOTE_LIKES = ["'", '\u2018', '\u2019', '\u201a', '\u201b']
 export function withheldOn(words: readonly string[], platform: Platform = process.platform): string | undefined {
+  if (words.some((w) => LINE_BREAKING.test(w))) return 'not offered — it holds a control or line-break character, which would split the line'
   if (platform !== 'win32') return undefined
-  const held = WINDOWS_RISKY.filter((c) => words.some((w) => w.includes(c)))
-  return held.length === 0 ? undefined
-    : `not offered on Windows — it holds ${held.join(' ')}, which cmd.exe or Windows PowerShell can read as more than text`
+  const held = (set: readonly string[]): string[] => set.filter((c) => words.some((w) => w.includes(c)))
+  const risky = held(WINDOWS_RISKY)
+  const quotes = held(QUOTE_LIKES)
+  const why = [
+    ...(risky.length > 0 ? [`${risky.join(' ')}, which cmd.exe or Windows PowerShell can read as more than text`] : []),
+    ...(quotes.length > 0 ? [`${quotes.join(' ')}, which PowerShell and Git Bash read differently`] : []),
+  ]
+  return why.length === 0 ? undefined : `not offered on Windows — it holds ${why.join(', and ')}`
 }
 
-// Row 239. Another tool's command as a line offered to be pasted, unless Windows withholds it.
+// Row 239. Another tool's command as a line offered to be pasted, unless it is withheld.
 export function offeredLine(argv: readonly string[], platform: Platform = process.platform): string | undefined {
   return withheldOn(argv, platform) === undefined ? shellLine(argv, platform) : undefined
 }
@@ -113,10 +145,6 @@ export function shellWords(line: string): string[] | undefined {
 // is, anything else is spelled out, and a command carrying any of it is never granted.
 const UNSHOWABLE = /[^\x20-\x7e]/u
 export const hasControl = (s: string): boolean => UNSHOWABLE.test(s)
-// One character spelled out: the one spelling `visible` and `logSafe` share.
-const spell = (c: string): string =>
-  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
-    : c.codePointAt(0)! < 0x100 ? `\\x${c.codePointAt(0)!.toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0)!.toString(16)}}`
 export const visible = (s: string): string => s.replace(new RegExp(UNSHOWABLE.source, 'gu'), spell)
 
 // Row 214. What a session drive runs wrote, on the human's terminal and in .witness/drive.log: the

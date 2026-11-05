@@ -78,7 +78,7 @@ const blockingAnchors = (r: GateRunEntry): string[] =>
 
 // Rows 139/203. Every option that offers a command is built from its act: the block prints the
 // act's line, and the option pastes unless a word of it is one the human must fill. Row 239: nor
-// when Windows withholds it (`Act.withheld`). The command is still shown, and its note says why.
+// when it is withheld (`Act.withheld`). The command is still shown, and its note says why.
 export function option(
   act: Act, depth: Depth, rest: Partial<Pick<Option, 'why' | 'when' | 'tradeoff' | 'note' | 'judgeFirst'>> = {},
 ): Option {

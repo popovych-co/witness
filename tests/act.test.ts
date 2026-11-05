@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actOn, cliAct, exitsLine } from '../src/act.js'
+import { actOn, cliAct, exitsLine, runRow } from '../src/act.js'
 
 // Rows 139/203. A command the CLI offers is an act: the words after `witness` as given, the
 // words a human fills, and the line the text has always printed.
@@ -51,6 +51,21 @@ describe('actOn (row 239)', () => {
       expect(Object.keys(actOn('darwin', ['trust', 'p1', '--cmd', `a${c}b`])), c).not.toContain('withheld')
     }
     expect(actOn('win32', ['decide', 'plan', 'p1', '--revise', '--note', '<why>']).withheld).toBeUndefined()
+  })
+  // Ruling R22: a quote-like reads differently in PowerShell and Git Bash, so Windows withholds it.
+  // Ruling R24: a line break would split the line, so every platform withholds it, and the line
+  // shows it spelled. Either way the argv runs as given.
+  it('on Windows a quote-like is withheld, and everywhere a line break is (row 239, rulings R22, R24)', () => {
+    const quoted = actOn('win32', ['trust', 'p1', '--cmd', "echo 'hi'"])
+    expect(quoted.withheld).toBe("not offered on Windows — it holds ', which PowerShell and Git Bash read differently")
+    expect(Object.keys(actOn('darwin', ['trust', 'p1', '--cmd', "echo 'hi'"]))).not.toContain('withheld')
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      const a = actOn(platform, ['satisfy', 'p1', '--need', 'a\nb'])
+      expect(a.line, platform).toBe("witness satisfy p1 --need 'a\\nb'")
+      expect(a.withheld, platform).toBe('not offered — it holds a control or line-break character, which would split the line')
+      expect(a.argv, platform).toEqual(['satisfy', 'p1', '--need', 'a\nb'])
+      expect(runRow(a), platform).toBe(`  note: witness satisfy p1 --need 'a\\nb' — ${a.withheld}`)
+    }
   })
 })
 

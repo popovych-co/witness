@@ -134,6 +134,16 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     return settle({ ...actR.value, selected: 'policy', runId: owed.run_id }, 'policy')
   }
 
+  // Row 239. A `pick` answers a choose block, whose options name specs, not commands: no gate stop
+  // yields one. Should one reach here, it is no decision the CLI can take at a gate, and it fails
+  // closed — left for a human, never handed on to the arbiter, which the arms below would otherwise
+  // pay a model call for, to judge a stop the policy claimed to have answered.
+  if (policy.kind === 'pick') {
+    const why = 'the policy picked a spec, which a gate stop never takes'
+    ctx.out(leftLine(gate, target, why))
+    return { kind: 'left', why, code: EXIT.REFUSED }
+  }
+
   ctx.out(cmd('arbiter', `judging ${gate} ${target} · ${block.rule}`))
   const menu = menuFor(block, owed)
   const ruling = await arbitrate(ctx, root, cfg, {

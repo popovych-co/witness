@@ -235,7 +235,7 @@ export function resolveStartBase(root: string, branch: string): Result<string> {
     // one push; an unreachable host is not fixed by anything witness can render, and a
     // `run:` that fixes nothing is the D129 defect D147's placeholder test guards against.
     // Row 239: the push is another tool's command, through the one renderer, and none where
-    // Windows withholds it.
+    // it is withheld.
     const missingRef = /couldn't find remote ref|no such ref|not our ref/i.test(fetched.out)
     return refuse([v('remote', 'fetch-failed', fetched.out.trim().slice(0, 160),
       `origin/${branch} reachable — check the network, or push ${branch} once if the remote has no such branch`,

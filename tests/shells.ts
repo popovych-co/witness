@@ -65,15 +65,23 @@ const MARKER = /^M\d$/
 // per paste serialized a row's pastes however many ran at once; a fresh link to one script ran in
 // 13 ms, and eight at once in 21 ms. A file that pastes calls `dropStub` once its tests are done:
 // vitest stops its worker with no `exit` event to clean up on.
-let script: { dir: string; path: string } | undefined
-function stubScript(): string {
+// Row 239 (ruling R24's K12 payloads). Beside it, the readline init file an interactive bash reads.
+// A paste runs with no LANG, so in the C locale, and there bash's readline reads a byte above 0x7f
+// as a Meta key and runs the command bound to it: a pasted `·` moved the cursor and rearranged the
+// line (probed 2026-11-04, bash 3.2: `witness adopt 'a·b'` arrived as `adopt bbbbbbba`). A human's
+// terminal runs in a UTF-8 locale, where readline takes such a byte as text; this file says so in
+// every locale, as LANG=en_US.UTF-8 did in the same probe.
+const INPUTRC = 'set input-meta on\nset output-meta on\nset convert-meta off\n'
+let script: { dir: string; path: string; inputrc: string } | undefined
+function stubScript(): { path: string; inputrc: string } {
   if (script === undefined) {
     const dir = mkdtempSync(join(tmpdir(), 'witness-paste-stub-'))
-    script = { dir, path: join(dir, 'stub') }
+    script = { dir, path: join(dir, 'stub'), inputrc: join(dir, 'inputrc') }
     writeFileSync(script.path, STUB)
     chmodSync(script.path, 0o755)
+    writeFileSync(script.inputrc, INPUTRC)
   }
-  return script.path
+  return script
 }
 export function dropStub(): void {
   if (script !== undefined) rmSync(script.dir, { recursive: true, force: true })
@@ -91,11 +99,14 @@ export async function pasteIn(mode: Mode, line: string, cwd?: string): Promise<P
   try {
     const bin = join(stubs, 'bin')
     mkdirSync(bin)
-    for (const name of STUBS) symlinkSync(stubScript(), join(bin, name))
+    const { path: stub, inputrc } = stubScript()
+    for (const name of STUBS) symlinkSync(stub, join(bin, name))
     const log = join(stubs, 'argv.log')
     // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
     // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
-    await ran(mode, line, dir, { PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null' })
+    await ran(mode, line, dir, {
+      PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null', INPUTRC: inputrc,
+    })
     const markers = markersUnder(dir)
     for (const m of markers) rmSync(join(dir, m), { recursive: true, force: true })
     return { markers, calls: existsSync(log) ? callsIn(readFileSync(log, 'utf8')) : [] }

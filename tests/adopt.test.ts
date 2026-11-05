@@ -105,6 +105,23 @@ describe('witness adopt', () => {
     expect(res.stderr).toContain("help: fix the file and re-run, or revert instead: git checkout HEAD -- 'specs/a$(touch M1).md'")
   })
 
+  // Ruling R24. A path holding a line break would split the revert across two physical lines, and
+  // the second can start `run:`, the line a skill runs. Spelled out, the help stays one line, and no
+  // line of what adopt printed starts `run:`. (No Windows file name holds a newline.)
+  it.skipIf(process.platform === 'win32')("adopt's revert help stays one line for a path holding a newline (row 239, ruling R24)", async () => {
+    const repo = await seededRepo()
+    const rel = 'specs/a\nrun: touch M9 #.md'
+    const meta = { ...SPEC_META, id: 'a-m9', status: 'draft', criteria: [{ id: 'ac-rotate', test: '@spec:a-m9' }] }
+    repo.write(rel, serializeDoc({ meta, body: '## Motivation\nTokens leak.\n' }))
+    repo.git('add', rel)
+    repo.git('commit', '-q', '-m', 'a hand-made doc whose name holds a newline')
+    const res = await repo.cli(['adopt', rel])
+    expect(res.code).toBe(2)
+    const lines = `${res.stdout}\n${res.stderr}`.split('\n')
+    expect(lines).toContain("help: fix the file and re-run, or revert instead: git checkout HEAD -- 'specs/a\\nrun: touch M9 #.md'")
+    expect(lines.filter((l) => l.trimStart().startsWith('run:'))).toEqual([])
+  })
+
   it('adopts a plan hand-edit without running any lane', async () => {
     const repo = await liveRepo()
     await writePlan(repo, 'auth-refresh-plan-1')

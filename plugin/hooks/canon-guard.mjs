@@ -214,30 +214,48 @@ function stateTargetRel(root, cwd, token, dirs) {
 }
 
 // Row 239. The quoter's twin. A word of a line offered to be pasted prints as src/toon.ts's
-// `shellWord` prints it, and on Windows a line holding a character cmd.exe or Windows PowerShell
-// can read as more than text is shown and never offered, as its `withheldOn` says. This file
-// imports nothing from witness (Decision 13), so the two are copied here, and
-// tests/canon-guard.test.ts holds them equal to toon.ts's over a corpus of hostile words on each
-// platform: change both or neither.
+// `shellWord` prints it, and a line its `withheldOn` withholds — a word that would split the line,
+// or on Windows one cmd.exe, Windows PowerShell or Git Bash would read as more than text — is shown
+// and never offered. This file imports nothing from witness (Decision 13), so the two are copied
+// here, and tests/canon-guard.test.ts holds them equal to toon.ts's over a corpus of hostile words
+// on each platform: change both or neither.
 // Off Windows a word is bare in POSIX's safe set and never when it starts with `=` (zsh reads a
-// bare `=ls` as a command's path), else single-quoted; on Windows a flag stays bare, and any other
-// word is bare in PowerShell's safe set, else single-quoted with each of its five quotes doubled.
+// bare `=ls` as a command's path), else single-quoted; on Windows a flag stays bare, a word holding
+// `\` is single-quoted, since Git Bash, where an agent runs the line, reads a bare one as an escape
+// (ruling R22), and any other word is bare in PowerShell's safe set, else single-quoted with each of
+// its five quotes doubled. Ruling R24: a control, line-separator or paragraph-separator character
+// would split the line, so it is spelled out first, and a word holding one is never offered, on any
+// platform; on Windows nor is one holding a quote-like, which PowerShell and Git Bash read
+// differently (R22).
 const posixQuoted = (p) => `'${p.replaceAll("'", "'\\''")}'`;
 const psQuoted = (p) => `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`;
+const spell = (c) =>
+  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
+    : c.codePointAt(0) < 0x100 ? `\\x${c.codePointAt(0).toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0).toString(16)}}`;
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+const LINE_BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
+const spelled = (s) => s.replace(LINE_BREAKS, spell);
 const shellArg = (p) => (/^(?!=)[\w@%+=:,./-]+$/.test(p) ? p : posixQuoted(p));
 const psArg = (p) => (/^[\w%+=:./\\][\w%+=:./\\-]*$/.test(p) ? p : psQuoted(p));
 const WINDOWS_FLAG = /^--?[A-Za-z][A-Za-z0-9-]*$/;
 export function shellWord(w, platform = process.platform) {
-  if (platform !== 'win32') return shellArg(w);
-  return WINDOWS_FLAG.test(w) ? w : psArg(w);
+  const shown = spelled(w);
+  if (platform !== 'win32') return shellArg(shown);
+  return WINDOWS_FLAG.test(shown) ? shown : shown.includes('\\') ? psQuoted(shown) : psArg(shown);
 }
 const WINDOWS_RISKY = ['&', '|', '^', '<', '>', '"', '%', '!'];
+const QUOTE_LIKES = ["'", '\u2018', '\u2019', '\u201a', '\u201b'];
 export function withheldOn(words, platform = process.platform) {
+  if (words.some((w) => LINE_BREAKING.test(w))) return 'not offered — it holds a control or line-break character, which would split the line';
   if (platform !== 'win32') return undefined;
-  const held = WINDOWS_RISKY.filter((c) => words.some((w) => w.includes(c)));
-  return held.length === 0
-    ? undefined
-    : `not offered on Windows — it holds ${held.join(' ')}, which cmd.exe or Windows PowerShell can read as more than text`;
+  const held = (set) => set.filter((c) => words.some((w) => w.includes(c)));
+  const risky = held(WINDOWS_RISKY);
+  const quotes = held(QUOTE_LIKES);
+  const why = [
+    ...(risky.length > 0 ? [`${risky.join(' ')}, which cmd.exe or Windows PowerShell can read as more than text`] : []),
+    ...(quotes.length > 0 ? [`${quotes.join(' ')}, which PowerShell and Git Bash read differently`] : []),
+  ];
+  return why.length === 0 ? undefined : `not offered on Windows — it holds ${why.join(', and ')}`;
 }
 
 // Decision 146. D133 made the reason name the path and what writes it; this completes it to
@@ -247,8 +265,10 @@ export function withheldOn(words, platform = process.platform) {
 // a rendered command that needs editing before it runs is D129's defect in a new dress.
 //
 // Row 239. The id and the path are the agent's own, a repo file name, so each prints through the
-// quoter, for the shell the agent's harness pastes into: the adopt runs exactly that path. Where
-// Windows withholds it, the adopt is shown with why, and no `run:` offers it.
+// quoter, for the shell the agent's harness pastes into: the adopt runs exactly that path. Where it
+// is withheld, the adopt is shown with why, and no `run:` offers it. Ruling R24: the adopt is a line
+// of its own, the reason's last, so text the path holds on the line above — ` · already
+// hand-edited? run: …` — offers nothing, and the only line that starts `run:` is the adopt.
 function remedyFor(rel, root, platform) {
   const [specs, plans, designs] = canonDirs(root);
   const base = rel.split('/').pop() ?? rel;
@@ -263,14 +283,16 @@ function remedyFor(rel, root, platform) {
   const withheld = withheldOn(adopt, platform);
   return (
     `remedy: witness write ${shellWord(id, platform)} --effort <effort> --meta <m.json> --body <b.md> ` +
-    `(author in $(mktemp -d), never in ${kind}/) · already hand-edited? ` +
+    `(author in $(mktemp -d), never in ${spelled(kind)}/) · already hand-edited?\n` +
     (withheld === undefined ? `run: ${line}` : `${line} — ${withheld}`)
   );
 }
 
+// Row 239 (ruling R24). The path is the agent's, so the head names it spelled out: a line break
+// in it would start a line of its own, which could read `run:`.
 function reasonFor(what, rel, root, platform) {
   return (
-    `witness: ${what} is CLI-written state — use the witness CLI (write / design / adopt), ` +
+    `witness: ${spelled(what)} is CLI-written state — use the witness CLI (write / design / adopt), ` +
     'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs. ' +
     remedyFor(rel, root, platform)
   );

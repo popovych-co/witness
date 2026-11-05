@@ -17,7 +17,7 @@ import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import type { GateCheck } from '../rounds.js'
-import { offeredLine } from '../toon.js'
+import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
@@ -114,9 +114,11 @@ registerGate({
       const artRel = designRel(cfg.paths, String(plan.meta.parent))
       const artAbs = join(root, artRel)
       if (!existsSync(artAbs) || !statSync(artAbs).isFile()) {
-        // Row 239: the restore is another tool's command, through the one renderer. Where Windows
-        // withholds it there is no `run:`, and the want still names both ways back.
-        return refuse([v('design', 'design-artifact-missing', artRel,
+        // Row 239: the restore is another tool's command, through the one renderer. Where it is
+        // withheld there is no `run:`, and the want still names both ways back. Ruling R24: the path
+        // is the config's, and the refusal's row above the remedy names it spelled out, so a line break
+        // in it cannot start a line of its own, which could read `run:`.
+        return refuse([v('design', 'design-artifact-missing', logSafe(artRel),
           'the approved living design the plan pins — restore it or re-run the design stage',
           offeredLine(['git', 'checkout', '--', artRel]))])
       }

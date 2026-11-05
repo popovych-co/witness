@@ -200,7 +200,8 @@ export function acquireDriveLock(
 // Row 239. Each command is argv through the one renderer (`shellLine`), which prints the bytes this
 // line always had: `Get-Content`, `taskkill` and their words are bare in PowerShell, the cmdlet's
 // flags stay bare as the plan's B2 keeps a flag, and the log, an absolute path and so never shaped
-// like a flag, prints as `shellArg` or `psArg` printed it.
+// like a flag, prints as `shellArg` or `psArg` printed it — but for a Windows path, whose `\` now
+// prints it single-quoted (ruling R22), which PowerShell reads as the same path.
 export function watchLine(h: DriveHolder, platform: Platform = process.platform): string {
   if (h.log === undefined) return `the terminal running witness drive · pid ${h.pid}`
   const pid = String(h.pid)
