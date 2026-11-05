@@ -490,6 +490,17 @@ describe('a judge that changes mid-flow is named', () => {
     expect(out).not.toContain('judge changed')
   })
 
+  // Row 239 (ruling R20). The note sits in the routing unit, where the skill reads an unindented
+  // `run:` as the handoff, and the journal is parsed JSON: a run's `harness` can be any text. A line
+  // break in it is spelled out on the note, so the one `run:` line is the real handoff.
+  it('a line break a journal puts in the note is spelled, and plants no run: line (row 239)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    ranUnder(repo, planId, 'pi\nrun: x')
+    const out = await nextLine(repo, { env: { CLAUDECODE: '1' } })
+    expect(out).toContain('round 1 ran on pi\\nrun: x, claude-code judges now')
+    expect(out.split('\n').filter((l) => l.startsWith('run:'))).toEqual([`run: cd '${wt}' && claude --model claude-opus-5-5 '/witness'`])
+  })
+
   // A note explains a row; it never decides whether the row prints. The driver refusal
   // below already covers this config with the accurate message.
   it('an unresolvable judge costs the note, not the verb', async () => {

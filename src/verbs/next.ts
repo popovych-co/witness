@@ -28,7 +28,7 @@ import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
-import { cmd, kv, rows, shellWord } from '../toon.js'
+import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { cliAct, type Act } from '../act.js'
@@ -1333,7 +1333,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.ask) ctx.out(kv('ask', `${action.ask.id} — ${askText(action.ask.text)}`))
   const draft = conversationDraft(root, action)
   if (draft !== undefined) ctx.out(kv('draft', draft))
-  if (action.note) ctx.out(kv('note', action.note))
+  // Row 239 (ruling R20). The note can carry journal text (a run's round or harness, in the judge
+  // note), and `kv` keeps a line break: one would start a line of its own inside the routing unit,
+  // where an unindented `run:` is the handoff. Spelled out, it stays on the note's line.
+  if (action.note) ctx.out(kv('note', logSafe(action.note)))
   if (action.block) renderDecision(action.block).forEach((l) => ctx.out(l))
   // Whether this session is already in `home:` is a fact the CLI holds both halves of, so
   // it answers it here rather than printing the handoff and leaving the comparison to the
