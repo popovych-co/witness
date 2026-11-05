@@ -3,7 +3,8 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { askText, nextAsk, type AskStatus } from '../ask.js'
 import { draftLine } from '../drafts.js'
-import { unmetNeeds } from '../needs.js'
+import { isId } from '../dsl.js'
+import { unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
@@ -24,18 +25,18 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { liveDrive } from '../live.js'
-import { HELD_KINDS, needsYou, needsYouToken, needYouRows } from '../needs-you.js'
+import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
-import { cmd, kv, rows } from '../toon.js'
+import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
-import type { Act } from '../act.js'
+import { cliAct, type Act } from '../act.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
-import { grantOf, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
-import { ROUND_BOUND, boundReached, lastGateRun, liveExits, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
+import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
 
@@ -217,10 +218,10 @@ function evidenceRow(
   seat: { home: string; model?: string }, opts: { midRed: boolean; step?: string; criteria: boolean },
 ): NextAction {
   const base = { stage: 'implement' as const, target: id, ...seat }
-  const stepFlag = opts.step === undefined ? '' : ` --step ${opts.step}`
+  const step = opts.step === undefined ? [] : ['--step', opts.step]
   if (report === undefined) {
     return {
-      line: `witness test-evidence ${id} --phase red${stepFlag}`, ...base,
+      ...runs(cliAct('test-evidence', id, '--phase', 'red', ...step)), ...base,
       note: opts.criteria
         ? 'nothing changed yet — write the failing test first'
         : 'nothing changed yet — make the change · every step of this plan is scaffolding',
@@ -230,23 +231,23 @@ function evidenceRow(
     .filter((r) => !(r.red && r.green && !r.vacuous))
     .map((r) => `${r.tag} ${!r.red || r.vacuous ? 'red' : 'green'}`)
     .join(' · ')
-  const line = !opts.midRed && files.some((f) => !isTestPath(f))
-    ? `witness verify-red ${id}${stepFlag}`
-    : `witness test-evidence ${id} --phase ${opts.midRed ? 'green' : 'red'}${stepFlag}`
-  return { line, ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
+  const act = !opts.midRed && files.some((f) => !isTestPath(f))
+    ? cliAct('verify-red', id, ...step)
+    : cliAct('test-evidence', id, '--phase', opts.midRed ? 'green' : 'red', ...step)
+  return { ...runs(act), ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
 }
 
 // The run that works a plan's next unfinished step. A step whose latest red came back vacuous
 // gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
 // again and `next` would answer with the same line twice. A green owed on the step (`greenOwedOn`)
 // outranks that: a green, not another red, is what the step is owed.
-function stepLine(id: string, s: StepState, entries: Entry[]): { line: string; why?: string } {
-  if (s.kind === 'scaffolding') return { line: `witness step-close ${id} --step ${s.id}` }
-  if (greenOwedOn(entries, s.id)) return { line: `witness test-evidence ${id} --phase green --step ${s.id}` }
+function stepLine(id: string, s: StepState, entries: Entry[]): { act: Act; why?: string } {
+  if (s.kind === 'scaffolding') return { act: cliAct('step-close', id, '--step', s.id) }
+  if (greenOwedOn(entries, s.id)) return { act: cliAct('test-evidence', id, '--phase', 'green', '--step', s.id) }
   if (lastRedVacuous(entries, s.id)) {
-    return { line: `witness verify-red ${id} --step ${s.id}`, why: 'its red was vacuous — verify-red reconstructs it against the base' }
+    return { act: cliAct('verify-red', id, '--step', s.id), why: 'its red was vacuous — verify-red reconstructs it against the base' }
   }
-  return { line: `witness test-evidence ${id} --phase red --step ${s.id}` }
+  return { act: cliAct('test-evidence', id, '--phase', 'red', '--step', s.id) }
 }
 
 // The step an evidence row names once every step is closed, unless the green owed names one (D192:
@@ -266,14 +267,20 @@ function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined 
 
 export interface NextAction {
   line: string
+  // Row 239 (the plan's B8). The line as data, on every line that is a runnable witness command,
+  // and `line` is its `line`: a reader runs `argv` and a human pastes `line`, the same command. A
+  // shape, which holds a placeholder or names a file to author, carries none, and each foreign
+  // word it holds prints through the quoter.
+  act?: Act
   stage?: 'brainstorm' | 'decompose' | 'design' | 'plan' | 'implement' | 'ship'
   target?: string
   note?: string
   // D121. Ranked options for a choice the ROUTING row cannot express: `next` names one
   // action, and where several are equally routable the human is choosing, not being told.
   // Printed after the contiguous next:/stage:/target:/note: unit the stage skills read
-  // verbatim, so it adds a screen rather than changing one.
-  block?: string[]
+  // verbatim, so it adds a screen rather than changing one. Row 239 (the plan's B8): the block
+  // itself, rendered where it prints, so drive runs its options' acts and reads no line back.
+  block?: Decision
   ask?: { id: string; text: string }   // row 176: the ask a brainstorm action answers
   home?: string   // absolute dir this action's session belongs in (implement → worktree, ship → primary root)
   model?: string  // model pin the fresh session in `home` runs under; the handoff string
@@ -286,6 +293,9 @@ export interface NextAction {
   // act, the human's, and nothing is spawned for it.
   trust?: RunCommand[]
 }
+
+// Row 239. A runnable line, printed from its act.
+const runs = (act: Act): { line: string; act: Act } => ({ line: act.line, act })
 
 // One list for both readers. `flowAction` needs it to name an effort that can carry a plan
 // write, and `computeNext` has always built exactly this — a second derivation here is the
@@ -344,11 +354,11 @@ function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: E
 function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, judge: string | undefined): NextAction {
   return authoringOwed(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha)
     ? {
-        line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+        line: `witness write <spec-id> --effort ${shellWord(e.slug)} --meta m.json --body b.md`,
         stage: 'decompose', target: e.slug,
         note: 'revise owed — re-author, then the gate has something new to judge',
       }
-    : { line: `witness gate decompose --effort ${e.slug}`, target: e.slug, ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
+    : { ...runs(cliAct('gate', 'decompose', '--effort', e.slug)), target: e.slug, ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
 }
 
 // Row 221. What approves draft principles — one derivation for `next`'s chore rung and for
@@ -363,12 +373,12 @@ export function principlesApproval(
   if (doc === undefined || String(doc.meta.status) !== 'draft') return undefined
   if (templateDraft(root, doc)) {
     const note = 'principles.md is the untouched template an older witness init left draft — witness migrate stamps it approved'
-    return { action: { line: 'witness migrate', note }, remedy: `${note} — run: witness migrate` }
+    return { action: { ...runs(cliAct('migrate')), note }, remedy: `${note} — run: witness migrate` }
   }
   const owner = principlesOwner(root, canon)
   if (owner === undefined) {
     const note = 'principles.md is draft and no effort owns it — amend principles through a feature or fix effort: its decompose gate approves them'
-    return { action: { line: 'witness check', note }, remedy: note }
+    return { action: { ...runs(cliAct('check')), note }, remedy: note }
   }
   const e = { slug: owner, entries: readStream(root, owner) }
   const plans = canon.docs.filter((d) => d.meta.type === 'plan')
@@ -376,7 +386,7 @@ export function principlesApproval(
   if (gateParked(e.entries, 'decompose')) {
     const reopen = reopenCommand('decompose', owner, e.entries, upstreamFor(root, 'decompose', owner))
     return {
-      action: { line: 'witness check', note: `${amended} · its decompose is parked — witness status names its reopen` },
+      action: { ...runs(cliAct('check')), note: `${amended} · its decompose is parked — witness status names its reopen` },
       remedy: `${amended} · its decompose is parked — reopen it: ${reopen}`,
     }
   }
@@ -384,15 +394,16 @@ export function principlesApproval(
     const step = decomposeStep(root, canon, e, judge)
     return { action: { ...step, note: [amended, step.note].filter(Boolean).join(' · ') }, remedy: `${amended} — run: ${step.line}` }
   }
-  const note = `principles.md is draft and ${owner}'s decompose is not owed now — witness log ${owner} shows where its gate stands`
-  return { action: { line: 'witness check', note }, remedy: note }
+  // Row 239. The log the note names is an act's line.
+  const note = `principles.md is draft and ${owner}'s decompose is not owed now — ${cliAct('log', owner).line} shows where its gate stands`
+  return { action: { ...runs(cliAct('check')), note }, remedy: note }
 }
 
 // Row 205. The trust act: the human names, in the chat, each command to trust. The listing
 // form of the verb, which grants nothing, so a routed line run verbatim cannot over-grant.
 export function trustAction(target: string, owed: RunCommand[]): NextAction {
   return {
-    line: `witness trust ${target}`, target, trust: owed,
+    ...runs(cliAct('trust', target)), target, trust: owed,
     note: `not trusted on this machine — ${owed.map(shownCmd).join(' · ')} · the human names each to trust it`,
   }
 }
@@ -426,8 +437,8 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   const implementModel = pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined
   const inWorktree = { home: wt, model: implementModel }
   const atRoot = { home: root }
-  if (!existsSync(wt)) return { line: `witness start ${id}`, target: id, note: 'worktree missing — start recreates it' }
-  if (plan.meta.pr !== undefined) return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+  if (!existsSync(wt)) return { ...runs(cliAct('start', id)), target: id, note: 'worktree missing — start recreates it' }
+  if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   // Row 95: a reopen on this plan's OWN plan gate is routable motion — the plan is what
   // needs re-authoring — and every reader was blind to it. Above the implement settle check
   // on purpose: an implement gate settled against an earlier plan version must not carry
@@ -453,7 +464,7 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   // the sha and re-arms the gate, which is why this keeps `diffSha` while
   // `gates/ship.ts` deliberately omits it (row 92).
   if (gateSettled(entries, 'implement', diffSha)) {
-    return { line: `witness ship ${id}`, stage: 'ship', target: id, ...atRoot }
+    return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   }
   // Row 191 · Plan's call 5. The evidence below is the parent tag's and knows nothing of the
   // plan's steps: one red→green pair satisfied it, so a three-step plan was routed to `gate
@@ -477,14 +488,14 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
     // Not "the last run": a vacuous red after that green may have passed.
     const owed = greenOwedStep(plan, entries)
     const owedStep = stepped.steps.find((s) => s.id === owed)
-    const { line, why } = stepLine(id, owedStep ?? stepped.next, entries)
+    const { act, why } = stepLine(id, owedStep ?? stepped.next, entries)
     const ahead = owedStep === undefined || owedStep.id === stepped.next.id
       ? why
       : redCycleClosed(entries)
         ? 'the last green failed — a passing green comes first'
         : `${owedStep.id} has an open red — its green comes first`
     return {
-      line, stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
+      ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
     }
   }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
@@ -507,7 +518,7 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   // edit — say that, and seat the session where the edit happens.
   if (authoringOwed(entries, 'implement', diffSha)) {
     return {
-      line: `witness test-evidence ${id} --phase green`, stage: 'implement', target: id, ...inWorktree,
+      ...runs(cliAct('test-evidence', id, '--phase', 'green')), stage: 'implement', target: id, ...inWorktree,
       note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
       ...inFlight,
     }
@@ -518,7 +529,7 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   // whatever that count said, and a fresh session after a relay gated with steps left.
   const uncounted = !progress.known && !implementGated(entries) ? { stage: 'implement' as const } : {}
   return {
-    line: `witness gate implement ${id}`, ...uncounted, target: id, ...inWorktree, ...inFlight,
+    ...runs(cliAct('gate', 'implement', id)), ...uncounted, target: id, ...inWorktree, ...inFlight,
     ...noteOf(
       lapseNote(entries, 'implement', diffSha,
         // `files` is the list flowAction already computed above — the cause costs one
@@ -564,10 +575,12 @@ function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
 // one-way on purpose — the same edge that moved `liveExits` out of gate.ts into rounds.ts.
 // Tier 2 hand-resolved it inline in three places; this is that derivation named once, and
 // it agrees with the registry by test (exits-line.test.ts pins upstreamOf for all five).
+// Row 239 (the plan's B15): a plan's parent outside the id set gives no upstream, as the plan
+// gate's `upstreamOf` gives none.
 function upstreamFor(root: string, gate: string, id: string, parent?: string): string | undefined {
   if (gate === 'decompose') return id
   if (gate === 'design') return effortOf(root, id)
-  if (gate === 'plan') return parent
+  if (gate === 'plan') return isId(parent) ? parent : undefined
   return id   // implement and ship judge the plan they run under
 }
 
@@ -580,21 +593,28 @@ function lastDisposition(entries: Entry[], gate: string, from: number): Decision
     .at(-1)
 }
 
+// Row 239 (ruling R19). A journaled round as a parked gate names it: a positive integer, or none. The
+// journal is parsed JSON, and a round prints on the parked head and in `status`, so any other value
+// is left out rather than printed.
+const roundOf = (r: unknown): number | undefined => (Number.isInteger(r) && (r as number) >= 1 ? (r as number) : undefined)
+
 // D124's reporting half. A parked flow that `next` silently skips is a disappearance, so
 // `status` names every one of them. The anchor comes from the run the stop disposed of —
 // the human parked something specific, and "parked" without "on what" is not a report.
+// Row 239: `round` is absent where the run's journaled round is not a round (`roundOf`).
 export function parkedGates(
   root: string, canon: Canon,
-): Array<{ gate: string; target: string; round: number; anchor: string; reopen: Act[] }> {
-  const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: Act[] }> = []
+): Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> {
+  const out: Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> = []
   // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
-  // effort abandoned, offers nothing to reopen or approve.
+  // effort abandoned, offers nothing to reopen or approve. Row 239 (the plan's B15): a doc named
+  // outside the id set is never offered (`effortStreams` already holds efforts to it).
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
     ...effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
       .map((slug) => ({ id: slug, gates: ['decompose'] as const })),
-    ...canon.docs.filter((d) => d.meta.type === 'plan' && !planFinished(d))
+    ...canon.docs.filter((d) => d.meta.type === 'plan' && !planFinished(d) && isId(d.meta.id))
       .map((d) => ({ id: String(d.meta.id), parent: String(d.meta.parent), gates: ['plan', 'implement', 'ship'] as const })),
-    ...canon.docs.filter((d) => d.meta.type === 'spec')
+    ...canon.docs.filter((d) => d.meta.type === 'spec' && isId(d.meta.id))
       .map((d) => ({ id: String(d.meta.id), gates: ['design'] as const })),
   ]
   for (const { id, parent, gates } of seen) {
@@ -606,8 +626,9 @@ export function parkedGates(
       const anchors = (last.verdicts ?? [])
         .flatMap((rv) => rv.findings.filter((f) => f.blocking))
         .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))
+      const round = roundOf(last.round)
       out.push({
-        gate, target: id, round: last.round,
+        gate, target: id, ...(round !== undefined ? { round } : {}),
         anchor: anchors[0] ?? last.standing ?? last.outcome,
         reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent)),
       })
@@ -733,11 +754,14 @@ function owedFrom(
   return out
 }
 
+// Row 239 (the plan's B15). A doc named outside the id set is never offered; `liveEfforts` reads
+// `effortStreams`, which holds efforts to it. `computeNext`'s own walk meets no such doc: it routes
+// `check` while any doc breaks its schema.
 export function owedDecisions(root: string, canon: Canon): OwedDecision[] {
   const byId = (a: CanonDoc, b: CanonDoc) => String(a.meta.id).localeCompare(String(b.meta.id))
   return owedFrom(root, liveEfforts(root),
-    canon.docs.filter((d) => d.meta.type === 'spec').sort(byId),
-    canon.docs.filter((d) => d.meta.type === 'plan').sort(byId))
+    canon.docs.filter((d) => d.meta.type === 'spec' && isId(d.meta.id)).sort(byId),
+    canon.docs.filter((d) => d.meta.type === 'plan' && isId(d.meta.id)).sort(byId))
 }
 
 // Both notes survive: a caller's own note must not silently drop the routing note that
@@ -796,7 +820,7 @@ function planWriteAction(
         note: `${planId} is owed, but no live effort can carry the write — open one`,
       }
     : {
-        line: `witness write ${planId} --effort ${owner} --meta m.json --body b.md`,
+        line: `witness write ${shellWord(planId)} --effort ${shellWord(owner)} --meta m.json --body b.md`,
         stage: 'plan', target,
       }
 }
@@ -821,17 +845,18 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     const choice = recoverChoice(root, txn)
     // Row 173. Under autonomy the fork is routing, not a disposition: the policy takes the
     // CLI's own pick and the commit it causes is what the journal keeps.
+    // Row 239. Option 1's line from its act (`recoverChoice` builds every option from one), and
+    // from its command should it carry none.
+    const first = choice.options[0]!
+    const line = first.act !== undefined ? runs(first.act) : { line: first.command }
     if (cfg.autonomy) {
       const p = policyFor({ at: 'recover', block: choice })
-      return {
-        line: p.kind === 'take' ? p.command : choice.options[0]!.command,
-        note: `policy took 1 of ${choice.options.length} — ${choice.rule}`,
-      }
+      return { ...(p.kind === 'take' ? runs(p.act) : line), note: `policy took 1 of ${choice.options.length} — ${choice.rule}` }
     }
-    return { line: choice.options[0]!.command, block: renderDecision(choice) }
+    return { ...line, block: choice }
   }
   if (canon.errors.length > 0 || canon.docs.some((d) => d.violations.length > 0)) {
-    return { line: 'witness check' }
+    return runs(cliAct('check'))
   }
 
   // `next` is the one verb that legitimately holds BOTH lanes, and each feeds named
@@ -886,12 +911,12 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     admits(e.slug) && effortWrites(root, e.slug).has(o.target) && draftLine(root, { kind: 'amend', effort: e.slug }) !== undefined)
   const owed = owedFrom(root, efforts, specs, plans).find((o) => admits(o.target) && !amendingLook(o))
   if (owed !== undefined) {
-    if (!owed.bound) return { line: `witness decide ${owed.gate} ${owed.target} --show`, target: owed.target }
-    const parent = owed.gate === 'plan' ? String(findById(canon, owed.target)?.meta.parent) : undefined
-    return {
-      line: liveExits(owed.gate, owed.target, readStream(root, owed.target), false, upstreamFor(root, owed.gate, owed.target, parent)),
-      target: owed.target, note: 'round bound reached — human decision required',
-    }
+    const show = runs(cliAct('decide', owed.gate, owed.target, '--show'))
+    if (!owed.bound) return { ...show, target: owed.target }
+    // Row 239 (the plan's B8). At the bound too the line is one command: `--show` prints the
+    // endgame's options as a block. It was `liveExits`' menu, which pasted whole is one pipeline
+    // that runs `--approve --override` and `abandon` together.
+    return { ...show, target: owed.target, note: 'round bound reached — human decision required' }
   }
 
   // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask
@@ -903,7 +928,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // `witness recap` on stage brainstorm, which `conversationStage` already reads as a conversation.
   const ask = admits(undefined) ? nextAsk(root) : undefined
   const grill = (a: AskStatus): NextAction =>
-    ({ line: `witness recap --file <recap.json> --ask ${a.id}`, stage: 'brainstorm', ask: { id: a.id, text: a.text } })
+    ({ line: `witness recap --file <recap.json> --ask ${shellWord(a.id)}`, stage: 'brainstorm', ask: { id: a.id, text: a.text } })
   if (ask !== undefined && draftLine(root, { kind: 'ask', id: ask.id }) !== undefined) return grill(ask)
   const amending = efforts.find((e) => admits(e.slug) && draftLine(root, { kind: 'amend', effort: e.slug }) !== undefined)
   if (amending !== undefined) return { line: 'witness recap --amend --file <recap.json>', stage: 'brainstorm', target: amending.slug }
@@ -926,7 +951,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
         const approval = principlesApproval(root, canon, judge)
         if (approval !== undefined) return approval.action
         return {
-          line: `witness write <plan-id> --effort ${e.slug} --meta m.json --body b.md`,
+          line: `witness write <plan-id> --effort ${shellWord(e.slug)} --meta m.json --body b.md`,
           stage: 'plan', target: e.slug,
           note: 'chore: plan-level motion — a chore never writes spec content',
         }
@@ -935,7 +960,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     }
     if (writes.size === 0) {
       return {
-        line: `witness write <spec-id> --effort ${e.slug} --meta m.json --body b.md`,
+        line: `witness write <spec-id> --effort ${shellWord(e.slug)} --meta m.json --body b.md`,
         stage: 'decompose', target: e.slug,
       }
     }
@@ -969,21 +994,21 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // A pending design DECISION was already caught by the top-of-function scan; a stale
     // prior approval never routes here because designPending re-arms on stamp.spec mismatch.
     if (!designArtifactCurrent(root, spec)) {
-      return { line: `witness design ${id} --file <html>`, stage: 'design', target: id }
+      return { line: `witness design ${shellWord(id)} --file <html>`, stage: 'design', target: id }
     }
     // Registered but unshown is the normal state right after --file. Ask for the show
     // step by name; routing to the gate here would refuse design-unseen every time — in
     // every mode (row 194).
-    if (designUnseen(root, cfg.paths, id) !== undefined) return { line: `witness design ${id} --open`, stage: 'design', target: id }
+    if (designUnseen(root, cfg.paths, id) !== undefined) return { ...runs(cliAct('design', id, '--open')), stage: 'design', target: id }
     // Row 194. A revise on bytes the gate already judged owes a new look, not a re-gate the CLI
     // would decline as `changed nothing` — the rule decompose and plan route by. Every step
     // of the design session, its gate included, carries the stage: it is the chat's.
     const entries = readStream(root, id)
     if (authoringOwed(entries, 'design', designCurrentSha(root, cfg.paths, spec))) {
-      return { line: `witness design ${id} --file <html>`, stage: 'design', target: id,
-        note: 'revise owed — re-author the look from witness decide design ' + id + ' --show' }
+      return { line: `witness design ${shellWord(id)} --file <html>`, stage: 'design', target: id,
+        note: `revise owed — re-author the look from ${cliAct('decide', 'design', id, '--show').line}` }
     }
-    return { line: `witness gate design ${id}`, stage: 'design', target: id, ...noteOf(judgeNote(entries, 'design', judge)) }
+    return { ...runs(cliAct('gate', 'design', id)), stage: 'design', target: id, ...noteOf(judgeNote(entries, 'design', judge)) }
   }
 
   const ready = (dep: string): boolean => {
@@ -1024,7 +1049,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     if (cfg.autonomy && planless.length > 1) {
       const choice = readyChoice(canon, bookable.length > 0 ? bookable : planless)
       const p = policyFor({ at: 'choose', block: choice })
-      const id = p.kind === 'take' ? p.command : choice.options[0]!.command
+      const id = p.kind === 'pick' ? p.id : choice.options[0]!.command
       const act = planWriteAction(root, efforts, nextPlanId(plans, id), id, id)
       return { ...act, ...noteOf(act.note, `${planless.length} ready — policy took ${id} (${choice.rule})`) }
     }
@@ -1034,7 +1059,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // The note said `multiple ready — choose: a b c`, which is a list, not a ranking: it
     // named the alternatives without saying which one to take or what taking another costs.
     const choice = readyChoice(canon, planless)
-    return { ...act, ...noteOf(act.note, `${planless.length} ready — ranked below`), block: renderDecision(choice) }
+    return { ...act, ...noteOf(act.note, `${planless.length} ready — ranked below`), block: choice }
   }
 
   // plans-first: every written plan gates before any plan starts or advances —
@@ -1050,7 +1075,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // fresh run brings it back, and `status` is where it stays visible meanwhile.
     if (gateSettled(entries, 'plan', planSha) || gateParked(entries, 'plan')) continue
     if (!authoringOwed(entries, 'plan', planSha)) {
-      return { line: `witness gate plan ${id}`, target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
+      return { ...runs(cliAct('gate', 'plan', id)), target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
     }
     const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
@@ -1075,17 +1100,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
       ]
     }
     const free = approved.find((p) => waitsOn(p).length === 0)
-    if (free !== undefined) return withTrust(root, ctx.env, cfg, canon, { line: `witness start ${String(free.meta.id)}`, target: String(free.meta.id) })
+    if (free !== undefined) return withTrust(root, ctx.env, cfg, canon, { ...runs(cliAct('start', String(free.meta.id))), target: String(free.meta.id) })
     const first = approved[0]!
     const id = String(first.meta.id)
     return withTrust(root, ctx.env, cfg, canon,
-      { line: `witness start ${id}`, target: id, note: `${id} waits on an unmet need — ${waitsOn(first).join(' · ')}` })
+      { ...runs(cliAct('start', id)), target: id, note: `${id} waits on an unmet need — ${waitsOn(first).join(' · ')}` })
   }
   // Rule B — the ladder is exhausted. Same line as rule A (canon errors, the early
   // return above) but a different state; the note is what tells them apart on screen
   // (D157 — the missing note is what turned issue #21 from a one-command diagnosis
   // into a filed bug).
-  return { line: 'witness check', note: NOTHING_OWED }
+  return { ...runs(cliAct('check')), note: NOTHING_OWED }
 }
 
 // A conversation is a stage whose product IS the exchange with a human: brainstorm has no
@@ -1156,7 +1181,7 @@ export function humanAction(
 // unmet manual need blocks. Read from the needs table, not from the walk, which stops at the
 // first human item and would miss a need past it.
 function needNotices(canon: Canon): string[] {
-  const byPlan = new Map<string, Array<{ text: string; satisfy: string }>>()
+  const byPlan = new Map<string, UnmetNeed[]>()
   for (const u of unmetNeeds(canon)) {
     if (u.blocks === 'start') byPlan.set(u.doc, [...(byPlan.get(u.doc) ?? []), u])
   }
@@ -1179,7 +1204,8 @@ export function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
   // `approved`, this refuses when it is not `in-progress` — an approved-but-unstarted
   // plan is not yet a flow, and reusing the name would misreport that case.
   if (status !== 'in-progress') {
-    return refuse([v('--flow', 'not-started', status, `a started plan — run witness start ${id} first`)])
+    // Row 239. The start the want names is an act's line.
+    return refuse([v('--flow', 'not-started', status, `a started plan — run ${cliAct('start', id).line} first`)])
   }
   return ok(doc)
 }
@@ -1222,7 +1248,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // own stops: two drive sessions settling repo-wide would both judge one stop.
   const marked = driveChild(ctx.env)
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
-  let routed: { command: string; target: string } | undefined
+  // Row 239 (the plan's B9): the re-run as its act, never its line read back.
+  let routed: { act: Act; target: string } | undefined
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
@@ -1230,9 +1257,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     for (const r of reports) {
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)
-      if (routed === undefined && r.settled.kind === 'routed') {
-        routed = { command: r.settled.line.replace(/^autonomy: re-run owed — /, ''), target: r.target }
-      }
+      if (routed === undefined && r.settled.kind === 'routed') routed = { act: r.settled.act, target: r.target }
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1248,7 +1273,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.flow !== undefined) {
     const flowR = resolveFlow(canon, values.flow)
     if (!flowR.ok) { renderRefusal(flowR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-    action = flowAction(root, cfgR.value, flowR.value, judge, ctx.env) ?? { line: 'witness check', target: values.flow }
+    action = flowAction(root, cfgR.value, flowR.value, judge, ctx.env) ?? { ...runs(cliAct('check')), target: values.flow }
   } else if (scope) {
     // The drive marker outranks the worktree's ambient flow: drive assigned this session
     // its target, and a worktree cwd only infers one.
@@ -1266,7 +1291,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // verdict, but the gate that would re-judge it is runnable now.
   if (routed !== undefined && action.line.startsWith('witness decide ')) {
     // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
-    action = { line: routed.command, target: routed.target, ...(routed.command.startsWith('witness gate design ') ? { stage: 'design' } : {}) }
+    const design = routed.act.argv[0] === 'gate' && routed.act.argv[1] === 'design'
+    action = { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
   }
   action = withDeferralNote(root, canon, action)
   // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the
@@ -1291,29 +1317,36 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // reason as the lines above.
   if (chat) needNotices(canon).forEach((l) => ctx.out(l))
   // Final review. What waits on the human that no `next:` routes — a target drive set aside as
-  // stuck or capped, a merge, a parked gate — is said here, once per line with its command, so a
-  // chat that starts beside a paused drive sees it rather than folding it into its wait token.
+  // stuck or capped, a merge, a parked gate — is said here, each with its command, so a chat that
+  // starts beside a paused drive sees it rather than folding it into its wait token. Row 239 (design
+  // §3.4): its head on a `waiting:` line, and each command on an indented row of its own under it.
   const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
-  for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) {
-    const [head, ...more] = needYouRows(i)
-    ctx.out(cmd('waiting', [head!.replace(/^wait: /, ''), ...more.map((r) => r.trim())].join(' · ')))
-  }
-  // Row 205. Under autonomy each untrusted command is a kept stop, one raw line each (D120),
-  // with the grant that names it — paste-ready whatever quotes the command carries.
+  for (const i of owed.filter(isHeld)) waitingRows(i).forEach((l) => ctx.out(l))
+  // Row 205. Under autonomy each untrusted command is a kept stop, raw (D120), with the grant that
+  // names it — paste-ready whatever quotes the command carries. Row 239 (B12): the command and its
+  // source on the kept stop's line, and the grant on a `run:` row of its own under it, since a
+  // repo command that spells ` · witness trust …` would otherwise plant a grant ahead of the real one.
   if (cfgR.value.autonomy && action.trust !== undefined && action.target !== undefined) {
     for (const c of action.trust) {
-      ctx.out(keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(action.target, c)}`))
+      ctx.out(keptStopLine('trust-grant', shownCmd(c)))
+      grantRows(action.target, c).forEach((l) => ctx.out(l))
     }
   }
   reportOpening(ctx, root, cfgR.value)
-  ctx.out(kv('next', action.line))
+  // Row 239 (the plan's B18). A command value prints raw (D120), as `run:` and `relay:` do below:
+  // `kv` wraps a value holding a `,` or a `"` in TOON's quotes, and a line pasted inside them is
+  // one word, not a command.
+  ctx.out(cmd('next', action.line))
   if (action.stage) ctx.out(kv('stage', action.stage))
   if (action.target) ctx.out(kv('target', action.target))
   if (action.ask) ctx.out(kv('ask', `${action.ask.id} — ${askText(action.ask.text)}`))
   const draft = conversationDraft(root, action)
   if (draft !== undefined) ctx.out(kv('draft', draft))
-  if (action.note) ctx.out(kv('note', action.note))
-  if (action.block) action.block.forEach((l) => ctx.out(l))
+  // Row 239 (ruling R20). The note can carry journal text (a run's round or harness, in the judge
+  // note), and `kv` keeps a line break: one would start a line of its own inside the routing unit,
+  // where an unindented `run:` is the handoff. Spelled out, it stays on the note's line.
+  if (action.note) ctx.out(kv('note', logSafe(action.note)))
+  if (action.block) renderDecision(action.block).forEach((l) => ctx.out(l))
   // Whether this session is already in `home:` is a fact the CLI holds both halves of, so
   // it answers it here rather than printing the handoff and leaving the comparison to the
   // model. A `run:` line that cds to the directory it was printed in is row 129's defect —
@@ -1328,8 +1361,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (action.home) {
     ctx.out(kv('home', action.home))
     if (elsewhere) {
-      ctx.out(kv('run', handoffLine(harness, action.home, action.model)))
-      ctx.out(kv('relay', relayLine(harness)))
+      ctx.out(cmd('run', handoffLine(harness, action.home, action.model)))
+      ctx.out(cmd('relay', relayLine(harness)))
     }
   }
   // Row 180. Under autonomy a chat session hands the machine work to drive: `/witness` starts it
@@ -1369,7 +1402,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       ctx.out(kv('warn', `the witness Pi add-on is older than this CLI — this chat waits in the foreground · run ${NPX_LATEST} init --agent pi`))
       mode = 'foreground'
     }
-    ctx.out(cmd('wait', `witness wait --since ${needsYouToken(items)}`))
+    ctx.out(cmd('wait', cliAct('wait', '--since', needsYouToken(items)).line))
     ctx.out(kv('wait-mode', mode))
   }
   return EXIT.OK

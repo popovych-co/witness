@@ -1,6 +1,7 @@
-import { cliAct } from './act.js'
+import { cliAct, type Act } from './act.js'
 import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
+import { isId } from './dsl.js'
 import type { GateCheck } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { execSync } from './spawn.js'
@@ -87,8 +88,24 @@ export function heldCriteria(doc: CanonDoc): Map<string, string[]> {
 
 // Row 179. One row per (criterion · unmet need holding it): what a gate's lane check, its
 // `held:` lines and a PR body name as not verified. Built by `laneCheck` from the lane's own
-// outcome, so the record and every surface read one derivation.
-export interface HeldRow { criterion: string; need: string; satisfy: string }
+// outcome, so the record and every surface read one derivation. Row 239 (the plan's B13): `spec`
+// is the spec the need is on, journaled from 0.28.3 on, so a surface rebuilds the command from the
+// row's ids (`heldSatisfy`). A row journaled before has none.
+export interface HeldRow { criterion: string; need: string; satisfy: string; spec?: string }
+
+// Row 239 (the plan's B13). A journaled row's command, as a surface prints it. The journal is text
+// anyone with the repo can edit, so its `satisfy` string is never trusted to hold a safe line: a row
+// that journals its ids is rebuilt from them, and one journaled before them (0.28.2) prints its
+// stored string only in the one shape `satisfyCommand` wrote there. Any other row prints none.
+// Review I2: the criterion and the need print ahead of the command, so in either shape a row names
+// one only while both are ids: a forged one could otherwise spell a command before the real one. A
+// journaled row is parsed JSON, so an id is a string too.
+const STORED_SATISFY = /^witness satisfy [a-z0-9][a-z0-9-]* --need [a-z0-9][a-z0-9-]*$/
+export function heldSatisfy(h: HeldRow): string | undefined {
+  if (!isId(h.criterion) || !isId(h.need)) return undefined
+  if (h.spec !== undefined) return isId(h.spec) ? cliAct('satisfy', h.spec, '--need', h.need).line : undefined
+  return typeof h.satisfy === 'string' && STORED_SATISFY.test(h.satisfy) ? h.satisfy : undefined
+}
 
 // Row 179. The one listing of what waits on a human's assertion about the world: `status`,
 // `next`, `start` and drive's run report all read it. A plan need blocks its plan's start; a
@@ -101,11 +118,17 @@ export interface UnmetNeed {
   holds: string[]                 // criteria it holds while unmet · [] for a plan need
   blocks: 'start' | 'nothing'
   ref: string                     // the need as `--need` takes it: its id · else its 1-based index among the manual needs
-  satisfy: string                 // the human's command — the id when the need has one, else its index
+  satisfy: string                 // the human's command — the id when the need has one, else its index · `satisfyAct`'s line
+  satisfyAct: Act                 // row 239 (ruling R16(b)): that command as an act, which a `run:` row prints (`runRow`)
 }
 
+// Row 239 (the plan's B15). Canon is text a hand edit can change, and a doc's id and a need's are
+// printed into the satisfy offered and on the line that heads it: a doc or a need named outside the
+// id set is never listed. A need with no id keeps its index among every manual need, as `satisfy`
+// counts them.
 export function unmetNeeds(canon: Canon): UnmetNeed[] {
   const docs = canon.docs
+    .filter((d) => isId(d.meta.id))
     .filter((d) => d.meta.type === 'spec' || (d.meta.type === 'plan' && ['draft', 'approved'].includes(String(d.meta.status))))
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
   return docs.flatMap((d) => {
@@ -114,12 +137,14 @@ export function unmetNeeds(canon: Canon): UnmetNeed[] {
     const needs = Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []
     const manuals = needs.filter((n) => typeof n.manual === 'string') as Array<{ id?: string; manual: string; satisfied?: boolean; holds?: unknown }>
     return manuals.flatMap((n, i) => {
+      if (n.id !== undefined && !isId(n.id)) return []
       const ref = n.id ?? String(i + 1)
+      const satisfyAct = cliAct('satisfy', id, '--need', ref)
       return needMet(d, n) ? [] : [{
         doc: id, type, need: needKey(n), text: n.manual,
         holds: type === 'spec' && Array.isArray(n.holds) ? (n.holds as string[]) : [],
         blocks: type === 'plan' ? 'start' as const : 'nothing' as const,
-        ref, satisfy: satisfyCommand(id, ref),
+        ref, satisfy: satisfyAct.line, satisfyAct,
       }]
     })
   })

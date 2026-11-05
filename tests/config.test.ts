@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
+import { fingerprint, SCHEMA_FINGERPRINTS } from '../src/settings.js'
 import { seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
 
 describe('loadConfig', () => {
@@ -316,6 +317,33 @@ describe('ship.merge (A7)', () => {
     repo.write('witness.config.yaml', 'schema: 1\nship:\n  merge: fast-forward\n')
     const r = loadConfig(repo.root)
     expect(!r.ok && r.violations[0]).toMatchObject({ field: 'ship.merge', rule: 'invalid', want: 'merge | squash | rebase' })
+  })
+})
+
+// Row 239 (the plan's B14). The ship branch is printed into the git commands a refusal offers, so it
+// holds only the names git allows that print bare in every shell. The rule rides `Setting.pattern`,
+// which the schema fingerprint leaves out: no schema step.
+describe('ship.branch (row 239)', () => {
+  it("ship.branch outside git's safe names is refused at load (Review Focus 2)", async () => {
+    const repo = tmpRepo()
+    const load = (branch: string) => {
+      repo.write('witness.config.yaml', `schema: 1\nship:\n  branch: ${JSON.stringify(branch)}\n`)
+      return loadConfig(repo.root)
+    }
+    for (const branch of ['main', 'release/1.2', 'feat/x+y']) {
+      const r = load(branch)
+      expect(r.ok && r.value.ship.branch, branch).toBe(branch)
+    }
+    for (const branch of ['feature/#12', 'a b', '-x', 'a..b', 'a/', 'x.lock', 'main$(touch${IFS}M7)']) {
+      const r = load(branch)
+      expect(!r.ok && r.violations, branch).toEqual([{ field: 'ship.branch', rule: 'invalid', got: branch,
+        want: 'a branch name: letters, digits and . _ / + -, as git allows them — it is printed into git commands' }])
+    }
+    const seeded = await seededRepo()
+    patchConfig(seeded, { ship: { branch: 'feature/#12' } })
+    expect((await seeded.cli(['check'])).stdout).toContain('error,config,ship.branch,invalid,')
+    expect(fingerprint(1)).toBe(SCHEMA_FINGERPRINTS[1])
+    expect(fingerprint(2)).toBe(SCHEMA_FINGERPRINTS[2])
   })
 })
 

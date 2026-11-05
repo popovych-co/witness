@@ -10,6 +10,7 @@ import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput, type Stamp } from '../gate.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
 import type { GateCheck } from '../rounds.js'
+import { shellWord } from '../toon.js'
 
 // Row 221 (final review). The critic's lenses are written for slices; principles are not one.
 const PRINCIPLES_LENSES = [
@@ -48,8 +49,9 @@ registerGate({
     // here, and an approve stamps them with its specs.
     const docs = effortCanon(root, canon, effort)
     if (docs.length === 0) {
+      // Row 239. A shape: the effort is quoted, and the id and the files are the session's.
       return refuse([v('effort', 'nothing-to-gate', effort,
-        `written specs or principles — run: witness write <id> --effort ${effort} --meta m.json --body b.md`)])
+        `written specs or principles — run: witness write <id> --effort ${shellWord(effort)} --meta m.json --body b.md`)])
     }
 
     const checks: GateCheck[] = []

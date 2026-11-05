@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cliAct, type Act } from './act.js'
+import { actOn, runRow, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { criteriaOwner, findById, type Canon, type CanonDoc } from './scan.js'
-import { hasControl, visible } from './toon.js'
+import { hasControl, visible, type Platform } from './toon.js'
 
 const allowPath = (root: string) => join(root, '.witness', 'allow.json')
 
@@ -70,10 +70,35 @@ export const unsafeLeft = (n: number): string =>
   `${n} carry characters outside printable ASCII — never granted here · rewrite where it is written`
 // Rows 139/203. The grant as an act: the raw command one argv word, so it runs without a shell.
 // A command the verb would not take has none, so no model ever holds an act for it.
-export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>): Act | undefined {
-  return hasControl(c.cmd) ? undefined : cliAct('trust', target, '--cmd', c.cmd)
+export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): Act | undefined {
+  return hasControl(c.cmd) ? undefined : actOn(platform, ['trust', target, '--cmd', c.cmd])
 }
-export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>): string => grantAct(target, c)?.line ?? UNGRANTABLE
+// The grant's line, or why there is none. Row 239: a grant Windows withholds (`Act.withheld`) is
+// never offered to be pasted, so the line names the listing instead, which grants nothing by
+// itself: the command stays pending, and at a terminal the listing asks for each one.
+export const grantOf = (target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): string => {
+  const act = grantAct(target, c, platform)
+  if (act === undefined) return UNGRANTABLE
+  return act.withheld === undefined ? act.line
+    : `${act.withheld} · at a terminal, ${actOn(platform, ['trust', target]).line} asks for each command`
+}
+
+// Row 239 (the plan's B12). A grant as the rows printed under the line that names its command: a
+// kept stop's, or the inbox's `wait:`. That line holds the repo's command, which can spell a grant
+// of its own, so the grant is never printed after it: it is a `run:` row of its own. A command the
+// verb would not take gets a note and no `run:`. One Windows withholds gets its note, then the
+// listing, which grants nothing by itself: the command stays pending (`trustListing`), and at a
+// terminal the listing asks for each one.
+export function grantRows(target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): string[] {
+  return grantRowsOf(grantAct(target, c, platform), actOn(platform, ['trust', target]))
+}
+// The same rows from a grant already built, as a model holds it: never the bytes of a command the
+// verb would not take, so the act decides (`TrustGrant`). `list` is the target's listing. Ruling
+// R16(b): both print through `runRow`, so a listing Windows withholds too is a note, never a `run:`.
+export function grantRowsOf(grant: Act | undefined, list: Act): string[] {
+  if (grant === undefined) return [`  note: ${UNGRANTABLE}`]
+  return grant.withheld === undefined ? [runRow(grant)] : [`  note: ${grant.withheld}`, runRow(list)]
+}
 
 // The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
 // runner IS `ship.test`, and a command listed twice is listed once, under its first source.
@@ -133,7 +158,7 @@ export interface TrustRow { cmd: string; source: string; doc?: string; status: T
 export interface TrustListing {
   target?: string        // absent: every command the repo runs, each doc's under its id (`doc`)
   rows: TrustRow[]       // the listing's order
-  pending: Act[]         // a target listing's untrusted commands, once each, as their grants · [] for the repo listing
+  pending: Act[]         // a target listing's untrusted commands, once each, as their grants · [] for the repo listing · row 239: a grant Windows withholds included
   untrusted: number      // untrusted commands, once each
   unsafe: number         // never granted here: the target listing counts each command once; the repo listing counts rows, as the verb always has
 }
@@ -148,16 +173,30 @@ const trustStatus = (trusted: ReadonlySet<string>, cmd: string): TrustStatus =>
 // grants from the same allow.json snapshot its rows were read from.
 export const pendingCmds = (listing: TrustListing): string[] => listing.pending.map((a) => a.argv[3]!)
 
-export function trustListing(root: string, cfg: Config, canon: Canon, target?: string): Result<TrustListing> {
+// Row 239 (the plan's B5). The trust verb's rows for the grants it offers when it granted nothing:
+// each pending grant's line to run, and for one Windows withholds its command, escaped, with why it
+// is not offered and the listing that asks for it at a terminal, where it stays pending.
+export function pendingRows(listing: TrustListing, platform: Platform = process.platform): string[] {
+  return listing.pending.map((a) => a.withheld === undefined ? runRow(a, 'run', '')
+    : `note: ${visible(a.argv[3]!)} — ${a.withheld} · at a terminal, ${actOn(platform, ['trust', listing.target!]).line} asks for each command`)
+}
+
+// Row 239. `platform` is the shell the grants are printed for: a grant Windows withholds stays
+// pending, so the verb's terminal prompt and `--yes` still reach it.
+export function trustListing(
+  root: string, cfg: Config, canon: Canon, target?: string, platform: Platform = process.platform,
+): Result<TrustListing> {
   if (target === undefined) return ok(listingOf(root, repoCommands(cfg, canon)))
   const doc = findById(canon, target)
   if (!doc) return refuse([v('artifact', 'unknown-artifact', target, 'an existing canon doc id', 'witness index')])
-  return ok(listingOf(root, commandsRun(cfg, canon, doc), target))
+  return ok(listingOf(root, commandsRun(cfg, canon, doc), target, platform))
 }
 
 // The counts are of the raw commands, never of their escaped rows: two commands can escape to
 // the same text.
-function listingOf(root: string, listed: ReadonlyArray<RunCommand & { doc?: string }>, target?: string): TrustListing {
+function listingOf(
+  root: string, listed: ReadonlyArray<RunCommand & { doc?: string }>, target?: string, platform: Platform = process.platform,
+): TrustListing {
   const trusted = new Set(load(root))
   const status = (cmd: string): TrustStatus => trustStatus(trusted, cmd)
   const once = [...new Set(listed.map((c) => c.cmd))]
@@ -167,7 +206,7 @@ function listingOf(root: string, listed: ReadonlyArray<RunCommand & { doc?: stri
     rows: listed.map((c): TrustRow => ({
       cmd: visible(c.cmd), source: visible(c.source), ...(c.doc !== undefined ? { doc: visible(c.doc) } : {}), status: status(c.cmd),
     })),
-    pending: target === undefined ? [] : untrusted.flatMap((cmd) => grantAct(target, { cmd }) ?? []),
+    pending: target === undefined ? [] : untrusted.flatMap((cmd) => grantAct(target, { cmd }, platform) ?? []),
     untrusted: untrusted.length,
     // A residual kept byte for byte: the repo listing counts rows, so a command two docs run
     // counts twice.

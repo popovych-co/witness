@@ -1,8 +1,8 @@
 import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
-  anchorRecurrence, boundReached, ladderSpent, lastGateRun, notePrefill, pendingDecision, repairsOnRegate,
-  repairGranted, roundBudget, roundsSinceApprove, type GateRunEntry,
+  anchorRecurrence, boundReached, ladderSpent, lastGateRun, pendingDecision, repairsOnRegate,
+  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry,
 } from './rounds.js'
 import { hasControl, visible } from './toon.js'
 
@@ -34,8 +34,9 @@ export interface Decision {
   anchor?: string
 }
 
-// Commands are emitted raw (D120): `esc` would quote the `--note "…"` argument and the
-// line would paste into a shell as an empty note.
+// Commands are emitted raw (D120). Row 239: each is its act's line, which the quoter already
+// made one pasteable command; `esc` would wrap a line holding a `"` in TOON's quotes, and pasted
+// inside them it is one word, not a command.
 export function renderDecision(d: Decision): string[] {
   const n = d.options.length
   const out = [`${d.key}: ${n} option${n === 1 ? '' : 's'} · 1 is recommended`]
@@ -75,20 +76,18 @@ const blockingAnchors = (r: GateRunEntry): string[] =>
   (r.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking)
     .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
 
-// The CLI's own placeholders, and only those. A finding's anchor is the reviewer's text and
-// may itself read `<SaveBar>`; matching any `<…>` made the prefilled revise "not runnable",
-// so the one fix the CLI recommends was the one act nobody could take.
-// An option reads the same two names off its act, as whole words (act.ts), so an anchor that
-// merely holds `<why>` no longer costs the revise its run: line. This test of the rendered
-// text stays for the arbiter's menu (arbiter.ts), which filters commands as lines.
-export const PLACEHOLDER = /<(why|effort)>/
-
 // Rows 139/203. Every option that offers a command is built from its act: the block prints the
-// act's line, and the option pastes unless a word of it is one the human must fill.
+// act's line, and the option pastes unless a word of it is one the human must fill. Row 239: nor
+// when it is withheld (`Act.withheld`). The command is still shown, and its note says why.
 export function option(
   act: Act, depth: Depth, rest: Partial<Pick<Option, 'why' | 'when' | 'tradeoff' | 'note' | 'judgeFirst'>> = {},
 ): Option {
-  return { command: act.line, depth, runnable: act.inputs.length === 0, act, ...rest }
+  const { note: given, ...shown } = rest
+  const note = [given, act.withheld].filter((n) => n !== undefined).join(' · ')
+  return {
+    command: act.line, depth, runnable: act.inputs.length === 0 && act.withheld === undefined, act, ...shown,
+    ...(note !== '' ? { note } : {}),
+  }
 }
 
 // The rule table is an ORDERED FIRST-MATCH list (D121). The id of the rule that matched is
@@ -145,7 +144,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
 
   const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
   const up = d('--revise', '--upstream', upstream ?? '<effort>')
-  const note = d('--revise', '--note', notePrefill(entries, gate))
+  // Row 239. Bare where the run holds facts: no reviewer text reaches a command.
+  const note = reviseAct(gate, target, entries)
   const atBound = boundReached(entries, gate)
   const budget = roundBudget(entries, gate)
   const spent = roundsSinceApprove(entries, gate)

@@ -2,6 +2,7 @@ import { dirname } from 'node:path'
 import { canonPaths } from './config.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { execFileSync } from './spawn.js'
+import { offeredLine } from './toon.js'
 
 // D158 (#20). A reviewer-bound diff is legitimately multi-megabyte and Node's spawnSync
 // default is 1 MiB, which crashed ship/gate as `spawnSync git ENOBUFS` — and, worse,
@@ -233,10 +234,12 @@ export function resolveStartBase(root: string, branch: string): Result<string> {
     // A remedy only where one is true. A remote that simply lacks the branch is fixed by
     // one push; an unreachable host is not fixed by anything witness can render, and a
     // `run:` that fixes nothing is the D129 defect D147's placeholder test guards against.
+    // Row 239: the push is another tool's command, through the one renderer, and none where
+    // it is withheld.
     const missingRef = /couldn't find remote ref|no such ref|not our ref/i.test(fetched.out)
     return refuse([v('remote', 'fetch-failed', fetched.out.trim().slice(0, 160),
       `origin/${branch} reachable — check the network, or push ${branch} once if the remote has no such branch`,
-      missingRef ? `git push -u origin ${branch}` : undefined)])
+      missingRef ? offeredLine(['git', 'push', '-u', 'origin', branch]) : undefined)])
   }
   return ok(`origin/${branch}`)
 }

@@ -1,6 +1,11 @@
 import { v, type Violation } from './refusal.js'
 
-export const ID_RE = /^[a-z0-9-]+$/
+// Row 239 (the plan's B14). An id is printed into the commands witness offers, where a word that
+// starts with `-` is read as a flag: it starts with a letter or a digit.
+export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
+// Row 239 (the plan's B15). A value a reader can print as an id: canon and the journal are parsed
+// text, so an id read there may be any value.
+export const isId = (s: unknown): s is string => typeof s === 'string' && ID_RE.test(s)
 
 export interface Criterion {
   id: string
@@ -29,7 +34,7 @@ export function validateCriteria(raw: unknown, specId: string): Violation[] {
     }
     const e = c as Record<string, unknown>
     if (typeof e.id !== 'string' || !ID_RE.test(e.id)) {
-      out.push(v(`${at}.id`, 'id-charset', String(e.id ?? 'absent'), '[a-z0-9-]+'))
+      out.push(v(`${at}.id`, 'id-charset', String(e.id ?? 'absent'), '[a-z0-9][a-z0-9-]*'))
     } else if (seen.has(e.id)) {
       out.push(v(`${at}.id`, 'id-unique', e.id, 'unique per spec'))
     } else {
@@ -78,7 +83,7 @@ export function validateNeeds(raw: unknown): Violation[] {
       out.push(v(`${at}.satisfied`, 'required', String(e.satisfied ?? 'absent'), 'boolean'))
     }
     if (e.id !== undefined) {
-      if (typeof e.id !== 'string' || !ID_RE.test(e.id)) out.push(v(`${at}.id`, 'id-charset', String(e.id), '[a-z0-9-]+'))
+      if (typeof e.id !== 'string' || !ID_RE.test(e.id)) out.push(v(`${at}.id`, 'id-charset', String(e.id), '[a-z0-9][a-z0-9-]*'))
       else if (ids.has(e.id)) out.push(v(`${at}.id`, 'id-unique', e.id, 'unique per doc'))
       else ids.add(e.id)
     }

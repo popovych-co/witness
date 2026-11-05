@@ -11,6 +11,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { canonicalSha, short, VOLATILE_FIELDS } from '../sha.js'
 import { kv, rows } from '../toon.js'
+import { cliAct } from '../act.js'
 
 function canonicalRender(meta: Record<string, unknown>, body: string): string {
   const kept = Object.fromEntries(
@@ -41,7 +42,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('sha', short(current)))
     ctx.out('delta: full content is the delta — new spec')
     const carried = carriedDecisions(root, spec)?.decisions.length ?? 0
-    if (carried > 0) ctx.out(`decisions: ${carried} carried — all are the delta · witness read ${id} --decisions`)
+    // Row 239. The read it names is an act's line, as below.
+    if (carried > 0) ctx.out(`decisions: ${carried} carried — all are the delta · ${cliAct('read', id, '--decisions').line}`)
     return EXIT.OK
   }
   ctx.out(kv('base', `plan-pin ${base.planId} @ ${short(base.sha!)}`))
@@ -56,7 +58,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (!moved.includes('decisions')) return
     const delta = decisionDelta(root, base, spec)
     if (delta === undefined) {
-      ctx.out(`decisions: moved since ${base.planId} — witness read ${id} --decisions`)
+      ctx.out(`decisions: moved since ${base.planId} — ${cliAct('read', id, '--decisions').line}`)
       return
     }
     ctx.out(`decisions: moved since ${base.planId}`)

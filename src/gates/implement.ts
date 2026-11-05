@@ -17,6 +17,8 @@ import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import type { GateCheck } from '../rounds.js'
+import { logSafe, offeredLine } from '../toon.js'
+import { cliAct } from '../act.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
   const diff = git(wt, 'diff', base)
@@ -90,8 +92,9 @@ registerGate({
     }
     const wt = worktreePath(root, planId)
     if (String(plan.meta.status) !== 'in-progress' || !existsSync(wt)) {
+      // Row 239. The command a want names is an act's line.
       return refuse([v('plan', 'not-started', String(plan.meta.status),
-        `an in-progress plan with a worktree — run: witness start ${planId}`)])
+        `an in-progress plan with a worktree — run: ${cliAct('start', planId).line}`)])
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {
@@ -111,9 +114,13 @@ registerGate({
       const artRel = designRel(cfg.paths, String(plan.meta.parent))
       const artAbs = join(root, artRel)
       if (!existsSync(artAbs) || !statSync(artAbs).isFile()) {
-        return refuse([v('design', 'design-artifact-missing', artRel,
+        // Row 239: the restore is another tool's command, through the one renderer. Where it is
+        // withheld there is no `run:`, and the want still names both ways back. Ruling R24: the path
+        // is the config's, and the refusal's row above the remedy names it spelled out, so a line break
+        // in it cannot start a line of its own, which could read `run:`.
+        return refuse([v('design', 'design-artifact-missing', logSafe(artRel),
           'the approved living design the plan pins — restore it or re-run the design stage',
-          `git checkout -- ${artRel}`)])
+          offeredLine(['git', 'checkout', '--', artRel]))])
       }
       const living: LensDoc = { path: artRel, contents: readFileSync(artAbs, 'utf8') }
       lensOverrides['design-reviewer'] = {

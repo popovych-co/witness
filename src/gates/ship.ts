@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { cliAct } from '../act.js'
 import { stateDirs } from '../gitio.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { canonicalSha, planContentSha } from '../sha.js'
@@ -42,8 +43,9 @@ registerGate({
     }
     const wt = worktreePath(root, planId)
     if (String(plan.meta.status) !== 'in-progress' || !existsSync(wt)) {
+      // Row 239. A command a want or a check detail names is an act's line, here and below.
       return refuse([v('plan', 'not-started', String(plan.meta.status),
-        `an in-progress plan with a worktree — run: witness start ${planId}`)])
+        `an in-progress plan with a worktree — run: ${cliAct('start', planId).line}`)])
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {
@@ -75,7 +77,7 @@ registerGate({
     checks.push({ name: 'implement-gate', ok: implementSettled,
       detail: lastImplement
         ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
-        : 'implement gate never ran — witness gate implement ' + planId })
+        : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` })
 
     checks.push(await commandLane(wt, root, ctx, 'tests', cfg.ship.test))
     checks.push(await commandLane(wt, root, ctx, 'lint', cfg.ship.lint))

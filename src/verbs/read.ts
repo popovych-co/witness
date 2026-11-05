@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
+import { cliAct } from '../act.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { controlsBlock, designRel, elementIds } from '../design.js'
 import { serializeDoc } from '../fm.js'
@@ -75,7 +76,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Before the unknown-id refusal: an effort slug is the one non-canon id this mode takes (§11).
   if (values.decisions) {
     if (doc?.meta.type === 'plan') {
-      renderRefusal([v('id', 'not-a-spec', `${id} is a plan`, `its parent's — witness read ${String(doc.meta.parent)} --decisions`)]).forEach(ctx.err)
+      // Row 239. The read the want names is an act's line.
+      renderRefusal([v('id', 'not-a-spec', `${id} is a plan`, `its parent's — ${cliAct('read', String(doc.meta.parent), '--decisions').line}`)]).forEach(ctx.err)
       return EXIT.REFUSED
     }
     const recap = doc === undefined ? latestRecap(root, id) : undefined

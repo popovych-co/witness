@@ -1,19 +1,23 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ok } from '../src/refusal.js'
+import { ok, refuse, v } from '../src/refusal.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { registerGate, runGate, type GateInput } from '../src/gate.js'
-import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
+import { notePrefill, type DecisionEntry, type GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { actOfCommand, applyDecision, decisionAct } from '../src/verbs/decide.js'
+import { applyDecision, decisionAct } from '../src/verbs/decide.js'
 import { SPEC_META, approve, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const BLOCKING = {
   coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
   findings: [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'expiry unbounded' }],
 }
+// Row 239. The synthetic gate's upstream is its target, so BLOCKING's anchor reads as the
+// parent's (`blocking-parent`). A heading with no doc id is the one anchor inside it.
+const HERE = { ...BLOCKING, findings: [{ blocking: true, anchor: '## Behavior', claim: 'expiry unbounded' }] }
+const CLEAN = { ...BLOCKING, findings: [] }
 
 // Re-registers on every call (not once-guarded): repo.cli(['decide', ...]) dynamically
 // imports gates/index.js, which registers the real 'plan' gate and would otherwise
@@ -49,14 +53,14 @@ function synthetic() {
   })
 }
 
-async function stoppedGate() {
+async function stoppedGate(verdict: unknown = BLOCKING, manual = false) {
   synthetic()
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   const scenario = fakeScenario()
-  putVerdict(scenario, BLOCKING)
+  putVerdict(scenario, verdict)
   const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-  await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual: false })
+  await runGate(ctx, 'plan', 'auth-refresh', { fresh: false, manual })
   return { repo, scenario, ctx }
 }
 const decisions = (repo: { root: string }, id = 'auth-refresh') =>
@@ -85,7 +89,7 @@ async function fallenBackGate() {
 }
 
 // three stopped rounds → bound reached, third round pending
-async function boundRepo() {
+async function boundRepo(verdicts: unknown[] = []) {
   const { repo } = await stoppedGate()
   for (const round of [1, 2]) {
     appendEntry(repo.root, 'auth-refresh', {
@@ -94,7 +98,7 @@ async function boundRepo() {
     appendEntry(repo.root, 'auth-refresh', {
       v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh', round: round + 1,
       run_id: `r-${round}`, reviewed_sha: `sha-${round}`, prompts_sha: 'p', witness: '0',
-      model: 'm', checks: [], verdicts: [], outcome: 'stopped',
+      model: 'm', checks: [], verdicts, outcome: 'stopped',
     })
   }
   return repo
@@ -163,6 +167,45 @@ describe('witness decide', () => {
 
     expect(res.code).toBe(2)
     expect(res.stderr).toContain('unknown-via')
+  })
+
+  // Row 239. A flag is read only where a flag stands: the word after `--note`, `--upstream`,
+  // `--pin` or `--via` is that flag's value whatever it reads, so text a human or the arbiter
+  // wrote never sets a flag.
+  it('a value that reads like a flag is the value, never a flag (row 239)', () => {
+    for (const word of ['--override', '--repair', '--trust-cmds', '--approve', '--stop']) {
+      expect(decisionAct(['ship', 'p1', '--revise', '--note', word]), word).toEqual(ok({ gate: 'ship', target: 'p1', decision: 'revise', note: word }))
+    }
+    expect(decisionAct(['plan', 'p1', '--revise', '--upstream', '--stop'])).toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', upstream: '--stop' }))
+    expect(decisionAct(['implement', 'p1', '--approve', '--pin', '--override'])).toEqual(ok({ gate: 'implement', target: 'p1', decision: 'approve', pins: ['--override'] }))
+    expect(decisionAct(['plan', 'p1', '--revise', '--via', '--stop'])).toEqual(refuse([v('--via', 'unknown-via', '--stop', 'affirmation — the only selection source the CLI defines')]))
+  })
+
+  // The verb's own parse reads argv the same way: a note of `--show` is a note, and the
+  // decision is taken.
+  it('a note typed as --show is the note, and decide decides (row 239)', async () => {
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', '--show'])
+
+    expect(res.code, res.stderr).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'revise', note: '--show' })
+  })
+
+  // Row 239. The CLI's own placeholders are slots a human fills, never a value: the printed
+  // `--note "<why>"` or `--upstream <effort>`, run as it stands, decides nothing.
+  it('an unfilled slot is refused at the one door, and journals nothing (row 239)', async () => {
+    expect(decisionAct(['plan', 'p1', '--revise', '--note', '<why>']))
+      .toEqual(refuse([v('--note', 'slot-unfilled', '<why>', 'the note itself — <why> is a slot the human fills')]))
+    expect(decisionAct(['plan', 'p1', '--revise', '--upstream', '<effort>']))
+      .toEqual(refuse([v('--upstream', 'slot-unfilled', '<effort>', 'the upstream itself — <effort> is a slot the human fills')]))
+    const { repo } = await stoppedGate()
+
+    const res = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', '<why>'])
+
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('slot-unfilled')
+    expect(decisions(repo)).toEqual([])
   })
 
   // D154. Trust is granted where a human decides. The grant runs only after the decision
@@ -268,6 +311,55 @@ describe('witness decide', () => {
     const show = await repo.cli(['decide', 'plan', 'auth-refresh', '--show'])
     expect(show.code).toBe(0)
     expect(show.stdout).toContain('expiry unbounded')
+  })
+
+  // Row 239. The block offers a bare `--revise` where the run holds facts, so the note it used
+  // to carry is the one `decide` journals; a run with none journals no note, as before.
+  it('a bare --revise journals the prefill the block used to carry (row 239)', async () => {
+    const { repo } = await stoppedGate()
+    const prefill = notePrefill(readStream(repo.root, 'auth-refresh'), 'plan')
+    expect(prefill).toBe('1 blocking finding: auth-refresh > ## Behavior')
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise'])
+    expect(r.code).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'revise', note: prefill })
+    expect(r.stdout).toContain('note: 1 blocking finding:')
+  })
+
+  it('a bare --revise on a run with no facts journals no note (row 239)', async () => {
+    const { repo } = await stoppedGate(CLEAN, true)
+    expect(notePrefill(readStream(repo.root, 'auth-refresh'), 'plan')).toBe('<why>')
+    const r = await repo.cli(['decide', 'plan', 'auth-refresh', '--revise'])
+    expect(r.code).toBe(0)
+    expect(decisions(repo).at(-1)!.decision).toBe('revise')
+    expect(decisions(repo).at(-1)).not.toHaveProperty('note')
+  })
+
+  // Each run below holds facts, so a derived note would show: none may.
+  it('--note, --upstream and --repair journal what they did before (row 239)', async () => {
+    const noted = (await stoppedGate()).repo
+    expect((await noted.cli(['decide', 'plan', 'auth-refresh', '--revise', '--note', 'fixit'])).code).toBe(0)
+    expect(decisions(noted).at(-1)!.note).toBe('fixit')
+
+    const up = (await stoppedGate()).repo
+    expect(notePrefill(readStream(up.root, 'auth-refresh'), 'plan')).not.toBe('<why>')
+    expect((await up.cli(['decide', 'plan', 'auth-refresh', '--revise', '--upstream', 'auth-refresh'])).code).toBe(0)
+    const child = decisions(up).at(-1)!
+    const reopen = decisions(up, up.effort).find((d) => d.caused_by !== undefined)!
+    expect(child.decision).toBe('revise-upstream')
+    expect(child).not.toHaveProperty('note')
+    expect(reopen).not.toHaveProperty('note')
+
+    const bound = await boundRepo([{ reviewer: 'plan-critic', coverage: [], findings: BLOCKING.findings }])
+    expect(notePrefill(readStream(bound.root, 'auth-refresh'), 'plan')).not.toBe('<why>')
+    expect((await bound.cli(['decide', 'plan', 'auth-refresh', '--revise', '--repair'])).code).toBe(0)
+    expect(decisions(bound).at(-1)).toMatchObject({ decision: 'revise', repair: true })
+    expect(decisions(bound).at(-1)).not.toHaveProperty('note')
+  })
+
+  it('recommended is option 1\'s verb, read off its argv (row 239)', async () => {
+    const { repo } = await stoppedGate(HERE)
+    expect((await repo.cli(['decide', 'plan', 'auth-refresh', '--stop'])).code).toBe(0)
+    expect(decisions(repo).at(-1)).toMatchObject({ decision: 'stop', rule: 'blocking-here', recommended: 'revise' })
   })
 
   it('at the bound: revise refused, approve needs --override', async () => {
@@ -563,12 +655,14 @@ describe('applyDecision — the one door (A4)', () => {
     expect(decisions(repo)).toEqual([])
   })
 
-  it('reads a rendered command into the same act the verb parses', () => {
-    expect(actOfCommand('witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1 "quoted""'))
-      .toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: '1 blocking finding: p1 > ## Step: s1 "quoted"' }))
-    expect(actOfCommand('witness decide implement p1 --approve --override')).toEqual(ok({ gate: 'implement', target: 'p1', decision: 'approve', override: true }))
-    expect(actOfCommand('witness gate plan p1').ok).toBe(false)
+  it('parses --via affirmation into the act the verb hands the one door', () => {
     expect(decisionAct(['plan', 'p1', '--revise', '--note', 'x', '--via', 'affirmation'])).toEqual(ok({ gate: 'plan', target: 'p1', decision: 'revise', note: 'x', selected: 'affirmation' }))
+  })
+  // Row 239. settle, the arbiter and drive run an option's argv, so nothing reads a printed
+  // decision back into one: the readers that did are gone.
+  it('no reader parses a printed decision back (row 239)', async () => {
+    expect(Object.keys(await import('../src/verbs/decide.js'))).not.toContain('actOfCommand')
+    expect(Object.keys(await import('../src/drive.js'))).not.toContain('parseBlock')
   })
 })
 

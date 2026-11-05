@@ -16,6 +16,7 @@ import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
 import { ASK_STREAM, reservedId } from '../ask.js'
+import { ID_RE, isId } from '../dsl.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
@@ -28,8 +29,9 @@ import { pendingDecision } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
 import { findById, findCycle, loadCanon, planFinished } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
-import { kv, rows } from '../toon.js'
+import { kv, rows, shellWord, visible } from '../toon.js'
 import { pendingTxn } from '../txn.js'
+import { cliAct } from '../act.js'
 import { listWorktrees, materializedCanon, RESIDUE_GOT, worktreePath } from '../worktree.js'
 
 interface Finding {
@@ -165,11 +167,12 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       const exit = typeof plan.meta.parent === 'string' ? canonExit(readStream(root, plan.meta.parent)) : undefined
       const status = String(plan.meta.status)
       if (exit !== undefined && (status === 'abandoned' || (status === 'done' && exit.to === 'superseded'))) continue
+      // Row 239. A command a finding names is an act's line, as in the motion findings below.
       findings.push(f('error', 'invariants', `${plan.rel}: parent`, 'unknown-parent', exit === undefined
         ? String(plan.meta.parent)
         : status === 'done'
           ? `${String(plan.meta.parent)} removed by abandon after this plan shipped it — canon lost built behavior; write that spec again under this id`
-          : `${String(plan.meta.parent)} ${exit.to} by ${exit.by ?? exit.cause} while this plan is ${status} — witness abandon ${String(plan.meta.id)} · or re-author it under a live parent`))
+          : `${String(plan.meta.parent)} ${exit.to} by ${exit.by ?? exit.cause} while this plan is ${status} — ${cliAct('abandon', String(plan.meta.id)).line} · or re-author it under a live parent`))
       continue
     }
     if (plan.meta.status !== 'draft' && plan.meta.status !== 'abandoned' && parent.meta.status === 'draft') {
@@ -181,6 +184,8 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
   }
 
+  // Row 239. Each motion finding names its command as an act's line, or as a shape (a file to
+  // author) whose foreign word is quoted.
   for (const plan of canon.docs.filter((d) => d.meta.type === 'plan')) {
     const id = String(plan.meta.id)
     if (String(plan.meta.status) === 'in-progress') {
@@ -189,30 +194,30 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (moved.length > 0) {
         findings.push(f('warn', 'motion', id, 'mid-flight-amendment', moved.includes('spec')
           ? `parent ${String(parent!.meta.id)} moved off the pin — ship will re-verify against current content`
-          : `the decisions ${String(parent!.meta.id)} carries moved off the pin — the plan was derived under the old ones · witness diff ${String(parent!.meta.id)}`))
+          : `the decisions ${String(parent!.meta.id)} carries moved off the pin — the plan was derived under the old ones · ${cliAct('diff', String(parent!.meta.id)).line}`))
       }
       if (!existsSync(worktreePath(root, id))) {
-        findings.push(f('warn', 'motion', id, 'missing-worktree', `witness start ${id} recreates it`))
+        findings.push(f('warn', 'motion', id, 'missing-worktree', `${cliAct('start', id).line} recreates it`))
       }
     }
     for (const gate of ['plan', 'implement', 'ship']) {
       if (pendingDecision(readStream(root, id), gate)) {
-        findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `witness decide ${gate} ${id} --show`))
+        findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', cliAct('decide', gate, id, '--show').line))
       }
     }
   }
   for (const slug of effortStreams(root)) {
     if (pendingDecision(readStream(root, slug), 'decompose')) {
-      findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', `witness decide decompose ${slug} --show`))
+      findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', cliAct('decide', 'decompose', slug, '--show').line))
     }
   }
   for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
     const id = String(spec.meta.id)
     if (pendingDecision(readStream(root, id), 'design')) {
-      findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', `witness decide design ${id} --show`))
+      findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', cliAct('decide', 'design', id, '--show').line))
     }
     if (designPending(root, spec) && String(spec.meta.status) === 'approved') {
-      findings.push(f('warn', 'motion', id, 'design-pending', `ui spec owes a design — witness design ${id} --file <html>`))
+      findings.push(f('warn', 'motion', id, 'design-pending', `ui spec owes a design — witness design ${shellWord(id)} --file <html>`))
     }
   }
   for (const planId of listWorktrees(root)) {
@@ -252,8 +257,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     // sample names an ARTIFACT when the set has one: the finding is about a doc a session
     // could read, while `.gitkeep` and journal rows sort first and name nothing at stake.
     const sample = (residue.find((r) => /\.(md|html)$/.test(r.rel)) ?? residue[0]!).rel
+    // Row 239. The start it names is an act's line.
     findings.push(f('warn', 'motion', planId, 'canon-in-worktree',
-      `${residue.length} canon file(s) checked out here (e.g. ${sample}) — worktree predates the exclusion; witness start ${planId} removes them`))
+      `${residue.length} canon file(s) checked out here (e.g. ${sample}) — worktree predates the exclusion; ${cliAct('start', planId).line} removes them`))
   }
 
   for (const doc of canon.docs) {
@@ -296,7 +302,20 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     for (const file of readdirSync(journalDir)) {
       if (!file.endsWith('.jsonl')) continue
       const id = file.slice(0, -'.jsonl'.length)
+      // Row 239 (the plan's B15). Witness never names a stream outside the id set, and no list of
+      // efforts holds one (`effortStreams`): it is reported, its name spelled out, and judged no further.
+      if (!ID_RE.test(id)) {
+        findings.push(f('warn', 'journal', visible(file), 'stream-name',
+          'a stream named outside [a-z0-9][a-z0-9-]* — witness never writes one and never offers it as a command'))
+        continue
+      }
       const entries = readStream(root, id)
+      // Row 239 (the plan's B15). Every ask the queue reads, which skips one named outside the set.
+      if (id === ASK_STREAM) {
+        for (const e of entries.filter((x) => x.t === 'ask' && !isId(x.id))) {
+          findings.push(f('warn', 'journal', file, 'ask-id', `ask ${visible(String(e.id))} is named outside [a-z0-9][a-z0-9-]* — never offered as a command`))
+        }
+      }
       if (id === ASK_STREAM && entries[0] !== undefined && entries[0].t !== 'ask') {
         findings.push(f('error', 'journal', file, 'reserved-stream-taken', `witness's ask queue is held by a ${entries[0].t} history — witness ask refuses until it moves`))
         continue
@@ -316,8 +335,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       }
       const owed = openDeferrals(entries)
       if (owed.length > 0) {
+        // Row 239. A shape: the stream's id is quoted, and `<id>`, `<why>` are the human's to fill.
         findings.push(f('warn', 'journal', id, 'stranded-deferral',
-          `${owed.length} open deferral(s) on a spec that left canon (${exit.to} by ${exit.by ?? exit.cause}): ${owed.map((d) => d.id).join(' ')} — witness dismiss ${id} --deferral <id> --cause superseded --note <why>`))
+          `${owed.length} open deferral(s) on a spec that left canon (${exit.to} by ${exit.by ?? exit.cause}): ${owed.map((d) => d.id).join(' ')} — witness dismiss ${shellWord(id)} --deferral <id> --cause superseded --note <why>`))
       }
     }
   }

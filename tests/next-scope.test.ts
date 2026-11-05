@@ -216,8 +216,11 @@ describe("the chat keeps the human's work (row 195)", () => {
     await lookOwed(repo)
     autonomyOn(repo)
     const out = await nextLine(repo, { env: fixtureEnv() })
-    const notice = 'kept-stop: unmet need — SES production access · witness satisfy auth-refresh-plan-1 --need ses-prod'
-    expect(out.split('\n').filter((l) => l === notice)).toHaveLength(1)
+    // Row 239: the notice is its head line, then the satisfy on a `run:` row of its own under it
+    const head = 'kept-stop: unmet need — SES production access'
+    const lines = out.split('\n')
+    expect(lines.filter((l) => l === head)).toHaveLength(1)
+    expect(lines[lines.indexOf(head) + 1]).toBe('  run: witness satisfy auth-refresh-plan-1 --need ses-prod')
     expect(out).toContain('next: witness design billing-page --file <html>')
   }, 60_000)
   it("with nothing for the human next prints the ladder's own action", async () => {

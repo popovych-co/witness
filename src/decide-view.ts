@@ -1,4 +1,4 @@
-import { exitsLine, type Act } from './act.js'
+import { cliAct, exitsLine, type Act } from './act.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { autonomyLines, decidedBy } from './autonomy.js'
 import type { Config } from './config.js'
@@ -28,11 +28,10 @@ export type Disposition = Pick<DecisionEntry, 'decision' | 'selected' | 'arbiter
 // one no act: the gate is terminal there. An actionable run is pending a decision or revised by
 // its author; `block` ranks its options, and with no block `exits` is the whole live set.
 // The view holds what the text prints, as printed. Only `run.findings` spells a reviewer's anchor
-// and claim out (logSafe); the same anchor reaches the model raw (R5/R17) in a note prefill (an
-// option's `command`, `act.argv` and `act.line`, and the exits' note act), an option's `why`,
-// `block.anchor` and a `run.demoted` anchor. A disposition's `note` and `reason` and a pin's `text`
-// are kept as printed too. A renderer must spell them out (spec §4.2); the UI runs an act's `argv`,
-// never its `line`.
+// and claim out (logSafe); the same anchor reaches the model raw (R5/R17) in an option's `why`,
+// `block.anchor` and a `run.demoted` anchor, and in no act: since row 239 the revise carries no
+// note. A disposition's `note` and `reason` and a pin's `text` are kept as printed too. A renderer
+// must spell them out (spec §4.2); the UI runs an act's `argv`, never its `line`.
 export type DecideView = { gate: string; target: string; autonomy: boolean } & (
   | { state: 'no-runs' }
   | { state: 'reopened'; by: { gate: string; artifact: string; round: number }; note?: string; last: LastRun; disposition?: Disposition; exits: Act[] }
@@ -121,7 +120,8 @@ export function decideViewLines(view: DecideView): string[] {
     out.push(kv('state', 'reopened — the gate must run again'))
     out.push(kv('reopened-by', `${view.by.gate} ${view.by.artifact} (round ${view.by.round})`))
     if (view.note) out.push(kv('note', view.note))
-    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome}${view.disposition ? `, ${view.disposition.decision}` : ''} · witness log ${target}`))
+    // Row 239. The log it names is an act's line, here and on the settled screen below.
+    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome}${view.disposition ? `, ${view.disposition.decision}` : ''} · ${cliAct('log', target).line}`))
     out.push(cmd('exits', exitsLine(view.exits)))
     return out
   }
@@ -133,7 +133,7 @@ export function decideViewLines(view: DecideView): string[] {
     out.push(kv('decided-by', decidedBy(d)))
     if (d.reason) out.push(kv('reason', d.reason))
     if (d.note) out.push(kv('note', d.note))
-    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · witness log ${target}`))
+    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · ${cliAct('log', target).line}`))
     // no exits: the gate is genuinely terminal here. Point at the one verb that owns
     // what comes next rather than re-deriving routing in a second place (D101).
     out.push('help: witness next')

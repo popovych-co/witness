@@ -5,8 +5,8 @@ import { loadConfig } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
-import { gateSpec, liveExits, renderGateRun, type GateSpec } from '../gate.js'
-import { decideView, decideViewLines } from '../decide-view.js'
+import { gateSpec, liveExits, renderGateRun } from '../gate.js'
+import { decideView, decideViewLines, type DecideView } from '../decide-view.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
 import { recommend, renderDecision } from '../recommend.js'
 import { writeDoc } from '../fm.js'
@@ -21,9 +21,10 @@ import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
-import { cmd, hasControl, kv, rows } from '../toon.js'
+import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
+import { cliAct } from '../act.js'
 import {
-  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, pendingDecision, repairGranted,
+  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, notePrefill, pendingDecision, repairGranted,
   roundsSinceApprove, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
@@ -41,13 +42,27 @@ function trustFor(ctx: Ctx, target: string): string[] {
 
 const asEntry = (e: DecisionEntry) => e as unknown as { t: 'human-decision'; [k: string]: unknown }
 
-function flagValue(argv: string[], flag: string): string | undefined {
-  const i = argv.indexOf(flag)
-  return i >= 0 ? argv[i + 1] : undefined
-}
+// The flags whose next word is their value.
+const VALUED = new Set(['--note', '--upstream', '--pin', '--via'])
 
-function flagValues(argv: string[], flag: string): string[] {
-  return argv.flatMap((a, i) => (a === flag && argv[i + 1] !== undefined ? [argv[i + 1]!] : []))
+// Row 239. argv read left to right, the one way `decide` reads it: each word is a flag, the value
+// of the valued flag before it, or a positional. A flag is read only where a flag stands, so a
+// value is never one, whatever it spells: a note a human or the arbiter wrote may read
+// `--override`, and it is the note. `values` keeps each valued flag's values in order.
+interface DecideWords { positional: string[]; flags: Set<string>; values: Map<string, string[]> }
+function decideWords(argv: readonly string[]): DecideWords {
+  const out: DecideWords = { positional: [], flags: new Set(), values: new Map() }
+  for (let i = 0; i < argv.length; i++) {
+    const w = argv[i]!
+    if (!w.startsWith('--')) { out.positional.push(w); continue }
+    out.flags.add(w)
+    const value = argv[i + 1]
+    if (VALUED.has(w) && value !== undefined) {
+      out.values.set(w, [...(out.values.get(w) ?? []), value])
+      i++
+    }
+  }
+  return out
 }
 
 // Row 108. The bound is the designed terminus, not a malfunction, and renderRefusal
@@ -107,56 +122,52 @@ export type DecisionAct = DecisionCore & (
 // SHAPE of the request; every refusal about the state it acts on is `applyDecision`'s. A
 // flag absent from argv is absent from the act — no field carries `false`.
 export function decisionAct(argv: string[]): Result<DecisionAct> {
-  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' &&
-    argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin' && argv[i - 1] !== '--via')
+  const { positional, flags, values } = decideWords(argv)
   const [gate, target] = positional
   if (!gate || !target) {
     return refuse([v('decide', 'usage', argv.join(' ') || '(none)', 'witness decide <gate> <target> --approve|--revise|--stop')])
   }
-  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => argv.includes(f))
+  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => flags.has(f))
   if (picked.length !== 1) {
     return refuse([v('decision', 'one-of-required', picked.join(' ') || '(none)', '--approve | --revise | --stop')])
   }
-  const via = flagValue(argv, '--via')
+  const via = values.get('--via')?.[0]
   if (via !== undefined && via !== 'affirmation') {
     return refuse([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
   }
-  const note = flagValue(argv, '--note')
-  const upstream = flagValue(argv, '--upstream')
-  const pins = flagValues(argv, '--pin')
+  const note = values.get('--note')?.[0]
+  const upstream = values.get('--upstream')?.[0]
+  const pins = values.get('--pin') ?? []
+  // Row 239. The CLI's own placeholders are slots a human fills, never a value: the printed
+  // `--note "<why>"` or `--upstream <effort>`, run as it stands, decides nothing.
+  const unfilled = [
+    ...(note === '<why>' ? [v('--note', 'slot-unfilled', '<why>', 'the note itself — <why> is a slot the human fills')] : []),
+    ...(upstream === '<effort>' ? [v('--upstream', 'slot-unfilled', '<effort>', 'the upstream itself — <effort> is a slot the human fills')] : []),
+  ]
+  if (unfilled.length > 0) return refuse(unfilled)
   return ok({
     gate, target, decision: picked[0]!.slice(2) as DecisionCore['decision'],
-    ...(argv.includes('--override') ? { override: true } : {}),
-    ...(argv.includes('--repair') ? { repair: true } : {}),
+    ...(flags.has('--override') ? { override: true } : {}),
+    ...(flags.has('--repair') ? { repair: true } : {}),
     ...(note !== undefined ? { note } : {}),
     ...(upstream !== undefined ? { upstream } : {}),
     ...(pins.length > 0 ? { pins } : {}),
-    ...(argv.includes('--trust-cmds') ? { trustCmds: true } : {}),
+    ...(flags.has('--trust-cmds') ? { trustCmds: true } : {}),
     ...(via === 'affirmation' ? { selected: 'affirmation' as const } : {}),
   })
 }
 
-// A block's rendered `witness decide …` command, read back into the act the verb would
-// parse. The note is the trailing `--note "(.*)"$` — the block's grammar (recommend.ts),
-// where commands are emitted raw (D120) — so a note may itself contain quotes.
-export function actOfCommand(command: string): Result<DecisionAct> {
-  const m = /^witness decide (.*)$/.exec(command)
-  if (!m) return refuse([v('command', 'not-a-decision', command, 'a rendered witness decide <gate> <target> … command')])
-  const noted = / --note "(.*)"$/.exec(m[1]!)
-  const argv = (noted ? m[1]!.slice(0, noted.index) : m[1]!).split(/\s+/).filter((a) => a !== '')
-  const act = decisionAct(argv)
-  return act.ok && noted ? ok({ ...act.value, note: noted[1]! }) : act
-}
-
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
-  const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--note' && argv[i - 1] !== '--upstream' && argv[i - 1] !== '--pin')
+  // Row 239. The same reading as `decisionAct`'s, so the two never disagree about which word is
+  // the gate, the target or `--show`.
+  const { positional, flags } = decideWords(argv)
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
     ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
-  if (argv.includes('--show')) return show(ctx, spec, target)
+  if (flags.has('--show')) return show(ctx, spec.gate, target)
   const act = decisionAct(argv)
   if (!act.ok) { renderRefusal(act.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const code = await applyDecision(ctx, act.value)
@@ -168,11 +179,26 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   return code
 }
 
-// Rows 139/203. The screen is the decide view's lines (src/decide-view.ts); the verb keeps the
-// refusals that come before any state can be read.
-function show(ctx: Ctx, spec: GateSpec, target: string): number {
+// Rows 139/203. The screen is the decide view's lines (src/decide-view.ts).
+function show(ctx: Ctx, gate: string, target: string): number {
+  const view = shownView(ctx, gate, target)
+  if (view === undefined) return EXIT.REFUSED
+  decideViewLines(view).forEach((l) => ctx.out(l))
+  return EXIT.OK
+}
+
+// Row 239 (the plan's B10). The view `--show` prints, after the refusals that come before any
+// state can be read, each rendered to `ctx.err`: `undefined` once one refused. The verb prints
+// its lines, and drive's `decide>` prints the same lines and runs the options' acts it holds,
+// so the block a human answers there is the one they would read in a chat (D143).
+export function shownView(ctx: Ctx, gate: string, target: string): DecideView | undefined {
+  const spec = gateSpec(gate)
+  if (!spec) {
+    renderRefusal([v('gate', 'unknown-gate', gate, 'decompose | plan | implement | ship | design')]).forEach((l) => ctx.err(l))
+    return undefined
+  }
   const rootR = primaryRoot(ctx.cwd)
-  if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return undefined }
   const root = rootR.value
 
   // Hoisted above `--show` (D94): both the anchor rule below and `--show`'s staleness
@@ -180,15 +206,14 @@ function show(ctx: Ctx, spec: GateSpec, target: string): number {
   // cannot read the config cannot honestly report state either, so refusing here — and
   // for `--show` too — is the correct order rather than a regression.
   const cfgR = loadConfig(root)
-  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  decideViewLines(decideView(root, cfgR.value, loadCanon(root), spec.gate, target)).forEach((l) => ctx.out(l))
-  return EXIT.OK
+  if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return undefined }
+  return decideView(root, cfgR.value, loadCanon(root), spec.gate, target)
 }
 
 // Row 173. The ONE writer of a disposition. The verb parses argv into an act; every
-// autonomous path (the gate's tail, `next`, drive) builds one from a block's rendered
-// command. One door means one set of refusals: a policy cannot reach a stamp the verb
-// would refuse, and a human cannot reach one the policy would.
+// autonomous path (the gate's tail, `next`, drive) builds one from an option's act, run as
+// its argv (row 239). One door means one set of refusals: a policy cannot reach a stamp the
+// verb would refuse, and a human cannot reach one the policy would.
 export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number> {
   const { gate, target, decision } = act
   const spec = gateSpec(gate)
@@ -211,7 +236,11 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   const canon = loadCanon(root)
   const upstreamId = spec.upstreamOf?.(root, canon, target)
 
-  const note = act.note
+  // Row 239. The block's revise carries no reviewer text, so a bare `--revise` journals the
+  // prefill it used to carry, derived from the same journal. A revise sent upstream or bought
+  // with a repair grant journals none, as before, and a run with no facts (`<why>`) leaves none.
+  const prefill = notePrefill(entries, gate)
+  const note = act.note ?? (decision === 'revise' && act.upstream === undefined && act.repair !== true && prefill !== '<why>' ? prefill : undefined)
   const override = act.override === true
   const repair = act.repair === true
   const upstream = act.upstream
@@ -287,9 +316,10 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     return EXIT.REFUSED
   }
   if (repair && !atBound) {
+    // Row 239. A shape: the target the human typed is quoted, and the slot is theirs to fill.
     renderRefusal([v('repair', 'repair-not-at-bound',
       `${roundsSinceApprove(entries, gate)} of ${ROUND_BOUND} rounds spent`,
-      `the round bound — below it a plain revise already re-gates: witness decide ${gate} ${target} --revise --note "<why>"`)])
+      `the round bound — below it a plain revise already re-gates: witness decide ${shellWord(gate)} ${shellWord(target)} --revise --note "<why>"`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -345,8 +375,10 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       // cannot honestly stamp bytes no battery read, at the bound or anywhere else.
       return renderBound(ctx, gate, target, entries, nowSha !== undefined && nowSha !== last.reviewed_sha, upstreamId)
     }
+    // Row 239. The command a want names is an act's line, so the target the human typed prints
+    // quoted: here, and in every want and help line of this verb below.
     renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
-      `a stopped gate-run awaiting a decision — run: witness gate ${gate} ${target}`)])
+      `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -387,7 +419,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       const unseen = designUnseen(root, cfgR.value.paths, target)
       if (unseen !== undefined) {
         blockers.push(v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
-          `a human shown this artifact — run: witness design ${target} --open`))
+          `a human shown this artifact — run: ${cliAct('design', target, '--open').line}`))
       }
     }
     // A `human-decision` entry is a RECORD — honest about the sha it judged whatever the
@@ -408,7 +440,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
         `verdict @${short(anchor.reviewed_sha)}, content @${short(now)}`,
         atBound
           ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
-          : `a verdict describing current content — run: witness gate ${gate} ${target}`))
+          : `a verdict describing current content — run: ${cliAct('gate', gate, target).line}`))
     }
     // Final review F1: a criterion the run held is no longer held, so the verdict never ran
     // what approving it now asserts. Re-gating appends a cached round with fresh checks.
@@ -418,7 +450,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
         `${lifted.join(' · ')} held at round ${anchor.round} · its need is met now`,
         atBound
           ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
-          : `a verdict that ran it — run: witness gate ${gate} ${target}`))
+          : `a verdict that ran it — run: ${cliAct('gate', gate, target).line}`))
     }
     if (blockers.length > 0) {
       renderRefusal(blockers).forEach((l) => ctx.err(l))
@@ -429,8 +461,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // D121. Recorded, never consumed: divergence between what the block recommended and what
   // the human chose is the only feedback loop the recommender has, and without the record it
   // is transcript archaeology. `recommended` is the VERB of option 1 — the shape of
-  // `decision` — so the two are directly comparable in a log query. The full command would
-  // carry a prefilled note that changes with the findings, which would make two identical
+  // `decision` — so the two are directly comparable in a log query. The full command once
+  // carried a prefilled note that changed with the findings, which made two identical
   // recommendations look different.
   const rec = recommend({
     gate, target, entries, upstream: upstreamId,
@@ -439,7 +471,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // misattributes — D130's audit was reporting rules that were never rendered.
     stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0,
   })
-  const recommendedVerb = rec?.options[0]?.command.match(/--(approve|revise|stop)/)?.[1]
+  // Row 239. Read off the act's words, never its printed line.
+  const recommendedVerb = rec?.options[0]?.act?.argv.find((w) => w === '--approve' || w === '--revise' || w === '--stop')?.slice(2)
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,
@@ -581,7 +614,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     const now = anchorOf(readStream(root, target))
     if (now.anchor === undefined || (now.anchor.run_id === anchor.run_id && now.after !== first.after)) {
       renderRefusal([v('gate', 'nothing-pending', `${gate} ${target} — decided since it was read`,
-        `a stopped gate-run awaiting a decision — run: witness decide ${gate} ${target} --show`)])
+        `a stopped gate-run awaiting a decision — run: ${cliAct('decide', gate, target, '--show').line}`)])
         .forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
@@ -632,7 +665,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       if (res.ok) ctx.out(kv('trusted', granted.join(' · ')))
       else {
         renderRefusal(res.violations).forEach((l) => ctx.err(l))
-        ctx.err(`help: the decision landed; grant again once the repo is free — witness trust ${target}`)
+        ctx.err(`help: the decision landed; grant again once the repo is free — ${cliAct('trust', target).line}`)
         grantExit = res.violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
       }
     } else {
@@ -646,14 +679,15 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}${by}`))
   if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
+  // Row 239. A shape: each foreign word is quoted, and the cause and the note are the human's.
   for (const d of deferralEntries) {
-    ctx.out(kv('obligation', `${d.id} — ${d.anchor} · ${d.kind} · open until a later ${gate} run no longer reports it, or witness dismiss ${target} --deferral ${d.id} --cause <superseded|lens-retired|judged-wrong> --note "<why>"`))
+    ctx.out(kv('obligation', `${d.id} — ${d.anchor} · ${d.kind} · open until a later ${gate} run no longer reports it, or witness dismiss ${shellWord(target)} --deferral ${shellWord(d.id)} --cause <superseded|lens-retired|judged-wrong> --note "<why>"`))
   }
   if (repair) {
     // What was bought, and that it does not come again — a grant the human forgets is
     // spent is a second walk into the same wall.
     ctx.out(kv('repair', `one extra round granted — round ${ROUND_BOUND + 1} of ${ROUND_BOUND + 1} is the last, and the grant does not refresh until an approve, a revise-upstream or a passed run`))
-    ctx.out(`help: fix the finding, then re-run: witness gate ${gate} ${target}`)
+    ctx.out(`help: fix the finding, then re-run: ${cliAct('gate', gate, target).line}`)
   }
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
     ctx.out('revise-context: (reconstructed from the journal — survives session death)')
@@ -665,7 +699,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
       ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
     }
-    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft amend-${target} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
+    // Row 239. The draft key is one word through the quoter; the recap's file is the human's.
+    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft ${shellWord(`amend-${target}`)} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
     else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
   }
   return grantExit

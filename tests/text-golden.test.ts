@@ -93,7 +93,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       parked:auth-refresh-plan-3:plan
       parked: auth-refresh-plan-3 · plan round 3 — parked at auth-refresh-plan-3 > ## Steps
-        run: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
+        exits: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
 
       stuck:x-plan-1
       stuck: x-plan-1 — no progress on witness ship x-plan-1
@@ -205,7 +205,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       note: fix the expiry
       decide: 4 options · 1 is recommended
       1 · recommended · root
-         witness decide implement auth-refresh-plan-1 --revise --note "1 blocking finding: src/token.ts"
+         witness decide implement auth-refresh-plan-1 --revise
          why: 1 blocking finding anchored inside this artifact (src/token.ts); round 1 of 3
       2 · root
          witness decide implement auth-refresh-plan-1 --revise --upstream auth-refresh-plan-1
@@ -219,7 +219,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
          witness decide implement auth-refresh-plan-1 --stop
          when: this work should not continue as scoped
          tradeoff: parks the flow — next stops offering it and reopening is an explicit act
-      run: witness decide implement auth-refresh-plan-1 --revise --note "1 blocking finding: src/token.ts"
+      run: witness decide implement auth-refresh-plan-1 --revise
       --- exit 0"
     `)
   })

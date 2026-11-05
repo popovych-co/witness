@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { ID_RE } from './dsl.js'
 import { tryGit } from './gitio.js'
 import { version } from './version.js'
 
@@ -155,8 +156,11 @@ export function streamIds(root: string): string[] {
     .sort()
 }
 
+// Row 239 (the plan's B15). A stream's id is its file's name, which a commit can make anything, and
+// an effort's slug is printed into the commands witness offers: a stream named outside the id set is
+// no effort here, so nothing reading efforts offers it (`witness check` reports it, `stream-name`).
 export function effortStreams(root: string): string[] {
-  return streamIds(root).filter((id) => readStream(root, id)[0]?.t === 'recap')
+  return streamIds(root).filter((id) => ID_RE.test(id) && readStream(root, id)[0]?.t === 'recap')
 }
 
 export function effortAbandoned(entries: Entry[]): boolean {

@@ -12,7 +12,8 @@ import { readFill } from '../context.js'
 import { contextLine, reportOpening, slicesLine } from '../slice.js'
 import { evaluateNeeds, unmetNeeds } from '../needs.js'
 import { humanCall, renderRefusal, v } from '../refusal.js'
-import { kv } from '../toon.js'
+import { kv, logSafe, shellWord } from '../toon.js'
+import { cliAct, runRow } from '../act.js'
 import { autonomyLines, keptStopLine, policyFor } from '../autonomy.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
@@ -86,8 +87,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (status !== 'approved') {
     const rule = status === 'done' || status === 'abandoned' ? 'terminal-status' : 'not-approved'
+    // Row 239. The gate the want names is an act's line.
     renderRefusal([v('status', rule, status,
-      'an approved plan — run: witness gate plan ' + planId)]).forEach((l) => ctx.err(l))
+      `an approved plan — run: ${cliAct('gate', 'plan', planId).line}`)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
@@ -108,17 +110,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (unmet.length) {
     // Row 179. Satisfying a manual need is the human's act, so its commands are named in `want`
     // and the row is a human's decision — never a `remedy`, whose `run:` line reads as mechanical.
-    const satisfy = unmetNeeds(canon).filter((u) => u.doc === planId).map((u) => u.satisfy)
+    const owed = unmetNeeds(canon).filter((u) => u.doc === planId)
     const machine = unmet.some((n) => n.kind !== 'manual')
-    const want = [...satisfy.map((c) => `a human runs ${c}`), ...(machine ? ['witness check shows env and cmd needs'] : [])].join(' · ')
+    const want = [...owed.map((u) => `a human runs ${u.satisfy}`), ...(machine ? ['witness check shows env and cmd needs'] : [])].join(' · ')
     const row = v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '), want)
     renderRefusal([unmet.some((n) => n.kind === 'manual') ? humanCall(row) : row]).forEach((l) => ctx.err(l))
     // Row 171. Under autonomy an unmet plan need is a kept stop: only this plan waits, and
-    // the line names the act that unblocks it.
+    // the line names the act that unblocks it. Row 239 (B12): in `unmetNeedLine`'s shape — a need's
+    // label is the doc's text, so the labels are prose on the kept stop's line, spelled out where
+    // they hold a line break (ruling R16(a)), and each satisfy prints on a row of its own under it.
     if (cfgR.value.autonomy) {
       const p = policyFor({ at: 'start', target: planId, unmet: unmet.map((n) => n.label) })
       if (p.kind === 'human') {
-        ctx.out(keptStopLine(p.stop, `${unmet.map((n) => n.label).join(' · ')}${satisfy.map((c) => ` · ${c}`).join('')}`))
+        ctx.out([keptStopLine(p.stop, logSafe(unmet.map((n) => n.label).join(' · '))), ...owed.map((u) => runRow(u.satisfyAct))].join('\n'))
       }
     }
     return EXIT.REFUSED
@@ -152,6 +156,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('steps', position))
   ctx.out(kv('context', opening))
   reportOpening(ctx, root, cfgR.value)
-  ctx.out(`help: implement inside the worktree; witness test-evidence ${planId} --phase red|green --step <id> as you go`)
+  // Row 239. A shape: the plan is quoted, and the phase and the step are the session's to name.
+  ctx.out(`help: implement inside the worktree; witness test-evidence ${shellWord(planId)} --phase red|green --step <id> as you go`)
   return EXIT.OK
 }

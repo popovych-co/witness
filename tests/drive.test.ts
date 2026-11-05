@@ -5,7 +5,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFil
 import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
+import { cliAct } from '../src/act.js'
 import { classifyAction, driveLoop, lineSink, spawnSession } from '../src/drive.js'
+import { option, renderDecision, type Decision } from '../src/recommend.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
 import { psArg } from '../src/toon.js'
@@ -119,11 +121,19 @@ describe('witness drive skeleton (D145)', () => {
   })
 })
 
+// Row 239. The blocks a NextAction carries, as the Decisions `next` builds: the recovery fork's
+// options are acts, a choose block's are spec ids.
+const RECOVERY: Decision = { key: 'recover', rule: 'txn-write-landed', options: [
+  option(cliAct('recover', '--complete'), 'root'), option(cliAct('recover', '--rollback'), 'root')] }
+const CHOOSE: Decision = { key: 'choose', rule: 'multiple-ready', options: [
+  { command: 'a', depth: 'root', runnable: true }, { command: 'b', depth: 'root', runnable: true }] }
+
 describe('classifyAction (D145 addendum §6)', () => {
   const root = '/repo'
 
   it('routes each action shape', () => {
-    expect(classifyAction({ line: 'witness decide ship p1 --show', target: 'p1' }, root))
+    const show = cliAct('decide', 'ship', 'p1', '--show')
+    expect(classifyAction({ line: show.line, act: show, target: 'p1' }, root))
       .toEqual({ kind: 'decision', gate: 'ship', target: 'p1' })
     expect(classifyAction({ line: 'witness recap --file recap.json', stage: 'brainstorm' }, root).kind)
       .toBe('conversation')
@@ -138,18 +148,16 @@ describe('classifyAction (D145 addendum §6)', () => {
     expect(classifyAction({ line: 'witness check' }, root).kind).toBe('idle')
   })
 
-  it('reads the bound endgame as a decision — liveExits renders decide verbs too', () => {
-    const line = 'witness decide implement p1 --approve --override | witness decide implement p1 --stop | witness abandon p1'
-    expect(classifyAction({ line, target: 'p1', note: 'round bound reached — human decision required' }, root))
+  it('reads the bound endgame as a decision — its rung names decide --show (row 239)', () => {
+    const show = cliAct('decide', 'implement', 'p1', '--show')
+    expect(classifyAction({ line: show.line, act: show, target: 'p1', note: 'round bound reached — human decision required' }, root))
       .toEqual({ kind: 'decision', gate: 'implement', target: 'p1' })
   })
 
   it('stops on a rendered block even when the line is runnable (D121)', () => {
-    const step = classifyAction({
-      line: 'witness recover --complete', block: ['recovery: 2 options · 1 is recommended', '1 · recommended · root'],
-    }, root)
+    const step = classifyAction({ line: 'witness recover --complete', block: RECOVERY }, root)
     expect(step.kind).toBe('decision')
-    expect(step.kind === 'decision' && step.block?.[0]).toMatch(/2 options/)
+    expect(step.kind === 'decision' && renderDecision(step.block!)[0]).toMatch(/2 options/)
   })
 
   it('spawns at the root when the action names no home', () => {
@@ -590,16 +598,18 @@ describe('driveLoop (D145)', () => {
 })
 
 // A real decompose gate-run against the fixture reviewer: the effort now carries a
-// pending decision, so `next` — and therefore drive — stops at a judgment stop.
-async function gatedEffort(): Promise<TestRepo> {
+// pending decision, so `next` — and therefore drive — stops at a judgment stop. Row 239: a
+// caller may hand the verdict no findings, or run the gate `--manual`.
+const NO_WINDOW = [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'no rotation window stated' }]
+async function gatedEffort(opts: { findings?: unknown[]; manual?: boolean } = {}): Promise<TestRepo> {
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   const scenario = fakeScenario()
   putVerdict(scenario, {
     coverage: [{ anchor: 'auth-refresh > ## Behavior', note: 'read' }],
-    findings: [{ blocking: true, anchor: 'auth-refresh > ## Behavior', claim: 'no rotation window stated' }],
+    findings: opts.findings ?? NO_WINDOW,
   })
-  const g = await repo.cli(['gate', 'decompose', '--effort', repo.effort], { env: gateEnv(scenario) })
+  const g = await repo.cli(['gate', 'decompose', '--effort', repo.effort, ...(opts.manual ? ['--manual'] : [])], { env: gateEnv(scenario) })
   if (g.code > 1) throw new Error(`gate failed: ${g.stdout}\n${g.stderr}`)
   return repo
 }
@@ -666,6 +676,103 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     expect(code).toBe(0)
     expect(out.join('\n')).toMatch(/nod-cannot|name the option/)
     expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
+
+  // Row 239. A command typed at `decide>` reads by the grammar witness quotes its words for
+  // (`shellWords`), so a note the human quotes is journaled as the words they meant.
+  it('a typed answer is split by the quoter\'s grammar (row 239)', async () => {
+    for (const [typed, note] of [["'it'\\''s'", "it's"], ['"don\'t ship"', "don't ship"]] as const) {
+      const repo = await gatedEffort()
+      const out: string[] = []
+      await driveLoop(repo.root, cfgOf(repo), askCtx(repo, [`witness decide decompose ${repo.effort} --revise --note ${typed}`], out), { maxSpawns: 1 })
+      expect(lastDecision(repo), typed).toMatchObject({ decision: 'revise', note })
+    }
+  }, 60000)
+
+  // Row 239. The `<why>` slot is the human's to fill: picked by its number, the option is refused
+  // as it always was, never run with the placeholder for a note. A verdict with no finding leaves
+  // the run no facts, so its revise keeps the slot: option 2 of the scope stop a feature's
+  // decompose makes (`reserved-stop-clean`, which outranks the `--manual` flag's `manual-stop`).
+  it('a pick that needs a word filled is refused, as before (row 239)', async () => {
+    const repo = await gatedEffort({ findings: [], manual: true })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['2', ''], out), { maxSpawns: 1 })
+    expect(out).toContain(`   witness decide decompose ${repo.effort} --revise --note "<why>"`)
+    expect(out).toContain('help: option 2 needs an id you must fill in — type it out')
+    expect(out.join('\n')).not.toContain('drive: running')
+    expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
+
+  // Row 239. So is one named by its verb: `note` names only the option holding the slot, which
+  // drive ran with `<why>` for its note before.
+  it('a verb naming only an option with a word to fill is refused too (row 239)', async () => {
+    const repo = await gatedEffort({ findings: [], manual: true })
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['note', ''], out), { maxSpawns: 1 })
+    expect(out).toContain('help: option 2 needs an id you must fill in — type it out')
+    expect(out.join('\n')).not.toContain('drive: running')
+    expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
+
+  it('an answer with an open quote is refused, not run (row 239)', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['witness decide x "open', ''], out), { maxSpawns: 1 })
+    expect(out).toContain('help: its quotes do not close — type the command again')
+    expect(out.join('\n')).not.toContain('drive: running')
+    expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
+
+  // Row 239. A word after `--note` is the note whatever it reads: typed, it never sets the flag
+  // it spells.
+  it('a typed note that reads like a flag is the note, never the flag (row 239)', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, [`witness decide decompose ${repo.effort} --revise --note --override`], out), { maxSpawns: 1 })
+    const d = lastDecision(repo)
+    expect(d).toMatchObject({ decision: 'revise', note: '--override' })
+    expect(d).not.toHaveProperty('override')
+  }, 30000)
+
+  // Row 239. The printed slot typed back as it stands is refused at the one door, not journaled.
+  it('a typed answer that leaves the <why> slot unfilled is refused, and decides nothing (row 239)', async () => {
+    const repo = await gatedEffort()
+    const out: string[] = []
+    const err: string[] = []
+    const typed = `witness decide decompose ${repo.effort} --revise --note "<why>"`
+    const ctx = fakeCtx(repo.root, {
+      tty: true, answers: [typed], out: (l) => out.push(l), err: (l) => err.push(l),
+      env: fixtureEnv({ WITNESS_DRIVE_AGENT_BIN: idleAgent(), WITNESS_KEEP_AWAKE_BIN: noopOpener() }),
+    })
+    await driveLoop(repo.root, cfgOf(repo), ctx, { maxSpawns: 1 })
+    expect(err.join('\n')).toContain('slot-unfilled')
+    expect(out).toContain(`drive: decision refused — ${typed}`)
+    expect(lastDecision(repo)).toBeUndefined()
+  }, 30000)
+
+  // Row 239. `--via affirmation` is decide's record that a nod chose: any other recommended act
+  // runs as named. Recover's strict parse refused the fork's `--complete` with it appended.
+  it('a nod at the recovery fork runs the act as named, and the transaction completes (row 239)', async () => {
+    const repo = await seededRepo()
+    const line = '{"v":1,"t":"status","artifact":"p","to":"done"}'
+    repo.write('.witness/journal/p.jsonl', `{"seed":1}\n${line}\n`)
+    repo.write('.witness/txn.json', JSON.stringify({ op: 'merge-stamp', files: ['.witness/journal/p.jsonl'], journalMulti: [{ stream: 'p', line }] }))
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, ['y'], out), { maxSpawns: 1 })
+    expect(out).toContain('recover: 2 options · 1 is recommended')
+    expect(out).toContain('drive: running — witness recover --complete')
+    expect(out.some((l) => l.startsWith('recovered: completed as '))).toBe(true)
+    expect(existsSync(join(repo.root, '.witness', 'txn.json'))).toBe(false)
+  }, 30000)
+
+  // D143: the block a human reads at `decide>` is the one they would read in a chat session.
+  it('decide> prints decide --show byte for byte (row 239, D143)', async () => {
+    const repo = await gatedEffort()
+    const shown = (await repo.cli(['decide', 'decompose', repo.effort, '--show'])).stdout
+    expect(shown).toContain('1 is recommended')
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), askCtx(repo, [''], out), { maxSpawns: 1 })
+    expect(`\n${out.join('\n')}\n`).toContain(`\n${shown}\n`)
   }, 30000)
 })
 
@@ -737,13 +844,14 @@ describe('classifyAction under autonomy (B2)', () => {
       .toEqual({ kind: 'conversation', line: 'witness recap --file <recap.json> --ask a1' })
     expect(classifyAction({ line: 'witness design auth-refresh --file <html>', stage: 'design', target: 'auth-refresh' }, root, auto).kind)
       .toBe('conversation')
-    expect(classifyAction({ line: 'witness recover --complete', block: ['recovery: 2 options · 1 is recommended'] }, root, auto).kind)
+    expect(classifyAction({ line: 'witness recover --complete', block: RECOVERY }, root, auto).kind)
       .toBe('spawn')
     expect(classifyAction({
       line: 'witness write a-plan-1 --effort e --meta m.json --body b.md', stage: 'plan', target: 'a',
-      block: ['choose: 2 options · 1 is recommended'],
+      block: CHOOSE,
     }, root, auto).kind).toBe('spawn')
-    expect(classifyAction({ line: 'witness decide ship p1 --show', target: 'p1' }, root, auto))
+    const show = cliAct('decide', 'ship', 'p1', '--show')
+    expect(classifyAction({ line: show.line, act: show, target: 'p1' }, root, auto))
       .toEqual({ kind: 'decision', gate: 'ship', target: 'p1' })
   })
   it('a look\'s gate is part of the design conversation (row 194)', () => {
@@ -883,7 +991,7 @@ describe('autonomy in the loop (B2)', () => {
     const out: string[] = []
     const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 9') }, out), {})
     expect(out).toContain('drive: waits on you — auth-refresh-plan-1 · unmet need')
-    expect(out).toContain('kept-stop: unmet need — SES production access · witness satisfy auth-refresh-plan-1 --need ses-prod')
+    expect(out).toContain('kept-stop: unmet need — SES production access\n  run: witness satisfy auth-refresh-plan-1 --need ses-prod')
     expect(out.join('\n')).not.toMatch(/\[\d+ /)
     expect(code).toBe(0)
   }, 60000)

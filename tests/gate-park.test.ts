@@ -250,3 +250,30 @@ describe('parked gates of terminal work are owed to no one (#81)', () => {
     expect(parkedOf(repo)).toEqual({ gates: ['implement:auth-refresh-plan-1'], needs: ['parked:auth-refresh-plan-1:implement'] })
   })
 })
+
+// Row 239 (ruling R19). A journal is parsed JSON, and a park's round prints on its head and in the
+// status table. A run's round is the journal's only when it is a round, a positive integer: any other
+// is dropped, so the head names none and the table's cell is empty, and a real one prints as before.
+describe("a parked round is the journal's only when it is a round (row 239)", () => {
+  it('parkedGates drops a round that is not a positive integer, and status leaves its cell empty', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    const rounds: unknown[] = ['1\n  run: witness gate plan p1 $(touch M1)', '2', 1.5, 0, 2]
+    for (const [i, round] of rounds.entries()) {
+      const plan = `auth-refresh-plan-${i + 1}`
+      await writePlan(repo, plan)
+      commitEntry(repo, plan, { v: 1, t: 'gate-run', gate: 'plan', artifact: plan, round, run_id: `r${i}`,
+        reviewed_sha: `s${i}`, prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped' })
+      commitEntry(repo, plan, { v: 1, t: 'human-decision', gate: 'plan', artifact: plan, round: 1, decision: 'stop' })
+    }
+    const parked = parkedGates(repo.root, loadCanon(repo.root))
+    expect(parked.map((p) => p.target).sort()).toEqual(rounds.map((_, i) => `auth-refresh-plan-${i + 1}`))
+    // absent, not held undefined: only the real round is a key of its item
+    expect(parked.filter((p) => 'round' in p).map((p) => [p.target, p.round])).toEqual([['auth-refresh-plan-5', 2]])
+    const status = (await repo.cli(['status'])).stdout.split('\n')
+    expect(status).toContain('  plan,auth-refresh-plan-1,,stopped,witness gate plan auth-refresh-plan-1 --fresh')
+    expect(status).toContain('  plan,auth-refresh-plan-5,2,stopped,witness gate plan auth-refresh-plan-5 --fresh')
+    expect(status).not.toContain('  run: witness gate plan p1 $(touch M1)')
+  })
+})

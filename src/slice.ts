@@ -7,7 +7,7 @@ import { relayLine, resolveDriver } from './harness.js'
 import { readStream, streamIds, type Entry, type EntryType, type JournalCtx } from './journal.js'
 import type { CanonDoc } from './scan.js'
 import { implementGated, redInFlight, stepProgress, stepsLine, vacuousEvidence, type Progress } from './steps.js'
-import { kv } from './toon.js'
+import { cmd, kv } from './toon.js'
 
 // Plan's call 8 (row 191 §4.8). An act is the session's own stage work. What the CLI writes on a
 // session's behalf is bookkeeping (`status`, the lazy merge stamp, among it), so a session cannot
@@ -187,7 +187,7 @@ export function reportHandover(ctx: Ctx, root: string, cfg: Config, opts: { guar
   const driver = resolveDriver(ctx.env, cfg.harness)
   if (!driver.ok) return false
   ctx.out(kv('context', contextLine(fill, limit, cfg.implement.stepsPerDispatch)))
-  ctx.out(kv('relay', relayLine(driver.value.harness)))
+  ctx.out(cmd('relay', relayLine(driver.value.harness)))
   return true
 }
 

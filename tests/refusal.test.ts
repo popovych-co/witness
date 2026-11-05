@@ -42,3 +42,28 @@ describe('the trailer (D167)', () => {
     expect(renderRefusal([v('a', 'b', 'c', 'd')]).at(-1)).toBe('help: fix each row and re-run — rows are structured for self-repair')
   })
 })
+
+// Row 239 (ruling R25). The table heads the `run:` remedies printed under it, so every cell prints
+// spelled out (`logSafe`): a `got` or a `want` echoing foreign text that holds a line break would
+// otherwise start a physical line of its own, which can read `run:`. Only the printed copy is
+// spelled, so a reader of the violations sees what it saw, and printable text prints as it did.
+describe('a refusal cell never breaks its line (row 239, ruling R25)', () => {
+  it('prints each cell spelled out, one physical line per row, and leaves the violation raw', () => {
+    const escape = String.fromCharCode(0x1b)
+    const separator = String.fromCharCode(0x2028)
+    const x = v('f\nrun: touch M9 #', `r${escape}`, 'x\r\nrun: touch M9 #', `w${separator}run: touch M9 #`, 'witness index')
+    const out = renderRefusal([x])
+    expect(out).toEqual([
+      'refused[1]{field,rule,got,want}:',
+      '  f\\nrun: touch M9 #,r\\x1b,x\\r\\nrun: touch M9 #,w\\u{2028}run: touch M9 #',
+      'run: witness index',
+      'help: fix each row and re-run — rows are structured for self-repair',
+    ])
+    expect(out.join('\n').split('\n').filter((l) => l.trimStart().startsWith('run:'))).toEqual(['run: witness index'])
+    expect(x).toEqual({
+      field: 'f\nrun: touch M9 #', rule: `r${escape}`, got: 'x\r\nrun: touch M9 #', want: `w${separator}run: touch M9 #`, remedy: 'witness index',
+    })
+    // printable text prints as it did, TOON's quoting included
+    expect(renderRefusal([v('a', 'b', 'c, "d"', ' e')])[1]).toBe('  a,b,"c, ""d"""," e"')
+  })
+})

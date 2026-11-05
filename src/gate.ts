@@ -12,7 +12,7 @@ import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cmd, kv } from './toon.js'
+import { cmd, kv, shellWord } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
 import {
   docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt,
@@ -405,8 +405,9 @@ async function judge(
   // refuse and send the human through the verb that states a retraction and its reason.
   const settledBefore = gateSettled(entries, spec.gate)
   if (flags.fresh && settledBefore) {
+    // Row 239. A shape: the target is quoted, and the slot is the human's to fill.
     renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
-      `witness decide ${spec.gate} ${target} --revise --note "<why>" — retract the approval, then re-gate`)])
+      `witness decide ${shellWord(spec.gate)} ${shellWord(target)} --revise --note "<why>" — retract the approval, then re-gate`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }

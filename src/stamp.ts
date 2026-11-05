@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { cliAct } from './act.js'
 import type { Ctx } from './cli.js'
 import { deferralMoves } from './deferral.js'
 import { writeDoc } from './fm.js'
@@ -67,7 +68,8 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
     const state = prState(ctx, root, pr)
     if (state === undefined) { result.stale.push({ plan: planId, why: "stale, couldn't check" }); continue }
     if (state === 'CLOSED') {
-      result.stale.push({ plan: planId, why: `pr #${pr} closed unmerged — witness abandon ${planId}?` })
+      // Row 239. The command the why names is an act's line.
+      result.stale.push({ plan: planId, why: `pr #${pr} closed unmerged — ${cliAct('abandon', planId).line}?` })
       continue
     }
     if (state !== 'MERGED') { result.stale.push({ plan: planId, why: `pr #${pr} still ${state}` }); continue }

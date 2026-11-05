@@ -1,4 +1,4 @@
-import { rows } from './toon.js'
+import { logSafe, rows } from './toon.js'
 
 export interface Violation {
   field: string
@@ -30,6 +30,9 @@ export function v(field: string, rule: string, got: string, want: string, remedy
 
 export const humanCall = (x: Violation): Violation => ({ ...x, human: true })
 
+// Row 239 (ruling R25). A cell as the table prints it: as `rows` reads a value, spelled out.
+const spelled = (cell: unknown): string => logSafe(String(cell ?? ''))
+
 export function renderRefusal(violations: Violation[]): string[] {
   const runnable = [...new Set(
     violations.map((x) => x.remedy).filter((r): r is string => r !== undefined && !/<[^>]+>/.test(r)),
@@ -39,10 +42,15 @@ export function renderRefusal(violations: Violation[]): string[] {
   const human = [...new Set(violations.filter((x) => x.human).map((x) => x.rule))]
   const mixed = violations.some((x) => !x.human)
   return [
-    // The destructure keeps `remedy` out of the row objects: the column list already
-    // governs what prints, but a remedy is not a column and must not become one.
-    ...rows('refused', ['field', 'rule', 'got', 'want'],
-      violations.map(({ remedy: _remedy, ...rest }) => rest) as unknown as Array<Record<string, unknown>>),
+    // The four columns alone make each row: a remedy is not a column and must not become one.
+    // Row 239 (ruling R25): the table heads the `run:` remedy rows below it, so, as R16(a) has every
+    // line heading an offered row print, each cell is spelled out (`logSafe`): a `got` or a `want`
+    // echoing foreign text — a hand-edited doc's id, a typed argument, a tool's output — that holds a
+    // line break would otherwise start a physical line of its own, which can read `run:`. Printable
+    // text prints as it did, and only this printed copy is spelled: the violations stay as given.
+    ...rows('refused', ['field', 'rule', 'got', 'want'], violations.map((x) => ({
+      field: spelled(x.field), rule: spelled(x.rule), got: spelled(x.got), want: spelled(x.want),
+    }))),
     ...runnable.map((r) => `run: ${r}`),
     human.length
       ? `help: a human's decision: ${human.join(' · ')} — stop and surface the list; re-running cannot clear it`

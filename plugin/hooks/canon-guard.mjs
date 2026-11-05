@@ -213,36 +213,96 @@ function stateTargetRel(root, cwd, token, dirs) {
   return undefined;
 }
 
+// Row 239. The quoter's twin. A word of a line offered to be pasted prints as src/toon.ts's
+// `shellWord` prints it, and a line its `withheldOn` withholds — a word holding a character outside
+// printable ASCII on any platform, or on Windows one cmd.exe, Windows PowerShell or Git Bash would
+// read as more than text — is shown and never offered. This file imports nothing from witness
+// (Decision 13), so the two are copied here, and tests/canon-guard.test.ts holds them equal to
+// toon.ts's over a corpus of hostile words on each platform: change both or neither.
+// Off Windows a word is bare in POSIX's safe set and never when it starts with `=` (zsh reads a
+// bare `=ls` as a command's path), else single-quoted; on Windows a flag stays bare, a word holding
+// `\` is single-quoted, since Git Bash, where an agent runs the line, reads a bare one as an escape
+// (ruling R22), and any other word is bare in PowerShell's safe set, else single-quoted. Ruling R27:
+// every character outside printable ASCII is spelled out first (`visible`), as the trust grant has
+// shown a command since rows 205/237, and a word holding one is never offered, on any platform — an
+// interactive shell's line editor reads a byte above 0x7f as a Meta key (probed). A control or
+// line-break character splits the line (R24), and on Windows a quote-like, which PowerShell and Git
+// Bash read differently (R22), gets its own message; each takes precedence over the general one.
+const posixQuoted = (p) => `'${p.replaceAll("'", "'\\''")}'`;
+const psQuoted = (p) => `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`;
+const spell = (c) =>
+  c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t'
+    : c.codePointAt(0) < 0x100 ? `\\x${c.codePointAt(0).toString(16).padStart(2, '0')}` : `\\u{${c.codePointAt(0).toString(16)}}`;
+const hasControl = (s) => /[^\x20-\x7e]/u.test(s);
+const visible = (s) => s.replace(/[^\x20-\x7e]/gu, spell);
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+const shellArg = (p) => (/^(?!=)[\w@%+=:,./-]+$/.test(p) ? p : posixQuoted(p));
+const psArg = (p) => (/^[\w%+=:./\\][\w%+=:./\\-]*$/.test(p) ? p : psQuoted(p));
+const WINDOWS_FLAG = /^--?[A-Za-z][A-Za-z0-9-]*$/;
+export function shellWord(w, platform = process.platform) {
+  const shown = visible(w);
+  if (platform !== 'win32') return shellArg(shown);
+  return WINDOWS_FLAG.test(shown) ? shown : shown.includes('\\') ? psQuoted(shown) : psArg(shown);
+}
+const WINDOWS_RISKY = ['&', '|', '^', '<', '>', '"', '%', '!'];
+const QUOTE_LIKES = ["'"];
+export function withheldOn(words, platform = process.platform) {
+  if (words.some((w) => LINE_BREAKING.test(w))) return 'not offered — it holds a control or line-break character, which would split the line';
+  if (words.some((w) => hasControl(w))) return "not offered — it holds a character outside printable ASCII, which a terminal's line editor can read as a command";
+  if (platform !== 'win32') return undefined;
+  const held = (set) => set.filter((c) => words.some((w) => w.includes(c)));
+  const risky = held(WINDOWS_RISKY);
+  const quotes = held(QUOTE_LIKES);
+  const why = [
+    ...(risky.length > 0 ? [`${risky.join(' ')}, which cmd.exe or Windows PowerShell can read as more than text`] : []),
+    ...(quotes.length > 0 ? [`${quotes.join(' ')}, which PowerShell and Git Bash read differently`] : []),
+  ];
+  return why.length === 0 ? undefined : `not offered on Windows — it holds ${why.join(', and ')}`;
+}
+
 // Decision 146. D133 made the reason name the path and what writes it; this completes it to
 // the remedy contract gate stops already honor (D121): a shape for authoring, and a fully
 // runnable `adopt` for an edit already made. No effort slug is knowable inside a hook that
 // reads only the tool call, so the write line stays a LABELLED SHAPE and never a `run:` —
 // a rendered command that needs editing before it runs is D129's defect in a new dress.
-function remedyFor(rel, root) {
+//
+// Row 239. The id and the path are the agent's own, a repo file name, so each prints through the
+// quoter, for the shell the agent's harness pastes into: the adopt runs exactly that path. Where it
+// is withheld, the adopt is shown with why, and no `run:` offers it. Ruling R24: the adopt is a line
+// of its own, the reason's last, so text the path holds on the line above — ` · already
+// hand-edited? run: …` — offers nothing, and the only line that starts `run:` is the adopt.
+function remedyFor(rel, root, platform) {
   const [specs, plans, designs] = canonDirs(root);
   const base = rel.split('/').pop() ?? rel;
   if (isStateRel(rel, [designs])) {
     const id = base.replace(/\.html$/, '');
-    return `remedy: witness design ${id} --file <your.html> (author in $(mktemp -d); --open shows the current one)`;
+    return `remedy: witness design ${shellWord(id, platform)} --file <your.html> (author in $(mktemp -d); --open shows the current one)`;
   }
   const id = base.replace(/\.md$/, '');
   const kind = isStateRel(rel, [plans]) ? plans : specs;
+  const adopt = ['adopt', rel];
+  const line = ['witness', ...adopt].map((w) => shellWord(w, platform)).join(' ');
+  const withheld = withheldOn(adopt, platform);
   return (
-    `remedy: witness write ${id} --effort <effort> --meta <m.json> --body <b.md> ` +
-    `(author in $(mktemp -d), never in ${kind}/) · already hand-edited? run: witness adopt ${rel}`
+    `remedy: witness write ${shellWord(id, platform)} --effort <effort> --meta <m.json> --body <b.md> ` +
+    `(author in $(mktemp -d), never in ${visible(kind)}/) · already hand-edited?\n` +
+    (withheld === undefined ? `run: ${line}` : `${line} — ${withheld}`)
   );
 }
 
-function reasonFor(what, rel, root) {
+// Row 239 (ruling R24). The path is the agent's, so the head names it spelled out: a line break
+// in it would start a line of its own, which could read `run:`.
+function reasonFor(what, rel, root, platform) {
   return (
-    `witness: ${what} is CLI-written state — use the witness CLI (write / design / adopt), ` +
+    `witness: ${visible(what)} is CLI-written state — use the witness CLI (write / design / adopt), ` +
     'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs. ' +
-    remedyFor(rel, root)
+    remedyFor(rel, root, platform)
   );
 }
 
 /**
- * @param {{ tool?: unknown, input?: unknown, cwd?: unknown }} call
+ * Row 239: `platform` is the shell the remedy is printed for, this machine's unless a test says.
+ * @param {{ tool?: unknown, input?: unknown, cwd?: unknown, platform?: unknown }} call
  * @returns {{ block: true, reason: string } | undefined}
  */
 export function canonGuard(call) {
@@ -250,6 +310,7 @@ export function canonGuard(call) {
     const tool = typeof call?.tool === 'string' ? call.tool : '';
     const args = call?.input && typeof call.input === 'object' ? call.input : {};
     const cwd = typeof call?.cwd === 'string' && call.cwd !== '' ? call.cwd : process.cwd();
+    const platform = typeof call?.platform === 'string' && call.platform !== '' ? call.platform : process.platform;
 
     if (WRITE_TOOLS.has(tool)) {
       // Claude Code sends file_path; pi sends path (core/tools/write.js:12).
@@ -262,7 +323,7 @@ export function canonGuard(call) {
       if (rel.startsWith('..')) return undefined;
       if (!isStateRel(rel, canonDirs(root))) return undefined;
       const posix = rel.split('\\').join('/');
-      return { block: true, reason: reasonFor(posix, posix, root) };
+      return { block: true, reason: reasonFor(posix, posix, root, platform) };
     }
 
     if (BASH_TOOLS.has(tool)) {
@@ -283,7 +344,7 @@ export function canonGuard(call) {
           // set and never the token that tripped it — which is why a block on a search string
           // read as a bug in the guard rather than a fact about the command.
           const rel = stateTargetRel(root, cwd, token, dirs);
-          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`, rel, root) };
+          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`, rel, root, platform) };
         }
       }
       return undefined;

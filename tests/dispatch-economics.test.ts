@@ -105,8 +105,9 @@ describe('implement skill carries the context-fill protocol (rows 79–80, 191)'
 // `relay:` with no `run:`: the work continues in this same home, so every surface that can
 // meet one must end the turn on it rather than act on.
 describe('the same-home relay ends the turn (rows 82 · 191)', () => {
+  // Row 239 (ruling R17): no unindented `run:`, since a kept stop's indented `run:` rows can print beside a relay.
   it('the router ends the turn on a relay: with no run:', () => {
-    expect(router).toMatch(/`relay:` line is printed with no `run:`/)
+    expect(router).toMatch(/`relay:` line is printed with no unindented `run:`/)
   })
   it.each(['witness-implement', 'witness-plan', 'witness-decompose', 'witness-design'])('%s hands a settled revise to a fresh session', (s) => {
     expect(skill(s)).toContain('a fresh session takes the revise')
@@ -116,7 +117,7 @@ describe('the same-home relay ends the turn (rows 82 · 191)', () => {
   })
   it('the router stops at a relay: with no run:', () => {
     expect(router).toContain(
-      "- A `relay:` line printed with no `run:` — by `next`, `gate`, `decide` (a `--revise` the human named included) or `ship`: the session reached its context limit, and the table's row applies.")
+      "- A `relay:` line printed with no unindented `run:` — by `next`, `gate`, `decide` (a `--revise` the human named included) or `ship`: the session reached its context limit, and the table's row applies.")
   })
   // Caution is a per-run mood (row 82), and the fresh session a relay opens is the same run.
   it('the --manual mood outlives a relay', () => {

@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cliAct } from '../src/act.js'
+import { gateSpec } from '../src/gate.js'
+import '../src/gates/index.js'
+import { appendEntry } from '../src/journal.js'
 import { evaluateNeeds, needMet, unmetNeeds } from '../src/needs.js'
 import { loadCanon, type CanonDoc } from '../src/scan.js'
+import { owedDecisions, parkedGates } from '../src/verbs/next.js'
 import { approve, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
 import type { Ctx } from '../src/cli.js'
 
@@ -88,10 +93,14 @@ describe('unmetNeeds (A10)', () => {
       needs: [{ manual: 'device on the desk', satisfied: false }],
       steps: [{ id: 's1', title: 't', criteria: ['ac-rotate', 'ac-prod'] }],
     })
+    // Row 239 (ruling R16(b)): each satisfy is also an act, which its `run:` row prints
     expect(unmetNeeds(loadCanon(repo.root))).toEqual([
-      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', ref: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' },
-      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', ref: '2', satisfy: 'witness satisfy auth-refresh --need 2' },
-      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', ref: '1', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1' },
+      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', ref: 'prod', satisfy: 'witness satisfy auth-refresh --need prod',
+        satisfyAct: cliAct('satisfy', 'auth-refresh', '--need', 'prod') },
+      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', ref: '2', satisfy: 'witness satisfy auth-refresh --need 2',
+        satisfyAct: cliAct('satisfy', 'auth-refresh', '--need', '2') },
+      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', ref: '1', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1',
+        satisfyAct: cliAct('satisfy', 'auth-refresh-plan-1', '--need', '1') },
     ])
   })
   it('a satisfied need and a started plan need are not listed', async () => {
@@ -101,5 +110,51 @@ describe('unmetNeeds (A10)', () => {
     await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ manual: 'device', satisfied: false }] })
     repo.flipStatus('auth-refresh-plan-1', 'in-progress')
     expect(unmetNeeds(loadCanon(repo.root))).toEqual([])
+  })
+
+  // Row 239 (the plan's B15). Canon is text a hand edit can change, and an id is printed into the
+  // commands the inbox offers and on the line that heads them: a need or a doc named outside the id
+  // set is never offered, and a plan whose parent is named outside it offers no `--upstream`.
+  it('a need or doc named outside the id set is never offered (row 239)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    await writePlan(repo, 'auth-refresh-plan-2', { needs: [{ manual: 'device on the desk', satisfied: false }] })
+    // the hand edits `write` refuses: a need's id with a space in it, a plan's id in capitals
+    repo.setMeta('auth-refresh', { needs: [
+      { id: 'n x', manual: 'production access granted', satisfied: false }, { manual: 'docs reviewed', satisfied: false },
+    ] })
+    repo.setMeta('auth-refresh-plan-2', { id: 'P1' })
+    // the need with no id keeps its index among every manual need, which `satisfy` reads it by
+    expect(unmetNeeds(loadCanon(repo.root)).map((u) => u.satisfyAct.argv))
+      .toEqual([['satisfy', 'auth-refresh', '--need', '2']])
+
+    // three stopped plan rounds on each plan, the third undisposed: a decision is owed at the bound
+    const round = (artifact: string, n: number) => appendEntry(repo.root, artifact, {
+      t: 'gate-run', gate: 'plan', artifact, round: n, run_id: `r${n}`, reviewed_sha: `s${n}`, prompts_sha: 'ps',
+      witness: '0', model: 'm', checks: [], outcome: 'stopped',
+      verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor: `${artifact} > ## Step: s1`, claim: 'x' }] }],
+    })
+    for (const artifact of ['auth-refresh-plan-1', 'P1']) for (const n of [1, 2, 3]) round(artifact, n)
+    expect(owedDecisions(repo.root, loadCanon(repo.root))).toEqual([{ gate: 'plan', target: 'auth-refresh-plan-1', bound: false }])
+
+    // a parent outside the id set gives no upstream, in the block and in a parked plan's reopen
+    repo.setMeta('auth-refresh-plan-1', { parent: 'p$(x)' })
+    expect(gateSpec('plan')!.upstreamOf!(repo.root, loadCanon(repo.root), 'auth-refresh-plan-1')).toBeUndefined()
+    const shown = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--show'])
+    expect(shown.stdout).toContain('witness decide plan auth-refresh-plan-1 --approve --override')
+    expect(shown.stdout).not.toContain('p$(x)')
+    // what the block names is the shape a human fills in, an option it marks not runnable
+    expect(shown.stdout.match(/--upstream \S+/g)).toEqual(['--upstream <effort>'])
+    for (const artifact of ['auth-refresh-plan-1', 'P1']) {
+      appendEntry(repo.root, artifact, { t: 'human-decision', gate: 'plan', artifact, round: 3, decision: 'stop' })
+    }
+    const parked = parkedGates(repo.root, loadCanon(repo.root))
+    expect(parked.map((p) => [p.gate, p.target])).toEqual([['plan', 'auth-refresh-plan-1']])
+    expect(parked[0]!.reopen.map((a) => a.argv.join(' '))).toEqual([
+      'decide plan auth-refresh-plan-1 --approve --override', 'decide plan auth-refresh-plan-1 --revise --repair',
+      'decide plan auth-refresh-plan-1 --stop', 'abandon auth-refresh-plan-1',
+    ])
   })
 })

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addOrigin, approve, seededRepo, threeStepPlan, writePlan, writeSpec } from './helpers.js'
+import { addOrigin, approve, autonomyOn, seededRepo, threeStepPlan, writePlan, writeSpec } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
 
 // Every D137 case needs the same approved plan; the difference is what remote exists.
@@ -139,5 +139,22 @@ describe('witness start prints steps:', () => {
     expect(again.code).toBe(0)
     expect(again.stdout).toContain('steps: 1/3 done · next s1')
     await repo.cli(['clean'])
+  })
+})
+
+// Row 239 (ruling R16(a)). A need's label is the doc's text: on start's kept stop a line break in it is
+// spelled out, so it cannot start a `run:` row of its own ahead of the real satisfy.
+describe("start's kept stop (row 239)", () => {
+  it('spells a newline in a need label on its head, under which only the real satisfy prints', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    const text = 'ses\n  run: witness satisfy auth-refresh-plan-1 --need 1; touch M1'
+    expect((await writePlan(repo, 'auth-refresh-plan-1', { needs: [{ manual: text, satisfied: false }] })).code).toBe(0)
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    autonomyOn(repo)
+    const out = (await repo.cli(['start', 'auth-refresh-plan-1'])).stdout.split('\n')
+    expect(out).toContain(`kept-stop: unmet need — ${text.replaceAll('\n', '\\n')}`)
+    expect(out.filter((l) => /^ {2}run: /.test(l))).toEqual(['  run: witness satisfy auth-refresh-plan-1 --need 1'])
   })
 })

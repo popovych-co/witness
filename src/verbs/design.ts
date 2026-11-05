@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { hostname, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { cliAct } from '../act.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, loadLocalConfig } from '../config.js'
 import { designPending, designRel, designStamp, htmlSha, validateDesignArtifact } from '../design.js'
@@ -15,7 +16,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon, type CanonDoc } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
-import { kv } from '../toon.js'
+import { cmd, kv, shellWord } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
@@ -87,7 +88,8 @@ function previewOnly(ctx: Ctx, root: string, id: string, file: string): number {
   ctx.out(kv('previewed', id))
   ctx.out(kv('path', abs))
   ctx.out(kv('opener', command))
-  ctx.out(kv('note', `a preview registers nothing — witness design ${id} --file <html> registers the look`))
+  // Row 239. A shape: the id is quoted, and the file is the session's to author.
+  ctx.out(kv('note', `a preview registers nothing — witness design ${shellWord(id)} --file <html> registers the look`))
   return EXIT.OK
 }
 
@@ -99,8 +101,9 @@ function previewOnly(ctx: Ctx, root: string, id: string, file: string): number {
 function openOnly(ctx: Ctx, root: string, rel: string, id: string): number {
   const abs = join(root, rel)
   if (!existsSync(abs)) {
+    // Row 239. A shape, as the preview's note above.
     renderRefusal([v('design', 'no-artifact', rel,
-      `a registered design — run: witness design ${id} --file <html>`)]).forEach(ctx.err)
+      `a registered design — run: witness design ${shellWord(id)} --file <html>`)]).forEach(ctx.err)
     return EXIT.REFUSED
   }
   const sha = htmlSha(readFileSync(abs, 'utf8'))
@@ -136,7 +139,7 @@ function openOnly(ctx: Ctx, root: string, rel: string, id: string): number {
   ctx.out(kv('path', rel))
   ctx.out(kv('sha', short(sha)))
   ctx.out(kv('opener', command))
-  ctx.out(`next: witness gate design ${id}`)
+  ctx.out(cmd('next', cliAct('gate', 'design', id).line))
   return EXIT.OK
 }
 
@@ -180,7 +183,7 @@ function persist(
   ctx.out(kv('design', id))
   ctx.out(kv('path', rel))
   ctx.out(kv('sha', short(sha)))
-  ctx.out(`next: witness gate design ${id}`)
+  ctx.out(cmd('next', cliAct('gate', 'design', id).line))
   return EXIT.OK
 }
 

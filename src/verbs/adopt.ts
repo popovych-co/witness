@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { cliAct } from '../act.js'
 import { adoptedCommitsFor, lastWitnessed, positionOf, untrailedCommitsFor } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { canonPaths } from '../config.js'
@@ -13,7 +14,7 @@ import { idRetired, pathRetired } from '../departure.js'
 import { findById, findCycle, loadCanon } from '../scan.js'
 import { validateDoc } from '../schemas.js'
 import { canonicalJson, canonicalSha, short, VOLATILE_FIELDS } from '../sha.js'
-import { kv } from '../toon.js'
+import { kv, shellLine } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
@@ -53,7 +54,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   violations.push(...positionMoves(root, rel, id, meta))
   if (violations.length) {
     renderRefusal(violations).forEach(ctx.err)
-    ctx.err(`help: fix the file and re-run, or revert instead: git checkout HEAD -- ${rel}`)
+    // Row 239. `rel` is the caller's argument, a repo file name a commit chose: the revert is
+    // another tool's command, through the one renderer.
+    ctx.err(`help: fix the file and re-run, or revert instead: ${shellLine(['git', 'checkout', 'HEAD', '--', rel])}`)
     return EXIT.REFUSED
   }
 
@@ -107,7 +110,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('adopt', `${id} · ${short(currentSha)} · ${commits.length} commit(s) absolved${unreviewed ? ' · unreviewed-amendment' : ''}`))
   const held = reverify ? reverify.criteria.filter((c) => c.held !== undefined).length : 0
   if (reverify) ctx.out(kv('reverify', reverify.ok ? `lane green${held > 0 ? ` · ${held} held` : ''} — stays live` : 'lane RED — drift stamped immediately (hand-edit, no debounce)'))
-  ctx.out('help: history: witness log ' + id)
+  // Row 239. The log the help names is an act's line.
+  ctx.out(`help: history: ${cliAct('log', id).line}`)
   return reverify && !reverify.ok ? EXIT.FINDINGS : EXIT.OK
 }
 
@@ -122,8 +126,9 @@ function positionMoves(root: string, rel: string, id: string, meta: Record<strin
   const was = seen?.position ?? positionOf({ status: 'draft' })
   const now = positionOf(meta)
   const shown = (x: unknown): string => (x === undefined ? '(none)' : typeof x === 'string' ? x : canonicalJson(x))
+  // Row 239: the revert is another tool's command, through the one renderer, as adopt's help.
   return VOLATILE_FIELDS.filter((f) => canonicalJson(was[f]) !== canonicalJson(now[f])).map((f) =>
     v(f, 'position-moved', `${shown(was[f])} → ${shown(now[f])}`, seen !== undefined
-      ? `position is written by the CLI — set ${f} back to ${shown(was[f])}, or revert the file: git checkout ${short(seen.commit)} -- ${rel}`
+      ? `position is written by the CLI — set ${f} back to ${shown(was[f])}, or revert the file: ${shellLine(['git', 'checkout', short(seen.commit), '--', rel])}`
       : `position is written by the CLI — a doc adopt has never seen is born ${f === 'status' ? 'status: draft' : `draft, with no ${f}`}`))
 }

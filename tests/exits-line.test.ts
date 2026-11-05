@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { cliAct, exitsLine } from '../src/act.js'
+import { actOn, cliAct, exitsLine } from '../src/act.js'
 import { gateSpec, runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream, type Entry } from '../src/journal.js'
@@ -65,7 +65,7 @@ describe('decide --show prints pasteable commands', () => {
       expect(line.trimStart().startsWith('"')).toBe(false)
     }
     const run = s.stdout.split('\n').find((l) => l.startsWith('run: '))!
-    expect(run).toBe('run: witness decide plan auth-refresh-plan-1 --revise --note "1 blocking finding: auth-refresh-plan-1 > ## Step: s1"')
+    expect(run).toBe('run: witness decide plan auth-refresh-plan-1 --revise')
     expect(s.stdout).toContain('witness decide plan auth-refresh-plan-1 --approve --override')
   })
 })
@@ -155,7 +155,8 @@ describe('liveExits', () => {
 })
 
 // Rows 139/203. The exits line is the live acts laid out, and these are its five states as
-// 0.28.1 printed them: the line must not move when the acts become the source.
+// 0.28.1 printed them: the line must not move when the acts become the source. By design, row
+// 239 drops the revise's note: a run with facts offers it bare.
 const judged = (round: number, sha: string): Entry => ({
   v: 1, t: 'gate-run', gate: 'plan', artifact: 'p1', round, run_id: `r${round}`,
   reviewed_sha: sha, prompts_sha: 'ps', witness: '0', model: 'm', checks: [], outcome: 'stopped',
@@ -169,9 +170,9 @@ describe('the exits line renders the live acts (rows 139/203)', () => {
   it('prints each state as it always did, from exitActs', () => {
     const states: Array<[string, Entry[], boolean, string]> = [
       ['below the bound', [judged(1, 'a')], false,
-        'witness decide plan p1 --approve | --revise --note "1 blocking finding: p1 > ## Step: s1" | --revise --upstream auth-refresh | --stop'],
+        'witness decide plan p1 --approve | --revise | --revise --upstream auth-refresh | --stop'],
       ['stale with a decision pending', [judged(1, 'a')], true,
-        'witness gate plan p1 | witness decide plan p1 --revise --note "1 blocking finding: p1 > ## Step: s1" | --revise --upstream auth-refresh | --stop'],
+        'witness gate plan p1 | witness decide plan p1 --revise | --revise --upstream auth-refresh | --stop'],
       ['stale with none pending', [judged(1, 'a'), decided('approve')], true, 'witness gate plan p1'],
       ['the bound', BOUND, false,
         'witness decide plan p1 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon p1'],
@@ -182,6 +183,17 @@ describe('the exits line renders the live acts (rows 139/203)', () => {
       expect(liveExits('plan', 'p1', entries, stale, 'auth-refresh'), name).toBe(line)
       expect(exitsLine(exitActs('plan', 'p1', entries, stale, 'auth-refresh')), name).toBe(line)
     }
+  })
+
+  // Row 239. The revise carries no reviewer text: a run with facts offers it bare.
+  it('the exits name the bare revise below the bound (row 239)', () => {
+    expect(liveExits('plan', 'p1', [judged(1, 'a')], false, 'auth-refresh'))
+      .toBe('witness decide plan p1 --approve | --revise | --revise --upstream auth-refresh | --stop')
+  })
+
+  it('a Windows exits line shares the prefix the same way (row 239)', () => {
+    const d = (...rest: string[]) => actOn('win32', ['decide', 'plan', 'p1', ...rest])
+    expect(exitsLine([d('--approve'), d('--stop')], 'win32')).toBe('witness decide plan p1 --approve | --stop')
   })
 
   it('reopens with a fresh run below the bound and with the endgame acts at it', () => {

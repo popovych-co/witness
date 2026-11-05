@@ -1,5 +1,5 @@
 import type { Entry } from './journal.js'
-import type { HeldRow } from './needs.js'
+import { heldSatisfy } from './needs.js'
 import { ROUND_BOUND, boundReached, roundBudget, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
 import { kv, logSafe, rows } from './toon.js'
 import { anchorKey } from './verdict.js'
@@ -47,7 +47,10 @@ export interface GateRunView {
   delta?: number; skipped: string[]; fallback: string[]; rerolled: string[]
   carried?: { lenses: string[]; run: string }
   checks: Array<{ name: string; ok: boolean; detail?: string }>
-  held: HeldRow[]
+  // Row 239 (B13): `satisfy` is the command `heldSatisfy` rebuilds, absent where the journaled row
+  // names none witness would print. Ruling R16(a): `criterion` and `need` are spelled out (`logSafe`),
+  // as a finding's anchor is: prose ahead of the command, where a line break would start a line.
+  held: Array<{ criterion: string; need: string; satisfy?: string }>
   findings: FindingView[]
   demoted: Array<{ anchor: string; round: number }>
   malformed: Array<{ reviewer: string; violations: Array<{ field: string; rule: string }> }>
@@ -69,7 +72,11 @@ export function gateRunView(entry: GateRunEntry, mode: 'ran' | 'resume', entries
     skipped: [...(entry.skipped ?? [])], fallback: [...(entry.fallback ?? [])], rerolled: [...(entry.rerolled ?? [])],
     ...(entry.carried ? { carried: { lenses: [...entry.carried.lenses], run: entry.carried.run } } : {}),
     checks: entry.checks.map((c) => ({ name: c.name, ok: c.ok, ...(c.detail !== undefined ? { detail: c.detail } : {}) })),
-    held: entry.checks.flatMap((c) => c.held ?? []).map((h) => ({ criterion: h.criterion, need: h.need, satisfy: h.satisfy })),
+    // A journaled row is parsed JSON: each field is shown as the string it prints as.
+    held: entry.checks.flatMap((c) => c.held ?? []).map((h) => {
+      const satisfy = heldSatisfy(h)
+      return { criterion: logSafe(String(h.criterion)), need: logSafe(String(h.need)), ...(satisfy !== undefined ? { satisfy } : {}) }
+    }),
     findings: findingViews(entry.verdicts ?? []),
     demoted: (entry.verdicts ?? []).flatMap((rv) => rv.findings)
       .flatMap((f) => (f.demoted !== undefined ? [{ anchor: anchorKey(f.anchor), round: f.demoted }] : [])),
@@ -102,7 +109,7 @@ export function gateRunLines(view: GateRunView): string[] {
   out.push(rows('checks', ['name', 'ok', 'detail'],
     view.checks.map((c) => ({ name: c.name, ok: String(c.ok), detail: c.detail ?? '' }))).join('\n'))
   // Row 179: what the lane did not run, beside the row that passed without it.
-  for (const h of view.held) out.push(`held: ${h.criterion} — ${h.need} unmet · ${h.satisfy}`)
+  for (const h of view.held) out.push(`held: ${h.criterion} — ${h.need} unmet${h.satisfy ? ` · ${h.satisfy}` : ''}`)
   if (view.findings.length > 0) {
     out.push(rows('findings', ['reviewer', 'blocking', 'pin', 'anchor', 'claim'], view.findings.map(findingRow)).join('\n'))
   }

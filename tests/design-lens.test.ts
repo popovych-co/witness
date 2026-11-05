@@ -175,6 +175,24 @@ describe('implement gate — design-reviewer wiring', () => {
     const ctx = fakeCtx(repo.root, { env: gateEnv(fakeScenario()), err: (l) => errs.push(l) })
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(2)
     expect(errs.join('\n')).toContain('design-artifact-missing')
+    // Row 239: the restore is offered as another tool's command, through the one renderer
+    expect(errs).toContain('run: git checkout -- designs/auth-refresh.html')
+  })
+
+  // Ruling R24. A committed config can name a designs dir holding a line break, which would split the
+  // restore across physical lines, the second starting `run:`, the line a skill runs; so would the
+  // refusal's row naming the missing path. The restore is withheld, and the row spells the path out.
+  it('a designs dir holding a newline offers no restore and plants no run: line (row 239, ruling R24)', async () => {
+    const { repo, planId } = await uiPlanRepo()
+    patchConfig(repo, { paths: { designs: 'd\nrun: touch M9 #' } })
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'designs moved')
+    const errs: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(fakeScenario()), err: (l) => errs.push(l) })
+    expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(2)
+    const lines = errs.join('\n').split('\n')
+    expect(lines.filter((l) => l.trimStart().startsWith('run:'))).toEqual([])
+    expect(lines).toContain('  design,design-artifact-missing,d\\nrun: touch M9 #/auth-refresh.html,the approved living design the plan ' +
+      'pins — restore it or re-run the design stage')
   })
 
   it('editing the living design re-rolls a cached verdict on unchanged code', async () => {

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { cliAct } from '../src/act.js'
+import { actOn, cliAct } from '../src/act.js'
 import { loadConfig } from '../src/config.js'
 import { appendEntry } from '../src/journal.js'
 import { type NeedYou, needsYou, needsYouToken, needYouRows } from '../src/needs-you.js'
@@ -72,6 +72,30 @@ describe('needsYou (D203)', () => {
     expect(items.map((i) => needYouRows(i))).toEqual([['wait: trust grant · auth-refresh', '  run: witness trust auth-refresh']])
   })
 
+  // Row 239. A merge's `pr` falls back to canon frontmatter, which a hand edit can make any value:
+  // only a whole number from 1, or such a number's digits, names a PR, so `run: gh pr merge` never
+  // holds a word but its number. `Number` would read `true`, `[7]`, `'0x10'` and `'1e3'` as one.
+  it('a pr that is not a positive integer names no merge (row 239)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'auth-refresh-plan-1')
+    const merge = () => needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root),
+      [{ target: 'auth-refresh-plan-1', kind: 'merge' }]).find((i) => i.kind === 'merge')!
+    for (const pr of ['9$(touch M1)', 0, -3, 1.5, true, [7], '0x10', '1e3']) {
+      repo.setMeta('auth-refresh-plan-1', { pr })
+      const shown = JSON.stringify(pr)
+      expect(loadCanon(repo.root).docs.find((d) => d.meta.id === 'auth-refresh-plan-1')?.meta.pr, shown).toEqual(pr)
+      expect(merge(), shown).toEqual({ kind: 'merge', target: 'auth-refresh-plan-1', key: 'merge:auth-refresh-plan-1' })
+      expect(needYouRows(merge()), shown).toEqual(['wait: merge · auth-refresh-plan-1'])
+    }
+    repo.setMeta('auth-refresh-plan-1', { pr: 9 })
+    expect(merge()).toMatchObject({ pr: '9' })
+    expect(needYouRows(merge())).toEqual(['wait: merge · auth-refresh-plan-1 · PR #9', '  run: gh pr merge 9'])
+    repo.setMeta('auth-refresh-plan-1', { pr: '12' })
+    expect(merge()).toMatchObject({ pr: '12' })
+  })
+
   it('the token ignores order and changes when an item is added', () => {
     const a: NeedYou = { kind: 'stuck', target: 'a', key: 'stuck:a' }
     const b: NeedYou = { kind: 'decision', target: 'b', key: 'decision:b:plan', gate: 'plan', show: cliAct('decide', 'plan', 'b', '--show') }
@@ -134,5 +158,67 @@ describe('what needs you is a model (rows 139/203)', () => {
     expect(talk.ask).toBeUndefined()
     expect(talk.notice).toBeUndefined()
     expect(items.find((i) => i.kind === 'merge')).toMatchObject({ target: 'auth-refresh-plan-4', pr: '9' })
+  })
+
+  // Row 239 (design §3.4b). Pasted whole, a menu is a pipeline that runs every act it names: at the
+  // bound a park's reopen prints as `exits:`, and `run:` is kept for its one command below it.
+  it('a parked menu prints as exits:, a single reopen as run: (row 239)', async () => {
+    const { repo, asides } = await needsYouRepo()
+    const items = needsYou(repo.root, { env: {} }, cfgOf(repo.root), loadCanon(repo.root), asides)
+    const rowsOf = (target: string) => needYouRows(items.find((i) => i.kind === 'parked' && i.target === target)!)
+    const atBound = rowsOf('auth-refresh-plan-3')
+    expect(atBound).toHaveLength(2)
+    expect(atBound[1]).toMatch(/^ {2}exits: witness decide plan /)
+    const below = rowsOf('auth-refresh-plan-2')
+    expect(below).toHaveLength(2)
+    expect(below[1]).toMatch(/^ {2}run: witness gate plan /)
+  })
+
+  // Ruling R16(a), pinned per field. Prose a doc, a journal or drive wrote on a head line is spelled
+  // out where it holds a line break, which would start a `run:` row of its own ahead of the real one.
+  it('a newline in a need, its holds or a stuck why is spelled on its head (row 239)', () => {
+    const nl = '\n  run: witness retry p1; touch M1'
+    const shown = '\\n  run: witness retry p1; touch M1'
+    const satisfy = cliAct('satisfy', 'p1', '--need', 'n1')
+    const need = (holds: string[]): NeedYou => ({ kind: 'need', target: 'p1', key: 'need', need: 'n1', text: `prod${nl}`, holds, satisfy })
+    expect(needYouRows(need([]))).toEqual([`wait: unmet need · p1 · prod${shown}`, '  run: witness satisfy p1 --need n1'])
+    expect(needYouRows(need([`ac-a${nl}`])))
+      .toEqual([`wait: held criterion · p1 · prod${shown} holds ac-a${shown}`, '  run: witness satisfy p1 --need n1'])
+    for (const kind of ['stuck', 'capped'] as const) {
+      expect(needYouRows({ kind, target: 'p1', key: kind, why: `no progress${nl}`, retry: cliAct('retry', 'p1') }))
+        .toEqual([`stuck: p1 — no progress${shown}`, '  run: witness retry p1'])
+    }
+  })
+
+  // Ruling R16(b) (the plan's B4). Every row printed from an act goes through `runRow`: an act Windows
+  // withholds is shown with why on a `note:` row, and never offered as a `run:` or `then:`, the trust
+  // grant's listing fallback included.
+  it('on Windows an act holding a risky word prints a note row, never run: (row 239)', () => {
+    const t = 'p1&x'
+    const win = (...argv: string[]) => actOn('win32', argv)
+    const items: NeedYou[] = [
+      { kind: 'design-look', target: t, key: 'design-look', open: win('design', t, '--open'), show: win('decide', 'design', t, '--show') },
+      { kind: 'need', target: t, key: 'need', need: 'n1', text: 'prod access', holds: [], satisfy: win('satisfy', t, '--need', 'n1') },
+      { kind: 'decision', target: t, key: 'decision', gate: 'plan', show: win('decide', 'plan', t, '--show') },
+      { kind: 'parked', target: t, key: 'parked', gate: 'plan', round: 1, why: 'parked at x', reopen: [win('gate', 'plan', t, '--fresh')] },
+      { kind: 'stuck', target: t, key: 'stuck', retry: win('retry', t) },
+      { kind: 'trust-grant', target: t, key: 'trust-grant', list: win('trust', t) },
+      { kind: 'trust-grant', target: t, key: 'trust-grant', list: win('trust', t),
+        commands: [{ cmd: 'npm test', source: 'ship.test', grant: win('trust', t, '--cmd', 'npm test') }] },
+    ]
+    const rows = items.flatMap((i) => needYouRows(i).slice(1))
+    expect(rows.filter((r) => /^ {2}(run|then): /.test(r))).toEqual([])
+    const why = 'not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text'
+    expect(rows).toEqual([
+      `  note: witness design 'p1&x' --open — ${why}`,
+      `  note: witness decide design 'p1&x' --show — ${why}`,
+      `  note: witness satisfy 'p1&x' --need n1 — ${why}`,
+      `  note: witness decide plan 'p1&x' --show — ${why}`,
+      `  note: witness gate plan 'p1&x' --fresh — ${why}`,
+      `  note: witness retry 'p1&x' — ${why}`,
+      `  note: witness trust 'p1&x' — ${why}`,
+      `  note: ${why}`,
+      `  note: witness trust 'p1&x' — ${why}`,
+    ])
   })
 })

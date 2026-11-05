@@ -1,4 +1,5 @@
-import { grantOf, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
+import { cliAct, type Act } from './act.js'
+import { grantRows, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
 import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
@@ -7,11 +8,11 @@ import { liftedHolds } from './needs.js'
 import { gateSpec } from './gate.js'
 import { readStream } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
-import { renderRefusal } from './refusal.js'
+import { renderRefusal, type Result } from './refusal.js'
 import type { DecisionEntry, GateRunEntry } from './rounds.js'
 import { criteriaOwner, loadCanon } from './scan.js'
 import { cmd, kv } from './toon.js'
-import { actOfCommand, applyDecision, type DecisionAct } from './verbs/decide.js'
+import { applyDecision, decisionAct, type DecisionAct } from './verbs/decide.js'
 import { owedDecisions, owedRun } from './verbs/next.js'
 import { pendingTxn } from './txn.js'
 
@@ -23,7 +24,9 @@ import { pendingTxn } from './txn.js'
 export type Settled =
   | { kind: 'none' }
   | { kind: 'decided'; by: 'policy' | 'arbiter'; decision: DecisionEntry['decision']; rule: string }
-  | { kind: 'routed'; line: string }                                       // a re-run the CLI names and never executes
+  // A re-run the CLI names and never executes. Row 239 (the plan's B9): with its act, which
+  // `next` and drive route by, never by the line read back.
+  | { kind: 'routed'; act: Act; line: string }
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   | { kind: 'left'; why: string; code: number; limit?: string }            // limit: the usage limit that refused the arbiter
@@ -43,8 +46,9 @@ function refusedRule(lines: readonly string[]): string | undefined {
   return at >= 0 ? lines[at + 1]?.trim().split(',')[1] : undefined
 }
 
+// Row 239. The command it names is an act's line, as every command witness prints.
 const leftLine = (gate: string, target: string, why: string) =>
-  cmd('autonomy', `left for a human — ${why} · witness decide ${gate} ${target} --show`)
+  cmd('autonomy', `left for a human — ${why} · ${cliAct('decide', gate, target, '--show').line}`)
 
 export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: string, target: string): Promise<Settled> {
   const spec = gateSpec(gate)
@@ -77,12 +81,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       // same model call to reach the same refusal (F4). It parks instead — once, reversibly,
       // as the policy's act — exactly as a second malformed answer does. A lock or a pending
       // transaction is transient (exit 3), so that stop is left to be tried again.
-      if (by === 'arbiter' && code === EXIT.REFUSED) {
-        return settle({
-          gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id,
-          note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
-        }, 'policy')
-      }
+      if (by === 'arbiter' && code === EXIT.REFUSED) return parkRefused(rule)
       const why = `the ${by} decision was refused (${rule ?? `exit ${code}`})`
       ctx.out(leftLine(gate, target, why))
       return { kind: 'left', why, code }
@@ -92,28 +91,57 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       decision: act.decision === 'revise' && act.upstream !== undefined ? 'revise-upstream' : act.decision,
     }
   }
+  const parkRefused = (rule: string | undefined): Promise<Settled> => settle({
+    gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id,
+    note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
+  }, 'policy')
+  // Row 239. A decide act runs as its argv, through the parse the verb gives it, which prints its
+  // refusal. A shape the parse refuses is no decision the CLI can take: the policy's stop is left
+  // for a human, and the arbiter's parks (F4).
+  const parsed = (argv: readonly string[]): Result<DecisionAct> => {
+    const actR = decisionAct(argv.slice(1))
+    if (!actR.ok) renderRefusal(actR.violations).forEach((l) => ctx.err(l))
+    return actR
+  }
 
   if (policy.kind === 'human') {
     // Row 194: the gate ran only on a look the human opened, so approving is their one act.
-    // Row 205 (final review): a trust grant is one line per command — escaped, with its source and
-    // the grant that names it — as `next`'s pre-flight prints it, so the chat shows the source.
+    // Row 205 (final review): a trust grant is one kept stop per command — escaped, with its source
+    // and the grant that names it — as `next`'s pre-flight prints it, so the chat shows the source.
+    // Row 239 (B12): the grant on a `run:` row of its own under the command, which is the repo's text.
     const line = policy.stop === 'design-look'
-      ? keptStopLine(policy.stop, `the human approves the screen or sends a note — witness decide design ${target} --show`)
-      : sourced(cfg, canon, target, untrusted).map((c) => keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(target, c)}`)).join('\n')
+      ? keptStopLine(policy.stop, `the human approves the screen or sends a note — ${cliAct('decide', 'design', target, '--show').line}`)
+      : sourced(cfg, canon, target, untrusted).flatMap((c) => [keptStopLine('trust-grant', shownCmd(c)), ...grantRows(target, c)]).join('\n')
     renderDecision(block).forEach((l) => ctx.out(l))
     ctx.out(line)
     return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }
   }
 
   if (policy.kind === 'take') {
-    const actR = actOfCommand(policy.command)
-    if (!actR.ok) {
+    const { act } = policy
+    if (act.argv[0] !== 'decide') {
       // Not a decision: a re-run the CLI names and never executes — the stage owns it.
-      const line = cmd('autonomy', `re-run owed — ${policy.command}`)
+      const line = cmd('autonomy', `re-run owed — ${act.line}`)
       ctx.out(line)
-      return { kind: 'routed', line }
+      return { kind: 'routed', act, line }
+    }
+    const actR = parsed(act.argv)
+    if (!actR.ok) {
+      const why = 'the policy chose an option the CLI could not read'
+      ctx.out(leftLine(gate, target, why))
+      return { kind: 'left', why, code: EXIT.REFUSED }
     }
     return settle({ ...actR.value, selected: 'policy', runId: owed.run_id }, 'policy')
+  }
+
+  // Row 239. A `pick` answers a choose block, whose options name specs, not commands: no gate stop
+  // yields one. Should one reach here, it is no decision the CLI can take at a gate, and it fails
+  // closed — left for a human, never handed on to the arbiter, which the arms below would otherwise
+  // pay a model call for, to judge a stop the policy claimed to have answered.
+  if (policy.kind === 'pick') {
+    const why = 'the policy picked a spec, which a gate stop never takes'
+    ctx.out(leftLine(gate, target, why))
+    return { kind: 'left', why, code: EXIT.REFUSED }
   }
 
   ctx.out(cmd('arbiter', `judging ${gate} ${target} · ${block.rule}`))
@@ -146,20 +174,19 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     const limited = ruling.violations.find((x) => x.rule === 'usage-limit')
     return { kind: 'left', why, code: EXIT.REFUSED, ...(limited ? { limit: limited.got } : {}) }
   }
-  const chosen = menu[ruling.value.choice - 1]!
-  const actR = actOfCommand(chosen.command)
-  if (!actR.ok) {
-    renderRefusal(actR.violations).forEach((l) => ctx.err(l))
-    const why = 'the arbiter chose an option the CLI could not read'
-    ctx.out(leftLine(gate, target, why))
-    return { kind: 'left', why, code: EXIT.REFUSED }
-  }
-  // The one placeholder the arbiter may fill (A3): `<why>`, with its note or its reason. A
-  // prefilled note stays as the CLI wrote it; the reason is journaled beside it either way.
-  const note = actR.value.note === '<why>' ? (ruling.value.note ?? ruling.value.reason) : actR.value.note
+  // The one placeholder the arbiter may fill (A3): `<why>`, with its note or its reason. Row 239:
+  // filled in a copy of the chosen act's argv, as the value of its `--note`, which `decisionAct`
+  // reads as the note whatever words it holds and never as a flag. A note that is the bare `<why>`
+  // leaves the slot unfilled, which the door refuses, and the flow parks (F4). An option with no
+  // slot carries no note: a bare revise journals the prefill `decide` derives, and the reason is
+  // journaled beside either.
+  const chosen = menu[ruling.value.choice - 1]!.act
+  const argv = [...chosen.argv]
+  for (const i of chosen.inputs) if (i.name === 'why') argv[i.at] = ruling.value.note ?? ruling.value.reason
+  const actR = parsed(argv)
+  if (!actR.ok) return parkRefused(actR.violations[0]?.rule)
   return settle({
-    ...actR.value, ...(note !== undefined ? { note } : {}),
-    selected: 'arbiter', reason: ruling.value.reason,
+    ...actR.value, selected: 'arbiter', reason: ruling.value.reason,
     arbiter: { model: ruling.value.model, prompts_sha: ruling.value.prompts_sha },
     runId: owed.run_id,
   }, 'arbiter')

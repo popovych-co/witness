@@ -50,6 +50,16 @@ describe('validateDoc: spec', () => {
     const out = validateDoc(specMeta(), '## Motivation\nonly\n')
     expect(out.some((x) => x.rule === 'template' && x.got.includes('## Behavior'))).toBe(true)
   })
+
+  // Row 239 (the plan's B14). An id is printed into the commands witness offers, where a word that
+  // starts with `-` is read as a flag.
+  it('an id may not start with - (row 239)', () => {
+    for (const id of ['-x', '-']) {
+      expect(validateDoc(specMeta({ id }), SPEC_BODY).filter((x) => x.field === 'id'), id)
+        .toEqual([{ field: 'id', rule: 'id-charset', got: id, want: '[a-z0-9][a-z0-9-]*' }])
+    }
+    expect(validateDoc(specMeta({ id: 'a-1', criteria: [{ id: 'ac-rotate', test: '@spec:a-1' }] }), SPEC_BODY)).toEqual([])
+  })
 })
 
 describe('validateDoc: plan', () => {
@@ -76,6 +86,16 @@ describe('validateDoc: plan', () => {
     expect(missing.some((x) => x.rule === 'step-section-missing')).toBe(true)
     const orphan = validateDoc(planMeta(), '## Step: s1\nx\n## Step: ghost\ny\n')
     expect(orphan.some((x) => x.rule === 'step-section-orphan')).toBe(true)
+  })
+
+  // Row 239. Ship stamps the PR's number, and `gh pr merge` is offered with it: a hand edit that
+  // writes anything else is refused.
+  it("a plan's pr is a positive integer (row 239)", () => {
+    expect(validateDoc(planMeta({ pr: 7 }), '## Step: s1\nx\n')).toEqual([])
+    for (const pr of ['7', 0, 1.5, '9$(x)']) {
+      expect(validateDoc(planMeta({ pr }), '## Step: s1\nx\n'), JSON.stringify(pr))
+        .toEqual([{ field: 'pr', rule: 'shape', got: String(pr), want: 'a positive integer — the PR number ship stamps' }])
+    }
   })
 })
 

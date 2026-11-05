@@ -93,7 +93,7 @@ describe('next says what waits on the human that it does not route (final review
     try {
       writeLive(repo.root, { pid: process.pid, asides: [{ target: 'a-plan-1', kind: 'stuck' }] })
       const res = await repo.cli(['next'], { env: { CLAUDECODE: '1' } })
-      expect(res.stdout).toContain('waiting: stuck: a-plan-1 — witness log a-plan-1 · run: witness retry a-plan-1')
+      expect(res.stdout).toContain('waiting: stuck: a-plan-1 — witness log a-plan-1\n  run: witness retry a-plan-1')
     } finally { lock.value() }
   })
 })
