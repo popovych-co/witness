@@ -12,8 +12,8 @@ import { readFill } from '../context.js'
 import { contextLine, reportOpening, slicesLine } from '../slice.js'
 import { evaluateNeeds, unmetNeeds } from '../needs.js'
 import { humanCall, renderRefusal, v } from '../refusal.js'
-import { kv, logSafe } from '../toon.js'
-import { runRow } from '../act.js'
+import { kv, logSafe, shellWord } from '../toon.js'
+import { cliAct, runRow } from '../act.js'
 import { autonomyLines, keptStopLine, policyFor } from '../autonomy.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
@@ -87,8 +87,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (status !== 'approved') {
     const rule = status === 'done' || status === 'abandoned' ? 'terminal-status' : 'not-approved'
+    // Row 239. The gate the want names is an act's line.
     renderRefusal([v('status', rule, status,
-      'an approved plan — run: witness gate plan ' + planId)]).forEach((l) => ctx.err(l))
+      `an approved plan — run: ${cliAct('gate', 'plan', planId).line}`)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
@@ -155,6 +156,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('steps', position))
   ctx.out(kv('context', opening))
   reportOpening(ctx, root, cfgR.value)
-  ctx.out(`help: implement inside the worktree; witness test-evidence ${planId} --phase red|green --step <id> as you go`)
+  // Row 239. A shape: the plan is quoted, and the phase and the step are the session's to name.
+  ctx.out(`help: implement inside the worktree; witness test-evidence ${shellWord(planId)} --phase red|green --step <id> as you go`)
   return EXIT.OK
 }

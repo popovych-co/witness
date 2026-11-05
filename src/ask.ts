@@ -1,3 +1,4 @@
+import { cliAct } from './act.js'
 import type { Ctx } from './cli.js'
 import { draftLine, dropDraft } from './drafts.js'
 import { FLOOR_STREAM } from './floor.js'
@@ -117,8 +118,9 @@ export function withdrawAsk(ctx: Ctx, root: string, id: string, note?: string): 
     if (!ask) return refuse([v('--withdraw', 'unknown-ask', id, 'an ask id — witness status lists the queue')])
     if (ask.state === 'withdrawn') return ok({ already: true })
     if (ask.state === 'answered') {
+      // Row 239. The command it names is an act's line, so the journal's effort prints quoted.
       return refuse([v('--withdraw', 'ask-answered', `${id} is answered by ${ask.effort}`,
-        `an unanswered ask — ${ask.effort} answers it now · witness abandon ${ask.effort} ends that effort`)])
+        `an unanswered ask — ${ask.effort} answers it now · ${cliAct('abandon', String(ask.effort)).line} ends that effort`)])
     }
     const entry = { t: 'ask-withdrawn' as const, ask: id, ...(note !== undefined ? { note } : {}) }
     const stream = journalRel(ASK_STREAM)

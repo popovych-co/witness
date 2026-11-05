@@ -1,4 +1,4 @@
-import { exitsLine, type Act } from './act.js'
+import { cliAct, exitsLine, type Act } from './act.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { autonomyLines, decidedBy } from './autonomy.js'
 import type { Config } from './config.js'
@@ -120,7 +120,8 @@ export function decideViewLines(view: DecideView): string[] {
     out.push(kv('state', 'reopened — the gate must run again'))
     out.push(kv('reopened-by', `${view.by.gate} ${view.by.artifact} (round ${view.by.round})`))
     if (view.note) out.push(kv('note', view.note))
-    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome}${view.disposition ? `, ${view.disposition.decision}` : ''} · witness log ${target}`))
+    // Row 239. The log it names is an act's line, here and on the settled screen below.
+    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome}${view.disposition ? `, ${view.disposition.decision}` : ''} · ${cliAct('log', target).line}`))
     out.push(cmd('exits', exitsLine(view.exits)))
     return out
   }
@@ -132,7 +133,7 @@ export function decideViewLines(view: DecideView): string[] {
     out.push(kv('decided-by', decidedBy(d)))
     if (d.reason) out.push(kv('reason', d.reason))
     if (d.note) out.push(kv('note', d.note))
-    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · witness log ${target}`))
+    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · ${cliAct('log', target).line}`))
     // no exits: the gate is genuinely terminal here. Point at the one verb that owns
     // what comes next rather than re-deriving routing in a second place (D101).
     out.push('help: witness next')

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cliAct } from './act.js'
 import { ID_RE } from './dsl.js'
 import { idTextList } from './idlists.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
@@ -171,9 +172,10 @@ export function draftSummary(k: DraftKey, draft: Record<string, unknown>): strin
 }
 
 // `next`'s line for a conversation that has a draft. None, or one that does not read, prints
-// nothing: an unreadable draft is refused by name where it is read back, never here.
+// nothing: an unreadable draft is refused by name where it is read back, never here. Row 239: the
+// command it names is an act's line.
 export function draftLine(root: string, k: DraftKey): string | undefined {
   const d = readDraft(root, k)
   if (!d.ok || d.value === undefined) return undefined
-  return `${draftSummary(k, d.value.draft)} · resume with witness draft ${keyName(k)}`
+  return `${draftSummary(k, d.value.draft)} · resume with ${cliAct('draft', keyName(k)).line}`
 }

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cliAct } from '../act.js'
 import { designCurrentSha, designGateSha, designRel, designReviewed, designUnseen, htmlSha, validateDesignArtifact } from '../design.js'
 import { registerGate, type GateInput, type MetaStamp } from '../gate.js'
 import { latestRecap } from '../journal.js'
@@ -10,6 +11,7 @@ import { findById } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
 import { contextDigest } from '../delta.js'
 import { snapshotFiles } from '../snapshot.js'
+import { shellWord } from '../toon.js'
 
 registerGate({
   gate: 'design',
@@ -36,16 +38,18 @@ registerGate({
     //
     // Row 194: in every mode. A look comes out of a conversation with a human, so the human
     // has seen it before any critic judges it (row 178's unseen gate is gone).
+    // Row 239. A command a want or a check detail names is an act's line, and a shape (a file to
+    // author) quotes its foreign word.
     const unseen = designUnseen(root, cfg.paths, specId)
     if (unseen !== undefined) {
       return refuse([v('design', 'design-unseen', `no sight witnessed for ${short(unseen)}`,
-        `a human shown this artifact — run: witness design ${specId} --open`)])
+        `a human shown this artifact — run: ${cliAct('design', specId, '--open').line}`)])
     }
 
     const checks: GateCheck[] = []
     checks.push({ name: 'ui-flag', ok: spec.meta.ui === true, detail: spec.meta.ui === true ? 'ui: true' : 'spec is not ui-flagged' })
     checks.push({ name: 'feature-class', ok: recap?.class === 'feature', detail: `effort class: ${recap?.class ?? 'none'}` })
-    checks.push({ name: 'artifact', ok: html !== undefined, detail: html !== undefined ? rel : `${rel} missing — run: witness design ${specId} --file <html>` })
+    checks.push({ name: 'artifact', ok: html !== undefined, detail: html !== undefined ? rel : `${rel} missing — run: witness design ${shellWord(specId)} --file <html>` })
     const template = html !== undefined ? validateDesignArtifact(html) : []
     checks.push({ name: 'template', ok: html !== undefined && template.length === 0,
       detail: template.length ? template.map((x) => x.rule).join(' · ') : 'self-contained, id-attributed' })

@@ -205,9 +205,10 @@ export function needYouRows(item: NeedYou): string[] {
     case 'parked':
       return [`parked: ${item.target} · ${item.gate}${item.round !== undefined ? ` round ${item.round}` : ''} — ${logSafe(item.why)}`,
         item.reopen.length === 1 ? runRow(item.reopen[0]!) : `  exits: ${exitsLine(item.reopen)}`]
+    // Row 239. The log the head names, when it has no why, is an act's line.
     case 'stuck':
     case 'capped':
-      return [`stuck: ${item.target} — ${item.why !== undefined ? logSafe(item.why) : `witness log ${item.target}`}`,
+      return [`stuck: ${item.target} — ${item.why !== undefined ? logSafe(item.why) : cliAct('log', item.target).line}`,
         ...(item.retry !== undefined ? [runRow(item.retry)] : [])]
   }
 }

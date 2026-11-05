@@ -14,6 +14,7 @@ import { basisMoved, planBasis, planDecisionsTerm, specBasis } from '../basis.js
 import { decisionDelta, decisionLines, recapLines } from '../decisions.js'
 import { rows } from '../toon.js'
 import type { GateCheck } from '../rounds.js'
+import { cliAct } from '../act.js'
 
 // D167. One derivation for the gate's stamp and `decide`'s: a pass approves a draft and nothing
 // else. Row 95 keeps an in-flight status through a re-author, and a passing re-gate must not
@@ -84,12 +85,13 @@ registerGate({
     const baseMoved = base.kind === 'empty' ? []
       : basisMoved({ spec: base.sha!, ...(base.decisions ? { decisions: base.decisions } : {}) }, current)
     const delta = baseMoved.includes('decisions') ? decisionDelta(root, base, parent) : undefined
+    // Row 239. Each read the prompt names is an act's line, here and in its sections below.
     const deltaBase = base.kind === 'empty'
       ? 'new spec — the delta is the whole spec'
       : [
           `previous plan ${base.planId} pinned ${short(base.sha ?? '')} — the plan must realize what changed since`,
           ...(!baseMoved.includes('decisions') ? []
-            : delta === undefined ? [`decisions moved since ${base.planId} — witness read ${parentId} --decisions`]
+            : delta === undefined ? [`decisions moved since ${base.planId} — ${cliAct('read', parentId, '--decisions').line}`]
             : [`decisions moved since ${base.planId}:`, ...rows('decisions-delta', ['id', 'change', 'text'], delta)]),
         ].join('\n')
     // What the parent's slicing settled and its effort's standing limits — shown only when it
@@ -97,8 +99,8 @@ registerGate({
     // chore plan also reads its chore's whole recap: a chore writes no spec to carry it.
     const carried = decisionLines(root, parent)
     const sections = [
-      ...(carried.some((l) => l.startsWith('  ')) ? [`### Decisions ${parentId} carries — witness read ${parentId} --decisions`, carried.join('\n')] : []),
-      ...(recap?.class === 'chore' ? [`### The chore's recap — witness read ${effort} --decisions`, recapLines(recap).join('\n')] : []),
+      ...(carried.some((l) => l.startsWith('  ')) ? [`### Decisions ${parentId} carries — ${cliAct('read', parentId, '--decisions').line}`, carried.join('\n')] : []),
+      ...(recap?.class === 'chore' ? [`### The chore's recap — ${cliAct('read', effort, '--decisions').line}`, recapLines(recap).join('\n')] : []),
     ]
     const promptBody = [
       `### Parent spec: ${parentId}`, serializeDoc({ meta: parent.meta, body: parent.body }),

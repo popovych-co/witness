@@ -18,6 +18,7 @@ import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import type { GateCheck } from '../rounds.js'
 import { offeredLine } from '../toon.js'
+import { cliAct } from '../act.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
   const diff = git(wt, 'diff', base)
@@ -91,8 +92,9 @@ registerGate({
     }
     const wt = worktreePath(root, planId)
     if (String(plan.meta.status) !== 'in-progress' || !existsSync(wt)) {
+      // Row 239. The command a want names is an act's line.
       return refuse([v('plan', 'not-started', String(plan.meta.status),
-        `an in-progress plan with a worktree — run: witness start ${planId}`)])
+        `an in-progress plan with a worktree — run: ${cliAct('start', planId).line}`)])
     }
     const parent = findById(canon, String(plan.meta.parent))
     if (!parent) {

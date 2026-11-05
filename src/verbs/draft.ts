@@ -10,7 +10,8 @@ import { primaryRoot } from '../gitio.js'
 import { latestRecap } from '../journal.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
-import { kv } from '../toon.js'
+import { kv, shellWord } from '../toon.js'
+import { cliAct } from '../act.js'
 import { askRefusal, effortRefusal } from './recap.js'
 
 // Row 199. A grill's or design session's local draft, saved after every settled answer and read
@@ -35,7 +36,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (values.file === undefined) {
     if (!stored.ok) return refused(stored.violations)
     if (stored.value === undefined) {
-      if (k.kind !== 'amend') return refused([v('key', 'no-draft', keyName(k), `a saved draft — witness draft ${keyName(k)} --file <json>`)])
+      // Row 239. A shape: the key is quoted, and the file is the session's to write.
+      if (k.kind !== 'amend') return refused([v('key', 'no-draft', keyName(k), `a saved draft — witness draft ${shellWord(keyName(k))} --file <json>`)])
       // Builder's call 8: an amendment starts from the latest recap, every text exact, because a
       // decision's text is part of the pin of every plan that carries it.
       const r = latestRecap(root, k.effort)!
@@ -70,8 +72,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const kept = new Set(settledItems(k, draft))
     const lost = settledItems(k, stored.value.draft).filter((i) => !kept.has(i))
     if (lost.length) {
+      // Row 239. The read-back it names is an act's line.
       return refused([v('key', 'draft-moved', `${keyName(k)} would drop ${lost.join(' · ')}`,
-        `this draft holds answers another session saved — read it back (witness draft ${keyName(k)}) and continue from it`)])
+        `this draft holds answers another session saved — read it back (${cliAct('draft', keyName(k)).line}) and continue from it`)])
     }
   }
   saveDraft(root, k, draft, session)

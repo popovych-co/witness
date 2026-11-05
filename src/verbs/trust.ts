@@ -9,7 +9,7 @@ import { acquireLock } from '../lock.js'
 import { ok, renderRefusal, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
-import { hasControl, kv, rows, visible } from '../toon.js'
+import { hasControl, kv, rows, shellWord, visible } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]"
@@ -54,7 +54,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   if (values.yes === true && !ctx.isTTY) {
-    renderRefusal([v('--yes', 'yes-needs-terminal', 'no terminal', `name each command: witness trust ${id} --cmd '<cmd>'`)])
+    // Row 239. A shape: the target the human typed is quoted (a grant without one was refused
+    // above), and the command is theirs to name.
+    renderRefusal([v('--yes', 'yes-needs-terminal', 'no terminal', `name each command: witness trust ${shellWord(id!)} --cmd '<cmd>'`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }

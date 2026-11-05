@@ -1,3 +1,4 @@
+import { cliAct } from './act.js'
 import { EXIT, type Ctx } from './cli.js'
 import { autonomyAt, loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
@@ -216,10 +217,12 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   const entries = readStream(root, planId)
   const wt = worktreePath(root, planId)
   const shipBranch = cfg.ship.branch
+  // Row 239. The command every held line names is an act's line.
+  const shipCmd = cliAct('ship', planId).line
   // `baseMoved` reads a failed fetch as "not moved" so routing degrades offline; here that
   // would merge onto a base nobody could check (F9), so an unreachable remote holds instead.
   if (!tryGit(wt, 'fetch', 'origin', shipBranch).ok) {
-    ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
+    ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · ${shipCmd} retries once the remote answers`))
     return EXIT.FINDINGS
   }
   // The merge is the one irreversible outward act, so its authority comes from the branch it
@@ -231,7 +234,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   let prBase: string | undefined
   try { prBase = view.ok ? (JSON.parse(view.out) as { baseRefName?: string }).baseRefName : undefined } catch { prBase = undefined }
   if (prBase === undefined) {
-    ctx.out(kv('merge', `held — the PR's base branch cannot be read · witness ship ${planId} retries`))
+    ctx.out(kv('merge', `held — the PR's base branch cannot be read · ${shipCmd} retries`))
     return EXIT.FINDINGS
   }
   if (prBase !== shipBranch) {
@@ -242,7 +245,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   // `origin/<base>` is a local ref that `update-ref` or a rewritten fetch refspec can forge.
   // Residual, recorded: an agent with this shell can still rewrite the remote's URL itself.
   if (!tryGit(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`).ok) {
-    ctx.out(kv('merge', `held — cannot verify ${prBase} (the fetch failed) · witness ship ${planId} retries once the remote answers`))
+    ctx.out(kv('merge', `held — cannot verify ${prBase} (the fetch failed) · ${shipCmd} retries once the remote answers`))
     return EXIT.FINDINGS
   }
   if (!autonomyAt(root, 'refs/witness/ship-authority')) {
@@ -257,7 +260,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     : !headNow.ok || (pushed !== undefined && headNow.out.trim() !== pushed) ? 'HEAD moved since the push'
     : undefined
   if (lapsed !== undefined) {
-    ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · witness ship ${planId} re-gates`))
+    ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · ${shipCmd} re-gates`))
     return EXIT.FINDINGS
   }
   // The local checks above prove the WORKTREE is what was judged; `gh pr merge` merges the
@@ -412,7 +415,8 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
     // that has already declined. The owed work is the edit the revise asked for.
     if (authoringOwed(entries, 'ship', reviewedSha)) {
       ctx.out(kv('ship', `${planId} — revise owed`))
-      ctx.out(`help: edit the code in ${wt} · then re-run witness ship ${planId}`)
+      // Row 239. The re-run it names is an act's line.
+      ctx.out(`help: edit the code in ${wt} · then re-run ${cliAct('ship', planId).line}`)
       return EXIT.FINDINGS
     }
     // Rebase BEFORE the battery, never after: the reviewers must judge the tree that will

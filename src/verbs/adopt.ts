@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { cliAct } from '../act.js'
 import { adoptedCommitsFor, lastWitnessed, positionOf, untrailedCommitsFor } from '../adopt.js'
 import { EXIT, type Ctx } from '../cli.js'
 import { canonPaths } from '../config.js'
@@ -109,7 +110,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   ctx.out(kv('adopt', `${id} · ${short(currentSha)} · ${commits.length} commit(s) absolved${unreviewed ? ' · unreviewed-amendment' : ''}`))
   const held = reverify ? reverify.criteria.filter((c) => c.held !== undefined).length : 0
   if (reverify) ctx.out(kv('reverify', reverify.ok ? `lane green${held > 0 ? ` · ${held} held` : ''} — stays live` : 'lane RED — drift stamped immediately (hand-edit, no debounce)'))
-  ctx.out('help: history: witness log ' + id)
+  // Row 239. The log the help names is an act's line.
+  ctx.out(`help: history: ${cliAct('log', id).line}`)
   return reverify && !reverify.ok ? EXIT.FINDINGS : EXIT.OK
 }
 

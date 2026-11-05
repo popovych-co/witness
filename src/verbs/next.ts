@@ -393,7 +393,8 @@ export function principlesApproval(
     const step = decomposeStep(root, canon, e, judge)
     return { action: { ...step, note: [amended, step.note].filter(Boolean).join(' · ') }, remedy: `${amended} — run: ${step.line}` }
   }
-  const note = `principles.md is draft and ${owner}'s decompose is not owed now — witness log ${owner} shows where its gate stands`
+  // Row 239. The log the note names is an act's line.
+  const note = `principles.md is draft and ${owner}'s decompose is not owed now — ${cliAct('log', owner).line} shows where its gate stands`
   return { action: { ...runs(cliAct('check')), note }, remedy: note }
 }
 
@@ -1196,7 +1197,8 @@ export function resolveFlow(canon: Canon, id: string): Result<CanonDoc> {
   // `approved`, this refuses when it is not `in-progress` — an approved-but-unstarted
   // plan is not yet a flow, and reusing the name would misreport that case.
   if (status !== 'in-progress') {
-    return refuse([v('--flow', 'not-started', status, `a started plan — run witness start ${id} first`)])
+    // Row 239. The start the want names is an act's line.
+    return refuse([v('--flow', 'not-started', status, `a started plan — run ${cliAct('start', id).line} first`)])
   }
   return ok(doc)
 }

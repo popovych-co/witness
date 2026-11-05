@@ -17,9 +17,10 @@ import { baseForSpec, contentAtSha } from '../history.js'
 import { findById, findCycle, loadCanon, planFinished, plansOn, type Canon, type CanonDoc } from '../scan.js'
 import { canonicalJson, canonicalSha, short } from '../sha.js'
 import { carriedDecisions, decisionsSha, type RecapDecision } from '../decisions.js'
-import { kv } from '../toon.js'
+import { cmd, kv, shellWord } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { validateDoc } from '../schemas.js'
+import { cliAct } from '../act.js'
 
 export interface Manifest {
   type?: unknown
@@ -297,7 +298,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('path', rel))
     ctx.out(kv('sha', short(sha)))
     ctx.out(kv('status', String(built.meta.status)))
-    ctx.out('next: witness check · witness index')
+    // Row 239 (ruling R10). A `next:` line is one command, printed from its act: the index is a
+    // pointer, on its own line.
+    ctx.out(cmd('next', cliAct('check').line))
+    ctx.out('help: witness index')
     return EXIT.OK
   } finally {
     lock.value()
@@ -342,7 +346,8 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   const computed = canonicalSha(parent.meta, parent.body)
   const supplied = manifest['derives-from']
   if (typeof supplied === 'string' && supplied !== computed) {
-    violations.push(v('derives-from', 'stale-derivation', short(supplied), `current parent content is ${short(computed)} — re-derive from witness diff ${parentId}`))
+    // Row 239. The diff the want names is an act's line.
+    violations.push(v('derives-from', 'stale-derivation', short(supplied), `current parent content is ${short(computed)} — re-derive from ${cliAct('diff', parentId).line}`))
   }
   // Row 198. The decisions the parent carries pin beside its content, absent when it carries
   // none, so a decision-free plan keeps today's bytes (c2). A chore's own decisions never pin
@@ -365,8 +370,9 @@ function buildPlanMeta(root: string, id: string, manifest: Manifest, recap: Reca
   if (parentUi) {
     const stamp = designStamp(parent)
     if (!stamp || designPending(root, parent)) {
+      // Row 239. A shape: the parent is quoted in both commands, and the file is the session's.
       violations.push(v('design-from', 'design-not-approved', String(parentId),
-        `an approved, current design — run: witness design ${parentId} --file <html> && witness gate design ${parentId}`))
+        `an approved, current design — run: witness design ${shellWord(parentId)} --file <html> && witness gate design ${shellWord(parentId)}`))
     } else if (suppliedDesignFrom !== stamp.sha) {
       violations.push(v('design-from', 'stale-design', short(String(suppliedDesignFrom ?? 'absent')),
         `the parent's current design sha ${short(stamp.sha)} — pin it in the manifest`))
