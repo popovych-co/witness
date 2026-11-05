@@ -135,4 +135,18 @@ describe('what needs you is a model (rows 139/203)', () => {
     expect(talk.notice).toBeUndefined()
     expect(items.find((i) => i.kind === 'merge')).toMatchObject({ target: 'auth-refresh-plan-4', pr: '9' })
   })
+
+  // Row 239 (design §3.4b). Pasted whole, a menu is a pipeline that runs every act it names: at the
+  // bound a park's reopen prints as `exits:`, and `run:` is kept for its one command below it.
+  it('a parked menu prints as exits:, a single reopen as run: (row 239)', async () => {
+    const { repo, asides } = await needsYouRepo()
+    const items = needsYou(repo.root, { env: {} }, cfgOf(repo.root), loadCanon(repo.root), asides)
+    const rowsOf = (target: string) => needYouRows(items.find((i) => i.kind === 'parked' && i.target === target)!)
+    const atBound = rowsOf('auth-refresh-plan-3')
+    expect(atBound).toHaveLength(2)
+    expect(atBound[1]).toMatch(/^ {2}exits: witness decide plan /)
+    const below = rowsOf('auth-refresh-plan-2')
+    expect(below).toHaveLength(2)
+    expect(below[1]).toMatch(/^ {2}run: witness gate plan /)
+  })
 })

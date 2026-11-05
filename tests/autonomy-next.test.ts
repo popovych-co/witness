@@ -75,5 +75,5 @@ it('start names an unmet plan need as a kept stop', async () => {
   const r = await repo.cli(['start', PLAN], { env: gateEnv(fakeScenario()) })
   expect(r.code).toBe(2)
   expect(r.stderr).toContain('needs-unmet')
-  expect(r.stdout).toContain(`kept-stop: unmet need — ses-prod · witness satisfy ${PLAN} --need 1`)
+  expect(r.stdout).toContain(`kept-stop: unmet need — ses-prod\n  run: witness satisfy ${PLAN} --need 1`)
 })

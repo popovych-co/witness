@@ -1,5 +1,5 @@
 import { cliAct, type Act } from './act.js'
-import { grantOf, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
+import { grantRows, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
 import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
@@ -106,11 +106,12 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
 
   if (policy.kind === 'human') {
     // Row 194: the gate ran only on a look the human opened, so approving is their one act.
-    // Row 205 (final review): a trust grant is one line per command — escaped, with its source and
-    // the grant that names it — as `next`'s pre-flight prints it, so the chat shows the source.
+    // Row 205 (final review): a trust grant is one kept stop per command — escaped, with its source
+    // and the grant that names it — as `next`'s pre-flight prints it, so the chat shows the source.
+    // Row 239 (B12): the grant on a `run:` row of its own under the command, which is the repo's text.
     const line = policy.stop === 'design-look'
       ? keptStopLine(policy.stop, `the human approves the screen or sends a note — ${cliAct('decide', 'design', target, '--show').line}`)
-      : sourced(cfg, canon, target, untrusted).map((c) => keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(target, c)}`)).join('\n')
+      : sourced(cfg, canon, target, untrusted).flatMap((c) => [keptStopLine('trust-grant', shownCmd(c)), ...grantRows(target, c)]).join('\n')
     renderDecision(block).forEach((l) => ctx.out(l))
     ctx.out(line)
     return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }

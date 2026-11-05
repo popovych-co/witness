@@ -24,7 +24,7 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { liveDrive } from '../live.js'
-import { HELD_KINDS, needsYou, needsYouToken, needYouRows } from '../needs-you.js'
+import { HELD_KINDS, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -34,7 +34,7 @@ import { renderDecision, type Decision } from '../recommend.js'
 import { cliAct, type Act } from '../act.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
-import { grantOf, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
+import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
@@ -1301,18 +1301,19 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // reason as the lines above.
   if (chat) needNotices(canon).forEach((l) => ctx.out(l))
   // Final review. What waits on the human that no `next:` routes — a target drive set aside as
-  // stuck or capped, a merge, a parked gate — is said here, once per line with its command, so a
-  // chat that starts beside a paused drive sees it rather than folding it into its wait token.
+  // stuck or capped, a merge, a parked gate — is said here, each with its command, so a chat that
+  // starts beside a paused drive sees it rather than folding it into its wait token. Row 239 (design
+  // §3.4): its head on a `waiting:` line, and each command on an indented row of its own under it.
   const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
-  for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) {
-    const [head, ...more] = needYouRows(i)
-    ctx.out(cmd('waiting', [head!.replace(/^wait: /, ''), ...more.map((r) => r.trim())].join(' · ')))
-  }
-  // Row 205. Under autonomy each untrusted command is a kept stop, one raw line each (D120),
-  // with the grant that names it — paste-ready whatever quotes the command carries.
+  for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) waitingRows(i).forEach((l) => ctx.out(l))
+  // Row 205. Under autonomy each untrusted command is a kept stop, raw (D120), with the grant that
+  // names it — paste-ready whatever quotes the command carries. Row 239 (B12): the command and its
+  // source on the kept stop's line, and the grant on a `run:` row of its own under it, since a
+  // repo command that spells ` · witness trust …` would otherwise plant a grant ahead of the real one.
   if (cfgR.value.autonomy && action.trust !== undefined && action.target !== undefined) {
     for (const c of action.trust) {
-      ctx.out(keptStopLine('trust-grant', `${shownCmd(c)} · ${grantOf(action.target, c)}`))
+      ctx.out(keptStopLine('trust-grant', shownCmd(c)))
+      grantRows(action.target, c).forEach((l) => ctx.out(l))
     }
   }
   reportOpening(ctx, root, cfgR.value)

@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { commandsRun, grantCommands, pendingCmds, trustListing, unsafeLeft } from '../allowlist.js'
+import { commandsRun, grantCommands, pendingCmds, pendingRows, trustListing, unsafeLeft } from '../allowlist.js'
 import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -9,7 +9,7 @@ import { acquireLock } from '../lock.js'
 import { ok, renderRefusal, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
-import { cmd as cmdLine, hasControl, kv, rows, visible } from '../toon.js'
+import { hasControl, kv, rows, visible } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 
 const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]"
@@ -129,9 +129,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (grant.length === 0) {
     if (named.length > 0) { ctx.out(kv('trust', `already trusted: ${named.join(' · ')}`)); return EXIT.OK }
     // Listing is the honest answer for a caller that granted nothing: exiting 0 would say the
-    // opposite. Each line pastes as one argument, whatever quotes the command carries.
+    // opposite. Each line pastes as one argument, whatever quotes the command carries. Row 239: a
+    // grant Windows withholds is a note naming why, never a line to paste; it stays pending, so
+    // this listing run at a terminal asks for it.
     ctx.out(kv('trust', `${listing.untrusted} untrusted — the human names each to trust it`))
-    for (const a of listing.pending) ctx.out(cmdLine('run', a.line))
+    pendingRows(listing).forEach((l) => ctx.out(l))
     return EXIT.FINDINGS
   }
 

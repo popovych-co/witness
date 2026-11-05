@@ -93,7 +93,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       parked:auth-refresh-plan-3:plan
       parked: auth-refresh-plan-3 · plan round 3 — parked at auth-refresh-plan-3 > ## Steps
-        run: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
+        exits: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
 
       stuck:x-plan-1
       stuck: x-plan-1 — no progress on witness ship x-plan-1

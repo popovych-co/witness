@@ -991,7 +991,7 @@ describe('autonomy in the loop (B2)', () => {
     const out: string[] = []
     const code = await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('exit 9') }, out), {})
     expect(out).toContain('drive: waits on you — auth-refresh-plan-1 · unmet need')
-    expect(out).toContain('kept-stop: unmet need — SES production access · witness satisfy auth-refresh-plan-1 --need ses-prod')
+    expect(out).toContain('kept-stop: unmet need — SES production access\n  run: witness satisfy auth-refresh-plan-1 --need ses-prod')
     expect(out.join('\n')).not.toMatch(/\[\d+ /)
     expect(code).toBe(0)
   }, 60000)

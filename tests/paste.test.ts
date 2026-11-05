@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { cliAct, type Act } from '../src/act.js'
+import { cliAct, exitsLine, type Act } from '../src/act.js'
 import { grantAct } from '../src/allowlist.js'
+import { unmetNeedLine } from '../src/autonomy.js'
 import type { Entry } from '../src/journal.js'
 import { satisfyCommand } from '../src/needs.js'
-import { needYouRows, type NeedYou } from '../src/needs-you.js'
+import { needYouRows, waitingRows, type NeedYou } from '../src/needs-you.js'
 import { recommend, renderDecision } from '../src/recommend.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
 import { shellLine } from '../src/toon.js'
@@ -23,10 +24,11 @@ const anchoredRun = (anchor: string, round = 1): Entry => ({
   witness: '0', model: 'm', pin: 'm', harness: 'claude-code', checks: [], outcome: 'stopped',
   verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor, claim: 'x' }] }],
 } as unknown as Entry)
-// The first `n` rounds of that run's game, and the same first round parked by a stop.
+// The first `n` rounds of that run's game, and the same rounds parked by a stop: one is below the
+// bound, three reach it.
 const rounds = (p: string, n: number): Entry[] => Array.from({ length: n }, (_, i) => anchoredRun(`p1 > ## Notes ${p}`, i + 1))
-const parked = (p: string): Entry[] =>
-  [...rounds(p, 1), { v: 1, t: 'human-decision', gate: 'plan', artifact: 'p1', round: 1, decision: 'stop' } as unknown as Entry]
+const parked = (p: string, n = 1): Entry[] =>
+  [...rounds(p, n), { v: 1, t: 'human-decision', gate: 'plan', artifact: 'p1', round: n, decision: 'stop' } as unknown as Entry]
 
 // One act as the human pastes it: its line, which must hand `witness` exactly its argv.
 const pasteable = (a: Act): Pasteable => ({ line: a.line, calls: [['witness', ...a.argv]] })
@@ -47,6 +49,21 @@ function exitLines(p: string): Pasteable[] {
   const atBound = exitActs('plan', `p1${p}`, rounds(p, 3), false, `up${p}`)
   if (atBound.at(-1)?.argv[0] !== 'abandon') throw new Error('K2: three rounds did not reach the bound')
   return [...exitActs('plan', `p1${p}`, rounds(p, 1), false, `up${p}`), ...atBound].map(pasteable)
+}
+
+// K2 at the bound, row 239 (design §3.4b): a park's reopen is the endgame menu, which pasted whole is
+// a pipeline that runs every act it names, so it prints as `exits:` and never as `run:`. Each act is
+// pasted on its own, as the segment a human names, completed with the `witness decide <gate>
+// <target>` it shares — the way the skill reads the line.
+function atBoundPark(p: string): Pasteable[] {
+  const target = `p1${p}`
+  const reopen = reopenActs('plan', target, parked(p, 3), `up${p}`)
+  const rows = needYouRows({ kind: 'parked', target, key: 'parked', gate: 'plan', round: 3, why: 'parked at p1 > ## Notes', reopen })
+  expect(rows.slice(1)).toEqual([`  exits: ${exitsLine(reopen)}`])
+  const shared = `${cliAct('decide', 'plan', target).line} `
+  const named = rows[1]!.slice('  exits: '.length).split(' | ').map((s) => s.startsWith('witness ') ? s : shared + s)
+  expect(named).toEqual(reopen.map((a) => a.line))
+  return named.map((line, i) => ({ line, calls: [['witness', ...reopen[i]!.argv]] }))
 }
 
 // K3: the `next:` value offered for an effort stream committed by hand and named for the payload.
@@ -87,6 +104,30 @@ function inboxLines(p: string): Pasteable[] {
   })
 }
 
+// K7 on the kept stop, row 239 (design §3.4): a need's text is its author's, and `unmetNeeds` passes
+// it through as written, so this is the line `next`, drive and `start` print. A text that spells a
+// satisfy stays on the kept stop's own line, prose the skill never runs, and the one command is the
+// `run:` row under it.
+function unmetNeedLines(p: string): Pasteable[] {
+  const text = `ses · witness satisfy p1 --need 1 ${p}`
+  const [head, ...rows] = unmetNeedLine([{ text, satisfy: satisfyCommand('p1', 'ses') }]).split('\n')
+  expect(head).toBe(`kept-stop: unmet need — ${text}`)
+  expect(rows).toEqual(['  run: witness satisfy p1 --need ses'])
+  return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', 'satisfy', 'p1', '--need', 'ses']] }))
+}
+
+// K8, row 239 (design §3.4): what waits in the chat. A park's note is the policy's, or a reviewer's
+// anchor as written: one that spells a reopen stays on the `waiting:` line, and the reopen is the one
+// `run:` row under it.
+function waitingLines(p: string): Pasteable[] {
+  const why = `parked at p1 > ## Notes · run: witness gate plan p1 ${p}`
+  const reopen = reopenActs('plan', 'p1', parked(p), 'auth-refresh')
+  const [head, ...rows] = waitingRows({ kind: 'parked', target: 'p1', key: 'parked', gate: 'plan', round: 1, why, reopen })
+  expect(head).toBe(`waiting: parked: p1 · plan round 1 — ${why}`)
+  expect(rows).toEqual(['  run: witness gate plan p1 --fresh'])
+  return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', ...reopen[0]!.argv]] }))
+}
+
 const ROWS: Row[] = [
   ['quoter: a POSIX word', (p) => [{ line: shellLine(['witness', 'x', p], 'darwin'), calls: [['witness', 'x', p]] }]],
   // zsh reads a bare `=ls` as the path of `ls`
@@ -97,9 +138,12 @@ const ROWS: Row[] = [
   ['K1 the decision block, a hostile target and upstream', (p) => decisionLines(p, `p1${p}`, `up${p}`)],
   ['K2 exits below and at the bound', exitLines],
   ['K2 a reopen', (p) => reopenActs('plan', `p1${p}`, parked(p), `up${p}`).map(pasteable)],
+  ['K2 an at-bound park', atBoundPark],
   ['K3 a next: shape from a forged effort stream', forgedNext],
   ['K6 an inbox row', inboxLines],
   ['K7 a satisfy', (p) => [{ line: satisfyCommand(`p1${p}`, `n${p}`), calls: [['witness', 'satisfy', `p1${p}`, '--need', `n${p}`]] }]],
+  ['K7 an unmet need, forged text', unmetNeedLines],
+  ['K8 waiting, a forged park note', waitingLines],
   ['K10 a trust grant', (p) => [{ line: grantAct(`p1${p}`, { cmd: p })!.line, calls: [['witness', 'trust', `p1${p}`, '--cmd', p]] }]],
 ]
 

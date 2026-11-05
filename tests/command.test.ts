@@ -118,6 +118,28 @@ describe('the chat keeps only the human\'s items (row 195)', () => {
   })
 })
 
+// Row 239 (design §3.4, §3.4b). A kept stop's and a waiting line's commands print on indented `run:`
+// rows of their own, a menu as `exits:`, so the rows that read them name those lines, and the
+// handoff `run:` is the unindented one.
+describe('a command is a line of its own (row 239)', () => {
+  const row = (start: string) => body().split('\n').find((l) => l.startsWith(start))!
+  it('a kept stop\'s and a waiting line\'s commands are their run: lines (row 239)', () => {
+    const trust = row('| `kept-stop: trust grant`')
+    expect(trust).toContain('the `run:` line printed under')
+    expect(trust).toContain('not offered on Windows')
+    expect(row('| `kept-stop: unmet need`')).toContain('the `run:` line printed under it')
+    expect(row('| `waiting:` lines')).toContain('`exits:`')
+    expect(row('| an unindented `run:` line is printed')).toContain('unindented')
+    expect(row('2. Read its TOON lines')).toContain('unindented')
+  })
+  // Ruling R13: `--via` is decide's selection record, and another verb refuses it.
+  it('a nod appends --via affirmation to a witness decide option only (row 239)', () => {
+    const nod = row('- After a `decide` line surfaced')
+    expect(nod).toContain('`--via affirmation` appended when it is a `witness decide` option')
+    expect(nod).toContain('`witness recover --complete`) runs as printed')
+  })
+})
+
 // Row 204. The chat sleeps until something needs the human and is woken, in one session.
 describe('the chat waits (row 204)', () => {
   it('launch: and watch: wait by wait-mode instead of ending the chat for good', () => {

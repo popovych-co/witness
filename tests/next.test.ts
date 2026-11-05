@@ -547,7 +547,7 @@ describe('next — a plan that waits on a need (A10)', () => {
     expect(start.stderr).not.toContain('run: witness satisfy')
     autonomyOn(repo)
     expect((await repo.cli(['start', 'auth-refresh-plan-1'])).stdout)
-      .toContain('kept-stop: unmet need — a test device on the desk · witness satisfy auth-refresh-plan-1 --need device')
+      .toContain('kept-stop: unmet need — a test device on the desk\n  run: witness satisfy auth-refresh-plan-1 --need device')
   })
 })
 

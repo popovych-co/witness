@@ -2,10 +2,13 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
+import { gateRunLines, gateRunView } from '../src/gate-run-view.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
+import { heldSatisfy, type HeldRow } from '../src/needs.js'
 import type { GateRunEntry } from '../src/rounds.js'
-import { runShip } from '../src/ship.js'
+import type { CanonDoc } from '../src/scan.js'
+import { prBody, runShip } from '../src/ship.js'
 import { addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
 
 const HELD_META = (cmd = 'false') => ({
@@ -24,7 +27,7 @@ async function heldFlow(cmd?: string) {
 }
 const runs = (repo: TestRepo, id: string) => readStream(repo.root, id).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
 const laneOf = (run: GateRunEntry) => run.checks.find((c) => c.name === 'drift-lane')!
-const ROW = { criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' }
+const ROW = { criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy auth-refresh --need prod', spec: 'auth-refresh' }
 
 describe('held criteria at the gates (A10)', () => {
   it('the implement gate passes a held criterion and names it on every surface', async () => {
@@ -61,6 +64,47 @@ describe('held criteria at the gates (A10)', () => {
     const calls = readFileSync(join(scenario, 'gh-calls'), 'utf8')
     expect(calls).toContain('Held — not verified while a need is unmet:')
     expect(calls).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
+  })
+})
+
+// Row 239 (B13, Review Focus 4). A journal is text anyone with the repo can edit, so a held row's
+// command is rebuilt from the ids it journals (0.28.3 on), and a row journaled before them (0.28.2)
+// prints its stored command only in the one shape witness wrote. Any other row prints none, on the
+// gate's screen and in the PR body alike.
+describe('a held row prints only a command witness built (row 239)', () => {
+  const SATISFY = 'witness satisfy auth-refresh --need prod'
+  const ROWS: Array<[row: HeldRow, satisfy: string | undefined]> = [
+    [{ criterion: 'ac-prod', need: 'prod', spec: 'auth-refresh', satisfy: 'x' }, SATISFY],
+    [{ criterion: 'ac-prod', need: 'prod', satisfy: SATISFY }, SATISFY],
+    [{ criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy x --need y; touch M1' }, undefined],
+    // a row that journals ids is rebuilt or prints none: it never falls back to its stored string
+    [{ criterion: 'ac-prod', need: 'prod; touch M1', spec: 'auth-refresh', satisfy: SATISFY }, undefined],
+  ]
+  const entry = (row: HeldRow): GateRunEntry => ({
+    v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1, run_id: 'r1', reviewed_sha: 'c0ffee1',
+    prompts_sha: 'p', witness: '0', model: 'm', outcome: 'passed',
+    checks: [{ name: 'drift-lane', ok: true, detail: 'ac-rotate:ok · ac-prod:held by prod', held: [row] }],
+  })
+  const PLAN: CanonDoc = {
+    rel: 'plans/auth-refresh-plan-1.md', body: '', violations: [], satisfiedNeeds: [],
+    meta: { id: 'auth-refresh-plan-1', parent: 'auth-refresh', 'derives-from': 'c0ffee1234' },
+  }
+
+  it('a journaled satisfy is rebuilt from its fields, and a forged one prints none (Review Focus 4)', () => {
+    expect(ROWS.map(([row]) => gateRunLines(gateRunView(entry(row), 'ran')).filter((l) => l.startsWith('held: ')))).toEqual([
+      ['held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod'],
+      ['held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod'],
+      ['held: ac-prod — prod unmet'],
+      ['held: ac-prod — prod; touch M1 unmet'],
+    ])
+    expect(ROWS.map(([row]) => heldSatisfy(row))).toEqual(ROWS.map(([, satisfy]) => satisfy))
+    expect(prBody(PLAN, ROWS.map(([row]) => row)).split('\n')).toEqual([
+      'Realizes spec auth-refresh at c0ffee1 (witness).', '', 'Held — not verified while a need is unmet:',
+      '- ac-prod: prod unmet — witness satisfy auth-refresh --need prod',
+      '- ac-prod: prod unmet — witness satisfy auth-refresh --need prod',
+      '- ac-prod: prod unmet',
+      '- ac-prod: prod; touch M1 unmet',
+    ])
   })
 })
 

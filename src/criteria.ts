@@ -152,9 +152,10 @@ export function laneCheck(lane: Result<CriteriaResult>): GateCheck {
     : []
   // Row 179: a lane that passed with held criteria says so in its own record, so no reader
   // of the gate-run can take the green for a verification of what was not run.
+  // Row 239 (B13): with the spec, so a surface rebuilds the command from the ids (`heldSatisfy`).
   const held: HeldRow[] = lane.ok
     ? lane.value.criteria.flatMap((c) => (c.held ?? []).map((need) =>
-        ({ criterion: c.id, need, satisfy: satisfyCommand(lane.value.spec, need) })))
+        ({ criterion: c.id, need, satisfy: satisfyCommand(lane.value.spec, need), spec: lane.value.spec })))
     : []
   return {
     name: 'drift-lane',

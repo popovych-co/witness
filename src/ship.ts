@@ -5,7 +5,7 @@ import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
 import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
-import { liftedHolds, type HeldRow } from './needs.js'
+import { heldSatisfy, liftedHolds, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { cmd, kv } from './toon.js'
@@ -78,12 +78,15 @@ export function existingPr(ctx: Ctx, root: string, branch: string): number | und
 }
 
 // Row 179. A PR shipped while a need held criteria says what was not verified, so the human
-// reading the PR is not told the spec was proven where it was not.
-function prBody(plan: CanonDoc, held: HeldRow[]): string {
+// reading the PR is not told the spec was proven where it was not. Row 239 (B13): a PR is a surface
+// too, so each row's command is the one `heldSatisfy` rebuilds from the journaled row, or none.
+export function prBody(plan: CanonDoc, held: HeldRow[]): string {
   const head = `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`
   if (held.length === 0) return head
-  return [head, '', 'Held — not verified while a need is unmet:',
-    ...held.map((h) => `- ${h.criterion}: ${h.need} unmet — ${h.satisfy}`)].join('\n')
+  return [head, '', 'Held — not verified while a need is unmet:', ...held.map((h) => {
+    const satisfy = heldSatisfy(h)
+    return `- ${h.criterion}: ${h.need} unmet${satisfy ? ` — ${satisfy}` : ''}`
+  })].join('\n')
 }
 
 export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string, held: HeldRow[] = []): Result<number> {

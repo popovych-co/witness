@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
-import { autonomyLines, keptStopLine, policyFor } from '../src/autonomy.js'
+import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../src/autonomy.js'
 import type { Entry } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
 import { lastGateRun, type GateRunEntry } from '../src/rounds.js'
@@ -25,6 +25,12 @@ it('renders the setting and the kept-stop set', () => {
   expect(autonomyLines({ autonomy: false })).toEqual([])
   expect(autonomyLines({ autonomy: true })).toEqual(LINES)
   expect(keptStopLine('trust-grant', 'node "x" run · y')).toBe('kept-stop: trust grant — node "x" run · y')
+})
+// Row 239 (design §3.4). A need's text is its author's: it stays on the kept stop's line, and each
+// command prints on its own `run:` row under it, so a text that spells a command plants none.
+it('an unmet need prints its commands on their own lines (row 239)', () => {
+  expect(unmetNeedLine([{ text: 'a', satisfy: 'witness satisfy p1 --need 1' }, { text: 'b', satisfy: 'witness satisfy p1 --need x' }]))
+    .toBe('kept-stop: unmet need — a · b\n  run: witness satisfy p1 --need 1\n  run: witness satisfy p1 --need x')
 })
 it('next prints it first, above the routing block', async () => {
   const repo = await seededRepo(); autonomyOn(repo)

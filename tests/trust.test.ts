@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
-import { ensureTrusted, grantCommands, grantOf, sourced, trustListing, UNGRANTABLE } from '../src/allowlist.js'
+import { ensureTrusted, grantCommands, grantOf, grantRows, pendingCmds, pendingRows, sourced, trustListing, UNGRANTABLE } from '../src/allowlist.js'
 import { decideView } from '../src/decide-view.js'
 import { readStream } from '../src/journal.js'
 import { needsYou } from '../src/needs-you.js'
@@ -601,5 +601,31 @@ describe('a grant Windows withholds names the listing instead (row 239)', () => 
     expect(grantOf('p1', { cmd: 'npm test && npm run lint' }, 'darwin')).toBe("witness trust p1 --cmd 'npm test && npm run lint'")
     expect(grantOf('p1', { cmd: 'npm test && npm run lint' }, 'win32')).toBe('not offered on Windows — it holds &, which ' +
       'cmd.exe or Windows PowerShell can read as more than text · at a terminal, witness trust p1 asks for each command')
+  })
+
+  // Row 239 (B12). A kept stop names the repo's command on its own line, so the grant prints on a
+  // row of its own under it, never after text the repo wrote.
+  it('a grant prints on its own line; on Windows a risky one is withheld for the listing (row 239)', () => {
+    expect(grantRows('p1', { cmd: 'npm test' }, 'darwin')).toEqual(["  run: witness trust p1 --cmd 'npm test'"])
+    expect(grantRows('p1', { cmd: 'bad\u001bcmd' })).toEqual(['  note: never granted here — rewrite it in printable ASCII where it is written'])
+    expect(grantRows('p1', { cmd: 'npm test && npm run lint' }, 'win32')).toEqual([
+      '  note: not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text',
+      '  run: witness trust p1',
+    ])
+  })
+
+  // The listing the withheld grant names grants nothing by itself: the command must still be
+  // pending, or the terminal's per-command prompt would never ask for it.
+  it('a withheld command stays pending, so the terminal prompt still asks for it (Review Focus 1)', async () => {
+    const repo = await planWithCmdCriterion('npm test && npm run lint')
+    const r = trustListing(repo.root, cfgOf(repo.root), loadCanon(repo.root), 'ingest-plan-1', 'win32')
+    if (!r.ok) throw new Error('listing')
+    expect(pendingCmds(r.value)).toContain('npm test && npm run lint')
+    expect(pendingRows(r.value, 'win32')).toEqual([
+      'note: npm test && npm run lint — not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read ' +
+        'as more than text · at a terminal, witness trust ingest-plan-1 asks for each command',
+      "run: witness trust ingest-plan-1 --cmd 'pnpm lint'",
+      "run: witness trust ingest-plan-1 --cmd 'echo first'",
+    ])
   })
 })

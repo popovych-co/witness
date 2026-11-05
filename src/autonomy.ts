@@ -34,9 +34,12 @@ export function keptStopLine(stop: KeptStop, detail: string): string {
 }
 
 // Row 179's kept stop for one plan's start: what is missing, then how to satisfy it. Drive's
-// set-aside and the chat's notice (row 195) print this one line.
+// set-aside and the chat's notice (row 195) print it. Row 239 (design §3.4): a need's text is its
+// author's, so it stays on the kept stop's own line, prose a skill never runs, and each satisfy
+// prints on a `run:` row of its own under it. Joined to the prose, a text that spells a command
+// would plant it ahead of the real one.
 export function unmetNeedLine(needs: ReadonlyArray<{ text: string; satisfy: string }>): string {
-  return keptStopLine('unmet-need', [...needs.map((u) => u.text), ...needs.map((u) => u.satisfy)].join(' · '))
+  return [keptStopLine('unmet-need', needs.map((u) => u.text).join(' · ')), ...needs.map((u) => `  run: ${u.satisfy}`)].join('\n')
 }
 
 // Row 171. What the policy does with a stop: take an act (a `witness decide` the CLI

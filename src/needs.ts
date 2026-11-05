@@ -1,6 +1,7 @@
 import { cliAct } from './act.js'
 import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
+import { ID_RE } from './dsl.js'
 import type { GateCheck } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { execSync } from './spawn.js'
@@ -87,8 +88,22 @@ export function heldCriteria(doc: CanonDoc): Map<string, string[]> {
 
 // Row 179. One row per (criterion · unmet need holding it): what a gate's lane check, its
 // `held:` lines and a PR body name as not verified. Built by `laneCheck` from the lane's own
-// outcome, so the record and every surface read one derivation.
-export interface HeldRow { criterion: string; need: string; satisfy: string }
+// outcome, so the record and every surface read one derivation. Row 239 (the plan's B13): `spec`
+// is the spec the need is on, journaled from 0.28.3 on, so a surface rebuilds the command from the
+// row's ids (`heldSatisfy`). A row journaled before has none.
+export interface HeldRow { criterion: string; need: string; satisfy: string; spec?: string }
+
+// Row 239 (the plan's B13). A journaled row's command, as a surface prints it. The journal is text
+// anyone with the repo can edit, so its `satisfy` string is never trusted to hold a safe line: a row
+// that journals its ids is rebuilt from them, and one journaled before them (0.28.2) prints its
+// stored string only in the one shape `satisfyCommand` wrote there. Any other row prints none.
+const STORED_SATISFY = /^witness satisfy [a-z0-9][a-z0-9-]* --need [a-z0-9][a-z0-9-]*$/
+export function heldSatisfy(h: HeldRow): string | undefined {
+  if (h.spec !== undefined) {
+    return ID_RE.test(h.spec) && ID_RE.test(h.need) ? cliAct('satisfy', h.spec, '--need', h.need).line : undefined
+  }
+  return STORED_SATISFY.test(h.satisfy) ? h.satisfy : undefined
+}
 
 // Row 179. The one listing of what waits on a human's assertion about the world: `status`,
 // `next`, `start` and drive's run report all read it. A plan need blocks its plan's start; a

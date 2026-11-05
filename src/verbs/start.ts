@@ -114,11 +114,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const row = v('needs', 'needs-unmet', unmet.map((n) => n.label).join(' · '), want)
     renderRefusal([unmet.some((n) => n.kind === 'manual') ? humanCall(row) : row]).forEach((l) => ctx.err(l))
     // Row 171. Under autonomy an unmet plan need is a kept stop: only this plan waits, and
-    // the line names the act that unblocks it.
+    // the line names the act that unblocks it. Row 239 (B12): in `unmetNeedLine`'s shape — a need's
+    // label is the doc's text, so the labels stay on the kept stop's line and each satisfy prints
+    // on a `run:` row of its own under it.
     if (cfgR.value.autonomy) {
       const p = policyFor({ at: 'start', target: planId, unmet: unmet.map((n) => n.label) })
       if (p.kind === 'human') {
-        ctx.out(keptStopLine(p.stop, `${unmet.map((n) => n.label).join(' · ')}${satisfy.map((c) => ` · ${c}`).join('')}`))
+        ctx.out([keptStopLine(p.stop, unmet.map((n) => n.label).join(' · ')), ...satisfy.map((c) => `  run: ${c}`)].join('\n'))
       }
     }
     return EXIT.REFUSED

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
-import { grantAct, UNGRANTABLE } from './allowlist.js'
+import { grantAct, grantRowsOf } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
@@ -11,7 +11,7 @@ import { unmetNeeds } from './needs.js'
 import type { Decision } from './recommend.js'
 import type { DecisionEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
-import { visible } from './toon.js'
+import { cmd, visible } from './toon.js'
 import { pendingTxn } from './txn.js'
 import { owedDecisions, parkedGates } from './verbs/next.js'
 import { recoverChoice } from './verbs/recover.js'
@@ -144,15 +144,13 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
 
 // Row 205. One wait per command, each with its source and the grant that names it. A command
 // the verb would not take (anything outside printable ASCII) gets a note, never a `run:`. An
-// aside with no commands (one read from the live folder) names the listing form.
+// aside with no commands (one read from the live folder) names the listing form. Row 239: the
+// grant's rows are the kept stop's (`grantRowsOf`), so one Windows withholds names the listing.
 function trustRows(item: Extract<NeedYou, { kind: 'trust-grant' }>): string[] {
   if (item.commands === undefined || item.commands.length === 0) {
     return [`wait: trust grant · ${item.target}`, `  run: ${item.list.line}`]
   }
-  return item.commands.flatMap((c) => [
-    `wait: trust grant · ${item.target} · ${c.cmd} (${c.source})`,
-    c.grant !== undefined ? `  run: ${c.grant.line}` : `  note: ${UNGRANTABLE}`,
-  ])
+  return item.commands.flatMap((c) => [`wait: trust grant · ${item.target} · ${c.cmd} (${c.source})`, ...grantRowsOf(c.grant, item.list)])
 }
 
 // Rows 139/203. An item's rows, laid out from its facts: every command a row offers is an act's
@@ -181,13 +179,26 @@ export function needYouRows(item: NeedYou): string[] {
     }
     case 'merge':
       return [`wait: merge · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''}`, ...(item.pr ? [`  run: gh pr merge ${item.pr}`] : [])]
+    // Row 239 (design §3.4b). At the bound the reopen is the endgame menu, and a menu pasted whole
+    // is a pipeline that runs every act it names: it prints as `exits:`, the label `decide --show`
+    // gives a set of choices, and `run:` is kept for one command.
     case 'parked':
-      return [`parked: ${item.target} · ${item.gate} round ${item.round} — ${item.why}`, `  run: ${exitsLine(item.reopen)}`]
+      return [`parked: ${item.target} · ${item.gate} round ${item.round} — ${item.why}`,
+        item.reopen.length === 1 ? `  run: ${item.reopen[0]!.line}` : `  exits: ${exitsLine(item.reopen)}`]
     case 'stuck':
     case 'capped':
       return [`stuck: ${item.target} — ${item.why ?? `witness log ${item.target}`}`,
         ...(item.retry !== undefined ? [`  run: ${item.retry.line}`] : [])]
   }
+}
+
+// Row 239 (design §3.4). How `next` names an item it does not route: the item's head as a
+// `waiting:` line, then the rows `needYouRows` prints under it, each command indented on its own.
+// The head is prose a repo or a reviewer can write — a park's note, an anchor — so a command
+// joined to it, as the line once did, could be planted ahead of the real one.
+export function waitingRows(item: NeedYou): string[] {
+  const [head, ...more] = needYouRows(item)
+  return [cmd('waiting', head!.replace(/^wait: /, '')), ...more]
 }
 
 // The first 12 hex of a sha1 over the sorted keys of what is owed: order-free, text-free.
