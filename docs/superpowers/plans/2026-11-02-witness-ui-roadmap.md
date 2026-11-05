@@ -11,7 +11,7 @@ Size: **S** ≈ one task · **M** ≈ 2–4 tasks · **L** ≈ 5+ tasks.
 ## Release 0 — bug fixes (shipped)
 
 - [x] **0.1** #65–#71, #81 — rows 220–227 · PR #82 · 0.28.1
-- [ ] **0.2** Rollout of 0.28.1: global skills, fewhats + HYC `init --agent pi` + `witness migrate` (stamps the untouched principles), `check` 0 errors, not pushed
+- [x] **0.2** Rollout of 0.28.1 (2026-11-03): global skills (6 at 0.28.1); fewhats `init --agent pi` 12bfb13 + `--agent claude-code` c48d055 (root + both worktrees) + `migrate` b0680b2 (principles approved); HYC `init --agent pi` d7d696f + `migrate` 922eb4c; `check` 0 errors in both; not pushed
 - [ ] **0.3** Human Windows check of row 223 (`drive --detach` under `WITNESS_BIN`)
 
 ## Release 1a — CLI foundations (minor) · rows 229–234 · no UI yet, each item testable by CLI alone
