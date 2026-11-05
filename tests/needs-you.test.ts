@@ -150,6 +150,22 @@ describe('what needs you is a model (rows 139/203)', () => {
     expect(below[1]).toMatch(/^ {2}run: witness gate plan /)
   })
 
+  // Ruling R16(a), pinned per field. Prose a doc, a journal or drive wrote on a head line is spelled
+  // out where it holds a line break, which would start a `run:` row of its own ahead of the real one.
+  it('a newline in a need, its holds or a stuck why is spelled on its head (row 239)', () => {
+    const nl = '\n  run: witness retry p1; touch M1'
+    const shown = '\\n  run: witness retry p1; touch M1'
+    const satisfy = cliAct('satisfy', 'p1', '--need', 'n1')
+    const need = (holds: string[]): NeedYou => ({ kind: 'need', target: 'p1', key: 'need', need: 'n1', text: `prod${nl}`, holds, satisfy })
+    expect(needYouRows(need([]))).toEqual([`wait: unmet need · p1 · prod${shown}`, '  run: witness satisfy p1 --need n1'])
+    expect(needYouRows(need([`ac-a${nl}`])))
+      .toEqual([`wait: held criterion · p1 · prod${shown} holds ac-a${shown}`, '  run: witness satisfy p1 --need n1'])
+    for (const kind of ['stuck', 'capped'] as const) {
+      expect(needYouRows({ kind, target: 'p1', key: kind, why: `no progress${nl}`, retry: cliAct('retry', 'p1') }))
+        .toEqual([`stuck: p1 — no progress${shown}`, '  run: witness retry p1'])
+    }
+  })
+
   // Ruling R16(b) (the plan's B4). Every row printed from an act goes through `runRow`: an act Windows
   // withholds is shown with why on a `note:` row, and never offered as a `run:` or `then:`, the trust
   // grant's listing fallback included.

@@ -45,7 +45,8 @@ export type NeedYou = ItemBase & (
   | { kind: 'conversation'; ask?: string; handoff?: string }
   | { kind: 'merge'; pr?: string }
   // why: the policy's note, or `parked at <anchor>` with a reviewer's anchor as printed (R5/R17): a renderer spells it out
-  | { kind: 'parked'; gate: string; round: number; why: string; reopen: Act[] }
+  // round: absent where the journal holds none that is a round (row 239, `parkedGates`)
+  | { kind: 'parked'; gate: string; round?: number; why: string; reopen: Act[] }
   | { kind: 'stuck'; why?: string; retry?: Act }
   | { kind: 'capped'; why?: string; retry?: Act })                       // two members, so `Extract` narrows each
 
@@ -134,7 +135,7 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
     // A journaled note is parsed JSON: held as the string it prints as.
     const why = stopped?.selected === 'policy' && stopped.note ? String(stopped.note) : `parked at ${p.anchor}`
     items.push({ kind: 'parked', target: p.target, key: `parked:${p.target}:${p.gate}`,
-      gate: p.gate, round: p.round, why, reopen: p.reopen })
+      gate: p.gate, ...(p.round !== undefined ? { round: p.round } : {}), why, reopen: p.reopen })
   }
   // A capped target the policy could not park carries no gate (drive.ts): it is stuck too. One
   // the policy parked is the parked row above, read from the journal.
@@ -194,7 +195,7 @@ export function needYouRows(item: NeedYou): string[] {
     // is a pipeline that runs every act it names: it prints as `exits:`, the label `decide --show`
     // gives a set of choices, and `run:` is kept for one command.
     case 'parked':
-      return [`parked: ${item.target} · ${item.gate} round ${item.round} — ${logSafe(item.why)}`,
+      return [`parked: ${item.target} · ${item.gate}${item.round !== undefined ? ` round ${item.round}` : ''} — ${logSafe(item.why)}`,
         item.reopen.length === 1 ? runRow(item.reopen[0]!) : `  exits: ${exitsLine(item.reopen)}`]
     case 'stuck':
     case 'capped':

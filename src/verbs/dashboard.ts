@@ -273,7 +273,8 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (asks.length) rows('asks', ['id', 'state', 'text'], asks).forEach(ctx.out)
   // D124. `next` stops offering a gate a human stopped; this is the surface that keeps it
   // from disappearing instead. High on the screen on purpose — a parked flow is orientation,
-  // not a footnote, and `reopen` is the act that brings it back.
+  // not a footnote, and `reopen` is the act that brings it back. Row 239 (ruling R19): a park whose
+  // journaled round is not a round carries none, and its cell prints empty.
   const parked = parkedGates(root, canon)
   if (parked.length > 0) {
     rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],

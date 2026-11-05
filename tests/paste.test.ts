@@ -2,13 +2,15 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { cliAct, exitsLine, type Act } from '../src/act.js'
 import { grantAct } from '../src/allowlist.js'
 import { unmetNeedLine } from '../src/autonomy.js'
-import type { Entry } from '../src/journal.js'
+import { loadConfig } from '../src/config.js'
+import { appendEntry, type Entry } from '../src/journal.js'
 import { satisfyCommand } from '../src/needs.js'
-import { needYouRows, waitingRows, type NeedYou } from '../src/needs-you.js'
+import { isHeld, needsYou, needYouRows, waitingRows, type NeedYou } from '../src/needs-you.js'
 import { recommend, renderDecision } from '../src/recommend.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
+import { loadCanon } from '../src/scan.js'
 import { shellLine } from '../src/toon.js'
-import { commitEntry, RECAP, seededRepo } from './helpers.js'
+import { approve, commitEntry, RECAP, seededRepo, writePlan, writeSpec } from './helpers.js'
 import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
 // Row 239. A pasted line runs only what witness wrote. Each row builds lines with witness's own
@@ -135,6 +137,29 @@ function waitingLines(p: string): Pasteable[] {
   return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', ...reopen[0]!.argv]] }))
 }
 
+// K8 from a forged journal, ruling R19: a park's round prints on the `waiting:` head, and the journal
+// is parsed JSON, so a run's round can be any text. `parkedGates` keeps it only when it is a round, a
+// positive integer: one that spells a newline and a `run:` row is dropped, the head names none, and
+// the reopen is the one `run:` row under it. Built through `needsYou`, as `next` builds it.
+async function forgedRound(p: string): Promise<Pasteable[]> {
+  const repo = await seededRepo()
+  const plan = 'auth-refresh-plan-1'
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, plan)
+  appendEntry(repo.root, plan, { v: 1, t: 'gate-run', gate: 'plan', artifact: plan, round: `1${p}`, run_id: 'r1', reviewed_sha: 's1',
+    prompts_sha: 'ps', witness: '0', model: 'm', checks: [], outcome: 'stopped' } as unknown as Entry)
+  appendEntry(repo.root, plan, { v: 1, t: 'human-decision', gate: 'plan', artifact: plan, round: 1, decision: 'stop' } as unknown as Entry)
+  const cfg = loadConfig(repo.root)
+  if (!cfg.ok) throw new Error('K8: config')
+  const item = needsYou(repo.root, { env: {} }, cfg.value, loadCanon(repo.root), []).find(isHeld)
+  if (item === undefined) throw new Error('K8: the forged park is no item')
+  const [head, ...rows] = waitingRows(item)
+  expect(head).toBe(`waiting: parked: ${plan} · plan — parked at stopped`)
+  expect(rows).toEqual([`  run: witness gate plan ${plan} --fresh`])
+  return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', 'gate', 'plan', plan, '--fresh']] }))
+}
+
 const ROWS: Row[] = [
   ['quoter: a POSIX word', (p) => [{ line: shellLine(['witness', 'x', p], 'darwin'), calls: [['witness', 'x', p]] }]],
   // zsh reads a bare `=ls` as the path of `ls`
@@ -151,6 +176,7 @@ const ROWS: Row[] = [
   ['K7 a satisfy', (p) => [{ line: satisfyCommand(`p1${p}`, `n${p}`), calls: [['witness', 'satisfy', `p1${p}`, '--need', `n${p}`]] }]],
   ['K7 an unmet need, forged text', unmetNeedLines, [...PAYLOADS, FORGED_ROW]],
   ['K8 waiting, a forged park note', waitingLines, [...PAYLOADS, FORGED_ROW]],
+  ['K8 waiting, a forged park round', forgedRound, [FORGED_ROW]],
   ['K10 a trust grant', (p) => [{ line: grantAct(`p1${p}`, { cmd: p })!.line, calls: [['witness', 'trust', `p1${p}`, '--cmd', p]] }]],
 ]
 

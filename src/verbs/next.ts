@@ -589,13 +589,19 @@ function lastDisposition(entries: Entry[], gate: string, from: number): Decision
     .at(-1)
 }
 
+// Row 239 (ruling R19). A journaled round as a parked gate names it: a positive integer, or none. The
+// journal is parsed JSON, and a round prints on the parked head and in `status`, so any other value
+// is left out rather than printed.
+const roundOf = (r: unknown): number | undefined => (Number.isInteger(r) && (r as number) >= 1 ? (r as number) : undefined)
+
 // D124's reporting half. A parked flow that `next` silently skips is a disappearance, so
 // `status` names every one of them. The anchor comes from the run the stop disposed of —
 // the human parked something specific, and "parked" without "on what" is not a report.
+// Row 239: `round` is absent where the run's journaled round is not a round (`roundOf`).
 export function parkedGates(
   root: string, canon: Canon,
-): Array<{ gate: string; target: string; round: number; anchor: string; reopen: Act[] }> {
-  const out: Array<{ gate: string; target: string; round: number; anchor: string; reopen: Act[] }> = []
+): Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> {
+  const out: Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> = []
   // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
   // effort abandoned, offers nothing to reopen or approve.
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
@@ -615,8 +621,9 @@ export function parkedGates(
       const anchors = (last.verdicts ?? [])
         .flatMap((rv) => rv.findings.filter((f) => f.blocking))
         .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))
+      const round = roundOf(last.round)
       out.push({
-        gate, target: id, round: last.round,
+        gate, target: id, ...(round !== undefined ? { round } : {}),
         anchor: anchors[0] ?? last.standing ?? last.outcome,
         reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent)),
       })

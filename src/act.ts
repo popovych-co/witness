@@ -69,7 +69,9 @@ export function cliAct(...argv: string[]): Act {
 // Row 239 (the plan's B4, ruling R16(b)). An act as the row printed under the line it belongs to:
 // `run: <line>`, or `then:` for the step after it. An act Windows withholds is shown with why on a
 // `note:` row, which offers nothing to paste. Every `run:` and `then:` row printed from an act goes
-// through here, so no printer can forget the check.
+// through here, so no printer can forget the check, but one: a decision block's own `run:` line
+// (`renderDecision`), which prints only an option `option()` made `runnable`, and `option()` never
+// makes a withheld act runnable.
 export function runRow(act: Act, label: 'run' | 'then' = 'run', indent = '  '): string {
   return act.withheld === undefined ? `${indent}${label}: ${act.line}` : `${indent}note: ${act.line} — ${act.withheld}`
 }
