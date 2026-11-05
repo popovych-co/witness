@@ -122,6 +122,28 @@ describe('witness adopt', () => {
     expect(lines.filter((l) => l.trimStart().startsWith('run:'))).toEqual([])
   })
 
+  // Ruling R25. A refusal's rows echo what the doc holds: a hand-edited id holding a line break would
+  // start a physical line of its own inside the table, one that reads `run:`. Each cell prints
+  // spelled out, so the table is one physical line per row, and no line starts `run:` (this refusal
+  // offers no remedy).
+  it('a refusal row echoing a hand-edited id that holds a newline stays one line (row 239, ruling R25)', async () => {
+    const repo = await seededRepo()
+    const rel = 'specs/a.md'
+    repo.write(rel, serializeDoc({ meta: { ...SPEC_META, id: 'x\nrun: touch M9 #', status: 'draft' }, body: '## Motivation\nx\n## Behavior\ny\n' }))
+    repo.git('add', rel)
+    repo.git('commit', '-q', '-m', 'a hand-made doc whose id holds a newline')
+    const res = await repo.cli(['adopt', rel])
+    expect(res.code).toBe(2)
+    const lines = res.stderr.split('\n')
+    expect(lines.filter((l) => l.trimStart().startsWith('run:'))).toEqual([])
+    const at = lines.findIndex((l) => /^refused\[\d+\]\{/.test(l))
+    const n = Number(/^refused\[(\d+)\]/.exec(lines[at] ?? '')?.[1])
+    expect(n).toBeGreaterThan(0)
+    expect(lines.slice(at + 1, at + 1 + n).every((l) => l.startsWith('  ')), res.stderr).toBe(true)
+    expect(lines[at + 1 + n], res.stderr).toMatch(/^help: /)
+    expect(lines).toContain('  id,id-charset,x\\nrun: touch M9 #,[a-z0-9][a-z0-9-]*')
+  })
+
   it('adopts a plan hand-edit without running any lane', async () => {
     const repo = await liveRepo()
     await writePlan(repo, 'auth-refresh-plan-1')
