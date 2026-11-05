@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { actOn, type Act } from './act.js'
+import { actOn, runRow, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { heldCriteria } from './needs.js'
@@ -93,10 +93,11 @@ export function grantRows(target: string, c: Pick<RunCommand, 'cmd'>, platform: 
   return grantRowsOf(grantAct(target, c, platform), actOn(platform, ['trust', target]))
 }
 // The same rows from a grant already built, as a model holds it: never the bytes of a command the
-// verb would not take, so the act decides (`TrustGrant`). `list` is the target's listing.
+// verb would not take, so the act decides (`TrustGrant`). `list` is the target's listing. Ruling
+// R16(b): both print through `runRow`, so a listing Windows withholds too is a note, never a `run:`.
 export function grantRowsOf(grant: Act | undefined, list: Act): string[] {
   if (grant === undefined) return [`  note: ${UNGRANTABLE}`]
-  return grant.withheld === undefined ? [`  run: ${grant.line}`] : [`  note: ${grant.withheld}`, `  run: ${list.line}`]
+  return grant.withheld === undefined ? [runRow(grant)] : [`  note: ${grant.withheld}`, runRow(list)]
 }
 
 // The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
@@ -176,7 +177,7 @@ export const pendingCmds = (listing: TrustListing): string[] => listing.pending.
 // each pending grant's line to run, and for one Windows withholds its command, escaped, with why it
 // is not offered and the listing that asks for it at a terminal, where it stays pending.
 export function pendingRows(listing: TrustListing, platform: Platform = process.platform): string[] {
-  return listing.pending.map((a) => a.withheld === undefined ? `run: ${a.line}`
+  return listing.pending.map((a) => a.withheld === undefined ? runRow(a, 'run', '')
     : `note: ${visible(a.argv[3]!)} — ${a.withheld} · at a terminal, ${actOn(platform, ['trust', listing.target!]).line} asks for each command`)
 }
 

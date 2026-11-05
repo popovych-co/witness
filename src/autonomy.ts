@@ -1,9 +1,9 @@
-import { cliAct, type Act } from './act.js'
+import { cliAct, runRow, type Act } from './act.js'
 import type { Config } from './config.js'
 import type { Entry } from './journal.js'
 import type { Decision } from './recommend.js'
 import { boundReached, fellBack, type DecisionEntry, type GateRunEntry } from './rounds.js'
-import { cmd, kv } from './toon.js'
+import { cmd, kv, logSafe } from './toon.js'
 
 // Rows 171-175. PURE, like recommend.ts: the setting's rendering, the kept-stop names, and
 // (row 171) the policy that acts on a stop under `autonomy: on`. It takes facts its caller
@@ -35,11 +35,12 @@ export function keptStopLine(stop: KeptStop, detail: string): string {
 
 // Row 179's kept stop for one plan's start: what is missing, then how to satisfy it. Drive's
 // set-aside and the chat's notice (row 195) print it. Row 239 (design §3.4): a need's text is its
-// author's, so it stays on the kept stop's own line, prose a skill never runs, and each satisfy
-// prints on a `run:` row of its own under it. Joined to the prose, a text that spells a command
-// would plant it ahead of the real one.
-export function unmetNeedLine(needs: ReadonlyArray<{ text: string; satisfy: string }>): string {
-  return [keptStopLine('unmet-need', needs.map((u) => u.text).join(' · ')), ...needs.map((u) => `  run: ${u.satisfy}`)].join('\n')
+// author's, so it is prose on the kept stop's own line, which a skill never runs, and each satisfy
+// prints on a row of its own under it (`runRow`). Joined to the prose, a text that spells a command
+// would plant it ahead of the real one; ruling R16(a): so would a line break in it, which starts a
+// row of its own, so the text is spelled out (`logSafe`).
+export function unmetNeedLine(needs: ReadonlyArray<{ text: string; satisfyAct: Act }>): string {
+  return [keptStopLine('unmet-need', logSafe(needs.map((u) => u.text).join(' · '))), ...needs.map((u) => runRow(u.satisfyAct))].join('\n')
 }
 
 // Row 171. What the policy does with a stop: take an act (a `witness decide` the CLI

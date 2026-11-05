@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { askText, nextAsk, type AskStatus } from '../ask.js'
 import { draftLine } from '../drafts.js'
-import { unmetNeeds } from '../needs.js'
+import { unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { primaryRoot } from '../gitio.js'
@@ -24,7 +24,7 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { liveDrive } from '../live.js'
-import { HELD_KINDS, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
+import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -1166,7 +1166,7 @@ export function humanAction(
 // unmet manual need blocks. Read from the needs table, not from the walk, which stops at the
 // first human item and would miss a need past it.
 function needNotices(canon: Canon): string[] {
-  const byPlan = new Map<string, Array<{ text: string; satisfy: string }>>()
+  const byPlan = new Map<string, UnmetNeed[]>()
   for (const u of unmetNeeds(canon)) {
     if (u.blocks === 'start') byPlan.set(u.doc, [...(byPlan.get(u.doc) ?? []), u])
   }
@@ -1305,7 +1305,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // starts beside a paused drive sees it rather than folding it into its wait token. Row 239 (design
   // §3.4): its head on a `waiting:` line, and each command on an indented row of its own under it.
   const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
-  for (const i of owed.filter((x) => HELD_KINDS.has(x.kind))) waitingRows(i).forEach((l) => ctx.out(l))
+  for (const i of owed.filter(isHeld)) waitingRows(i).forEach((l) => ctx.out(l))
   // Row 205. Under autonomy each untrusted command is a kept stop, raw (D120), with the grant that
   // names it — paste-ready whatever quotes the command carries. Row 239 (B12): the command and its
   // source on the kept stop's line, and the grant on a `run:` row of its own under it, since a

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cliAct } from '../src/act.js'
 import { evaluateNeeds, needMet, unmetNeeds } from '../src/needs.js'
 import { loadCanon, type CanonDoc } from '../src/scan.js'
 import { approve, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
@@ -88,10 +89,14 @@ describe('unmetNeeds (A10)', () => {
       needs: [{ manual: 'device on the desk', satisfied: false }],
       steps: [{ id: 's1', title: 't', criteria: ['ac-rotate', 'ac-prod'] }],
     })
+    // Row 239 (ruling R16(b)): each satisfy is also an act, which its `run:` row prints
     expect(unmetNeeds(loadCanon(repo.root))).toEqual([
-      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', ref: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' },
-      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', ref: '2', satisfy: 'witness satisfy auth-refresh --need 2' },
-      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', ref: '1', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1' },
+      { doc: 'auth-refresh', type: 'spec', need: 'prod', text: 'production access granted', holds: ['ac-prod'], blocks: 'nothing', ref: 'prod', satisfy: 'witness satisfy auth-refresh --need prod',
+        satisfyAct: cliAct('satisfy', 'auth-refresh', '--need', 'prod') },
+      { doc: 'auth-refresh', type: 'spec', need: 'docs reviewed', text: 'docs reviewed', holds: [], blocks: 'nothing', ref: '2', satisfy: 'witness satisfy auth-refresh --need 2',
+        satisfyAct: cliAct('satisfy', 'auth-refresh', '--need', '2') },
+      { doc: 'auth-refresh-plan-1', type: 'plan', need: 'device on the desk', text: 'device on the desk', holds: [], blocks: 'start', ref: '1', satisfy: 'witness satisfy auth-refresh-plan-1 --need 1',
+        satisfyAct: cliAct('satisfy', 'auth-refresh-plan-1', '--need', '1') },
     ])
   })
   it('a satisfied need and a started plan need are not listed', async () => {

@@ -8,7 +8,7 @@ import { untrustedCmdsFor } from './allowlist.js'
 import { heldSatisfy, liftedHolds, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cmd, kv } from './toon.js'
+import { cmd, kv, logSafe } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
 import { recommend, renderDecision } from './recommend.js'
@@ -79,13 +79,14 @@ export function existingPr(ctx: Ctx, root: string, branch: string): number | und
 
 // Row 179. A PR shipped while a need held criteria says what was not verified, so the human
 // reading the PR is not told the spec was proven where it was not. Row 239 (B13): a PR is a surface
-// too, so each row's command is the one `heldSatisfy` rebuilds from the journaled row, or none.
+// too, so each row's command is the one `heldSatisfy` rebuilds from the journaled row, or none, and
+// (ruling R16(a)) its criterion and need are spelled out, so a line break cannot start a line of its own.
 export function prBody(plan: CanonDoc, held: HeldRow[]): string {
   const head = `Realizes spec ${String(plan.meta.parent)} at ${String(plan.meta['derives-from']).slice(0, 7)} (witness).`
   if (held.length === 0) return head
   return [head, '', 'Held — not verified while a need is unmet:', ...held.map((h) => {
     const satisfy = heldSatisfy(h)
-    return `- ${h.criterion}: ${h.need} unmet${satisfy ? ` — ${satisfy}` : ''}`
+    return `- ${logSafe(String(h.criterion))}: ${logSafe(String(h.need))} unmet${satisfy ? ` — ${satisfy}` : ''}`
   })].join('\n')
 }
 

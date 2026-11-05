@@ -612,6 +612,11 @@ describe('a grant Windows withholds names the listing instead (row 239)', () => 
       '  note: not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text',
       '  run: witness trust p1',
     ])
+    // Ruling R16(b): the listing fallback honours withheld too — a target Windows withholds is never a `run:`
+    expect(grantRows('p1&x', { cmd: 'npm test' }, 'win32')).toEqual([
+      '  note: not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text',
+      "  note: witness trust 'p1&x' — not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text",
+    ])
   })
 
   // The listing the withheld grant names grants nothing by itself: the command must still be

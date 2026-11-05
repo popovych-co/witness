@@ -48,7 +48,8 @@ export interface GateRunView {
   carried?: { lenses: string[]; run: string }
   checks: Array<{ name: string; ok: boolean; detail?: string }>
   // Row 239 (B13): `satisfy` is the command `heldSatisfy` rebuilds, absent where the journaled row
-  // names none witness would print.
+  // names none witness would print. Ruling R16(a): `criterion` and `need` are spelled out (`logSafe`),
+  // as a finding's anchor is: prose ahead of the command, where a line break would start a line.
   held: Array<{ criterion: string; need: string; satisfy?: string }>
   findings: FindingView[]
   demoted: Array<{ anchor: string; round: number }>
@@ -71,9 +72,10 @@ export function gateRunView(entry: GateRunEntry, mode: 'ran' | 'resume', entries
     skipped: [...(entry.skipped ?? [])], fallback: [...(entry.fallback ?? [])], rerolled: [...(entry.rerolled ?? [])],
     ...(entry.carried ? { carried: { lenses: [...entry.carried.lenses], run: entry.carried.run } } : {}),
     checks: entry.checks.map((c) => ({ name: c.name, ok: c.ok, ...(c.detail !== undefined ? { detail: c.detail } : {}) })),
+    // A journaled row is parsed JSON: each field is shown as the string it prints as.
     held: entry.checks.flatMap((c) => c.held ?? []).map((h) => {
       const satisfy = heldSatisfy(h)
-      return { criterion: h.criterion, need: h.need, ...(satisfy !== undefined ? { satisfy } : {}) }
+      return { criterion: logSafe(String(h.criterion)), need: logSafe(String(h.need)), ...(satisfy !== undefined ? { satisfy } : {}) }
     }),
     findings: findingViews(entry.verdicts ?? []),
     demoted: (entry.verdicts ?? []).flatMap((rv) => rv.findings)

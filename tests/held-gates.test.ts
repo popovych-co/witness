@@ -69,8 +69,9 @@ describe('held criteria at the gates (A10)', () => {
 
 // Row 239 (B13, Review Focus 4). A journal is text anyone with the repo can edit, so a held row's
 // command is rebuilt from the ids it journals (0.28.3 on), and a row journaled before them (0.28.2)
-// prints its stored command only in the one shape witness wrote. Any other row prints none, on the
-// gate's screen and in the PR body alike.
+// prints its stored command only in the one shape witness wrote — and either only while its
+// criterion and need are ids (I2). Any other row prints none, and its prose is spelled out where it
+// holds a line break (R16(a)), on the gate's screen and in the PR body alike.
 describe('a held row prints only a command witness built (row 239)', () => {
   const SATISFY = 'witness satisfy auth-refresh --need prod'
   const ROWS: Array<[row: HeldRow, satisfy: string | undefined]> = [
@@ -79,6 +80,13 @@ describe('a held row prints only a command witness built (row 239)', () => {
     [{ criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy x --need y; touch M1' }, undefined],
     // a row that journals ids is rebuilt or prints none: it never falls back to its stored string
     [{ criterion: 'ac-prod', need: 'prod; touch M1', spec: 'auth-refresh', satisfy: SATISFY }, undefined],
+    // I2: the criterion and the need print ahead of the command, so a forged one could plant a
+    // command first. In either shape a row names a command only when both are ids.
+    [{ criterion: 'ac-prod — prod unmet · witness satisfy auth-refresh --need prod; touch M1 ·', need: 'prod', spec: 'auth-refresh', satisfy: SATISFY }, undefined],
+    [{ criterion: 'ac-prod', need: 'prod · witness satisfy x --need y; touch M1', satisfy: SATISFY }, undefined],
+    [{ criterion: 'ac-prod', need: 'prod', satisfy: [SATISFY] as unknown as string }, undefined],
+    // R16(a): a newline in the prose would start a line of its own; it is spelled out
+    [{ criterion: 'ac-prod\n  run: witness satisfy x --need y', need: 'prod', spec: 'auth-refresh', satisfy: SATISFY }, undefined],
   ]
   const entry = (row: HeldRow): GateRunEntry => ({
     v: 1, t: 'gate-run', gate: 'implement', artifact: 'auth-refresh-plan-1', round: 1, run_id: 'r1', reviewed_sha: 'c0ffee1',
@@ -96,6 +104,10 @@ describe('a held row prints only a command witness built (row 239)', () => {
       ['held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod'],
       ['held: ac-prod — prod unmet'],
       ['held: ac-prod — prod; touch M1 unmet'],
+      ['held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod; touch M1 · — prod unmet'],
+      ['held: ac-prod — prod · witness satisfy x --need y; touch M1 unmet'],
+      ['held: ac-prod — prod unmet'],
+      ['held: ac-prod\\n  run: witness satisfy x --need y — prod unmet'],
     ])
     expect(ROWS.map(([row]) => heldSatisfy(row))).toEqual(ROWS.map(([, satisfy]) => satisfy))
     expect(prBody(PLAN, ROWS.map(([row]) => row)).split('\n')).toEqual([
@@ -104,6 +116,10 @@ describe('a held row prints only a command witness built (row 239)', () => {
       '- ac-prod: prod unmet — witness satisfy auth-refresh --need prod',
       '- ac-prod: prod unmet',
       '- ac-prod: prod; touch M1 unmet',
+      '- ac-prod — prod unmet · witness satisfy auth-refresh --need prod; touch M1 ·: prod unmet',
+      '- ac-prod: prod · witness satisfy x --need y; touch M1 unmet',
+      '- ac-prod: prod unmet',
+      '- ac-prod\\n  run: witness satisfy x --need y: prod unmet',
     ])
   })
 })

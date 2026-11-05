@@ -66,6 +66,14 @@ export function cliAct(...argv: string[]): Act {
   return actOn(process.platform, argv)
 }
 
+// Row 239 (the plan's B4, ruling R16(b)). An act as the row printed under the line it belongs to:
+// `run: <line>`, or `then:` for the step after it. An act Windows withholds is shown with why on a
+// `note:` row, which offers nothing to paste. Every `run:` and `then:` row printed from an act goes
+// through here, so no printer can forget the check.
+export function runRow(act: Act, label: 'run' | 'then' = 'run', indent = '  '): string {
+  return act.withheld === undefined ? `${indent}${label}: ${act.line}` : `${indent}note: ${act.line} — ${act.withheld}`
+}
+
 // `liveExits`' grammar: the acts' lines joined by ` | `, where a decide act on the same gate and
 // target as the act before it prints only the words after them — `witness decide plan p1
 // --approve | --stop`. A decide act with no word past its target prints whole, never as an

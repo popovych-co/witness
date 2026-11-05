@@ -1,4 +1,4 @@
-import { cliAct } from './act.js'
+import { cliAct, type Act } from './act.js'
 import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import { ID_RE } from './dsl.js'
@@ -97,12 +97,15 @@ export interface HeldRow { criterion: string; need: string; satisfy: string; spe
 // anyone with the repo can edit, so its `satisfy` string is never trusted to hold a safe line: a row
 // that journals its ids is rebuilt from them, and one journaled before them (0.28.2) prints its
 // stored string only in the one shape `satisfyCommand` wrote there. Any other row prints none.
+// Review I2: the criterion and the need print ahead of the command, so in either shape a row names
+// one only while both are ids: a forged one could otherwise spell a command before the real one. A
+// journaled row is parsed JSON, so an id is a string too.
 const STORED_SATISFY = /^witness satisfy [a-z0-9][a-z0-9-]* --need [a-z0-9][a-z0-9-]*$/
+const isId = (s: unknown): s is string => typeof s === 'string' && ID_RE.test(s)
 export function heldSatisfy(h: HeldRow): string | undefined {
-  if (h.spec !== undefined) {
-    return ID_RE.test(h.spec) && ID_RE.test(h.need) ? cliAct('satisfy', h.spec, '--need', h.need).line : undefined
-  }
-  return STORED_SATISFY.test(h.satisfy) ? h.satisfy : undefined
+  if (!isId(h.criterion) || !isId(h.need)) return undefined
+  if (h.spec !== undefined) return isId(h.spec) ? cliAct('satisfy', h.spec, '--need', h.need).line : undefined
+  return typeof h.satisfy === 'string' && STORED_SATISFY.test(h.satisfy) ? h.satisfy : undefined
 }
 
 // Row 179. The one listing of what waits on a human's assertion about the world: `status`,
@@ -116,7 +119,8 @@ export interface UnmetNeed {
   holds: string[]                 // criteria it holds while unmet · [] for a plan need
   blocks: 'start' | 'nothing'
   ref: string                     // the need as `--need` takes it: its id · else its 1-based index among the manual needs
-  satisfy: string                 // the human's command — the id when the need has one, else its index
+  satisfy: string                 // the human's command — the id when the need has one, else its index · `satisfyAct`'s line
+  satisfyAct: Act                 // row 239 (ruling R16(b)): that command as an act, which a `run:` row prints (`runRow`)
 }
 
 export function unmetNeeds(canon: Canon): UnmetNeed[] {
@@ -130,11 +134,12 @@ export function unmetNeeds(canon: Canon): UnmetNeed[] {
     const manuals = needs.filter((n) => typeof n.manual === 'string') as Array<{ id?: string; manual: string; satisfied?: boolean; holds?: unknown }>
     return manuals.flatMap((n, i) => {
       const ref = n.id ?? String(i + 1)
+      const satisfyAct = cliAct('satisfy', id, '--need', ref)
       return needMet(d, n) ? [] : [{
         doc: id, type, need: needKey(n), text: n.manual,
         holds: type === 'spec' && Array.isArray(n.holds) ? (n.holds as string[]) : [],
         blocks: type === 'plan' ? 'start' as const : 'nothing' as const,
-        ref, satisfy: satisfyCommand(id, ref),
+        ref, satisfy: satisfyAct.line, satisfyAct,
       }]
     })
   })

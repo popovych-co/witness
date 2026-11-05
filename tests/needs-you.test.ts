@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { cliAct } from '../src/act.js'
+import { actOn, cliAct } from '../src/act.js'
 import { loadConfig } from '../src/config.js'
 import { appendEntry } from '../src/journal.js'
 import { type NeedYou, needsYou, needsYouToken, needYouRows } from '../src/needs-you.js'
@@ -148,5 +148,37 @@ describe('what needs you is a model (rows 139/203)', () => {
     const below = rowsOf('auth-refresh-plan-2')
     expect(below).toHaveLength(2)
     expect(below[1]).toMatch(/^ {2}run: witness gate plan /)
+  })
+
+  // Ruling R16(b) (the plan's B4). Every row printed from an act goes through `runRow`: an act Windows
+  // withholds is shown with why on a `note:` row, and never offered as a `run:` or `then:`, the trust
+  // grant's listing fallback included.
+  it('on Windows an act holding a risky word prints a note row, never run: (row 239)', () => {
+    const t = 'p1&x'
+    const win = (...argv: string[]) => actOn('win32', argv)
+    const items: NeedYou[] = [
+      { kind: 'design-look', target: t, key: 'design-look', open: win('design', t, '--open'), show: win('decide', 'design', t, '--show') },
+      { kind: 'need', target: t, key: 'need', need: 'n1', text: 'prod access', holds: [], satisfy: win('satisfy', t, '--need', 'n1') },
+      { kind: 'decision', target: t, key: 'decision', gate: 'plan', show: win('decide', 'plan', t, '--show') },
+      { kind: 'parked', target: t, key: 'parked', gate: 'plan', round: 1, why: 'parked at x', reopen: [win('gate', 'plan', t, '--fresh')] },
+      { kind: 'stuck', target: t, key: 'stuck', retry: win('retry', t) },
+      { kind: 'trust-grant', target: t, key: 'trust-grant', list: win('trust', t) },
+      { kind: 'trust-grant', target: t, key: 'trust-grant', list: win('trust', t),
+        commands: [{ cmd: 'npm test', source: 'ship.test', grant: win('trust', t, '--cmd', 'npm test') }] },
+    ]
+    const rows = items.flatMap((i) => needYouRows(i).slice(1))
+    expect(rows.filter((r) => /^ {2}(run|then): /.test(r))).toEqual([])
+    const why = 'not offered on Windows — it holds &, which cmd.exe or Windows PowerShell can read as more than text'
+    expect(rows).toEqual([
+      `  note: witness design 'p1&x' --open — ${why}`,
+      `  note: witness decide design 'p1&x' --show — ${why}`,
+      `  note: witness satisfy 'p1&x' --need n1 — ${why}`,
+      `  note: witness decide plan 'p1&x' --show — ${why}`,
+      `  note: witness gate plan 'p1&x' --fresh — ${why}`,
+      `  note: witness retry 'p1&x' — ${why}`,
+      `  note: witness trust 'p1&x' — ${why}`,
+      `  note: ${why}`,
+      `  note: witness trust 'p1&x' — ${why}`,
+    ])
   })
 })

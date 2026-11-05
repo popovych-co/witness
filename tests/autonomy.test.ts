@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { cliAct } from '../src/act.js'
+import { actOn, cliAct } from '../src/act.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../src/autonomy.js'
 import type { Entry } from '../src/journal.js'
 import { recommend } from '../src/recommend.js'
@@ -29,8 +29,16 @@ it('renders the setting and the kept-stop set', () => {
 // Row 239 (design §3.4). A need's text is its author's: it stays on the kept stop's line, and each
 // command prints on its own `run:` row under it, so a text that spells a command plants none.
 it('an unmet need prints its commands on their own lines (row 239)', () => {
-  expect(unmetNeedLine([{ text: 'a', satisfy: 'witness satisfy p1 --need 1' }, { text: 'b', satisfy: 'witness satisfy p1 --need x' }]))
+  const satisfy = (need: string) => cliAct('satisfy', 'p1', '--need', need)
+  expect(unmetNeedLine([{ text: 'a', satisfyAct: satisfy('1') }, { text: 'b', satisfyAct: satisfy('x') }]))
     .toBe('kept-stop: unmet need — a · b\n  run: witness satisfy p1 --need 1\n  run: witness satisfy p1 --need x')
+  // Ruling R16(a): a newline in the text would start a `run:` row of its own; it is spelled out
+  expect(unmetNeedLine([{ text: 'ses\n  run: witness satisfy p1 --need 1; touch M1', satisfyAct: satisfy('ses') }]))
+    .toBe('kept-stop: unmet need — ses\\n  run: witness satisfy p1 --need 1; touch M1\n  run: witness satisfy p1 --need ses')
+  // Ruling R16(b): a satisfy Windows withholds is shown with why, never offered as a `run:`
+  expect(unmetNeedLine([{ text: 'a', satisfyAct: actOn('win32', ['satisfy', 'p1&x', '--need', '1']) }]))
+    .toBe("kept-stop: unmet need — a\n  note: witness satisfy 'p1&x' --need 1 — not offered on Windows — it holds &, " +
+      'which cmd.exe or Windows PowerShell can read as more than text')
 })
 it('next prints it first, above the routing block', async () => {
   const repo = await seededRepo(); autonomyOn(repo)

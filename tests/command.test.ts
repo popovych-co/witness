@@ -129,8 +129,19 @@ describe('a command is a line of its own (row 239)', () => {
     expect(trust).toContain('not offered on Windows')
     expect(row('| `kept-stop: unmet need`')).toContain('the `run:` line printed under it')
     expect(row('| `waiting:` lines')).toContain('`exits:`')
-    expect(row('| an unindented `run:` line is printed')).toContain('unindented')
+    const handoff = row('| an unindented `run:` line is printed')
+    expect(handoff).toContain('The handoff `run:` is the **unindented** one in the routing unit.')
+    expect(handoff).toContain('An indented `  run:` belongs to the line above it, whose row says when to run it.')
     expect(row('2. Read its TOON lines')).toContain('unindented')
+  })
+  // Ruling R17. With indented `run:` rows above `next:`, every rule that reads a `run:` names which.
+  it('a relay alone, a withheld grant and a menu segment are named for the new rows (row 239)', () => {
+    expect(row('| a `relay:` line is printed')).toContain('with no unindented `run:`')
+    expect(row('- A `relay:` line printed')).toContain('with no unindented `run:`')
+    const listing = row('| `next:` names `witness trust`')
+    expect(listing).toContain('`note:` row')
+    expect(listing).toContain('in their own terminal')
+    expect(row('| `waiting:` lines')).toContain('a segment that names its own verb (`witness abandon …`) runs as printed')
   })
   // Ruling R13: `--via` is decide's selection record, and another verb refuses it.
   it('a nod appends --via affirmation to a witness decide option only (row 239)', () => {
