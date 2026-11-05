@@ -181,7 +181,7 @@ the list the CLI reads (`src/settings.ts`).
 | `criteria.exclude` | extra globs never scanned for criteria tags · [] = none — accepts: a list of globs ([] = none) | `[]` |
 | `ship.test` | the suite command ship runs · full-suite criteria run it too — accepts: a shell command | `npm test` |
 | `ship.lint` | the lint command ship runs — accepts: a shell command | `npm run lint` |
-| `ship.branch` | the branch witness ships into — accepts: a branch name | `main` |
+| `ship.branch` | the branch witness ships into — accepts: a branch name: letters, digits and . _ / + -, as git allows them — it is printed into git commands | `main` |
 | `ship.merge` | how ship merges its own PR under autonomy · merge \| squash \| rebase — accepts: merge \| squash \| rebase | `merge` |
 | `ship.ciSettleMs` | ms green CI must hold still before an autonomous merge · 0–1800000 — accepts: an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges | `60000` |
 | `autonomy` | on = the CLI settles its own stops and merges green PRs · on \| off · counts once committed — accepts: on \| off | `off` |

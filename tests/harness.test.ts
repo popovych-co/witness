@@ -365,6 +365,13 @@ describe('thinking-aware handoff rendering', () => {
     expect(handoffLine(pi, "C:\\o'b", 'claude-opus-5', 'win32'))
       .toBe("Set-Location -LiteralPath 'C:\\o''b' -ErrorAction Stop; pi --model anthropic/claude-opus-5 '/witness'")
   })
+
+  // Row 239 (the plan's B14). `[` and `]` are glob characters: bare after `--model`, zsh refuses the
+  // line with "no matches found".
+  it('a [1m] pin is quoted in the handoff (row 239)', () => {
+    expect(handoffLine(claude, '/wt', 'claude-opus-4-6[1m]', 'darwin'))
+      .toBe("cd '/wt' && claude --model 'claude-opus-4-6[1m]' '/witness'")
+  })
 })
 
 describe('claude envelope errors (B4)', () => {

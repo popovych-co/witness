@@ -32,7 +32,7 @@ export function validateRecap(raw: unknown): Violation[] {
   const e = raw as Record<string, unknown>
   const out: Violation[] = []
   if (typeof e.effort !== 'string' || !ID_RE.test(e.effort)) {
-    out.push(v('effort', 'id-charset', String(e.effort ?? 'absent'), '[a-z0-9-]+'))
+    out.push(v('effort', 'id-charset', String(e.effort ?? 'absent'), '[a-z0-9][a-z0-9-]*'))
   }
   if (e.class !== 'feature' && e.class !== 'fix' && e.class !== 'chore') {
     out.push(v('class', 'enum', String(e.class ?? 'absent'), 'feature | fix | chore'))

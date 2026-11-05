@@ -44,7 +44,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     return EXIT.REFUSED
   }
   if (!ID_RE.test(newId)) {
-    renderRefusal([v('id', 'id-charset', newId, 'ids match ^[a-z0-9-]+$')]).forEach((l) => ctx.err(l))
+    renderRefusal([v('id', 'id-charset', newId, 'ids match ^[a-z0-9][a-z0-9-]*$')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
   const reserved = reservedId(newId)

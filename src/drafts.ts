@@ -126,7 +126,7 @@ export function validateDraft(k: DraftKey, raw: unknown): Violation[] {
   }
   if (raw.effort !== undefined) {
     if (typeof raw.effort !== 'string' || !ID_RE.test(raw.effort)) {
-      out.push(v('effort', 'id-charset', String(raw.effort), '[a-z0-9-]+'))
+      out.push(v('effort', 'id-charset', String(raw.effort), '[a-z0-9][a-z0-9-]*'))
     } else if (k.kind === 'amend' && raw.effort !== k.effort) {
       out.push(v('effort', 'effort-mismatch', raw.effort, `${k.effort} — the effort this draft amends`))
     }

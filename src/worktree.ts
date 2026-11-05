@@ -24,7 +24,7 @@ export function worktreeFlow(cwd: string, root: string): string | undefined {
   if (!top.out.startsWith(dir + sep)) return undefined
   const rest = top.out.slice(dir.length + 1)
   // Round-tripping the last path segment back to a plan id is safe: worktreePath is a
-  // bare join with no slugification, and doc ids are /^[a-z0-9-]+$/ (dsl.ts).
+  // bare join with no slugification, and doc ids are /^[a-z0-9][a-z0-9-]*$/ (dsl.ts).
   return rest.length > 0 && !rest.includes(sep) ? rest : undefined
 }
 

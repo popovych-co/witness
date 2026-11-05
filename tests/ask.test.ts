@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { ASK_STREAM, askQueue } from '../src/ask.js'
 import { idRetired } from '../src/departure.js'
 import { effortStreams, readStream } from '../src/journal.js'
-import { draftPath, draftSave, seededRepo, tmpRepo, writeSpec } from './helpers.js'
+import { commitEntry, draftPath, draftSave, seededRepo, tmpRepo, writeSpec } from './helpers.js'
 
 const initialized = async () => { const repo = tmpRepo(); await repo.cli(['init']); return repo }
 
@@ -25,6 +25,17 @@ describe('witness ask (A9)', () => {
     await repo.cli(['ask', 'pay', 'by', 'card'])
     expect(askQueue(repo.root).map((a) => [a.id, a.text, a.state]))
       .toEqual([['a1', 'first', 'unanswered'], ['a2', 'pay by card', 'unanswered']])
+  })
+
+  // Row 239 (the plan's B15). The queue skips an ask committed by hand under a name outside the id set,
+  // and the numbering still counts it, as 0.28.2's did: an ask that release numbered past such an
+  // entry is never minted again.
+  it('an ask named outside the id set is never queued, and still numbered past (row 239)', async () => {
+    const repo = await initialized()
+    await repo.cli(['ask', 'first'])
+    commitEntry(repo, ASK_STREAM, { t: 'ask', id: 'a$(x)', text: 'forged' })
+    expect((await repo.cli(['ask', 'second'])).stdout).toContain('ask: a3 — queued')
+    expect(askQueue(repo.root).map((a) => a.id)).toEqual(['a1', 'a3'])
   })
 
   it('refuses an empty ask and text beside --withdraw', async () => {

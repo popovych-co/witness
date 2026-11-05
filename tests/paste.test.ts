@@ -76,18 +76,20 @@ function atBoundPark(p: string): Pasteable[] {
   return named.map((line, i) => ({ line, calls: [['witness', ...reopen[i]!.argv]] }))
 }
 
-// K3: the `next:` value offered for an effort stream committed by hand and named for the payload.
-// A stream's slug is its file's name, and any stream that opens with a recap is an effort. The
-// value is a shape: pasted, its `<spec-id>` redirect fails, so the row checks inertness only.
+// K3: an effort stream committed by hand and named for the payload. A stream's slug is its file's
+// name, and one that opens with a recap reads as an effort. Row 239 (the plan's B15): a name outside
+// the id set is never offered, so no `next:` value names it, and `check` reports it. What `next`
+// offers instead is the grill's shape: pasted, its `<recap.json>` redirect fails, so the row checks
+// inertness only.
 async function forgedNext(p: string): Promise<Pasteable[]> {
   const repo = await seededRepo({ noRecap: true })
   commitEntry(repo, `e${p}`, { t: 'recap', ...RECAP, effort: `e${p}` })
   const res = await repo.cli(['next'])
-  const line = res.stdout.split('\n').find((l) => l.startsWith('next: '))?.slice('next: '.length)
-  if (line === undefined || !line.includes('witness write <spec-id> --effort ')) {
-    throw new Error(`K3: next offered no write shape\n${res.stdout}${res.stderr}`)
-  }
-  return [{ line }]
+  const lines = res.stdout.split('\n').filter((l) => l.startsWith('next: ')).map((l) => l.slice('next: '.length))
+  expect(lines, res.stdout).toEqual(['witness recap --file <recap.json>'])
+  expect(res.stdout).not.toContain(`e${p}`)
+  expect((await repo.cli(['check'])).stdout).toContain(',stream-name,')
+  return lines.map((line) => ({ line }))
 }
 
 // K6: every command an inbox row offers, its `run:` or `then:` label cut, beside the act it prints.
@@ -271,7 +273,7 @@ const ROWS: Row[] = [
   ['K2 exits below and at the bound', exitLines],
   ['K2 a reopen', (p) => reopenActs('plan', `p1${p}`, parked(p), `up${p}`).map(pasteable)],
   ['K2 an at-bound park', atBoundPark],
-  ['K3 a next: shape from a forged effort stream', forgedNext],
+  ['K3 a forged effort stream is never offered', forgedNext],
   ['K6 an inbox row', inboxLines],
   ['K7 a satisfy', (p) => [{ line: satisfyCommand(`p1${p}`, `n${p}`), calls: [['witness', 'satisfy', `p1${p}`, '--need', `n${p}`]] }]],
   ['K7 an unmet need, forged text', unmetNeedLines, [...PAYLOADS, FORGED_ROW]],

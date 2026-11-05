@@ -104,7 +104,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   })
   const id = positionals[0]
   const missing: Violation[] = []
-  if (!id || !ID_RE.test(id)) missing.push(v('id', 'id-charset', String(id ?? 'absent'), 'witness write <id> with [a-z0-9-]+'))
+  if (!id || !ID_RE.test(id)) missing.push(v('id', 'id-charset', String(id ?? 'absent'), 'witness write <id> with [a-z0-9][a-z0-9-]*'))
   for (const flag of ['effort', 'meta', 'body'] as const) {
     if (!values[flag]) missing.push(v(`--${flag}`, 'required', 'absent', `--${flag} <value>`))
   }

@@ -117,5 +117,5 @@ $WITNESS recap --file "$DIR/recap.json" --ask <id>
 - `--ask <id>` names the ask the recap answers, and `next` stops offering it.
 - **An amendment** runs `$WITNESS recap --amend --file "$DIR/recap.json"`, the recap naming its effort. It re-arms the decompose gate's feature-class stop: scope changed, scope gets re-approved.
 - **A confirmed recap deletes the draft.** Nothing is left to resume.
-- Effort slug: kebab-case `[a-z0-9-]+`, minted from the scope title. A `slug-reuse` refusal means that history exists — mint a different slug; histories never merge, and `--amend` is never the dodge.
+- Effort slug: kebab-case `[a-z0-9][a-z0-9-]*`, minted from the scope title. A `slug-reuse` refusal means that history exists — mint a different slug; histories never merge, and `--amend` is never the dodge.
 - The refusal repair loop applies (3 attempts, then stop with the violation list).

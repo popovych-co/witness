@@ -1,7 +1,7 @@
 import { cliAct, type Act } from './act.js'
 import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
 import type { Ctx } from './cli.js'
-import { ID_RE } from './dsl.js'
+import { isId } from './dsl.js'
 import type { GateCheck } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { execSync } from './spawn.js'
@@ -101,7 +101,6 @@ export interface HeldRow { criterion: string; need: string; satisfy: string; spe
 // one only while both are ids: a forged one could otherwise spell a command before the real one. A
 // journaled row is parsed JSON, so an id is a string too.
 const STORED_SATISFY = /^witness satisfy [a-z0-9][a-z0-9-]* --need [a-z0-9][a-z0-9-]*$/
-const isId = (s: unknown): s is string => typeof s === 'string' && ID_RE.test(s)
 export function heldSatisfy(h: HeldRow): string | undefined {
   if (!isId(h.criterion) || !isId(h.need)) return undefined
   if (h.spec !== undefined) return isId(h.spec) ? cliAct('satisfy', h.spec, '--need', h.need).line : undefined
@@ -123,8 +122,13 @@ export interface UnmetNeed {
   satisfyAct: Act                 // row 239 (ruling R16(b)): that command as an act, which a `run:` row prints (`runRow`)
 }
 
+// Row 239 (the plan's B15). Canon is text a hand edit can change, and a doc's id and a need's are
+// printed into the satisfy offered and on the line that heads it: a doc or a need named outside the
+// id set is never listed. A need with no id keeps its index among every manual need, as `satisfy`
+// counts them.
 export function unmetNeeds(canon: Canon): UnmetNeed[] {
   const docs = canon.docs
+    .filter((d) => isId(d.meta.id))
     .filter((d) => d.meta.type === 'spec' || (d.meta.type === 'plan' && ['draft', 'approved'].includes(String(d.meta.status))))
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
   return docs.flatMap((d) => {
@@ -133,6 +137,7 @@ export function unmetNeeds(canon: Canon): UnmetNeed[] {
     const needs = Array.isArray(d.meta.needs) ? (d.meta.needs as Array<Record<string, unknown>>) : []
     const manuals = needs.filter((n) => typeof n.manual === 'string') as Array<{ id?: string; manual: string; satisfied?: boolean; holds?: unknown }>
     return manuals.flatMap((n, i) => {
+      if (n.id !== undefined && !isId(n.id)) return []
       const ref = n.id ?? String(i + 1)
       const satisfyAct = cliAct('satisfy', id, '--need', ref)
       return needMet(d, n) ? [] : [{

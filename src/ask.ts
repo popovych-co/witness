@@ -1,6 +1,7 @@
 import { cliAct } from './act.js'
 import type { Ctx } from './cli.js'
 import { draftLine, dropDraft } from './drafts.js'
+import { isId } from './dsl.js'
 import { FLOOR_STREAM } from './floor.js'
 import { stateCommit } from './gitio.js'
 import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
@@ -41,7 +42,9 @@ export function askQueue(root: string): AskStatus[] {
   // Row 194. A `human-decision` entry on this stream is an old recap check (row 177): history
   // `log` still prints, and nothing a queue derives from.
   for (const e of readStream(root, ASK_STREAM)) {
-    if (e.t === 'ask') out.push({ id: String(e.id), text: String(e.text), state: 'unanswered' })
+    // Row 239 (the plan's B15). An ask is routed as `--ask <id>`, and the journal is text a commit can
+    // make anything: an ask named outside the id set is never queued (`witness check`: `ask-id`).
+    if (e.t === 'ask' && isId(e.id)) out.push({ id: e.id, text: String(e.text), state: 'unanswered' })
     else if (e.t === 'ask-withdrawn') {
       const a = out.find((x) => x.id === e.ask)
       if (a) a.state = 'withdrawn'
@@ -92,8 +95,9 @@ export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: str
     const unanswered = (): number => askQueue(root).filter((a) => a.state === 'unanswered').length
     const open = queue.find((a) => a.state === 'unanswered' && askText(a.text) === askText(text))
     if (open !== undefined) return ok({ id: open.id, unanswered: unanswered(), already: true })
-    // numbered under the lock: two queuers racing must not both take the next id
-    const id = `a${queue.length + 1}`
+    // numbered under the lock: two queuers racing must not both take the next id. Row 239: counted
+    // over every ask the stream holds, the ones the queue skips included, so no id is minted twice.
+    const id = `a${readStream(root, ASK_STREAM).filter((e) => e.t === 'ask').length + 1}`
     const entry = { t: 'ask' as const, id, text: text.trim() }
     const stream = journalRel(ASK_STREAM)
     const res = withTxn(root, { op: `ask(${id})`, files: [stream], journal: { stream: ASK_STREAM, line: entryLine(entry) } }, () => {

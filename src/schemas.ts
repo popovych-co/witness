@@ -16,7 +16,7 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
   const out: Violation[] = []
   const id = meta.id
   if (typeof id !== 'string' || !ID_RE.test(id)) {
-    out.push(v('id', 'id-charset', String(id ?? 'absent'), '[a-z0-9-]+'))
+    out.push(v('id', 'id-charset', String(id ?? 'absent'), '[a-z0-9][a-z0-9-]*'))
   }
   const type = meta.type
   if (type !== 'spec' && type !== 'plan' && type !== 'principles') {
@@ -34,7 +34,7 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
   }
   const depends = meta.depends ?? []
   if (!Array.isArray(depends) || depends.some((d) => typeof d !== 'string' || !ID_RE.test(d))) {
-    out.push(v('depends', 'shape', JSON.stringify(meta.depends), 'list of ids matching [a-z0-9-]+'))
+    out.push(v('depends', 'shape', JSON.stringify(meta.depends), 'list of ids matching [a-z0-9][a-z0-9-]*'))
   }
   out.push(...validateNeeds(meta.needs))
   out.push(...validateHolds(meta))
@@ -86,6 +86,10 @@ export function validateDoc(meta: Record<string, unknown>, body: string): Violat
     if (meta['decisions-from'] !== undefined && (typeof meta['decisions-from'] !== 'string' || !/^[0-9a-f]{64}$/.test(String(meta['decisions-from'])))) {
       out.push(v('decisions-from', 'shape', String(meta['decisions-from']), '64-hex carried-decisions sha'))
     }
+    // Row 239. Ship stamps the PR's number (`stampPr`), and the merge a human is offered names it.
+    if (meta.pr !== undefined && !(typeof meta.pr === 'number' && Number.isInteger(meta.pr) && meta.pr > 0)) {
+      out.push(v('pr', 'shape', String(meta.pr), 'a positive integer — the PR number ship stamps'))
+    }
     out.push(...validateSteps(meta.steps, body))
   }
 
@@ -105,7 +109,7 @@ function validateSteps(raw: unknown, body: string): Violation[] {
     const at = `steps[${i}]`
     const e = (typeof s === 'object' && s !== null ? s : {}) as Record<string, unknown>
     if (typeof e.id !== 'string' || !ID_RE.test(e.id)) {
-      out.push(v(`${at}.id`, 'id-charset', String(e.id ?? 'absent'), '[a-z0-9-]+'))
+      out.push(v(`${at}.id`, 'id-charset', String(e.id ?? 'absent'), '[a-z0-9][a-z0-9-]*'))
     } else if (ids.has(e.id)) {
       out.push(v(`${at}.id`, 'id-unique', e.id, 'unique per plan'))
     } else {

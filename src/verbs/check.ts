@@ -16,6 +16,7 @@ import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
 import { ASK_STREAM, reservedId } from '../ask.js'
+import { ID_RE, isId } from '../dsl.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
@@ -28,7 +29,7 @@ import { pendingDecision } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
 import { findById, findCycle, loadCanon, planFinished } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
-import { kv, rows, shellWord } from '../toon.js'
+import { kv, rows, shellWord, visible } from '../toon.js'
 import { pendingTxn } from '../txn.js'
 import { cliAct } from '../act.js'
 import { listWorktrees, materializedCanon, RESIDUE_GOT, worktreePath } from '../worktree.js'
@@ -301,7 +302,20 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     for (const file of readdirSync(journalDir)) {
       if (!file.endsWith('.jsonl')) continue
       const id = file.slice(0, -'.jsonl'.length)
+      // Row 239 (the plan's B15). Witness never names a stream outside the id set, and no list of
+      // efforts holds one (`effortStreams`): it is reported, its name spelled out, and judged no further.
+      if (!ID_RE.test(id)) {
+        findings.push(f('warn', 'journal', visible(file), 'stream-name',
+          'a stream named outside [a-z0-9][a-z0-9-]* — witness never writes one and never offers it as a command'))
+        continue
+      }
       const entries = readStream(root, id)
+      // Row 239 (the plan's B15). Every ask the queue reads, which skips one named outside the set.
+      if (id === ASK_STREAM) {
+        for (const e of entries.filter((x) => x.t === 'ask' && !isId(x.id))) {
+          findings.push(f('warn', 'journal', file, 'ask-id', `ask ${visible(String(e.id))} is named outside [a-z0-9][a-z0-9-]* — never offered as a command`))
+        }
+      }
       if (id === ASK_STREAM && entries[0] !== undefined && entries[0].t !== 'ask') {
         findings.push(f('error', 'journal', file, 'reserved-stream-taken', `witness's ask queue is held by a ${entries[0].t} history — witness ask refuses until it moves`))
         continue

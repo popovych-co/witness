@@ -51,3 +51,14 @@ describe('validateNeeds', () => {
     expect(validateNeeds([{ manual: 'x' }])[0]?.rule).toBe('required')
   })
 })
+
+// Row 239 (the plan's B14). A criterion's and a need's id are printed into commands witness offers,
+// where a word that starts with `-` is read as a flag.
+describe('ids (row 239)', () => {
+  it('a criterion or need id may not start with - (row 239)', () => {
+    expect(validateCriteria([{ id: '-x', cmd: 'true' }], 'x'))
+      .toEqual([{ field: 'criteria[0].id', rule: 'id-charset', got: '-x', want: '[a-z0-9][a-z0-9-]*' }])
+    expect(validateNeeds([{ id: '-n', manual: 'x', satisfied: false }]))
+      .toEqual([{ field: 'needs[0].id', rule: 'id-charset', got: '-n', want: '[a-z0-9][a-z0-9-]*' }])
+  })
+})

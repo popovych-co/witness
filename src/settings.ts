@@ -46,10 +46,20 @@ export interface Setting {
   ambient?: true
   // Read outside the CLI by a dependency-free hook (§4.9): its path never moves or renames.
   hookRead?: true
+  // Row 239. A `text` value's character set, where the value is printed into a command offered to
+  // be pasted. Not part of what a schema promises (`fingerprint`): it refuses only values no
+  // shell-safe line can carry, and `migrate` has nothing to rewrite.
+  pattern?: RegExp
   group: Group
   comment: string   // the end-of-line comment in the file
   want: string      // want: of an `invalid` refusal
 }
+
+// Row 239 (the plan's B14). The ship branch is printed into the git commands a refusal offers. Its
+// characters are letters, digits and `. _ / + -`, under git's ref rules for them: no `..`, `//` or
+// `/.`, and no `.lock`, `.` or `/` at the end. It starts with a letter or a digit, so it is never
+// read as a flag, and every name it admits prints bare on every platform.
+export const BRANCH_RE = /^(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*\.lock$)[A-Za-z0-9][A-Za-z0-9._\/+-]*(?<![./])$/
 
 // A setting an older schema knew and the current one does not. Known up to `until`; its
 // refusal in a newer file says what replaced it.
@@ -132,7 +142,11 @@ export const SETTINGS: readonly Setting[] = [
     path: 'ship.lint', shape: { kind: 'text' }, since: 1, defaults: { 1: 'npm run lint' }, ambient: true, group: 'setup',
     comment: 'the lint command ship runs', want: 'a shell command',
   },
-  { path: 'ship.branch', shape: { kind: 'text' }, since: 1, defaults: { 1: 'main' }, group: 'setup', comment: 'the branch witness ships into', want: 'a branch name' },
+  {
+    path: 'ship.branch', shape: { kind: 'text' }, pattern: BRANCH_RE, since: 1, defaults: { 1: 'main' }, group: 'setup',
+    comment: 'the branch witness ships into',
+    want: 'a branch name: letters, digits and . _ / + -, as git allows them — it is printed into git commands',
+  },
   {
     path: 'ship.merge', shape: { kind: 'enum', values: ['merge', 'squash', 'rebase'] }, since: 1, defaults: { 1: 'merge' }, group: 'setup',
     comment: 'how ship merges its own PR under autonomy · merge | squash | rebase', want: 'merge | squash | rebase',
@@ -281,7 +295,8 @@ export function defaultValues(opts: { harness?: string; schema?: number } = {}):
 
 // What a schema promises a file means: every path, shape, `since` and default in force at
 // that schema. Comments, wants and groups are left out, so rewording one needs no schema step:
-// `migrate` refreshes witness's comments on every run (§4.1).
+// `migrate` refreshes witness's comments on every run (§4.1). Row 239: so is a `pattern`, which
+// refuses only values no shell-safe line can carry.
 export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS): string {
   const live = list.filter((s) => s.since <= schema)
     .map((s) => [s.path, s.shape, s.since, defaultAt(s, schema) ?? null] as const)

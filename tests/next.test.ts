@@ -224,13 +224,17 @@ describe('next: lines are acts, one command each (row 239)', () => {
     expect(lines.filter((l) => l.startsWith('next: ') && l.includes(' | '))).toEqual([])
   })
 
-  it('a next: or run: value holding a comma prints raw, never TOON-quoted (row 239, D120)', async () => {
-    // An effort stream committed by hand: its file name is its slug, and it opens with a recap.
+  // Row 239 (the plan's B15). An effort stream committed by hand: its file name is its slug, and it
+  // opens with a recap. A slug holding a comma is outside the id set, so the stream is never offered,
+  // and `check` reports it. D120's raw `next:` and `run:` values are `cmd()`'s, pinned in
+  // tests/exits-line.test.ts.
+  it('an effort stream named outside the id set is never offered, a comma in it included (row 239, B15)', async () => {
     const repo = await seededRepo({ noRecap: true })
     commitEntry(repo, 'e,x', { t: 'recap', ...RECAP, effort: 'e,x' })
     const out = await nextLine(repo)
-    expect(out.split('\n').filter((l) => l.startsWith('next: ')))
-      .toEqual(['next: witness write <spec-id> --effort e,x --meta m.json --body b.md'])
+    expect(out.split('\n').filter((l) => l.startsWith('next: '))).toEqual(['next: witness recap --file <recap.json>'])
+    expect(out).not.toContain('e,x')
+    expect((await repo.cli(['check'])).stdout).toContain('warn,journal,"e,x.jsonl",stream-name,')
   })
 })
 

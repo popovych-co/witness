@@ -12,6 +12,7 @@ import { registerGate, type GateInput } from '../gate.js'
 import { designPending, designStamp } from '../design.js'
 import { basisMoved, planBasis, planDecisionsTerm, specBasis } from '../basis.js'
 import { decisionDelta, decisionLines, recapLines } from '../decisions.js'
+import { isId } from '../dsl.js'
 import { rows } from '../toon.js'
 import type { GateCheck } from '../rounds.js'
 import { cliAct } from '../act.js'
@@ -135,9 +136,12 @@ registerGate({
     return plan && parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
   },
 
+  // Row 239 (the plan's B15). The upstream is printed into `--revise --upstream <id>`: a parent
+  // outside the id set gives none, as `next`'s `upstreamFor` gives none.
   upstreamOf(_root, canon, planId) {
     const plan = findById(canon, planId)
-    return plan && plan.meta.type === 'plan' ? String(plan.meta.parent) : undefined
+    const parent = plan && plan.meta.type === 'plan' ? String(plan.meta.parent) : undefined
+    return isId(parent) ? parent : undefined
   },
 
   approveStamps(_root, canon, planId) {

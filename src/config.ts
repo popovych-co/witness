@@ -145,8 +145,9 @@ export function checkValue(s: Setting, val: unknown): Result<unknown> {
       return typeof val === 'boolean' ? ok(val) : invalid()
     case 'enum':
       return typeof val === 'string' && shape.values.includes(val) ? ok(val) : invalid()
+    // Row 239. A setting with a `pattern` holds only what it admits.
     case 'text':
-      return typeof val === 'string' && val !== '' ? ok(val) : invalid()
+      return typeof val === 'string' && val !== '' && (s.pattern?.test(val) ?? true) ? ok(val) : invalid()
     case 'dir':
       return typeof val === 'string' && val !== '' ? relPath(field, val, 'directory') : invalid()
     case 'files': {

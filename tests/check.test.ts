@@ -9,7 +9,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { SPEC_META, approve, decidedRepo, turnDecision, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig } from './helpers.js'
+import { RECAP, SPEC_META, approve, commitEntry, decidedRepo, turnDecision, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig } from './helpers.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -107,6 +107,24 @@ describe('witness check', () => {
     repo.git('commit', '-m', 'add the doc')
     const ok = await repo.cli(['check'])
     expect(ok.stdout).not.toContain('doc-missing')
+  })
+
+  // Row 239 (the plan's B15). A stream's name is its file's, and an ask's id is the journal's text:
+  // witness writes neither outside the id set, and one committed by hand is reported and never
+  // offered — no `next:` names the stream, and no `--ask` routes the ask.
+  it('a journal name outside the id set is reported, never offered (row 239)', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    commitEntry(repo, 'e$(touch M1)', { t: 'recap', ...RECAP, effort: 'e$(touch M1)' })
+    expect((await repo.cli(['check'])).stdout).toContain('warn,journal,e$(touch M1).jsonl,stream-name,'
+      + 'a stream named outside [a-z0-9][a-z0-9-]* — witness never writes one and never offers it as a command')
+    const next = await repo.cli(['next'])
+    expect(next.stdout.split('\n').filter((l) => l.includes('e$(touch M1)')), next.stdout).toEqual([])
+
+    commitEntry(repo, 'asks', { t: 'ask', id: 'a$(x)', text: 'build the thing' })
+    expect((await repo.cli(['check'])).stdout)
+      .toContain('warn,journal,asks.jsonl,ask-id,ask a$(x) is named outside [a-z0-9][a-z0-9-]* — never offered as a command')
+    const routed = await repo.cli(['next'])
+    expect(routed.stdout, routed.stdout).not.toContain('--ask')
   })
 })
 

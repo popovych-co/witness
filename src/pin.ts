@@ -40,14 +40,23 @@ export function parsePin(field: string, raw: string): Result<ParsedPin> {
 // Names that re-point when a vendor ships a new model, so a pin naming one is no pin.
 export const MODEL_ALIASES: readonly string[] = ['sonnet', 'opus', 'haiku', 'fable', 'default', 'latest']
 
-// The one pin check (row 193): the grammar, then the alias refusal. Every pinned setting —
-// a gate's model, the arbiter's — runs it where it is read and where it is used.
+// Row 239 (the plan's B14). What a pin may hold: it is printed after `--model` in the handoff a human
+// pastes. `@` keeps a Vertex-style `model@version` id, and `[`, `]` Claude Code's `[1m]` ids, which
+// the quoter quotes; a leading letter or digit keeps a pin from reading as a flag.
+const PIN_CHARSET = /^[A-Za-z0-9][A-Za-z0-9._:\/@\[\]-]*$/
+
+// The one pin check (row 193): the grammar, then the alias refusal, then the character set. Every
+// pinned setting — a gate's model, the arbiter's — runs it where it is read and where it is used.
 export function checkPin(field: string, raw: string): Result<string> {
   const parsed = parsePin(field, raw)
   if (!parsed.ok) return refuse(parsed.violations)
   if (MODEL_ALIASES.includes(parsed.value.model)) {
     return refuse([v(field, 'alias-refused', raw,
       'an exact model id — an alias re-points when its vendor ships a new model (Decision 55)')])
+  }
+  if (!PIN_CHARSET.test(raw)) {
+    return refuse([v(field, 'pin-charset', raw,
+      'letters, digits and . _ : / @ [ ] -, starting with a letter or digit — a pin is printed into commands a human pastes')])
   }
   return ok(raw)
 }

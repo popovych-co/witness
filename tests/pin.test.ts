@@ -16,6 +16,21 @@ describe('checkPin', () => {
     if (!bad.ok) expect(bad.violations[0]).toMatchObject({ field: 'arbiter.model', rule: 'pin-malformed', want: '[provider/]model[:thinking]' })
     expect(checkPin('gates.ship.model', 'claude-opus-5-5:high')).toEqual({ ok: true, value: 'claude-opus-5-5:high' })
   })
+
+  // Row 239 (the plan's B14). A pin is printed after `--model` in the handoff a human pastes. `@`
+  // keeps a Vertex-style `model@version` id, and `[`, `]` Claude Code's `[1m]` ids, which the
+  // quoter quotes.
+  it('a pin outside the printable set is refused (row 239)', () => {
+    for (const raw of ['claude$(x)', 'a b']) {
+      expect(checkPin('gates.plan.model', raw), raw).toEqual({ ok: false, violations: [{
+        field: 'gates.plan.model', rule: 'pin-charset', got: raw,
+        want: 'letters, digits and . _ : / @ [ ] -, starting with a letter or digit — a pin is printed into commands a human pastes',
+      }] })
+    }
+    for (const raw of ['m', 'claude-opus-5-5', 'anthropic/claude-x:high', 'google/gemini-3.6-pro:low', 'claude-x@20250514', 'claude-opus-4-6[1m]']) {
+      expect(checkPin('gates.plan.model', raw), raw).toEqual({ ok: true, value: raw })
+    }
+  })
 })
 
 describe('parsePin', () => {

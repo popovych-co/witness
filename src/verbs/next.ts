@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { askText, nextAsk, type AskStatus } from '../ask.js'
 import { draftLine } from '../drafts.js'
+import { isId } from '../dsl.js'
 import { unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
@@ -574,10 +575,12 @@ function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
 // one-way on purpose — the same edge that moved `liveExits` out of gate.ts into rounds.ts.
 // Tier 2 hand-resolved it inline in three places; this is that derivation named once, and
 // it agrees with the registry by test (exits-line.test.ts pins upstreamOf for all five).
+// Row 239 (the plan's B15): a plan's parent outside the id set gives no upstream, as the plan
+// gate's `upstreamOf` gives none.
 function upstreamFor(root: string, gate: string, id: string, parent?: string): string | undefined {
   if (gate === 'decompose') return id
   if (gate === 'design') return effortOf(root, id)
-  if (gate === 'plan') return parent
+  if (gate === 'plan') return isId(parent) ? parent : undefined
   return id   // implement and ship judge the plan they run under
 }
 
@@ -604,13 +607,14 @@ export function parkedGates(
 ): Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> {
   const out: Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> = []
   // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
-  // effort abandoned, offers nothing to reopen or approve.
+  // effort abandoned, offers nothing to reopen or approve. Row 239 (the plan's B15): a doc named
+  // outside the id set is never offered (`effortStreams` already holds efforts to it).
   const seen: Array<{ id: string; parent?: string; gates: readonly string[] }> = [
     ...effortStreams(root).filter((slug) => !effortAbandoned(readStream(root, slug)))
       .map((slug) => ({ id: slug, gates: ['decompose'] as const })),
-    ...canon.docs.filter((d) => d.meta.type === 'plan' && !planFinished(d))
+    ...canon.docs.filter((d) => d.meta.type === 'plan' && !planFinished(d) && isId(d.meta.id))
       .map((d) => ({ id: String(d.meta.id), parent: String(d.meta.parent), gates: ['plan', 'implement', 'ship'] as const })),
-    ...canon.docs.filter((d) => d.meta.type === 'spec')
+    ...canon.docs.filter((d) => d.meta.type === 'spec' && isId(d.meta.id))
       .map((d) => ({ id: String(d.meta.id), gates: ['design'] as const })),
   ]
   for (const { id, parent, gates } of seen) {
@@ -750,11 +754,14 @@ function owedFrom(
   return out
 }
 
+// Row 239 (the plan's B15). A doc named outside the id set is never offered; `liveEfforts` reads
+// `effortStreams`, which holds efforts to it. `computeNext`'s own walk meets no such doc: it routes
+// `check` while any doc breaks its schema.
 export function owedDecisions(root: string, canon: Canon): OwedDecision[] {
   const byId = (a: CanonDoc, b: CanonDoc) => String(a.meta.id).localeCompare(String(b.meta.id))
   return owedFrom(root, liveEfforts(root),
-    canon.docs.filter((d) => d.meta.type === 'spec').sort(byId),
-    canon.docs.filter((d) => d.meta.type === 'plan').sort(byId))
+    canon.docs.filter((d) => d.meta.type === 'spec' && isId(d.meta.id)).sort(byId),
+    canon.docs.filter((d) => d.meta.type === 'plan' && isId(d.meta.id)).sort(byId))
 }
 
 // Both notes survive: a caller's own note must not silently drop the routing note that
