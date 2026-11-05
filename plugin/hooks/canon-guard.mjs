@@ -213,36 +213,71 @@ function stateTargetRel(root, cwd, token, dirs) {
   return undefined;
 }
 
+// Row 239. The quoter's twin. A word of a line offered to be pasted prints as src/toon.ts's
+// `shellWord` prints it, and on Windows a line holding a character cmd.exe or Windows PowerShell
+// can read as more than text is shown and never offered, as its `withheldOn` says. This file
+// imports nothing (Decision 13), so the two are copied here, and tests/canon-guard.test.ts holds
+// them equal to toon.ts's over a corpus of hostile words on each platform: change both or neither.
+// Off Windows a word is bare in POSIX's safe set and never when it starts with `=` (zsh reads a
+// bare `=ls` as a command's path), else single-quoted; on Windows a flag stays bare, and any other
+// word is bare in PowerShell's safe set, else single-quoted with each of its five quotes doubled.
+const posixQuoted = (p) => `'${p.replaceAll("'", "'\\''")}'`;
+const psQuoted = (p) => `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`;
+const shellArg = (p) => (/^(?!=)[\w@%+=:,./-]+$/.test(p) ? p : posixQuoted(p));
+const psArg = (p) => (/^[\w%+=:./\\][\w%+=:./\\-]*$/.test(p) ? p : psQuoted(p));
+const WINDOWS_FLAG = /^--?[A-Za-z][A-Za-z0-9-]*$/;
+export function shellWord(w, platform = process.platform) {
+  if (platform !== 'win32') return shellArg(w);
+  return WINDOWS_FLAG.test(w) ? w : psArg(w);
+}
+const WINDOWS_RISKY = ['&', '|', '^', '<', '>', '"', '%', '!'];
+export function withheldOn(words, platform = process.platform) {
+  if (platform !== 'win32') return undefined;
+  const held = WINDOWS_RISKY.filter((c) => words.some((w) => w.includes(c)));
+  return held.length === 0
+    ? undefined
+    : `not offered on Windows — it holds ${held.join(' ')}, which cmd.exe or Windows PowerShell can read as more than text`;
+}
+
 // Decision 146. D133 made the reason name the path and what writes it; this completes it to
 // the remedy contract gate stops already honor (D121): a shape for authoring, and a fully
 // runnable `adopt` for an edit already made. No effort slug is knowable inside a hook that
 // reads only the tool call, so the write line stays a LABELLED SHAPE and never a `run:` —
 // a rendered command that needs editing before it runs is D129's defect in a new dress.
-function remedyFor(rel, root) {
+//
+// Row 239. The id and the path are the agent's own, a repo file name, so each prints through the
+// quoter, for the shell the agent's harness pastes into: the adopt runs exactly that path. Where
+// Windows withholds it, the adopt is shown with why, and no `run:` offers it.
+function remedyFor(rel, root, platform) {
   const [specs, plans, designs] = canonDirs(root);
   const base = rel.split('/').pop() ?? rel;
   if (isStateRel(rel, [designs])) {
     const id = base.replace(/\.html$/, '');
-    return `remedy: witness design ${id} --file <your.html> (author in $(mktemp -d); --open shows the current one)`;
+    return `remedy: witness design ${shellWord(id, platform)} --file <your.html> (author in $(mktemp -d); --open shows the current one)`;
   }
   const id = base.replace(/\.md$/, '');
   const kind = isStateRel(rel, [plans]) ? plans : specs;
+  const adopt = ['adopt', rel];
+  const line = ['witness', ...adopt].map((w) => shellWord(w, platform)).join(' ');
+  const withheld = withheldOn(adopt, platform);
   return (
-    `remedy: witness write ${id} --effort <effort> --meta <m.json> --body <b.md> ` +
-    `(author in $(mktemp -d), never in ${kind}/) · already hand-edited? run: witness adopt ${rel}`
+    `remedy: witness write ${shellWord(id, platform)} --effort <effort> --meta <m.json> --body <b.md> ` +
+    `(author in $(mktemp -d), never in ${kind}/) · already hand-edited? ` +
+    (withheld === undefined ? `run: ${line}` : `${line} — ${withheld}`)
   );
 }
 
-function reasonFor(what, rel, root) {
+function reasonFor(what, rel, root, platform) {
   return (
     `witness: ${what} is CLI-written state — use the witness CLI (write / design / adopt), ` +
     'never a direct edit. Direct edits are refused; the Witness-State trailer audit catches end-runs. ' +
-    remedyFor(rel, root)
+    remedyFor(rel, root, platform)
   );
 }
 
 /**
- * @param {{ tool?: unknown, input?: unknown, cwd?: unknown }} call
+ * Row 239: `platform` is the shell the remedy is printed for, this machine's unless a test says.
+ * @param {{ tool?: unknown, input?: unknown, cwd?: unknown, platform?: unknown }} call
  * @returns {{ block: true, reason: string } | undefined}
  */
 export function canonGuard(call) {
@@ -250,6 +285,7 @@ export function canonGuard(call) {
     const tool = typeof call?.tool === 'string' ? call.tool : '';
     const args = call?.input && typeof call.input === 'object' ? call.input : {};
     const cwd = typeof call?.cwd === 'string' && call.cwd !== '' ? call.cwd : process.cwd();
+    const platform = typeof call?.platform === 'string' && call.platform !== '' ? call.platform : process.platform;
 
     if (WRITE_TOOLS.has(tool)) {
       // Claude Code sends file_path; pi sends path (core/tools/write.js:12).
@@ -262,7 +298,7 @@ export function canonGuard(call) {
       if (rel.startsWith('..')) return undefined;
       if (!isStateRel(rel, canonDirs(root))) return undefined;
       const posix = rel.split('\\').join('/');
-      return { block: true, reason: reasonFor(posix, posix, root) };
+      return { block: true, reason: reasonFor(posix, posix, root, platform) };
     }
 
     if (BASH_TOOLS.has(tool)) {
@@ -283,7 +319,7 @@ export function canonGuard(call) {
           // set and never the token that tripped it — which is why a block on a search string
           // read as a bug in the guard rather than a fact about the command.
           const rel = stateTargetRel(root, cwd, token, dirs);
-          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`, rel, root) };
+          if (rel) return { block: true, reason: reasonFor(`${rel} (${how})`, rel, root, platform) };
         }
       }
       return undefined;

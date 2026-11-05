@@ -11,7 +11,7 @@ import { unmetNeeds } from './needs.js'
 import type { Decision } from './recommend.js'
 import type { DecisionEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
-import { cmd, logSafe, visible } from './toon.js'
+import { cmd, logSafe, shellLine, visible } from './toon.js'
 import { pendingTxn } from './txn.js'
 import { owedDecisions, parkedGates } from './verbs/next.js'
 import { recoverChoice } from './verbs/recover.js'
@@ -71,6 +71,12 @@ export const WAIT_KINDS: ReadonlySet<WaitKind> =
   new Set(['pending-txn', 'design-look', 'trust-grant', 'need', 'decision', 'conversation', 'merge'])
 
 const prOf = (line: string): string | undefined => /PR #(\d+)/.exec(line)?.[1]
+// Row 239. The frontmatter's `pr`, read as `stamp.ts` and `wait` read it, and named only when it is
+// a positive integer: the CLI writes a number there, and a hand edit can write any text.
+const prOfMeta = (meta: unknown): string | undefined => {
+  const n = Number(meta)
+  return Number.isInteger(n) && n > 0 ? String(n) : undefined
+}
 
 export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[]): NeedYou[] {
   const items: NeedYou[] = []
@@ -123,8 +129,7 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
       add({ kind: 'conversation', target: a.target, key: `conversation:${a.target}`, ...(ask !== undefined ? { ask } : {}),
         ...(driver.ok ? { handoff: handoffLine(driver.value.harness, root, undefined) } : {}) })
     } else {
-      const meta = findById(canon, a.target)?.meta.pr
-      const pr = (a.line !== undefined ? prOf(a.line) : undefined) ?? (meta !== undefined ? String(meta) : undefined)
+      const pr = (a.line !== undefined ? prOf(a.line) : undefined) ?? prOfMeta(findById(canon, a.target)?.meta.pr)
       add({ kind: 'merge', target: a.target, key: `merge:${a.target}`, ...(pr ? { pr } : {}) })
     }
   }
@@ -189,8 +194,10 @@ export function needYouRows(item: NeedYou): string[] {
       const who = item.target === TARGETLESS ? `brainstorm${item.ask !== undefined ? ` · ask ${item.ask}` : ''}` : item.target
       return [`wait: conversation · ${who}`, ...(item.handoff !== undefined ? [`  run: ${item.handoff}`] : [])]
     }
+    // Row 239. Another tool's command, through the one renderer; `needsYou` names only a number.
     case 'merge':
-      return [`wait: merge · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''}`, ...(item.pr ? [`  run: gh pr merge ${item.pr}`] : [])]
+      return [`wait: merge · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''}`,
+        ...(item.pr ? [`  run: ${shellLine(['gh', 'pr', 'merge', item.pr])}`] : [])]
     // Row 239 (design §3.4b). At the bound the reopen is the endgame menu, and a menu pasted whole
     // is a pipeline that runs every act it names: it prints as `exits:`, the label `decide --show`
     // gives a set of choices, and `run:` is kept for one command.

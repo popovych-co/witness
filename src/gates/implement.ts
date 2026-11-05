@@ -17,6 +17,7 @@ import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import type { GateCheck } from '../rounds.js'
+import { offeredLine } from '../toon.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
   const diff = git(wt, 'diff', base)
@@ -111,9 +112,11 @@ registerGate({
       const artRel = designRel(cfg.paths, String(plan.meta.parent))
       const artAbs = join(root, artRel)
       if (!existsSync(artAbs) || !statSync(artAbs).isFile()) {
+        // Row 239: the restore is another tool's command, through the one renderer. Where Windows
+        // withholds it there is no `run:`, and the want still names both ways back.
         return refuse([v('design', 'design-artifact-missing', artRel,
           'the approved living design the plan pins — restore it or re-run the design stage',
-          `git checkout -- ${artRel}`)])
+          offeredLine(['git', 'checkout', '--', artRel]))])
       }
       const living: LensDoc = { path: artRel, contents: readFileSync(artAbs, 'utf8') }
       lensOverrides['design-reviewer'] = {

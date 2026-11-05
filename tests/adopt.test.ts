@@ -5,7 +5,8 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import type { TestRepo } from './helpers.js'
 import {
-  approve, copyFixture, fixtureEnv, plantHolder, recapEffort, renamedAndResliced, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
+  approve, copyFixture, fixtureEnv, plantHolder, recapEffort, renamedAndResliced, SPEC_META, seededRepo, singleConfig, stampLive, writePlan,
+  writeSpec,
 } from './helpers.js'
 
 async function liveRepo(): Promise<TestRepo> {
@@ -87,6 +88,21 @@ describe('witness adopt', () => {
     expect(res.code).toBe(2)
     expect(res.stdout + res.stderr).toContain('git checkout HEAD --')
     expect(readStream(repo.root, 'auth-refresh').some((e) => e.t === 'adopt')).toBe(false)
+  })
+
+  // Row 239. The path is the agent's argument, a repo file name a hostile commit chose: the revert
+  // the help names is another tool's command, printed through the quoter.
+  it("adopt's revert help quotes the path it was given (row 239)", async () => {
+    const repo = await seededRepo()
+    const rel = 'specs/a$(touch M1).md'
+    const meta = { ...SPEC_META, id: 'a-m1', status: 'draft', criteria: [{ id: 'ac-rotate', test: '@spec:a-m1' }] }
+    repo.write(rel, serializeDoc({ meta, body: '## Motivation\nTokens leak.\n' }))
+    repo.git('add', rel)
+    repo.git('commit', '-q', '-m', 'a hand-made doc with no ## Behavior')
+    const res = await repo.cli(['adopt', rel])
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('missing ## Behavior')
+    expect(res.stderr).toContain("help: fix the file and re-run, or revert instead: git checkout HEAD -- 'specs/a$(touch M1).md'")
   })
 
   it('adopts a plan hand-edit without running any lane', async () => {

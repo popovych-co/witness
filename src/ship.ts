@@ -8,7 +8,7 @@ import { untrustedCmdsFor } from './allowlist.js'
 import { heldSatisfy, liftedHolds, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cmd, kv, logSafe } from './toon.js'
+import { cmd, kv, logSafe, shellLine } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
 import { recommend, renderDecision } from './recommend.js'
@@ -161,7 +161,8 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   // which is the exact failure this function exists to prevent.
   const fetched = tryGit(wt, 'fetch', remote, shipBranch)
   if (!fetched.ok) {
-    return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `git fetch ${remote} ${shipBranch} to succeed`)])
+    // Row 239: the fetch the want names is another tool's command, through the one renderer.
+    return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, shipBranch])} to succeed`)])
   }
   const base = `${remote}/${shipBranch}`
   if (tryGit(wt, 'merge-base', '--is-ancestor', base, 'HEAD').ok) return ok('clean')

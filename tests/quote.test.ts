@@ -1,10 +1,13 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
+import { actOn } from '../src/act.js'
+import { grantRows } from '../src/allowlist.js'
+import { handoffLine, loadHarness } from '../src/harness.js'
 import { offeredLine, quotedWord, shellArg, shellLine, shellWord, shellWords, withheldOn } from '../src/toon.js'
-import { PAYLOADS } from './shells.js'
-
-// Row 239. The hostile and awkward words: the paste payloads, a non-ASCII id, each single quote
-// PowerShell reads, a PowerShell variable, a space, a pair of quotes and the empty word.
-const CORPUS = [...PAYLOADS, '\u00fcber plan', "it's", 'a\u2018b\u2019c\u201ad\u201b', '$env:X', 'a b', "''", '']
+import { CORPUS } from './shells.js'
 
 // PowerShell's reading of one word, after its tokenizer: a word opening with any of its five
 // single quotes is a string running to the next one, where two together are one literal quote;
@@ -75,6 +78,29 @@ describe('one quoter for every pasted word (row 239)', () => {
     expect(offeredLine(['git', 'push', '-u', 'origin', 'main'], 'darwin')).toBe('git push -u origin main')
     expect(offeredLine(['git', 'push', '-u', 'origin', 'main'], 'win32')).toBe('git push -u origin main')
     expect(offeredLine(['git', 'checkout', '--', 'd&x.html'], 'win32')).toBeUndefined()
+  })
+
+  // Row 239 (the plan's B4, B5). Each kind of line a foreign word reaches, built for Windows around
+  // each character cmd.exe or Windows PowerShell reads: a trust grant's command, a restore remedy's
+  // path, a push remedy's branch and the canon guard's path are shown and never offered. The
+  // handoff's path is a cmdlet's argument, which PowerShell alone reads: quoted, never withheld.
+  it('on Windows every kind a foreign word reaches withholds a risky one (row 239)', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'quote-guard-'))
+    writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
+    const claude = loadHarness('claude-code')
+    if (!claude.ok) throw new Error('claude-code')
+    for (const c of ['&', '|', '^', '<', '>', '"', '%', '!']) {
+      expect(actOn('win32', ['trust', 'p1', '--cmd', `x${c}y`]).withheld, c).toBeDefined()
+      expect(grantRows('p1', { cmd: `x${c}y` }, 'win32').filter((r) => r.includes('--cmd')), c).toEqual([])
+      expect(offeredLine(['git', 'checkout', '--', `d${c}.html`], 'win32'), c).toBeUndefined()
+      expect(offeredLine(['git', 'push', '-u', 'origin', `b${c}`], 'win32'), c).toBeUndefined()
+      const guard = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${c}b.md`) }, cwd: repo, platform: 'win32' })
+      expect(guard?.block, c).toBe(true)
+      expect(guard?.reason, c).not.toContain('run: witness adopt')
+      expect(guard?.reason, c).toContain(`witness adopt ${shellWord(`specs/a${c}b.md`, 'win32')} \u2014 ${withheld(c)}`)
+      expect(handoffLine(claude.value, `C:\\a${c}b`, undefined, 'win32'), c)
+        .toBe(`Set-Location -LiteralPath 'C:\\a${c}b' -ErrorAction Stop; claude '/witness'`)
+    }
   })
 
   it("shellWords reads the quoter's grammar and a human's typing, and refuses an open quote", () => {

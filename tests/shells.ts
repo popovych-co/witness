@@ -38,6 +38,14 @@ export const REF_PAYLOADS: readonly string[] = [
   'main$(touch${IFS}M1)', 'main`touch${IFS}M2`', 'main;touch${IFS}M5;', 'main$(touch${=IFS}M7)',
 ]
 
+// Row 239. The hostile and awkward words a quoter is checked over: the paste payloads, a non-ASCII
+// id, each single quote PowerShell reads, a PowerShell variable, a space, a pair of quotes and the
+// empty word. Here, beside the payloads, so that src/toon.ts's quoter and the canon guard's twin
+// are held to one list.
+export const CORPUS: readonly string[] = [
+  ...PAYLOADS, '\u00fcber plan', "it's", 'a\u2018b\u2019c\u201ad\u201b', '$env:X', 'a b', "''", '',
+]
+
 // One line to paste, and the calls its stubs must receive, one argv each with the stub's name
 // first. With no `calls` the line is checked for inertness only, as for a form that is lossy in
 // the shell it lands in. A line that `cd`s makes its directory under a directory of its own and

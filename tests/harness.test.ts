@@ -349,6 +349,17 @@ describe('thinking-aware handoff rendering', () => {
     expect(handoffLine(claude, '/wt', undefined))
       .toBe("cd '/wt' && claude '/witness'")
   })
+
+  // Row 239 (the plan's B16). Windows PowerShell 5.1 has no `&&`, and a failed `Set-Location` is no
+  // terminating error: `-ErrorAction Stop` makes it one, so nothing after it on the pasted line runs
+  // (reasoned: there is no Windows here). The home and `/witness` are always quoted, as off Windows,
+  // and the thinking budget is set as an environment variable of the session.
+  it('the Windows handoff speaks PowerShell (row 239, B16)', () => {
+    expect(handoffLine(claude, 'C:\\w\\repo', 'claude-opus-5:high', 'win32'))
+      .toBe("Set-Location -LiteralPath 'C:\\w\\repo' -ErrorAction Stop; $env:MAX_THINKING_TOKENS = '16384'; claude --model claude-opus-5 '/witness'")
+    expect(handoffLine(pi, "C:\\o'b", 'claude-opus-5', 'win32'))
+      .toBe("Set-Location -LiteralPath 'C:\\o''b' -ErrorAction Stop; pi --model anthropic/claude-opus-5 '/witness'")
+  })
 })
 
 describe('claude envelope errors (B4)', () => {

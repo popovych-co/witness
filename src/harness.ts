@@ -5,6 +5,7 @@ import { basename, join } from 'node:path'
 import { CLAUDE_THINKING_BUDGET, parsePin, type ParsedPin } from './pin.js'
 import type { ToolPolicy } from './reviewer.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { quotedWord, shellLine, type Platform } from './toon.js'
 import { pinIn } from './version.js'
 import { claudeStream, piStream, type WorkerStream } from './worker-stream.js'
 
@@ -27,7 +28,7 @@ export interface Harness {
   name: HarnessName
   launch: string
   // No `modelFlag` template: Decision 88 made the model flag a renderer over the PARSED
-  // pin (modelArg), which a format string cannot express — it must choose a provider
+  // pin (modelFlags), which a format string cannot express — it must choose a provider
   // per-pin and append pi's native `:thinking` suffix. A leftover template would be a
   // standing invitation to re-derive the flag from it and restore bug B2.
   defaultProvider?: string
@@ -378,9 +379,9 @@ export function judgeLine(r: Result<{ harness: Harness; source: HarnessSource }>
 // for a provider-qualified pin — pastes cleanly, resolves to nothing: bug B2's shape.
 // Pi renders the provider and its native `:thinking` suffix; claude-code renders the
 // bare id and carries non-off thinking as a MAX_THINKING_TOKENS prefix on the line.
-// The model flag as ARGV, which is what a spawn takes; `modelArg` below is this same
-// answer joined for a pasteable line. Decision 88's renderer-over-a-parsed-pin, in the
-// shape both consumers can use without either re-deriving it.
+// The model flag as ARGV, which is what a spawn takes; `handoffLine` below prints this same
+// answer through the quoter for a pasteable line. Decision 88's renderer-over-a-parsed-pin,
+// in the shape both consumers can use without either re-deriving it.
 export function modelFlags(harness: Harness, model: string | undefined): string[] {
   if (model === undefined || model === '') return []
   const parsed = parsePin('gates.model', model)
@@ -403,21 +404,31 @@ export function thinkingEnv(harness: Harness, model: string | undefined): Record
   return { MAX_THINKING_TOKENS: String(CLAUDE_THINKING_BUDGET[parsed.value.thinking]) }
 }
 
-function modelArg(harness: Harness, model: string | undefined): string {
-  const flags = modelFlags(harness, model)
-  return flags.length === 0 ? '' : ` ${flags.join(' ')}`
+// Row 239. The line that hands the work to a session in another home, for the shell `platform`
+// pastes into, where it runs exactly this: change to `home`, then start the harness. The home and
+// `/witness` are always quoted (`quotedWord`): a checkout's path can hold a quote, a space or
+// `$(…)`, and the path once stood raw inside a `'…'` that its own quote closed. The launch and the
+// model flag print as argv words (`shellLine`): a pin's characters are checked where the config
+// loads, not here. Off Windows: `cd '<home>' && [MAX_THINKING_TOKENS=<n> ]<launch>[ --model <pin>]
+// '/witness'`. On Windows (the plan's B16) Windows PowerShell has no `&&`, and a failed
+// `Set-Location` is no terminating error: `-ErrorAction Stop` makes it one, so nothing after it on
+// the line runs, and the budget is set in the session's environment. The line is never withheld
+// (the plan's B5): the home is a cmdlet's argument, which PowerShell alone reads, and the words a
+// launch shim can hand cmd.exe are constants and a pin, whose character set holds none it reads.
+export function handoffLine(harness: Harness, home: string, model: string | undefined, platform: Platform = process.platform): string {
+  const budget = Object.entries(thinkingEnv(harness, model))
+  const launch = `${shellLine([harness.launch, ...modelFlags(harness, model)], platform)} ${quotedWord('/witness', platform)}`
+  if (platform === 'win32') {
+    const env = budget.map(([k, val]) => `$env:${k} = ${quotedWord(val, platform)}; `).join('')
+    return `Set-Location -LiteralPath ${quotedWord(home, platform)} -ErrorAction Stop; ${env}${launch}`
+  }
+  return `cd ${quotedWord(home, platform)} && ${budget.map(([k, val]) => `${k}=${val} `).join('')}${launch}`
 }
 
-// Single quotes: a double-quoted form trips toon esc() quoting and emits an
-// unpasteable line (see the note this replaces at verbs/next.ts:69).
-export function handoffLine(harness: Harness, home: string, model: string | undefined): string {
-  const budget = Object.entries(thinkingEnv(harness, model)).map(([k, val]) => `${k}=${val} `).join('')
-  return `cd '${home}' && ${budget}${harness.launch}${modelArg(harness, model)} '/witness'`
-}
-
-// No comma: toon's esc() quotes any value containing one (toon.ts:3), and a quoted
-// `relay: "/clear, then /witness"` is what the implement skill would then print
-// verbatim — the same class of defect as the double-quoted handoff note above.
+// The relay as the skill prints it: the harness's own command for a fresh context, then
+// `/witness`. Row 239: every reader prints it raw (`cmd()`, the plan's B18); its wording, with
+// no comma, dates from when it printed through `kv`, whose TOON quoting wrapped any value
+// holding one.
 export function relayLine(harness: Harness): string {
   return `${harness.relay} then /witness`
 }

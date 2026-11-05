@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { canonGuard } from '../plugin/hooks/canon-guard.mjs';
+import { canonGuard, shellWord as twinWord, withheldOn as twinWithheld } from '../plugin/hooks/canon-guard.mjs';
+import { shellWord, withheldOn } from '../src/toon.js';
+import { CORPUS } from './shells.js';
 
 function witnessRepo(config = 'schema: 1\n'): string {
   const dir = mkdtempSync(join(tmpdir(), 'canonguard-'));
@@ -230,5 +232,49 @@ describe('canonGuard — the refusal names the way back in', () => {
     const r = canonGuard({ tool: 'Bash', input: { command: 'echo hi > specs/a.md' }, cwd: repo });
     expect(r?.reason).toContain('specs/a.md (a redirect target)');
     expect(r?.reason).toContain('witness adopt specs/a.md');
+  });
+});
+
+// Row 239 (g2). The guard ships alone into a user's repo and imports nothing (Decision 13), so it
+// carries its own copy of the quoter, held here to src/toon.ts's over the quoter's corpus, each
+// branch of the Windows word rule (a flag B2 keeps bare, and the words psArg quotes or leaves) and
+// a word holding each character Windows withholds.
+describe('the quoter twin (row 239)', () => {
+  const WORDS = [
+    ...CORPUS, '-LiteralPath', '--', '=x', 'a&b', "''",
+    '--approve', '-u', '-a.b', '--%', 'a,b', '@x', 'C:\\w\\repo',
+    ...['&', '|', '^', '<', '>', '"', '%', '!'].map((c) => `x${c}y`),
+  ];
+
+  it.each(['darwin', 'linux', 'win32'])('quotes and withholds every word as toon.ts does, on %s', (platform) => {
+    for (const w of WORDS) {
+      expect(twinWord(w, platform), JSON.stringify(w)).toBe(shellWord(w, platform));
+      expect(twinWithheld([w], platform), JSON.stringify(w)).toBe(withheldOn([w], platform));
+    }
+    expect(twinWithheld(WORDS, platform)).toBe(withheldOn(WORDS, platform));
+  });
+
+  // The agent's own path, quoted where the shell would read it: the id in the write shape, and
+  // the path in the runnable adopt.
+  it('a blocked Write names the adopt with its path quoted', () => {
+    const repo = witnessRepo();
+    const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', "a'b c.md") }, cwd: repo });
+    expect(r?.reason).toContain("run: witness adopt 'specs/a'\\''b c.md'");
+    expect(r?.reason).toContain("remedy: witness write 'a'\\''b c' --effort <effort>");
+    const d = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'designs', 'x y.html') }, cwd: repo });
+    expect(d?.reason).toContain("remedy: witness design 'x y' --file <your.html>");
+  });
+
+  // B5: on Windows a path holding a character cmd.exe or Windows PowerShell can read is shown with
+  // why, and never offered as a `run:`.
+  it('on Windows a risky path is shown, never offered', () => {
+    const repo = witnessRepo();
+    const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', 'a&b.md') }, cwd: repo, platform: 'win32' });
+    expect(r?.block).toBe(true);
+    expect(r?.reason).not.toContain('run: witness adopt');
+    expect(r?.reason).toContain('not offered on Windows');
+    expect(r?.reason).toMatch(
+      / · already hand-edited\? witness adopt 'specs\/a&b\.md' — not offered on Windows — it holds &, which cmd\.exe or Windows PowerShell can read as more than text$/,
+    );
   });
 });

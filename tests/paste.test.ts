@@ -1,16 +1,24 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
 import { cliAct, exitsLine, type Act } from '../src/act.js'
-import { grantAct } from '../src/allowlist.js'
+import { grantAct, grantRows } from '../src/allowlist.js'
 import { unmetNeedLine } from '../src/autonomy.js'
 import { loadConfig } from '../src/config.js'
+import { watchLine } from '../src/drive-presence.js'
+import { resolveStartBase } from '../src/gitio.js'
+import { handoffLine, loadHarness, type Harness } from '../src/harness.js'
 import { appendEntry, type Entry } from '../src/journal.js'
 import { satisfyCommand } from '../src/needs.js'
 import { isHeld, needsYou, needYouRows, waitingRows, type NeedYou } from '../src/needs-you.js'
 import { recommend, renderDecision } from '../src/recommend.js'
+import { renderRefusal } from '../src/refusal.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { shellLine } from '../src/toon.js'
-import { approve, commitEntry, RECAP, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { offeredLine, type Platform, shellLine } from '../src/toon.js'
+import { approve, commitEntry, RECAP, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
 import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
 // Row 239. A pasted line runs only what witness wrote. Each row builds lines with witness's own
@@ -160,6 +168,91 @@ async function forgedRound(p: string): Promise<Pasteable[]> {
   return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', 'gate', 'plan', plan, '--fresh']] }))
 }
 
+// Row 239. The directories the rows below make for their lines, removed once this file is done.
+const made: string[] = []
+function dirOf(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  made.push(dir)
+  return dir
+}
+
+const harness = (name: string): Harness => {
+  const h = loadHarness(name)
+  if (!h.ok) throw new Error(`no harness ${name}`)
+  return h.value
+}
+
+// K4, row 239: the handoff, which `cd`s into a home a checkout's path names. The home sits under a
+// directory of its own, which the line is pasted in, so a marker made after the `cd` is found too.
+function handoffHome(p: string): { base: string; home: string } {
+  const base = dirOf('witness-paste-home-')
+  const home = join(base, `h'${p} x`)
+  mkdirSync(home)
+  return { base, home }
+}
+
+// K5, row 239: the push remedy a refusal names when the remote lacks the branch, as `witness start`
+// meets it at an empty bare origin.
+async function pushRemedy(p: string): Promise<Pasteable[]> {
+  const repo = tmpRepo()
+  const bare = `${repo.root}-empty.git`
+  made.push(repo.root, bare)
+  repo.git('init', '--bare', '-b', 'main', bare)   // never pushed to
+  repo.git('remote', 'add', 'origin', bare)
+  const r = resolveStartBase(repo.root, `main${p}`)
+  if (r.ok) throw new Error(`K5: the fetch of main${p} did not fail`)
+  const run = renderRefusal(r.violations).find((l) => l.startsWith('run: '))
+  if (run === undefined) throw new Error(`K5: no push remedy\n${renderRefusal(r.violations).join('\n')}`)
+  return [{ line: run.slice('run: '.length), calls: [['git', 'push', '-u', 'origin', `main${p}`]] }]
+}
+
+// C1, row 239: the merge an inbox row offers. A `pr` reaches it validated (`needsYou`); built here
+// around the payload itself, the row's one command still runs only `gh pr merge` with that word.
+function mergeLines(p: string): Pasteable[] {
+  const offered = needYouRows({ kind: 'merge', target: 'x', key: 'k', pr: p }).filter((r) => OFFERED.test(r))
+  if (offered.length !== 1) throw new Error(`C1: the merge offered ${offered.length} commands`)
+  return [{ line: offered[0]!.replace(OFFERED, ''), calls: [['gh', 'pr', 'merge', p]] }]
+}
+
+// K12, row 239: the canon guard's remedy, handed to the agent whose Write it blocked, at the path that
+// agent named. Its command is the reason's tail, after the `run: ` that offers it; on Windows a path
+// Windows withholds offers none.
+const ADOPT_RUN = ' · already hand-edited? run: '
+function guardLines(p: string, platform: Platform = 'darwin'): Pasteable[] {
+  const repo = dirOf('witness-paste-guard-')
+  writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
+  const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${p}.md`) }, cwd: repo, platform })
+  if (r?.block !== true) throw new Error(`K12: the guard did not block specs/a${p}.md`)
+  const at = r.reason.indexOf(ADOPT_RUN)
+  if (at < 0 && platform !== 'win32') throw new Error(`K12: the guard offered no adopt\n${r.reason}`)
+  if (at < 0) return []
+  return [{ line: r.reason.slice(at + ADOPT_RUN.length), calls: [['witness', 'adopt', `specs/a${p}.md`]] }]
+}
+
+// K13, row 239: drive's watch line names its log, a path under the checkout. The stop after it is cut:
+// it names a pid, and pasted it would signal that process.
+function watchLines(p: string): Pasteable[] {
+  const log = join(dirOf('witness-paste-log-'), `l ${p}.log`)
+  const [tail] = watchLine({ pid: 1, log }, 'darwin').split(' · stop it: ')
+  return [{ line: tail!, calls: [['tail', '-f', log]] }]
+}
+
+// Row 239 (the plan's B5, B16). The same kinds built for Windows, pasted into a POSIX shell as Git
+// Bash would take them. PowerShell's quoting is lossy there for a `'`, so each line is checked for
+// inertness only, and a line Windows withholds is not offered at all.
+function windowsLines(p: string): Pasteable[] {
+  const home = `C:\\w\\h'${p} x`
+  const lines = [
+    handoffLine(harness('claude-code'), home, 'claude-opus-5:high', 'win32'),
+    handoffLine(harness('pi'), home, `claude${p}`, 'win32'),
+    offeredLine(['git', 'push', '-u', 'origin', `main${p}`], 'win32'),
+    offeredLine(['git', 'checkout', '--', `designs/${p}.html`], 'win32'),
+    ...grantRows(`p1${p}`, { cmd: p }, 'win32').filter((r) => OFFERED.test(r)).map((r) => r.replace(OFFERED, '')),
+    ...guardLines(p, 'win32').map((x) => x.line),
+  ]
+  return lines.filter((line): line is string => line !== undefined).map((line) => ({ line }))
+}
+
 const ROWS: Row[] = [
   ['quoter: a POSIX word', (p) => [{ line: shellLine(['witness', 'x', p], 'darwin'), calls: [['witness', 'x', p]] }]],
   // zsh reads a bare `=ls` as the path of `ls`
@@ -178,6 +271,28 @@ const ROWS: Row[] = [
   ['K8 waiting, a forged park note', waitingLines, [...PAYLOADS, FORGED_ROW]],
   ['K8 waiting, a forged park round', forgedRound, [FORGED_ROW]],
   ['K10 a trust grant', (p) => [{ line: grantAct(`p1${p}`, { cmd: p })!.line, calls: [['witness', 'trust', `p1${p}`, '--cmd', p]] }]],
+  ['K4 the handoff, claude', (p) => {
+    const { base, home } = handoffHome(p)
+    return [{ line: handoffLine(harness('claude-code'), home, 'claude-opus-5:high', 'darwin'),
+      calls: [['claude', '--model', 'claude-opus-5', '/witness']], cwd: base }]
+  }],
+  // the pin's character set is checked where the config loads, not here, so the payload reaches it
+  ['K4 the handoff, pi', (p) => {
+    const { base, home } = handoffHome(p)
+    return [{ line: handoffLine(harness('pi'), home, `claude${p}`, 'darwin'),
+      calls: [['pi', '--model', `anthropic/claude${p}`, '/witness']], cwd: base }]
+  }],
+  // git calls a ref holding a space an invalid refspec, so only the space-free payloads reach it
+  ['K5 the push remedy', pushRemedy, REF_PAYLOADS],
+  ['K5 the restore remedy', (p) => [{ line: offeredLine(['git', 'checkout', '--', `designs/${p}.html`], 'darwin')!,
+    calls: [['git', 'checkout', '--', `designs/${p}.html`]] }]],
+  ['C1 the merge', mergeLines],
+  // the text adopt.ts prints after its revert help
+  ["K11 adopt's help", (p) => [{ line: shellLine(['git', 'checkout', 'HEAD', '--', `specs/a${p}.md`], 'darwin'),
+    calls: [['git', 'checkout', 'HEAD', '--', `specs/a${p}.md`]] }]],
+  ['K12 the canon guard', (p) => guardLines(p)],
+  ['K13 the watch line', watchLines],
+  ['K4, K5, K10, K12 in the Windows form', windowsLines],
 ]
 
 // Row 239. Where each payload was built to bite (the inventory's "Which payload bites where"), as
@@ -221,6 +336,7 @@ async function pooled<T, R>(jobs: readonly T[], run: (job: T) => Promise<R>): Pr
 
 describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote (row 239)', () => {
   afterAll(dropStub)
+  afterAll(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }) })
 
   // Without it, a broken harness would pass every row. Each mode must see a line that does run
   // code, and an interactive one must expand history, as a human's paste meets it: there `!#`

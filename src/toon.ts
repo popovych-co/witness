@@ -1,6 +1,9 @@
 // Row 239. Each shell's quoting that nothing reads through, the one copy of each: inside POSIX
 // single quotes no character is special, so a `'` is written `'\''` (close, an escaped quote,
-// reopen); inside PowerShell's nothing expands, and a single quote is written twice.
+// reopen); inside PowerShell's nothing expands, and a single quote is written twice. The one
+// exception is the canon guard, which ships alone and imports nothing: plugin/hooks/canon-guard.mjs
+// carries a twin of `shellWord` and `withheldOn` and all they read, and tests/canon-guard.test.ts
+// holds it equal to these. Change both or neither.
 const posixQuoted = (p: string): string => `'${p.replaceAll("'", "'\\''")}'`
 const psQuoted = (p: string): string => `'${p.replace(/['‘’‚‛]/g, (q) => q + q)}'`
 
