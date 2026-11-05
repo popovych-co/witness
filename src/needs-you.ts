@@ -71,12 +71,13 @@ export const WAIT_KINDS: ReadonlySet<WaitKind> =
   new Set(['pending-txn', 'design-look', 'trust-grant', 'need', 'decision', 'conversation', 'merge'])
 
 const prOf = (line: string): string | undefined => /PR #(\d+)/.exec(line)?.[1]
-// Row 239. The frontmatter's `pr`, read as `stamp.ts` and `wait` read it, and named only when it is
-// a positive integer: the CLI writes a number there, and a hand edit can write any text.
-const prOfMeta = (meta: unknown): string | undefined => {
-  const n = Number(meta)
-  return Number.isInteger(n) && n > 0 ? String(n) : undefined
-}
+// Row 239. The frontmatter's `pr`, named only when it is a PR's number: the CLI writes one there
+// (`stampPr`), and a hand edit can write any value. A number counts when it is a whole number from
+// 1, and a string when it is such a number's digits; `Number` would also read `true`, `[7]`, `'0x10'`
+// and `'1e3'` as numbers. Safe integers only, so the word printed is always the number's digits.
+const prOfMeta = (meta: unknown): string | undefined =>
+  typeof meta === 'number' ? (Number.isSafeInteger(meta) && meta >= 1 ? String(meta) : undefined)
+    : typeof meta === 'string' && /^[1-9]\d*$/.test(meta) ? meta : undefined
 
 export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[]): NeedYou[] {
   const items: NeedYou[] = []

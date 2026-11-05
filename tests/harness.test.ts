@@ -351,12 +351,17 @@ describe('thinking-aware handoff rendering', () => {
   })
 
   // Row 239 (the plan's B16). Windows PowerShell 5.1 has no `&&`, and a failed `Set-Location` is no
-  // terminating error: `-ErrorAction Stop` makes it one, so nothing after it on the pasted line runs
-  // (reasoned: there is no Windows here). The home and `/witness` are always quoted, as off Windows,
-  // and the thinking budget is set as an environment variable of the session.
+  // terminating error: `-ErrorAction Stop` makes it one, so nothing after it on the pasted line runs.
+  // The home and `/witness` are always quoted, as off Windows. The session keeps an environment
+  // variable after the line, so the thinking budget is saved, set for the launch and restored after
+  // it (ruling R21): a later handoff with no budget, pasted in the same window, starts with none.
+  // REASONED, as the whole Windows form is: there is no Windows here.
   it('the Windows handoff speaks PowerShell (row 239, B16)', () => {
     expect(handoffLine(claude, 'C:\\w\\repo', 'claude-opus-5:high', 'win32'))
-      .toBe("Set-Location -LiteralPath 'C:\\w\\repo' -ErrorAction Stop; $env:MAX_THINKING_TOKENS = '16384'; claude --model claude-opus-5 '/witness'")
+      .toBe("Set-Location -LiteralPath 'C:\\w\\repo' -ErrorAction Stop; $witnessThinking = $env:MAX_THINKING_TOKENS; " +
+        "$env:MAX_THINKING_TOKENS = '16384'; claude --model claude-opus-5 '/witness'; $env:MAX_THINKING_TOKENS = $witnessThinking")
+    expect(handoffLine(claude, 'C:\\w\\repo', 'claude-opus-5', 'win32'))
+      .toBe("Set-Location -LiteralPath 'C:\\w\\repo' -ErrorAction Stop; claude --model claude-opus-5 '/witness'")
     expect(handoffLine(pi, "C:\\o'b", 'claude-opus-5', 'win32'))
       .toBe("Set-Location -LiteralPath 'C:\\o''b' -ErrorAction Stop; pi --model anthropic/claude-opus-5 '/witness'")
   })

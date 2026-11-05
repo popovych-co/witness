@@ -175,6 +175,8 @@ describe('implement gate — design-reviewer wiring', () => {
     const ctx = fakeCtx(repo.root, { env: gateEnv(fakeScenario()), err: (l) => errs.push(l) })
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(2)
     expect(errs.join('\n')).toContain('design-artifact-missing')
+    // Row 239: the restore is offered as another tool's command, through the one renderer
+    expect(errs).toContain('run: git checkout -- designs/auth-refresh.html')
   })
 
   it('editing the living design re-rolls a cached verdict on unchanged code', async () => {

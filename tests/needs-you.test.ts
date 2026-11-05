@@ -72,8 +72,9 @@ describe('needsYou (D203)', () => {
     expect(items.map((i) => needYouRows(i))).toEqual([['wait: trust grant · auth-refresh', '  run: witness trust auth-refresh']])
   })
 
-  // Row 239. A merge's `pr` falls back to canon frontmatter, which a hand edit can make any text:
-  // only a positive integer names a PR, so `run: gh pr merge` never holds a word but its number.
+  // Row 239. A merge's `pr` falls back to canon frontmatter, which a hand edit can make any value:
+  // only a whole number from 1, or such a number's digits, names a PR, so `run: gh pr merge` never
+  // holds a word but its number. `Number` would read `true`, `[7]`, `'0x10'` and `'1e3'` as one.
   it('a pr that is not a positive integer names no merge (row 239)', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
@@ -81,14 +82,18 @@ describe('needsYou (D203)', () => {
     await writePlan(repo, 'auth-refresh-plan-1')
     const merge = () => needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root),
       [{ target: 'auth-refresh-plan-1', kind: 'merge' }]).find((i) => i.kind === 'merge')!
-    for (const pr of ['9$(touch M1)', 0, -3, 1.5]) {
+    for (const pr of ['9$(touch M1)', 0, -3, 1.5, true, [7], '0x10', '1e3']) {
       repo.setMeta('auth-refresh-plan-1', { pr })
-      expect(merge(), String(pr)).toEqual({ kind: 'merge', target: 'auth-refresh-plan-1', key: 'merge:auth-refresh-plan-1' })
-      expect(needYouRows(merge()), String(pr)).toEqual(['wait: merge · auth-refresh-plan-1'])
+      const shown = JSON.stringify(pr)
+      expect(loadCanon(repo.root).docs.find((d) => d.meta.id === 'auth-refresh-plan-1')?.meta.pr, shown).toEqual(pr)
+      expect(merge(), shown).toEqual({ kind: 'merge', target: 'auth-refresh-plan-1', key: 'merge:auth-refresh-plan-1' })
+      expect(needYouRows(merge()), shown).toEqual(['wait: merge · auth-refresh-plan-1'])
     }
     repo.setMeta('auth-refresh-plan-1', { pr: 9 })
     expect(merge()).toMatchObject({ pr: '9' })
     expect(needYouRows(merge())).toEqual(['wait: merge · auth-refresh-plan-1 · PR #9', '  run: gh pr merge 9'])
+    repo.setMeta('auth-refresh-plan-1', { pr: '12' })
+    expect(merge()).toMatchObject({ pr: '12' })
   })
 
   it('the token ignores order and changes when an item is added', () => {

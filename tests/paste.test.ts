@@ -17,7 +17,7 @@ import { recommend, renderDecision } from '../src/recommend.js'
 import { renderRefusal } from '../src/refusal.js'
 import { exitActs, reopenActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { offeredLine, type Platform, shellLine } from '../src/toon.js'
+import { offeredLine, type Platform, shellLine, shellWord, withheldOn } from '../src/toon.js'
 import { approve, commitEntry, RECAP, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
 import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
 
@@ -215,18 +215,25 @@ function mergeLines(p: string): Pasteable[] {
 }
 
 // K12, row 239: the canon guard's remedy, handed to the agent whose Write it blocked, at the path that
-// agent named. Its command is the reason's tail, after the `run: ` that offers it; on Windows a path
-// Windows withholds offers none.
+// agent named. Its command is the reason's tail, after the `run: ` that offers it. The guard offers it
+// exactly where toon.ts's `withheldOn` would, so a guard that withheld every Windows adopt, or dropped
+// one with no note, fails here; one Windows withholds is shown with why and offers nothing to paste.
 const ADOPT_RUN = ' · already hand-edited? run: '
 function guardLines(p: string, platform: Platform = 'darwin'): Pasteable[] {
   const repo = dirOf('witness-paste-guard-')
   writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
-  const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${p}.md`) }, cwd: repo, platform })
-  if (r?.block !== true) throw new Error(`K12: the guard did not block specs/a${p}.md`)
+  const rel = `specs/a${p}.md`
+  const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, rel) }, cwd: repo, platform })
+  if (r?.block !== true) throw new Error(`K12: the guard did not block ${rel}`)
   const at = r.reason.indexOf(ADOPT_RUN)
-  if (at < 0 && platform !== 'win32') throw new Error(`K12: the guard offered no adopt\n${r.reason}`)
-  if (at < 0) return []
-  return [{ line: r.reason.slice(at + ADOPT_RUN.length), calls: [['witness', 'adopt', `specs/a${p}.md`]] }]
+  const held = withheldOn(['adopt', rel], platform)
+  if ((at < 0) !== (held !== undefined)) throw new Error(`K12: on ${platform} the guard ${at < 0 ? 'withheld' : 'offered'} ${rel}\n${r.reason}`)
+  if (held !== undefined) {
+    expect(r.reason).toContain('not offered on Windows')
+    expect(r.reason.endsWith(` · already hand-edited? witness adopt ${shellWord(rel, platform)} — ${held}`), r.reason).toBe(true)
+    return []
+  }
+  return [{ line: r.reason.slice(at + ADOPT_RUN.length), calls: [['witness', 'adopt', rel]] }]
 }
 
 // K13, row 239: drive's watch line names its log, a path under the checkout. The stop after it is cut:

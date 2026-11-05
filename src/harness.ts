@@ -410,19 +410,27 @@ export function thinkingEnv(harness: Harness, model: string | undefined): Record
 // `$(…)`, and the path once stood raw inside a `'…'` that its own quote closed. The launch and the
 // model flag print as argv words (`shellLine`): a pin's characters are checked where the config
 // loads, not here. Off Windows: `cd '<home>' && [MAX_THINKING_TOKENS=<n> ]<launch>[ --model <pin>]
-// '/witness'`. On Windows (the plan's B16) Windows PowerShell has no `&&`, and a failed
-// `Set-Location` is no terminating error: `-ErrorAction Stop` makes it one, so nothing after it on
-// the line runs, and the budget is set in the session's environment. The line is never withheld
-// (the plan's B5): the home is a cmdlet's argument, which PowerShell alone reads, and the words a
-// launch shim can hand cmd.exe are constants and a pin, whose character set holds none it reads.
+// '/witness'`, where the budget prefixes the one command. On Windows (the plan's B16) Windows
+// PowerShell has no `&&`, and a failed `Set-Location` is no terminating error: `-ErrorAction Stop`
+// makes it one, so nothing after it on the line runs. A budget set there would outlive the line,
+// since the session keeps its environment, and a later handoff with no budget, pasted in the same
+// window, would start with it (ruling R21): the line saves the variable, sets it, launches, and
+// restores it, and the restore after `;` runs whether or not the launch succeeds. Assigning `$null`
+// removes the variable, so one that was unset is unset again. REASONED: there is no Windows here.
+// The line is never withheld (the plan's B5): the home is a cmdlet's argument, which PowerShell
+// alone reads, and the words a launch shim can hand cmd.exe are constants and a pin, whose
+// character set holds none it reads.
 export function handoffLine(harness: Harness, home: string, model: string | undefined, platform: Platform = process.platform): string {
-  const budget = Object.entries(thinkingEnv(harness, model))
+  // `thinkingEnv` names one variable at most: claude's budget.
+  const budget = Object.entries(thinkingEnv(harness, model))[0]
   const launch = `${shellLine([harness.launch, ...modelFlags(harness, model)], platform)} ${quotedWord('/witness', platform)}`
   if (platform === 'win32') {
-    const env = budget.map(([k, val]) => `$env:${k} = ${quotedWord(val, platform)}; `).join('')
-    return `Set-Location -LiteralPath ${quotedWord(home, platform)} -ErrorAction Stop; ${env}${launch}`
+    const cd = `Set-Location -LiteralPath ${quotedWord(home, platform)} -ErrorAction Stop; `
+    if (budget === undefined) return `${cd}${launch}`
+    const [k, val] = budget
+    return `${cd}$witnessThinking = $env:${k}; $env:${k} = ${quotedWord(val, platform)}; ${launch}; $env:${k} = $witnessThinking`
   }
-  return `cd ${quotedWord(home, platform)} && ${budget.map(([k, val]) => `${k}=${val} `).join('')}${launch}`
+  return `cd ${quotedWord(home, platform)} && ${budget !== undefined ? `${budget[0]}=${budget[1]} ` : ''}${launch}`
 }
 
 // The relay as the skill prints it: the harness's own command for a fresh context, then

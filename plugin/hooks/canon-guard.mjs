@@ -216,8 +216,9 @@ function stateTargetRel(root, cwd, token, dirs) {
 // Row 239. The quoter's twin. A word of a line offered to be pasted prints as src/toon.ts's
 // `shellWord` prints it, and on Windows a line holding a character cmd.exe or Windows PowerShell
 // can read as more than text is shown and never offered, as its `withheldOn` says. This file
-// imports nothing (Decision 13), so the two are copied here, and tests/canon-guard.test.ts holds
-// them equal to toon.ts's over a corpus of hostile words on each platform: change both or neither.
+// imports nothing from witness (Decision 13), so the two are copied here, and
+// tests/canon-guard.test.ts holds them equal to toon.ts's over a corpus of hostile words on each
+// platform: change both or neither.
 // Off Windows a word is bare in POSIX's safe set and never when it starts with `=` (zsh reads a
 // bare `=ls` as a command's path), else single-quoted; on Windows a flag stays bare, and any other
 // word is bare in PowerShell's safe set, else single-quoted with each of its five quotes doubled.

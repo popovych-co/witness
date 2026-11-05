@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -86,20 +86,24 @@ describe('one quoter for every pasted word (row 239)', () => {
   // handoff's path is a cmdlet's argument, which PowerShell alone reads: quoted, never withheld.
   it('on Windows every kind a foreign word reaches withholds a risky one (row 239)', () => {
     const repo = mkdtempSync(join(tmpdir(), 'quote-guard-'))
-    writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
-    const claude = loadHarness('claude-code')
-    if (!claude.ok) throw new Error('claude-code')
-    for (const c of ['&', '|', '^', '<', '>', '"', '%', '!']) {
-      expect(actOn('win32', ['trust', 'p1', '--cmd', `x${c}y`]).withheld, c).toBeDefined()
-      expect(grantRows('p1', { cmd: `x${c}y` }, 'win32').filter((r) => r.includes('--cmd')), c).toEqual([])
-      expect(offeredLine(['git', 'checkout', '--', `d${c}.html`], 'win32'), c).toBeUndefined()
-      expect(offeredLine(['git', 'push', '-u', 'origin', `b${c}`], 'win32'), c).toBeUndefined()
-      const guard = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${c}b.md`) }, cwd: repo, platform: 'win32' })
-      expect(guard?.block, c).toBe(true)
-      expect(guard?.reason, c).not.toContain('run: witness adopt')
-      expect(guard?.reason, c).toContain(`witness adopt ${shellWord(`specs/a${c}b.md`, 'win32')} \u2014 ${withheld(c)}`)
-      expect(handoffLine(claude.value, `C:\\a${c}b`, undefined, 'win32'), c)
-        .toBe(`Set-Location -LiteralPath 'C:\\a${c}b' -ErrorAction Stop; claude '/witness'`)
+    try {
+      writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
+      const claude = loadHarness('claude-code')
+      if (!claude.ok) throw new Error('claude-code')
+      for (const c of ['&', '|', '^', '<', '>', '"', '%', '!']) {
+        expect(actOn('win32', ['trust', 'p1', '--cmd', `x${c}y`]).withheld, c).toBeDefined()
+        expect(grantRows('p1', { cmd: `x${c}y` }, 'win32').filter((r) => r.includes('--cmd')), c).toEqual([])
+        expect(offeredLine(['git', 'checkout', '--', `d${c}.html`], 'win32'), c).toBeUndefined()
+        expect(offeredLine(['git', 'push', '-u', 'origin', `b${c}`], 'win32'), c).toBeUndefined()
+        const guard = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${c}b.md`) }, cwd: repo, platform: 'win32' })
+        expect(guard?.block, c).toBe(true)
+        expect(guard?.reason, c).not.toContain('run: witness adopt')
+        expect(guard?.reason, c).toContain(`witness adopt ${shellWord(`specs/a${c}b.md`, 'win32')} \u2014 ${withheld(c)}`)
+        expect(handoffLine(claude.value, `C:\\a${c}b`, undefined, 'win32'), c)
+          .toBe(`Set-Location -LiteralPath 'C:\\a${c}b' -ErrorAction Stop; claude '/witness'`)
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
     }
   })
 

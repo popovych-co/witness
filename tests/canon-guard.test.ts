@@ -235,10 +235,10 @@ describe('canonGuard — the refusal names the way back in', () => {
   });
 });
 
-// Row 239 (g2). The guard ships alone into a user's repo and imports nothing (Decision 13), so it
-// carries its own copy of the quoter, held here to src/toon.ts's over the quoter's corpus, each
-// branch of the Windows word rule (a flag B2 keeps bare, and the words psArg quotes or leaves) and
-// a word holding each character Windows withholds.
+// Row 239 (g2). The guard ships alone into a user's repo and imports nothing from witness
+// (Decision 13), so it carries its own copy of the quoter, held here to src/toon.ts's over the
+// quoter's corpus, each branch of the Windows word rule (a flag B2 keeps bare, and the words psArg
+// quotes or leaves) and a word holding each character Windows withholds.
 describe('the quoter twin (row 239)', () => {
   const WORDS = [
     ...CORPUS, '-LiteralPath', '--', '=x', 'a&b', "''",
@@ -266,7 +266,7 @@ describe('the quoter twin (row 239)', () => {
   });
 
   // B5: on Windows a path holding a character cmd.exe or Windows PowerShell can read is shown with
-  // why, and never offered as a `run:`.
+  // why, and never offered as a `run:`; a safe path is offered as it is everywhere.
   it('on Windows a risky path is shown, never offered', () => {
     const repo = witnessRepo();
     const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', 'a&b.md') }, cwd: repo, platform: 'win32' });
@@ -276,5 +276,8 @@ describe('the quoter twin (row 239)', () => {
     expect(r?.reason).toMatch(
       / · already hand-edited\? witness adopt 'specs\/a&b\.md' — not offered on Windows — it holds &, which cmd\.exe or Windows PowerShell can read as more than text$/,
     );
+    const safe = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', 'a.md') }, cwd: repo, platform: 'win32' });
+    expect(safe?.reason).toMatch(/ · already hand-edited\? run: witness adopt specs\/a\.md$/);
+    expect(safe?.reason).not.toContain('not offered on Windows');
   });
 });
