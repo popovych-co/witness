@@ -469,7 +469,7 @@ export function watchSignature(root: string): string {
 // Row 240: `retry` is drive's own timer, not a human's stop — a settle the door refused with exit
 // 3, due again at `due`, with the act `kept` when its making cost a model call, and its `tries`.
 // Never published, listed, notified or counted toward a pause for the human.
-export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'fix' | 'stuck' | 'capped' | 'retry'
+export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'fix' | 'stuck' | 'capped' | 'retry' | 'recheck'
 export interface Aside {
   target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string
   trust?: RunCommand[]   // row 205: a trust grant's commands, each with its source
@@ -480,8 +480,12 @@ export interface Aside {
 // refusal in a row sets the stop aside for the human. A busy lock never reaches the door.
 export const RETRY_DUE_MS = LOCK_WAIT_MS
 export const RETRY_MAX = 3
-// The kinds that are drive's own timers, never the human's.
-const isTimer = (a: { kind: AsideKind }): boolean => a.kind === 'retry'
+// Row 242 (design §4.3.4). A transient ship hold is checked again 5 minutes after the first, the
+// wait doubling to at most an hour; constants (n3), each re-check a session counted against the caps.
+export const RECHECK_FIRST_MS = 300_000
+export const RECHECK_MAX_MS = 3_600_000
+// The kinds that are drive's own timers, never the human's: a settle's retry, a hold's re-check.
+const isTimer = (a: { kind: AsideKind }): boolean => a.kind === 'retry' || a.kind === 'recheck'
 
 
 const streamLines = (root: string, id: string): number => readStream(root, id).length
@@ -635,7 +639,8 @@ export function journalWatch(root: string, target: string): (session?: string) =
   }
 }
 
-interface Lane { action: NextAction; end: Promise<SessionEnd> }
+// `streamAt`: the target's stream length when the lane started — what it journaled is after it.
+interface Lane { action: NextAction; end: Promise<SessionEnd>; streamAt: number }
 
 const lastRunGate = (entries: ReturnType<typeof readStream>): string | undefined => {
   const run = [...entries].reverse().find((e) => e.t === 'gate-run') as { gate?: unknown } | undefined
@@ -874,7 +879,10 @@ export async function driveLoop(
 
   // `next` is the line the session takes (D13): the action's, or the re-run a settle routed.
   const launch = (step: SpawnStep, action: NextAction, n: number, next: string): Lane => {
-    const lane: Lane = { action, end: Promise.resolve(undefined as unknown as SessionEnd) }
+    const lane: Lane = {
+      action, end: Promise.resolve(undefined as unknown as SessionEnd),
+      streamAt: action.target !== undefined ? readStream(root, action.target).length : 0,
+    }
     // Row 242: a merge or fix left to the human is read from the record ship journals, so drive no
     // longer listens for ship's words (the merge sniff of rows 180 and 214 retired).
     // Row 214: what the session journals for its flow. Target-less work has no stream of its own
@@ -944,6 +952,30 @@ export async function driveLoop(
       stop ??= 'spawn-failed'                            // this machine can spawn nothing
       return
     }
+    // Row 242 (design §4.3.4). A lane that journaled a transient or pending record — now the
+    // stream's latest entry — is re-checked by drive itself; one that wrote nothing takes the
+    // no-progress path below and ends stuck: a session that never reached ship is no re-check.
+    if (key !== TARGETLESS) {
+      const entries = readStream(root, key)
+      const rec = latestOutcome(entries)
+      if (rec !== undefined && (rec.outcome === 'transient' || rec.outcome === 'pending') && entries.length > lane.streamAt) {
+        const reason = logSafe(String(rec.reason))
+        if (!autonomous) {
+          // The human is at the terminal: the hold is theirs to look at, as stuck.
+          ctx.out(`drive: ${rec.outcome} — ${key} · ${reason}`)
+          setAside(key, { kind: 'stuck', line: lane.action.line, why: `${rec.outcome}: ${String(rec.reason)}`, key0: keyAfter(key) })
+          return
+        }
+        const prev = recheckDelay.get(key)
+        const delay = prev === undefined ? RECHECK_FIRST_MS : Math.min(prev * 2, RECHECK_MAX_MS)
+        recheckDelay.set(key, delay)
+        progress.delete(key)                              // the unchanged line never reads as stuck
+        ctx.out(`drive: recheck — ${key} · ${reason} · again in ${duration(delay)}`)
+        setAside(key, { kind: 'recheck', line: lane.action.line, why: String(rec.reason), due: clock.now() + delay })
+        return
+      }
+      recheckDelay.delete(key)
+    }
 
   }
 
@@ -955,6 +987,7 @@ export async function driveLoop(
   // limit becomes drive's own pause, and the stop is judged again after it.
   // target → the re-run its settle routed (row 239: its act; row 241: a plan step's whole row)
   const routed = new Map<string, { act: Act; row?: NextAction }>()
+  const recheckDelay = new Map<string, number>()       // row 242: each target's last re-check wait
   // Row 240 (§4.1.4). Door refusals with exit 3 in a row, per target, and the acts kept from them
   // whose retry fell due this round.
   const retries = new Map<string, number>()
@@ -1033,7 +1066,10 @@ export async function driveLoop(
       const gate = hit.gate ?? lastRunGate(readStream(root, action.target))
       setAside(key, { kind: 'capped', line: action.line, why: hit.note, ...(gate ? { gate } : {}), key0: keyOf(action) })
     } else {
-      const why = `${hit.note} · ${parked.why}`
+      // Row 242: a hold drive kept re-checking until the cap names its last reason — the first wake it makes.
+      const last = latestOutcome(readStream(root, action.target))
+      const held = last !== undefined && (last.outcome === 'transient' || last.outcome === 'pending') ? ` · ${logSafe(String(last.reason))}` : ''
+      const why = `${hit.note} · ${parked.why}${held}`
       ctx.out(`drive: capped — ${action.target} · ${why}`)
       setAside(key, { kind: 'capped', line: action.line, why, key0: keyOf(action) })
     }
@@ -1128,7 +1164,8 @@ export async function driveLoop(
       // Row 240: drive's own timers wake it at their due times (the repo lock is outside the signature).
       const due = nextDue()
       if (due !== undefined && clock.now() >= due) return true
-      if (clock.now() - pauseSince >= idleMax) {
+      // Row 242: drive's own timers are its own work — the idle limit does not run while one waits.
+      if (due === undefined && clock.now() - pauseSince >= idleMax) {
         ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
         stop = 'idle-limit'
         return false
