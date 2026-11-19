@@ -48,7 +48,7 @@ A fresh session is the execution model: **this session is the implementer**, wor
 - `context:` — the fill this session opens at, or `unmeasured (<reason>)` and the step budget it falls back to.
 - `warn: this session opens at …` when it opens already over the limit: work one step anyway. Every slice closes at least one step, and the CLI ends this one at that close.
 
-Each step's evidence cycle names the step: `--phase red --step <step-id>`, then `--phase green --step <step-id>`. Before the plan's first implement gate, and after it while any criteria step is open, the CLI refuses a cycle that names no step (`step-required`). Steps an amendment added — after a gate, or after the PR opened — are worked like a fresh plan's, from `steps:`, before anything else: `next` routes them first. A scaffolding step has no cycle: do its rigging, then close it with `$WITNESS step-close <plan-id> --step <step-id>`.
+Each step's evidence cycle names the step: `--phase red --step <step-id>`, then `--phase green --step <step-id>`. Before the plan's first implement gate, and after it while any criteria step is open, the CLI refuses a cycle that names no step (`step-required`). Steps an amendment added — after a gate, or after the PR opened — are worked like a fresh plan's, from `steps:`, before anything else: `next` routes them first. A `gate implement` refused with `steps-open` names the next step's command: run that, never the gate — no implement review starts while a step is open. A scaffolding step has no cycle: do its rigging, then close it with `$WITNESS step-close <plan-id> --step <step-id>`.
 
 Protocol per step, in order — red/green/refactor with witnessed evidence:
 

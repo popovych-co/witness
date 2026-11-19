@@ -11,10 +11,10 @@ import { readStream } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal, type Result } from './refusal.js'
 import { lastGateRun, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
-import { criteriaOwner, loadCanon } from './scan.js'
+import { criteriaOwner, findById, loadCanon } from './scan.js'
 import { cmd, kv } from './toon.js'
 import { applyDecision, decisionAct, printReviseContext, type DecisionAct } from './verbs/decide.js'
-import { owedDecisions, owedRun } from './verbs/next.js'
+import { openStepRow, owedDecisions, owedRun, type NextAction } from './verbs/next.js'
 import { pendingTxn } from './txn.js'
 
 // Row 173. Under `autonomy: on` a stop is settled where it is produced — the end of
@@ -35,7 +35,8 @@ export type Settled =
   | { kind: 'busy'; pid: number; since: number }
   // A re-run the CLI names and never executes. Row 239 (the plan's B9): with its act, which
   // `next` and drive route by, never by the line read back.
-  | { kind: 'routed'; act: Act; line: string }
+  // Row 241 (R12): `row`, the flow's whole step row when the re-run is a plan step's.
+  | { kind: 'routed'; act: Act; line: string; row?: NextAction }
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   // limit: the usage limit that refused the arbiter. act: the refused act (row 240), which drive
@@ -225,6 +226,15 @@ async function judgeStop(
   if (policy.kind === 'take') {
     const { act } = policy
     if (act.argv[0] !== 'decide') {
+      // Row 241 (R12). While a plan step is open no implement review runs, so a re-run of the
+      // implement gate is the flow's step row — stage implement, home the worktree, its model.
+      const plan = gate === 'implement' && act.argv[0] === 'gate' ? findById(canon, target) : undefined
+      const open = plan?.meta.type === 'plan' ? openStepRow(root, cfg, plan) : undefined
+      if (open?.row.act !== undefined) {
+        const line = cmd('autonomy', `re-run owed — ${open.row.line}`)
+        ctx.out(line)
+        return { kind: 'routed', act: open.row.act, line, row: open.row }
+      }
       // Not a decision: a re-run the CLI names and never executes — the stage owns it.
       const line = cmd('autonomy', `re-run owed — ${act.line}`)
       ctx.out(line)

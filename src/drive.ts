@@ -936,7 +936,8 @@ export async function driveLoop(
   // the pass leaves for a human, drive sets aside. The pass never waits inside a reviewer
   // (F6: that wait was silent, uncounted and deaf to a signal): an arbiter refused by a usage
   // limit becomes drive's own pause, and the stop is judged again after it.
-  const routed = new Map<string, Act>()               // target → the re-run its settle routed (row 239: its act)
+  // target → the re-run its settle routed (row 239: its act; row 241: a plan step's whole row)
+  const routed = new Map<string, { act: Act; row?: NextAction }>()
   // Row 240 (§4.1.4). Door refusals with exit 3 in a row, per target, and the acts kept from them
   // whose retry fell due this round.
   const retries = new Map<string, number>()
@@ -980,7 +981,7 @@ export async function driveLoop(
         ctx.out(`drive: waits on you — ${r.target} · decision · ${s.why}`)
         setAside(r.target, { kind: 'decision', line: cliAct('decide', r.gate, r.target, '--show').line, why: s.why, gate: r.gate, key0: keyOf(ownNext(r.target)) })
       } else if (s.kind === 'routed') {
-        routed.set(r.target, s.act)
+        routed.set(r.target, { act: s.act, ...(s.row !== undefined ? { row: s.row } : {}) })
       }
     }
   }
@@ -1173,8 +1174,12 @@ export async function driveLoop(
         // Only then: `routed` keeps a target's re-run for the whole run.
         let next = action.line
         if (step.kind === 'decision' && autonomous && rerun !== undefined) {
-          step = conversationStage({ line: rerun.line }) ? { kind: 'conversation', line: rerun.line } : { kind: 'spawn', home: root, target: action.target }
-          next = rerun.line
+          // Row 241 (R12): a plan step's re-run runs at its row's home (the worktree), on its model.
+          step = conversationStage({ line: rerun.act.line }) ? { kind: 'conversation', line: rerun.act.line }
+            : rerun.row !== undefined
+              ? { kind: 'spawn', home: rerun.row.home ?? root, stage: rerun.row.stage, target: action.target, model: rerun.row.model }
+              : { kind: 'spawn', home: root, target: action.target }
+          next = rerun.act.line
         }
         if (step.kind !== 'spawn') { await standAside(step, action, key); continue }
         if (spawns >= ceiling) {

@@ -17,6 +17,7 @@ import { primaryRoot, stateCommit } from '../gitio.js'
 import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon } from '../scan.js'
+import { openStepRow } from './next.js'
 import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -396,8 +397,14 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     }
     // Row 239. The command a want names is an act's line, so the target the human typed prints
     // quoted: here, and in every want and help line of this verb below.
+    // Row 241 (R9): while a plan step is open no implement review runs, so the refusal names the
+    // step's command, never `gate implement`.
+    const plan = gate === 'implement' ? findById(canon, target) : undefined
+    const open = plan !== undefined && plan.meta.type === 'plan' ? openStepRow(root, cfgR.value, plan) : undefined
     renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
-      `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`)])
+      open !== undefined
+        ? `${open.row.line} — ${open.step} is not built yet, and no implement review runs while it is open`
+        : `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }

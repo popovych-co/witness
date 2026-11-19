@@ -15,7 +15,7 @@ import { diffReviewedSha, effortOf } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
-import { gateSettled } from '../verbs/next.js'
+import { gateSettled, openStepRow } from '../verbs/next.js'
 import { lastGateRun, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
 
@@ -74,10 +74,15 @@ registerGate({
     // movement because authoring is what it routes to, while ship asks only whether
     // implement was EVER settled. Passing a sha here re-opens the livelock — do not add one.
     const implementSettled = gateSettled(entries, 'implement')
-    checks.push({ name: 'implement-gate', ok: implementSettled,
-      detail: lastImplement
-        ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
-        : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` })
+    // Row 241 (R9): a settled implement gate does not carry a plan with a step still open — unless a
+    // human approved it past its steps on the plan as it stands (row 93; `openStepRow` reads that).
+    const open = openStepRow(root, cfg, plan)
+    checks.push({ name: 'implement-gate', ok: implementSettled && open === undefined,
+      detail: open !== undefined
+        ? `${open.step} is open — ${open.row.line}`
+        : lastImplement
+          ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
+          : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` })
 
     checks.push(await commandLane(wt, root, ctx, 'tests', cfg.ship.test))
     checks.push(await commandLane(wt, root, ctx, 'lint', cfg.ship.lint))

@@ -30,7 +30,7 @@ import {
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { gateSettled, owedRun } from './verbs/next.js'
+import { gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
@@ -297,6 +297,19 @@ export function printSliceShape(ctx: Ctx, root: string, gateName: string, target
 export async function runGate(
   ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean; handover?: boolean },
 ): Promise<number> {
+  // Row 241 (R9; the user's decisions 6 and 9). No implement review starts while a plan step is
+  // open, whoever starts it: refused before the battery, journaling nothing, naming the step's
+  // command. To skip a step, amend the plan and drop it.
+  if (gateName === 'implement') {
+    const rootR = primaryRoot(ctx.cwd)
+    const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
+    const plan = rootR.ok && cfgR?.ok ? findById(loadCanon(rootR.value), target) : undefined
+    const open = rootR.ok && cfgR?.ok && plan?.meta.type === 'plan' ? openStepRow(rootR.value, cfgR.value, plan) : undefined
+    if (open !== undefined) {
+      renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+  }
   const code = await judge(ctx, gateName, target, flags)
   if (code !== EXIT.FINDINGS && code !== EXIT.BLOCKED) return code
   if (flags.manual) return code

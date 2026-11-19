@@ -189,6 +189,10 @@ describe('unbuilt steps come first in the skills (row 241)', () => {
     expect(body).toContain('and after it while any criteria step is open, the CLI refuses a cycle that names no step (`step-required`)')
     expect(body).toContain('Steps an amendment added — after a gate, or after the PR opened — are worked like a fresh plan\'s, from `steps:`')
   });
+  it('a steps-open refusal sends implement to the step and ship back to /witness', () => {
+    expect(readFileSync(skillPath('witness-implement'), 'utf8')).toContain('A `gate implement` refused with `steps-open` names the next step\'s command: run that, never the gate')
+    expect(readFileSync(skillPath('witness-ship'), 'utf8')).toContain('means the plan gained a step: ship nothing, and hand back to /witness, which routes the step')
+  });
   it('plan gives changed work a new step id', () => {
     expect(readFileSync(skillPath('witness-plan'), 'utf8')).toContain('changed work gets a new step id: a closed id stays closed')
   });

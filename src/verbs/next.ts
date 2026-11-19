@@ -29,7 +29,7 @@ import { busyHolder } from '../busy.js'
 import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
-import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
+import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
@@ -447,6 +447,57 @@ export function humanApprovedPastSteps(entries: Entry[], plan: CanonDoc): boolea
   return run !== undefined && runJudgedPlan(run, plan)
 }
 
+// The flow's step row: the green owed (a red in flight, or an already-present red) first, else the
+// first unclosed step's red or close — stage implement, home the worktree. `step` is the one it names.
+function stepRow(
+  id: string, plan: CanonDoc, entries: Entry[], stepped: Extract<ReturnType<typeof stepProgress>, { known: true }> & { next: StepState },
+  inWorktree: { home: string; model?: string }, midRed: boolean,
+): { row: NextAction; step: string } {
+  const inFlight = midRed ? { midRed: true as const } : {}
+  // The green owed comes before the first unclosed step: routing that step's red or its close
+  // would leave the green owed unrouted. D192: once the latest genuine red's cycle has closed
+  // (`redCycleClosed`), what failed is a later green (a failing red would be the latest genuine red,
+  // its cycle still open), and the note says so rather than naming a red its step no longer holds.
+  // Not "the last run": a vacuous red after that green may have passed.
+  // Row 241 (R10): a step closed as already present owes its green next, as a red in flight does.
+  const present = greenOwedStep(plan, entries) === undefined ? presentGreenOwed(plan, entries) : undefined
+  const owed = greenOwedStep(plan, entries) ?? present
+  const owedStep = stepped.steps.find((s) => s.id === owed)
+  const { act, why } = stepLine(id, owedStep ?? stepped.next, entries, present)
+  const ahead = owedStep === undefined || owedStep.id === stepped.next.id
+    ? why
+    : present !== undefined
+      ? `${owedStep.id} is already present — its green comes first`
+      : redCycleClosed(entries)
+        ? 'the last green failed — a passing green comes first'
+        : `${owedStep.id} has an open red — its green comes first`
+  return {
+    row: { ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight },
+    step: (owedStep ?? stepped.next).id,
+  }
+}
+
+const implementSeat = (root: string, cfg: Config, id: string): { home: string; model?: string } => {
+  const pinR = stagePin(cfg, 'implement')
+  const pin = pinR.ok ? pinR.value : undefined
+  return { home: worktreePath(root, id), model: pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined }
+}
+
+// Row 241 (R9, R12). The step a plan still owes before any implement review starts, as the flow's
+// own step row; none when its progress is unknown (a legacy plan), every step is closed, or a human
+// approved the implement gate past its steps on the plan as it stands (row 93).
+export function openStepRow(root: string, cfg: Config, plan: CanonDoc): { row: NextAction; step: string } | undefined {
+  const id = String(plan.meta.id)
+  const entries = readStream(root, id)
+  const progress = stepProgress(plan, entries)
+  if (!progress.known || progress.next === undefined || humanApprovedPastSteps(entries, plan)) return undefined
+  return stepRow(id, plan, entries, { ...progress, next: progress.next }, implementSeat(root, cfg, id), redInFlight(entries))
+}
+
+// Row 241 (R9). The refusal every implement review and ship run takes while a step is open.
+export const stepsOpenViolation = (o: { row: NextAction; step: string }): Violation =>
+  v('steps', 'steps-open', `${o.step} is open`, `${o.row.line} — ${o.step} is not built yet`)
+
 function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
@@ -483,28 +534,7 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   // diff is empty.
   const midRed = redInFlight(entries)
   const inFlight = midRed ? { midRed: true as const } : {}
-  if (stepped?.next !== undefined) {
-    // The green owed comes before the first unclosed step: routing that step's red or its close
-    // would leave the green owed unrouted. D192: once the latest genuine red's cycle has closed
-    // (`redCycleClosed`), what failed is a later green (a failing red would be the latest genuine red,
-    // its cycle still open), and the note says so rather than naming a red its step no longer holds.
-    // Not "the last run": a vacuous red after that green may have passed.
-    // Row 241 (R10): a step closed as already present owes its green next, as a red in flight does.
-    const present = greenOwedStep(plan, entries) === undefined ? presentGreenOwed(plan, entries) : undefined
-    const owed = greenOwedStep(plan, entries) ?? present
-    const owedStep = stepped.steps.find((s) => s.id === owed)
-    const { act, why } = stepLine(id, owedStep ?? stepped.next, entries, present)
-    const ahead = owedStep === undefined || owedStep.id === stepped.next.id
-      ? why
-      : present !== undefined
-        ? `${owedStep.id} is already present — its green comes first`
-        : redCycleClosed(entries)
-          ? 'the last green failed — a passing green comes first'
-          : `${owedStep.id} has an open red — its green comes first`
-    return {
-      ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
-    }
-  }
+  if (stepped?.next !== undefined) return stepRow(id, plan, entries, { ...stepped, next: stepped.next }, inWorktree, midRed).row
   if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
@@ -1291,7 +1321,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   const settleScope = scope ?? (live !== undefined ? (t: string) => !driveWillDecide(live, t) : undefined)
   // Row 239 (the plan's B9): the re-run as its act, never its line read back.
-  let routed: { act: Act; target: string } | undefined
+  let routed: { act: Act; target: string; row?: NextAction } | undefined
   // Row 240. A drive from before 0.29 runs this repo: it settles stops and runs ships with no busy
   // lock, so this `next` settles nothing and routes nothing beside it — the human stops it first.
   const older = cfgR.value.autonomy && marked === undefined ? olderDrive(root) : undefined
@@ -1307,7 +1337,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     for (const r of reports) {
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)
-      if (routed === undefined && r.settled.kind === 'routed') routed = { act: r.settled.act, target: r.target }
+      if (routed === undefined && r.settled.kind === 'routed') {
+        routed = { act: r.settled.act, target: r.target, ...(r.settled.row !== undefined ? { row: r.settled.row } : {}) }
+      }
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1342,7 +1374,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (routed !== undefined && action.line.startsWith('witness decide ')) {
     // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
     const design = routed.act.argv[0] === 'gate' && routed.act.argv[1] === 'design'
-    action = { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
+    // Row 241 (R12): a plan step's re-run is its whole row — stage implement, home the worktree.
+    action = routed.row ?? { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
   }
   action = withDeferralNote(root, canon, action)
   // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the

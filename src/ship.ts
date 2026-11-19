@@ -15,7 +15,7 @@ import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
-import { authoringOwed, gateSettled } from './verbs/next.js'
+import { authoringOwed, gateSettled, openStepRow, stepsOpenViolation } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
 import { handOverIfDue } from './slice.js'
@@ -274,6 +274,14 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     return EXIT.OK
   }
   cfg = nowR.value
+  // Row 241 (R9). A plan re-authored with a new step during the CI watch holds the merge: `next`
+  // routes the step, so this outcome writes no record.
+  const nowPlan = findById(loadCanon(root), planId)
+  const open = nowPlan !== undefined ? openStepRow(root, cfg, nowPlan) : undefined
+  if (open !== undefined) {
+    ctx.out(kv('merge', `held — ${open.step} is not built yet · ${open.row.line}`))
+    return EXIT.FINDINGS
+  }
   const entries = readStream(root, planId)
   const wt = worktreePath(root, planId)
   const shipBranch = cfg.ship.branch
@@ -464,6 +472,13 @@ async function shipMarked(
   ctx: Ctx, root: string, cfgR: { ok: true; value: Config }, planId: string, canon: ReturnType<typeof loadCanon>,
   plan: CanonDoc, opts: { manual?: boolean },
 ): Promise<number> {
+  // Row 241 (R9). Whoever runs it — a drive session included — ship runs no review and carries no
+  // plan on while a step is open: refused before anything journals, naming the step's command.
+  const open = openStepRow(root, cfgR.value, plan)
+  if (open !== undefined) {
+    renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   const wt = worktreePath(root, planId)
   let entries = readStream(root, planId)
   const shipBranch = cfgR.value.ship.branch
