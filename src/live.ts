@@ -24,7 +24,11 @@ const END_REASONS: readonly EndReason[] = ['done', 'idle-limit', 'ceiling', 'usa
 const ASIDE_KINDS: readonly AsideKind[] = ['kept', 'decision', 'conversation', 'merge', 'stuck', 'capped']
 
 export interface LiveAside { target: string; kind: AsideKind; gate?: string; stop?: KeptStop }
-export interface LiveState { pid: number; asides: LiveAside[]; ended?: EndReason }
+// Row 240 (design §4.1.5). `scope`: the flow a `--flow` drive claimed (absent: every target).
+// `deciding`: drive still settles stops — false once it stopped for good (a ceiling, a usage stop,
+// a spawn failure), while its lanes drain. A file without it (hand-written, or older) is not
+// deciding, so every reader shows what it would show with no drive at all.
+export interface LiveState { pid: number; asides: LiveAside[]; ended?: EndReason; scope?: { flow: string }; deciding?: boolean }
 
 // A folder a repo committed as a symlink would aim drive's writes anywhere: refused, as
 // `detachDrive` refuses a linked log. Absent is fine — the first write makes it.
@@ -86,7 +90,7 @@ export function writeLive(root: string, state: LiveState): void {
 // Every field is checked against what this CLI knows: a target that is no canon id or effort, a kind,
 // gate or stop this CLI does not name, is dropped whole. No free text is kept.
 export function readLive(root: string, canon: Canon): LiveState | undefined {
-  const raw = get(root, DRIVE_FILE) as { pid?: unknown; asides?: unknown; ended?: unknown } | undefined
+  const raw = get(root, DRIVE_FILE) as { pid?: unknown; asides?: unknown; ended?: unknown; scope?: unknown; deciding?: unknown } | undefined
   if (raw === undefined || raw === null || typeof raw !== 'object' || !isPid(raw.pid)) return undefined
   // Canon ids and effort slugs: drive sets aside effort-level work too (final review b-I4).
   const ids = new Set([...canon.docs.map((d) => String(d.meta.id)), ...effortStreams(root)])
@@ -105,7 +109,18 @@ export function readLive(root: string, canon: Canon): LiveState | undefined {
     })
   }
   const ended = END_REASONS.includes(raw.ended as EndReason) ? { ended: raw.ended as EndReason } : {}
-  return { pid: raw.pid, asides, ...ended }
+  const flow = (raw.scope as { flow?: unknown } | null | undefined)?.flow
+  const scope = typeof flow === 'string' && ids.has(flow) ? { scope: { flow } } : {}
+  return { pid: raw.pid, asides, ...ended, ...scope, deciding: raw.deciding === true }
+}
+
+// Row 240 (design §4.1.5). A stop drive will decide: a live drive still deciding, the target in its
+// scope, and not set aside by it — a lane's stops by its session, every other by the settle pass.
+// Drive's own timers (a retry) are never published, so a stop waiting on one is still drive's.
+export function driveWillDecide(live: LiveState | undefined, target: string): boolean {
+  if (live === undefined || live.deciding !== true) return false
+  if (live.scope !== undefined && live.scope.flow !== target) return false
+  return !live.asides.some((a) => a.target === target)
 }
 
 // The live drive's state: only while the drive the file names holds the drive lock.

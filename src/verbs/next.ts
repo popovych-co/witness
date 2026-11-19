@@ -24,7 +24,8 @@ import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } from '../harness.js'
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
-import { liveDrive } from '../live.js'
+import { driveWillDecide, liveDrive } from '../live.js'
+import { busyHolder } from '../busy.js'
 import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
 import { lazyStamp } from '../stamp.js'
@@ -1164,12 +1165,21 @@ export function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, 
 // answered in a terminal). Everything else is held aside, need-blocked starts included. A
 // target-less action that is no conversation (the recovery fork) is the ladder's own, and the
 // walk never passes it.
+// Row 240: `skip` names a decision someone else is deciding now (drive, or another process's
+// settle lock); the walk passes it, holding its target, and records it in `skipped`.
 export function humanAction(
   root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction,
+  skip?: (a: NextAction) => boolean, skipped?: NextAction[],
 ): NextAction | undefined {
   const held = new Set<string>()
   for (let a = first; ;) {
     if (conversationStage(a)) return a
+    if (a.line.startsWith('witness decide ') && a.target !== undefined && !held.has(a.target) && skip?.(a) === true) {
+      skipped?.push(a)
+      held.add(a.target)
+      a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
+      continue
+    }
     if (a.line.startsWith('witness decide ') || a.line.startsWith('witness trust ')) return a
     if (a.line === 'witness check' || a.target === undefined || held.has(a.target)) return undefined
     held.add(a.target)
@@ -1247,7 +1257,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 181. A session drive spawned answers for its own target alone, and settles only its
   // own stops: two drive sessions settling repo-wide would both judge one stop.
   const marked = driveChild(ctx.env)
+  // Row 240 (design §4.1.5). Beside a live 0.29 drive still deciding, an unmarked `next` settles
+  // only the stops drive will not decide: outside its scope, or set aside by it for a human.
+  const live = cfgR.value.autonomy && marked === undefined ? liveDrive(root, canon) : undefined
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
+  const settleScope = scope ?? (live !== undefined ? (t: string) => !driveWillDecide(live, t) : undefined)
   // Row 239 (the plan's B9): the re-run as its act, never its line read back.
   let routed: { act: Act; target: string } | undefined
   // Row 240. A drive from before 0.29 runs this repo: it settles stops and runs ships with no busy
@@ -1260,7 +1274,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
-    const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
+    const reports = await settleOwed(ctx, root, cfgR.value, settleScope ? { scope: settleScope } : {})
     if (reports.some((r) => r.settled.kind === 'decided' || r.settled.kind === 'superseded')) canon = loadCanon(root)
     for (const r of reports) {
       const line = settledLine(r)
@@ -1307,9 +1321,24 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // rest: it is routed to the first item the human owes, and `launch:`/`watch:` below still
   // follow the ladder's own action. A `--flow` claim and a worktree's ambient flow keep their
   // scope: the walk reads the whole ladder, which would route past the flow the session is on.
-  const ladder = action
+  let ladder = action
   const chat = cfgR.value.autonomy && marked === undefined && values.flow === undefined && ambientFlow === undefined
-  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder) : undefined
+  // Row 240 (design §4.1.5). The chat's route skips a stop drive will decide, or one under another
+  // process's live settle lock, naming it once — `note: being decided` — so `next: witness decide`
+  // prints only for a stop that needs the human.
+  const beingDecided = (a: NextAction): boolean => a.act?.argv[0] === 'decide' && a.target !== undefined &&
+    (driveWillDecide(live, a.target) || busyHolder(root, 'settle', a.target) !== undefined)
+  const decidedElsewhere: NextAction[] = []
+  if (chat && beingDecided(ladder)) {
+    const held = new Set<string>()
+    while (beingDecided(ladder) && !held.has(ladder.target!)) {
+      decidedElsewhere.push(ladder)
+      held.add(ladder.target!)
+      ladder = computeNext(root, ctx, canon, cfgR.value, { scope: (t) => t === undefined || !held.has(t) })
+    }
+    action = withDeferralNote(root, canon, ladder)
+  }
+  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder, beingDecided, decidedElsewhere) : undefined
   // The ladder's own action already carries its deferral note; one the walk reached does not yet.
   if (human !== undefined && human !== ladder) action = withDeferralNote(root, canon, human)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
@@ -1324,11 +1353,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 195. Raw, because each is a command (D120), and above the routing block for the same
   // reason as the lines above.
   if (chat) needNotices(canon).forEach((l) => ctx.out(l))
+  // Row 240: each stop someone else is deciding, once — nothing to ask about it.
+  for (const t of new Set(decidedElsewhere.map((a) => `${a.act!.argv[1]} ${a.target}`))) ctx.out(kv('note', `being decided — ${t}`))
   // Final review. What waits on the human that no `next:` routes — a target drive set aside as
   // stuck or capped, a merge, a parked gate — is said here, each with its command, so a chat that
   // starts beside a paused drive sees it rather than folding it into its wait token. Row 239 (design
   // §3.4): its head on a `waiting:` line, and each command on an indented row of its own under it.
-  const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
+  const owed = chat ? needsYou(root, ctx, cfgR.value, canon, live?.asides ?? [],
+    live !== undefined ? { ...(live.scope !== undefined ? { flow: live.scope.flow } : {}), deciding: live.deciding === true } : undefined) : []
   for (const i of owed.filter(isHeld)) waitingRows(i).forEach((l) => ctx.out(l))
   // Row 205. Under autonomy each untrusted command is a kept stop, raw (D120), with the grant that
   // names it — paste-ready whatever quotes the command carries. Row 239 (B12): the command and its

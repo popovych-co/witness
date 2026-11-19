@@ -1055,7 +1055,12 @@ export async function driveLoop(
     const asides: LiveAside[] = humanAsides().filter((a) => !notice(a)).map((a) => ({
       target: a.target, kind: a.kind, ...(a.gate !== undefined ? { gate: a.gate } : {}), ...(a.stop !== undefined ? { stop: a.stop } : {}),
     }))
-    writeLive(root, { pid: process.pid, asides, ...(ended !== undefined ? { ended } : {}) })
+    // Row 240: drive's scope, and whether it still settles stops — false once it stopped for good.
+    writeLive(root, {
+      pid: process.pid, asides, ...(ended !== undefined ? { ended } : {}),
+      ...(flags.flow !== undefined ? { scope: { flow: flags.flow } } : {}),
+      deciding: ended === undefined && stop === undefined && signalled === undefined,
+    })
   }
   // Row 203 (Q2). Each item that newly needs the human is notified once per run (n5), a burst
   // as one notification, started in the background so no round waits on it. Mid-run, an item
@@ -1073,7 +1078,10 @@ export async function driveLoop(
       `witness · ${basename(root)}: ${named.join(' · ')}${fresh.length > 3 ? ` (+${fresh.length - 3})` : ''}`,
       process.platform, { wait: false })
   }
-  const owed = (): NeedYou[] => needsYou(root, ctx, cfg, loadCanon(root), humanAsides())
+  // Row 240: drive applies its own scope rule — a stop it will decide is no item for the human.
+  const owed = (): NeedYou[] => needsYou(root, ctx, cfg, loadCanon(root), humanAsides(), {
+    ...(flags.flow !== undefined ? { flow: flags.flow } : {}), deciding: stop === undefined && signalled === undefined,
+  })
 
   // Row 202. Everything left waits on the human: say what, notify, let the machine sleep, and
   // watch for the act. A change runs a round as usual (take-back, settle pass, fill); a change

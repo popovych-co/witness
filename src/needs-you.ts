@@ -79,7 +79,14 @@ const prOfMeta = (meta: unknown): string | undefined =>
   typeof meta === 'number' ? (Number.isSafeInteger(meta) && meta >= 1 ? String(meta) : undefined)
     : typeof meta === 'string' && /^[1-9]\d*$/.test(meta) ? meta : undefined
 
-export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[]): NeedYou[] {
+// Row 240 (design §4.1.5). A live drive's scope and whether it still decides. Under one that does,
+// an owed decision in its scope is listed only once drive set it aside — never for a settle waiting
+// on its retry, or a usage pause — and a pending transaction only once drive set the recovery aside.
+export interface DriveScope { flow?: string; deciding: boolean }
+
+export function needsYou(
+  root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[], drive?: DriveScope,
+): NeedYou[] {
   const items: NeedYou[] = []
   const named = new Set<string>()
   const add = (item: NeedYou) => {
@@ -88,7 +95,10 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
   }
   // A crash no session could recover blocks every write: it is named first (F4).
   const txn = pendingTxn(root)
-  if (txn !== undefined) {
+  const deciding = drive?.deciding === true
+  const drives = (t: string): boolean =>
+    deciding && (drive?.flow === undefined || drive.flow === t) && !aside.some((a) => a.target === t)
+  if (txn !== undefined && !(deciding && !aside.some((a) => a.target === TARGETLESS))) {
     items.push({ kind: 'pending-txn', target: TARGETLESS, key: 'pending-txn:-', op: txn.op, recover: recoverChoice(root, txn) })
   }
   for (const a of aside.filter((x) => x.kind === 'kept' && (x.stop === 'design-look' || x.stop === 'trust-grant'))) {
@@ -110,7 +120,7 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
       satisfy: u.satisfyAct })
   }
   for (const o of owedDecisions(root, canon)) {
-    if (named.has(o.target)) continue
+    if (named.has(o.target) || drives(o.target)) continue
     add({ kind: 'decision', target: o.target, key: `decision:${o.target}:${o.gate}`, gate: o.gate,
       show: cliAct('decide', o.gate, o.target, '--show') })
   }

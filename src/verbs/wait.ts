@@ -42,7 +42,10 @@ export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { sinc
   takeWaiter(root, me, session)                            // one waiter per repo: the newest
   const read = () => {
     const canon = loadCanon(root)
-    return { canon, items: needsYou(root, ctx, cfg, canon, liveDrive(root, canon)?.asides ?? []).filter((i) => i.notice !== true) }
+    const live = liveDrive(root, canon)
+    // Row 240: the live drive's scope rule — a stop it will decide is not a wake.
+    const scope = live !== undefined ? { ...(live.scope !== undefined ? { flow: live.scope.flow } : {}), deciding: live.deciding === true } : undefined
+    return { canon, items: needsYou(root, ctx, cfg, canon, live?.asides ?? [], scope).filter((i) => i.notice !== true) }
   }
   let { canon, items } = read()
   const say = (head: string, rows: readonly string[]): number => {

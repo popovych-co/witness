@@ -48,6 +48,11 @@ describe('design stage in the motion surfaces', () => {
     expect(cmd).toContain('| `wait: older drive` is printed | A `witness drive` from before 0.29 runs this repo');
     expect(cmd).toContain('Never run that line yourself, and never wait again until they say go.');
   });
+  it('the /witness loop keeps matching past a stop being decided, and ends on nothing owed (row 240)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| `note: being decided — <gate> <target>` lines are printed above `next:` | Drive, or another witness run, is deciding that stop now.');
+    expect(cmd).toContain('| `next: witness check` with `note: nothing is owed`, in a chat | Nothing is owed that this chat can do.');
+  });
   it('the /witness loop hands off when home: is elsewhere', () => {
     const cmd = read('plugin/commands/witness.md');
     expect(cmd).toMatch(/`home:`/);
