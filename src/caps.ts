@@ -1,7 +1,7 @@
 import { EXIT, type Ctx } from './cli.js'
 import type { DriveCaps } from './config.js'
 import type { Entry } from './journal.js'
-import { fellBack, gateRuns, lastGateRun, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { fellBack, gateRuns, lastGateRun, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { duration } from './usage.js'
 import { gateSettled } from './verbs/next.js'
 
@@ -75,8 +75,11 @@ export async function parkAtCap(
   // Loaded on A1's precedent for settle.ts: decide.ts reaches the gate registry.
   const { applyDecision } = await import('./verbs/decide.js')
   const errs: string[] = []
+  // Row 240 (R3): the token of this read, so a park read before another decision on the gate —
+  // a human's revise-upstream, a settler's — refuses `settled-since` instead of parking on top (P7).
   const code = await applyDecision({ ...ctx, cwd: root, err: (l) => { errs.push(l); ctx.err(l) } }, {
     gate, target, decision: 'stop', note: hit.note, selected: 'policy', rule: `cap-${hit.cap}`, park: true, runId: last.run_id,
+    token: settledToken(entries, gate, last.run_id),
   })
   if (code === EXIT.OK) return { parked: true }
   // the refusal's rows are indented under its header; the rule is each row's second field
