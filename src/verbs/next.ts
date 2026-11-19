@@ -487,6 +487,9 @@ const implementSeat = (root: string, cfg: Config, id: string): { home: string; m
 // own step row; none when its progress is unknown (a legacy plan), every step is closed, or a human
 // approved the implement gate past its steps on the plan as it stands (row 93).
 export function openStepRow(root: string, cfg: Config, plan: CanonDoc): { row: NextAction; step: string } | undefined {
+  // The step row is the flow's, and only an in-progress plan has a flow (flowStep): a draft or a
+  // finished plan owes no step row.
+  if (String(plan.meta.status) !== 'in-progress') return undefined
   const id = String(plan.meta.id)
   const entries = readStream(root, id)
   const progress = stepProgress(plan, entries)
