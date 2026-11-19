@@ -25,7 +25,7 @@ import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
 import { cliAct } from '../act.js'
 import {
   ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, notePrefill, pendingDecision, repairGranted,
-  roundsSinceApprove, type DecisionEntry, type GateRunEntry,
+  roundsSinceApprove, settledToken, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
@@ -89,6 +89,13 @@ function renderBound(
   return EXIT.REFUSED
 }
 
+// Row 240 (R2). The settler lost the stop: a decision landed after the read its act was built on.
+function settledSince(ctx: Ctx, gate: string, target: string): number {
+  renderRefusal([v('gate', 'settled-since', `${gate} ${target} — decided since it was read`,
+    `the stop as it stands — ${cliAct('decide', gate, target, '--show').line}`)]).forEach((l) => ctx.err(l))
+  return EXIT.REFUSED
+}
+
 export interface DecisionCore {
   gate: string
   target: string
@@ -109,6 +116,10 @@ export interface DecisionCore {
   // (D121: the rule that matched is the rule recorded).
   park?: true
   rule?: string
+  // Row 240 (R2), settler-only (`decisionAct` never sets it, so a human act carries none): the
+  // settled-since token of the settler's own read (`settledToken`). The door compares it first
+  // and again under the state lock; a decision that landed since refuses `settled-since`.
+  token?: string
 }
 
 // Who selected the option rides with the act, so the record is written by the same door
@@ -303,6 +314,14 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   }
 
   const atBound = boundReached(entries, gate)
+
+  // Row 240 (R2). Before the repair, bound and anchor checks: a settler whose read predates a
+  // decision that landed meanwhile has lost the stop, and any rule below would only refuse it
+  // for the wrong reason (`repair-not-at-bound`) — or, through D94's revised anchor or the
+  // bound's endgame anchor, let its act land on a disposition it never read.
+  if (act.token !== undefined && settledToken(entries, gate, act.runId ?? '') !== act.token) {
+    return settledSince(ctx, gate, target)
+  }
 
   // Row 109. The grant is a REVISE — the human is sending the artifact back, they are just
   // paying for the round that verifies the fix. Refusing the other spellings is not
@@ -611,7 +630,14 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // unlocked, and two settlers racing one stop (two `next` sessions, drive beside a chat)
     // both judged the same pending run. Asked again under the lock, the loser finds the run
     // decided or superseded and refuses, so the race journals exactly one decision.
-    const now = anchorOf(readStream(root, target))
+    const lockedEntries = readStream(root, target)
+    // Row 240 (R2): the token again, from the read under the lock. Two reads both taken after
+    // the loser's arbiter answered cannot see a decision that landed during that call; the
+    // token, taken before it, can.
+    if (act.token !== undefined && settledToken(lockedEntries, gate, act.runId ?? '') !== act.token) {
+      return settledSince(ctx, gate, target)
+    }
+    const now = anchorOf(lockedEntries)
     if (now.anchor === undefined || (now.anchor.run_id === anchor.run_id && now.after !== first.after)) {
       renderRefusal([v('gate', 'nothing-pending', `${gate} ${target} — decided since it was read`,
         `a stopped gate-run awaiting a decision — run: ${cliAct('decide', gate, target, '--show').line}`)])

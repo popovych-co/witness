@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import type { HeldRow } from './needs.js'
@@ -491,4 +492,17 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     if (answersKey(run, key)) return { kind: 'cached', from: run }
   }
   return { kind: 'fresh' }
+}
+
+// Row 240 (design §4.1.1, R2). What a settler read of its stop: every decision of that gate
+// after the run it judged — a reopen of that gate (`caused_by`) included — hashed. A settler
+// takes it from its own read, before any model call, and the one door compares it first and
+// again under the state lock: an act whose read predates a decision that landed meanwhile
+// refuses `settled-since`, so no settler's act lands on a disposition it did not read. A run
+// the stream does not hold hashes every decision of the gate, the same on both reads.
+export function settledToken(entries: Entry[], gate: string, runId: string): string {
+  const at = entries.findIndex((e) => e.t === 'gate-run' &&
+    (e as unknown as GateRunEntry).gate === gate && (e as unknown as GateRunEntry).run_id === runId)
+  const after = entries.slice(at + 1).filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+  return createHash('sha1').update(JSON.stringify(after)).digest('hex').slice(0, 12)
 }
