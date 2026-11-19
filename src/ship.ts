@@ -23,7 +23,9 @@ import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
-import { classifyGh, classifyGit, journalOutcome, type ShipOutcome } from './ship-outcome.js'
+import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
+import { heldItem, needYouRows } from './needs-you.js'
+import { driveChild } from './drive-presence.js'
 import { shipUntil, takeBusy } from './busy.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
@@ -566,6 +568,17 @@ async function shipMarked(
   if (open !== undefined) {
     renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
+  }
+  // Row 242 (R15). A session drive started meets a standing merge or fix record with its stop at
+  // once — re-running ship there only spends a session to reach the same stop. A human's own
+  // `witness ship` re-checks, and its outcome replaces the record.
+  if (driveChild(ctx.env) !== undefined) {
+    const head = tryGit(worktreePath(root, planId), 'rev-parse', 'HEAD')
+    const rec = standingRecord(readStream(root, planId), head.ok ? head.out.trim() : undefined)
+    if (rec !== undefined) {
+      needYouRows(heldItem(rec, cfgR.value)).forEach((l) => ctx.out(l))
+      return EXIT.FINDINGS
+    }
   }
   const wt = worktreePath(root, planId)
   let entries = readStream(root, planId)

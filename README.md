@@ -250,6 +250,14 @@ gate, and `next` routes the owed work, steps first; `witness status` and `decide
 `revise:` row, beside a `fresh:` row (a re-review of the work as it stands) when no work is owed. It
 also restarts drive's caps for that target.
 
+A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
+survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
+pinned to the approved commit (`gh pr merge N --<ship.merge> --match-head-commit <sha>`), or
+`waiting: fix` (the PR aims at another branch, was closed, holds commits the worktree lacks, or a
+login was refused) with no merge command at all. Each has a `recheck:` row, `witness ship <plan>`,
+for when you have acted. A hold that clears by itself — CI still running, GitHub not answering — is
+drive's to check again, within its caps.
+
 ### Upgrading
 
 After each witness upgrade, run `witness migrate --dry-run` to see what the new version adds or

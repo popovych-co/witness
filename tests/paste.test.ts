@@ -215,10 +215,13 @@ async function pushRemedy(p: string): Promise<Pasteable[]> {
 
 // C1, row 239: the merge an inbox row offers. A `pr` reaches it validated (`needsYou`); built here
 // around the payload itself, the row's one command still runs only `gh pr merge` with that word.
+// Row 242: the merge is pinned to the record's head, with the method `ship.merge` names.
 function mergeLines(p: string): Pasteable[] {
-  const offered = needYouRows({ kind: 'merge', target: 'x', key: 'k', pr: p }).filter((r) => OFFERED.test(r))
+  const head = 'a'.repeat(40)
+  const offered = needYouRows({ kind: 'merge', target: 'x', key: 'k', pr: p, head, method: 'merge', recheck: cliAct('ship', 'x') })
+    .filter((r) => OFFERED.test(r))
   if (offered.length !== 1) throw new Error(`C1: the merge offered ${offered.length} commands`)
-  return [{ line: offered[0]!.replace(OFFERED, ''), calls: [['gh', 'pr', 'merge', p]] }]
+  return [{ line: offered[0]!.replace(OFFERED, ''), calls: [['gh', 'pr', 'merge', p, '--merge', '--match-head-commit', head]] }]
 }
 
 // K12, row 239: the canon guard's remedy, handed to the agent whose Write it blocked, at the path that

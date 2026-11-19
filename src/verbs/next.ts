@@ -7,7 +7,7 @@ import { isId } from '../dsl.js'
 import { unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
-import { primaryRoot } from '../gitio.js'
+import { primaryRoot, tryGit } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { templateDraft } from '../principles.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
@@ -25,6 +25,7 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { driveWillDecide, liveDrive } from '../live.js'
+import { standingRecord, type ShipOutcomeEntry } from '../ship-outcome.js'
 import { busyHolder } from '../busy.js'
 import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
@@ -271,6 +272,9 @@ function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined 
 
 export interface NextAction {
   line: string
+  // Row 242. The human's hold this action stands for: a merge or fix record the plan's ship ended
+  // on, standing (`heldPlan`). Every reader classifies from it, never from the line.
+  held?: ShipOutcomeEntry
   // Row 239 (the plan's B8). The line as data, on every line that is a runnable witness command,
   // and `line` is its `line`: a reader runs `argv` and a human pastes `line`, the same command. A
   // shape, which holds a placeholder or names a file to author, carries none, and each foreign
@@ -483,6 +487,21 @@ const implementSeat = (root: string, cfg: Config, id: string): { home: string; m
   return { home: worktreePath(root, id), model: pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined }
 }
 
+// Row 242 (design §4.3.2, One predicate). A plan is held while a merge or fix record stands — the
+// plan stream's latest entry, on the worktree's HEAD — and nothing above its ship row routes: no
+// plan reopen, no open step. `flowStep`, `needsYou` and drive all read this one predicate.
+export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcomeEntry | undefined {
+  if (String(plan.meta.status) !== 'in-progress') return undefined
+  const id = String(plan.meta.id)
+  const wt = worktreePath(root, id)
+  if (!existsSync(wt)) return undefined
+  const entries = readStream(root, id)
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  const rec = standingRecord(entries, head.ok ? head.out.trim() : undefined)
+  if (rec === undefined || openReopen(entries, 'plan') !== undefined || openStepRow(root, cfg, plan) !== undefined) return undefined
+  return rec
+}
+
 // Row 241 (R9, R12). The step a plan still owes before any implement review starts, as the flow's
 // own step row; none when its progress is unknown (a legacy plan), every step is closed, or a human
 // approved the implement gate past its steps on the plan as it stands (row 93).
@@ -538,6 +557,13 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   const midRed = redInFlight(entries)
   const inFlight = midRed ? { midRed: true as const } : {}
   if (stepped?.next !== undefined) return stepRow(id, plan, entries, { ...stepped, next: stepped.next }, inWorktree, midRed).row
+  // Row 242. A standing human hold is answered with its stop, never another `witness ship`: the line
+  // is ship's re-check, and `held` says it is the human's (needsYou prints its rows).
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  const held = standingRecord(entries, head.ok ? head.out.trim() : undefined)
+  if (held !== undefined) {
+    return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot, held, note: `${held.outcome} stop — ${held.reason}` }
+  }
   if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
@@ -1235,6 +1261,8 @@ export function conversationDraft(root: string, action: Pick<NextAction, 'stage'
 // A stop that waits for the human: a decision the CLI could not settle, a conversation, or a
 // start an unmet manual need blocks. Drive sets each aside, so none is work to launch it for.
 function humanStop(canon: Canon, a: NextAction): boolean {
+  // Row 242: a recorded hold is the human's, read from its record.
+  if (a.held !== undefined) return true
   if (a.line.startsWith('witness decide ') || a.line.startsWith('witness trust ') || conversationStage(a)) return true
   return a.line.startsWith('witness start ') &&
     unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
@@ -1428,10 +1456,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const beingDecided = (a: NextAction): boolean => a.act?.argv[0] === 'decide' && a.target !== undefined &&
     (driveWillDecide(live, a.target) || busyHolder(root, 'settle', a.target) !== undefined)
   const decidedElsewhere: NextAction[] = []
-  if (chat && beingDecided(ladder)) {
+  // Row 242: a recorded hold is never the chat's `next:` either — its `waiting:` rows name it, and a
+  // chat that ran `witness ship` would only re-check the same stop every turn.
+  if (chat && (beingDecided(ladder) || ladder.held !== undefined)) {
     const held = new Set<string>()
-    while (beingDecided(ladder) && !held.has(ladder.target!)) {
-      decidedElsewhere.push(ladder)
+    while ((beingDecided(ladder) || ladder.held !== undefined) && !held.has(ladder.target!)) {
+      if (ladder.held === undefined) decidedElsewhere.push(ladder)
       held.add(ladder.target!)
       ladder = computeNext(root, ctx, canon, cfgR.value, { scope: (t) => t === undefined || !held.has(t) })
     }

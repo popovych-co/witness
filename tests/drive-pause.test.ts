@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -9,8 +10,9 @@ import { driveLoop, journalWatch, PAUSE_IDLE_MAX_MS, PAUSE_POLL_MS, watchSignatu
 import { appendEntry, entryLine, journalRel, withJournalCtx } from '../src/journal.js'
 import { readLive, writeLive } from '../src/live.js'
 import { loadCanon } from '../src/scan.js'
+import { worktreePath } from '../src/worktree.js'
 import {
-  type TestRepo, approve, autonomyOn, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, ghState, noopOpener, patchConfig, seededRepo,
+  type TestRepo, approve, autonomyOn, closedStep, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, ghState, noopOpener, patchConfig, seededRepo,
   writeLocalConfig, writePlan, writeSpec, SCAFFOLDING_FIRST, startedThreeStepPlan,
 } from './helpers.js'
 
@@ -186,7 +188,10 @@ async function startedFlow(opts: { spawns?: number; pr?: number } = {}): Promise
   await writePlan(repo, 'a-plan-1', { parent: 'a', steps: [{ id: 's1', title: 'a', criteria: ['ac-a'] }] })
   approve(repo, 'a-plan-1')
   await repo.cli(['start', 'a-plan-1'])
-  if (opts.pr !== undefined) repo.setMeta('a-plan-1', { pr: opts.pr })
+  if (opts.pr !== undefined) {
+    closedStep(repo, 'a-plan-1', 's1', 'a')                  // row 241: an open step routes above the PR
+    repo.setMeta('a-plan-1', { pr: opts.pr })
+  }
   autonomyOn(repo)
   writeLocalConfig(repo.root, { notify: noopOpener() })
   return repo
@@ -224,7 +229,10 @@ describe('what drive set aside comes back (D207)', () => {
     const repo = await startedFlow({ pr: 7 })
     const scenario = fakeScenario()
     ghState(scenario, 7, 'OPEN')
-    const agent = script("echo tick\necho 'ship: merge PR #7 on GitHub when ready'")
+    // row 242: the ship session journals its merge record, as `witness ship` does on a no-CI hold
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath(repo.root, 'a-plan-1'), encoding: 'utf8' }).trim()
+    const rec = JSON.stringify({ v: 1, t: 'ship-outcome', artifact: 'a-plan-1', pr: 7, head, outcome: 'merge', reason: 'no CI checks reported' })
+    const agent = script(`echo tick\nprintf '%s\\n' '${rec}' >> "${join(repo.root, journalRel('a-plan-1'))}"`)
     const out: string[] = []
     const clock = scripted({
       2: async () => {
@@ -233,7 +241,7 @@ describe('what drive set aside comes back (D207)', () => {
       },
     })
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_IDLE_MAX_MS: '30000', WITNESS_DRIVE_AGENT_BIN: agent }, out), {}, clock)
-    expect(out).toContain('drive: merge — ship: merge PR #7 on GitHub when ready')
+    expect(out).toContain('drive: merge — a-plan-1 · no CI checks reported')
     expect(out).toContain('drive: released — a-plan-1 · done')
     expect(ticks(out)).toBe(1)
     expect(out.some((l) => /^drive: done — \d+ merged · 0 wait on you/.test(l))).toBe(true)

@@ -57,6 +57,11 @@ describe('design stage in the motion surfaces', () => {
     const cmd = read('plugin/commands/witness.md');
     expect(cmd).toContain('| a `parked:` item with `revise:` or `fresh:` rows | `revise:` sends the work back to the parked gate — run it only when the human asks');
   });
+  it('the /witness loop leaves merge and fix stops to the human (row 242)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| a `waiting: merge` or `waiting: fix` item | `waiting: merge`: the human merges');
+    expect(cmd).toContain('Never run that line yourself, even when asked; run its `recheck:` line only when they ask.');
+  });
   it('the /witness loop hands off when home: is elsewhere', () => {
     const cmd = read('plugin/commands/witness.md');
     expect(cmd).toMatch(/`home:`/);

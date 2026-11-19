@@ -142,7 +142,11 @@ describe('classifyAction (D145 addendum §6)', () => {
       .toBe('conversation')
     expect(classifyAction({ line: 'witness design auth-refresh --open', stage: 'design' }, root).kind)
       .toBe('conversation')
-    expect(classifyAction({ line: 'ship: merge PR #4 on GitHub when ready' }, root).kind).toBe('merge')
+    // Row 242: a hold is read from its record, never from ship's words
+    const held = (outcome: 'merge' | 'fix') => ({ t: 'ship-outcome' as const, artifact: 'p1', pr: 4, head: 'a'.repeat(40), outcome, reason: 'r' })
+    expect(classifyAction({ line: 'witness ship p1', target: 'p1', held: held('merge') }, root).kind).toBe('merge')
+    expect(classifyAction({ line: 'witness ship p1', target: 'p1', held: held('fix') }, root).kind).toBe('fix')
+    expect(classifyAction({ line: 'ship: merge PR #4 on GitHub when ready' }, root).kind).not.toBe('merge')
     expect(classifyAction({
       line: 'witness gate implement p1', stage: 'implement', target: 'p1',
       home: '/repo/.witness/worktrees/p1',
@@ -1558,8 +1562,10 @@ echo gated`)
 })
 
 // Final review F10. Any child line containing "merge PR" set the flow aside as a merge for the
-// human and the report handed out `gh pr merge <n>` — for a flow with no PR at all.
-describe('the merge sniff (B2)', () => {
+// human and the report handed out `gh pr merge <n>` — for a flow with no PR at all. Row 242 retired
+// the sniff: a merge left to the human is read from the record ship journals (tests/ship-held.test.ts),
+// so no line a session prints sets a flow aside, the CLI's own included.
+describe('the merge sniff, retired (B2, row 242)', () => {
   it('agent text that mentions a merge is not one', async () => {
     const repo = await startedFlows(['a'])
     const out: string[] = []
@@ -1567,23 +1573,22 @@ describe('the merge sniff (B2)', () => {
     expect(out.join('\n')).not.toContain('drive: merge')
     expect(out.join('\n')).not.toContain('gh pr merge')
   }, 60_000)
-  it('the CLI\'s own merge line on a flow with a PR still sets it aside', async () => {
+  it('the CLI\'s own merge line, with no record, sets nothing aside as a merge', async () => {
     const repo = await startedFlows(['a'], { shipping: 'a' })
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('echo "ship: merge PR #7 on GitHub when ready — the lazy stamp flips plan → done · spec → live"') }, out), {})
-    expect(out).toContain('wait: merge · a-plan-1 · PR #7')
-    expect(out).toContain('  run: gh pr merge 7')
+    expect(out.join('\n')).not.toContain('wait: merge · a-plan-1')
+    expect(out.join('\n')).not.toContain('gh pr merge')
   }, 60_000)
   // Row 214. `mergeOwnPr` prints its line inside the agent's bash tool, so in production it is a
   // tool's output — which print mode never wrote unless the agent quoted it.
-  it('the CLI\'s merge line inside a tool\'s output sets the flow aside (issue #64)', async () => {
+  it('the CLI\'s merge line inside a tool\'s output sets nothing aside either, and is not printed (issue #64)', async () => {
     const repo = await startedFlows(['a'], { shipping: 'a' })
     patchConfig(repo, { harness: 'pi' })
     const agent = script(say({ type: 'tool_execution_end', toolCallId: 'c1', toolName: 'bash', result: { content: [{ type: 'text', text: MERGE }] }, isError: false }))
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
-    expect(out).toContain('wait: merge · a-plan-1 · PR #7')
-    expect(out).toContain('  run: gh pr merge 7')
+    expect(out.join('\n')).not.toContain('wait: merge · a-plan-1')
     expect(out.some((l) => /^\[\d+ [^\]]*\] ship: /.test(l))).toBe(false)
   }, 60_000)
 })

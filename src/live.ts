@@ -21,7 +21,7 @@ const WAITER_FILE = 'waiter.json'
 
 export type EndReason = 'done' | 'idle-limit' | 'ceiling' | 'usage' | 'autonomy-off' | 'spawn-failed' | 'signal' | 'superseded'
 const END_REASONS: readonly EndReason[] = ['done', 'idle-limit', 'ceiling', 'usage', 'autonomy-off', 'spawn-failed', 'signal', 'superseded']
-const ASIDE_KINDS: readonly AsideKind[] = ['kept', 'decision', 'conversation', 'merge', 'stuck', 'capped']
+const ASIDE_KINDS: readonly AsideKind[] = ['kept', 'decision', 'conversation', 'merge', 'fix', 'stuck', 'capped']
 
 export interface LiveAside { target: string; kind: AsideKind; gate?: string; stop?: KeptStop }
 // Row 240 (design §4.1.5). `scope`: the flow a `--flow` drive claimed (absent: every target).

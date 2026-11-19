@@ -81,11 +81,9 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       merge:auth-refresh-plan-4
       wait: merge · auth-refresh-plan-4 · PR #9
-        run: gh pr merge 9
 
       merge:auth-refresh-plan-8
       wait: merge · auth-refresh-plan-8 · PR #12
-        run: gh pr merge 12
 
       parked:auth-refresh-plan-2:plan
       parked: auth-refresh-plan-2 · plan round 1 — parked by the policy — drive cap: plan ran 16 rounds

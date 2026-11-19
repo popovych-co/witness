@@ -91,7 +91,8 @@ describe('needsYou (D203)', () => {
     }
     repo.setMeta('auth-refresh-plan-1', { pr: 9 })
     expect(merge()).toMatchObject({ pr: '9' })
-    expect(needYouRows(merge())).toEqual(['wait: merge · auth-refresh-plan-1 · PR #9', '  run: gh pr merge 9'])
+    // row 242: with no record there is no head to pin a merge to, so no command is offered
+    expect(needYouRows(merge())).toEqual(['wait: merge · auth-refresh-plan-1 · PR #9'])
     repo.setMeta('auth-refresh-plan-1', { pr: '12' })
     expect(merge()).toMatchObject({ pr: '12' })
   })
