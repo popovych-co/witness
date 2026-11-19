@@ -39,7 +39,9 @@ function liveDrive(repo: TestRepo, state: Omit<LiveState, 'pid'>): () => void {
   writeLive(repo.root, { pid: process.pid, ...state })
   return lock.value
 }
-const chatNext = (repo: TestRepo) => repo.cli(['next'], { env: { CLAUDECODE: '1' } })
+// `CI: ''`: a runner's CI=true must not reach `next`, which settles nothing under CI — these tests
+// are about what the chat settles, on a laptop and on CI alike.
+const chatNext = (repo: TestRepo) => repo.cli(['next'], { env: { CLAUDECODE: '1', CI: '' } })
 
 describe('the chat leaves drive\'s stops to drive (row 240)', () => {
   it('the chat\'s next under a live drive settles no stop drive will decide (#88)', async () => {

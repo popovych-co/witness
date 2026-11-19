@@ -146,7 +146,8 @@ describe('no implement review starts while a step is open (row 241)', () => {
     if (s.kind !== 'routed') return
     expect(s.act.line).toBe(S2(planId))
     expect(s.row).toMatchObject({ line: S2(planId), stage: 'implement', home: worktreePath(repo.root, planId) })
-    const out = (await repo.cli(['next'])).stdout.split('\n')
+    // `CI: ''`: `next` settles nothing under a runner's CI=true, and this asserts what its settle routes
+    const out = (await repo.cli(['next'], { env: { CI: '' } })).stdout.split('\n')
     expect(out).toContain(`next: ${S2(planId)}`)
     expect(out).toContain('stage: implement')
     expect(out.some((l) => l.startsWith('next: witness gate implement'))).toBe(false)
