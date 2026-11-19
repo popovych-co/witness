@@ -22,7 +22,7 @@ import { canonicalSha } from '../src/sha.js'
 import { ROUND_BOUND } from '../src/rounds.js'
 import { containmentLine, jobHost } from '../src/contain.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, closedStep, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -68,7 +68,10 @@ async function startedFlows(specs: string[], opts: { shipping?: string } = {}): 
     approve(repo, `${s}-plan-1`)
     await repo.cli(['start', `${s}-plan-1`])
   }
-  if (opts.shipping) repo.setMeta(`${opts.shipping}-plan-1`, { pr: 7 })
+  if (opts.shipping) {
+    closedStep(repo, `${opts.shipping}-plan-1`, 's1', opts.shipping)       // row 241: an open step routes above the PR
+    repo.setMeta(`${opts.shipping}-plan-1`, { pr: 7 })
+  }
   autonomyOn(repo)
   writeLocalConfig(repo.root, { notify: noopOpener() })
   return repo

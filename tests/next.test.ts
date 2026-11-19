@@ -435,10 +435,9 @@ describe('next routes the next unfinished plan step', () => {
     expect(await lines(repo, wt)).toContain('note: nothing changed yet — make the change · every step of this plan is scaffolding')
   })
 
-  // Step routing holds until the first implement gate: after it an untagged cycle is a fix round
-  // and the plan's steps are behind it, so a known plan with a step left unclosed gets the rows below
-  // step routing, here the gate's, as before row 191.
-  it('keeps the rows below step routing once an implement gate has run', async () => {
+  // Row 241 (R7; reverses row 191's Plan's call 5): an open step is the next work after an implement
+  // gate too, so a known plan with a step left unclosed routes that step, never the gate.
+  it('routes the next unclosed step once an implement gate has run', async () => {
     const { repo, wt, planId } = await startedThreeStepPlan()
     expect((await evidenceCycle(repo, wt, planId, 's1')).code).toBe(0)
     commitEntry(repo, planId, {
@@ -446,9 +445,9 @@ describe('next routes the next unfinished plan step', () => {
       prompts_sha: 'p', witness: '0', model: 'm', checks: [], verdicts: [], outcome: 'passed',
     })
     const out = await lines(repo, wt)
-    expect(out.find((l) => l.startsWith('next: '))).toBe(`next: witness gate implement ${planId}`)
-    expect(out).not.toContain('stage: implement')
-    expect(out.filter((l) => l.startsWith('note: steps'))).toEqual([])
+    expect(out.find((l) => l.startsWith('next: '))).toBe(`next: witness test-evidence ${planId} --phase red --step s2`)
+    expect(out).toContain('stage: implement')
+    expect(out.filter((l) => l.startsWith('note: steps'))).toEqual(['note: steps 1/3 done · next s2'])
   })
 
   it("keeps today's rows for a legacy plan", async () => {

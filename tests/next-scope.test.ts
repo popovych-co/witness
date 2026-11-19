@@ -8,7 +8,7 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { computeNext, NOTHING_OWED } from '../src/verbs/next.js'
 import {
-  approve, autonomyOn, fakeCtx, fixtureEnv, fakeScenario, gateEnv, ghState, hermeticEnv, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
+  approve, autonomyOn, closedStep, fakeCtx, fixtureEnv, fakeScenario, gateEnv, ghState, hermeticEnv, nextLine, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, writePlan, writeSpec, type TestRepo,
   trustConfig,
 } from './helpers.js'
@@ -25,6 +25,7 @@ async function flowAndDraft(): Promise<TestRepo & { env: Record<string, string> 
   await writePlan(repo, 'auth-refresh-plan-1')
   approve(repo, 'auth-refresh-plan-1')
   await repo.cli(['start', 'auth-refresh-plan-1'])
+  closedStep(repo, 'auth-refresh-plan-1')
   repo.setMeta('auth-refresh-plan-1', { pr: 7 })
   trustConfig(repo)
   await writeSpec(repo, 'auth-mfa', { criteria: [{ id: 'ac-mfa', test: '@spec:auth-mfa' }] })

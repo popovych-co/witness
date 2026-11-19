@@ -12,7 +12,7 @@ import { findById, loadCanon, planFinished, plannableParent, type Canon, type Ca
 import { templateDraft } from '../principles.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner } from '../reviewed.js'
+import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner, runJudgedPlan } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
@@ -431,6 +431,22 @@ export function flowAction(
   return a && withTrust(root, env, cfg, { docs: [plan] }, a)
 }
 
+// Row 241 (design §4.2.1; the user's decision 8). A human's approve of the implement gate stays
+// final (row 93): while the plan's content is what the approved run judged, the plan is past its
+// steps, and neither the step row nor the steps-open refusal applies. A policy or arbiter approve
+// gets no such pass. With the steps-open refusal in force no new implement run starts with a step
+// open, so in practice this reaches approvals given before the upgrade.
+export function humanApprovedPastSteps(entries: Entry[], plan: CanonDoc): boolean {
+  let at = -1
+  entries.forEach((e, i) => {
+    if (e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === 'implement') at = i
+  })
+  const d = entries[at] as unknown as DecisionEntry | undefined
+  if (d === undefined || d.decision !== 'approve' || (d.selected !== undefined && d.selected !== 'affirmation')) return false
+  const run = lastGateRun(entries.slice(0, at), 'implement')
+  return run !== undefined && runJudgedPlan(run, plan)
+}
+
 function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
@@ -442,41 +458,24 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   const inWorktree = { home: wt, model: implementModel }
   const atRoot = { home: root }
   if (!existsSync(wt)) return { ...runs(cliAct('start', id)), target: id, note: 'worktree missing — start recreates it' }
-  if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   // Row 95: a reopen on this plan's OWN plan gate is routable motion — the plan is what
   // needs re-authoring — and every reader was blind to it. Above the implement settle check
   // on purpose: an implement gate settled against an earlier plan version must not carry
-  // the flow past a reopen saying the plan itself is wrong. Below the `pr` row on purpose
-  // too: a flow already at ship is answered by ship. No `home:` — plan authoring writes
-  // canon at the root, and this matches what computeNext's plans-first loop prints.
+  // the flow past a reopen saying the plan itself is wrong. Row 241 extends it above the `pr`
+  // row too: a plan sent back after its PR opened is re-authored before it ships (P8). No
+  // `home:` — plan authoring writes canon at the root, and this matches what computeNext's
+  // plans-first loop prints.
   if (openReopen(entries, 'plan') !== undefined) {
     const act = planWriteAction(root, liveEfforts(root), id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'plan gate reopened — re-author, then re-gate the plan') }
   }
-  const baseR = diffBase(wt, cfg)
-  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
-  // Rows 95 + 96: the identity is the diff plus the plan's content, never the worktree, and
-  // it comes from the SAME derivation the implement gate keys on — deriving it here a second
-  // way is what made every settled gate read as lapsed. undefined means the base cannot be
-  // resolved — "cannot compute", never "moved", so a settled gate stays settled.
-  const diffSha = baseR.ok ? implementReviewedSha(wt, baseR.value, plan) : undefined
-  // D93: the gate owns its deterministic checks; the router reads the verdict and never
-  // re-derives the predicate. Testing `evidence` in front of this is what made a human
-  // `--approve` invisible to the one verb the driving loop calls every turn — the
-  // journal said settled, `next` said test-evidence, and no error printed anywhere.
-  // Sha-sensitivity is load-bearing here: emptying the worktree after an approval moves
-  // the sha and re-arms the gate, which is why this keeps `diffSha` while
-  // `gates/ship.ts` deliberately omits it (row 92).
-  if (gateSettled(entries, 'implement', diffSha)) {
-    return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
-  }
-  // Row 191 · Plan's call 5. The evidence below is the parent tag's and knows nothing of the
-  // plan's steps: one red→green pair satisfied it, so a three-step plan was routed to `gate
-  // implement` after its first step and every mid-plan relay's fresh session gated early.
-  // While the plan's progress is known and no implement gate has run, the next unfinished
-  // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
+  // Row 241 (R7; reverses row 191's Plan's call 5). A plan's unbuilt steps are its next work before
+  // and after an implement gate, and above its PR: an amendment that adds a step after either is
+  // built before the plan ships (#89, P8, P21) — unless a human approved the implement gate past it
+  // on the plan as it stands (row 93). After the gate an untagged cycle is still a fix round, which
+  // closes no step; a step 0.28 let be built untagged after a gate reads open and is re-witnessed.
   const progress = stepProgress(plan, entries)
-  const stepped = progress.known && !implementGated(entries) ? progress : undefined
+  const stepped = progress.known && !humanApprovedPastSteps(entries, plan) ? progress : undefined
   // Final review I1, its re-review and D192. A red in flight (steps.ts: the latest non-vacuous run
   // saw a failure) is one whatever step it names, or none: recorded out of order, ahead of a
   // scaffolding step left unclosed, re-opened on a closed step, or a fix round's. Whatever row
@@ -506,6 +505,24 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
       ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
     }
   }
+  if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
+  const baseR = diffBase(wt, cfg)
+  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
+  // Rows 95 + 96: the identity is the diff plus the plan's content, never the worktree, and
+  // it comes from the SAME derivation the implement gate keys on — deriving it here a second
+  // way is what made every settled gate read as lapsed. undefined means the base cannot be
+  // resolved — "cannot compute", never "moved", so a settled gate stays settled.
+  const diffSha = baseR.ok ? implementReviewedSha(wt, baseR.value, plan) : undefined
+  // D93: the gate owns its deterministic checks; the router reads the verdict and never
+  // re-derives the predicate. Testing `evidence` in front of this is what made a human
+  // `--approve` invisible to the one verb the driving loop calls every turn — the
+  // journal said settled, `next` said test-evidence, and no error printed anywhere.
+  // Sha-sensitivity is load-bearing here: emptying the worktree after an approval moves
+  // the sha and re-arms the gate, which is why this keeps `diffSha` while
+  // `gates/ship.ts` deliberately omits it (row 92).
+  if (gateSettled(entries, 'implement', diffSha)) {
+    return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
+  }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
@@ -516,7 +533,11 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
         midRed, criteria: hasCriteriaStep(plan),
         // D192. While a red is in flight its green is owed, so the row names the red in flight's step,
         // as the step row does. Read from the latest red of any kind, it named a vacuous red's step.
-        step: stepped !== undefined ? greenOwedStep(plan, entries) ?? evidenceStep(stepped.steps, entries) : undefined,
+        // Row 241: after an implement gate, with every step closed, a cycle is a fix round's and names
+        // no step — but the green owed by a red in flight, or by an already-present red, still does.
+        step: stepped === undefined ? undefined
+          : !implementGated(entries) ? greenOwedStep(plan, entries) ?? evidenceStep(stepped.steps, entries)
+            : greenOwedStep(plan, entries) ?? presentGreenOwed(plan, entries),
       }),
       ...inFlight,
     }

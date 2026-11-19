@@ -193,14 +193,15 @@ export function checkStep(plan: CanonDoc, entries: Entry[], step: string | undef
     if (verb === 'evidence') {
       // Plan's call 4: owed where the CLI can tell it is. Before the first implement gate every
       // cycle on a plan whose progress is known is a step's, and one forgotten flag would turn
-      // that knowledge off for good. After the gate an untagged cycle is a fix round, a legacy
-      // plan's evidence never named its steps, and a plan with no criteria step has no step a
-      // cycle could be.
-      if (!hasCriteriaStep(plan) || implementGated(entries)) return []
+      // that knowledge off for good. Row 241 (R8): so is every cycle after it while a criteria step
+      // is open — an amendment's step. With every step closed an untagged cycle is a fix round; a
+      // legacy plan's evidence never named its steps, and a plan with no criteria step has no step
+      // a cycle could be.
+      if (!hasCriteriaStep(plan)) return []
       const p = stepProgress(plan, entries)
-      return p.known
-        ? [v('--step', 'step-required', 'absent', `--step <id> — every cycle before the first implement gate is a plan step's · steps ${stepsLine(p)}`)]
-        : []
+      if (!p.known) return []
+      if (implementGated(entries) && !p.steps.some((s) => s.kind === 'criteria' && s.closedAt === undefined)) return []
+      return [v('--step', 'step-required', 'absent', `--step <id> — every cycle while a criteria step is open is a plan step's · steps ${stepsLine(p)}`)]
     }
     // Row 239. A shape quotes its foreign word, and the prose after it stays as it reads.
     const scaffolding = steps.filter((s) => s.kind === 'scaffolding').map((s) => s.id).join(' · ')

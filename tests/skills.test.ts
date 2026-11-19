@@ -183,6 +183,17 @@ describe('witness-implement — capture mandate', () => {
   });
 });
 
+describe('unbuilt steps come first in the skills (row 241)', () => {
+  it('implement owes --step after a gate while a criteria step is open, and works amended steps from steps:', () => {
+    const body = readFileSync(skillPath('witness-implement'), 'utf8')
+    expect(body).toContain('and after it while any criteria step is open, the CLI refuses a cycle that names no step (`step-required`)')
+    expect(body).toContain('Steps an amendment added — after a gate, or after the PR opened — are worked like a fresh plan\'s, from `steps:`')
+  });
+  it('plan gives changed work a new step id', () => {
+    expect(readFileSync(skillPath('witness-plan'), 'utf8')).toContain('changed work gets a new step id: a closed id stays closed')
+  });
+});
+
 describe('witness-implement: a step already on the base (row 241)', () => {
   it('a verify-red that closes a step as already present prints the slice lines, and its green comes next', () => {
     expect(readFileSync(skillPath('witness-implement'), 'utf8'))
