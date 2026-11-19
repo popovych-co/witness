@@ -5,6 +5,9 @@ if [ "$1" = "--version" ]; then echo "gh fake 0.0.0"; exit 0; fi
 dir="${WITNESS_FAKE_DIR:?WITNESS_FAKE_DIR unset}"
 mkdir -p "$dir"
 echo "$*" >> "$dir/gh-calls"
+# a test makes one subcommand fail as GitHub would: its words on stderr, its exit code (default 1)
+fail="$dir/gh-fail-$1-$2"
+if [ -f "$fail" ]; then cat "$fail" >&2; exit "$(cat "$fail-code" 2>/dev/null || echo 1)"; fi
 sub="$1 $2"
 case "$sub" in
   "auth status") echo "Logged in to github.com (fake)"; exit 0 ;;

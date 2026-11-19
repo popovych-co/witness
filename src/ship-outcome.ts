@@ -60,3 +60,26 @@ export function journalOutcome(root: string, planId: string, rec: ShipOutcomeRec
     lock.value()
   }
 }
+
+// Row 242 (design §4.3.1). Git's words read for their meaning, from a git run in the C locale with
+// `--porcelain` where git has it (tryGitC), so a localized git still classifies (W7): a push the
+// remote refused because it holds commits the worktree lacks, a lease it refused, a refused login,
+// and a remote that did not answer.
+export function classifyGit(out: string): 'diverged' | 'lease' | 'login' | 'network' | 'other' {
+  if (/stale info/i.test(out)) return 'lease'
+  if (/\[rejected\]|non-fast-forward|fetch first|\[remote rejected\]/i.test(out)) return 'diverged'
+  if (/Authentication failed|Permission denied \(publickey|could not read Username|terminal prompts disabled|HTTP 40[13]|invalid username or password/i.test(out)) return 'login'
+  if (/Could not resolve host|unable to access|Connection (timed out|refused|reset)|Network is unreachable|early EOF|Operation timed out|Could not read from remote repository|timed out/i.test(out)) return 'network'
+  return 'other'
+}
+
+// GitHub's, from gh's exit and words: a refused login (gh asking for authentication, an HTTP 401, a
+// 403 that says it is about authentication or a token), a rate limit (a 403 or 429 that says so),
+// and no answer at all (a connection error, or a gh killed by its timeout, which leaves no code).
+export function classifyGh(code: number | null, out: string): 'login' | 'rate' | 'network' | 'other' {
+  if (/rate limit|HTTP 429/i.test(out)) return 'rate'
+  if (/HTTP 401|Bad credentials|gh auth login|authentication required|not logged in/i.test(out)) return 'login'
+  if (/HTTP 403/i.test(out) && /authenticat|credential|token|SAML|SSO/i.test(out)) return 'login'
+  if (code === null || /error connecting|could not resolve|no such host|i\/o timeout|connection (refused|reset)|TLS handshake|EOF|timed? ?out/i.test(out)) return 'network'
+  return 'other'
+}

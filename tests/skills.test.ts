@@ -222,6 +222,11 @@ describe('witness-ship', () => {
     const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
     expect(cmd).toContain('A `decided: … (decided first)` line is the same')
   });
+  it('names the merge and fix stops the human\'s, a transient hold drive\'s, and a red CI its own (row 242)', () => {
+    for (const s of ['never merge yourself or run a `gh pr merge` line', '`ci: red` with failing checks is yours: fix it and re-run `witness ship`',
+      'running `witness ship` again returns the same stop', 'is drive\'s to check again: END YOUR TURN']) expect(body(), s).toContain(s)
+    expect(body()).not.toContain('a base it cannot verify — is the human\'s')
+  });
   it('ends the turn on a busy line, in the ship skill and in /witness (row 240)', () => {
     expect(body()).toContain('A `busy:` line means another witness run is acting on this plan now: render it and END YOUR TURN')
     const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
@@ -393,7 +398,7 @@ describe('one autonomy conditional per skill (A8)', () => {
     expect(read('witness-ship')).toContain('`merged:`');
     expect(read('witness-ship')).toContain('Never merge');
     expect(read('witness-design')).toContain('the kept stop `design look`');
-    expect(read('witness-ship')).toContain('Any other `merge: held`');
+    expect(read('witness-ship')).toContain('A merge or fix stop — `merge: held`');
     expect(read('witness-ship')).toContain('ship <plan-id>    # append --manual when the run asked for it');
   });
 });
