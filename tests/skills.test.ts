@@ -200,6 +200,11 @@ describe('witness-ship', () => {
     const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
     expect(cmd).toContain('A `decided: … (decided first)` line is the same')
   });
+  it('ends the turn on a busy line, in the ship skill and in /witness (row 240)', () => {
+    expect(body()).toContain('A `busy:` line means another witness run is acting on this plan now: render it and END YOUR TURN')
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('| `busy:` is printed | Another witness run is acting on that target now. Do nothing for it')
+  });
   it('checks a resolution through witness turn (row 218)', () => {
     expect(body()).toContain("<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>");
   });

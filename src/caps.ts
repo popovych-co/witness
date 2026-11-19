@@ -1,5 +1,6 @@
+import { settleUntil, takeBusy } from './busy.js'
 import { EXIT, type Ctx } from './cli.js'
-import type { DriveCaps } from './config.js'
+import type { Config, DriveCaps } from './config.js'
 import type { Entry } from './journal.js'
 import { fellBack, gateRuns, lastGateRun, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { duration } from './usage.js'
@@ -63,8 +64,23 @@ export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHi
 // `park` anchors it on the gate's last run even after the author moved the tree. A target
 // with no open gate has nothing to park on; a refusal from the door is named, not guessed.
 export async function parkAtCap(
-  ctx: Ctx, root: string, target: string, hit: CapHit,
-): Promise<{ parked: true } | { parked: false; why: string }> {
+  ctx: Ctx, root: string, target: string, hit: CapHit, cfg: Config,
+): Promise<{ parked: true } | { parked: false; why: string; busy?: true }> {
+  // Row 240 (design §4.1.2): under the stop's settle lock, taken before the stream is read. Held
+  // by another live process, nothing parks and drive tries the target again next round.
+  const lock = takeBusy(root, 'settle', target, settleUntil(cfg, ctx.env, Date.now()))
+  if (!lock.taken) {
+    if ('holder' in lock) return { parked: false, busy: true, why: 'busy' }
+    return { parked: false, why: `the policy could not park it (${lock.refused[0]?.rule ?? 'lock-unwritable'})` }
+  }
+  try {
+    return await parkUnderLock(ctx, root, target, hit)
+  } finally {
+    lock.release()
+  }
+}
+
+async function parkUnderLock(ctx: Ctx, root: string, target: string, hit: CapHit): Promise<{ parked: true } | { parked: false; why: string }> {
   const { readStream } = await import('./journal.js')
   const entries = readStream(root, target)
   if (!entries.some((e) => e.t === 'gate-run')) return { parked: false, why: 'no gate run to park it on' }

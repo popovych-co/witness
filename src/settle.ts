@@ -1,6 +1,7 @@
 import { cliAct, type Act } from './act.js'
 import { grantRows, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
 import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
+import { settleUntil, takeBusy } from './busy.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -60,9 +61,35 @@ function refusedRule(lines: readonly string[]): string | undefined {
 const leftLine = (gate: string, target: string, why: string) =>
   cmd('autonomy', `left for a human — ${why} · ${cliAct('decide', gate, target, '--show').line}`)
 
+// Row 240 (design §4.1.2). The stop's settle lock is taken before the stop is read and held
+// through the arbiter call and the door, so a second settler beside it — a chat's `next`, drive's
+// pass, a terminal's gate — reads nothing and asks no model. Nobody waits for it.
 export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: string, target: string): Promise<Settled> {
-  return judgeStop(ctx, root, cfg, gate, target, false)
+  const lock = takeBusy(root, 'settle', target, settleUntil(cfg, ctx.env, Date.now()))
+  if (!lock.taken) {
+    if ('holder' in lock) return { kind: 'busy', pid: lock.holder.pid, since: lock.holder.since }
+    renderRefusal(lock.refused).forEach((l) => ctx.err(l))
+    const why = `the settle lock could not be written (${lock.refused[0]?.rule ?? 'lock-unwritable'})`
+    ctx.out(leftLine(gate, target, why))
+    return { kind: 'left', why, code: EXIT.BLOCKED }
+  }
+  try {
+    return await judgeStop(ctx, root, cfg, gate, target, false)
+  } finally {
+    lock.release()
+  }
 }
+
+// Local wall-clock HH:MM, for the lines that name when a holder started.
+export const hhmm = (ms: number): string => {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// Row 240. Where a verb settles (the gate's tail, ship's awaiting-decision settle), a busy stop is
+// named once and the verb exits 3: another run is deciding it, and there is nothing to do.
+export const busyLine = (gate: string, target: string, s: { pid: number; since: number }): string =>
+  `busy: ${target} — another witness run is deciding ${gate} (pid ${s.pid}, since ${hhmm(s.since)})`
 
 const byOf = (d: DecisionEntry): 'human' | 'policy' | 'arbiter' =>
   d.selected === 'policy' || d.selected === 'arbiter' ? d.selected : 'human'

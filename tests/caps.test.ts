@@ -88,6 +88,7 @@ describe('a cap park lands only on what it read (row 240)', () => {
     }
     return repo
   }
+  const cfgOf = (root: string) => { const r = loadConfig(root); if (!r.ok) throw new Error('cfg'); return r.value }
   const decisions = (root: string) => (readStream(root, PLAN).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[])
     .filter((d) => d.gate === 'plan').map((d) => `${d.decision} · ${d.selected ?? 'human'}`)
 
@@ -98,7 +99,7 @@ describe('a cap park lands only on what it read (row 240)', () => {
       expect(await applyDecision(fakeCtx(repo.root), { gate: 'plan', target: PLAN, decision: 'revise', upstream: 'auth-refresh' })).toBe(0)
     }
     const hit = { cap: 'rounds' as const, gate: 'plan', note: 'drive cap: plan ran 3 rounds' }
-    expect(await parkAtCap(fakeCtx(repo.root), repo.root, PLAN, hit)).toEqual({ parked: false, why: 'the policy could not park it (settled-since)' })
+    expect(await parkAtCap(fakeCtx(repo.root), repo.root, PLAN, hit, cfgOf(repo.root))).toEqual({ parked: false, why: 'the policy could not park it (settled-since)' })
     expect(decisions(repo.root)).toEqual(['revise-upstream · human'])
     expect(openReopen(readStream(repo.root, 'auth-hardening'), 'decompose')).toBeDefined()
   })
@@ -106,7 +107,7 @@ describe('a cap park lands only on what it read (row 240)', () => {
   it('a cap park on the stop as it read it still parks', async () => {
     const repo = await boundStop()
     const hit = { cap: 'rounds' as const, gate: 'plan', note: 'drive cap: plan ran 3 rounds' }
-    expect(await parkAtCap(fakeCtx(repo.root), repo.root, PLAN, hit)).toEqual({ parked: true })
+    expect(await parkAtCap(fakeCtx(repo.root), repo.root, PLAN, hit, cfgOf(repo.root))).toEqual({ parked: true })
     expect(decisions(repo.root)).toEqual(['stop · policy'])
   })
 })

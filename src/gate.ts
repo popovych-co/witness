@@ -306,8 +306,10 @@ export async function runGate(
   if (!cfgR.ok || !cfgR.value.autonomy || pendingTxn(rootR.value) !== undefined) return code
   // A dynamic import: settle.ts reaches decide.ts, whose gates/index.js import would close a
   // static cycle through this module — each gate's registerGate would run before GATES exists.
-  const { settleStop, settledCode } = await import('./settle.js')
+  const { busyLine, settleStop, settledCode } = await import('./settle.js')
   const settled = await settleStop(ctx, rootR.value, cfgR.value, gateName, target)
+  // Row 240: another run holds this stop's settle lock — it is deciding it; nothing to do here.
+  if (settled.kind === 'busy') ctx.out(busyLine(gateName, target, settled))
   // Row 191 §4.4. A revise settled here is handed to the session that ran the gate, so this is
   // where a session at its limit hands it to a fresh one. Ship passes `handover: false`: its run
   // hands over once, at its own exit (Plan's call 7).

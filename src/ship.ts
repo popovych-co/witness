@@ -22,7 +22,8 @@ import { handOverIfDue } from './slice.js'
 import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
-import { settleStop, settledCode } from './settle.js'
+import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
+import { shipUntil, takeBusy } from './busy.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
 
@@ -440,6 +441,29 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
     renderRefusal([v('plan', 'unknown-plan', planId, 'a plans/ doc id')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
+  // Row 240 (design §4.1.2). One ship run per plan: the marker is taken before anything journals
+  // and released when the run ends. Held by another live process, this run does nothing — that
+  // one continues — and exits 3. Nobody waits for it.
+  const marker = takeBusy(root, 'ship', planId, shipUntil(cfgR.value, ctx.env, Date.now()))
+  if (!marker.taken) {
+    if ('holder' in marker) {
+      ctx.out(`busy: ${planId} — witness ship is running on it (pid ${marker.holder.pid}, since ${hhmm(marker.holder.since)}) · nothing to do; it continues when that ends`)
+    } else {
+      renderRefusal(marker.refused).forEach((l) => ctx.err(l))
+    }
+    return EXIT.BLOCKED
+  }
+  try {
+    return await shipMarked(ctx, root, cfgR, planId, canon, plan, opts)
+  } finally {
+    marker.release()
+  }
+}
+
+async function shipMarked(
+  ctx: Ctx, root: string, cfgR: { ok: true; value: Config }, planId: string, canon: ReturnType<typeof loadCanon>,
+  plan: CanonDoc, opts: { manual?: boolean },
+): Promise<number> {
   const wt = worktreePath(root, planId)
   let entries = readStream(root, planId)
   const shipBranch = cfgR.value.ship.branch
@@ -513,6 +537,7 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
       phase = rederive()
       if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
     } else if (s.kind !== 'none') {
+      if (s.kind === 'busy') ctx.out(busyLine('ship', planId, s))
       return settledCode(EXIT.FINDINGS, s)
     }
     // `none` — a stop the policy does not settle (a `--manual` run's): the human's, rendered below.
