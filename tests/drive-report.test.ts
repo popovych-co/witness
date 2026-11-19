@@ -49,7 +49,7 @@ describe('the run report (B6)', () => {
       '  run: witness satisfy auth-refresh-plan-2 --need ses-prod',
       'wait: decision · plan auth-refresh-plan-4',
       '  run: witness decide plan auth-refresh-plan-4 --show',
-      'parked: auth-refresh-plan-3 · plan round 3 — drive cap: plan ran 16 rounds across budget resets · drive.caps.rounds 16',
+      'parked: auth-refresh-plan-3 · plan round 3 — parked by the policy — drive cap: plan ran 16 rounds across budget resets · drive.caps.rounds 16',
       'stuck: x-plan-1 — no progress on witness ship x-plan-1',
       'obligation: d-1a2b3c4d · auth-refresh-plan-1 · src/token.ts#rotate — artifact-debt',
       'decisions: policy 3 · arbiter 1 · affirmation 0 · named 1',      // the cap park is a policy decision too

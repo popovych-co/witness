@@ -661,8 +661,43 @@ const roundOf = (r: unknown): number | undefined => (Number.isInteger(r) && (r a
 // `status` names every one of them. The anchor comes from the run the stop disposed of —
 // the human parked something specific, and "parked" without "on what" is not a report.
 // Row 239: `round` is absent where the run's journaled round is not a round (`roundOf`).
+// Row 241 (R11). Whether a parked gate's target has work owed, so its reopen is the revise alone: the
+// gate's latest act before the park sent work upstream, the plan's own gate is reopened, or — read
+// with the config — the flow routes implement work other than the gate (a step, an evidence row,
+// an edit a revise asked for).
+export function parkOwed(root: string, cfg: Config | undefined, canon: Canon, gate: string, target: string, entries: Entry[]): boolean {
+  const last = lastGateRun(entries, gate)
+  const acts = last === undefined ? [] : entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate && (e as unknown as DecisionEntry).caused_by === undefined)
+    .map((e) => e as unknown as DecisionEntry)
+  if (acts.at(-2)?.decision === 'revise-upstream') return true
+  const plan = findById(canon, target)
+  if (plan?.meta.type !== 'plan') return false
+  if (openReopen(entries, 'plan') !== undefined) return true
+  if (cfg === undefined) {
+    const p = stepProgress(plan, entries)
+    return p.known && p.next !== undefined && !humanApprovedPastSteps(entries, plan)
+  }
+  const row = flowStep(root, cfg, plan)
+  return row !== undefined && row.stage === 'implement' && !row.line.startsWith('witness gate ')
+}
+
+// Row 241. Who parked a gate, and why, for the parked head: the arbiter with its reason, the policy
+// with its note, or a human at the anchor the stop disposed of.
+export function parkedBy(entries: Entry[], gate: string, anchor: string): string {
+  const stopped = entries.filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
+  // A journaled note or reason is parsed JSON: held as the string it prints as.
+  if (stopped?.selected === 'arbiter') return `parked by the arbiter — ${String(stopped.reason ?? stopped.note ?? 'no reason journaled')}`
+  if (stopped?.selected === 'policy' && stopped.note) {
+    const note = String(stopped.note)
+    return note.startsWith('parked by the policy') ? note : `parked by the policy — ${note}`
+  }
+  return `parked by a human at ${anchor}`
+}
+
 export function parkedGates(
-  root: string, canon: Canon,
+  root: string, canon: Canon, cfg?: Config,
 ): Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> {
   const out: Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> = []
   // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
@@ -689,7 +724,7 @@ export function parkedGates(
       out.push({
         gate, target: id, ...(round !== undefined ? { round } : {}),
         anchor: anchors[0] ?? last.standing ?? last.outcome,
-        reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent)),
+        reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent), parkOwed(root, cfg, canon, gate, id, entries)),
       })
     }
   }

@@ -91,6 +91,9 @@ export interface DecisionEntry {
   // set on a `revise`, only ever at the bound, and only once per budget window — the whole
   // grant is this flag plus the window it sits in, so nothing can drift out of sync with it.
   repair?: true
+  // Row 241 (R11). A human's revise that lifted a park below the bound: the gate is sent back to
+  // work without running. Restarts drive's cap window and its per-run use for the target.
+  unpark?: true
   note?: string
   upstream?: { artifact: string; gate: string }
   caused_by?: { artifact: string; gate: string; round: number }
@@ -372,23 +375,32 @@ export function liveExits(
   return exitsLine(exitActs(gate, target, entries, stale, upstream))
 }
 
-// What un-parks a gate stopped under D124. Below the bound a fresh run is the act — the
-// content is unchanged, so a plain re-gate would answer `changed-nothing`. At the bound
-// the gate short-circuits before invoking anything, so `--fresh` is the D67 lie: the only
-// live acts there are the endgame set, which exitActs already knows.
+// Row 241 (R11). The human revise that lifted a park (`decide` journals it marked).
+export function isUnpark(e: Entry, gate?: string): boolean {
+  return e.t === 'human-decision' && (e as unknown as DecisionEntry).unpark === true &&
+    (gate === undefined || (e as unknown as DecisionEntry).gate === gate)
+}
+
+// What un-parks a gate stopped under D124. At the bound the gate short-circuits before invoking
+// anything, so `--fresh` is the D67 lie: the only live acts there are the endgame set, which
+// exitActs already knows. Below it, row 241 (R11): a human's revise sends the gate back to work —
+// alone while work is `owed` (an open step, a plan reopen, an evidence row, or work the gate's
+// last act sent upstream), since a fresh run would only judge the work as it stands; otherwise
+// beside a fresh run, which re-reviews it (the content is unchanged, so a plain re-gate would
+// answer `changed-nothing`).
 export function reopenActs(
-  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed: boolean,
 ): Act[] {
-  return boundReached(entries, gate)
-    ? exitActs(gate, target, entries, false, upstream)
-    : [cliAct('gate', gate, target, '--fresh')]
+  if (boundReached(entries, gate)) return exitActs(gate, target, entries, false, upstream)
+  const revise = cliAct('decide', gate, target, '--revise', '--note', '<why>')
+  return owed ? [revise] : [revise, cliAct('gate', gate, target, '--fresh')]
 }
 
 // Rows 139/203. The reopen as one line: `reopenActs` rendered.
 export function reopenCommand(
-  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed = false,
 ): string {
-  return exitsLine(reopenActs(gate, target, entries, upstream))
+  return exitsLine(reopenActs(gate, target, entries, upstream, owed))
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {

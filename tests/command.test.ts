@@ -53,6 +53,10 @@ describe('design stage in the motion surfaces', () => {
     expect(cmd).toContain('| `note: being decided — <gate> <target>` lines are printed above `next:` | Drive, or another witness run, is deciding that stop now.');
     expect(cmd).toContain('| `next: witness check` with `note: nothing is owed`, in a chat | Nothing is owed that this chat can do.');
   });
+  it('the /witness loop runs a parked gate\'s revise or fresh row only when the human asks (row 241)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| a `parked:` item with `revise:` or `fresh:` rows | `revise:` sends the work back to the parked gate — run it only when the human asks');
+  });
   it('the /witness loop hands off when home: is elsewhere', () => {
     const cmd = read('plugin/commands/witness.md');
     expect(cmd).toMatch(/`home:`/);

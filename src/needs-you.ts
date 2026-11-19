@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { cliAct, exitsLine, runRow, type Act } from './act.js'
+import { cliAct, exitsLine, reopenRows, runRow, type Act } from './act.js'
 import { grantAct, grantRowsOf } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -13,7 +13,7 @@ import type { DecisionEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { cmd, logSafe, shellLine, visible } from './toon.js'
 import { pendingTxn } from './txn.js'
-import { owedDecisions, parkedGates } from './verbs/next.js'
+import { owedDecisions, parkedBy, parkedGates } from './verbs/next.js'
 import { recoverChoice } from './verbs/recover.js'
 
 // Row 203. What needs the human, derived once from the journal, the canon and drive's
@@ -144,12 +144,9 @@ export function needsYou(
       add({ kind: 'merge', target: a.target, key: `merge:${a.target}`, ...(pr ? { pr } : {}) })
     }
   }
-  for (const p of parkedGates(root, canon)) {
-    const stopped = readStream(root, p.target)
-      .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === p.gate)
-      .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
-    // A journaled note is parsed JSON: held as the string it prints as.
-    const why = stopped?.selected === 'policy' && stopped.note ? String(stopped.note) : `parked at ${p.anchor}`
+  for (const p of parkedGates(root, canon, cfg)) {
+    // Row 241: the head names who parked it.
+    const why = parkedBy(readStream(root, p.target), p.gate, p.anchor)
     items.push({ kind: 'parked', target: p.target, key: `parked:${p.target}:${p.gate}`,
       gate: p.gate, ...(p.round !== undefined ? { round: p.round } : {}), why, reopen: p.reopen })
   }
@@ -212,9 +209,11 @@ export function needYouRows(item: NeedYou): string[] {
     // Row 239 (design §3.4b). At the bound the reopen is the endgame menu, and a menu pasted whole
     // is a pipeline that runs every act it names: it prints as `exits:`, the label `decide --show`
     // gives a set of choices, and `run:` is kept for one command.
+    // Row 241 (R11): below the bound each way back is a labelled row of its own — `revise:` sends
+    // the work back, `fresh:` re-runs the review — never one `exits:` line.
     case 'parked':
       return [`parked: ${item.target} · ${item.gate}${item.round !== undefined ? ` round ${item.round}` : ''} — ${logSafe(item.why)}`,
-        item.reopen.length === 1 ? runRow(item.reopen[0]!) : `  exits: ${exitsLine(item.reopen)}`]
+        ...reopenRows(item.reopen)]
     // Row 239. The log the head names, when it has no why, is an act's line.
     case 'stuck':
     case 'capped':

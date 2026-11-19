@@ -92,8 +92,9 @@ async function forgedNext(p: string): Promise<Pasteable[]> {
   return lines.map((line) => ({ line }))
 }
 
-// K6: every command an inbox row offers, its `run:` or `then:` label cut, beside the act it prints.
-const OFFERED = /^ {2}(?:run|then): /
+// K6: every command an inbox row offers, its `run:`, `then:`, `revise:` or `fresh:` label cut (row 241
+// labels a park's ways back), beside the act it prints.
+const OFFERED = /^ {2}(?:run|then|revise|fresh): /
 function inboxLines(p: string): Pasteable[] {
   const target = `p1${p}`
   const show = cliAct('decide', 'plan', target, '--show')
@@ -101,7 +102,7 @@ function inboxLines(p: string): Pasteable[] {
   const look = cliAct('decide', 'design', target, '--show')
   const satisfy = cliAct('satisfy', target, '--need', `n${p}`)
   const retry = cliAct('retry', target)
-  const reopen = reopenActs('plan', target, parked(p), `up${p}`)
+  const reopen = reopenActs('plan', target, parked(p), `up${p}`, false)
   const items: Array<[NeedYou, Act[]]> = [
     [{ kind: 'decision', target, key: 'decision', gate: 'plan', show }, [show]],
     [{ kind: 'design-look', target, key: 'design-look', open, show: look }, [open, look]],
@@ -140,11 +141,12 @@ function unmetNeedLines(p: string): Pasteable[] {
 // under it.
 function waitingLines(p: string): Pasteable[] {
   const why = `parked at p1 > ## Notes · run: witness gate plan p1 ${p}`
-  const reopen = reopenActs('plan', 'p1', parked(p), 'auth-refresh')
+  const reopen = reopenActs('plan', 'p1', parked(p), 'auth-refresh', false)
   const [head, ...rows] = waitingRows({ kind: 'parked', target: 'p1', key: 'parked', gate: 'plan', round: 1, why, reopen })
   expect(head).toBe(`waiting: parked: p1 · plan round 1 — ${spelled(why)}`)
-  expect(rows).toEqual(['  run: witness gate plan p1 --fresh'])
-  return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', ...reopen[0]!.argv]] }))
+  // Row 241: the ways back, each on a labelled row of its own
+  expect(rows).toEqual(['  revise: witness decide plan p1 --revise --note "<why>"', '  fresh: witness gate plan p1 --fresh'])
+  return rows.map((r, i) => ({ line: r.replace(OFFERED, ''), calls: [['witness', ...reopen[i]!.argv]] }))
 }
 
 // K8 from a forged journal, ruling R19: a park's round prints on the `waiting:` head, and the journal
@@ -165,9 +167,12 @@ async function forgedRound(p: string): Promise<Pasteable[]> {
   const item = needsYou(repo.root, { env: {} }, cfg.value, loadCanon(repo.root), []).find(isHeld)
   if (item === undefined) throw new Error('K8: the forged park is no item')
   const [head, ...rows] = waitingRows(item)
-  expect(head).toBe(`waiting: parked: ${plan} · plan — parked at stopped`)
-  expect(rows).toEqual([`  run: witness gate plan ${plan} --fresh`])
-  return rows.map((r) => ({ line: r.slice('  run: '.length), calls: [['witness', 'gate', 'plan', plan, '--fresh']] }))
+  expect(head).toBe(`waiting: parked: ${plan} · plan — parked by a human at stopped`)
+  expect(rows).toEqual([`  revise: witness decide plan ${plan} --revise --note "<why>"`, `  fresh: witness gate plan ${plan} --fresh`])
+  return [
+    { line: rows[0]!.replace(OFFERED, ''), calls: [['witness', 'decide', 'plan', plan, '--revise', '--note', '<why>']] },
+    { line: rows[1]!.replace(OFFERED, ''), calls: [['witness', 'gate', 'plan', plan, '--fresh']] },
+  ]
 }
 
 // Row 239. The directories the rows below make for their lines, removed once this file is done.

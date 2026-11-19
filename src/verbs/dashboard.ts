@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { exitsLine } from '../act.js'
+import { exitsLine, reopenRows } from '../act.js'
 import { EXIT, version, type Ctx } from '../cli.js'
 import { ASK_STREAM, askQueue, askText } from '../ask.js'
 import { loadConfig } from '../config.js'
@@ -275,10 +275,16 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   // from disappearing instead. High on the screen on purpose — a parked flow is orientation,
   // not a footnote, and `reopen` is the act that brings it back. Row 239 (ruling R19): a park whose
   // journaled round is not a round carries none, and its cell prints empty.
-  const parked = parkedGates(root, canon)
+  // Row 241 (R11): each reopen act prints raw on a row of its own under the table, never inside a
+  // TOON cell — `revise:` and `fresh:` below the bound, the endgame menu as `exits:` at it.
+  const parked = parkedGates(root, canon, cfg.ok ? cfg.value : undefined)
   if (parked.length > 0) {
-    rows('parked', ['gate', 'target', 'round', 'anchor', 'reopen'],
-      parked.map((p) => ({ ...p, reopen: exitsLine(p.reopen) }))).forEach(ctx.out)
+    rows('parked', ['gate', 'target', 'round', 'anchor'],
+      parked.map(({ reopen: _r, ...p }) => p)).forEach(ctx.out)
+    for (const p of parked) {
+      ctx.out(kv('reopen', `${p.gate} ${p.target}`))
+      reopenRows(p.reopen).forEach((l) => ctx.out(l))
+    }
   }
   const debts = deferralRows(root, canon)
   if (debts.length > 0) {

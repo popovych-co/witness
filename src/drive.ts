@@ -20,6 +20,7 @@ import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
+import { isUnpark } from './rounds.js'
 import { stateFloor } from './floor.js'
 import { compareTriple, version } from './version.js'
 import { ASK_STREAM } from './ask.js'
@@ -661,6 +662,7 @@ export async function driveLoop(
   const aside = new Map<string, Aside>()
   const progress = new Map<string, string>()
   const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
+  const unparksSeen = new Map<string, number>()           // row 241: human un-parks counted per target
   let spawns = 0
   let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | 'idle-limit' | 'superseded' | undefined
   let idle: string | undefined
@@ -1189,6 +1191,14 @@ export async function driveLoop(
           break
         }
         if (waitingNeed(action, key)) continue
+        // Row 241 (R11). A human un-park restarts the target's per-run spawns and wall clock, as
+        // row 207's release does: an arbiter's park sets no aside, so no take-back would.
+        if (action.target !== undefined) {
+          const n = readStream(root, action.target).filter((e) => isUnpark(e)).length
+          const seen = unparksSeen.get(key)
+          if (seen !== undefined && n > seen) use.delete(key)
+          unparksSeen.set(key, n)
+        }
         // A cap outranks a stall in the report, and no session is spent past it.
         if (await capped(action, key)) continue
         if (unmoved(key, action)) continue

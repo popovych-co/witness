@@ -44,7 +44,7 @@ describe('needsYou (D203)', () => {
     expect(needYouRows(byKind('capped')[0]!))
       .toEqual(['stuck: auth-refresh-plan-2 — witness log auth-refresh-plan-2', '  run: witness retry auth-refresh-plan-2'])
     expect(byKind('parked')[0]).toMatchObject({ target: 'auth-refresh-plan-3', key: 'parked:auth-refresh-plan-3:plan' })
-    expect(needYouRows(byKind('parked')[0]!)[0]).toBe('parked: auth-refresh-plan-3 · plan round 1 — drive cap: plan ran 16 rounds')
+    expect(needYouRows(byKind('parked')[0]!)[0]).toBe('parked: auth-refresh-plan-3 · plan round 1 — parked by the policy — drive cap: plan ran 16 rounds')
   })
 
   it('a pending transaction is first', async () => {
@@ -123,7 +123,8 @@ describe('what needs you is a model (rows 139/203)', () => {
       .toMatchObject({ satisfy: cliAct('satisfy', 'auth-refresh', '--need', '2') })
     expect(of('decision')).toMatchObject({ target: 'auth-refresh-plan-1', gate: 'plan',
       show: cliAct('decide', 'plan', 'auth-refresh-plan-1', '--show') })
-    expect(of('parked', 'auth-refresh-plan-2').reopen).toEqual([cliAct('gate', 'plan', 'auth-refresh-plan-2', '--fresh')])
+    expect(of('parked', 'auth-refresh-plan-2').reopen).toEqual([
+      cliAct('decide', 'plan', 'auth-refresh-plan-2', '--revise', '--note', '<why>'), cliAct('gate', 'plan', 'auth-refresh-plan-2', '--fresh')])
     expect(of('parked', 'auth-refresh-plan-3').reopen.at(-1)).toEqual(cliAct('abandon', 'auth-refresh-plan-3'))
     expect(of('stuck', 'x-plan-1')).toMatchObject({ why: 'no progress on witness ship x-plan-1', retry: cliAct('retry', 'x-plan-1') })
     expect(of('stuck', '-').retry).toBeUndefined()
@@ -162,7 +163,8 @@ describe('what needs you is a model (rows 139/203)', () => {
 
   // Row 239 (design §3.4b). Pasted whole, a menu is a pipeline that runs every act it names: at the
   // bound a park's reopen prints as `exits:`, and `run:` is kept for its one command below it.
-  it('a parked menu prints as exits:, a single reopen as run: (row 239)', async () => {
+  // Row 241 (R11): below the bound each way back is a labelled row of its own.
+  it('a parked menu prints as exits:, the reopen below the bound as revise: and fresh: rows (rows 239, 241)', async () => {
     const { repo, asides } = await needsYouRepo()
     const items = needsYou(repo.root, { env: {} }, cfgOf(repo.root), loadCanon(repo.root), asides)
     const rowsOf = (target: string) => needYouRows(items.find((i) => i.kind === 'parked' && i.target === target)!)
@@ -170,8 +172,9 @@ describe('what needs you is a model (rows 139/203)', () => {
     expect(atBound).toHaveLength(2)
     expect(atBound[1]).toMatch(/^ {2}exits: witness decide plan /)
     const below = rowsOf('auth-refresh-plan-2')
-    expect(below).toHaveLength(2)
-    expect(below[1]).toMatch(/^ {2}run: witness gate plan /)
+    expect(below).toHaveLength(3)
+    expect(below[1]).toMatch(/^ {2}revise: witness decide plan auth-refresh-plan-2 --revise --note "<why>"$/)
+    expect(below[2]).toMatch(/^ {2}fresh: witness gate plan /)
   })
 
   // Ruling R16(a), pinned per field. Prose a doc, a journal or drive wrote on a head line is spelled

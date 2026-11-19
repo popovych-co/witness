@@ -17,7 +17,8 @@ import { primaryRoot, stateCommit } from '../gitio.js'
 import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon } from '../scan.js'
-import { openStepRow } from './next.js'
+import { gateParked, openStepRow } from './next.js'
+import { driveChild } from '../drive-presence.js'
 import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -26,7 +27,7 @@ import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
 import { cliAct } from '../act.js'
 import {
   ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, notePrefill, pendingDecision, repairGranted,
-  roundsSinceApprove, settledToken, type DecisionEntry, type GateRunEntry,
+  isUnpark, roundsSinceApprove, settledToken, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
@@ -324,6 +325,19 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     return settledSince(ctx, gate, target)
   }
 
+  // Row 241 (R11; the user's decision Q3). Below the bound a human's plain revise on a parked gate
+  // sends it back to work: the park is lifted without running the gate. A human's act only — not
+  // inside a session drive started (rows 205, 207, 225), and never the policy's or the arbiter's,
+  // since a settler that parked a gate must not be the one to un-park it.
+  const unparking = decision === 'revise' && upstream === undefined && !repair && !atBound && gateParked(entries, gate)
+  if (unparking && (act.selected === 'policy' || act.selected === 'arbiter' || driveChild(ctx.env) !== undefined)) {
+    renderRefusal([v('decide', 'unpark-human',
+      act.selected === 'policy' || act.selected === 'arbiter' ? `${act.selected} revise on a parked gate` : 'a session drive started',
+      `the human, in their own chat or terminal — witness decide ${shellWord(gate)} ${shellWord(target)} --revise --note "<why>" sends a parked gate back to work`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   // Row 109. The grant is a REVISE — the human is sending the artifact back, they are just
   // paying for the round that verifies the fix. Refusing the other spellings is not
   // pedantry: `--approve --repair` reads as "approve and let it re-run", which is not a
@@ -363,15 +377,18 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // The run this decision disposes of, and how many decisions already sit after it. A
   // function of the stream so the lock can ask it again (row 173): read twice, answered
   // by one derivation.
-  const anchorOf = (es: Entry[]): { anchor: GateRunEntry | undefined; after: number } => {
+  const anchorOf = (es: Entry[]): { anchor: GateRunEntry | undefined; after: number; unpark: boolean } => {
     const lastRun = lastGateRun(es, gate)
     const afterLast = lastRun
       ? es.slice(es.lastIndexOf(lastRun as unknown as Entry) + 1)
           .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
           .map((e) => e as unknown as DecisionEntry)
       : []
-    const onlyRevises = afterLast.length > 0 &&
-      afterLast.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
+    // Row 241 (R11): D94's revised anchor reads from the last un-park — the park before it is lifted —
+    // so approve and stop stay reachable on unchanged content after a human sent the gate back.
+    const fromUnpark = afterLast.slice(Math.max(0, afterLast.map((d) => isUnpark(d as unknown as Entry)).lastIndexOf(true)))
+    const onlyRevises = fromUnpark.length > 0 &&
+      fromUnpark.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
     const unchanged = lastRun !== undefined && (nowSha === undefined || nowSha === lastRun.reviewed_sha)
     const revisedAnchor = onlyRevises && unchanged && (decision === 'approve' || decision === 'stop')
     // at the bound the gate refuses to run again, so no fresh pending decision can
@@ -381,9 +398,12 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       (decision === 'revise' && (upstream !== undefined || repair)))
     // Row 183: a cap park disposes of the flow, not of bytes — `gateParked` has no sha term
     const parked = act.park === true && decision === 'stop'
+    // Row 241 (R11): a human's revise on a parked run below the bound anchors on it — the un-park.
+    const unpark = unparking && pendingDecision(es, gate) === undefined && !boundReached(es, gate) && gateParked(es, gate)
     return {
-      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor || parked) ? lastRun : undefined),
+      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor || parked || unpark) ? lastRun : undefined),
       after: afterLast.length,
+      unpark,
     }
   }
   const first = anchorOf(entries)
@@ -510,6 +530,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
     ...(act.selected !== undefined ? { selected: act.selected } : {}),
     ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
+    ...(first.unpark ? { unpark: true as const } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per

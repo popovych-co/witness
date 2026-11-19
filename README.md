@@ -244,7 +244,11 @@ own and every `witness turn`, which is how a session runs its tests — because 
 servers or browsers collide. On Windows each session, test run and gate reviewer runs in a job
 object, so whatever it starts — detached, or orphaned by an installer that exited — ends with it;
 elsewhere a session's process group does. A target that reaches any `drive.caps.*` bound is
-parked.
+parked. Below the round bound a parked gate goes back to work with your own
+`witness decide <gate> <target> --revise --note "<why>"` — it lifts the park without running the
+gate, and `next` routes the owed work, steps first; `witness status` and `decide --show` print it on a
+`revise:` row, beside a `fresh:` row (a re-review of the work as it stands) when no work is owed. It
+also restarts drive's caps for that target.
 
 ### Upgrading
 

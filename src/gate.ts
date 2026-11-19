@@ -12,6 +12,7 @@ import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
+import { cliAct, runRow } from './act.js'
 import { cmd, kv, shellWord } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
 import {
@@ -30,7 +31,7 @@ import {
   type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
+import { gateParked, gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
@@ -297,6 +298,16 @@ export function printSliceShape(ctx: Ctx, root: string, gateName: string, target
 export async function runGate(
   ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean; handover?: boolean },
 ): Promise<number> {
+  // Row 241 (R11). A `--fresh` refused on a parked gate is a human's call: the way back that can
+  // succeed is the revise that sends the gate back to work, named on a row of its own.
+  const parkedFresh = flags.fresh && parkedHere(ctx, gateName, target)
+  const refusedFresh = (code: number): number => {
+    if (parkedFresh && code === EXIT.REFUSED) {
+      ctx.err(`help: ${gateName} ${target} is parked — sending it back to work is a human's call`)
+      ctx.err(runRow(cliAct('decide', gateName, target, '--revise', '--note', '<why>'), 'revise'))
+    }
+    return code
+  }
   // Row 241 (R9; the user's decisions 6 and 9). No implement review starts while a plan step is
   // open, whoever starts it: refused before the battery, journaling nothing, naming the step's
   // command. To skip a step, amend the plan and drop it.
@@ -307,11 +318,11 @@ export async function runGate(
     const open = rootR.ok && cfgR?.ok && plan?.meta.type === 'plan' ? openStepRow(rootR.value, cfgR.value, plan) : undefined
     if (open !== undefined) {
       renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
-      return EXIT.REFUSED
+      return refusedFresh(EXIT.REFUSED)
     }
   }
   const code = await judge(ctx, gateName, target, flags)
-  if (code !== EXIT.FINDINGS && code !== EXIT.BLOCKED) return code
+  if (code !== EXIT.FINDINGS && code !== EXIT.BLOCKED) return refusedFresh(code)
   if (flags.manual) return code
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) return code
@@ -331,6 +342,11 @@ export async function runGate(
     (settled.decision === 'revise' || settled.decision === 'revise-upstream')
   if (revised && flags.handover !== false) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
   return settledCode(code, settled)
+}
+
+function parkedHere(ctx: Ctx, gateName: string, target: string): boolean {
+  const rootR = primaryRoot(ctx.cwd)
+  return rootR.ok && gateParked(readStream(rootR.value, target), gateName)
 }
 
 async function judge(

@@ -72,7 +72,7 @@ export function cliAct(...argv: string[]): Act {
 // through here, so no printer can forget the check, but one: a decision block's own `run:` line
 // (`renderDecision`), which prints only an option `option()` made `runnable`, and `option()` never
 // makes a withheld act runnable.
-export function runRow(act: Act, label: 'run' | 'then' = 'run', indent = '  '): string {
+export function runRow(act: Act, label: 'run' | 'then' | 'revise' | 'fresh' = 'run', indent = '  '): string {
   return act.withheld === undefined ? `${indent}${label}: ${act.line}` : `${indent}note: ${act.line} — ${act.withheld}`
 }
 
@@ -87,4 +87,14 @@ export function exitsLine(acts: readonly Act[], platform: Platform = process.pla
       [0, 1, 2].every((k) => a.argv[k] === prev.argv[k])
     return shared ? words(a.argv, platform).slice(3).join(' ') : a.line
   }).join(' | ')
+}
+
+// Row 241 (R11). A parked gate's reopen as rows: below the bound a `revise:` row, and a `fresh:` row
+// beside it when no work is owed; at the bound the endgame menu, a set of choices, as `exits:`.
+export function reopenRows(reopen: readonly Act[]): string[] {
+  const labelOf = (a: Act): 'revise' | 'fresh' | undefined =>
+    a.argv[0] === 'decide' && a.argv.includes('--revise') && !a.argv.includes('--upstream') && !a.argv.includes('--repair') ? 'revise'
+      : a.argv[0] === 'gate' && a.argv.includes('--fresh') ? 'fresh' : undefined
+  if (reopen.length > 0 && reopen.every((a) => labelOf(a) !== undefined)) return reopen.map((a) => runRow(a, labelOf(a)))
+  return reopen.length === 1 ? [runRow(reopen[0]!)] : [`  exits: ${exitsLine(reopen)}`]
 }
