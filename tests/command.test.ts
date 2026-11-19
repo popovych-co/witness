@@ -43,6 +43,25 @@ describe('design stage in the motion surfaces', () => {
     expect(cmd).toMatch(/stage: design/);
     expect(cmd).toContain('witness-design');
   });
+  it('the /witness loop tells the human about an older drive and ends the turn (row 240)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| `wait: older drive` is printed | A `witness drive` from before 0.29 runs this repo');
+    expect(cmd).toContain('Never run that line yourself, and never wait again until they say go.');
+  });
+  it('the /witness loop keeps matching past a stop being decided, and ends on nothing owed (row 240)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| `note: being decided — <gate> <target>` lines are printed above `next:` | Drive, or another witness run, is deciding that stop now.');
+    expect(cmd).toContain('| `next: witness check` with `note: nothing is owed`, in a chat | Nothing is owed that this chat can do.');
+  });
+  it('the /witness loop runs a parked gate\'s revise or fresh row only when the human asks (row 241)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| a `parked:` item with `revise:` or `fresh:` rows | `revise:` sends the work back to the parked gate — run it only when the human asks');
+  });
+  it('the /witness loop leaves merge and fix stops to the human (row 242)', () => {
+    const cmd = read('plugin/commands/witness.md');
+    expect(cmd).toContain('| a `waiting: merge` or `waiting: fix` item | `waiting: merge`: the human merges');
+    expect(cmd).toContain('Never run that line yourself, even when asked; run its `recheck:` line only when they ask.');
+  });
   it('the /witness loop hands off when home: is elsewhere', () => {
     const cmd = read('plugin/commands/witness.md');
     expect(cmd).toMatch(/`home:`/);

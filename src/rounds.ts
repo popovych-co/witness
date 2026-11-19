@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import type { HeldRow } from './needs.js'
@@ -90,6 +91,9 @@ export interface DecisionEntry {
   // set on a `revise`, only ever at the bound, and only once per budget window — the whole
   // grant is this flag plus the window it sits in, so nothing can drift out of sync with it.
   repair?: true
+  // Row 241 (R11). A human's revise that lifted a park below the bound: the gate is sent back to
+  // work without running. Restarts drive's cap window and its per-run use for the target.
+  unpark?: true
   note?: string
   upstream?: { artifact: string; gate: string }
   caused_by?: { artifact: string; gate: string; round: number }
@@ -371,23 +375,43 @@ export function liveExits(
   return exitsLine(exitActs(gate, target, entries, stale, upstream))
 }
 
-// What un-parks a gate stopped under D124. Below the bound a fresh run is the act — the
-// content is unchanged, so a plain re-gate would answer `changed-nothing`. At the bound
-// the gate short-circuits before invoking anything, so `--fresh` is the D67 lie: the only
-// live acts there are the endgame set, which exitActs already knows.
+// Row 241 (R11). The human revise that lifted a park (`decide` journals it marked).
+export function isUnpark(e: Entry, gate?: string): boolean {
+  return e.t === 'human-decision' && (e as unknown as DecisionEntry).unpark === true &&
+    (gate === undefined || (e as unknown as DecisionEntry).gate === gate)
+}
+
+// Row 241. An un-park as `decide` journals it: a human's (no `selected`), lifting a park — the
+// gate's previous decision is a stop. What restarts drive's caps reads this, never the marker
+// alone, so a line that merely claims `unpark` and follows no park restarts nothing.
+export function unparkAt(entries: Entry[], i: number): boolean {
+  const e = entries[i]
+  if (e === undefined || !isUnpark(e) || (e as unknown as DecisionEntry).selected !== undefined) return false
+  const gate = (e as unknown as DecisionEntry).gate
+  const before = entries.slice(0, i).filter((x) => x.t === 'human-decision' && (x as unknown as DecisionEntry).gate === gate).at(-1)
+  return (before as unknown as DecisionEntry | undefined)?.decision === 'stop'
+}
+
+// What un-parks a gate stopped under D124. At the bound the gate short-circuits before invoking
+// anything, so `--fresh` is the D67 lie: the only live acts there are the endgame set, which
+// exitActs already knows. Below it, row 241 (R11): a human's revise sends the gate back to work —
+// alone while work is `owed` (an open step, a plan reopen, an evidence row, or work the gate's
+// last act sent upstream), since a fresh run would only judge the work as it stands; otherwise
+// beside a fresh run, which re-reviews it (the content is unchanged, so a plain re-gate would
+// answer `changed-nothing`).
 export function reopenActs(
-  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed: boolean,
 ): Act[] {
-  return boundReached(entries, gate)
-    ? exitActs(gate, target, entries, false, upstream)
-    : [cliAct('gate', gate, target, '--fresh')]
+  if (boundReached(entries, gate)) return exitActs(gate, target, entries, false, upstream)
+  const revise = cliAct('decide', gate, target, '--revise', '--note', '<why>')
+  return owed ? [revise] : [revise, cliAct('gate', gate, target, '--fresh')]
 }
 
 // Rows 139/203. The reopen as one line: `reopenActs` rendered.
 export function reopenCommand(
-  gate: string, target: string, entries: Entry[], upstream: string | undefined,
+  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed = false,
 ): string {
-  return exitsLine(reopenActs(gate, target, entries, upstream))
+  return exitsLine(reopenActs(gate, target, entries, upstream, owed))
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {
@@ -491,4 +515,17 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     if (answersKey(run, key)) return { kind: 'cached', from: run }
   }
   return { kind: 'fresh' }
+}
+
+// Row 240 (design §4.1.1, R2). What a settler read of its stop: every decision of that gate
+// after the run it judged — a reopen of that gate (`caused_by`) included — hashed. A settler
+// takes it from its own read, before any model call, and the one door compares it first and
+// again under the state lock: an act whose read predates a decision that landed meanwhile
+// refuses `settled-since`, so no settler's act lands on a disposition it did not read. A run
+// the stream does not hold hashes every decision of the gate, the same on both reads.
+export function settledToken(entries: Entry[], gate: string, runId: string): string {
+  const at = entries.findIndex((e) => e.t === 'gate-run' &&
+    (e as unknown as GateRunEntry).gate === gate && (e as unknown as GateRunEntry).run_id === runId)
+  const after = entries.slice(at + 1).filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+  return createHash('sha1').update(JSON.stringify(after)).digest('hex').slice(0, 12)
 }

@@ -1,6 +1,26 @@
-import { describe, expect, it } from 'vitest'
-import { capHit } from '../src/caps.js'
-import type { Entry } from '../src/journal.js'
+import { describe, expect, it, vi } from 'vitest'
+import { capHit, parkAtCap } from '../src/caps.js'
+import { loadConfig } from '../src/config.js'
+import { gateSpec } from '../src/gate.js'
+import '../src/gates/index.js'
+import { appendEntry, readStream, type Entry } from '../src/journal.js'
+import { openReopen, type DecisionEntry } from '../src/rounds.js'
+import { loadCanon } from '../src/scan.js'
+import type { DecisionAct } from '../src/verbs/decide.js'
+import { fakeCtx, plannedRepo } from './helpers.js'
+
+// P7: a hook between a cap park's read and its act, where another decision lands.
+const door = vi.hoisted(() => ({ beforePark: undefined as undefined | (() => Promise<void>) }))
+vi.mock('../src/verbs/decide.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/verbs/decide.js')>()
+  return {
+    ...real,
+    applyDecision: async (ctx: Parameters<typeof real.applyDecision>[0], act: DecisionAct) => {
+      if (act.park === true && door.beforePark !== undefined) { const h = door.beforePark; door.beforePark = undefined; await h() }
+      return real.applyDecision(ctx, act)
+    },
+  }
+})
 
 const run = (gate: string, round: number, extra: Record<string, unknown> = {}) => ({
   v: 1, t: 'gate-run', gate, artifact: 'p1', round, run_id: `r-${gate}-${round}`, reviewed_sha: 's',
@@ -47,5 +67,47 @@ describe('caps spare a converged flow (B5)', () => {
   it('upstream resets behind a gate that since converged trip nothing', () => {
     const resets = [1, 2, 3, 4, 5, 6].flatMap(() => [run('implement', 1), decide('implement', 'revise-upstream')])
     expect(hit([...resets, run('implement', 1, { outcome: 'passed' })])).toBeUndefined()
+  })
+})
+
+// Row 240 (design §4.1.3, R3; P7 inverted). A cap park carries a token from its own read, so one
+// read before a human's revise-upstream refuses instead of parking on top of it.
+describe('a cap park lands only on what it read (row 240)', () => {
+  const PLAN = 'auth-refresh-plan-1'
+  async function boundStop() {
+    const repo = await plannedRepo()
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error('cfg')
+    const sha = gateSpec('plan')!.currentSha!(repo.root, loadCanon(repo.root), cfg.value, PLAN)
+    for (let round = 1; round <= 3; round++) {
+      appendEntry(repo.root, PLAN, {
+        v: 1, t: 'gate-run', gate: 'plan', artifact: PLAN, round, run_id: `r-${round}`, reviewed_sha: sha,
+        prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'stopped',
+        verdicts: [{ reviewer: 'plan-critic', coverage: [], findings: [{ blocking: true, anchor: `${PLAN} > ## Step: s1`, claim: 'x' }] }],
+      } as never)
+    }
+    return repo
+  }
+  const cfgOf = (root: string) => { const r = loadConfig(root); if (!r.ok) throw new Error('cfg'); return r.value }
+  const decisions = (root: string) => (readStream(root, PLAN).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[])
+    .filter((d) => d.gate === 'plan').map((d) => `${d.decision} · ${d.selected ?? 'human'}`)
+
+  it('a cap park from a read taken before a revise-upstream refuses settled-since (P7)', async () => {
+    const repo = await boundStop()
+    const { applyDecision } = await import('../src/verbs/decide.js')
+    door.beforePark = async () => {
+      expect(await applyDecision(fakeCtx(repo.root), { gate: 'plan', target: PLAN, decision: 'revise', upstream: 'auth-refresh' })).toBe(0)
+    }
+    const hit = { cap: 'rounds' as const, gate: 'plan', note: 'drive cap: plan ran 3 rounds' }
+    expect(await parkAtCap(fakeCtx(repo.root), repo.root, PLAN, hit, cfgOf(repo.root))).toEqual({ parked: false, why: 'the policy could not park it (settled-since)' })
+    expect(decisions(repo.root)).toEqual(['revise-upstream · human'])
+    expect(openReopen(readStream(repo.root, 'auth-hardening'), 'decompose')).toBeDefined()
+  })
+
+  it('a cap park on the stop as it read it still parks', async () => {
+    const repo = await boundStop()
+    const hit = { cap: 'rounds' as const, gate: 'plan', note: 'drive cap: plan ran 3 rounds' }
+    expect(await parkAtCap(fakeCtx(repo.root), repo.root, PLAN, hit, cfgOf(repo.root))).toEqual({ parked: true })
+    expect(decisions(repo.root)).toEqual(['stop · policy'])
   })
 })

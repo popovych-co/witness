@@ -1,14 +1,15 @@
 import { EXIT, type Ctx } from '../cli.js'
 import { checkoutRoot, diffBase, recordEvidence, verifyRed } from '../evidence.js'
 import { loadConfig } from '../config.js'
-import { primaryRoot } from '../gitio.js'
-import { readStream } from '../journal.js'
+import { primaryRoot, stateCommit } from '../gitio.js'
+import { appendEntry, entryLine, journalRel, readStream } from '../journal.js'
+import { acquireLock } from '../lock.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { findById, loadCanon, type CanonDoc } from '../scan.js'
 import { reportStepClose } from '../slice.js'
 import { checkStep, closedAt, stepProgress } from '../steps.js'
 import { kv } from '../toon.js'
-import { guardTxn } from '../txn.js'
+import { guardTxn, withTxn } from '../txn.js'
 import type { Violation } from '../refusal.js'
 
 // The lock is taken inside, for the journal write alone (row 181). Its refusal is still
@@ -95,6 +96,33 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   return EXIT.OK
 }
 
+// Row 241 (design §4.2.4, R10). The test passed with the plan's change set aside: the step's
+// behavior is already on the base. While the step is still open on a plan whose progress is known,
+// the step closes "already present" — a `step-close` marked present, an act, journaled once — and
+// its green comes next. Read under the lock, so two racing runs journal one close.
+function closePresent(ctx: Ctx, root: string, plan: CanonDoc, step: string): void {
+  const planId = String(plan.meta.id)
+  const lock = acquireLock(root)
+  if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return }
+  try {
+    const p = stepProgress(plan, readStream(root, planId))
+    const s = p.known ? p.steps.find((x) => x.id === step && x.kind === 'criteria') : undefined
+    if (s === undefined || s.closedAt !== undefined) return
+    const entry = { t: 'step-close' as const, artifact: planId, step, present: true }
+    const marker = { op: `step-close(${planId})`, files: [journalRel(planId)], journalMulti: [{ stream: planId, line: entryLine(entry) }] }
+    const txn = withTxn(root, marker, () => {
+      appendEntry(root, planId, entry)
+      return stateCommit(root, marker.files, marker.op)
+    })
+    if (!txn.ok) { renderRefusal(txn.violations).forEach(ctx.err); return }
+    ctx.out(kv('step-close', `${planId} · ${step} closed — already present: its test passed before any change`))
+  } finally {
+    lock.value()
+  }
+  // A step close decides the slice, as `step-close` does; its green is the next row.
+  reportStepClose(ctx, root, plan, { closed: step, passingGreen: false })
+}
+
 export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
   const planId = planIdOf(argv)
   const baseArg = argv.includes('--base') ? argv[argv.indexOf('--base') + 1] : undefined
@@ -135,6 +163,7 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
   // only confirmed the restore and journaled nothing (final review I3), so it closed no step and
   // decides no slice, not even on a legacy plan.
   if (!vacuous) reportGreen(ctx, stateRoot, plan, greenOk)
+  if (vacuous && step !== undefined) closePresent(ctx, stateRoot, plan, step)
   if (vacuous) {
     ctx.err('vacuous: tests pass against base — the test may assert nothing, or the behavior already existed')
     return EXIT.FINDINGS

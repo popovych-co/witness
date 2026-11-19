@@ -63,6 +63,15 @@ export function diffReviewedSha(runRoot: string, base: string): string {
 // the sha itself instead of calling `currentSha`. Two of the three agreeing is the same
 // split-brain rows 93 and 95 are about — the gate keyed on one sha while `next` checked
 // another, and every settled gate read as lapsed one turn later.
+// Row 241 (design §4.2.1). Whether an implement run judged the plan's content as it stands now —
+// its reviewed sha is H(diff, plan content), and the diff half is journaled beside it (row 135) —
+// never the base or the tree: ship's own rebase moves the base and must not read as a new plan
+// (P28). A run from before row 135 has no diff half and cannot say, so it reads as not.
+export function runJudgedPlan(run: { reviewed_sha: string; diff_sha?: string }, plan: CanonDoc): boolean {
+  if (run.diff_sha === undefined) return false
+  return createHash('sha256').update(run.diff_sha).update('\0').update(planContentSha(plan.meta, plan.body)).digest('hex') === run.reviewed_sha
+}
+
 export function implementReviewedSha(runRoot: string, base: string, plan: CanonDoc): string {
   return createHash('sha256')
     .update(diffReviewedSha(runRoot, base))

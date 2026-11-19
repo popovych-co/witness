@@ -1,7 +1,8 @@
+import { settleUntil, takeBusy } from './busy.js'
 import { EXIT, type Ctx } from './cli.js'
-import type { DriveCaps } from './config.js'
+import type { Config, DriveCaps } from './config.js'
 import type { Entry } from './journal.js'
-import { fellBack, gateRuns, lastGateRun, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { fellBack, gateRuns, lastGateRun, settledToken, unparkAt, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { duration } from './usage.js'
 import { gateSettled } from './verbs/next.js'
 
@@ -29,8 +30,9 @@ function openGates(entries: Entry[]): string[] {
 
 // First hit wins, in this order: rounds · upstream · spawns · wall clock.
 export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHit | undefined {
+  // Row 241 (R11): a human un-park restarts the window, as a cap park does.
   let lastPark = -1
-  entries.forEach((e, i) => { if (isCapPark(e)) lastPark = i })
+  entries.forEach((e, i) => { if (isCapPark(e) || unparkAt(entries, i)) lastPark = i })
   const since = entries.slice(lastPark + 1)
   // Every budget reset is ignored: this counts the rounds a gate ran, not its window. The
   // exemptions are `roundsSinceApprove`'s — a malformed or fallen-back round spends nothing.
@@ -63,8 +65,23 @@ export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHi
 // `park` anchors it on the gate's last run even after the author moved the tree. A target
 // with no open gate has nothing to park on; a refusal from the door is named, not guessed.
 export async function parkAtCap(
-  ctx: Ctx, root: string, target: string, hit: CapHit,
-): Promise<{ parked: true } | { parked: false; why: string }> {
+  ctx: Ctx, root: string, target: string, hit: CapHit, cfg: Config,
+): Promise<{ parked: true } | { parked: false; why: string; busy?: true }> {
+  // Row 240 (design §4.1.2): under the stop's settle lock, taken before the stream is read. Held
+  // by another live process, nothing parks and drive tries the target again next round.
+  const lock = takeBusy(root, 'settle', target, settleUntil(cfg, ctx.env, Date.now()))
+  if (!lock.taken) {
+    if ('holder' in lock) return { parked: false, busy: true, why: 'busy' }
+    return { parked: false, why: `the policy could not park it (${lock.refused[0]?.rule ?? 'lock-unwritable'})` }
+  }
+  try {
+    return await parkUnderLock(ctx, root, target, hit)
+  } finally {
+    lock.release()
+  }
+}
+
+async function parkUnderLock(ctx: Ctx, root: string, target: string, hit: CapHit): Promise<{ parked: true } | { parked: false; why: string }> {
   const { readStream } = await import('./journal.js')
   const entries = readStream(root, target)
   if (!entries.some((e) => e.t === 'gate-run')) return { parked: false, why: 'no gate run to park it on' }
@@ -75,8 +92,11 @@ export async function parkAtCap(
   // Loaded on A1's precedent for settle.ts: decide.ts reaches the gate registry.
   const { applyDecision } = await import('./verbs/decide.js')
   const errs: string[] = []
+  // Row 240 (R3): the token of this read, so a park read before another decision on the gate —
+  // a human's revise-upstream, a settler's — refuses `settled-since` instead of parking on top (P7).
   const code = await applyDecision({ ...ctx, cwd: root, err: (l) => { errs.push(l); ctx.err(l) } }, {
     gate, target, decision: 'stop', note: hit.note, selected: 'policy', rule: `cap-${hit.cap}`, park: true, runId: last.run_id,
+    token: settledToken(entries, gate, last.run_id),
   })
   if (code === EXIT.OK) return { parked: true }
   // the refusal's rows are indented under its header; the rule is each row's second field

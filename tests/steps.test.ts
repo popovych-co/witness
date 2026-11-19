@@ -154,12 +154,17 @@ describe('step progress (row 191 §4.3)', () => {
   })
   // Plan's call 4: owed only where the CLI can tell. After the first implement gate an untagged
   // cycle is a fix round, and a legacy plan's evidence never named its steps.
-  it('checkStep requires a step for evidence while progress is known and no implement gate has run', () => {
-    expect(checkStep(plan, [red('s1'), green('s1')] as Entry[], undefined, 'evidence')).toEqual([{
+  // Row 241 (R8): before the first implement gate, and after it while a criteria step is open.
+  it('checkStep requires a step for evidence while progress is known and a criteria step is open', () => {
+    const owed = (done: string) => [{
       field: '--step', rule: 'step-required', got: 'absent',
-      want: "--step <id> — every cycle before the first implement gate is a plan step's · steps 1/3 done · next s2",
-    }])
-    expect(checkStep(plan, [red('s1'), green('s1'), { v: 1, t: 'gate-run', gate: 'implement' }] as Entry[], undefined, 'evidence')).toEqual([])
+      want: `--step <id> — every cycle while a criteria step is open is a plan step's · steps ${done}`,
+    }]
+    const gate = { v: 1, t: 'gate-run', gate: 'implement' }
+    expect(checkStep(plan, [red('s1'), green('s1')] as Entry[], undefined, 'evidence')).toEqual(owed('1/3 done · next s2'))
+    expect(checkStep(plan, [red('s1'), green('s1'), gate] as Entry[], undefined, 'evidence')).toEqual(owed('1/3 done · next s2'))
+    // every criteria step closed after the gate: a fix round names none
+    expect(checkStep(plan, [red('s1'), green('s1'), red('s2'), green('s2'), gate] as Entry[], undefined, 'evidence')).toEqual([])
     expect(checkStep(plan, [red(), green()] as Entry[], undefined, 'evidence')).toEqual([])
   })
   // A plan with no criteria step (its spec's criteria delta was empty) has no step a cycle could

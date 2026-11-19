@@ -1,4 +1,4 @@
-import { cliAct, exitsLine, type Act } from './act.js'
+import { cliAct, exitsLine, reopenRows, type Act } from './act.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { autonomyLines, decidedBy } from './autonomy.js'
 import type { Config } from './config.js'
@@ -10,11 +10,12 @@ import './gates/index.js'
 import { policyPins, readStream, type Entry, type PolicyPin } from './journal.js'
 import { liftedHolds } from './needs.js'
 import { recommend, renderDecision, type Decision } from './recommend.js'
-import { exitActs, lastGateRun, openReopen, type DecisionEntry } from './rounds.js'
+import { exitActs, lastGateRun, openReopen, reopenActs, type DecisionEntry } from './rounds.js'
+import { gateParked, parkOwed, parkedBy } from './verbs/next.js'
 import { criteriaOwner, type Canon } from './scan.js'
 import type { GateName } from './settings.js'
 import { short } from './sha.js'
-import { cmd, kv, rows } from './toon.js'
+import { cmd, kv, rows, logSafe } from './toon.js'
 
 // Rows 139/203. `decide --show` as a model: one gate's state on one target — its last run, what
 // disposed of it, whether the content moved since, a reopen — derived once, so the verb prints
@@ -36,6 +37,8 @@ export type DecideView = { gate: string; target: string; autonomy: boolean } & (
   | { state: 'no-runs' }
   | { state: 'reopened'; by: { gate: string; artifact: string; round: number }; note?: string; last: LastRun; disposition?: Disposition; exits: Act[] }
   | { state: 'settled'; disposition: Disposition; last: LastRun }
+  // Row 241 (R11): a gate a stop took off the board, who parked it and why, and its way back.
+  | { state: 'parked'; why: string; disposition: Disposition; last: LastRun; reopen: Act[] }
   | { state: 'actionable'; run: GateRunView; pins: PolicyPin[]; disposition?: Disposition; block?: Decision; exits: Act[] })
 
 // The record's fields the screen reads, each present only when the record carries it.
@@ -85,6 +88,14 @@ export function decideView(root: string, cfg: Config, canon: Canon, gate: GateNa
       exits: exitActs(gate, target, entries, stale, upstream),
     }
   }
+  if (disposition && gateParked(entries, gate)) {
+    const anchor = (last.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking))
+      .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`))[0] ?? last.standing ?? last.outcome
+    return {
+      ...head, state: 'parked', why: parkedBy(entries, gate, anchor), disposition, last: lastRun,
+      reopen: reopenActs(gate, target, entries, upstream, parkOwed(root, cfg, canon, gate, target, entries)),
+    }
+  }
   if (disposition && disposition.decision !== 'revise' && disposition.decision !== 'revise-upstream') {
     return { ...head, state: 'settled', disposition, last: lastRun }
   }
@@ -123,6 +134,15 @@ export function decideViewLines(view: DecideView): string[] {
     // Row 239. The log it names is an act's line, here and on the settled screen below.
     out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome}${view.disposition ? `, ${view.disposition.decision}` : ''} · ${cliAct('log', target).line}`))
     out.push(cmd('exits', exitsLine(view.exits)))
+    return out
+  }
+  if (view.state === 'parked') {
+    out.push(kv('gate', gate))
+    out.push(kv('target', target))
+    out.push(`state: parked — ${logSafe(view.why)}`)
+    out.push(kv('decided-by', decidedBy(view.disposition)))
+    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · ${cliAct('log', target).line}`))
+    out.push(...reopenRows(view.reopen))
     return out
   }
   if (view.state === 'settled') {

@@ -49,7 +49,8 @@ describe('witness ship', () => {
     const calls = readFileSync(join(scenario, 'gh-calls'), 'utf8')
     expect(calls).toContain('pr create')
     expect(calls).toContain('pr checks 1 --watch')
-    expect(repo.git('log', '-1', '--format=%B')).toContain('ship(auth-refresh-plan-1): pr #1')
+    // row 242: the outcome record is journaled after the stamp
+    expect(repo.git('log', '-3', '--format=%B')).toContain('ship(auth-refresh-plan-1): pr #1')
   })
 
   it('uncommitted worktree: pr phase makes the sole code commit before push', async () => {
@@ -69,7 +70,7 @@ describe('witness ship', () => {
     await runShip(ctx, planId)                                     // killed-after-merge? just re-run
     const calls = readFileSync(join(scenario, 'gh-calls'), 'utf8')
     expect(calls.match(/pr create/g)!.length).toBe(1)
-    expect(calls.match(/pr checks/g)!.length).toBe(2)
+    expect(calls.match(/pr checks 1 --watch/g)!.length).toBe(2)
   })
 
   it('red CI reports findings', async () => {

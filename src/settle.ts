@@ -1,6 +1,7 @@
 import { cliAct, type Act } from './act.js'
 import { grantRows, shownCmd, sourced, trustedCommands, untrustedCmdsFor } from './allowlist.js'
 import { arbitrate, decisionEvidence, menuFor } from './arbiter.js'
+import { settleUntil, takeBusy } from './busy.js'
 import { keptStopLine, policyFor, type KeptStop } from './autonomy.js'
 import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -9,11 +10,11 @@ import { gateSpec } from './gate.js'
 import { readStream } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal, type Result } from './refusal.js'
-import type { DecisionEntry, GateRunEntry } from './rounds.js'
-import { criteriaOwner, loadCanon } from './scan.js'
+import { lastGateRun, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { criteriaOwner, findById, loadCanon } from './scan.js'
 import { cmd, kv } from './toon.js'
-import { applyDecision, decisionAct, type DecisionAct } from './verbs/decide.js'
-import { owedDecisions, owedRun } from './verbs/next.js'
+import { applyDecision, decisionAct, printReviseContext, type DecisionAct } from './verbs/decide.js'
+import { openStepRow, owedDecisions, owedRun, type NextAction } from './verbs/next.js'
 import { pendingTxn } from './txn.js'
 
 // Row 173. Under `autonomy: on` a stop is settled where it is produced — the end of
@@ -24,12 +25,23 @@ import { pendingTxn } from './txn.js'
 export type Settled =
   | { kind: 'none' }
   | { kind: 'decided'; by: 'policy' | 'arbiter'; decision: DecisionEntry['decision']; rule: string }
+  // Row 240 (design §4.1.1's table). The door refused this settler because a decision landed on
+  // the run it judged first — a human's, or another settler's. Every reader treats it as
+  // `decided` with the winner's decision; it is never a park on top.
+  | { kind: 'superseded'; by: 'human' | 'policy' | 'arbiter'; decision: DecisionEntry['decision'] }
+  // A newer run is owed: that run's own settle decides it, so nothing is for the human here.
+  | { kind: 'moved' }
+  // Another live process holds this stop's settle lock (§4.1.2): nothing was read, nothing asked.
+  | { kind: 'busy'; pid: number; since: number }
   // A re-run the CLI names and never executes. Row 239 (the plan's B9): with its act, which
   // `next` and drive route by, never by the line read back.
-  | { kind: 'routed'; act: Act; line: string }
+  // Row 241 (R12): `row`, the flow's whole step row when the re-run is a plan step's.
+  | { kind: 'routed'; act: Act; line: string; row?: NextAction }
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
-  | { kind: 'left'; why: string; code: number; limit?: string }            // limit: the usage limit that refused the arbiter
+  // limit: the usage limit that refused the arbiter. act: the refused act (row 240), which drive
+  // keeps for its retry (§4.1.4) when `paid` says its making cost a model call.
+  | { kind: 'left'; why: string; code: number; limit?: string; act?: DecisionAct; paid?: true }
 
 // The commands a failed check of `run` names that the repo STILL does not trust. A grant
 // made since the stop moves a command out of this list, which is what turns the kept trust
@@ -50,7 +62,49 @@ function refusedRule(lines: readonly string[]): string | undefined {
 const leftLine = (gate: string, target: string, why: string) =>
   cmd('autonomy', `left for a human — ${why} · ${cliAct('decide', gate, target, '--show').line}`)
 
-export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: string, target: string): Promise<Settled> {
+// Row 240 (design §4.1.2). The stop's settle lock is taken before the stop is read and held
+// through the arbiter call and the door, so a second settler beside it — a chat's `next`, drive's
+// pass, a terminal's gate — reads nothing and asks no model. Nobody waits for it.
+// `kept` (row 240, §4.1.4): an act drive kept from a settle the door refused with exit 3, applied
+// again — with no model call — while the stop's run and token are still the ones it was made on.
+export async function settleStop(
+  ctx: Ctx, root: string, cfg: Config, gate: string, target: string, opts: { kept?: DecisionAct } = {},
+): Promise<Settled> {
+  const lock = takeBusy(root, 'settle', target, settleUntil(cfg, ctx.env, Date.now()))
+  if (!lock.taken) {
+    if ('holder' in lock) return { kind: 'busy', pid: lock.holder.pid, since: lock.holder.since }
+    renderRefusal(lock.refused).forEach((l) => ctx.err(l))
+    const why = `the settle lock could not be written (${lock.refused[0]?.rule ?? 'lock-unwritable'})`
+    ctx.out(leftLine(gate, target, why))
+    return { kind: 'left', why, code: EXIT.BLOCKED }
+  }
+  try {
+    return await judgeStop(ctx, root, cfg, gate, target, false, opts.kept)
+  } finally {
+    lock.release()
+  }
+}
+
+// Local wall-clock HH:MM, for the lines that name when a holder started.
+export const hhmm = (ms: number): string => {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// Row 240. Where a verb settles (the gate's tail, ship's awaiting-decision settle), a busy stop is
+// named once and the verb exits 3: another run is deciding it, and there is nothing to do.
+export const busyLine = (gate: string, target: string, s: { pid: number; since: number }): string =>
+  `busy: ${target} — another witness run is deciding ${gate} (pid ${s.pid}, since ${hhmm(s.since)})`
+
+const byOf = (d: DecisionEntry): 'human' | 'policy' | 'arbiter' =>
+  d.selected === 'policy' || d.selected === 'arbiter' ? d.selected : 'human'
+
+// One judgment of the stop from one read. `again` is the second judgment after a refusal that
+// found the content moved while the first was being made (design §4.1.1's "judged again"); it is
+// made once, never a third time.
+async function judgeStop(
+  ctx: Ctx, root: string, cfg: Config, gate: string, target: string, again: boolean, kept?: DecisionAct,
+): Promise<Settled> {
   const spec = gateSpec(gate)
   if (!spec) return { kind: 'none' }
   const entries = readStream(root, target)
@@ -58,6 +112,9 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   // `--manual` keeps that run's stop for a human "for that run regardless" — including when
   // `next` meets it turns later (Review Focus 4).
   if (owed === undefined || owed.manual) return { kind: 'none' }
+  // Row 240 (R2). What this settler read of its stop, taken before any model call; every act
+  // below carries it, so none can land on a disposition this read did not see.
+  const token = settledToken(entries, gate, owed.run_id)
 
   const canon = loadCanon(root)
   const now = spec.currentSha?.(root, canon, cfg, target)
@@ -69,6 +126,47 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   if (block === undefined) return { kind: 'none' }
   const untrusted = stillUntrusted(root, ctx.env, owed)
   const policy = policyFor({ at: 'gate', gate, target, entries, run: owed, block, untrusted })
+  // Whether this judgment paid for a model call: an arbiter ruling, or an act kept from one.
+  let paid = false
+
+  // Row 240 (design §4.1.1's table). After any refusal the stop is read again, and what landed
+  // since decides what this settle was: a decision on the judged run → `superseded`, naming the
+  // winner; a newer run → `moved`, that run's own settle's; content that moved while it was being
+  // judged → judged once more as the stale stop it now is. Only a stop still owed in the same
+  // form — the same run, the same token — reaches today's handling below.
+  const afterRefusal = async (rule: string | undefined): Promise<Settled | undefined> => {
+    const fresh = readStream(root, target)
+    if (settledToken(fresh, gate, owed.run_id) !== token) {
+      // The winner is the first decision that landed after this settler's read — at the bound a
+      // reopen of the gate can already sit after the run in that read (final review).
+      const after = (es: typeof entries) => {
+        const at = es.findIndex((e) => e.t === 'gate-run' && (e as unknown as GateRunEntry).run_id === owed.run_id)
+        return es.slice(at + 1).filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+      }
+      const winner = after(fresh)[after(entries).length] as unknown as DecisionEntry | undefined
+      if (winner !== undefined) {
+        const by = byOf(winner)
+        ctx.out(kv('decided', `${gate} ${target} → ${winner.decision} · ${by} (decided first)`))
+        if (winner.decision === 'revise' || winner.decision === 'revise-upstream') {
+          printReviseContext(ctx, root, {
+            gate, target, run: owed, entries: fresh, upstreamId: spec.upstreamOf?.(root, loadCanon(root), target), decision: winner,
+          })
+        }
+        return { kind: 'superseded', by, decision: winner.decision }
+      }
+    }
+    const latest = lastGateRun(fresh, gate)
+    if (latest !== undefined && latest.run_id !== owed.run_id) return { kind: 'moved' }
+    if (rule === 'stale-verdict' || rule === 'hold-lifted') {
+      if (!again) return judgeStop(ctx, root, cfg, gate, target, true)
+      // Moved again while it was judged again: a park here would rest on a ruling about content
+      // that is already gone, so the stop is left for a human instead.
+      const why = `the content moved while it was judged, twice (${rule})`
+      ctx.out(leftLine(gate, target, why))
+      return { kind: 'left', why, code: EXIT.REFUSED }
+    }
+    return undefined
+  }
 
   const settle = async (act: DecisionAct, by: 'policy' | 'arbiter'): Promise<Settled> => {
     // The refusal's rule is read off the rows the door printed, so the line that leaves the
@@ -77,6 +175,8 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     const code = await applyDecision({ ...ctx, err: (l) => { errs.push(l); ctx.err(l) } }, act)
     if (code !== EXIT.OK) {
       const rule = refusedRule(errs)
+      const settled = await afterRefusal(rule)
+      if (settled !== undefined) return settled
       // An arbiter choice the door refuses would stay owed, and every `next` would pay for the
       // same model call to reach the same refusal (F4). It parks instead — once, reversibly,
       // as the policy's act — exactly as a second malformed answer does. A lock or a pending
@@ -84,17 +184,27 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       if (by === 'arbiter' && code === EXIT.REFUSED) return parkRefused(rule)
       const why = `the ${by} decision was refused (${rule ?? `exit ${code}`})`
       ctx.out(leftLine(gate, target, why))
-      return { kind: 'left', why, code }
+      return { kind: 'left', why, code, act, ...(paid ? { paid: true as const } : {}) }
     }
     return {
       kind: 'decided', by, rule: block.rule,
       decision: act.decision === 'revise' && act.upstream !== undefined ? 'revise-upstream' : act.decision,
     }
   }
+  // Row 240: carries the token of the read the refused choice was made on, so it lands only on
+  // the stop as that read saw it.
   const parkRefused = (rule: string | undefined): Promise<Settled> => settle({
-    gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id,
+    gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id, token,
     note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
   }, 'policy')
+  // Row 240 (§4.1.4). A kept act lands through the same refusal handling, with no model call, only
+  // on the stop it was made on; a run or a token that moved since drops it, and the stop is judged
+  // afresh below.
+  if (kept !== undefined && kept.runId === owed.run_id && kept.token === token) {
+    paid = true
+    return settle(kept, kept.selected === 'arbiter' ? 'arbiter' : 'policy')
+  }
+
   // Row 239. A decide act runs as its argv, through the parse the verb gives it, which prints its
   // refusal. A shape the parse refuses is no decision the CLI can take: the policy's stop is left
   // for a human, and the arbiter's parks (F4).
@@ -120,6 +230,15 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   if (policy.kind === 'take') {
     const { act } = policy
     if (act.argv[0] !== 'decide') {
+      // Row 241 (R12). While a plan step is open no implement review runs, so a re-run of the
+      // implement gate is the flow's step row — stage implement, home the worktree, its model.
+      const plan = gate === 'implement' && act.argv[0] === 'gate' ? findById(canon, target) : undefined
+      const open = plan?.meta.type === 'plan' ? openStepRow(root, cfg, plan) : undefined
+      if (open?.row.act !== undefined) {
+        const line = cmd('autonomy', `re-run owed — ${open.row.line}`)
+        ctx.out(line)
+        return { kind: 'routed', act: open.row.act, line, row: open.row }
+      }
       // Not a decision: a re-run the CLI names and never executes — the stage owns it.
       const line = cmd('autonomy', `re-run owed — ${act.line}`)
       ctx.out(line)
@@ -131,7 +250,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       ctx.out(leftLine(gate, target, why))
       return { kind: 'left', why, code: EXIT.REFUSED }
     }
-    return settle({ ...actR.value, selected: 'policy', runId: owed.run_id }, 'policy')
+    return settle({ ...actR.value, selected: 'policy', runId: owed.run_id, token }, 'policy')
   }
 
   // Row 239. A `pick` answers a choose block, whose options name specs, not commands: no gate stop
@@ -145,6 +264,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   }
 
   ctx.out(cmd('arbiter', `judging ${gate} ${target} · ${block.rule}`))
+  paid = true
   const menu = menuFor(block, owed)
   const ruling = await arbitrate(ctx, root, cfg, {
     mode: 'decision', menu,
@@ -157,7 +277,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
       renderRefusal(ruling.violations).forEach((l) => ctx.err(l))
       return settle({
         gate, target, decision: 'stop', note: 'parked by the policy — the arbiter answered malformed twice',
-        selected: 'policy', runId: owed.run_id,
+        selected: 'policy', runId: owed.run_id, token,
       }, 'policy')
     }
     const rule = ruling.violations[0]?.rule ?? 'unknown'
@@ -188,15 +308,16 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
   return settle({
     ...actR.value, selected: 'arbiter', reason: ruling.value.reason,
     arbiter: { model: ruling.value.model, prompts_sha: ruling.value.prompts_sha },
-    runId: owed.run_id,
+    runId: owed.run_id, token,
   }, 'arbiter')
 }
 
 // The gate's exit after its tail settled: an approve is a pass, any other decision leaves
 // work owed, and a stop the CLI did not settle keeps the code the gate already had.
 export function settledCode(code: number, s: Settled): number {
-  if (s.kind === 'decided') return s.decision === 'approve' ? EXIT.OK : EXIT.FINDINGS
+  if (s.kind === 'decided' || s.kind === 'superseded') return s.decision === 'approve' ? EXIT.OK : EXIT.FINDINGS
   if (s.kind === 'left') return s.code
+  if (s.kind === 'busy') return EXIT.BLOCKED
   return code
 }
 
@@ -212,7 +333,8 @@ export interface SettleReport { gate: string; target: string; settled: Settled }
 // drive session passes its own target, and drive passes the targets no session holds, so
 // each stop has exactly one settler. The default admits everything (A1's repo-wide pass).
 export async function settleOwed(
-  ctx: Ctx, root: string, cfg: Config, opts: { scope?: (target: string) => boolean } = {},
+  ctx: Ctx, root: string, cfg: Config,
+  opts: { scope?: (target: string) => boolean; kept?: ReadonlyMap<string, DecisionAct> } = {},
 ): Promise<SettleReport[]> {
   if (ctx.env.CI) return []
   if (pendingTxn(root) !== undefined) return []
@@ -220,7 +342,8 @@ export async function settleOwed(
   const admits = opts.scope ?? (() => true)
   const out: SettleReport[] = []
   for (const o of owedDecisions(root, loadCanon(root)).filter((d) => admits(d.target))) {
-    out.push({ gate: o.gate, target: o.target, settled: await settleStop(quiet, root, cfg, o.gate, o.target) })
+    const kept = opts.kept?.get(o.target)
+    out.push({ gate: o.gate, target: o.target, settled: await settleStop(quiet, root, cfg, o.gate, o.target, kept && kept.gate === o.gate ? { kept } : {}) })
   }
   return out
 }
@@ -229,6 +352,9 @@ export function settledLine(r: SettleReport): string | undefined {
   const s = r.settled
   switch (s.kind) {
     case 'decided': return kv('decided', `${r.gate} ${r.target} → ${s.decision} · ${s.by} · ${s.rule}`)
+    case 'superseded': return kv('decided', `${r.gate} ${r.target} → ${s.decision} · ${s.by} (decided first)`)
+    case 'moved': return undefined
+    case 'busy': return undefined
     case 'routed': return s.line
     case 'kept': return s.line
     case 'left': return leftLine(r.gate, r.target, s.why)

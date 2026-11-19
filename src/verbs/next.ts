@@ -7,28 +7,30 @@ import { isId } from '../dsl.js'
 import { unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
-import { primaryRoot } from '../gitio.js'
+import { fetchBranch, primaryRoot, stateOnlyAdvance, tryGit } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { templateDraft } from '../principles.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
-import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner } from '../reviewed.js'
+import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner, runJudgedPlan } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import {
-  greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, redCycleClosed, redInFlight, stepProgress, stepsLine,
+  greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, presentGreenOwed, redCycleClosed, redInFlight, stepProgress, stepsLine,
   type StepState,
 } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } from '../harness.js'
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
-import { liveDrive } from '../live.js'
+import { driveWillDecide, liveDrive } from '../live.js'
+import { journalOutcome, standingRecord, type ShipOutcomeEntry } from '../ship-outcome.js'
+import { busyHolder } from '../busy.js'
 import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
-import { lazyStamp } from '../stamp.js'
-import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
+import { lazyStamp, type PrView } from '../stamp.js'
+import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
@@ -37,7 +39,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
-import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
+import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
@@ -231,9 +233,12 @@ function evidenceRow(
     .filter((r) => !(r.red && r.green && !r.vacuous))
     .map((r) => `${r.tag} ${!r.red || r.vacuous ? 'red' : 'green'}`)
     .join(' · ')
-  const act = !opts.midRed && files.some((f) => !isTestPath(f))
+  // Row 241 (R10): after an already-present red its green comes next, never another verify-red,
+  // which would only find the behavior on the base again (P30).
+  const greenOwed = opts.midRed || report.required.some((r) => r.present === true && !r.green)
+  const act = !greenOwed && files.some((f) => !isTestPath(f))
     ? cliAct('verify-red', id, ...step)
-    : cliAct('test-evidence', id, '--phase', opts.midRed ? 'green' : 'red', ...step)
+    : cliAct('test-evidence', id, '--phase', greenOwed ? 'green' : 'red', ...step)
   return { ...runs(act), ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
 }
 
@@ -241,9 +246,9 @@ function evidenceRow(
 // gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
 // again and `next` would answer with the same line twice. A green owed on the step (`greenOwedOn`)
 // outranks that: a green, not another red, is what the step is owed.
-function stepLine(id: string, s: StepState, entries: Entry[]): { act: Act; why?: string } {
+function stepLine(id: string, s: StepState, entries: Entry[], present?: string): { act: Act; why?: string } {
   if (s.kind === 'scaffolding') return { act: cliAct('step-close', id, '--step', s.id) }
-  if (greenOwedOn(entries, s.id)) return { act: cliAct('test-evidence', id, '--phase', 'green', '--step', s.id) }
+  if (greenOwedOn(entries, s.id) || present === s.id) return { act: cliAct('test-evidence', id, '--phase', 'green', '--step', s.id) }
   if (lastRedVacuous(entries, s.id)) {
     return { act: cliAct('verify-red', id, '--step', s.id), why: 'its red was vacuous — verify-red reconstructs it against the base' }
   }
@@ -267,6 +272,9 @@ function evidenceStep(steps: StepState[], entries: Entry[]): string | undefined 
 
 export interface NextAction {
   line: string
+  // Row 242. The human's hold this action stands for: a merge or fix record the plan's ship ended
+  // on, standing (`heldPlan`). Every reader classifies from it, never from the line.
+  held?: ShipOutcomeEntry
   // Row 239 (the plan's B8). The line as data, on every line that is a runnable witness command,
   // and `line` is its `line`: a reader runs `argv` and a human pastes `line`, the same command. A
   // shape, which holds a placeholder or names a file to author, carries none, and each foreign
@@ -427,6 +435,128 @@ export function flowAction(
   return a && withTrust(root, env, cfg, { docs: [plan] }, a)
 }
 
+// Row 241 (design §4.2.1; the user's decision 8). A human's approve of the implement gate stays
+// final (row 93): while the plan's content is what the approved run judged, the plan is past its
+// steps, and neither the step row nor the steps-open refusal applies. A policy or arbiter approve
+// gets no such pass. With the steps-open refusal in force no new implement run starts with a step
+// open, so in practice this reaches approvals given before the upgrade.
+export function humanApprovedPastSteps(entries: Entry[], plan: CanonDoc): boolean {
+  let at = -1
+  entries.forEach((e, i) => {
+    if (e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === 'implement') at = i
+  })
+  const d = entries[at] as unknown as DecisionEntry | undefined
+  if (d === undefined || d.decision !== 'approve' || (d.selected !== undefined && d.selected !== 'affirmation')) return false
+  const run = lastGateRun(entries.slice(0, at), 'implement')
+  return run !== undefined && runJudgedPlan(run, plan)
+}
+
+// The flow's step row: the green owed (a red in flight, or an already-present red) first, else the
+// first unclosed step's red or close — stage implement, home the worktree. `step` is the one it names.
+function stepRow(
+  id: string, plan: CanonDoc, entries: Entry[], stepped: Extract<ReturnType<typeof stepProgress>, { known: true }> & { next: StepState },
+  inWorktree: { home: string; model?: string }, midRed: boolean,
+): { row: NextAction; step: string } {
+  const inFlight = midRed ? { midRed: true as const } : {}
+  // The green owed comes before the first unclosed step: routing that step's red or its close
+  // would leave the green owed unrouted. D192: once the latest genuine red's cycle has closed
+  // (`redCycleClosed`), what failed is a later green (a failing red would be the latest genuine red,
+  // its cycle still open), and the note says so rather than naming a red its step no longer holds.
+  // Not "the last run": a vacuous red after that green may have passed.
+  // Row 241 (R10): a step closed as already present owes its green next, as a red in flight does.
+  const present = greenOwedStep(plan, entries) === undefined ? presentGreenOwed(plan, entries) : undefined
+  const owed = greenOwedStep(plan, entries) ?? present
+  const owedStep = stepped.steps.find((s) => s.id === owed)
+  const { act, why } = stepLine(id, owedStep ?? stepped.next, entries, present)
+  const ahead = owedStep === undefined || owedStep.id === stepped.next.id
+    ? why
+    : present !== undefined
+      ? `${owedStep.id} is already present — its green comes first`
+      : redCycleClosed(entries)
+        ? 'the last green failed — a passing green comes first'
+        : `${owedStep.id} has an open red — its green comes first`
+  return {
+    row: { ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight },
+    step: (owedStep ?? stepped.next).id,
+  }
+}
+
+const implementSeat = (root: string, cfg: Config, id: string): { home: string; model?: string } => {
+  const pinR = stagePin(cfg, 'implement')
+  const pin = pinR.ok ? pinR.value : undefined
+  return { home: worktreePath(root, id), model: pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined }
+}
+
+// Row 242 (design §4.3.2, GitHub moves on). While a merge record stands, `next` reads what changed
+// on GitHub and journals the record that follows: a PR retargeted away from ship.branch, or closed
+// without merging, is a fix; a base moved beyond witness's state commits is a re-gate (one fetch of
+// ship.branch per `next`, with a timeout). A merged PR is the lazy stamp's, as before. No answer —
+// a failed or timed-out fetch, a view GitHub did not give — journals nothing, and the row stands. A
+// fix record is never checked for a moved base: a rebase cannot clear a human's hold.
+export const GITHUB_CHECK_FETCH_MS = 10_000
+
+export function githubCheck(root: string, ctx: Ctx, cfg: Config, canon: Canon, views: ReadonlyMap<string, PrView>): void {
+  if (ctx.env.CI) return
+  const branch = cfg.ship.branch
+  let fetched: boolean | undefined
+  for (const plan of canon.docs.filter((d) => d.meta.type === 'plan' && isId(d.meta.id))) {
+    const id = String(plan.meta.id)
+    const rec = heldPlan(root, cfg, plan)
+    if (rec === undefined || rec.outcome !== 'merge') continue
+    const view = views.get(id)
+    if (view === undefined || view.state === 'MERGED') continue
+    const wt = worktreePath(root, id)
+    const base = (): string | undefined => {
+      const b = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
+      return b.ok ? b.out.trim() : undefined
+    }
+    const record = (outcome: 'fix' | 're-gate', reason: string) => {
+      const b = base()
+      journalOutcome(root, id, { ...(rec.pr !== undefined ? { pr: rec.pr } : {}), head: rec.head, ...(b !== undefined ? { base: b } : {}), outcome, reason })
+    }
+    if (view.state === 'CLOSED') { record('fix', 'closed without merging — reopen it, or abandon the plan'); continue }
+    if (view.base !== undefined && view.base !== branch) { record('fix', `the PR targets ${view.base} but ship.branch is ${branch}`); continue }
+    fetched ??= fetchBranch(root, branch, GITHUB_CHECK_FETCH_MS)
+    if (!fetched) continue
+    const onBase = `refs/remotes/origin/${branch}`
+    if (tryGit(wt, 'merge-base', '--is-ancestor', onBase, 'HEAD').ok || stateOnlyAdvance(wt, root, 'HEAD', onBase)) continue
+    record('re-gate', `${branch} moved beyond the approved base`)
+  }
+}
+
+// Row 242 (design §4.3.2, One predicate). A plan is held while a merge or fix record stands — the
+// plan stream's latest entry, on the worktree's HEAD — and nothing above its ship row routes: no
+// plan reopen, no open step. `flowStep`, `needsYou` and drive all read this one predicate.
+export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcomeEntry | undefined {
+  if (String(plan.meta.status) !== 'in-progress') return undefined
+  const id = String(plan.meta.id)
+  const wt = worktreePath(root, id)
+  if (!existsSync(wt)) return undefined
+  const entries = readStream(root, id)
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  const rec = standingRecord(entries, head.ok ? head.out.trim() : undefined)
+  if (rec === undefined || openReopen(entries, 'plan') !== undefined || openStepRow(root, cfg, plan) !== undefined) return undefined
+  return rec
+}
+
+// Row 241 (R9, R12). The step a plan still owes before any implement review starts, as the flow's
+// own step row; none when its progress is unknown (a legacy plan), every step is closed, or a human
+// approved the implement gate past its steps on the plan as it stands (row 93).
+export function openStepRow(root: string, cfg: Config, plan: CanonDoc): { row: NextAction; step: string } | undefined {
+  // The step row is the flow's, and only an in-progress plan has a flow (flowStep): a draft or a
+  // finished plan owes no step row.
+  if (String(plan.meta.status) !== 'in-progress') return undefined
+  const id = String(plan.meta.id)
+  const entries = readStream(root, id)
+  const progress = stepProgress(plan, entries)
+  if (!progress.known || progress.next === undefined || humanApprovedPastSteps(entries, plan)) return undefined
+  return stepRow(id, plan, entries, { ...progress, next: progress.next }, implementSeat(root, cfg, id), redInFlight(entries))
+}
+
+// Row 241 (R9). The refusal every implement review and ship run takes while a step is open.
+export const stepsOpenViolation = (o: { row: NextAction; step: string }): Violation =>
+  v('steps', 'steps-open', `${o.step} is open`, `${o.row.line} — ${o.step} is not built yet`)
+
 function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
@@ -438,17 +568,40 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   const inWorktree = { home: wt, model: implementModel }
   const atRoot = { home: root }
   if (!existsSync(wt)) return { ...runs(cliAct('start', id)), target: id, note: 'worktree missing — start recreates it' }
-  if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   // Row 95: a reopen on this plan's OWN plan gate is routable motion — the plan is what
   // needs re-authoring — and every reader was blind to it. Above the implement settle check
   // on purpose: an implement gate settled against an earlier plan version must not carry
-  // the flow past a reopen saying the plan itself is wrong. Below the `pr` row on purpose
-  // too: a flow already at ship is answered by ship. No `home:` — plan authoring writes
-  // canon at the root, and this matches what computeNext's plans-first loop prints.
+  // the flow past a reopen saying the plan itself is wrong. Row 241 extends it above the `pr`
+  // row too: a plan sent back after its PR opened is re-authored before it ships (P8). No
+  // `home:` — plan authoring writes canon at the root, and this matches what computeNext's
+  // plans-first loop prints.
   if (openReopen(entries, 'plan') !== undefined) {
     const act = planWriteAction(root, liveEfforts(root), id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'plan gate reopened — re-author, then re-gate the plan') }
   }
+  // Row 241 (R7; reverses row 191's Plan's call 5). A plan's unbuilt steps are its next work before
+  // and after an implement gate, and above its PR: an amendment that adds a step after either is
+  // built before the plan ships (#89, P8, P21) — unless a human approved the implement gate past it
+  // on the plan as it stands (row 93). After the gate an untagged cycle is still a fix round, which
+  // closes no step; a step 0.28 let be built untagged after a gate reads open and is re-witnessed.
+  const progress = stepProgress(plan, entries)
+  const stepped = progress.known && !humanApprovedPastSteps(entries, plan) ? progress : undefined
+  // Final review I1, its re-review and D192. A red in flight (steps.ts: the latest non-vacuous run
+  // saw a failure) is one whatever step it names, or none: recorded out of order, ahead of a
+  // scaffolding step left unclosed, re-opened on a closed step, or a fix round's. Whatever row
+  // follows, the session is mid-red, and the evidence row's phase reads the same answer unless the
+  // diff is empty.
+  const midRed = redInFlight(entries)
+  const inFlight = midRed ? { midRed: true as const } : {}
+  if (stepped?.next !== undefined) return stepRow(id, plan, entries, { ...stepped, next: stepped.next }, inWorktree, midRed).row
+  // Row 242. A standing human hold is answered with its stop, never another `witness ship`: the line
+  // is ship's re-check, and `held` says it is the human's (needsYou prints its rows).
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  const held = standingRecord(entries, head.ok ? head.out.trim() : undefined)
+  if (held !== undefined) {
+    return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot, held, note: `${held.outcome} stop — ${held.reason}` }
+  }
+  if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
   const files = baseR.ok ? changedFiles(wt, baseR.value) : []
   // Rows 95 + 96: the identity is the diff plus the plan's content, never the worktree, and
@@ -466,38 +619,6 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   if (gateSettled(entries, 'implement', diffSha)) {
     return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   }
-  // Row 191 · Plan's call 5. The evidence below is the parent tag's and knows nothing of the
-  // plan's steps: one red→green pair satisfied it, so a three-step plan was routed to `gate
-  // implement` after its first step and every mid-plan relay's fresh session gated early.
-  // While the plan's progress is known and no implement gate has run, the next unfinished
-  // step is the work. Legacy plans and fix rounds after a gate keep the rows below.
-  const progress = stepProgress(plan, entries)
-  const stepped = progress.known && !implementGated(entries) ? progress : undefined
-  // Final review I1, its re-review and D192. A red in flight (steps.ts: the latest non-vacuous run
-  // saw a failure) is one whatever step it names, or none: recorded out of order, ahead of a
-  // scaffolding step left unclosed, re-opened on a closed step, or a fix round's. Whatever row
-  // follows, the session is mid-red, and the evidence row's phase reads the same answer unless the
-  // diff is empty.
-  const midRed = redInFlight(entries)
-  const inFlight = midRed ? { midRed: true as const } : {}
-  if (stepped?.next !== undefined) {
-    // The green owed comes before the first unclosed step: routing that step's red or its close
-    // would leave the green owed unrouted. D192: once the latest genuine red's cycle has closed
-    // (`redCycleClosed`), what failed is a later green (a failing red would be the latest genuine red,
-    // its cycle still open), and the note says so rather than naming a red its step no longer holds.
-    // Not "the last run": a vacuous red after that green may have passed.
-    const owed = greenOwedStep(plan, entries)
-    const owedStep = stepped.steps.find((s) => s.id === owed)
-    const { act, why } = stepLine(id, owedStep ?? stepped.next, entries)
-    const ahead = owedStep === undefined || owedStep.id === stepped.next.id
-      ? why
-      : redCycleClosed(entries)
-        ? 'the last green failed — a passing green comes first'
-        : `${owedStep.id} has an open red — its green comes first`
-    return {
-      ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
-    }
-  }
   // evidenceForDiff is vacuously "satisfied" when nothing has changed yet (an empty
   // required-tags list trivially passes .every()) — a fresh worktree needs the
   // implement-stage hint too, not a premature jump to "gate implement".
@@ -508,7 +629,11 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
         midRed, criteria: hasCriteriaStep(plan),
         // D192. While a red is in flight its green is owed, so the row names the red in flight's step,
         // as the step row does. Read from the latest red of any kind, it named a vacuous red's step.
-        step: stepped !== undefined ? greenOwedStep(plan, entries) ?? evidenceStep(stepped.steps, entries) : undefined,
+        // Row 241: after an implement gate, with every step closed, a cycle is a fix round's and names
+        // no step — but the green owed by a red in flight, or by an already-present red, still does.
+        step: stepped === undefined ? undefined
+          : !implementGated(entries) ? greenOwedStep(plan, entries) ?? evidenceStep(stepped.steps, entries)
+            : greenOwedStep(plan, entries) ?? presentGreenOwed(plan, entries),
       }),
       ...inFlight,
     }
@@ -602,8 +727,43 @@ const roundOf = (r: unknown): number | undefined => (Number.isInteger(r) && (r a
 // `status` names every one of them. The anchor comes from the run the stop disposed of —
 // the human parked something specific, and "parked" without "on what" is not a report.
 // Row 239: `round` is absent where the run's journaled round is not a round (`roundOf`).
+// Row 241 (R11). Whether a parked gate's target has work owed, so its reopen is the revise alone: the
+// gate's latest act before the park sent work upstream, the plan's own gate is reopened, or — read
+// with the config — the flow routes implement work other than the gate (a step, an evidence row,
+// an edit a revise asked for).
+export function parkOwed(root: string, cfg: Config | undefined, canon: Canon, gate: string, target: string, entries: Entry[]): boolean {
+  const last = lastGateRun(entries, gate)
+  const acts = last === undefined ? [] : entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate && (e as unknown as DecisionEntry).caused_by === undefined)
+    .map((e) => e as unknown as DecisionEntry)
+  if (acts.at(-2)?.decision === 'revise-upstream') return true
+  const plan = findById(canon, target)
+  if (plan?.meta.type !== 'plan') return false
+  if (openReopen(entries, 'plan') !== undefined) return true
+  if (cfg === undefined) {
+    const p = stepProgress(plan, entries)
+    return p.known && p.next !== undefined && !humanApprovedPastSteps(entries, plan)
+  }
+  const row = flowStep(root, cfg, plan)
+  return row !== undefined && row.stage === 'implement' && !row.line.startsWith('witness gate ')
+}
+
+// Row 241. Who parked a gate, and why, for the parked head: the arbiter with its reason, the policy
+// with its note, or a human at the anchor the stop disposed of.
+export function parkedBy(entries: Entry[], gate: string, anchor: string): string {
+  const stopped = entries.filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+    .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
+  // A journaled note or reason is parsed JSON: held as the string it prints as.
+  if (stopped?.selected === 'arbiter') return `parked by the arbiter — ${String(stopped.reason ?? stopped.note ?? 'no reason journaled')}`
+  if (stopped?.selected === 'policy' && stopped.note) {
+    const note = String(stopped.note)
+    return note.startsWith('parked by the policy') ? note : `parked by the policy — ${note}`
+  }
+  return `parked by a human at ${anchor}`
+}
+
 export function parkedGates(
-  root: string, canon: Canon,
+  root: string, canon: Canon, cfg?: Config,
 ): Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> {
   const out: Array<{ gate: string; target: string; round?: number; anchor: string; reopen: Act[] }> = []
   // Row 227. A parked gate on terminal work is owed to no one: a plan done or abandoned, an
@@ -630,7 +790,7 @@ export function parkedGates(
       out.push({
         gate, target: id, ...(round !== undefined ? { round } : {}),
         anchor: anchors[0] ?? last.standing ?? last.outcome,
-        reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent)),
+        reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent), parkOwed(root, cfg, canon, gate, id, entries)),
       })
     }
   }
@@ -1138,6 +1298,8 @@ export function conversationDraft(root: string, action: Pick<NextAction, 'stage'
 // A stop that waits for the human: a decision the CLI could not settle, a conversation, or a
 // start an unmet manual need blocks. Drive sets each aside, so none is work to launch it for.
 function humanStop(canon: Canon, a: NextAction): boolean {
+  // Row 242: a recorded hold is the human's, read from its record.
+  if (a.held !== undefined) return true
   if (a.line.startsWith('witness decide ') || a.line.startsWith('witness trust ') || conversationStage(a)) return true
   return a.line.startsWith('witness start ') &&
     unmetNeeds(canon).some((u) => u.doc === a.target && u.blocks === 'start')
@@ -1164,12 +1326,21 @@ export function driveHasWork(root: string, ctx: Ctx, canon: Canon, cfg: Config, 
 // answered in a terminal). Everything else is held aside, need-blocked starts included. A
 // target-less action that is no conversation (the recovery fork) is the ladder's own, and the
 // walk never passes it.
+// Row 240: `skip` names a decision someone else is deciding now (drive, or another process's
+// settle lock); the walk passes it, holding its target, and records it in `skipped`.
 export function humanAction(
   root: string, ctx: Ctx, canon: Canon, cfg: Config, first: NextAction,
+  skip?: (a: NextAction) => boolean, skipped?: NextAction[],
 ): NextAction | undefined {
   const held = new Set<string>()
   for (let a = first; ;) {
     if (conversationStage(a)) return a
+    if (a.line.startsWith('witness decide ') && a.target !== undefined && !held.has(a.target) && skip?.(a) === true) {
+      skipped?.push(a)
+      held.add(a.target)
+      a = computeNext(root, ctx, canon, cfg, { scope: (t) => t === undefined || !held.has(t) })
+      continue
+    }
     if (a.line.startsWith('witness decide ') || a.line.startsWith('witness trust ')) return a
     if (a.line === 'witness check' || a.target === undefined || held.has(a.target)) return undefined
     held.add(a.target)
@@ -1228,6 +1399,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)
   if (lazy.stamped.length > 0) canon = loadCanon(root)
+  // Row 242. A standing merge stop follows its PR on GitHub, from the view the stamp just read.
+  githubCheck(root, ctx, cfgR.value, canon, lazy.views)
   // `dashboard` renders these; `next` computed them and dropped them. A merge stamp that
   // cannot proceed (commit refused, PR closed unmerged, lock held) leaves the flow parked
   // at ship forever, and `next` — the one verb the driving loop calls every turn — said
@@ -1247,17 +1420,31 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 181. A session drive spawned answers for its own target alone, and settles only its
   // own stops: two drive sessions settling repo-wide would both judge one stop.
   const marked = driveChild(ctx.env)
+  // Row 240 (design §4.1.5). Beside a live 0.29 drive still deciding, an unmarked `next` settles
+  // only the stops drive will not decide: outside its scope, or set aside by it for a human.
+  const live = cfgR.value.autonomy && marked === undefined ? liveDrive(root, canon) : undefined
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
+  const settleScope = scope ?? (live !== undefined ? (t: string) => !driveWillDecide(live, t) : undefined)
   // Row 239 (the plan's B9): the re-run as its act, never its line read back.
-  let routed: { act: Act; target: string } | undefined
+  let routed: { act: Act; target: string; row?: NextAction } | undefined
+  // Row 240. A drive from before 0.29 runs this repo: it settles stops and runs ships with no busy
+  // lock, so this `next` settles nothing and routes nothing beside it — the human stops it first.
+  const older = cfgR.value.autonomy && marked === undefined ? olderDrive(root) : undefined
+  if (older !== undefined) {
+    ctx.out(OLDER_DRIVE_LINE)
+    ctx.out(`  run: ${stopCommand(older)}`)
+    return EXIT.OK
+  }
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
-    const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
-    if (reports.some((r) => r.settled.kind === 'decided')) canon = loadCanon(root)
+    const reports = await settleOwed(ctx, root, cfgR.value, settleScope ? { scope: settleScope } : {})
+    if (reports.some((r) => r.settled.kind === 'decided' || r.settled.kind === 'superseded')) canon = loadCanon(root)
     for (const r of reports) {
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)
-      if (routed === undefined && r.settled.kind === 'routed') routed = { act: r.settled.act, target: r.target }
+      if (routed === undefined && r.settled.kind === 'routed') {
+        routed = { act: r.settled.act, target: r.target, ...(r.settled.row !== undefined ? { row: r.settled.row } : {}) }
+      }
     }
   }
   const { values } = parseArgs({ args: argv, options: { flow: { type: 'string' } }, allowPositionals: true })
@@ -1292,16 +1479,34 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (routed !== undefined && action.line.startsWith('witness decide ')) {
     // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
     const design = routed.act.argv[0] === 'gate' && routed.act.argv[1] === 'design'
-    action = { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
+    // Row 241 (R12): a plan step's re-run is its whole row — stage implement, home the worktree.
+    action = routed.row ?? { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
   }
   action = withDeferralNote(root, canon, action)
   // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the
   // rest: it is routed to the first item the human owes, and `launch:`/`watch:` below still
   // follow the ladder's own action. A `--flow` claim and a worktree's ambient flow keep their
   // scope: the walk reads the whole ladder, which would route past the flow the session is on.
-  const ladder = action
+  let ladder = action
   const chat = cfgR.value.autonomy && marked === undefined && values.flow === undefined && ambientFlow === undefined
-  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder) : undefined
+  // Row 240 (design §4.1.5). The chat's route skips a stop drive will decide, or one under another
+  // process's live settle lock, naming it once — `note: being decided` — so `next: witness decide`
+  // prints only for a stop that needs the human.
+  const beingDecided = (a: NextAction): boolean => a.act?.argv[0] === 'decide' && a.target !== undefined &&
+    (driveWillDecide(live, a.target) || busyHolder(root, 'settle', a.target) !== undefined)
+  const decidedElsewhere: NextAction[] = []
+  // Row 242: a recorded hold is never the chat's `next:` either — its `waiting:` rows name it, and a
+  // chat that ran `witness ship` would only re-check the same stop every turn.
+  if (chat && (beingDecided(ladder) || ladder.held !== undefined)) {
+    const held = new Set<string>()
+    while ((beingDecided(ladder) || ladder.held !== undefined) && !held.has(ladder.target!)) {
+      if (ladder.held === undefined) decidedElsewhere.push(ladder)
+      held.add(ladder.target!)
+      ladder = computeNext(root, ctx, canon, cfgR.value, { scope: (t) => t === undefined || !held.has(t) })
+    }
+    action = withDeferralNote(root, canon, ladder)
+  }
+  const human = chat ? humanAction(root, ctx, canon, cfgR.value, ladder, beingDecided, decidedElsewhere) : undefined
   // The ladder's own action already carries its deferral note; one the walk reached does not yet.
   if (human !== undefined && human !== ladder) action = withDeferralNote(root, canon, human)
   // D153. The scoping was deliberate but unprinted — the residual of the 2026-08-01
@@ -1316,11 +1521,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 195. Raw, because each is a command (D120), and above the routing block for the same
   // reason as the lines above.
   if (chat) needNotices(canon).forEach((l) => ctx.out(l))
+  // Row 240: each stop someone else is deciding, once — nothing to ask about it.
+  for (const t of new Set(decidedElsewhere.map((a) => `${a.act!.argv[1]} ${a.target}`))) ctx.out(kv('note', `being decided — ${t}`))
   // Final review. What waits on the human that no `next:` routes — a target drive set aside as
   // stuck or capped, a merge, a parked gate — is said here, each with its command, so a chat that
   // starts beside a paused drive sees it rather than folding it into its wait token. Row 239 (design
   // §3.4): its head on a `waiting:` line, and each command on an indented row of its own under it.
-  const owed = chat ? needsYou(root, ctx, cfgR.value, canon, liveDrive(root, canon)?.asides ?? []) : []
+  const owed = chat ? needsYou(root, ctx, cfgR.value, canon, live?.asides ?? [],
+    live !== undefined ? { ...(live.scope !== undefined ? { flow: live.scope.flow } : {}), deciding: live.deciding === true } : undefined) : []
   for (const i of owed.filter(isHeld)) waitingRows(i).forEach((l) => ctx.out(l))
   // Row 205. Under autonomy each untrusted command is a kept stop, raw (D120), with the grant that
   // names it — paste-ready whatever quotes the command carries. Row 239 (B12): the command and its

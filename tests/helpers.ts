@@ -681,6 +681,15 @@ export function commitEntry(repo: TestRepo, stream: string, entry: { t: EntryTyp
   repo.git('commit', '-m', `journal: ${stream}`, '-m', 'Witness-State: 1')
 }
 
+// Row 241. A step's witnessed red→green, committed as state: a fixture that stamps `pr:` closes its
+// plan's step first, since an open step now routes above the PR (R7).
+export function closedStep(repo: TestRepo, planId: string, step = 's1', tag = 'auth-refresh'): void {
+  for (const [phase, ok] of [['red', false], ['green', true]] as const) {
+    commitEntry(repo, planId, { t: 'test-evidence', artifact: planId, phase, runner: 'filtered', step,
+      tests: [{ name: `closes the step @spec:${tag}`, ok }] })
+  }
+}
+
 // Row 191 §4.3. A red as a CLI older than `--step` journaled it. Naming no step, it leaves the
 // plan's progress unknown: a legacy plan. `vacuous` is a red that passed, as one recorded after
 // the implementation does.

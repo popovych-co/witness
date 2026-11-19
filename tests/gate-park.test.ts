@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
+import { readStream } from '../src/journal.js'
 import { needsYou } from '../src/needs-you.js'
 import { loadCanon } from '../src/scan.js'
 import { parkedGates } from '../src/verbs/next.js'
@@ -97,13 +98,15 @@ describe('parking is reversible', () => {
   // refuses `nothing-pending` once ANY disposition sits on the run, which is correct by its
   // own contract — one run, one disposition. So the second door is the one that was already
   // built: an upstream reopen from the parent, which un-parks exactly as it un-settles.
-  it('a plain revise on a parked gate refuses rather than silently re-deciding it', async () => {
+  // Row 241 (R11; amends row 124): below the bound a human's revise sends a parked gate back to
+  // work, journaled as the un-park it is — never silently, never by a settler.
+  it('a human\'s plain revise on a parked gate below the bound lifts the park, journaled as an un-park', async () => {
     const repo = await stoppedPlanGate()
     await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--stop'])
     const d = await repo.cli(['decide', 'plan', 'auth-refresh-plan-1', '--revise', '--note', 'reconsidered'])
-    expect(d.code).toBe(2)
-    expect(d.stderr).toContain('nothing-pending')
-    expect((await repo.cli(['status'])).stdout).toContain('parked')
+    expect(d.code).toBe(0)
+    expect(readStream(repo.root, 'auth-refresh-plan-1').at(-1)).toMatchObject({ decision: 'revise', unpark: true })
+    expect((await repo.cli(['status'])).stdout).not.toContain('parked')
   })
 
   it('an upstream reopen un-parks the gate it lands on', async () => {
@@ -272,8 +275,10 @@ describe("a parked round is the journal's only when it is a round (row 239)", ()
     // absent, not held undefined: only the real round is a key of its item
     expect(parked.filter((p) => 'round' in p).map((p) => [p.target, p.round])).toEqual([['auth-refresh-plan-5', 2]])
     const status = (await repo.cli(['status'])).stdout.split('\n')
-    expect(status).toContain('  plan,auth-refresh-plan-1,,stopped,witness gate plan auth-refresh-plan-1 --fresh')
-    expect(status).toContain('  plan,auth-refresh-plan-5,2,stopped,witness gate plan auth-refresh-plan-5 --fresh')
+    // Row 241: the reopen prints on rows of its own under the table, never in a cell
+    expect(status).toContain('  plan,auth-refresh-plan-1,,stopped')
+    expect(status).toContain('  plan,auth-refresh-plan-5,2,stopped')
+    expect(status).toContain('  fresh: witness gate plan auth-refresh-plan-5 --fresh')
     expect(status).not.toContain('  run: witness gate plan p1 $(touch M1)')
   })
 })

@@ -139,12 +139,17 @@ registerGate({
 
     const report = evidenceForDiff(wt, root, plan, base)
     const missing = report.required.filter((r) => !(r.red && r.green && !r.vacuous))
+    // Row 241 (R10). The deterministic lane cannot tell a behavior already on the base from a test
+    // that asserts nothing, so it says so to the reviewers and in the stop's evidence.
+    const present = report.required.filter((r) => r.present === true)
+      .map((r) => `already present: ${r.presentStep ?? r.tag} — its test passed before any change`)
+    const presentNote = present.length > 0 ? ` · ${present.join(' · ')}` : ''
     checks.push({ name: 'evidence', ok: report.satisfied,
-      detail: report.satisfied
+      detail: (report.satisfied
         ? (report.required.length > 0
             ? `${String(plan.meta.parent)}: red→green`
             : `no ${String(plan.meta.parent)} tests in the diff — nothing to witness`)
-        : missing.map((m) => `${m.tag}: red=${m.red} green=${m.green}${m.vacuous ? ' vacuous' : ''}`).join(' · ') })
+        : missing.map((m) => `${m.tag}: red=${m.red} green=${m.green}${m.vacuous ? ' vacuous' : ''}`).join(' · ')) + presentNote })
 
     // Row 97: the obligation created by editing someone's tests is that those tests still
     // pass — not that their whole spec is satisfied, which is the out-of-band drift sweep's
@@ -181,7 +186,10 @@ registerGate({
       // D151. The primary root is where canon lives; a reviewer may cite the plan it judges.
       reviewed: { kind: 'tree', root: wt, files, canonRoot: root, canonDirs: stateDirs(root) },
       promptBody: codePromptBody(wt, base, files,
-        `### Plan under implementation: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
+        `### Plan under implementation: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}` +
+        (present.length > 0
+          ? `\n\n### Evidence notes\n${present.map((p) => `- ${p}: judge whether the test tells the behavior apart from its absence`).join('\n')}`
+          : '')),
       checks,
       stamps: [],
       lensOverrides,

@@ -175,13 +175,14 @@ describe('test-evidence --step', () => {
     const r = await repo.cli(['test-evidence', P, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('step-required')
-    expect(r.stderr).toContain("--step <id> — every cycle before the first implement gate is a plan step's · steps 0/3 done · next s1")
+    expect(r.stderr).toContain("--step <id> — every cycle while a criteria step is open is a plan step's · steps 0/3 done · next s1")
     expect(evidence(repo)).toEqual([])
     expect(existsSync(screensDir(wt, P))).toBe(false)
   })
 
-  // After that gate an untagged cycle is a fix round, which closes no step.
-  it('accepts an untagged cycle after an implement gate run', async () => {
+  // Row 241 (R8): after that gate an untagged cycle is a fix round only once every criteria step
+  // closed; while one is open — an amendment's — the cycle is that step's and names it.
+  it('refuses an untagged cycle after an implement gate run while a criteria step is open', async () => {
     const { repo, wt } = await startedThreeStepPlan()
     commitEntry(repo, P, {
       t: 'gate-run', gate: 'implement', artifact: P, round: 1, run_id: 'r-1', reviewed_sha: 'sha-before',
@@ -189,9 +190,9 @@ describe('test-evidence --step', () => {
     })
     writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
     const r = await repo.cli(['test-evidence', P, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
-    expect(r.code).toBe(0)
-    expect(evidence(repo)).toHaveLength(1)
-    expect(evidence(repo)[0]).not.toHaveProperty('step')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('step-required')
+    expect(evidence(repo)).toEqual([])
   })
 
   // A legacy plan's evidence predates step tags, so its cycles were never a step's to name.

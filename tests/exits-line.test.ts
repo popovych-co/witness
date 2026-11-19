@@ -196,10 +196,14 @@ describe('the exits line renders the live acts (rows 139/203)', () => {
     expect(exitsLine([d('--approve'), d('--stop')], 'win32')).toBe('witness decide plan p1 --approve | --stop')
   })
 
-  it('reopens with a fresh run below the bound and with the endgame acts at it', () => {
-    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh'))
-      .toEqual([cliAct('gate', 'plan', 'p1', '--fresh')])
-    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], 'auth-refresh')
+  // Row 241 (R11): below the bound a human's revise sends the work back — alone while work is owed,
+  // beside a fresh run otherwise — and at the bound the endgame acts stay.
+  it('reopens with a revise (and a fresh run when nothing is owed) below the bound and with the endgame acts at it', () => {
+    const revise = cliAct('decide', 'plan', 'p1', '--revise', '--note', '<why>')
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh', false))
+      .toEqual([revise, cliAct('gate', 'plan', 'p1', '--fresh')])
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh', true)).toEqual([revise])
+    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], 'auth-refresh', false)
     expect(atBound).toEqual(exitActs('plan', 'p1', [...BOUND, decided('stop')], false, 'auth-refresh'))
     expect(atBound.at(-1)).toEqual(cliAct('abandon', 'p1'))
   })

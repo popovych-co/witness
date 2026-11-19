@@ -4,25 +4,29 @@ import { autonomyAt, loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
-import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
+import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit, tryGitC } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { heldSatisfy, liftedHolds, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
-import { humanCall, ok, refuse, renderRefusal, v, type Result } from './refusal.js'
+import { humanCall, ok, refuse, renderRefusal, v, type Result, type Violation } from './refusal.js'
 import { cmd, kv, logSafe, shellLine } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
-import { authoringOwed, gateSettled } from './verbs/next.js'
+import { authoringOwed, gateSettled, openStepRow, stepsOpenViolation } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
 import { handOverIfDue } from './slice.js'
 import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
-import { settleStop, settledCode } from './settle.js'
+import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
+import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
+import { heldItem, needYouRows } from './needs-you.js'
+import { driveChild } from './drive-presence.js'
+import { shipUntil, takeBusy } from './busy.js'
 
 export type ShipPhase = 'gate' | 'awaiting-decision' | 'pr' | 'watch'
 
@@ -55,15 +59,64 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
   return baseMoved || holdLifted ? 'gate' : 'pr'
 }
 
-function gh(ctx: Ctx, cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string } {
+// `code`: gh's exit status, or null when it ended on a signal (its timeout) — row 242 reads both.
+function gh(ctx: Ctx, cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string; code: number | null } {
   try {
     const out = execFileSync('gh', args, {
       cwd, env: ctx.env as NodeJS.ProcessEnv, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024,
     })
-    return { ok: true, out }
+    return { ok: true, out, code: 0 }
   } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; message?: string }
-    return { ok: false, out: `${err.stdout ?? ''}${err.stderr ?? ''}` || String(err.message) }
+    const err = e as { stdout?: string; stderr?: string; message?: string; status?: number | null }
+    return { ok: false, out: `${err.stdout ?? ''}${err.stderr ?? ''}` || String(err.message), code: typeof err.status === 'number' ? err.status : null }
+  }
+}
+
+// Row 242 (design §4.3.1). The outcome a ship run ends on, journaled for every reader: the PR it is
+// about (once one exists), the worktree's HEAD, and the ship branch's commit as ship last fetched it.
+function recordOutcome(root: string, planId: string, outcome: ShipOutcome, reason: string, shipBranch?: string): void {
+  const wt = worktreePath(root, planId)
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  if (!head.ok) return
+  const pr = findById(loadCanon(root), planId)?.meta.pr
+  const base = shipBranch !== undefined ? tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${shipBranch}`) : undefined
+  journalOutcome(root, planId, {
+    ...(typeof pr === 'number' && Number.isSafeInteger(pr) && pr >= 1 ? { pr } : {}),
+    head: head.out.trim(), ...(base?.ok ? { base: base.out.trim() } : {}), outcome, reason,
+  })
+}
+
+// Row 242. A refusal of the remote — no origin, a fetch, a push, a PR create — as the outcome it is:
+// a human's fix (a branch holding commits the worktree lacks, a lease refused, a refused login, no
+// remote), or one drive re-checks (the remote did not answer, or another push or create failure).
+// The session's own work — a commit that failed, an unreadable HEAD, a rebase conflict — is no record.
+function recordRefusal(root: string, planId: string, violations: readonly Violation[], shipBranch: string): void {
+  const o = violations[0] !== undefined ? refusalOutcome(violations[0]) : undefined
+  if (o !== undefined) recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
+}
+
+// A failed fetch, read for what it means (C locale): a login git refused is the human's fix — as on a
+// push — and so is a PR branch gone from the remote; anything else is a remote that did not answer.
+export function fetchOutcome(out: string, transient: string): { outcome: 'fix' | 'transient'; reason: string } {
+  if (classifyGit(out) === 'login') return { outcome: 'fix', reason: 'git refused the login — sign in to the remote again' }
+  if (/couldn't find remote ref/i.test(out)) return { outcome: 'fix', reason: 'the PR branch is gone from the remote — recreate or reopen it, or abandon the plan' }
+  return { outcome: 'transient', reason: transient }
+}
+
+export function refusalOutcome(x: Violation): { outcome: ShipOutcome; reason: string } | undefined {
+  const got = String(x.got)
+  switch (x.rule) {
+    case 'no-remote': return { outcome: 'fix', reason: 'no origin remote — add one, then re-check' }
+    case 'push-diverged': return { outcome: 'fix', reason: 'the PR branch holds commits this worktree lacks — overwriting them is your call' }
+    case 'fetch-failed': return fetchOutcome(got, 'the fetch failed')
+    case 'push-failed': return classifyGit(got) === 'login'
+      ? { outcome: 'fix', reason: 'git refused the login — sign in to the remote again' }
+      : { outcome: 'transient', reason: 'the push failed' }
+    case 'pr-create-failed': return classifyGh(1, got) === 'login'
+      ? { outcome: 'fix', reason: 'GitHub refused the login — gh auth login' }
+      : { outcome: 'transient', reason: 'the PR could not be created' }
+    case 'pr-url-unparseable': return { outcome: 'transient', reason: 'the PR create answered no PR' }
+    default: return undefined
   }
 }
 
@@ -91,19 +144,76 @@ export function prBody(plan: CanonDoc, held: HeldRow[]): string {
   })].join('\n')
 }
 
+// Row 242. The commit witness itself last pushed to a plan's PR branch, kept in a witness-owned
+// ref (refs/ is shared by every worktree of the repo). A forced push leases on it, never on the
+// tracking ref: any fetch moves that one onto whatever the remote holds, a collaborator's commit
+// included, and a lease on it then authorises overwriting that commit (P27).
+export function pushedRef(planId: string): string {
+  return `refs/witness/pushed/${planId}`
+}
+
+export function recordPushed(wt: string, planId: string, sha: string): void {
+  tryGit(wt, 'update-ref', pushedRef(planId), sha)
+}
+
+const DIVERGED_WANT =
+  'a PR branch this worktree can fast-forward — the remote holds commits it does not, and overwriting them is a human\'s call'
+
+// The lease a forced push to `branch` carries, settled from a fresh fetch BEFORE anything moves
+// the worktree, so a refused one leaves the worktree as it was, for the human. The fetched tip is
+// accepted only when it is witness's own last push, or a commit the worktree already holds (a PR
+// pushed before 0.29 has no record, and overwriting what HEAD contains loses nothing); anything
+// else is someone else's work. The push then leases on that exact sha, so a commit landing
+// between this fetch and the push is refused by the remote itself.
+function leaseFor(wt: string, branch: string, remote = 'origin'): Result<string> {
+  const fetched = tryGitC(wt, 'fetch', remote, branch)
+  if (!fetched.ok) {
+    return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, branch])} to succeed`)])
+  }
+  const tip = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}^{commit}`)
+  if (!tip.ok) return refuse([v('push', 'head-unreadable', tip.out.slice(0, 200), `a readable ${remote}/${branch}`)])
+  const sha = tip.out.trim()
+  const planId = branch.startsWith('witness/') ? branch.slice('witness/'.length) : undefined
+  const recorded = planId === undefined ? undefined : tryGit(wt, 'rev-parse', '--verify', '--quiet', `${pushedRef(planId)}^{commit}`)
+  if (recorded?.ok && recorded.out.trim() === sha) return ok(sha)
+  if (tryGit(wt, 'merge-base', '--is-ancestor', sha, 'HEAD').ok) return ok(sha)
+  return refuse([humanCall(v('push', 'push-diverged', `${remote}/${branch} at ${sha.slice(0, 12)}`, DIVERGED_WANT))])
+}
+
+// A push of HEAD to the PR branch, forced only under a lease from `leaseFor`, read in the C
+// locale; a rejection is the remote holding commits witness did not push. Recorded on success.
+function pushPr(wt: string, branch: string, lease: string | undefined, setUpstream: boolean, remote = 'origin'): Result<string> {
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  if (!head.ok) return refuse([v('push', 'head-unreadable', head.out.slice(0, 200), `a readable HEAD in ${wt}`)])
+  const push = tryGitC(wt, 'push', '--porcelain',
+    ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${branch}:${lease}`]),
+    ...(setUpstream ? ['-u'] : []), remote, `HEAD:refs/heads/${branch}`)
+  if (!push.ok) {
+    const kind = classifyGit(push.out)
+    if (kind === 'diverged' || kind === 'lease') {
+      return refuse([humanCall(v('push', 'push-diverged', push.out.slice(0, 200), DIVERGED_WANT))])
+    }
+    return refuse([v('push', 'push-failed', push.out.slice(0, 200), `${shellLine(['git', 'push', remote, branch])} to succeed`)])
+  }
+  const sha = head.out.trim()
+  if (branch.startsWith('witness/')) recordPushed(wt, branch.slice('witness/'.length), sha)
+  return ok(sha)
+}
+
 export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string, held: HeldRow[] = []): Result<number> {
   const branch = branchName(String(plan.meta.id))
   if (!tryGit(root, 'remote', 'get-url', 'origin').ok) {
     return refuse([v('origin', 'no-remote', '(none)', 'an origin remote — gh pr create needs one')])
   }
-  // --force-with-lease once an upstream exists: the rebase now runs in the GATE phase, so
-  // a re-entered pr phase pushes a rebased branch and a plain push is no longer a
-  // fast-forward. The lease still refuses to clobber anything pushed by someone else.
+  // A forced push once an upstream exists: the rebase now runs in the GATE phase, so a
+  // re-entered pr phase pushes a rebased branch and a plain push is no longer a fast-forward.
+  // Row 242: the lease is witness's own last push (or a tip the worktree holds), never the
+  // tracking ref, so it refuses to clobber anything pushed by someone else.
   const hasUpstream = tryGit(wt, 'rev-parse', '--verify', `refs/remotes/origin/${branch}`).ok
-  const push = hasUpstream
-    ? tryGit(wt, 'push', '--force-with-lease', '-u', 'origin', branch)
-    : tryGit(wt, 'push', '-u', 'origin', branch)
-  if (!push.ok) return refuse([v('push', 'push-failed', push.out.slice(0, 200), 'git push -u origin to succeed')])
+  const lease = hasUpstream ? leaseFor(wt, branch) : undefined
+  if (lease !== undefined && !lease.ok) return lease
+  const push = pushPr(wt, branch, lease?.value, true)
+  if (!push.ok) return push
   const found = existingPr(ctx, root, branch)
   if (found !== undefined) return ok(found)
   const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
@@ -160,7 +270,7 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   // A configured remote that will not fetch is NOT the offline case. Degrading to the
   // local ref here would silently rebase on a stale base immediately before a merge,
   // which is the exact failure this function exists to prevent.
-  const fetched = tryGit(wt, 'fetch', remote, shipBranch)
+  const fetched = tryGitC(wt, 'fetch', remote, shipBranch)
   if (!fetched.ok) {
     // Row 239: the fetch the want names is another tool's command, through the one renderer.
     return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, shipBranch])} to succeed`)])
@@ -170,6 +280,14 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   // Same predicate as baseMoved: an advance made entirely of witness's own state commits is
   // bookkeeping, and rebasing onto it moves the base term of every reviewed sha for nothing.
   if (stateOnlyAdvance(wt, root, 'HEAD', base)) return ok('clean')
+  // Only push a branch that HAS an upstream. This runs in the gate phase, before createPr has
+  // ever pushed, so on a first ship there is nothing on the remote to update — createPr does the
+  // initial push. Row 242: where an upstream exists, the lease is settled before the rebase, so a
+  // PR branch someone else pushed to refuses with the worktree untouched (P27).
+  const branch = tryGit(wt, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+  const upstream = branch.ok && tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok
+  const lease = upstream ? leaseFor(wt, branch.out.trim(), remote) : undefined
+  if (lease !== undefined && !lease.ok) return lease
   // --autostash: this runs in the GATE phase, and implement deliberately leaves the
   // worktree uncommitted (ship owns the sole code commit, in the pr phase below), so the
   // tree is normally dirty and a bare rebase refuses with "you have unstaged changes".
@@ -181,17 +299,12 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
     return refuse([v('rebase', 'textual-conflict', `${base} moved`,
       'resolve in the worktree (rebase manually), then re-run witness ship — the CLI never freehands a merge')])
   }
-  // Only push a branch that HAS an upstream. This now runs in the gate phase, before
-  // createPr has ever pushed, so on a first ship there is nothing on the remote to
-  // update and an unconditional push fails with "no upstream branch" — createPr does
-  // the initial push. Where an upstream does exist the push result is the whole point:
-  // reporting 'rebased' after a failed push leaves the PR head on the pre-rebase commit,
-  // and CI goes green on a tree nobody will merge.
-  if (tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok) {
-    const push = tryGit(wt, 'push', '--force-with-lease')
-    if (!push.ok) {
-      return refuse([v('push', 'push-failed', push.out.slice(0, 200), 'git push --force-with-lease to succeed')])
-    }
+  // Where an upstream exists the push result is the whole point: reporting 'rebased' after a
+  // failed push leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody
+  // will merge.
+  if (lease !== undefined) {
+    const push = pushPr(wt, branch.out.trim(), lease.value, false, remote)
+    if (!push.ok) return push
   }
   return ok('rebased')
 }
@@ -211,9 +324,18 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   const nowR = loadConfig(root)
   if (!nowR.ok || !nowR.value.autonomy) {
     ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
+    recordOutcome(root, planId, 'merge', 'autonomy is off now — the merge is yours', cfg.ship.branch)
     return EXIT.OK
   }
   cfg = nowR.value
+  // Row 241 (R9). A plan re-authored with a new step during the CI watch holds the merge: `next`
+  // routes the step, so this outcome writes no record.
+  const nowPlan = findById(loadCanon(root), planId)
+  const open = nowPlan !== undefined ? openStepRow(root, cfg, nowPlan) : undefined
+  if (open !== undefined) {
+    ctx.out(kv('merge', `held — ${open.step} is not built yet · ${open.row.line}`))
+    return EXIT.FINDINGS
+  }
   const entries = readStream(root, planId)
   const wt = worktreePath(root, planId)
   const shipBranch = cfg.ship.branch
@@ -221,8 +343,11 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   const shipCmd = cliAct('ship', planId).line
   // `baseMoved` reads a failed fetch as "not moved" so routing degrades offline; here that
   // would merge onto a base nobody could check (F9), so an unreachable remote holds instead.
-  if (!tryGit(wt, 'fetch', 'origin', shipBranch).ok) {
-    ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · ${shipCmd} retries once the remote answers`))
+  const baseFetch = tryGitC(wt, 'fetch', 'origin', shipBranch)
+  if (!baseFetch.ok) {
+    const o = fetchOutcome(baseFetch.out, `cannot verify ${shipBranch} (the fetch failed)`)
+    ctx.out(kv('merge', o.outcome === 'fix' ? `held — ${o.reason} · then ${shipCmd}` : `held — cannot verify ${shipBranch} (the fetch failed) · ${shipCmd} retries once the remote answers`))
+    recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
     return EXIT.FINDINGS
   }
   // The merge is the one irreversible outward act, so its authority comes from the branch it
@@ -230,26 +355,49 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   // from HEAD alone, which the coding agent can commit to. "The branch it lands on" is the
   // PR's base as GitHub reports it, not `ship.branch`, which is working-copy config: a PR
   // aimed anywhere else is a human's call.
-  const view = gh(ctx, root, ['pr', 'view', String(pr), '--json', 'baseRefName'])
+  // Row 242: the same view reads the PR's state, so a PR closed (or merged) on GitHub is named.
+  const view = gh(ctx, root, ['pr', 'view', String(pr), '--json', 'state,baseRefName'])
   let prBase: string | undefined
-  try { prBase = view.ok ? (JSON.parse(view.out) as { baseRefName?: string }).baseRefName : undefined } catch { prBase = undefined }
+  let prState: string | undefined
+  try {
+    const v0 = view.ok ? (JSON.parse(view.out) as { baseRefName?: unknown; state?: unknown }) : undefined
+    prBase = typeof v0?.baseRefName === 'string' ? v0.baseRefName : undefined
+    prState = typeof v0?.state === 'string' ? v0.state : undefined
+  } catch { prBase = undefined }
   if (prBase === undefined) {
-    ctx.out(kv('merge', `held — the PR's base branch cannot be read · ${shipCmd} retries`))
+    const login = !view.ok && classifyGh(view.code, view.out) === 'login'
+    ctx.out(kv('merge', login ? `held — GitHub refused the login · gh auth login, then ${shipCmd}` : `held — the PR's base branch cannot be read · ${shipCmd} retries`))
+    recordOutcome(root, planId, login ? 'fix' : 'transient', login ? 'GitHub refused the login — gh auth login' : "the PR's base branch cannot be read", shipBranch)
     return EXIT.FINDINGS
+  }
+  if (prState === 'CLOSED') {
+    ctx.out(kv('merge', `held — PR #${pr} was closed without merging · a human's call`))
+    recordOutcome(root, planId, 'fix', 'closed without merging — reopen it, or abandon the plan', shipBranch)
+    return EXIT.FINDINGS
+  }
+  if (prState === 'MERGED') {
+    ctx.out(kv('merged', `#${pr} · merged on GitHub — the lazy stamp finishes the lifecycle on the next scan`))
+    recordOutcome(root, planId, 'merged', 'merged on GitHub', shipBranch)
+    return EXIT.OK
   }
   if (prBase !== shipBranch) {
     ctx.out(kv('merge', `held — the PR targets ${prBase} but ship.branch is ${shipBranch} · a human's call`))
+    recordOutcome(root, planId, 'fix', `the PR targets ${prBase} but ship.branch is ${shipBranch}`, shipBranch)
     return EXIT.FINDINGS
   }
   // Fetched into a witness-owned ref with an explicit forced refspec and read from there:
   // `origin/<base>` is a local ref that `update-ref` or a rewritten fetch refspec can forge.
   // Residual, recorded: an agent with this shell can still rewrite the remote's URL itself.
-  if (!tryGit(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`).ok) {
-    ctx.out(kv('merge', `held — cannot verify ${prBase} (the fetch failed) · ${shipCmd} retries once the remote answers`))
+  const authority = tryGitC(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`)
+  if (!authority.ok) {
+    const o = fetchOutcome(authority.out, `cannot verify ${prBase} (the fetch failed)`)
+    ctx.out(kv('merge', o.outcome === 'fix' ? `held — ${o.reason} · then ${shipCmd}` : `held — cannot verify ${prBase} (the fetch failed) · ${shipCmd} retries once the remote answers`))
+    recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
     return EXIT.FINDINGS
   }
   if (!autonomyAt(root, 'refs/witness/ship-authority')) {
     ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
+    recordOutcome(root, planId, 'merge', `the shipped ${prBase} says autonomy is off — the merge is yours`, shipBranch)
     return EXIT.OK
   }
   const base = diffBase(wt, cfg)
@@ -261,6 +409,7 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     : undefined
   if (lapsed !== undefined) {
     ctx.out(kv('merge', `held — the ship approval lapsed (${lapsed}) · ${shipCmd} re-gates`))
+    recordOutcome(root, planId, 're-gate', `the ship approval lapsed (${lapsed})`, shipBranch)
     return EXIT.FINDINGS
   }
   // The local checks above prove the WORKTREE is what was judged; `gh pr merge` merges the
@@ -272,9 +421,16 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
     renderRefusal([humanCall(v('gh', 'merge-refused', merged.out.trim().slice(-200),
       "a PR GitHub will merge — branch protection and required reviews are the repo owner's to settle"))])
       .forEach((l) => ctx.err(l))
+    // Row 242: a refusal after the base moved since the check is a re-gate; one GitHub never
+    // answered is drive's to re-check; any other is the human's.
+    const kind = classifyGh(merged.code, merged.out)
+    if (baseMoved(wt, root, shipBranch)) recordOutcome(root, planId, 're-gate', `${shipBranch} moved since the check`, shipBranch)
+    else if (kind === 'rate' || kind === 'network') recordOutcome(root, planId, 'transient', 'GitHub did not answer the merge', shipBranch)
+    else recordOutcome(root, planId, 'fix', kind === 'login' ? 'GitHub refused the login — gh auth login' : 'GitHub refused the merge — branch protection or required reviews', shipBranch)
     return EXIT.REFUSED
   }
   ctx.out(kv('merged', `#${pr} · ${cfg.ship.merge} — the lazy stamp finishes the lifecycle on the next scan`))
+  recordOutcome(root, planId, 'merged', `merged · ${cfg.ship.merge}`, shipBranch)
   return EXIT.OK
 }
 
@@ -299,12 +455,12 @@ function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Re
   if (!head.ok) return refuse([v('push', 'head-unreadable', head.out.slice(0, 200), `a readable HEAD in ${wt}`)])
   const sha = head.out.trim()
   const remote = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
-  if (remote.ok && sha === remote.out.trim()) return ok(sha)
-  const push = tryGit(wt, 'push', '-u', 'origin', `HEAD:${branch}`)
-  if (!push.ok) {
-    return refuse([humanCall(v('push', 'push-diverged', push.out.slice(0, 200),
-      'a PR branch this worktree can fast-forward — the remote holds commits it does not, and overwriting them is a human\'s call'))])
-  }
+  // Row 242: the remote already IS the approved tree — witness's own record says so from here on.
+  if (remote.ok && sha === remote.out.trim()) { recordPushed(wt, planId, sha); return ok(sha) }
+  // Row 242: a rejection is the remote holding commits this worktree lacks (push-diverged); any
+  // other failure is the push's own (push-failed), classified by its words for the record.
+  const push = pushPr(wt, branch, undefined, true)
+  if (!push.ok) return push
   ctx.out(kv('push', `${branch} → the approved tree`))
   return ok(sha)
 }
@@ -313,7 +469,11 @@ const WATCH_MS = 1_800_000
 const POLL_MS = 10_000
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms))
 
+// Row 242: red only on positive evidence from the check set; a set that could not be read is
+// `unreadable` (classified from gh's exit and words), and one still pending when the watch closed
+// is `pending` — neither is a red CI.
 type CiVerdict = { kind: 'green' } | { kind: 'red'; detail: string } | { kind: 'none' } | { kind: 'no-pass' }
+  | { kind: 'unreadable'; detail: string; code: number | null } | { kind: 'pending' }
 
 // Row 174 (F7). `gh pr checks --watch` exits 0 for every rollup with nothing failed or pending
 // — cancelled and skipped included — and ends the moment nothing is pending, which can be
@@ -321,30 +481,47 @@ type CiVerdict = { kind: 'green' } | { kind: 'red'; detail: string } | { kind: '
 // still: after the watch and `ship.ciSettleMs`, at least one check passed and none failed,
 // was cancelled or is pending; a check that appeared meanwhile is watched in turn. "No
 // checks" at the first poll is retried within the same window before it is believed.
-async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number): Promise<CiVerdict> {
+// `settleGreen`: a green set must hold still for `settleMs` before it licenses witness's own merge
+// (autonomy); with the merge the human's, the wait applies only before believing "no checks".
+async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number, settleGreen = true): Promise<CiVerdict> {
   const start = Date.now()
+  // The watch window; a test shortens it, since a real one is half an hour. Shortening it only makes
+  // ship give up sooner with `pending` — never green, which needs a set with nothing pending.
+  const windowMs = Number(ctx.env.WITNESS_SHIP_WATCH_MS) || WATCH_MS
+  // A green read that followed a watch that failed or timed out has not seen the set hold still:
+  // it settles and reads again before it licenses a merge (F7, kept on every path to green).
+  let resettled = false
   for (;;) {
-    const left = Math.max(1, WATCH_MS - (Date.now() - start))
+    const left = Math.max(1, windowMs - (Date.now() - start))
     const watched = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], left)
-    if (!watched.ok) {
-      if (/no checks reported/.test(watched.out)) {
-        if (Date.now() - start < settleMs) { await sleep(Math.min(settleMs, POLL_MS)); continue }
-        return { kind: 'none' }
-      }
-      return { kind: 'red', detail: watched.out.trim().slice(-200) }
+    if (!watched.ok && /no checks reported/.test(watched.out)) {
+      if (Date.now() - start < settleMs) { await sleep(Math.min(settleMs, POLL_MS)); continue }
+      return { kind: 'none' }
     }
-    if (settleMs > 0) await sleep(settleMs)
+    // A watch that ended any other way says nothing for certain — gh exits 1 for a failed check,
+    // a refused login and a network error alike — so the check set is read either way.
+    if (watched.ok && settleGreen && settleMs > 0) await sleep(settleMs)
     const read = gh(ctx, root, ['pr', 'checks', String(pr), '--json', 'name,bucket'])
     let checks: Array<{ name: string; bucket: string }> | undefined
     try { checks = read.ok ? JSON.parse(read.out) as Array<{ name: string; bucket: string }> : undefined } catch { checks = undefined }
-    if (!Array.isArray(checks)) return { kind: 'red', detail: `the check set could not be read — ${read.out.trim().slice(-120)}` }
+    if (!Array.isArray(checks)) {
+      const why = read.ok ? watched : read
+      return { kind: 'unreadable', detail: why.out.trim().slice(-200), code: why.code }
+    }
     if (checks.some((c) => c.bucket === 'pending')) {
-      if (Date.now() - start >= WATCH_MS) return { kind: 'red', detail: 'checks still pending when the watch window closed' }
+      if (Date.now() - start >= windowMs) return { kind: 'pending' }
+      await sleep(Math.min(POLL_MS, Math.max(1, windowMs - (Date.now() - start))))
       continue
     }
     const bad = checks.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel')
     if (bad.length > 0) return { kind: 'red', detail: bad.map((c) => `${c.bucket}: ${c.name}`).join(' · ') }
-    return checks.some((c) => c.bucket === 'pass') ? { kind: 'green' } : { kind: 'no-pass' }
+    if (!checks.some((c) => c.bucket === 'pass')) return { kind: 'no-pass' }
+    if (!watched.ok && settleGreen && settleMs > 0 && !resettled) {
+      resettled = true
+      await sleep(settleMs)
+      continue
+    }
+    return { kind: 'green' }
   }
 }
 
@@ -376,6 +553,47 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
   if (!plan || plan.meta.type !== 'plan') {
     renderRefusal([v('plan', 'unknown-plan', planId, 'a plans/ doc id')]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
+  }
+  // Row 240 (design §4.1.2). One ship run per plan: the marker is taken before anything journals
+  // and released when the run ends. Held by another live process, this run does nothing — that
+  // one continues — and exits 3. Nobody waits for it.
+  const marker = takeBusy(root, 'ship', planId, shipUntil(cfgR.value, ctx.env, Date.now()))
+  if (!marker.taken) {
+    if ('holder' in marker) {
+      ctx.out(`busy: ${planId} — witness ship is running on it (pid ${marker.holder.pid}, since ${hhmm(marker.holder.since)}) · nothing to do; it continues when that ends`)
+    } else {
+      renderRefusal(marker.refused).forEach((l) => ctx.err(l))
+    }
+    return EXIT.BLOCKED
+  }
+  try {
+    return await shipMarked(ctx, root, cfgR, planId, canon, plan, opts)
+  } finally {
+    marker.release()
+  }
+}
+
+async function shipMarked(
+  ctx: Ctx, root: string, cfgR: { ok: true; value: Config }, planId: string, canon: ReturnType<typeof loadCanon>,
+  plan: CanonDoc, opts: { manual?: boolean },
+): Promise<number> {
+  // Row 241 (R9). Whoever runs it — a drive session included — ship runs no review and carries no
+  // plan on while a step is open: refused before anything journals, naming the step's command.
+  const open = openStepRow(root, cfgR.value, plan)
+  if (open !== undefined) {
+    renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  // Row 242 (R15). A session drive started meets a standing merge or fix record with its stop at
+  // once — re-running ship there only spends a session to reach the same stop. A human's own
+  // `witness ship` re-checks, and its outcome replaces the record.
+  if (driveChild(ctx.env) !== undefined) {
+    const head = tryGit(worktreePath(root, planId), 'rev-parse', 'HEAD')
+    const rec = standingRecord(readStream(root, planId), head.ok ? head.out.trim() : undefined)
+    if (rec !== undefined) {
+      needYouRows(heldItem(rec, cfgR.value, planId)).forEach((l) => ctx.out(l))
+      return EXIT.FINDINGS
+    }
   }
   const wt = worktreePath(root, planId)
   let entries = readStream(root, planId)
@@ -426,6 +644,7 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
     const rebase = rebaseIfMoved(wt, root, shipBranch)
     if (!rebase.ok) {
       renderRefusal(rebase.violations).forEach((l) => ctx.err(l))
+      recordRefusal(root, planId, rebase.violations, shipBranch)
       // A textual conflict is a hand-back, not a refusal: the human resolves it in the
       // worktree and re-runs. Every other rule (no-remote, fetch-failed, push-failed) is
       // a genuine refusal and exits REFUSED like the rest of the CLI.
@@ -445,10 +664,12 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
     // A stop the gate's tail left owed (a crash, or one waiting when autonomy was turned on)
     // settles here by the same policy; anything but an approve hands back as before.
     const s = await settleStop(ctx, root, cfgR.value, 'ship', planId)
-    if (s.kind === 'decided' && s.decision === 'approve') {
+    // Row 240: a settle another decider won is that decider's decision — an approve carries on too.
+    if ((s.kind === 'decided' || s.kind === 'superseded') && s.decision === 'approve') {
       phase = rederive()
       if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
     } else if (s.kind !== 'none') {
+      if (s.kind === 'busy') ctx.out(busyLine('ship', planId, s))
       return settledCode(EXIT.FINDINGS, s)
     }
     // `none` — a stop the policy does not settle (a `--manual` run's): the human's, rendered below.
@@ -483,7 +704,11 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
     // What the approved run did not run, from its own record — the one derivation (row 179).
     const held = (lastGateRun(entries, 'ship')?.checks ?? []).flatMap((c) => c.held ?? [])
     const created = createPr(ctx, wt, root, plan!, parentSummary, held)
-    if (!created.ok) { renderRefusal(created.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    if (!created.ok) {
+      renderRefusal(created.violations).forEach((l) => ctx.err(l))
+      recordRefusal(root, planId, created.violations, shipBranch)
+      return EXIT.REFUSED
+    }
     const stamped = stampPr(ctx, root, planId, created.value)
     if (!stamped.ok) { renderRefusal(stamped.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('pr', `#${created.value} created and stamped`))
@@ -495,23 +720,45 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
   // reviewed tree and the base are the ones the battery judged. It does carry that tree to
   // the PR first — a revise answered after the PR opened is otherwise never pushed (F8).
   const pushed = pushApproved(ctx, wt, planId, String(findById(canon, String(plan!.meta.parent))?.meta.summary ?? 'witness change'))
-  if (!pushed.ok) { renderRefusal(pushed.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
-  if (autonomy) {
-    const ci = await watchCi(ctx, root, pr, cfgR.value.ship.ciSettleMs)
-    // Row 174 / §11 call 18. Green is the merge's only licence: no checks at all, or none
-    // that passed, is not green — the human's call, never a CI to "fix".
-    if (ci.kind === 'none') { ctx.out(kv('merge', 'held — no CI checks reported · witness merges only on green CI')); return EXIT.FINDINGS }
-    if (ci.kind === 'no-pass') { ctx.out(kv('merge', 'held — no passing CI check · witness merges only on green CI')); return EXIT.FINDINGS }
-    if (ci.kind === 'red') { ctx.out(kv('ci', `red — ${ci.detail}`)); return EXIT.FINDINGS }
-    ctx.out(kv('ci', 'green'))
-    return mergeOwnPr(ctx, root, cfgR.value, planId, pr, pushed.value)
+  if (!pushed.ok) {
+    renderRefusal(pushed.violations).forEach((l) => ctx.err(l))
+    recordRefusal(root, planId, pushed.violations, shipBranch)
+    return EXIT.REFUSED
   }
-  const green = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], WATCH_MS)
-  if (!green.ok) {
-    ctx.out(kv('ci', `red — ${green.out.trim().slice(-200)}`))
+  // Row 242. Both modes watch CI the same way — autonomy off also waits `ship.ciSettleMs` before it
+  // believes "no checks" — and every outcome is journaled for drive, `next` and the report.
+  const ci = await watchCi(ctx, root, pr, cfgR.value.ship.ciSettleMs, autonomy)
+  const merge = autonomy ? 'witness merges only on green CI' : 'the merge is yours'
+  // Row 174 / §11 call 18. Green is the merge's only licence: no checks at all, or none
+  // that passed, is not green — the human's call, never a CI to "fix".
+  if (ci.kind === 'none' || ci.kind === 'no-pass') {
+    const reason = ci.kind === 'none' ? 'no CI checks reported' : 'no passing CI check'
+    ctx.out(kv('merge', `held — ${reason} · ${merge}`))
+    recordOutcome(root, planId, 'merge', reason, shipBranch)
+    return EXIT.FINDINGS
+  }
+  if (ci.kind === 'red') {
+    ctx.out(kv('ci', `red — ${ci.detail}`))
+    recordOutcome(root, planId, 'red', ci.detail, shipBranch)
+    return EXIT.FINDINGS
+  }
+  if (ci.kind === 'pending') {
+    ctx.out(kv('ci', 'pending — checks still pending when the watch closed · checked again later'))
+    recordOutcome(root, planId, 'pending', 'checks still pending when the watch closed', shipBranch)
+    return EXIT.FINDINGS
+  }
+  if (ci.kind === 'unreadable') {
+    const login = classifyGh(ci.code, ci.detail) === 'login'
+    ctx.out(kv('merge', login
+      ? `held — GitHub refused the login · gh auth login, then ${cliAct('ship', planId).line}`
+      : 'held — the check set could not be read · checked again later'))
+    ctx.out(`note: ${logSafe(ci.detail)}`)
+    recordOutcome(root, planId, login ? 'fix' : 'transient', login ? 'GitHub refused the login — gh auth login' : 'the check set could not be read', shipBranch)
     return EXIT.FINDINGS
   }
   ctx.out(kv('ci', 'green'))
+  if (autonomy) return mergeOwnPr(ctx, root, cfgR.value, planId, pr, pushed.value)
   ctx.out(kv('ship', `merge PR #${pr} on GitHub when ready — the lazy stamp flips plan → done, spec → live`))
+  recordOutcome(root, planId, 'merge', 'CI is green — autonomy is off, so the merge is yours', shipBranch)
   return EXIT.OK
 }

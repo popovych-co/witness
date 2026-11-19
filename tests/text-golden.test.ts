@@ -81,18 +81,17 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       merge:auth-refresh-plan-4
       wait: merge · auth-refresh-plan-4 · PR #9
-        run: gh pr merge 9
 
       merge:auth-refresh-plan-8
       wait: merge · auth-refresh-plan-8 · PR #12
-        run: gh pr merge 12
 
       parked:auth-refresh-plan-2:plan
-      parked: auth-refresh-plan-2 · plan round 1 — drive cap: plan ran 16 rounds
-        run: witness gate plan auth-refresh-plan-2 --fresh
+      parked: auth-refresh-plan-2 · plan round 1 — parked by the policy — drive cap: plan ran 16 rounds
+        revise: witness decide plan auth-refresh-plan-2 --revise --note "<why>"
+        fresh: witness gate plan auth-refresh-plan-2 --fresh
 
       parked:auth-refresh-plan-3:plan
-      parked: auth-refresh-plan-3 · plan round 3 — parked at auth-refresh-plan-3 > ## Steps
+      parked: auth-refresh-plan-3 · plan round 3 — parked by a human at auth-refresh-plan-3 > ## Steps
         exits: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
 
       stuck:x-plan-1
@@ -144,8 +143,9 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       wait: merge · auth-refresh
 
       parked:auth-hardening:decompose
-      parked: auth-hardening · decompose round 1 — parked at stopped
-        run: witness gate decompose auth-hardening --fresh
+      parked: auth-hardening · decompose round 1 — parked by a human at stopped
+        revise: witness decide decompose auth-hardening --revise --note "<why>"
+        fresh: witness gate decompose auth-hardening --fresh
       token b36f3cd4ff27"
     `)
   })

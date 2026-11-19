@@ -58,7 +58,10 @@ export const DRIVE_TAKEOVER_GRACE_MS = 25_000
 // `leased`: the lock carries `lease: 1`, written by a drive that renews it. A lock without the
 // mark was written by a drive from before row 224 (0.27.0), which never renews: it is read by
 // its pid alone, as then, so an upgrade while it runs never lets a second drive take its lock.
-type Held = DriveHolder & { renewed: number; leased: boolean }
+// Row 240: `busy`, the lock carries `busy: 1`, written by a drive that honours the busy locks
+// (0.29.0). A live drive lock without it is an older drive, which settles stops and runs ships
+// with no lock of its own: a newer `next` or `wait` beside it settles nothing and names it.
+type Held = DriveHolder & { renewed: number; leased: boolean; busy: boolean }
 
 function readHolder(root: string): Held | 'absent' | 'unreadable' {
   const p = join(root, DRIVE_LOCK)
@@ -73,12 +76,12 @@ function readHolder(root: string): Held | 'absent' | 'unreadable' {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable'
   }
   try {
-    const h = JSON.parse(text) as { pid?: unknown; log?: unknown; lease?: unknown }
+    const h = JSON.parse(text) as { pid?: unknown; log?: unknown; lease?: unknown; busy?: unknown }
     if (typeof h.pid !== 'number' || !Number.isInteger(h.pid) || h.pid < 1) return 'unreadable'
     // The lock says only WHETHER a background log exists; its path is always derived. What
     // the file says is never printed: `watch:` is a line the engine acts on, and a path read
     // from a file could carry a newline and a forged `launch:` or `run:` line.
-    return { pid: h.pid, renewed, leased: h.lease === 1, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
+    return { pid: h.pid, renewed, leased: h.lease === 1, busy: h.busy === 1, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
   } catch {
     return 'unreadable'
   }
@@ -93,6 +96,16 @@ export function driveHolder(root: string, now = Date.now()): DriveHolder | undef
   if (typeof h !== 'object' || !isAlive(h.pid) || !leaseLive(h, now)) return undefined
   return { pid: h.pid, ...(h.log !== undefined ? { log: h.log } : {}) }
 }
+
+// Row 240. A live drive from before 0.29 (its lock has no `busy: 1`), or none.
+export function olderDrive(root: string, now = Date.now()): DriveHolder | undefined {
+  const h = readHolder(root)
+  if (typeof h !== 'object' || h.busy || !isAlive(h.pid) || !leaseLive(h, now)) return undefined
+  return { pid: h.pid, ...(h.log !== undefined ? { log: h.log } : {}) }
+}
+
+// What `next` and `wait` print beside an older drive, above its stop command on a `run:` row.
+export const OLDER_DRIVE_LINE = 'wait: older drive — a witness drive from before 0.29 runs this repo · stop it, then say go'
 
 // Row 224. The running drive's renewal: the lock's mtime set to now when the lock is this
 // pid's. A link at the lock path is never followed (utimes would touch what it points at).
@@ -141,7 +154,7 @@ export function acquireDriveLock(
   let expired: { pid: number; renewed: number; since: number } | undefined
   for (;;) {
     try {
-      writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}), lease: 1 }), { flag: 'wx' })
+      writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}), lease: 1, busy: 1 }), { flag: 'wx' })
       return ok(release)
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -207,9 +220,14 @@ export function acquireDriveLock(
 // bytes rather than spelling them, as the human needs the real path to read.
 export function watchLine(h: DriveHolder, platform: Platform = process.platform): string {
   if (h.log === undefined) return `the terminal running witness drive · pid ${h.pid}`
-  const pid = String(h.pid)
   const watch = platform === 'win32' ? ['Get-Content', '-LiteralPath', h.log, '-Wait', '-Tail', '50', '-Encoding', 'UTF8'] : ['tail', '-f', h.log]
-  const stop = platform === 'win32' ? ['taskkill', '/PID', pid, '/T', '/F'] : ['kill', pid]
-  const render = (argv: readonly string[]): string => argv.map((w) => shellWordExact(w, platform)).join(' ')
-  return `${render(watch)} · stop it: ${render(stop)}`
+  return `${render(watch, platform)} · stop it: ${stopCommand(h, platform)}`
+}
+
+const render = (argv: readonly string[], platform: Platform): string => argv.map((w) => shellWordExact(w, platform)).join(' ')
+
+// The command that stops a drive, by its pid: the `watch:` line's stop (rows 180 and 201).
+export function stopCommand(h: DriveHolder, platform: Platform = process.platform): string {
+  const pid = String(h.pid)
+  return render(platform === 'win32' ? ['taskkill', '/PID', pid, '/T', '/F'] : ['kill', pid], platform)
 }

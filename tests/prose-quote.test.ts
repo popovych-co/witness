@@ -58,6 +58,10 @@ const NOT_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ['src/drive.ts', '--- witness drive ${new Date().toISOString()} ---'],
   // What `witness migrate` would write, in words: witness's own setting paths, not arguments.
   ['src/migration.ts', "witness migrate ${parts.join(' · ')}"],
+  // Row 240's busy lines: prose naming who holds a lock — a pid and a clock time (numbers) and a
+  // gate from witness's own gate list. The target they name comes before the word witness.
+  ['src/settle.ts', 'another witness run is deciding ${gate} (pid ${s.pid}, since ${hhmm(s.since)})'],
+  ['src/ship.ts', 'witness ship is running on it (pid ${marker.holder.pid}, since ${hhmm(marker.holder.since)})'],
   // adopt's usage line: `<…>` is argument syntax naming the configured dirs, not a command.
   ['src/verbs/adopt.ts', 'witness adopt <${paths.specs}/... | ${paths.plans}/...>.md'],
 ]

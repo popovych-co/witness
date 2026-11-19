@@ -17,6 +17,8 @@ import { primaryRoot, stateCommit } from '../gitio.js'
 import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon } from '../scan.js'
+import { gateParked, openStepRow } from './next.js'
+import { driveChild } from '../drive-presence.js'
 import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -25,7 +27,7 @@ import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
 import { cliAct } from '../act.js'
 import {
   ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, notePrefill, pendingDecision, repairGranted,
-  roundsSinceApprove, type DecisionEntry, type GateRunEntry,
+  isUnpark, roundsSinceApprove, settledToken, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
@@ -89,6 +91,13 @@ function renderBound(
   return EXIT.REFUSED
 }
 
+// Row 240 (R2). The settler lost the stop: a decision landed after the read its act was built on.
+function settledSince(ctx: Ctx, gate: string, target: string): number {
+  renderRefusal([v('gate', 'settled-since', `${gate} ${target} — decided since it was read`,
+    `the stop as it stands — ${cliAct('decide', gate, target, '--show').line}`)]).forEach((l) => ctx.err(l))
+  return EXIT.REFUSED
+}
+
 export interface DecisionCore {
   gate: string
   target: string
@@ -109,6 +118,10 @@ export interface DecisionCore {
   // (D121: the rule that matched is the rule recorded).
   park?: true
   rule?: string
+  // Row 240 (R2), settler-only (`decisionAct` never sets it, so a human act carries none): the
+  // settled-since token of the settler's own read (`settledToken`). The door compares it first
+  // and again under the state lock; a decision that landed since refuses `settled-since`.
+  token?: string
 }
 
 // Who selected the option rides with the act, so the record is written by the same door
@@ -304,6 +317,27 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
 
   const atBound = boundReached(entries, gate)
 
+  // Row 240 (R2). Before the repair, bound and anchor checks: a settler whose read predates a
+  // decision that landed meanwhile has lost the stop, and any rule below would only refuse it
+  // for the wrong reason (`repair-not-at-bound`) — or, through D94's revised anchor or the
+  // bound's endgame anchor, let its act land on a disposition it never read.
+  if (act.token !== undefined && settledToken(entries, gate, act.runId ?? '') !== act.token) {
+    return settledSince(ctx, gate, target)
+  }
+
+  // Row 241 (R11; the user's decision Q3). Below the bound a human's plain revise on a parked gate
+  // sends it back to work: the park is lifted without running the gate. A human's act only — not
+  // inside a session drive started (rows 205, 207, 225), and never the policy's or the arbiter's,
+  // since a settler that parked a gate must not be the one to un-park it.
+  const unparking = decision === 'revise' && upstream === undefined && !repair && !atBound && gateParked(entries, gate)
+  if (unparking && (act.selected === 'policy' || act.selected === 'arbiter' || driveChild(ctx.env) !== undefined)) {
+    renderRefusal([v('decide', 'unpark-human',
+      act.selected === 'policy' || act.selected === 'arbiter' ? `${act.selected} revise on a parked gate` : 'a session drive started',
+      `the human, in their own chat or terminal — witness decide ${shellWord(gate)} ${shellWord(target)} --revise --note "<why>" sends a parked gate back to work`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
   // Row 109. The grant is a REVISE — the human is sending the artifact back, they are just
   // paying for the round that verifies the fix. Refusing the other spellings is not
   // pedantry: `--approve --repair` reads as "approve and let it re-run", which is not a
@@ -343,15 +377,18 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // The run this decision disposes of, and how many decisions already sit after it. A
   // function of the stream so the lock can ask it again (row 173): read twice, answered
   // by one derivation.
-  const anchorOf = (es: Entry[]): { anchor: GateRunEntry | undefined; after: number } => {
+  const anchorOf = (es: Entry[]): { anchor: GateRunEntry | undefined; after: number; unpark: boolean } => {
     const lastRun = lastGateRun(es, gate)
     const afterLast = lastRun
       ? es.slice(es.lastIndexOf(lastRun as unknown as Entry) + 1)
           .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
           .map((e) => e as unknown as DecisionEntry)
       : []
-    const onlyRevises = afterLast.length > 0 &&
-      afterLast.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
+    // Row 241 (R11): D94's revised anchor reads from the last un-park — the park before it is lifted —
+    // so approve and stop stay reachable on unchanged content after a human sent the gate back.
+    const fromUnpark = afterLast.slice(Math.max(0, afterLast.map((d) => isUnpark(d as unknown as Entry)).lastIndexOf(true)))
+    const onlyRevises = fromUnpark.length > 0 &&
+      fromUnpark.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
     const unchanged = lastRun !== undefined && (nowSha === undefined || nowSha === lastRun.reviewed_sha)
     const revisedAnchor = onlyRevises && unchanged && (decision === 'approve' || decision === 'stop')
     // at the bound the gate refuses to run again, so no fresh pending decision can
@@ -361,9 +398,12 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       (decision === 'revise' && (upstream !== undefined || repair)))
     // Row 183: a cap park disposes of the flow, not of bytes — `gateParked` has no sha term
     const parked = act.park === true && decision === 'stop'
+    // Row 241 (R11): a human's revise on a parked run below the bound anchors on it — the un-park.
+    const unpark = unparking && pendingDecision(es, gate) === undefined && !boundReached(es, gate) && gateParked(es, gate)
     return {
-      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor || parked) ? lastRun : undefined),
+      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor || parked || unpark) ? lastRun : undefined),
       after: afterLast.length,
+      unpark,
     }
   }
   const first = anchorOf(entries)
@@ -377,8 +417,14 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     }
     // Row 239. The command a want names is an act's line, so the target the human typed prints
     // quoted: here, and in every want and help line of this verb below.
+    // Row 241 (R9): while a plan step is open no implement review runs, so the refusal names the
+    // step's command, never `gate implement`.
+    const plan = gate === 'implement' ? findById(canon, target) : undefined
+    const open = plan !== undefined && plan.meta.type === 'plan' ? openStepRow(root, cfgR.value, plan) : undefined
     renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
-      `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`)])
+      open !== undefined
+        ? `${open.row.line} — ${open.step} is not built yet, and no implement review runs while it is open`
+        : `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -484,6 +530,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
     ...(act.selected !== undefined ? { selected: act.selected } : {}),
     ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
+    ...(first.unpark ? { unpark: true as const } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per
@@ -611,7 +658,14 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // unlocked, and two settlers racing one stop (two `next` sessions, drive beside a chat)
     // both judged the same pending run. Asked again under the lock, the loser finds the run
     // decided or superseded and refuses, so the race journals exactly one decision.
-    const now = anchorOf(readStream(root, target))
+    const lockedEntries = readStream(root, target)
+    // Row 240 (R2): the token again, from the read under the lock. Two reads both taken after
+    // the loser's arbiter answered cannot see a decision that landed during that call; the
+    // token, taken before it, can.
+    if (act.token !== undefined && settledToken(lockedEntries, gate, act.runId ?? '') !== act.token) {
+      return settledSince(ctx, gate, target)
+    }
+    const now = anchorOf(lockedEntries)
     if (now.anchor === undefined || (now.anchor.run_id === anchor.run_id && now.after !== first.after)) {
       renderRefusal([v('gate', 'nothing-pending', `${gate} ${target} — decided since it was read`,
         `a stopped gate-run awaiting a decision — run: ${cliAct('decide', gate, target, '--show').line}`)])
@@ -690,18 +744,32 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ctx.out(`help: fix the finding, then re-run: ${cliAct('gate', gate, target).line}`)
   }
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
-    ctx.out('revise-context: (reconstructed from the journal — survives session death)')
-    renderGateRun(ctx, anchor, 'ran', { entries, help: false, upstream: upstreamId })
-    const pins = policyPins(readStream(root, target))
-    if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
-    if (note) ctx.out(kv('note', note))
-    if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
-    if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
-      ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
-    }
-    // Row 239. The draft key is one word through the quoter; the recap's file is the human's.
-    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft ${shellWord(`amend-${target}`)} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
-    else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
+    printReviseContext(ctx, root, {
+      gate, target, run: anchor, entries, upstreamId, asked: upstream,
+      decision: { note, upstream: entry.upstream, ...(act.selected === 'arbiter' ? { selected: 'arbiter', reason: act.reason } : {}) },
+    })
   }
   return grantExit
+}
+
+// The revise-context a revise prints, rebuilt from the journal. Row 240: printed by `decide` after
+// its own revise, and by a settle that lost the stop to a revise (`superseded`), since the stage
+// skills fix "from the revise-context it printed". `asked` is the upstream the act named, when known.
+export function printReviseContext(ctx: Ctx, root: string, r: {
+  gate: string; target: string; run: GateRunEntry; entries: Entry[]; upstreamId?: string; asked?: string
+  decision: Pick<DecisionEntry, 'note' | 'upstream' | 'selected' | 'reason'>
+}): void {
+  ctx.out('revise-context: (reconstructed from the journal — survives session death)')
+  renderGateRun(ctx, r.run, 'ran', { entries: r.entries, help: false, upstream: r.upstreamId })
+  const pins = policyPins(readStream(root, r.target))
+  if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
+  if (r.decision.note) ctx.out(kv('note', r.decision.note))
+  if (r.decision.selected === 'arbiter' && r.decision.reason !== undefined) ctx.out(kv('reason', r.decision.reason))
+  const booked = r.decision.upstream
+  if (r.asked !== undefined && booked && r.asked !== booked.artifact) {
+    ctx.out(kv('upstream', `${r.asked} is owned by effort ${booked.artifact} — the decompose reopen is booked there`))
+  }
+  // Row 239. The draft key is one word through the quoter; the recap's file is the human's.
+  if (r.gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft ${shellWord(`amend-${r.target}`)} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
+  else if (booked) ctx.out(`help: reopened ${booked.artifact} (${booked.gate} stage) — linked via caused_by`)
 }

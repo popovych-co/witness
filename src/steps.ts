@@ -48,6 +48,10 @@ export function closingIndex(step: Pick<StepState, 'id' | 'kind'>, entries: Entr
     if (e.step !== step.id) continue
     if (step.kind === 'scaffolding') {
       if (e.t === 'step-close') return i
+    } else if (e.t === 'step-close' && e.present === true) {
+      // Row 241 (R10): verify-red found the step's behavior already on the base and closed it
+      // "already present" — its green still comes next, for the tag (evidenceForDiff).
+      return i
     } else if (opensCycle(e)) {
       opened = true
     } else if (opened && closesCycle(e)) {
@@ -154,6 +158,21 @@ export function greenOwedStep(plan: CanonDoc, entries: Entry[]): string | undefi
   return manifest(plan).find((s) => s.kind === 'criteria' && s.id === step)?.id
 }
 
+// Row 241 (R10). The step an already-present red left owed its green: the latest red naming a
+// criteria step is a reconstructed one that came back vacuous (verify-red found the behavior on the
+// base), and no passing green tagged with that step follows it. Its green is the next row.
+export function presentGreenOwed(plan: CanonDoc, entries: Entry[]): string | undefined {
+  const criteria = new Set(manifest(plan).filter((s) => s.kind === 'criteria').map((s) => s.id))
+  let at = -1
+  entries.forEach((e, i) => {
+    if (e.t === 'test-evidence' && e.phase === 'red' && typeof e.step === 'string' && criteria.has(e.step)) at = i
+  })
+  const red = entries[at]
+  if (red === undefined || red.vacuous !== true || red.reconstructed !== true) return undefined
+  const step = String(red.step)
+  return entries.slice(at + 1).some((e) => e.step === step && closesCycle(e)) ? undefined : step
+}
+
 // The step's latest red passed: the behavior it asserts already exists, as when the
 // implementation was written first, so a plain red on it can only come back vacuous again.
 export function lastRedVacuous(entries: Entry[], stepId: string): boolean {
@@ -174,14 +193,15 @@ export function checkStep(plan: CanonDoc, entries: Entry[], step: string | undef
     if (verb === 'evidence') {
       // Plan's call 4: owed where the CLI can tell it is. Before the first implement gate every
       // cycle on a plan whose progress is known is a step's, and one forgotten flag would turn
-      // that knowledge off for good. After the gate an untagged cycle is a fix round, a legacy
-      // plan's evidence never named its steps, and a plan with no criteria step has no step a
-      // cycle could be.
-      if (!hasCriteriaStep(plan) || implementGated(entries)) return []
+      // that knowledge off for good. Row 241 (R8): so is every cycle after it while a criteria step
+      // is open — an amendment's step. With every step closed an untagged cycle is a fix round; a
+      // legacy plan's evidence never named its steps, and a plan with no criteria step has no step
+      // a cycle could be.
+      if (!hasCriteriaStep(plan)) return []
       const p = stepProgress(plan, entries)
-      return p.known
-        ? [v('--step', 'step-required', 'absent', `--step <id> — every cycle before the first implement gate is a plan step's · steps ${stepsLine(p)}`)]
-        : []
+      if (!p.known) return []
+      if (implementGated(entries) && !p.steps.some((s) => s.kind === 'criteria' && s.closedAt === undefined)) return []
+      return [v('--step', 'step-required', 'absent', `--step <id> — every cycle while a criteria step is open is a plan step's · steps ${stepsLine(p)}`)]
     }
     // Row 239. A shape quotes its foreign word, and the prose after it stays as it reads.
     const scaffolding = steps.filter((s) => s.kind === 'scaffolding').map((s) => s.id).join(' · ')

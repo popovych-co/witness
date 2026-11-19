@@ -31,6 +31,9 @@ export type EntryType =
   // Row 207. The human's ask that drive try a target again, for a fix that leaves no other
   // record (code, a tool, an account): it moves the target's key, so drive takes it back.
   | 'retry'
+  // Row 242. The outcome `witness ship` ended on — a merge left to the human, a hold only they can
+  // fix, one drive re-checks, a red CI, a re-gate, a merge — so every reader classifies from it.
+  | 'ship-outcome'
 
 export interface Entry {
   v: 1

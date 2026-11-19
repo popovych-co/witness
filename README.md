@@ -244,7 +244,19 @@ own and every `witness turn`, which is how a session runs its tests — because 
 servers or browsers collide. On Windows each session, test run and gate reviewer runs in a job
 object, so whatever it starts — detached, or orphaned by an installer that exited — ends with it;
 elsewhere a session's process group does. A target that reaches any `drive.caps.*` bound is
-parked.
+parked. Below the round bound a parked gate goes back to work with your own
+`witness decide <gate> <target> --revise --note "<why>"` — it lifts the park without running the
+gate, and `next` routes the owed work, steps first; `witness status` and `decide --show` print it on a
+`revise:` row, beside a `fresh:` row (a re-review of the work as it stands) when no work is owed. It
+also restarts drive's caps for that target.
+
+A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
+survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
+pinned to the approved commit (`gh pr merge N --<ship.merge> --match-head-commit <sha>`), or
+`waiting: fix` (the PR aims at another branch, was closed, holds commits the worktree lacks, or a
+login was refused) with no merge command at all. Each has a `recheck:` row, `witness ship <plan>`,
+for when you have acted. A hold that clears by itself — CI still running, GitHub not answering — is
+drive's to check again, within its caps.
 
 ### Upgrading
 
@@ -302,7 +314,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `next` | the one next action across every effort |
 | `drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach]` | runs every session itself · under autonomy it needs no terminal and reports when nothing else can move. Up to `drive.parallel` targets at once, one session per target; usage limits are waited out; a target past a cap is parked. `--detach` (autonomy only) runs it in the background into `.witness/drive.log` — each session's start, every command and file its agent touches, every act it journals for its flow, a `still running` line after 5 quiet minutes, and how it ended; drive's pi sessions are kept in pi's session store under `witness-drive/`; `--manual` runs serially and asks you at every stop. One drive per repo. A session drive spawned is refused — agents are what drive spawns, never what spawns drive |
 | `ship <plan-id> [--manual]` | lanes → ship gate → PR → CI watch → under autonomy: merge on green · `--manual` keeps that run's stop and merge for a human |
-| `test-evidence <plan-id> --phase red\|green [--step <id>]` / `verify-red <plan-id> [--base <ref>] [--step <id>]` | journal red/green criteria evidence from a worktree; `--step` names the plan step the cycle closes — required before the plan's first implement gate (on a plan with a criteria step), left off for a fix round after it. A green that closes a step prints `context:`, `steps:` and `slice:` |
+| `test-evidence <plan-id> --phase red\|green [--step <id>]` / `verify-red <plan-id> [--base <ref>] [--step <id>]` | journal red/green criteria evidence from a worktree; `--step` names the plan step the cycle closes — required before the plan's first implement gate (on a plan with a criteria step), and after it while a criteria step is open (an amendment's step routes first); left off for a fix round, once every step is closed. A green that closes a step prints `context:`, `steps:` and `slice:` |
 | `turn -- <command> [args…]` | run one command in the repo's test turn — it waits while another worktree's test run holds it, unless `drive.parallelSuites: true` — and on Windows inside a job object, so whatever it starts ends with it; exits with the command's code · the implement and ship skills run every test a session runs itself through it |
 | `step-close <plan-id> --step <id>` | close a scaffolding step, which has no red→green to witness; prints `context:`, `steps:` and `slice:` as a closing green does, and closing it again changes nothing |
 | `adopt <path>` | absolve a finished hand-edit into the journal — content only: a hand edit that moves `status`, `drift`, `pr` or `design` is refused, since only witness writes a doc's position |

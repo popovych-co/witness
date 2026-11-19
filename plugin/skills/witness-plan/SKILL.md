@@ -81,7 +81,7 @@ EOF
 $WITNESS write auth-refresh-plan-1 --effort <effort> --meta "$DIR/meta.json" --body "$DIR/body.md"
 ```
 
-Body discipline (write-validated: exactly one `## Step: <id>` section per manifest step, none missing, none orphaned):
+Body discipline (write-validated: exactly one `## Step: <id>` section per manifest step, none missing, none orphaned). When re-authoring a plan, changed work gets a new step id: a closed id stays closed, so work rewritten under it would never be built.
 
 - Each step section is executable by a fresh session with zero context: exact paths, the test to write first, expected red, minimal code, expected green.
 - A step realizing browser-visible behavior (markup, styles, routes, client-side interaction) names an **end-to-end Puppeteer** test as its test-to-write-first — the browser drives the slice's real backend and store, faking only third-party boundaries the repo doesn't own. Browser-level e2e TDD is the implement contract; the implement gate's pr-test lens treats a unit test standing in for the browser — or a browser test stubbing the slice's own backend — as a coverage gap.

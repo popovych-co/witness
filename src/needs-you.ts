@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { cliAct, exitsLine, runRow, type Act } from './act.js'
+import { cliAct, exitsLine, reopenRows, runRow, type Act } from './act.js'
 import { grantAct, grantRowsOf } from './allowlist.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -13,7 +13,9 @@ import type { DecisionEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { cmd, logSafe, shellLine, visible } from './toon.js'
 import { pendingTxn } from './txn.js'
-import { owedDecisions, parkedGates } from './verbs/next.js'
+import { heldPlan, owedDecisions, parkedBy, parkedGates } from './verbs/next.js'
+import type { ShipOutcomeEntry } from './ship-outcome.js'
+import { isId } from './dsl.js'
 import { recoverChoice } from './verbs/recover.js'
 
 // Row 203. What needs the human, derived once from the journal, the canon and drive's
@@ -43,7 +45,11 @@ export type NeedYou = ItemBase & (
   | { kind: 'need'; need: string; text: string; holds: string[]; satisfy: Act }
   | { kind: 'decision'; gate: string; show: Act }
   | { kind: 'conversation'; ask?: string; handoff?: string }
-  | { kind: 'merge'; pr?: string }
+  // Row 242: from the plan's standing merge record — the head the merge is pinned to, the method
+  // `ship.merge` names, why it waits, and `witness ship` to re-check. A fix stop never offers a merge;
+  // `base` is set only when the PR aims at another branch (`gh pr edit N --base <ship.branch>`).
+  | { kind: 'merge'; pr?: string; head?: string; method?: string; reason?: string; recheck?: Act }
+  | { kind: 'fix'; pr?: string; reason: string; base?: string; recheck: Act }
   // why: the policy's note, or `parked at <anchor>` with a reviewer's anchor as printed (R5/R17): a renderer spells it out
   // round: absent where the journal holds none that is a round (row 239, `parkedGates`)
   | { kind: 'parked'; gate: string; round?: number; why: string; reopen: Act[] }
@@ -56,19 +62,19 @@ export type AsideFacts = Pick<Aside, 'target' | 'kind'> & Partial<Pick<Aside, 'g
 
 export const WAIT_LABEL: Record<WaitKind, string> = {
   'pending-txn': 'pending transaction', 'design-look': 'design look', 'trust-grant': 'trust grant', need: 'unmet need',
-  decision: 'decision', conversation: 'conversation', merge: 'merge', parked: 'parked', stuck: 'stuck', capped: 'capped',
+  decision: 'decision', conversation: 'conversation', merge: 'merge', fix: 'fix', parked: 'parked', stuck: 'stuck', capped: 'capped',
 }
 
 // The kinds `next` never routes: the chat names each, with its command (final review). Row 239: an
 // item of one of them is a `HeldItem`, the only kind `waitingRows` lays out.
-type HeldKind = 'merge' | 'parked' | 'stuck' | 'capped'
-export const HELD_KINDS: ReadonlySet<WaitKind> = new Set<HeldKind>(['merge', 'parked', 'stuck', 'capped'])
+type HeldKind = 'merge' | 'fix' | 'parked' | 'stuck' | 'capped'
+export const HELD_KINDS: ReadonlySet<WaitKind> = new Set<HeldKind>(['merge', 'fix', 'parked', 'stuck', 'capped'])
 export type HeldItem = Extract<NeedYou, { kind: HeldKind }>
 export const isHeld = (item: NeedYou): item is HeldItem => HELD_KINDS.has(item.kind)
 
 // The kinds the report counts as waits (each target once), in the order a human answers them.
 export const WAIT_KINDS: ReadonlySet<WaitKind> =
-  new Set(['pending-txn', 'design-look', 'trust-grant', 'need', 'decision', 'conversation', 'merge'])
+  new Set(['pending-txn', 'design-look', 'trust-grant', 'need', 'decision', 'conversation', 'merge', 'fix'])
 
 const prOf = (line: string): string | undefined => /PR #(\d+)/.exec(line)?.[1]
 // Row 239. The frontmatter's `pr`, named only when it is a PR's number: the CLI writes one there
@@ -79,7 +85,14 @@ const prOfMeta = (meta: unknown): string | undefined =>
   typeof meta === 'number' ? (Number.isSafeInteger(meta) && meta >= 1 ? String(meta) : undefined)
     : typeof meta === 'string' && /^[1-9]\d*$/.test(meta) ? meta : undefined
 
-export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[]): NeedYou[] {
+// Row 240 (design §4.1.5). A live drive's scope and whether it still decides. Under one that does,
+// an owed decision in its scope is listed only once drive set it aside — never for a settle waiting
+// on its retry, or a usage pause — and a pending transaction only once drive set the recovery aside.
+export interface DriveScope { flow?: string; deciding: boolean }
+
+export function needsYou(
+  root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon: Canon, aside: readonly AsideFacts[], drive?: DriveScope,
+): NeedYou[] {
   const items: NeedYou[] = []
   const named = new Set<string>()
   const add = (item: NeedYou) => {
@@ -88,7 +101,10 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
   }
   // A crash no session could recover blocks every write: it is named first (F4).
   const txn = pendingTxn(root)
-  if (txn !== undefined) {
+  const deciding = drive?.deciding === true
+  const drives = (t: string): boolean =>
+    deciding && (drive?.flow === undefined || drive.flow === t) && !aside.some((a) => a.target === t)
+  if (txn !== undefined && !(deciding && !aside.some((a) => a.target === TARGETLESS))) {
     items.push({ kind: 'pending-txn', target: TARGETLESS, key: 'pending-txn:-', op: txn.op, recover: recoverChoice(root, txn) })
   }
   for (const a of aside.filter((x) => x.kind === 'kept' && (x.stop === 'design-look' || x.stop === 'trust-grant'))) {
@@ -110,9 +126,17 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
       satisfy: u.satisfyAct })
   }
   for (const o of owedDecisions(root, canon)) {
-    if (named.has(o.target)) continue
+    if (named.has(o.target) || drives(o.target)) continue
     add({ kind: 'decision', target: o.target, key: `decision:${o.target}:${o.gate}`, gate: o.gate,
       show: cliAct('decide', o.gate, o.target, '--show') })
+  }
+  // Row 242: a plan's standing merge or fix record, from the journal — so the rows survive a drive
+  // restart and agree with `next` and drive, which read the same predicate (`heldPlan`).
+  for (const plan of canon.docs.filter((d) => d.meta.type === 'plan' && isId(d.meta.id))) {
+    const t = String(plan.meta.id)
+    if (named.has(t)) continue
+    const rec = heldPlan(root, cfg, plan)
+    if (rec !== undefined) add(heldItem(rec, cfg, t))
   }
   const driver = resolveDriver(ctx.env, cfg.harness)
   for (const a of aside.filter((x) => x.kind === 'conversation' || x.kind === 'merge')) {
@@ -134,12 +158,9 @@ export function needsYou(root: string, ctx: Pick<Ctx, 'env'>, cfg: Config, canon
       add({ kind: 'merge', target: a.target, key: `merge:${a.target}`, ...(pr ? { pr } : {}) })
     }
   }
-  for (const p of parkedGates(root, canon)) {
-    const stopped = readStream(root, p.target)
-      .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === p.gate)
-      .map((e) => e as unknown as DecisionEntry).filter((d) => d.decision === 'stop').at(-1)
-    // A journaled note is parsed JSON: held as the string it prints as.
-    const why = stopped?.selected === 'policy' && stopped.note ? String(stopped.note) : `parked at ${p.anchor}`
+  for (const p of parkedGates(root, canon, cfg)) {
+    // Row 241: the head names who parked it.
+    const why = parkedBy(readStream(root, p.target), p.gate, p.anchor)
     items.push({ kind: 'parked', target: p.target, key: `parked:${p.target}:${p.gate}`,
       gate: p.gate, ...(p.round !== undefined ? { round: p.round } : {}), why, reopen: p.reopen })
   }
@@ -196,20 +217,50 @@ export function needYouRows(item: NeedYou): string[] {
       return [`wait: conversation · ${who}`, ...(item.handoff !== undefined ? [`  run: ${item.handoff}`] : [])]
     }
     // Row 239. Another tool's command, through the one renderer; `needsYou` names only a number.
+    // Row 242: the merge command pinned to the head the record names (`--match-head-commit`), through
+    // the one renderer, the number's digits and the sha's hex checked; then the re-check.
     case 'merge':
-      return [`wait: merge · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''}`,
-        ...(item.pr ? [`  run: ${shellLine(['gh', 'pr', 'merge', item.pr])}`] : [])]
+      return [`wait: merge · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''}${item.reason ? ` — ${logSafe(item.reason)}` : ''}`,
+        ...(item.pr && item.head && item.method ? [`  run: ${shellLine(['gh', 'pr', 'merge', item.pr, `--${item.method}`, '--match-head-commit', item.head])}`] : []),
+        ...(item.recheck ? [runRow(item.recheck, 'recheck')] : [])]
+    case 'fix':
+      return [`wait: fix · ${item.target}${item.pr ? ` · PR #${item.pr}` : ''} — ${logSafe(item.reason)}`,
+        ...(item.pr && item.base ? [`  run: ${shellLine(['gh', 'pr', 'edit', item.pr, '--base', item.base])}`] : []),
+        runRow(item.recheck, 'recheck')]
     // Row 239 (design §3.4b). At the bound the reopen is the endgame menu, and a menu pasted whole
     // is a pipeline that runs every act it names: it prints as `exits:`, the label `decide --show`
     // gives a set of choices, and `run:` is kept for one command.
+    // Row 241 (R11): below the bound each way back is a labelled row of its own — `revise:` sends
+    // the work back, `fresh:` re-runs the review — never one `exits:` line.
     case 'parked':
       return [`parked: ${item.target} · ${item.gate}${item.round !== undefined ? ` round ${item.round}` : ''} — ${logSafe(item.why)}`,
-        item.reopen.length === 1 ? runRow(item.reopen[0]!) : `  exits: ${exitsLine(item.reopen)}`]
+        ...reopenRows(item.reopen)]
     // Row 239. The log the head names, when it has no why, is an act's line.
     case 'stuck':
     case 'capped':
       return [`stuck: ${item.target} — ${item.why !== undefined ? logSafe(item.why) : cliAct('log', item.target).line}`,
         ...(item.retry !== undefined ? [runRow(item.retry)] : [])]
+  }
+}
+
+const MERGE_METHODS = new Set(['merge', 'squash', 'rebase'])
+
+// Row 242. A standing merge or fix record as the item every surface prints: the merge pinned to the
+// record's head, a PR number only as its digits, a sha only as hex, and the base edit only where the
+// PR aims at another branch than `ship.branch`. The record is journal text, so the target is the plan
+// id the caller read it for, never the record's own `artifact`; its reason is spelled out where printed.
+export function heldItem(rec: ShipOutcomeEntry, cfg: Config, planId: string): NeedYou {
+  const t = planId
+  const pr = prOfMeta(rec.pr)
+  const recheck = cliAct('ship', t)
+  if (rec.outcome === 'fix') {
+    const base = /^the PR targets /.test(String(rec.reason)) ? cfg.ship.branch : undefined
+    return { kind: 'fix', target: t, key: `fix:${t}`, ...(pr ? { pr } : {}), reason: String(rec.reason), ...(base ? { base } : {}), recheck }
+  }
+  const head = /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(String(rec.head)) ? String(rec.head) : undefined
+  return {
+    kind: 'merge', target: t, key: `merge:${t}`, ...(pr ? { pr } : {}), ...(head ? { head } : {}),
+    ...(MERGE_METHODS.has(cfg.ship.merge) ? { method: cfg.ship.merge } : {}), reason: String(rec.reason), recheck,
   }
 }
 

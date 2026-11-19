@@ -183,6 +183,28 @@ describe('witness-implement — capture mandate', () => {
   });
 });
 
+describe('unbuilt steps come first in the skills (row 241)', () => {
+  it('implement owes --step after a gate while a criteria step is open, and works amended steps from steps:', () => {
+    const body = readFileSync(skillPath('witness-implement'), 'utf8')
+    expect(body).toContain('and after it while any criteria step is open, the CLI refuses a cycle that names no step (`step-required`)')
+    expect(body).toContain('Steps an amendment added — after a gate, or after the PR opened — are worked like a fresh plan\'s, from `steps:`')
+  });
+  it('a steps-open refusal sends implement to the step and ship back to /witness', () => {
+    expect(readFileSync(skillPath('witness-implement'), 'utf8')).toContain('A `gate implement` refused with `steps-open` names the next step\'s command: run that, never the gate')
+    expect(readFileSync(skillPath('witness-ship'), 'utf8')).toContain('means the plan gained a step: ship nothing, and hand back to /witness, which routes the step')
+  });
+  it('plan gives changed work a new step id', () => {
+    expect(readFileSync(skillPath('witness-plan'), 'utf8')).toContain('changed work gets a new step id: a closed id stays closed')
+  });
+});
+
+describe('witness-implement: a step already on the base (row 241)', () => {
+  it('a verify-red that closes a step as already present prints the slice lines, and its green comes next', () => {
+    expect(readFileSync(skillPath('witness-implement'), 'utf8'))
+      .toContain('unless it closed its step as already present (`step-close: … closed — already present`), which prints the slice lines like any step close; that step\'s green comes next')
+  });
+});
+
 describe('witness-ship', () => {
   const body = () => readFileSync(skillPath('witness-ship'), 'utf8');
   it('drives the ship phases and always stops for the human', () => {
@@ -194,6 +216,21 @@ describe('witness-ship', () => {
     expect(body()).toContain('semantic-conflict');
     expect(body()).toContain('--force-with-lease');
     expect(body()).toContain('Never merge');
+  });
+  it('reads a decision another decider landed first as that decision (row 240)', () => {
+    expect(body()).toContain('A `decided: ship … → revise (decided first)` line is a revise like any other')
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('A `decided: … (decided first)` line is the same')
+  });
+  it('names the merge and fix stops the human\'s, a transient hold drive\'s, and a red CI its own (row 242)', () => {
+    for (const s of ['never merge yourself or run a `gh pr merge` line', '`ci: red` with failing checks is yours: fix it and re-run `witness ship`',
+      'running `witness ship` again returns the same stop', 'is drive\'s to check again: END YOUR TURN']) expect(body(), s).toContain(s)
+    expect(body()).not.toContain('a base it cannot verify — is the human\'s')
+  });
+  it('ends the turn on a busy line, in the ship skill and in /witness (row 240)', () => {
+    expect(body()).toContain('A `busy:` line means another witness run is acting on this plan now: render it and END YOUR TURN')
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('| `busy:` is printed | Another witness run is acting on that target now. Do nothing for it')
   });
   it('checks a resolution through witness turn (row 218)', () => {
     expect(body()).toContain("<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>");
@@ -361,7 +398,7 @@ describe('one autonomy conditional per skill (A8)', () => {
     expect(read('witness-ship')).toContain('`merged:`');
     expect(read('witness-ship')).toContain('Never merge');
     expect(read('witness-design')).toContain('the kept stop `design look`');
-    expect(read('witness-ship')).toContain('Any other `merge: held`');
+    expect(read('witness-ship')).toContain('A merge or fix stop — `merge: held`');
     expect(read('witness-ship')).toContain('ship <plan-id>    # append --manual when the run asked for it');
   });
 });

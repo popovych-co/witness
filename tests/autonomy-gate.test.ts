@@ -194,7 +194,8 @@ it('an arbiter that answers malformed twice parks the flow once (Review Focus 5)
   expect(callCount(scenario)).toBe(3)
   await repo.cli(['next'], { env: gateEnv(scenario) })
   expect(callCount(scenario)).toBe(3)
-  expect((await repo.cli(['status'], { env: gateEnv(scenario) })).stdout).toContain('parked[1]{gate,target,round,anchor,reopen}:')
+  // Row 241: the reopen prints on rows of its own under the table
+  expect((await repo.cli(['status'], { env: gateEnv(scenario) })).stdout).toContain('parked[1]{gate,target,round,anchor}:')
 })
 
 it('an arbiter that cannot be invoked leaves the stop for a human', async () => {

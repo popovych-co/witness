@@ -62,7 +62,7 @@ describe('next tells the chat how to wait (D204)', () => {
     const { spawn } = await import('node:child_process')
     const holder = spawn('sleep', ['10'])
     try {
-      repo.write('.witness/drive.lock', JSON.stringify({ pid: holder.pid, log: `${repo.root}/.witness/drive.log` }))
+      repo.write('.witness/drive.lock', JSON.stringify({ pid: holder.pid, log: `${repo.root}/.witness/drive.log`, busy: 1 }))
       const res = await repo.cli(['next'], { env: { CLAUDECODE: '1' } })
       expect(res.stdout).toContain(`watch: tail -f ${repo.root}/.witness/drive.log · stop it: kill ${holder.pid}`)
       expect(res.stdout).toMatch(WAIT)
