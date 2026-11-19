@@ -1253,7 +1253,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
-    if (reports.some((r) => r.settled.kind === 'decided')) canon = loadCanon(root)
+    if (reports.some((r) => r.settled.kind === 'decided' || r.settled.kind === 'superseded')) canon = loadCanon(root)
     for (const r of reports) {
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)

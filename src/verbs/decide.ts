@@ -716,18 +716,32 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ctx.out(`help: fix the finding, then re-run: ${cliAct('gate', gate, target).line}`)
   }
   if (entry.decision === 'revise' || entry.decision === 'revise-upstream') {
-    ctx.out('revise-context: (reconstructed from the journal — survives session death)')
-    renderGateRun(ctx, anchor, 'ran', { entries, help: false, upstream: upstreamId })
-    const pins = policyPins(readStream(root, target))
-    if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
-    if (note) ctx.out(kv('note', note))
-    if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
-    if (upstream !== undefined && entry.upstream && upstream !== entry.upstream.artifact) {
-      ctx.out(kv('upstream', `${upstream} is owned by effort ${entry.upstream.artifact} — the decompose reopen is booked there`))
-    }
-    // Row 239. The draft key is one word through the quoter; the recap's file is the human's.
-    if (gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft ${shellWord(`amend-${target}`)} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
-    else if (entry.upstream) ctx.out(`help: reopened ${entry.upstream.artifact} (${entry.upstream.gate} stage) — linked via caused_by`)
+    printReviseContext(ctx, root, {
+      gate, target, run: anchor, entries, upstreamId, asked: upstream,
+      decision: { note, upstream: entry.upstream, ...(act.selected === 'arbiter' ? { selected: 'arbiter', reason: act.reason } : {}) },
+    })
   }
   return grantExit
+}
+
+// The revise-context a revise prints, rebuilt from the journal. Row 240: printed by `decide` after
+// its own revise, and by a settle that lost the stop to a revise (`superseded`), since the stage
+// skills fix "from the revise-context it printed". `asked` is the upstream the act named, when known.
+export function printReviseContext(ctx: Ctx, root: string, r: {
+  gate: string; target: string; run: GateRunEntry; entries: Entry[]; upstreamId?: string; asked?: string
+  decision: Pick<DecisionEntry, 'note' | 'upstream' | 'selected' | 'reason'>
+}): void {
+  ctx.out('revise-context: (reconstructed from the journal — survives session death)')
+  renderGateRun(ctx, r.run, 'ran', { entries: r.entries, help: false, upstream: r.upstreamId })
+  const pins = policyPins(readStream(root, r.target))
+  if (pins.length > 0) ctx.out(rows('pins', ['ordinal', 'text'], pins as unknown as Array<Record<string, unknown>>).join('\n'))
+  if (r.decision.note) ctx.out(kv('note', r.decision.note))
+  if (r.decision.selected === 'arbiter' && r.decision.reason !== undefined) ctx.out(kv('reason', r.decision.reason))
+  const booked = r.decision.upstream
+  if (r.asked !== undefined && booked && r.asked !== booked.artifact) {
+    ctx.out(kv('upstream', `${r.asked} is owned by effort ${booked.artifact} — the decompose reopen is booked there`))
+  }
+  // Row 239. The draft key is one word through the quoter; the recap's file is the human's.
+  if (r.gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft ${shellWord(`amend-${r.target}`)} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
+  else if (booked) ctx.out(`help: reopened ${booked.artifact} (${booked.gate} stage) — linked via caused_by`)
 }

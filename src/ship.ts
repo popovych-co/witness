@@ -508,7 +508,8 @@ async function shipPass(ctx: Ctx, planId: string, opts: { manual?: boolean }): P
     // A stop the gate's tail left owed (a crash, or one waiting when autonomy was turned on)
     // settles here by the same policy; anything but an approve hands back as before.
     const s = await settleStop(ctx, root, cfgR.value, 'ship', planId)
-    if (s.kind === 'decided' && s.decision === 'approve') {
+    // Row 240: a settle another decider won is that decider's decision — an approve carries on too.
+    if ((s.kind === 'decided' || s.kind === 'superseded') && s.decision === 'approve') {
       phase = rederive()
       if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
     } else if (s.kind !== 'none') {

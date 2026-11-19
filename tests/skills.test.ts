@@ -195,6 +195,11 @@ describe('witness-ship', () => {
     expect(body()).toContain('--force-with-lease');
     expect(body()).toContain('Never merge');
   });
+  it('reads a decision another decider landed first as that decision (row 240)', () => {
+    expect(body()).toContain('A `decided: ship … → revise (decided first)` line is a revise like any other')
+    const cmd = readFileSync(join(__dirname, '..', 'plugin', 'commands', 'witness.md'), 'utf8')
+    expect(cmd).toContain('A `decided: … (decided first)` line is the same')
+  });
   it('checks a resolution through witness turn (row 218)', () => {
     expect(body()).toContain("<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>");
   });

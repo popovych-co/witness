@@ -311,7 +311,9 @@ export async function runGate(
   // Row 191 §4.4. A revise settled here is handed to the session that ran the gate, so this is
   // where a session at its limit hands it to a fresh one. Ship passes `handover: false`: its run
   // hands over once, at its own exit (Plan's call 7).
-  const revised = settled.kind === 'decided' && (settled.decision === 'revise' || settled.decision === 'revise-upstream')
+  // Row 240: a revise another decider landed first is handed over just the same.
+  const revised = (settled.kind === 'decided' || settled.kind === 'superseded') &&
+    (settled.decision === 'revise' || settled.decision === 'revise-upstream')
   if (revised && flags.handover !== false) reportHandover(ctx, rootR.value, cfgR.value, { guard: false })
   return settledCode(code, settled)
 }
