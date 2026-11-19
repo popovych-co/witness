@@ -10,18 +10,33 @@ import { offeredLine } from './toon.js'
 // 64 MiB and ship.ts's 16 MiB; V8's string ceiling bounds any sync read regardless.
 const GIT_MAX_BUFFER = 256 * 1024 * 1024
 
-export function git(root: string, ...args: string[]): string {
+function gitRun(root: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync('git', args, {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: GIT_MAX_BUFFER,
+    ...(env ? { env } : {}),
   }).replace(/\n$/, '')
 }
 
+export function git(root: string, ...args: string[]): string {
+  return gitRun(root, args)
+}
+
 export function tryGit(root: string, ...args: string[]): { ok: boolean; out: string } {
+  return tryGitWith(root, args)
+}
+
+// Row 242. git's words read for their meaning (a rejected push, a refused login) come from a git
+// run in the C locale, so a localized git still classifies (W7).
+export function tryGitC(root: string, ...args: string[]): { ok: boolean; out: string } {
+  return tryGitWith(root, args, { ...process.env, LC_ALL: 'C' })
+}
+
+function tryGitWith(root: string, args: string[], env?: NodeJS.ProcessEnv): { ok: boolean; out: string } {
   try {
-    return { ok: true, out: git(root, ...args) }
+    return { ok: true, out: gitRun(root, args, env) }
   } catch (e) {
     const err = e as { stdout?: Buffer | string; stderr?: Buffer | string }
     // most git failures (like `pull --rebase` with no upstream) write to stderr with

@@ -4,7 +4,7 @@ import { autonomyAt, loadConfig, type Config } from './config.js'
 import { acquireLock } from './lock.js'
 import { crashPoint, guardTxn, withTxn } from './txn.js'
 import { appendEntry, journalRel, readStream, type Entry } from './journal.js'
-import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit } from './gitio.js'
+import { primaryRoot, stateCommit, stateOnlyAdvance, tryGit, tryGitC } from './gitio.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { heldSatisfy, liftedHolds, type HeldRow } from './needs.js'
 import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
@@ -91,19 +91,75 @@ export function prBody(plan: CanonDoc, held: HeldRow[]): string {
   })].join('\n')
 }
 
+// Row 242. The commit witness itself last pushed to a plan's PR branch, kept in a witness-owned
+// ref (refs/ is shared by every worktree of the repo). A forced push leases on it, never on the
+// tracking ref: any fetch moves that one onto whatever the remote holds, a collaborator's commit
+// included, and a lease on it then authorises overwriting that commit (P27).
+export function pushedRef(planId: string): string {
+  return `refs/witness/pushed/${planId}`
+}
+
+export function recordPushed(wt: string, planId: string, sha: string): void {
+  tryGit(wt, 'update-ref', pushedRef(planId), sha)
+}
+
+const DIVERGED_WANT =
+  'a PR branch this worktree can fast-forward — the remote holds commits it does not, and overwriting them is a human\'s call'
+
+// The lease a forced push to `branch` carries, settled from a fresh fetch BEFORE anything moves
+// the worktree, so a refused one leaves the worktree as it was, for the human. The fetched tip is
+// accepted only when it is witness's own last push, or a commit the worktree already holds (a PR
+// pushed before 0.29 has no record, and overwriting what HEAD contains loses nothing); anything
+// else is someone else's work. The push then leases on that exact sha, so a commit landing
+// between this fetch and the push is refused by the remote itself.
+function leaseFor(wt: string, branch: string, remote = 'origin'): Result<string> {
+  const fetched = tryGit(wt, 'fetch', remote, branch)
+  if (!fetched.ok) {
+    return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, branch])} to succeed`)])
+  }
+  const tip = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}^{commit}`)
+  if (!tip.ok) return refuse([v('push', 'head-unreadable', tip.out.slice(0, 200), `a readable ${remote}/${branch}`)])
+  const sha = tip.out.trim()
+  const planId = branch.startsWith('witness/') ? branch.slice('witness/'.length) : undefined
+  const recorded = planId === undefined ? undefined : tryGit(wt, 'rev-parse', '--verify', '--quiet', `${pushedRef(planId)}^{commit}`)
+  if (recorded?.ok && recorded.out.trim() === sha) return ok(sha)
+  if (tryGit(wt, 'merge-base', '--is-ancestor', sha, 'HEAD').ok) return ok(sha)
+  return refuse([humanCall(v('push', 'push-diverged', `${remote}/${branch} at ${sha.slice(0, 12)}`, DIVERGED_WANT))])
+}
+
+// A push of HEAD to the PR branch, forced only under a lease from `leaseFor`, read in the C
+// locale; a rejection is the remote holding commits witness did not push. Recorded on success.
+function pushPr(wt: string, branch: string, lease: string | undefined, setUpstream: boolean, remote = 'origin'): Result<string> {
+  const head = tryGit(wt, 'rev-parse', 'HEAD')
+  if (!head.ok) return refuse([v('push', 'head-unreadable', head.out.slice(0, 200), `a readable HEAD in ${wt}`)])
+  const push = tryGitC(wt, 'push', '--porcelain',
+    ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${branch}:${lease}`]),
+    ...(setUpstream ? ['-u'] : []), remote, `HEAD:refs/heads/${branch}`)
+  if (!push.ok) {
+    if (/\[rejected\]|\[remote rejected\]|stale info|non-fast-forward|fetch first/.test(push.out)) {
+      return refuse([humanCall(v('push', 'push-diverged', push.out.slice(0, 200), DIVERGED_WANT))])
+    }
+    return refuse([v('push', 'push-failed', push.out.slice(0, 200), `${shellLine(['git', 'push', remote, branch])} to succeed`)])
+  }
+  const sha = head.out.trim()
+  if (branch.startsWith('witness/')) recordPushed(wt, branch.slice('witness/'.length), sha)
+  return ok(sha)
+}
+
 export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, parentSummary: string, held: HeldRow[] = []): Result<number> {
   const branch = branchName(String(plan.meta.id))
   if (!tryGit(root, 'remote', 'get-url', 'origin').ok) {
     return refuse([v('origin', 'no-remote', '(none)', 'an origin remote — gh pr create needs one')])
   }
-  // --force-with-lease once an upstream exists: the rebase now runs in the GATE phase, so
-  // a re-entered pr phase pushes a rebased branch and a plain push is no longer a
-  // fast-forward. The lease still refuses to clobber anything pushed by someone else.
+  // A forced push once an upstream exists: the rebase now runs in the GATE phase, so a
+  // re-entered pr phase pushes a rebased branch and a plain push is no longer a fast-forward.
+  // Row 242: the lease is witness's own last push (or a tip the worktree holds), never the
+  // tracking ref, so it refuses to clobber anything pushed by someone else.
   const hasUpstream = tryGit(wt, 'rev-parse', '--verify', `refs/remotes/origin/${branch}`).ok
-  const push = hasUpstream
-    ? tryGit(wt, 'push', '--force-with-lease', '-u', 'origin', branch)
-    : tryGit(wt, 'push', '-u', 'origin', branch)
-  if (!push.ok) return refuse([v('push', 'push-failed', push.out.slice(0, 200), 'git push -u origin to succeed')])
+  const lease = hasUpstream ? leaseFor(wt, branch) : undefined
+  if (lease !== undefined && !lease.ok) return lease
+  const push = pushPr(wt, branch, lease?.value, true)
+  if (!push.ok) return push
   const found = existingPr(ctx, root, branch)
   if (found !== undefined) return ok(found)
   const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
@@ -170,6 +226,14 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   // Same predicate as baseMoved: an advance made entirely of witness's own state commits is
   // bookkeeping, and rebasing onto it moves the base term of every reviewed sha for nothing.
   if (stateOnlyAdvance(wt, root, 'HEAD', base)) return ok('clean')
+  // Only push a branch that HAS an upstream. This runs in the gate phase, before createPr has
+  // ever pushed, so on a first ship there is nothing on the remote to update — createPr does the
+  // initial push. Row 242: where an upstream exists, the lease is settled before the rebase, so a
+  // PR branch someone else pushed to refuses with the worktree untouched (P27).
+  const branch = tryGit(wt, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+  const upstream = branch.ok && tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok
+  const lease = upstream ? leaseFor(wt, branch.out.trim(), remote) : undefined
+  if (lease !== undefined && !lease.ok) return lease
   // --autostash: this runs in the GATE phase, and implement deliberately leaves the
   // worktree uncommitted (ship owns the sole code commit, in the pr phase below), so the
   // tree is normally dirty and a bare rebase refuses with "you have unstaged changes".
@@ -181,17 +245,12 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
     return refuse([v('rebase', 'textual-conflict', `${base} moved`,
       'resolve in the worktree (rebase manually), then re-run witness ship — the CLI never freehands a merge')])
   }
-  // Only push a branch that HAS an upstream. This now runs in the gate phase, before
-  // createPr has ever pushed, so on a first ship there is nothing on the remote to
-  // update and an unconditional push fails with "no upstream branch" — createPr does
-  // the initial push. Where an upstream does exist the push result is the whole point:
-  // reporting 'rebased' after a failed push leaves the PR head on the pre-rebase commit,
-  // and CI goes green on a tree nobody will merge.
-  if (tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok) {
-    const push = tryGit(wt, 'push', '--force-with-lease')
-    if (!push.ok) {
-      return refuse([v('push', 'push-failed', push.out.slice(0, 200), 'git push --force-with-lease to succeed')])
-    }
+  // Where an upstream exists the push result is the whole point: reporting 'rebased' after a
+  // failed push leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody
+  // will merge.
+  if (lease !== undefined) {
+    const push = pushPr(wt, branch.out.trim(), lease.value, false, remote)
+    if (!push.ok) return push
   }
   return ok('rebased')
 }
@@ -299,11 +358,15 @@ function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Re
   if (!head.ok) return refuse([v('push', 'head-unreadable', head.out.slice(0, 200), `a readable HEAD in ${wt}`)])
   const sha = head.out.trim()
   const remote = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
-  if (remote.ok && sha === remote.out.trim()) return ok(sha)
-  const push = tryGit(wt, 'push', '-u', 'origin', `HEAD:${branch}`)
+  // Row 242: the remote already IS the approved tree — witness's own record says so from here on.
+  if (remote.ok && sha === remote.out.trim()) { recordPushed(wt, planId, sha); return ok(sha) }
+  const push = pushPr(wt, branch, undefined, true)
   if (!push.ok) {
-    return refuse([humanCall(v('push', 'push-diverged', push.out.slice(0, 200),
-      'a PR branch this worktree can fast-forward — the remote holds commits it does not, and overwriting them is a human\'s call'))])
+    // A plain push the remote refused for any reason but a rejection keeps today's rule: the
+    // remote holds commits this worktree does not.
+    return push.violations[0]?.rule === 'push-failed'
+      ? refuse([humanCall(v('push', 'push-diverged', push.violations[0].got, DIVERGED_WANT))])
+      : push
   }
   ctx.out(kv('push', `${branch} → the approved tree`))
   return ok(sha)
