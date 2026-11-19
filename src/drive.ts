@@ -13,12 +13,12 @@ import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop, type ResolvedSpawn } fro
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
 import { releaseDeadTurn } from './runner-lock.js'
 import { computeNext, conversationStage, type NextAction } from './verbs/next.js'
-import { shownView } from './verbs/decide.js'
+import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
 import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
-import { isAlive, pause } from './lock.js'
+import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
 import { stateFloor } from './floor.js'
 import { compareTriple, version } from './version.js'
@@ -462,11 +462,22 @@ export function watchSignature(root: string): string {
 // once a human moves it. Row 207: so do drive's own verdicts (stuck, capped) and the merge — a
 // paused drive would otherwise hold them forever — moved by a grant, a satisfied need, a
 // decision, the merge stamp, or the human's `witness retry` for a fix that leaves no record.
-export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped'
+// Row 240: `retry` is drive's own timer, not a human's stop — a settle the door refused with exit
+// 3, due again at `due`, with the act `kept` when its making cost a model call, and its `tries`.
+// Never published, listed, notified or counted toward a pause for the human.
+export type AsideKind = 'kept' | 'decision' | 'conversation' | 'merge' | 'stuck' | 'capped' | 'retry'
 export interface Aside {
   target: string; kind: AsideKind; line: string; why: string; gate?: string; stop?: KeptStop; key0?: string
   trust?: RunCommand[]   // row 205: a trust grant's commands, each with its source
+  due?: number; kept?: DecisionAct; tries?: number
 }
+
+// Row 240 (design §4.1.4). A refused settle is tried again one lock wait later; the third door
+// refusal in a row sets the stop aside for the human. A busy lock never reaches the door.
+export const RETRY_DUE_MS = LOCK_WAIT_MS
+export const RETRY_MAX = 3
+// The kinds that are drive's own timers, never the human's.
+const isTimer = (a: { kind: AsideKind }): boolean => a.kind === 'retry'
 
 // What `mergeOwnPr` prints when it leaves the merge to a human (ship.ts), and nothing else.
 const MERGE_LINE = /^ship: "?merge PR #(\d+) on GitHub when ready/
@@ -707,6 +718,22 @@ export async function driveLoop(
   const settleAdmits = (t: string | undefined): boolean =>
     !busySeen.has(t ?? TARGETLESS) && settleAdmitsFor(t, { lanes, aside, ...(flags.flow !== undefined ? { flow: flags.flow } : {}), busy: busyOther })
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
+  // Row 240. Drive's timers: the earliest due time, and each timer whose time came — only its aside
+  // is deleted (row 207's release resets a target's use and must not be used), its kept act handed
+  // to this round's settle pass.
+  const nextDue = (): number | undefined => {
+    let at: number | undefined
+    for (const a of aside.values()) if (isTimer(a) && a.due !== undefined && (at === undefined || a.due < at)) at = a.due
+    return at
+  }
+  const releaseDue = () => {
+    for (const [k, a] of [...aside]) {
+      if (!isTimer(a) || a.due === undefined || a.due > clock.now()) continue
+      aside.delete(k)
+      if (a.kept !== undefined) dueKept.set(k, a.kept)
+    }
+  }
+  const humanAsides = (): Aside[] => [...aside.values()].filter((a) => !isTimer(a))
   // Row 196. A target's own next action, read with every other target filtered out: how the
   // settle pass, which holds no action, and `takeBack` derive the key a human may move.
   const ownNext = (key: string): NextAction =>
@@ -910,12 +937,32 @@ export async function driveLoop(
   // (F6: that wait was silent, uncounted and deaf to a signal): an arbiter refused by a usage
   // limit becomes drive's own pause, and the stop is judged again after it.
   const routed = new Map<string, Act>()               // target → the re-run its settle routed (row 239: its act)
+  // Row 240 (§4.1.4). Door refusals with exit 3 in a row, per target, and the acts kept from them
+  // whose retry fell due this round.
+  const retries = new Map<string, number>()
+  const dueKept = new Map<string, DecisionAct>()
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
-    for (const r of await settleOwed(ctx, root, cfg, { scope: settleAdmits })) {
+    const reports = await settleOwed(ctx, root, cfg, { scope: settleAdmits, kept: dueKept })
+    // A kept act stays until a settle of its target uses it: one busy this round is judged next.
+    for (const r of reports) dueKept.delete(r.target)
+    for (const r of reports) {
       const s = r.settled
       // Row 240: another process took the stop's settle lock after the scope was read.
       if (s.kind === 'busy') { busySeen.add(r.target); continue }
+      if (s.kind === 'left' && s.code === EXIT.BLOCKED && s.limit === undefined) {
+        const tries = (retries.get(r.target) ?? 0) + 1
+        retries.set(r.target, tries)
+        if (tries < RETRY_MAX) {
+          ctx.out(`drive: retry — ${r.target} · ${s.why} · again in ${duration(RETRY_DUE_MS)}`)
+          setAside(r.target, {
+            kind: 'retry', line: cliAct('decide', r.gate, r.target, '--show').line, why: s.why, gate: r.gate,
+            due: clock.now() + RETRY_DUE_MS, tries, ...(s.paid === true && s.act !== undefined ? { kept: s.act } : {}),
+          })
+          continue
+        }
+      }
+      retries.delete(r.target)
       if (s.kind === 'left' && s.limit !== undefined) {
         pauseFor(limitIn(s.limit, clock.now()) ?? { kind: 'usage', text: s.limit })
         continue
@@ -1005,7 +1052,7 @@ export async function driveLoop(
   const notice = (a: Aside): boolean => a.target === TARGETLESS && a.kind === 'conversation' && !/ --ask /.test(a.line)
   const publish = (ended?: EndReason) => {
     if (!autonomous) return
-    const asides: LiveAside[] = [...aside.values()].filter((a) => !notice(a)).map((a) => ({
+    const asides: LiveAside[] = humanAsides().filter((a) => !notice(a)).map((a) => ({
       target: a.target, kind: a.kind, ...(a.gate !== undefined ? { gate: a.gate } : {}), ...(a.stop !== undefined ? { stop: a.stop } : {}),
     }))
     writeLive(root, { pid: process.pid, asides, ...(ended !== undefined ? { ended } : {}) })
@@ -1026,7 +1073,7 @@ export async function driveLoop(
       `witness · ${basename(root)}: ${named.join(' · ')}${fresh.length > 3 ? ` (+${fresh.length - 3})` : ''}`,
       process.platform, { wait: false })
   }
-  const owed = (): NeedYou[] => needsYou(root, ctx, cfg, loadCanon(root), [...aside.values()])
+  const owed = (): NeedYou[] => needsYou(root, ctx, cfg, loadCanon(root), humanAsides())
 
   // Row 202. Everything left waits on the human: say what, notify, let the machine sleep, and
   // watch for the act. A change runs a round as usual (take-back, settle pass, fill); a change
@@ -1052,12 +1099,15 @@ export async function driveLoop(
     const signature = roundSignature
     for (;;) {
       if (watchSignature(root) !== signature) return true
+      // Row 240: drive's own timers wake it at their due times (the repo lock is outside the signature).
+      const due = nextDue()
+      if (due !== undefined && clock.now() >= due) return true
       if (clock.now() - pauseSince >= idleMax) {
         ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
         stop = 'idle-limit'
         return false
       }
-      await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
+      await Promise.race([clock.sleep(due !== undefined ? Math.max(0, Math.min(PAUSE_POLL_MS, due - clock.now())) : PAUSE_POLL_MS), aborted])
       if (signalled !== undefined) return false
     }
   }
@@ -1097,6 +1147,7 @@ export async function driveLoop(
       // A run that is stopping fills nothing more, so a target released now would be set aside
       // by nobody and drop out of the report; it stays where it is, and the report derives it.
       if (!stop && !signalled) takeBack()
+      if (autonomous && !stop && !signalled) releaseDue()
       if (autonomous && !stop && !signalled && clock.now() >= pausedUntil) await settlePass()
       while (!stop && !signalled && lanes.size < parallel && clock.now() >= pausedUntil) {
         canonNow = loadCanon(root)
@@ -1149,7 +1200,14 @@ export async function driveLoop(
           continue
         }
         // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
-        if (autonomous && !stop && !signalled && [...aside.values()].some((a) => !notice(a)) && await pauseForHuman()) continue
+        const forHuman = humanAsides().some((a) => !notice(a))
+        if (autonomous && !stop && !signalled && forHuman && await pauseForHuman()) continue
+        // Row 240. Only drive's own timers wait: it sleeps until the earliest is due.
+        const due = nextDue()
+        if (autonomous && !stop && !signalled && !forHuman && due !== undefined) {
+          await Promise.race([clock.sleep(Math.max(0, due - clock.now())), aborted])
+          continue
+        }
         break
       }
       const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
@@ -1166,7 +1224,7 @@ export async function driveLoop(
     // The idle limit is no failure: the run waited on the human as long as it could.
     const stopped = signalled !== undefined ? `signal ${signalled}` : stop === 'idle-limit' ? undefined : stop
     refreshAside()
-    const report = driveReport(root, ctx, cfg, start, [...aside.values()], { autonomous, ...(stopped ? { stopped } : {}) })
+    const report = driveReport(root, ctx, cfg, start, humanAsides(), { autonomous, ...(stopped ? { stopped } : {}) })
     report.lines.forEach((l) => ctx.out(l))
     if (autonomous) {
       const local = loadLocalConfig(root)

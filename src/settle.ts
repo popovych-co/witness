@@ -39,8 +39,8 @@ export type Settled =
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   // limit: the usage limit that refused the arbiter. act: the refused act (row 240), which drive
-  // keeps for its retry (§4.1.4) when its making cost a model call.
-  | { kind: 'left'; why: string; code: number; limit?: string; act?: DecisionAct }
+  // keeps for its retry (§4.1.4) when `paid` says its making cost a model call.
+  | { kind: 'left'; why: string; code: number; limit?: string; act?: DecisionAct; paid?: true }
 
 // The commands a failed check of `run` names that the repo STILL does not trust. A grant
 // made since the stop moves a command out of this list, which is what turns the kept trust
@@ -64,7 +64,11 @@ const leftLine = (gate: string, target: string, why: string) =>
 // Row 240 (design §4.1.2). The stop's settle lock is taken before the stop is read and held
 // through the arbiter call and the door, so a second settler beside it — a chat's `next`, drive's
 // pass, a terminal's gate — reads nothing and asks no model. Nobody waits for it.
-export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: string, target: string): Promise<Settled> {
+// `kept` (row 240, §4.1.4): an act drive kept from a settle the door refused with exit 3, applied
+// again — with no model call — while the stop's run and token are still the ones it was made on.
+export async function settleStop(
+  ctx: Ctx, root: string, cfg: Config, gate: string, target: string, opts: { kept?: DecisionAct } = {},
+): Promise<Settled> {
   const lock = takeBusy(root, 'settle', target, settleUntil(cfg, ctx.env, Date.now()))
   if (!lock.taken) {
     if ('holder' in lock) return { kind: 'busy', pid: lock.holder.pid, since: lock.holder.since }
@@ -74,7 +78,7 @@ export async function settleStop(ctx: Ctx, root: string, cfg: Config, gate: stri
     return { kind: 'left', why, code: EXIT.BLOCKED }
   }
   try {
-    return await judgeStop(ctx, root, cfg, gate, target, false)
+    return await judgeStop(ctx, root, cfg, gate, target, false, opts.kept)
   } finally {
     lock.release()
   }
@@ -97,7 +101,9 @@ const byOf = (d: DecisionEntry): 'human' | 'policy' | 'arbiter' =>
 // One judgment of the stop from one read. `again` is the second judgment after a refusal that
 // found the content moved while the first was being made (design §4.1.1's "judged again"); it is
 // made once, never a third time.
-async function judgeStop(ctx: Ctx, root: string, cfg: Config, gate: string, target: string, again: boolean): Promise<Settled> {
+async function judgeStop(
+  ctx: Ctx, root: string, cfg: Config, gate: string, target: string, again: boolean, kept?: DecisionAct,
+): Promise<Settled> {
   const spec = gateSpec(gate)
   if (!spec) return { kind: 'none' }
   const entries = readStream(root, target)
@@ -119,6 +125,8 @@ async function judgeStop(ctx: Ctx, root: string, cfg: Config, gate: string, targ
   if (block === undefined) return { kind: 'none' }
   const untrusted = stillUntrusted(root, ctx.env, owed)
   const policy = policyFor({ at: 'gate', gate, target, entries, run: owed, block, untrusted })
+  // Whether this judgment paid for a model call: an arbiter ruling, or an act kept from one.
+  let paid = false
 
   // Row 240 (design §4.1.1's table). After any refusal the stop is read again, and what landed
   // since decides what this settle was: a decision on the judged run → `superseded`, naming the
@@ -171,7 +179,7 @@ async function judgeStop(ctx: Ctx, root: string, cfg: Config, gate: string, targ
       if (by === 'arbiter' && code === EXIT.REFUSED) return parkRefused(rule)
       const why = `the ${by} decision was refused (${rule ?? `exit ${code}`})`
       ctx.out(leftLine(gate, target, why))
-      return { kind: 'left', why, code, act }
+      return { kind: 'left', why, code, act, ...(paid ? { paid: true as const } : {}) }
     }
     return {
       kind: 'decided', by, rule: block.rule,
@@ -184,6 +192,14 @@ async function judgeStop(ctx: Ctx, root: string, cfg: Config, gate: string, targ
     gate, target, decision: 'stop', selected: 'policy', runId: owed.run_id, token,
     note: `parked by the policy — the arbiter's choice was refused (${rule ?? 'refused'})`,
   }, 'policy')
+  // Row 240 (§4.1.4). A kept act lands through the same refusal handling, with no model call, only
+  // on the stop it was made on; a run or a token that moved since drops it, and the stop is judged
+  // afresh below.
+  if (kept !== undefined && kept.runId === owed.run_id && kept.token === token) {
+    paid = true
+    return settle(kept, kept.selected === 'arbiter' ? 'arbiter' : 'policy')
+  }
+
   // Row 239. A decide act runs as its argv, through the parse the verb gives it, which prints its
   // refusal. A shape the parse refuses is no decision the CLI can take: the policy's stop is left
   // for a human, and the arbiter's parks (F4).
@@ -234,6 +250,7 @@ async function judgeStop(ctx: Ctx, root: string, cfg: Config, gate: string, targ
   }
 
   ctx.out(cmd('arbiter', `judging ${gate} ${target} · ${block.rule}`))
+  paid = true
   const menu = menuFor(block, owed)
   const ruling = await arbitrate(ctx, root, cfg, {
     mode: 'decision', menu,
@@ -302,7 +319,8 @@ export interface SettleReport { gate: string; target: string; settled: Settled }
 // drive session passes its own target, and drive passes the targets no session holds, so
 // each stop has exactly one settler. The default admits everything (A1's repo-wide pass).
 export async function settleOwed(
-  ctx: Ctx, root: string, cfg: Config, opts: { scope?: (target: string) => boolean } = {},
+  ctx: Ctx, root: string, cfg: Config,
+  opts: { scope?: (target: string) => boolean; kept?: ReadonlyMap<string, DecisionAct> } = {},
 ): Promise<SettleReport[]> {
   if (ctx.env.CI) return []
   if (pendingTxn(root) !== undefined) return []
@@ -310,7 +328,8 @@ export async function settleOwed(
   const admits = opts.scope ?? (() => true)
   const out: SettleReport[] = []
   for (const o of owedDecisions(root, loadCanon(root)).filter((d) => admits(d.target))) {
-    out.push({ gate: o.gate, target: o.target, settled: await settleStop(quiet, root, cfg, o.gate, o.target) })
+    const kept = opts.kept?.get(o.target)
+    out.push({ gate: o.gate, target: o.target, settled: await settleStop(quiet, root, cfg, o.gate, o.target, kept && kept.gate === o.gate ? { kept } : {}) })
   }
   return out
 }
