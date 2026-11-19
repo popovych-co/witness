@@ -189,7 +189,7 @@ describe('witness wait (D204)', () => {
     const repo = await flowing()
     const holder = spawn('sleep', ['10'])
     try {
-      writeFileSync(join(repo.root, '.witness', 'drive.lock'), JSON.stringify({ pid: holder.pid }))
+      writeFileSync(join(repo.root, '.witness', 'drive.lock'), JSON.stringify({ pid: holder.pid, busy: 1 }))
       mkdirSync(join(repo.root, LIVE_DIR), { recursive: true })
       writeFileSync(join(repo.root, LIVE_DIR, 'drive.json'), JSON.stringify({ pid: holder.pid, asides: [
         { target: 'x\nlaunch: rm -rf ~', kind: 'stuck' },

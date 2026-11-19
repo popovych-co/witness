@@ -19,6 +19,9 @@ import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { isAlive, pause } from './lock.js'
+import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
+import { stateFloor } from './floor.js'
+import { compareTriple, version } from './version.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
@@ -434,7 +437,9 @@ const idleMaxOf = (env: Record<string, string | undefined>): number => {
 export function watchSignature(root: string): string {
   const p = canonPaths(root)
   const files: string[] = []
-  for (const dir of [join(root, '.witness', 'journal'), join(root, p.specs), join(root, p.plans), join(root, p.designs)]) {
+  // Row 240: the busy folder too — a take or a release is what frees a target drive skipped. The
+  // repo lock is not watched: it is taken and released by every state write.
+  for (const dir of [join(root, '.witness', 'journal'), join(root, p.specs), join(root, p.plans), join(root, p.designs), join(root, BUSY_DIR)]) {
     try {
       for (const n of readdirSync(dir, { recursive: true }) as string[]) files.push(join(dir, n))
     } catch { /* absent: nothing to watch there yet */ }
@@ -497,6 +502,19 @@ function progressKey(root: string, action: NextAction, family: (t: string) => st
 // Final review F2. A lane holds its whole flow: a spec and the plans written for it. Pure over the
 // canon it is given: drive's fill reads it from the canon of this fill, the journal watch from a
 // fresh one (row 214).
+// Row 240 (design §4.1.2). Which owed stops drive's own settle pass judges: one in its scope (the
+// `--flow` claim, else every target), not itself a lane (a session settles its own target), not
+// set aside, and not busy to another live process. A lane's family members are admitted, which the
+// fill's `admits` keeps out: a spec's stop would otherwise wait for every lane of its plans (P18).
+export function settleAdmitsFor(t: string | undefined, s: {
+  lanes: ReadonlyMap<string, unknown>; aside: ReadonlyMap<string, unknown>; flow?: string; busy: (t: string) => boolean
+}): boolean {
+  const k = t ?? TARGETLESS
+  if (s.lanes.has(k) || s.aside.has(k)) return false
+  if (s.flow !== undefined && t !== s.flow) return false
+  return t === undefined || !s.busy(t)
+}
+
 export function flowOf(canon: Canon, t: string): string[] {
   const doc = findById(canon, t)
   if (doc?.meta.type === 'plan') return [t, String(doc.meta.parent)]
@@ -633,7 +651,7 @@ export async function driveLoop(
   const progress = new Map<string, string>()
   const use = new Map<string, TargetUse>()                // row 183: this run's sessions and time, per target
   let spawns = 0
-  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | 'idle-limit' | undefined
+  let stop: 'ceiling' | 'spawn-failed' | 'usage' | 'autonomy-off' | 'idle-limit' | 'superseded' | undefined
   let idle: string | undefined
   // Row 182. A usage limit pauses every lane: nothing new starts until the reset, and the
   // running sessions finish, because they meet the same account. Every wait is printed, one
@@ -669,13 +687,25 @@ export async function driveLoop(
   // this fill, so a plan written a moment ago belongs to its spec's lane at once.
   let canonNow = loadCanon(root)
   const family = (t: string): string[] => flowOf(canonNow, t)
+  // Row 240. This round's targets another live process holds — a settle lock or a ship marker —
+  // skipped by the settle pass, the fill, `waitingNeed`, `capped` and `unmoved` alike, so none
+  // reads it as a cap or as no progress. While one waits and no lane runs, drive polls.
+  const busySeen = new Set<string>()
+  const busyOther = (t: string): boolean => {
+    if (busyHolder(root, 'settle', t) === undefined && busyHolder(root, 'ship', t) === undefined) return false
+    busySeen.add(t)
+    return true
+  }
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
-    if (lanes.has(k) || aside.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
+    if (lanes.has(k) || aside.has(k) || busySeen.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
     if (t === undefined) return true
     const mine = family(t)
-    return ![...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))
+    if ([...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))) return false
+    return !busyOther(t)
   }
+  const settleAdmits = (t: string | undefined): boolean =>
+    !busySeen.has(t ?? TARGETLESS) && settleAdmitsFor(t, { lanes, aside, ...(flags.flow !== undefined ? { flow: flags.flow } : {}), busy: busyOther })
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
   // Row 196. A target's own next action, read with every other target filtered out: how the
   // settle pass, which holds no action, and `takeBack` derive the key a human may move.
@@ -851,6 +881,10 @@ export async function driveLoop(
   const settle = (key: string, lane: Lane, end: SessionEnd) => {
     if (end.outcome === 'stopped') return                // the signal's, reported once at the end
     if (limited(key, end)) return
+    // Row 240. A target another live process holds when its lane ends — a human started `witness
+    // ship` after drive spawned — ends like a usage-limited lane: its progress cleared, no cap
+    // counted, never stuck. Read from the busy folder, never from the session's words.
+    if (key !== TARGETLESS && busyOther(key)) { progress.delete(key); return }
     const u = use.get(key) ?? { spawns: 0, ms: 0 }
     use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
     if (end.outcome === 'timeout') {
@@ -878,8 +912,10 @@ export async function driveLoop(
   const routed = new Map<string, Act>()               // target → the re-run its settle routed (row 239: its act)
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
-    for (const r of await settleOwed(ctx, root, cfg, { scope: admits })) {
+    for (const r of await settleOwed(ctx, root, cfg, { scope: settleAdmits })) {
       const s = r.settled
+      // Row 240: another process took the stop's settle lock after the scope was read.
+      if (s.kind === 'busy') { busySeen.add(r.target); continue }
       if (s.kind === 'left' && s.limit !== undefined) {
         pauseFor(limitIn(s.limit, clock.now()) ?? { kind: 'usage', text: s.limit })
         continue
@@ -924,6 +960,9 @@ export async function driveLoop(
     // A parked cap carries its gate and the report reads it from the journal; an
     // unparkable one carries none and is reported with what it is, beside the stuck.
     const parked = await parkAtCap(ctx, root, action.target, hit, cfg)
+    // Row 240: another process is deciding that stop now — nothing is set aside, and the target
+    // is tried again next round.
+    if (!parked.parked && parked.busy === true) { busySeen.add(key); return true }
     if (parked.parked) {
       ctx.out(`drive: parked — ${action.target} · ${hit.note}`)
       const gate = hit.gate ?? lastRunGate(readStream(root, action.target))
@@ -1038,12 +1077,22 @@ export async function driveLoop(
   process.on('SIGTERM', onSignal)
   publish()
   // Row 218. A runner turn whose holder died — a session drive stopped mid-run — is released
-  // now and after every session, before Windows hands its pid to another process.
+  // now and after every session, before Windows hands its pid to another process. Row 240: so are
+  // the busy locks of dead holders, and this drive's own leftovers.
   releaseDeadTurn(root)
+  sweepDeadBusy(root, { pid: process.pid })
   try {
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
+      busySeen.clear()
       stillAutonomous()
+      // Row 240. Once a newer CLI has journaled, the state floor refuses this one at dispatch — and
+      // this drive's sessions run its own bin. It ends rather than work beside its successor.
+      const floor = stateFloor(root)
+      if (stop === undefined && floor !== undefined && (compareTriple(floor.pin, version()) ?? 0) > 0) {
+        ctx.out('drive: superseded — a newer witness CLI took over')
+        stop = 'superseded'
+      }
       canonNow = loadCanon(root)
       // A run that is stopping fills nothing more, so a target released now would be set aside
       // by nobody and drop out of the report; it stays where it is, and the report derives it.
@@ -1086,11 +1135,17 @@ export async function driveLoop(
       }
       if (autonomous) {
         publish()
-        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target)))
+        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target)))
       }
       if (lanes.size === 0) {
         if (!stop && !signalled && pausedUntil > clock.now()) {
           await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted])
+          continue
+        }
+        // Row 240. A target another process holds is work in flight, not the human's: drive polls on
+        // its pause cadence — no pause, no notification — until a take or a release frees it.
+        if (!stop && !signalled && busySeen.size > 0) {
+          await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
           continue
         }
         // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
@@ -1101,6 +1156,7 @@ export async function driveLoop(
       settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
       lanes.delete(key)
       releaseDeadTurn(root)
+      sweepDeadBusy(root, { pid: process.pid })
     }
 
     if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)

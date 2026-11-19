@@ -36,6 +36,7 @@ Every turn is `witness next`, read, act on the first matching row, repeat:
 | `busy:` is printed | Another witness run is acting on that target now. Do nothing for it — no retry, and no other verb on it. In a session drive started, **END YOUR TURN**; in a chat, say so once and keep matching the rows below. |
 | `wait: needs you` is printed | Something new needs the human. Tell the human the rows it printed, then run `$WITNESS next` and act on the first item it routes, one at a time; after the human's answer, loop. |
 | `wait: drive stopped — <why>` is printed | Drive is gone with work left. Tell the human, with the why, and **END YOUR TURN** — never restart drive yourself. When they say "go", run `$WITNESS next`: its `launch:` restarts it. |
+| `wait: older drive` is printed | A `witness drive` from before 0.29 runs this repo, and nothing here may act beside it. Tell the human, with the `run:` line under it, and **END YOUR TURN**. Never run that line yourself, and never wait again until they say go. |
 | `wait: replaced by this chat's newer wait` is printed | A newer wait of this same chat now runs. **END YOUR TURN** — that wait wakes you. |
 | `wait: taken over by another chat` is printed | A newer `/witness` chat now waits for this repo. **END YOUR TURN**, and never wait again in this chat. |
 | `wait: merged on GitHub` is printed | A merge left to the human landed. Run `$WITNESS next` — its stamp records the merge — and loop. |

@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, type Config } from '../config.js'
 import { PAUSE_IDLE_MAX_MS } from '../drive.js'
-import { driveHolder, sessionMarker } from '../drive-presence.js'
+import { OLDER_DRIVE_LINE, driveHolder, olderDrive, sessionMarker, stopCommand } from '../drive-presence.js'
 import { resolveDriver } from '../harness.js'
 import { primaryRoot } from '../gitio.js'
 import { lastEnd, liveDrive, takeWaiter, waiterState, type EndReason } from '../live.js'
@@ -30,6 +30,7 @@ const WHY: Record<EndReason, string> = {
   'autonomy-off': 'autonomy is off',
   'spawn-failed': 'this machine could not start a session',
   signal: 'stopped by a signal',
+  superseded: 'a newer witness CLI took over',
   done: 'its run ended',
 }
 
@@ -63,6 +64,10 @@ export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { sinc
     const state = waiterState(root, me, session)
     if (state === 'replaced') { ctx.out("wait: replaced by this chat's newer wait"); return EXIT.OK }
     if (state === 'taken') { ctx.out('wait: taken over by another chat'); return EXIT.OK }
+    // Row 240. A drive from before 0.29 settles and ships with no busy lock of its own: the human
+    // stops it before this chat does anything beside it.
+    const older = olderDrive(root)
+    if (older !== undefined) { ctx.out(OLDER_DRIVE_LINE); ctx.out(`  run: ${stopCommand(older)}`); return EXIT.OK }
     // A 0.24.x drive writes no live file but holds the lock: running, its waits unknown.
     if (driveHolder(root) === undefined) {
       if (driveHasWork(root, ctx, canon, cfg, computeNext(root, ctx, canon, cfg))) {

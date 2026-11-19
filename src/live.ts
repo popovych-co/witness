@@ -19,8 +19,8 @@ export const LIVE_DIR = '.witness/live'
 const DRIVE_FILE = 'drive.json'
 const WAITER_FILE = 'waiter.json'
 
-export type EndReason = 'done' | 'idle-limit' | 'ceiling' | 'usage' | 'autonomy-off' | 'spawn-failed' | 'signal'
-const END_REASONS: readonly EndReason[] = ['done', 'idle-limit', 'ceiling', 'usage', 'autonomy-off', 'spawn-failed', 'signal']
+export type EndReason = 'done' | 'idle-limit' | 'ceiling' | 'usage' | 'autonomy-off' | 'spawn-failed' | 'signal' | 'superseded'
+const END_REASONS: readonly EndReason[] = ['done', 'idle-limit', 'ceiling', 'usage', 'autonomy-off', 'spawn-failed', 'signal', 'superseded']
 const ASIDE_KINDS: readonly AsideKind[] = ['kept', 'decision', 'conversation', 'merge', 'stuck', 'capped']
 
 export interface LiveAside { target: string; kind: AsideKind; gate?: string; stop?: KeptStop }

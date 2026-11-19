@@ -37,7 +37,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
-import { driveChild, driveHolder, watchLine } from '../drive-presence.js'
+import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
 
 // A gate is settled only if the verdict that settled it still describes the CURRENT
@@ -1250,6 +1250,14 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   // Row 239 (the plan's B9): the re-run as its act, never its line read back.
   let routed: { act: Act; target: string } | undefined
+  // Row 240. A drive from before 0.29 runs this repo: it settles stops and runs ships with no busy
+  // lock, so this `next` settles nothing and routes nothing beside it — the human stops it first.
+  const older = cfgR.value.autonomy && marked === undefined ? olderDrive(root) : undefined
+  if (older !== undefined) {
+    ctx.out(OLDER_DRIVE_LINE)
+    ctx.out(`  run: ${stopCommand(older)}`)
+    return EXIT.OK
+  }
   if (cfgR.value.autonomy) {
     const { settleOwed, settledLine } = await import('../settle.js')
     const reports = await settleOwed(ctx, root, cfgR.value, scope ? { scope } : {})
