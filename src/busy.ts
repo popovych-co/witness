@@ -32,12 +32,17 @@ const UNREADABLE_GRACE_MS = 1_000
 const CREATE_RETRY_MS = 1_000
 const RETRY_PAUSE_MS = 50
 const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES'])
+// A `since` this far ahead of now is a tampered lock or a clock set wrong, never a live holder.
+const SINCE_SLACK_MS = 60_000
 
 // The one seam for file errors, so a test can stand in for a Windows scanner.
 export const busyIo = {
   create(p: string, text: string): void {
     const fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644)
     try { writeSync(fd, text) } finally { closeSync(fd) }
+  },
+  unlink(p: string): void {
+    unlinkSync(p)
   },
 }
 
@@ -86,7 +91,7 @@ function readLock(p: string): Read {
 
 // Live: its pid is alive, its `until` has not passed, and it claims no more than the cap.
 const live = (l: BusyLock, now: number): boolean =>
-  l.until >= l.since && l.until - l.since <= BUSY_MAX_MS && now <= l.until && isAlive(l.pid)
+  l.until >= l.since && l.until - l.since <= BUSY_MAX_MS && l.since <= now + SINCE_SLACK_MS && now <= l.until && isAlive(l.pid)
 
 const olderThanGrace = (p: string, now: number): boolean => {
   try { return now - lstatSync(p).mtimeMs >= UNREADABLE_GRACE_MS } catch { return true }
@@ -157,11 +162,23 @@ export function takeBusy(
 }
 
 // A lock is released by its taker only, and only while it still holds what the taker wrote.
+// Windows: a scanner holding the file a moment fails the unlink (EBUSY, EPERM); it is retried within
+// a second, as a create is, so a released lock does not read live to others until its `until`.
 function releaseIf(p: string, text: string): void {
-  try {
-    if (lstatSync(p).isSymbolicLink()) return
-    if (readFileSync(p, 'utf8') === text) unlinkSync(p)
-  } catch { /* gone already; an unlink that keeps failing is left to the dead-pid rule */ }
+  const t0 = Date.now()
+  for (;;) {
+    try {
+      if (lstatSync(p).isSymbolicLink()) return
+      if (readFileSync(p, 'utf8') !== text) return
+      busyIo.unlink(p)
+      return
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      // gone already; an unlink that keeps failing is left to the dead-pid rule
+      if (code === undefined || !TRANSIENT.has(code) || Date.now() - t0 >= CREATE_RETRY_MS) return
+      pause(RETRY_PAUSE_MS)
+    }
+  }
 }
 
 // The live holder of `kind`'s lock on `target`, when it is a process other than `opts.pid`.
@@ -192,7 +209,7 @@ export function sweepDeadBusy(root: string, opts: { pid?: number } = {}): number
     const droppable = (t: string | undefined): boolean => {
       if (t === undefined) { try { return lstatSync(p).isSymbolicLink() } catch { return false } }
       const l = parseLock(t)
-      return l === 'malformed' || (typeof l === 'object' && (l.pid === pid || !isAlive(l.pid)))
+      return l === 'malformed' || (typeof l === 'object' && (l.pid === pid || !isAlive(l.pid) || !live(l, Date.now())))
     }
     const text = readLock(p) === 'link' ? undefined : (() => { try { return readFileSync(p, 'utf8') } catch { return '' } })()
     if (!droppable(text)) continue

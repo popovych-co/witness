@@ -8,7 +8,7 @@ import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import { withValues } from '../src/settings.js'
 import { classifyGh, classifyGit } from '../src/ship-outcome.js'
-import { runShip } from '../src/ship.js'
+import { refusalOutcome, runShip } from '../src/ship.js'
 import { addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, singleConfig, type TestRepo } from './helpers.js'
 
 // Row 242 (design §4.3.1, R13). Every outcome `witness ship` ends on is classified and journaled:
@@ -73,6 +73,20 @@ const records = (repo: TestRepo, plan: string) =>
   readStream(repo.root, plan).filter((e) => e.t === 'ship-outcome').map((e) => ({ outcome: e.outcome, reason: e.reason, pr: e.pr }))
 const gh = (scenario: string, file: string, text: string) => writeFileSync(join(scenario, file), text)
 
+describe('a refusal of the remote, as the outcome it is (row 242, final review)', () => {
+  const fetchFailed = (got: string) => refusalOutcome({ field: 'fetch', rule: 'fetch-failed', got, want: 'w' })?.outcome
+  it('a fetch git refused the login for is a fix, never transient', () => {
+    expect(fetchFailed("remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/o/r.git/'")).toBe('fix')
+    expect(fetchFailed('git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.')).toBe('fix')
+  })
+  it('a PR branch gone from the remote is a fix', () => {
+    expect(fetchFailed("fatal: couldn't find remote ref witness/a-plan-1")).toBe('fix')
+  })
+  it('a remote that did not answer is still transient', () => {
+    expect(fetchFailed("fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com")).toBe('transient')
+  })
+})
+
 describe('every ship outcome is classified and recorded (row 242)', () => {
   it('no CI checks → a merge record, and no merge', async () => {
     const s = await readyToShip()
@@ -126,6 +140,24 @@ describe('every ship outcome is classified and recorded (row 242)', () => {
     gh(s.scenario, 'gh-fail-watch', 'error: the watch timed out\n')
     expect(await runShip(s.ctx, s.planId)).toBe(0)
     expect(s.calls().match(/pr checks 1 --json name,bucket/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  }, 180_000)
+
+  it('a refused git login at the merge\'s base fetch → fix, never transient', async () => {
+    const s = await readyToShip()
+    gh(s.scenario, 'pr-1-checks', 'none')
+    await runShip(s.ctx, s.planId)                                       // opens PR #1, a merge stop
+    gh(s.scenario, 'pr-1-checks', 'pass')
+    const ssh = join(s.scenario, 'ssh-deny')
+    writeFileSync(ssh, '#!/bin/sh\necho "git@github.com: Permission denied (publickey)." >&2\nexit 255\n', { mode: 0o755 })
+    s.repo.git('remote', 'set-url', 'origin', 'ssh://git@github.invalid/o/r.git')
+    const before = process.env.GIT_SSH_COMMAND
+    process.env.GIT_SSH_COMMAND = ssh
+    try {
+      await runShip(s.ctx, s.planId)
+    } finally {
+      if (before === undefined) delete process.env.GIT_SSH_COMMAND; else process.env.GIT_SSH_COMMAND = before
+    }
+    expect(records(s.repo, s.planId).at(-1)).toMatchObject({ outcome: 'fix', pr: 1 })
   }, 180_000)
 
   it('a merge → merged', async () => {

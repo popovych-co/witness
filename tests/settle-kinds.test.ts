@@ -105,6 +105,22 @@ describe('settleStop after the door refused its act (row 240)', () => {
     expect(arbiter.calls).toBe(1)
   })
 
+  // Final review: the winner is the decision that landed after the settler's read, not the first one
+  // after the run — at the bound a reopen of the gate can already sit there.
+  it('a lost race at the bound names the decision that landed, past a reopen already in the read', async () => {
+    const repo = await plannedRepo()
+    await stopFor(repo, 3)
+    appendEntry(repo.root, PLAN, { v: 1, t: 'human-decision', gate: 'plan', artifact: PLAN, round: 3, decision: 'revise',
+      caused_by: { artifact: PLAN, gate: 'implement', round: 1 } } as never)
+    reset([async () => {
+      expect(await applyDecision(fakeCtx(repo.root), { gate: 'plan', target: PLAN, decision: 'stop' })).toBe(0)
+    }], [stops])
+    const out: string[] = []
+    const s = await settleStop(fakeCtx(repo.root, { out: (l) => out.push(l) }), repo.root, cfgOf(repo), 'plan', PLAN)
+    expect(s).toEqual({ kind: 'superseded', by: 'human', decision: 'stop' })
+    expect(out).toContain(`decided: plan ${PLAN} → stop · human (decided first)`)
+  })
+
   it('a stale-verdict refusal below the bound is judged again: routed, no park, no second call (P26)', async () => {
     const repo = await plannedRepo()
     await stopFor(repo, 1)

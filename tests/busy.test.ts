@@ -98,6 +98,31 @@ describe('takeBusy and busyHolder (row 240)', () => {
     expect(JSON.parse(readFileSync(outside, 'utf8')).pid).toBe(OTHER)
   })
 
+  // Final review: a `since` far ahead of now (a tampered lock, a clock set wrong) is never live, so
+  // no target stays busy forever; drive's sweep drops it too.
+  it('a lock whose since lies far in the future is stale, and swept', () => {
+    const root = repo()
+    const since = NOW + 30 * 365 * 86_400_000
+    handLock(root, 'future', { pid: OTHER, since, until: since + 1_000 })
+    expect(busyHolder(root, 'settle', 'future', { pid: process.pid })).toBeUndefined()
+    expect(sweepDeadBusy(root, { pid: process.pid })).toBe(1)
+    handLock(root, 'future', { pid: OTHER, since, until: since + 1_000 })
+    expect(takeBusy(root, 'settle', 'future', NOW + 60_000, { pid: process.pid }).taken).toBe(true)
+  })
+
+  // Final review (Windows): a scanner holding the file a moment fails the release's unlink; it is
+  // retried, as a create is, so the lock never outlives its taker's release.
+  it('an unlink EBUSY or EPERM on release is retried', () => {
+    const root = repo()
+    const t = takeBusy(root, 'settle', 'a-plan-1', NOW + 60_000, { pid: process.pid })
+    let n = 0
+    const realUnlink = busyIo.unlink
+    busyIo.unlink = (p) => { n++; if (n <= 2) throw Object.assign(new Error('scanner'), { code: n === 1 ? 'EBUSY' : 'EPERM' }); realUnlink(p) }
+    try { if (t.taken) t.release() } finally { busyIo.unlink = realUnlink }
+    expect(n).toBe(3)
+    expect(existsSync(lockFile(root, 'a-plan-1'))).toBe(false)
+  })
+
   it('an empty file is a write in progress for one second, then stale', () => {
     const root = repo()
     handLock(root, 'a-plan-1', '')

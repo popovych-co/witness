@@ -396,7 +396,8 @@ export function evidenceForDiff(runRoot: string, stateRoot: string, plan: CanonD
     // Row 241 (R10): a reconstructed red that came back vacuous ran with the change set aside —
     // the behavior is already present — unlike a plain vacuous red, which cannot tell that from a
     // test that asserts nothing. The reviewers judge which it is (the gate's note).
-    const present = lastRed?.vacuous === true && lastRed.reconstructed === true
+    // Final review: it closes a step, so it names one — a fix round's reconstructed red names none.
+    const present = lastRed?.vacuous === true && lastRed.reconstructed === true && typeof lastRed.step === 'string'
     return {
       tag,
       red: present || (lastRed !== undefined && matching(lastRed, tag).some((t) => !t.ok)),

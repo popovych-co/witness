@@ -91,20 +91,31 @@ function recordOutcome(root: string, planId: string, outcome: ShipOutcome, reaso
 // remote), or one drive re-checks (the remote did not answer, or another push or create failure).
 // The session's own work — a commit that failed, an unreadable HEAD, a rebase conflict — is no record.
 function recordRefusal(root: string, planId: string, violations: readonly Violation[], shipBranch: string): void {
-  const x = violations[0]
-  if (x === undefined) return
+  const o = violations[0] !== undefined ? refusalOutcome(violations[0]) : undefined
+  if (o !== undefined) recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
+}
+
+// A failed fetch, read for what it means (C locale): a login git refused is the human's fix — as on a
+// push — and so is a PR branch gone from the remote; anything else is a remote that did not answer.
+export function fetchOutcome(out: string, transient: string): { outcome: 'fix' | 'transient'; reason: string } {
+  if (classifyGit(out) === 'login') return { outcome: 'fix', reason: 'git refused the login — sign in to the remote again' }
+  if (/couldn't find remote ref/i.test(out)) return { outcome: 'fix', reason: 'the PR branch is gone from the remote — recreate or reopen it, or abandon the plan' }
+  return { outcome: 'transient', reason: transient }
+}
+
+export function refusalOutcome(x: Violation): { outcome: ShipOutcome; reason: string } | undefined {
   const got = String(x.got)
   switch (x.rule) {
-    case 'no-remote': return recordOutcome(root, planId, 'fix', 'no origin remote — add one, then re-check', shipBranch)
-    case 'push-diverged': return recordOutcome(root, planId, 'fix', 'the PR branch holds commits this worktree lacks — overwriting them is your call', shipBranch)
-    case 'fetch-failed': return recordOutcome(root, planId, 'transient', 'the fetch failed', shipBranch)
+    case 'no-remote': return { outcome: 'fix', reason: 'no origin remote — add one, then re-check' }
+    case 'push-diverged': return { outcome: 'fix', reason: 'the PR branch holds commits this worktree lacks — overwriting them is your call' }
+    case 'fetch-failed': return fetchOutcome(got, 'the fetch failed')
     case 'push-failed': return classifyGit(got) === 'login'
-      ? recordOutcome(root, planId, 'fix', 'git refused the login — sign in to the remote again', shipBranch)
-      : recordOutcome(root, planId, 'transient', 'the push failed', shipBranch)
+      ? { outcome: 'fix', reason: 'git refused the login — sign in to the remote again' }
+      : { outcome: 'transient', reason: 'the push failed' }
     case 'pr-create-failed': return classifyGh(1, got) === 'login'
-      ? recordOutcome(root, planId, 'fix', 'GitHub refused the login — gh auth login', shipBranch)
-      : recordOutcome(root, planId, 'transient', 'the PR could not be created', shipBranch)
-    case 'pr-url-unparseable': return recordOutcome(root, planId, 'transient', 'the PR create answered no PR', shipBranch)
+      ? { outcome: 'fix', reason: 'GitHub refused the login — gh auth login' }
+      : { outcome: 'transient', reason: 'the PR could not be created' }
+    case 'pr-url-unparseable': return { outcome: 'transient', reason: 'the PR create answered no PR' }
     default: return undefined
   }
 }
@@ -155,7 +166,7 @@ const DIVERGED_WANT =
 // else is someone else's work. The push then leases on that exact sha, so a commit landing
 // between this fetch and the push is refused by the remote itself.
 function leaseFor(wt: string, branch: string, remote = 'origin'): Result<string> {
-  const fetched = tryGit(wt, 'fetch', remote, branch)
+  const fetched = tryGitC(wt, 'fetch', remote, branch)
   if (!fetched.ok) {
     return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, branch])} to succeed`)])
   }
@@ -259,7 +270,7 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   // A configured remote that will not fetch is NOT the offline case. Degrading to the
   // local ref here would silently rebase on a stale base immediately before a merge,
   // which is the exact failure this function exists to prevent.
-  const fetched = tryGit(wt, 'fetch', remote, shipBranch)
+  const fetched = tryGitC(wt, 'fetch', remote, shipBranch)
   if (!fetched.ok) {
     // Row 239: the fetch the want names is another tool's command, through the one renderer.
     return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, shipBranch])} to succeed`)])
@@ -332,9 +343,11 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   const shipCmd = cliAct('ship', planId).line
   // `baseMoved` reads a failed fetch as "not moved" so routing degrades offline; here that
   // would merge onto a base nobody could check (F9), so an unreachable remote holds instead.
-  if (!tryGit(wt, 'fetch', 'origin', shipBranch).ok) {
-    ctx.out(kv('merge', `held — cannot verify ${shipBranch} (the fetch failed) · ${shipCmd} retries once the remote answers`))
-    recordOutcome(root, planId, 'transient', `cannot verify ${shipBranch} (the fetch failed)`, shipBranch)
+  const baseFetch = tryGitC(wt, 'fetch', 'origin', shipBranch)
+  if (!baseFetch.ok) {
+    const o = fetchOutcome(baseFetch.out, `cannot verify ${shipBranch} (the fetch failed)`)
+    ctx.out(kv('merge', o.outcome === 'fix' ? `held — ${o.reason} · then ${shipCmd}` : `held — cannot verify ${shipBranch} (the fetch failed) · ${shipCmd} retries once the remote answers`))
+    recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
     return EXIT.FINDINGS
   }
   // The merge is the one irreversible outward act, so its authority comes from the branch it
@@ -375,9 +388,11 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
   // Fetched into a witness-owned ref with an explicit forced refspec and read from there:
   // `origin/<base>` is a local ref that `update-ref` or a rewritten fetch refspec can forge.
   // Residual, recorded: an agent with this shell can still rewrite the remote's URL itself.
-  if (!tryGit(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`).ok) {
-    ctx.out(kv('merge', `held — cannot verify ${prBase} (the fetch failed) · ${shipCmd} retries once the remote answers`))
-    recordOutcome(root, planId, 'transient', `cannot verify ${prBase} (the fetch failed)`, shipBranch)
+  const authority = tryGitC(root, 'fetch', '--no-tags', 'origin', `+refs/heads/${prBase}:refs/witness/ship-authority`)
+  if (!authority.ok) {
+    const o = fetchOutcome(authority.out, `cannot verify ${prBase} (the fetch failed)`)
+    ctx.out(kv('merge', o.outcome === 'fix' ? `held — ${o.reason} · then ${shipCmd}` : `held — cannot verify ${prBase} (the fetch failed) · ${shipCmd} retries once the remote answers`))
+    recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
     return EXIT.FINDINGS
   }
   if (!autonomyAt(root, 'refs/witness/ship-authority')) {

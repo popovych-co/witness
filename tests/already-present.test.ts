@@ -71,6 +71,17 @@ describe('a step already on the base (row 241)', () => {
     expect(report(fresh.repo, fresh.wt, fresh.planId)).toMatchObject({ satisfied: false, required: [{ red: false }] })
   }, 240_000)
 
+  // Final review: "already present" closes a step. A reconstructed red that names no step — a fix
+  // round's after an implement gate — stands for no red, so the fix still owes a genuine one.
+  it('a fix round\'s vacuous verify-red, naming no step, does not pass the evidence check', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    commitEntry(repo, planId, { ...presentRed(planId), step: undefined })
+    await repo.cli(['test-evidence', planId, '--phase', 'green'], { cwd: wt, env: fixtureEnv() })
+    const r = report(repo, wt, planId)
+    expect(r.satisfied).toBe(false)
+    expect(r.required[0]).not.toHaveProperty('present')
+  }, 180_000)
+
   it('the gate\'s battery input and the stop\'s evidence carry already present: s1 — its test passed before any change', async () => {
     const { repo, wt, planId } = await shippableRepo()
     commitEntry(repo, planId, presentRed(planId))

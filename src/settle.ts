@@ -137,9 +137,13 @@ async function judgeStop(
   const afterRefusal = async (rule: string | undefined): Promise<Settled | undefined> => {
     const fresh = readStream(root, target)
     if (settledToken(fresh, gate, owed.run_id) !== token) {
-      const at = fresh.findIndex((e) => e.t === 'gate-run' && (e as unknown as GateRunEntry).run_id === owed.run_id)
-      const winner = fresh.slice(at + 1).find((e) => e.t === 'human-decision' &&
-        (e as unknown as DecisionEntry).gate === gate) as unknown as DecisionEntry | undefined
+      // The winner is the first decision that landed after this settler's read — at the bound a
+      // reopen of the gate can already sit after the run in that read (final review).
+      const after = (es: typeof entries) => {
+        const at = es.findIndex((e) => e.t === 'gate-run' && (e as unknown as GateRunEntry).run_id === owed.run_id)
+        return es.slice(at + 1).filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
+      }
+      const winner = after(fresh)[after(entries).length] as unknown as DecisionEntry | undefined
       if (winner !== undefined) {
         const by = byOf(winner)
         ctx.out(kv('decided', `${gate} ${target} → ${winner.decision} · ${by} (decided first)`))
