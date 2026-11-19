@@ -158,14 +158,21 @@ describe('a human un-park restarts the caps (row 241)', () => {
     reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', checks: [], outcome: 'stopped' })
   it('the cap window counts from the later of the last cap park and the last human un-park', () => {
     const caps = { rounds: 2, upstream: 9, spawns: 9, wallClockMs: 1e9 }
-    const before = [run(1), run(2)]
+    const park = { v: 1, t: 'human-decision', gate: 'implement', artifact: 'p1', round: 2, decision: 'stop', selected: 'arbiter' }
+    const before = [run(1), run(2), park]
     expect(capHit(before as unknown as Entry[], { spawns: 0, ms: 0 }, caps)?.cap).toBe('rounds')
-    const unparked = [...before, { v: 1, t: 'human-decision', gate: 'implement', artifact: 'p1', round: 2, decision: 'revise', unpark: true }]
+    const unpark = { v: 1, t: 'human-decision', gate: 'implement', artifact: 'p1', round: 2, decision: 'revise', unpark: true }
+    const unparked = [...before, unpark]
     expect(capHit(unparked as unknown as Entry[], { spawns: 0, ms: 0 }, caps)).toBeUndefined()
+    // a line that only claims to un-park — following no park, or a settler's — restarts nothing
+    expect(capHit([run(1), run(2), unpark] as unknown as Entry[], { spawns: 0, ms: 0 }, caps)?.cap).toBe('rounds')
+    expect(capHit([...before, { ...unpark, selected: 'policy' }] as unknown as Entry[], { spawns: 0, ms: 0 }, caps)?.cap).toBe('rounds')
     expect(capHit([...unparked, run(3), run(4)] as unknown as Entry[], { spawns: 0, ms: 0 }, caps)?.cap).toBe('rounds')
   })
 
-  it('drive resets a target\'s per-run use when its stream gains a human un-park', async () => {
+  for (const committed of [true, false]) it(committed
+    ? 'drive resets a target\'s per-run use when its stream gains a human un-park'
+    : 'an un-park line a session appended without a state commit restarts no cap', async () => {
     const repo = await seededRepo()
     for (const s of ['a', 'b']) {
       await writeSpec(repo, s, { criteria: [{ id: `ac-${s}`, test: `@spec:${s}` }] })
@@ -195,7 +202,8 @@ echo "$WITNESS_DRIVE" >> "${log}"
 case "$WITNESS_DRIVE" in
   a-plan-1) if [ "$(grep -c a-plan-1 "${log}")" = 1 ]; then printf '%s\\n' '${runA}' '${park}' >> "${journalA}"; fi ;;
   b-plan-1) i=0; while ! grep -q '"selected":"arbiter"' "${journalA}" && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
-            printf '%s\\n' '${unpark}' >> "${journalA}" ;;
+            printf '%s\\n' '${unpark}' >> "${journalA}"
+            ${committed ? `git -C "${repo.root}" add "${journalA}" && git -C "${repo.root}" -c user.name=w -c user.email=w@e commit -qm unpark -m 'Witness-State: 1'` : 'true'} ;;
 esac
 `, { mode: 0o755 })
     const out: string[] = []
@@ -203,7 +211,7 @@ esac
       env: fixtureEnv({ WITNESS_KEEP_AWAKE_BIN: noopOpener(), WITNESS_DRIVE_IDLE_MAX_MS: '0', WITNESS_DRIVE_AGENT_BIN: agent }),
       out: (l) => out.push(l),
     }), {}, fakeClock(0))
-    expect(readFileSync(log, 'utf8').split('\n').filter((l) => l === 'a-plan-1')).toHaveLength(2)
-    expect(out.join('\n')).not.toContain('drive: capped — a-plan-1 · drive cap: 1 session(s)')
+    expect(readFileSync(log, 'utf8').split('\n').filter((l) => l === 'a-plan-1')).toHaveLength(committed ? 2 : 1)
+    if (committed) expect(out.join('\n')).not.toContain('drive: capped — a-plan-1 · drive cap: 1 session(s)')
   }, 120_000)
 })

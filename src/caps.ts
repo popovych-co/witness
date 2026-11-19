@@ -2,7 +2,7 @@ import { settleUntil, takeBusy } from './busy.js'
 import { EXIT, type Ctx } from './cli.js'
 import type { Config, DriveCaps } from './config.js'
 import type { Entry } from './journal.js'
-import { fellBack, gateRuns, isUnpark, lastGateRun, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { fellBack, gateRuns, lastGateRun, settledToken, unparkAt, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { duration } from './usage.js'
 import { gateSettled } from './verbs/next.js'
 
@@ -32,7 +32,7 @@ function openGates(entries: Entry[]): string[] {
 export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHit | undefined {
   // Row 241 (R11): a human un-park restarts the window, as a cap park does.
   let lastPark = -1
-  entries.forEach((e, i) => { if (isCapPark(e) || isUnpark(e)) lastPark = i })
+  entries.forEach((e, i) => { if (isCapPark(e) || unparkAt(entries, i)) lastPark = i })
   const since = entries.slice(lastPark + 1)
   // Every budget reset is ignored: this counts the rounds a gate ran, not its window. The
   // exemptions are `roundsSinceApprove`'s — a malformed or fallen-back round spends nothing.

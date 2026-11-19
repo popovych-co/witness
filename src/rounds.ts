@@ -381,6 +381,17 @@ export function isUnpark(e: Entry, gate?: string): boolean {
     (gate === undefined || (e as unknown as DecisionEntry).gate === gate)
 }
 
+// Row 241. An un-park as `decide` journals it: a human's (no `selected`), lifting a park — the
+// gate's previous decision is a stop. What restarts drive's caps reads this, never the marker
+// alone, so a line that merely claims `unpark` and follows no park restarts nothing.
+export function unparkAt(entries: Entry[], i: number): boolean {
+  const e = entries[i]
+  if (e === undefined || !isUnpark(e) || (e as unknown as DecisionEntry).selected !== undefined) return false
+  const gate = (e as unknown as DecisionEntry).gate
+  const before = entries.slice(0, i).filter((x) => x.t === 'human-decision' && (x as unknown as DecisionEntry).gate === gate).at(-1)
+  return (before as unknown as DecisionEntry | undefined)?.decision === 'stop'
+}
+
 // What un-parks a gate stopped under D124. At the bound the gate short-circuits before invoking
 // anything, so `--fresh` is the D67 lie: the only live acts there are the endgame set, which
 // exitActs already knows. Below it, row 241 (R11): a human's revise sends the gate back to work —

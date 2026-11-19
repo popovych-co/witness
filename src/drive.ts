@@ -20,14 +20,14 @@ import { entryDetail } from './verbs/log.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
-import { isUnpark } from './rounds.js'
+import { unparkAt } from './rounds.js'
 import { stateFloor } from './floor.js'
 import { compareTriple, version } from './version.js'
 import { ASK_STREAM } from './ask.js'
 import { KEPT_STOP_NAMES, unmetNeedLine, type KeptStop } from './autonomy.js'
 import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
-import { effortStreams, journalRel, readStream, type Entry } from './journal.js'
+import { effortStreams, journalActs, journalRel, readStream, type Entry } from './journal.js'
 import { movesFlow } from './progress.js'
 import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
@@ -1192,9 +1192,13 @@ export async function driveLoop(
         }
         if (waitingNeed(action, key)) continue
         // Row 241 (R11). A human un-park restarts the target's per-run spawns and wall clock, as
-        // row 207's release does: an arbiter's park sets no aside, so no take-back would.
+        // row 207's release does: an arbiter's park sets no aside, so no take-back would. Only an
+        // un-park witness journaled counts — committed by a state commit, a human's, right after a
+        // park — so a line a session merely appended to the journal restarts no cap.
         if (action.target !== undefined) {
-          const n = readStream(root, action.target).filter((e) => isUnpark(e)).length
+          const acts = journalActs(root, action.target)
+          const es = acts.map((a) => a.entry)
+          const n = acts.filter((a, i) => !/^0+$/.test(a.commit) && unparkAt(es, i)).length
           const seen = unparksSeen.get(key)
           if (seen !== undefined && n > seen) use.delete(key)
           unparksSeen.set(key, n)
