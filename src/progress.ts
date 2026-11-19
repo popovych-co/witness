@@ -14,6 +14,8 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   trust: 'act',
   deferral: 'act', 'deferral-moved': 'act', 'deferral-retyped': 'act', 'deferral-discharged': 'act', 'deferral-dismissed': 'act',
   ask: 'act', 'ask-withdrawn': 'act', 'need-satisfied': 'act', 'step-close': 'act', retry: 'act',
+  // Row 242: what ship ended on moves the flow — a re-check is told from a session that did nothing.
+  'ship-outcome': 'act',
   // A refused write is the CLI saying no (F5). A sync is the merge stamp's or `start`'s
   // automatic act on the human's behalf (D138). A dispatch report is telemetry (row 81). A
   // drift check reads; a policy pin records the rule a decision ran under.
