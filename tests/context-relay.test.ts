@@ -153,11 +153,13 @@ describe('the rule at a step close', () => {
     expect(report(r)).toEqual(['context: 17% of 1M · limit 20%', 'steps: 1/3 done · next s2', 'slice: continue'])
   })
 
-  // The behavior is already in the base, so the reconstructed red passes: a finding, not a cycle.
-  it('a vacuous verify-red reports nothing', async () => {
+  // The behavior is already in the base, so the reconstructed red passes. Row 241 (R10): on an open
+  // step that closes the step as already present — a step close, so the slice is decided here too.
+  it('a vacuous verify-red on an open step closes it present and decides the slice', async () => {
     const r = await verifyRed(TOKEN_FIXED)
     expect(r.code).toBe(1)
-    expect(r.stdout).not.toContain('context:')
+    expect(r.stdout).toContain('step-close: auth-refresh-plan-1 · s1 closed — already present: its test passed before any change')
+    expect(lines(r).filter((l) => l.startsWith('context:'))).toHaveLength(1)
   })
 
   // §4.3: a legacy plan's steps are not the CLI's to see, so until its implement gate every
@@ -562,14 +564,20 @@ describe('a vacuous red is no act', () => {
     expect(relays(a)).toEqual([])
     // A fresh session runs the routed line, as each turn of the probe's loop opened one to.
     const first = await repo.cli(['next'], { cwd: wt, env: over('B') })
+    expect(relays(first)).toEqual([])
+    // Row 241 (R10): the first verify-red finds s1 on the base and closes it present — an act — and
+    // the routed row becomes its green.
     const verified = await repo.cli(['verify-red', PLAN, '--step', 's1'], { cwd: wt, env: over('B') })
     expect(verified.code).toBe(1)
     expect(verified.stdout).toContain('verify-red: red NOT observed · green confirmed')
-    const again = await repo.cli(['next'], { cwd: wt, env: over('B') })
-    expect(routed(again)).toBe(routed(first))
-    expect(relays(first)).toEqual([])
+    expect(routed(await repo.cli(['next'], { cwd: wt, env: over('B') }))).toBe(`next: witness test-evidence ${PLAN} --phase green --step s1`)
+    // A fresh session that only re-runs it closes nothing again: no act, and nothing to hand over.
+    const rerun = await repo.cli(['verify-red', PLAN, '--step', 's1'], { cwd: wt, env: over('C') })
+    expect(rerun.stdout).not.toContain('step-close:')
+    const again = await repo.cli(['next'], { cwd: wt, env: over('C') })
     expect(relays(again)).toEqual([])
-    expect(readStream(repo.root, PLAN).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red'])
+    expect(readStream(repo.root, PLAN).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red', 'red'])
+    expect(readStream(repo.root, PLAN).filter((e) => e.t === 'step-close')).toHaveLength(1)
   })
 })
 

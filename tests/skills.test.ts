@@ -183,6 +183,13 @@ describe('witness-implement — capture mandate', () => {
   });
 });
 
+describe('witness-implement: a step already on the base (row 241)', () => {
+  it('a verify-red that closes a step as already present prints the slice lines, and its green comes next', () => {
+    expect(readFileSync(skillPath('witness-implement'), 'utf8'))
+      .toContain('unless it closed its step as already present (`step-close: … closed — already present`), which prints the slice lines like any step close; that step\'s green comes next')
+  });
+});
+
 describe('witness-ship', () => {
   const body = () => readFileSync(skillPath('witness-ship'), 'utf8');
   it('drives the ship phases and always stops for the human', () => {

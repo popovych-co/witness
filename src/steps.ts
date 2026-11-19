@@ -48,6 +48,10 @@ export function closingIndex(step: Pick<StepState, 'id' | 'kind'>, entries: Entr
     if (e.step !== step.id) continue
     if (step.kind === 'scaffolding') {
       if (e.t === 'step-close') return i
+    } else if (e.t === 'step-close' && e.present === true) {
+      // Row 241 (R10): verify-red found the step's behavior already on the base and closed it
+      // "already present" — its green still comes next, for the tag (evidenceForDiff).
+      return i
     } else if (opensCycle(e)) {
       opened = true
     } else if (opened && closesCycle(e)) {
@@ -152,6 +156,21 @@ export function redCycleClosed(entries: Entry[]): boolean {
 export function greenOwedStep(plan: CanonDoc, entries: Entry[]): string | undefined {
   const step = stepInFlight(entries)
   return manifest(plan).find((s) => s.kind === 'criteria' && s.id === step)?.id
+}
+
+// Row 241 (R10). The step an already-present red left owed its green: the latest red naming a
+// criteria step is a reconstructed one that came back vacuous (verify-red found the behavior on the
+// base), and no passing green tagged with that step follows it. Its green is the next row.
+export function presentGreenOwed(plan: CanonDoc, entries: Entry[]): string | undefined {
+  const criteria = new Set(manifest(plan).filter((s) => s.kind === 'criteria').map((s) => s.id))
+  let at = -1
+  entries.forEach((e, i) => {
+    if (e.t === 'test-evidence' && e.phase === 'red' && typeof e.step === 'string' && criteria.has(e.step)) at = i
+  })
+  const red = entries[at]
+  if (red === undefined || red.vacuous !== true || red.reconstructed !== true) return undefined
+  const step = String(red.step)
+  return entries.slice(at + 1).some((e) => e.step === step && closesCycle(e)) ? undefined : step
 }
 
 // The step's latest red passed: the behavior it asserts already exists, as when the

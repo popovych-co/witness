@@ -1426,10 +1426,13 @@ describe('a vacuous red is no progress (row 191)', () => {
     const agent = script(`echo tick\n${witnessCli()} verify-red ${planId} --step s1\nexit 0`)
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: agent }, out), {})
-    expect(out.filter((l) => / tick$/.test(l))).toHaveLength(1)
+    // Row 241 (R10): the first session's verify-red closes s1 as already present — progress — and
+    // routes its green; a second session that re-runs the verify-red closes nothing and is stuck.
+    expect(out.filter((l) => / tick$/.test(l))).toHaveLength(2)
     expect(out).toContain(`[1 implement/${planId}] verify-red: red NOT observed · green confirmed`)
-    expect(out).toContain(`drive: no progress — witness verify-red ${planId} --step s1`)
-    expect(readStream(repo.root, planId).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red'])
+    expect(out).toContain(`drive: no progress — witness test-evidence ${planId} --phase green --step s1`)
+    expect(readStream(repo.root, planId).filter((e) => e.t === 'test-evidence').map((e) => e.phase)).toEqual(['red', 'red', 'red'])
+    expect(readStream(repo.root, planId).filter((e) => e.t === 'step-close').map((e) => e.present)).toEqual([true])
   }, 120000)
 })
 

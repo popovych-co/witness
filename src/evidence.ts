@@ -354,6 +354,11 @@ export interface EvidenceRequirement {
   red: boolean
   green: boolean
   vacuous: boolean
+  // Row 241 (R10). The tag's latest red is an already-present one: verify-red set the plan's change
+  // aside and the test still passed, so the behavior is on the base. It stands for the red once a
+  // passing green follows it; `presentStep` is the step it named, when it named one.
+  present?: true
+  presentStep?: string
 }
 
 export interface EvidenceReport {
@@ -388,12 +393,17 @@ export function evidenceForDiff(runRoot: string, stateRoot: string, plan: CanonD
     }
     const lastRed = lastRedIdx >= 0 ? entries[lastRedIdx]! : undefined
     const lastGreen = lastGreenIdx >= 0 ? entries[lastGreenIdx]! : undefined
+    // Row 241 (R10): a reconstructed red that came back vacuous ran with the change set aside —
+    // the behavior is already present — unlike a plain vacuous red, which cannot tell that from a
+    // test that asserts nothing. The reviewers judge which it is (the gate's note).
+    const present = lastRed?.vacuous === true && lastRed.reconstructed === true
     return {
       tag,
-      red: lastRed !== undefined && matching(lastRed, tag).some((t) => !t.ok),
+      red: present || (lastRed !== undefined && matching(lastRed, tag).some((t) => !t.ok)),
       green: lastGreen !== undefined && lastGreenIdx > lastRedIdx &&
         matching(lastGreen, tag).every((t) => t.ok),
-      vacuous: lastRed?.vacuous === true,
+      vacuous: lastRed?.vacuous === true && !present,
+      ...(present ? { present: true as const, ...(typeof lastRed.step === 'string' ? { presentStep: lastRed.step } : {}) } : {}),
     }
   })
   return {

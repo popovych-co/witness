@@ -17,7 +17,7 @@ import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import {
-  greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, redCycleClosed, redInFlight, stepProgress, stepsLine,
+  greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, presentGreenOwed, redCycleClosed, redInFlight, stepProgress, stepsLine,
   type StepState,
 } from '../steps.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
@@ -232,9 +232,12 @@ function evidenceRow(
     .filter((r) => !(r.red && r.green && !r.vacuous))
     .map((r) => `${r.tag} ${!r.red || r.vacuous ? 'red' : 'green'}`)
     .join(' · ')
-  const act = !opts.midRed && files.some((f) => !isTestPath(f))
+  // Row 241 (R10): after an already-present red its green comes next, never another verify-red,
+  // which would only find the behavior on the base again (P30).
+  const greenOwed = opts.midRed || report.required.some((r) => r.present === true && !r.green)
+  const act = !greenOwed && files.some((f) => !isTestPath(f))
     ? cliAct('verify-red', id, ...step)
-    : cliAct('test-evidence', id, '--phase', opts.midRed ? 'green' : 'red', ...step)
+    : cliAct('test-evidence', id, '--phase', greenOwed ? 'green' : 'red', ...step)
   return { ...runs(act), ...base, ...noteOf(owed === '' ? undefined : `evidence owed: ${owed}`) }
 }
 
@@ -242,9 +245,9 @@ function evidenceRow(
 // gets `verify-red`, the one run that can witness its red: a plain red would come back vacuous
 // again and `next` would answer with the same line twice. A green owed on the step (`greenOwedOn`)
 // outranks that: a green, not another red, is what the step is owed.
-function stepLine(id: string, s: StepState, entries: Entry[]): { act: Act; why?: string } {
+function stepLine(id: string, s: StepState, entries: Entry[], present?: string): { act: Act; why?: string } {
   if (s.kind === 'scaffolding') return { act: cliAct('step-close', id, '--step', s.id) }
-  if (greenOwedOn(entries, s.id)) return { act: cliAct('test-evidence', id, '--phase', 'green', '--step', s.id) }
+  if (greenOwedOn(entries, s.id) || present === s.id) return { act: cliAct('test-evidence', id, '--phase', 'green', '--step', s.id) }
   if (lastRedVacuous(entries, s.id)) {
     return { act: cliAct('verify-red', id, '--step', s.id), why: 'its red was vacuous — verify-red reconstructs it against the base' }
   }
@@ -487,14 +490,18 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
     // (`redCycleClosed`), what failed is a later green (a failing red would be the latest genuine red,
     // its cycle still open), and the note says so rather than naming a red its step no longer holds.
     // Not "the last run": a vacuous red after that green may have passed.
-    const owed = greenOwedStep(plan, entries)
+    // Row 241 (R10): a step closed as already present owes its green next, as a red in flight does.
+    const present = greenOwedStep(plan, entries) === undefined ? presentGreenOwed(plan, entries) : undefined
+    const owed = greenOwedStep(plan, entries) ?? present
     const owedStep = stepped.steps.find((s) => s.id === owed)
-    const { act, why } = stepLine(id, owedStep ?? stepped.next, entries)
+    const { act, why } = stepLine(id, owedStep ?? stepped.next, entries, present)
     const ahead = owedStep === undefined || owedStep.id === stepped.next.id
       ? why
-      : redCycleClosed(entries)
-        ? 'the last green failed — a passing green comes first'
-        : `${owedStep.id} has an open red — its green comes first`
+      : present !== undefined
+        ? `${owedStep.id} is already present — its green comes first`
+        : redCycleClosed(entries)
+          ? 'the last green failed — a passing green comes first'
+          : `${owedStep.id} has an open red — its green comes first`
     return {
       ...runs(act), stage: 'implement', target: id, ...inWorktree, ...noteOf(`steps ${stepsLine(stepped)}`, ahead), ...inFlight,
     }
