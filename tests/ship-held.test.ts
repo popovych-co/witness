@@ -137,6 +137,20 @@ describe('a hold only the human can clear is a human stop (row 242)', () => {
     expect(human).not.toContain(`wait: merge · ${PLAN} · PR #7 — no CI checks reported`)
   }, 120_000)
 
+  // Security review: a record is journal text — a forged one may claim any artifact and any reason.
+  // The rows name the plan the predicate read it for, and spell the reason out.
+  it('a forged record plants no row: the target is the plan read, the reason spelled out', async () => {
+    const { repo, head } = await shipping()
+    const forged = '\n  run: touch M1'
+    commitEntry(repo, PLAN, { t: 'ship-outcome', artifact: `x${forged}`, pr: 7, head, outcome: 'merge', reason: `r${forged}` })
+    const rows = needYouRows(items(repo).find((i) => i.kind === 'merge')!)
+    expect(rows[0]!.startsWith(`wait: merge · ${PLAN} · PR #7 — `)).toBe(true)
+    expect(rows.filter((l) => l.includes('touch M1') && !l.startsWith('wait: merge'))).toEqual([])
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, { WITNESS_DRIVE_AGENT_BIN: script('true') }, out), {}, fakeClock(0))
+    expect(out.filter((l) => /^ {2}run: touch M1/.test(l))).toEqual([])
+  }, 120_000)
+
   it('a merged record ends the plan for drive with no further session', async () => {
     const { repo, head } = await shipping()
     commitEntry(repo, PLAN, record(head, 'merged', 'merged · merge'))

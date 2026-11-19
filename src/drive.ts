@@ -817,7 +817,7 @@ export async function driveLoop(
   const asHeld = (key: string): boolean => {
     const rec = heldNow(key)
     if (rec === undefined) return false
-    ctx.out(`drive: ${rec.outcome} — ${key} · ${rec.reason}`)
+    ctx.out(`drive: ${rec.outcome} — ${key} · ${logSafe(String(rec.reason))}`)
     setAside(key, { kind: rec.outcome === 'fix' ? 'fix' : 'merge', line: cliAct('ship', key).line, why: rec.reason, key0: keyOf(ownNext(key)) })
     return true
   }
@@ -854,7 +854,7 @@ export async function driveLoop(
       return
     }
     if (step.kind === 'merge' || step.kind === 'fix') {
-      ctx.out(`drive: ${step.kind} — ${action.target ?? 'untargeted work'} · ${action.held?.reason ?? 'the merge is a human\'s'}`)
+      ctx.out(`drive: ${step.kind} — ${action.target ?? 'untargeted work'} · ${action.held !== undefined ? logSafe(String(action.held.reason)) : 'the merge is a human\'s'}`)
       setAside(key, { kind: step.kind, line: step.line, why: action.held?.reason ?? 'the merge is a human\'s', key0: keyOf(action) })
       return
     }

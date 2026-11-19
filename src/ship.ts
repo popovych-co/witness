@@ -576,7 +576,7 @@ async function shipMarked(
     const head = tryGit(worktreePath(root, planId), 'rev-parse', 'HEAD')
     const rec = standingRecord(readStream(root, planId), head.ok ? head.out.trim() : undefined)
     if (rec !== undefined) {
-      needYouRows(heldItem(rec, cfgR.value)).forEach((l) => ctx.out(l))
+      needYouRows(heldItem(rec, cfgR.value, planId)).forEach((l) => ctx.out(l))
       return EXIT.FINDINGS
     }
   }

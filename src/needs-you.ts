@@ -136,7 +136,7 @@ export function needsYou(
     const t = String(plan.meta.id)
     if (named.has(t)) continue
     const rec = heldPlan(root, cfg, plan)
-    if (rec !== undefined) add(heldItem(rec, cfg))
+    if (rec !== undefined) add(heldItem(rec, cfg, t))
   }
   const driver = resolveDriver(ctx.env, cfg.harness)
   for (const a of aside.filter((x) => x.kind === 'conversation' || x.kind === 'merge')) {
@@ -247,9 +247,10 @@ const MERGE_METHODS = new Set(['merge', 'squash', 'rebase'])
 
 // Row 242. A standing merge or fix record as the item every surface prints: the merge pinned to the
 // record's head, a PR number only as its digits, a sha only as hex, and the base edit only where the
-// PR aims at another branch than `ship.branch`.
-export function heldItem(rec: ShipOutcomeEntry, cfg: Config): NeedYou {
-  const t = rec.artifact
+// PR aims at another branch than `ship.branch`. The record is journal text, so the target is the plan
+// id the caller read it for, never the record's own `artifact`; its reason is spelled out where printed.
+export function heldItem(rec: ShipOutcomeEntry, cfg: Config, planId: string): NeedYou {
+  const t = planId
   const pr = prOfMeta(rec.pr)
   const recheck = cliAct('ship', t)
   if (rec.outcome === 'fix') {
