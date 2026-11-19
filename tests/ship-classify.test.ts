@@ -43,14 +43,14 @@ const CLEAN = {
   coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
-const shipConfig = (autonomy: boolean) => stringify(withValues(parse(singleConfig('filtered')) as Record<string, unknown>, {
-  ship: { test: 'true', lint: 'true', ciSettleMs: 0 }, ...(autonomy ? { autonomy: 'on' } : {}),
+const shipConfig = (autonomy: boolean, ciSettleMs = 0) => stringify(withValues(parse(singleConfig('filtered')) as Record<string, unknown>, {
+  ship: { test: 'true', lint: 'true', ciSettleMs }, ...(autonomy ? { autonomy: 'on' } : {}),
 }))
 // An approved ship gate on a plan with an origin: the next `witness ship` opens PR #1 and watches CI.
-async function readyToShip(opts: { autonomy?: boolean } = {}) {
+async function readyToShip(opts: { autonomy?: boolean; ciSettleMs?: number } = {}) {
   const autonomy = opts.autonomy ?? true
   const seed = await shippableRepo()
-  seed.repo.write('witness.config.yaml', shipConfig(autonomy))
+  seed.repo.write('witness.config.yaml', shipConfig(autonomy, opts.ciSettleMs ?? 0))
   seed.repo.git('add', 'witness.config.yaml'); seed.repo.git('commit', '-m', 'config')
   addOrigin(seed.repo)
   const scenario = fakeScenario()
@@ -117,6 +117,15 @@ describe('every ship outcome is classified and recorded (row 242)', () => {
     gh(s.scenario, 'pr-1-rollups', 'test:fail,lint:cancel,build:pass\n')
     expect(await runShip(s.ctx, s.planId)).toBe(1)
     expect(records(s.repo, s.planId).at(-1)).toEqual({ outcome: 'red', reason: 'fail: test · cancel: lint', pr: 1 })
+  }, 180_000)
+
+  // F7 kept (security review): a watch that failed or timed out says nothing about a check that has
+  // yet to register, so a green read after it settles and reads the set again before any merge.
+  it('a green read after a failed watch settles and reads the set again before it merges', async () => {
+    const s = await readyToShip({ ciSettleMs: 300 })
+    gh(s.scenario, 'gh-fail-watch', 'error: the watch timed out\n')
+    expect(await runShip(s.ctx, s.planId)).toBe(0)
+    expect(s.calls().match(/pr checks 1 --json name,bucket/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
   }, 180_000)
 
   it('a merge → merged', async () => {

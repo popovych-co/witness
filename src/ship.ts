@@ -468,8 +468,12 @@ type CiVerdict = { kind: 'green' } | { kind: 'red'; detail: string } | { kind: '
 // (autonomy); with the merge the human's, the wait applies only before believing "no checks".
 async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number, settleGreen = true): Promise<CiVerdict> {
   const start = Date.now()
-  // The watch window; a test shortens it, since a real one is half an hour.
+  // The watch window; a test shortens it, since a real one is half an hour. Shortening it only makes
+  // ship give up sooner with `pending` — never green, which needs a set with nothing pending.
   const windowMs = Number(ctx.env.WITNESS_SHIP_WATCH_MS) || WATCH_MS
+  // A green read that followed a watch that failed or timed out has not seen the set hold still:
+  // it settles and reads again before it licenses a merge (F7, kept on every path to green).
+  let resettled = false
   for (;;) {
     const left = Math.max(1, windowMs - (Date.now() - start))
     const watched = gh(ctx, root, ['pr', 'checks', String(pr), '--watch'], left)
@@ -494,7 +498,13 @@ async function watchCi(ctx: Ctx, root: string, pr: number, settleMs: number, set
     }
     const bad = checks.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel')
     if (bad.length > 0) return { kind: 'red', detail: bad.map((c) => `${c.bucket}: ${c.name}`).join(' · ') }
-    return checks.some((c) => c.bucket === 'pass') ? { kind: 'green' } : { kind: 'no-pass' }
+    if (!checks.some((c) => c.bucket === 'pass')) return { kind: 'no-pass' }
+    if (!watched.ok && settleGreen && settleMs > 0 && !resettled) {
+      resettled = true
+      await sleep(settleMs)
+      continue
+    }
+    return { kind: 'green' }
   }
 }
 
