@@ -1064,7 +1064,9 @@ function nextChild(root: string, env: NodeJS.ProcessEnv): Promise<{ code: number
 }
 
 describe('one decision per stop (B3)', () => {
-  it('two settlers racing one stop journal exactly one decision · the loser reads left', async () => {
+  // Row 240: the loser reads the winner's decision — `decided: … (decided first)` — or, when its
+  // read came after the winner landed, nothing at all; never a decision of its own.
+  it('two settlers racing one stop journal exactly one decision · the loser reads decided first', async () => {
     // a stopped plan gate with one blocking-here finding, taken under autonomy: the policy revises
     const repo = await plannedRepo({ autonomy: false })
     const scenario = fakeScenario()
@@ -1075,7 +1077,9 @@ describe('one decision per stop (B3)', () => {
     const [x, y] = await Promise.all([nextChild(repo.root, env), nextChild(repo.root, env)])
     const decided = readStream(repo.root, 'auth-refresh-plan-1').filter((e) => e.t === 'human-decision')
     expect(decided).toHaveLength(1)
-    expect([x, y].filter((r) => r.stdout.includes('decided:'))).toHaveLength(1)
+    const own = (r: { stdout: string }) => r.stdout.split('\n').some((l) => l.startsWith('decided:') && !l.includes('(decided first)'))
+    expect([x, y].filter(own)).toHaveLength(1)
+    expect([x, y].filter((r) => r.stdout.includes('autonomy: left'))).toHaveLength(0)
   }, 60_000)
 })
 
