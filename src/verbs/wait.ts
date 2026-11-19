@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
 import { loadConfig, type Config } from '../config.js'
 import { PAUSE_IDLE_MAX_MS } from '../drive.js'
+import { logSafe } from '../toon.js'
 import { OLDER_DRIVE_LINE, driveHolder, olderDrive, sessionMarker, stopCommand } from '../drive-presence.js'
 import { resolveDriver } from '../harness.js'
 import { primaryRoot } from '../gitio.js'
@@ -9,7 +10,7 @@ import { lastEnd, liveDrive, takeWaiter, waiterState, type EndReason } from '../
 import { needsYou, needsYouToken, needYouRows, type NeedYou } from '../needs-you.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
-import { prState } from '../stamp.js'
+import { prView } from '../stamp.js'
 import { duration, realClock, type Clock } from '../usage.js'
 import { computeNext, driveHasWork } from './next.js'
 
@@ -86,10 +87,18 @@ export async function waitLoop(root: string, ctx: Ctx, cfg: Config, opts: { sinc
     // stamps it. Read-only and slow.
     if (clock.now() - prAt >= WAIT_PR_POLL_MS) {
       prAt = clock.now()
-      for (const i of items.filter((x) => x.kind === 'merge')) {
+      // Row 242: the PR read against the standing record. A merge stop wakes the chat once its PR
+      // merged, closed or was retargeted; a fix stop, which already names such a state, wakes only on
+      // a merge. The chat's `next` journals what changed, after which the record names it.
+      for (const i of items.filter((x) => x.kind === 'merge' || x.kind === 'fix')) {
         const pr = findById(canon, i.target)?.meta.pr
-        if (pr !== undefined && prState(ctx, root, Number(pr)) === 'MERGED') {
-          return say(`wait: merged on GitHub — ${i.target} · PR #${Number(pr)}`, [])
+        const view = pr !== undefined ? prView(ctx, root, Number(pr)) : undefined
+        if (view === undefined) continue
+        if (view.state === 'MERGED') return say(`wait: merged on GitHub — ${i.target} · PR #${Number(pr)}`, [])
+        if (i.kind !== 'merge') continue
+        if (view.state === 'CLOSED') return say(`wait: needs you — ${i.target} · PR #${Number(pr)} is closed on GitHub`, [])
+        if (view.base !== undefined && view.base !== cfg.ship.branch) {
+          return say(`wait: needs you — ${i.target} · PR #${Number(pr)} now targets ${logSafe(view.base)} on GitHub`, [])
         }
       }
     }

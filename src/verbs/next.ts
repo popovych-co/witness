@@ -7,7 +7,7 @@ import { isId } from '../dsl.js'
 import { unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
-import { primaryRoot, tryGit } from '../gitio.js'
+import { fetchBranch, primaryRoot, stateOnlyAdvance, tryGit } from '../gitio.js'
 import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { templateDraft } from '../principles.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
@@ -25,11 +25,11 @@ import { handoffLine, relayLine, resolveDriver, resolveJudge, type Harness } fro
 import { payloadStale } from '../install.js'
 import { NPX_LATEST } from '../version.js'
 import { driveWillDecide, liveDrive } from '../live.js'
-import { standingRecord, type ShipOutcomeEntry } from '../ship-outcome.js'
+import { journalOutcome, standingRecord, type ShipOutcomeEntry } from '../ship-outcome.js'
 import { busyHolder } from '../busy.js'
 import { isHeld, needsYou, needsYouToken, waitingRows } from '../needs-you.js'
 import { atHome, worktreeFlow, worktreePath } from '../worktree.js'
-import { lazyStamp } from '../stamp.js'
+import { lazyStamp, type PrView } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
@@ -485,6 +485,43 @@ const implementSeat = (root: string, cfg: Config, id: string): { home: string; m
   const pinR = stagePin(cfg, 'implement')
   const pin = pinR.ok ? pinR.value : undefined
   return { home: worktreePath(root, id), model: pin !== undefined && pin !== SESSION_DEFAULT ? pin : undefined }
+}
+
+// Row 242 (design §4.3.2, GitHub moves on). While a merge record stands, `next` reads what changed
+// on GitHub and journals the record that follows: a PR retargeted away from ship.branch, or closed
+// without merging, is a fix; a base moved beyond witness's state commits is a re-gate (one fetch of
+// ship.branch per `next`, with a timeout). A merged PR is the lazy stamp's, as before. No answer —
+// a failed or timed-out fetch, a view GitHub did not give — journals nothing, and the row stands. A
+// fix record is never checked for a moved base: a rebase cannot clear a human's hold.
+export const GITHUB_CHECK_FETCH_MS = 10_000
+
+export function githubCheck(root: string, ctx: Ctx, cfg: Config, canon: Canon, views: ReadonlyMap<string, PrView>): void {
+  if (ctx.env.CI) return
+  const branch = cfg.ship.branch
+  let fetched: boolean | undefined
+  for (const plan of canon.docs.filter((d) => d.meta.type === 'plan' && isId(d.meta.id))) {
+    const id = String(plan.meta.id)
+    const rec = heldPlan(root, cfg, plan)
+    if (rec === undefined || rec.outcome !== 'merge') continue
+    const view = views.get(id)
+    if (view === undefined || view.state === 'MERGED') continue
+    const wt = worktreePath(root, id)
+    const base = (): string | undefined => {
+      const b = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
+      return b.ok ? b.out.trim() : undefined
+    }
+    const record = (outcome: 'fix' | 're-gate', reason: string) => {
+      const b = base()
+      journalOutcome(root, id, { ...(rec.pr !== undefined ? { pr: rec.pr } : {}), head: rec.head, ...(b !== undefined ? { base: b } : {}), outcome, reason })
+    }
+    if (view.state === 'CLOSED') { record('fix', 'closed without merging — reopen it, or abandon the plan'); continue }
+    if (view.base !== undefined && view.base !== branch) { record('fix', `the PR targets ${view.base} but ship.branch is ${branch}`); continue }
+    fetched ??= fetchBranch(root, branch, GITHUB_CHECK_FETCH_MS)
+    if (!fetched) continue
+    const onBase = `refs/remotes/origin/${branch}`
+    if (tryGit(wt, 'merge-base', '--is-ancestor', onBase, 'HEAD').ok || stateOnlyAdvance(wt, root, 'HEAD', onBase)) continue
+    record('re-gate', `${branch} moved beyond the approved base`)
+  }
 }
 
 // Row 242 (design §4.3.2, One predicate). A plan is held while a merge or fix record stands — the
@@ -1362,6 +1399,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   let canon = loadCanon(root)
   const lazy = lazyStamp(root, ctx, canon)
   if (lazy.stamped.length > 0) canon = loadCanon(root)
+  // Row 242. A standing merge stop follows its PR on GitHub, from the view the stamp just read.
+  githubCheck(root, ctx, cfgR.value, canon, lazy.views)
   // `dashboard` renders these; `next` computed them and dropped them. A merge stamp that
   // cannot proceed (commit refused, PR closed unmerged, lock held) leaves the flow parked
   // at ship forever, and `next` — the one verb the driving loop calls every turn — said

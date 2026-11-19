@@ -44,29 +44,44 @@ export interface LazyResult {
   // D141. Worktrees this run declined to remove because the caller was standing in one.
   // Reported by the renderers, never a failure: it re-runs from any other cwd.
   kept: string[]
+  // Row 242. What GitHub said of each in-progress plan's PR, by plan id — read once here, so `next`'s
+  // check of a standing merge record costs no second call. Absent: GitHub did not answer.
+  views: Map<string, PrView>
 }
 
-export function prState(ctx: Ctx, root: string, pr: number): string | undefined {
+export interface PrView { state: string; base?: string }
+
+// Row 242. The PR's state and base, from one `gh pr view`. A failure, a timeout, a PR GitHub no longer
+// knows, or an answer that is not the JSON asked for, all read as no answer (undefined).
+export function prView(ctx: Ctx, root: string, pr: number): PrView | undefined {
   try {
-    const out = execFileSync('gh', ['pr', 'view', String(pr), '--json', 'state'], {
-      cwd: root, env: ctx.env as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 3_000,
+    const out = execFileSync('gh', ['pr', 'view', String(pr), '--json', 'state,baseRefName'], {
+      cwd: root, env: ctx.env as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'pipe'],
     })
-    return (JSON.parse(out) as { state?: string }).state
+    const v = JSON.parse(out) as { state?: unknown; baseRefName?: unknown }
+    if (typeof v?.state !== 'string' || !/^[A-Z_]+$/.test(v.state)) return undefined
+    return { state: v.state, ...(typeof v.baseRefName === 'string' ? { base: v.baseRefName } : {}) }
   } catch {
     return undefined
   }
 }
 
+export function prState(ctx: Ctx, root: string, pr: number): string | undefined {
+  return prView(ctx, root, pr)?.state
+}
+
 export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
-  const result: LazyResult = { stamped: [], stale: [], kept: [] }
+  const result: LazyResult = { stamped: [], stale: [], kept: [], views: new Map() }
   if (ctx.env.CI) return result                                     // CI never writes state
   const candidates = canon.docs.filter((d) =>
     d.meta.type === 'plan' && String(d.meta.status) === 'in-progress' && d.meta.pr !== undefined)
   for (const plan of candidates) {
     const planId = String(plan.meta.id)
     const pr = Number(plan.meta.pr)
-    const state = prState(ctx, root, pr)
-    if (state === undefined) { result.stale.push({ plan: planId, why: "stale, couldn't check" }); continue }
+    const view = prView(ctx, root, pr)
+    const state = view?.state
+    if (view === undefined || state === undefined) { result.stale.push({ plan: planId, why: "stale, couldn't check" }); continue }
+    result.views.set(planId, view)
     if (state === 'CLOSED') {
       // Row 239. The command the why names is an act's line.
       result.stale.push({ plan: planId, why: `pr #${pr} closed unmerged — ${cliAct('abandon', planId).line}?` })

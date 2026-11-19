@@ -28,6 +28,19 @@ export function tryGit(root: string, ...args: string[]): { ok: boolean; out: str
   return tryGitWith(root, args)
 }
 
+// Row 242. One fetch of `branch` from origin that gives up after `timeoutMs` — git itself has no
+// timeout, and a black-holed remote never answers (P32). False on any failure: offline.
+export function fetchBranch(root: string, branch: string, timeoutMs: number): boolean {
+  try {
+    execFileSync('git', ['fetch', '--no-tags', 'origin', branch], {
+      cwd: root, stdio: ['ignore', 'ignore', 'ignore'], timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' },
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Row 242. git's words read for their meaning (a rejected push, a refused login) come from a git
 // run in the C locale, so a localized git still classifies (W7).
 export function tryGitC(root: string, ...args: string[]): { ok: boolean; out: string } {
