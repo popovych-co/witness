@@ -38,8 +38,14 @@ const staged = (wt: string, f: string): string => g(wt, 'show', `:${f}`)
 
 // A hook in the test repo's own hooks dir (shared by its worktrees), so a step of the move meets a
 // state the test sets at exactly that moment: `git rebase` runs pre-rebase before it moves anything.
+// core.hooksPath is pinned in the repo's own config first: `--git-path hooks/…` honours a global
+// core.hooksPath, which would put the hook in the user's own hooks dir, run by every rebase in every
+// repo (tests/gitio.test.ts pins it for the same reason).
 function hook(wt: string, name: string, body: string): void {
-  const path = resolve(wt, g(wt, 'rev-parse', '--git-path', `hooks/${name}`))
+  const hooks = join(resolve(wt, g(wt, 'rev-parse', '--git-common-dir')), 'hooks')
+  g(wt, 'config', 'core.hooksPath', hooks)
+  const path = join(hooks, name)
+  expect(resolve(wt, g(wt, 'rev-parse', '--git-path', `hooks/${name}`))).toBe(path)
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, `#!/bin/sh\n${body}\n`)
   chmodSync(path, 0o755)
@@ -52,6 +58,8 @@ async function movedPlan() {
   const seed = await shippableRepo()
   const { repo, wt, planId } = seed
   addOrigin(repo)
+  // the markers the tests read are git's default style, whatever a global merge.conflictStyle says
+  repo.git('config', 'merge.conflictStyle', 'merge')
   repo.write('f.txt', 'a\nb\nc\n')
   repo.write('g.txt', '1\n2\n3\n')
   repo.git('add', 'f.txt', 'g.txt')
@@ -353,6 +361,29 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     expect(am.status).not.toBe(0)
     refusedOver('am')
     g(wt, 'am', '--abort')
+    expect(stashList(wt)).toBe('')
+  }, 180_000)
+
+  it('a session\'s rebase that starts under witness\'s own is never aborted: operation-in-progress, the work kept in the carry ref (P19)', async () => {
+    const { wt, repo, planId, moveMain, run } = await movedPlan()
+    // a session starts its own rebase as witness's begins (after step 2 and its re-check), and the
+    // hook then refuses witness's: the session's rebase is what stands in the worktree afterwards
+    hook(wt, 'pre-rebase', 'unset GIT_REFLOG_ACTION\ngit rebase --no-verify --force-rebase --exec false HEAD~1 >/dev/null 2>&1\nexit 1')
+    put(wt, 'g.txt', '1\n2\nWORK\n')
+    moveMain({ 'm.txt': 'main\n' })
+    const r = rebaseIfMoved(wt, repo.root, 'main', run)
+    expect(r.ok).toBe(false)
+    const x = !r.ok ? r.violations : []
+    expect(x.map((y) => y.rule)).toEqual(['operation-in-progress', 'carry-pending'])
+    expect(x[0]!.want).toContain(shellLine(['git', 'rebase', '--continue']))
+    // never aborted: the session's rebase still stands, its own entries the newest in HEAD's reflog
+    expect(operationInProgress(wt)).toBe('rebase-merge')
+    expect(g(wt, 'reflog', '-n', '1', '--format=%gs', 'HEAD')).toMatch(/^rebase \(/)
+    expect(g(wt, 'reflog', '-n', '5', '--format=%gs', 'HEAD')).not.toMatch(/abort/)
+    // nothing applied into it; the work waits in the carry ref
+    expect(read(wt, 'g.txt')).toBe('1\n2\n3\n')
+    expect(hasCarry(wt, planId)).toBe(true)
+    expect(g(wt, 'diff', `${carryRef(planId)}^1`, carryRef(planId))).toContain('+WORK')
     expect(stashList(wt)).toBe('')
   }, 180_000)
 

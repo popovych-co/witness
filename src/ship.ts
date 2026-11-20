@@ -27,8 +27,8 @@ import {
   carryClashViolations, clashGuard, clashLeft, clashViolations, refuseClash, replayConflictViolations,
 } from './clash.js'
 import {
-  baseInTheWay, captureCarry, carryGit, carryPending, cleanTree, heldLock, lockedRow, operationInProgress, operationRefusal,
-  reapply, unmergedPaths, type Reapplied,
+  baseInTheWay, captureCarry, carryGit, carryPending, cleanTree, headReflog, heldLock, lockedRow, operationInProgress,
+  operationRefusal, ownRebaseSince, reapply, unmergedPaths, type OpInProgress, type Reapplied,
 } from './carry.js'
 import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
 import { heldItem, needYouRows } from './needs-you.js'
@@ -328,9 +328,14 @@ export function rebaseIfMoved(
     const cleaned = cleanTree(wt, planId)
     if (!cleaned.ok) return cleaned
   }
-  // Step 6. Witness's own rebase (its reflog action `witness-carry`), never stashing anything.
+  // Step 6. Witness's own rebase (its reflog action `witness-carry`), never stashing anything. Step 2
+  // is asked again right before it: a session may have started an operation since (the lease's fetch
+  // alone can take a while), and witness rebases into none.
+  const appeared = operationInProgress(wt)
+  if (appeared !== undefined) return refuse(sessionOperation(wt, planId, appeared, carry))
+  const reflog = headReflog(wt)
   const rebase = carryGit(wt, 'rebase', '--no-autostash', base)
-  if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`))
+  if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`, reflog))
   // Step 7. The work back, or the refusal that keeps it.
   if (carry !== undefined) {
     const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry))
@@ -356,24 +361,37 @@ function putBackRefusal(wt: string, planId: string, onto: string, put: Reapplied
   }
 }
 
-// Step 6 failed. The unmerged paths are read first (a replay conflict's files), then witness's own
-// rebase is aborted — its exit is not read: a rebase that died before it started has nothing to
-// abort, so success is the state itself, no operation in progress and HEAD back where it was. Only
-// then is the carry put back, and its ref deleted only after a clean put-back. A put-back that fails
-// keeps the ref (`carry-pending`, or `index-locked` for a held lock). After a clean one, a replay
-// conflict refuses `textual-conflict` naming the files, and anything else `rebase-refused` in git's
-// own words.
+// An operation a session started under the move (step 2, met late): the session's to finish, never
+// aborted nor applied into. Work already carried stays in the carry ref (`carry-pending`); step 0
+// puts it back once the operation is over.
+function sessionOperation(wt: string, planId: string, op: OpInProgress, carry: string | undefined): Violation[] {
+  return [operationRefusal(wt, planId, op), ...(carry === undefined ? [] : [carryPending(planId,
+    'a git operation started in the worktree while the move was under way, so the plan\'s work was not put back into it')])]
+}
+
+// Step 6 failed. The unmerged paths are read first (a replay conflict's files). An operation now in
+// progress is aborted only when it is witness's own rebase (`ownRebaseSince`); a session's that began
+// under the call refuses as the session's. The abort's exit is not read: success is the state itself,
+// no operation in progress and HEAD back where it was. Only then is the carry put back, and its ref
+// deleted only after a clean put-back. A put-back that fails keeps the ref (`carry-pending`, or
+// `index-locked` for a held lock). After a clean one, a known replay conflict refuses
+// `textual-conflict` naming the files, ahead of a lock read once the rebase is undone (a put-back has
+// just found the index free); then a held lock `index-locked`, and anything else `rebase-refused` in
+// git's own words.
 function failedRebase(
   wt: string, planId: string, onto: string, carry: string | undefined, at: { head: string; ref: string }, out: string,
+  reflog: readonly string[],
 ): Violation[] {
   const replayed = unmergedPaths(wt).map((p) => p.path)
-  carryGit(wt, 'rebase', '--abort')
+  const op = operationInProgress(wt)
+  if (op !== undefined && !ownRebaseSince(wt, op, out, reflog)) return sessionOperation(wt, planId, op, carry)
+  const abort = op === undefined ? undefined : carryGit(wt, 'rebase', '--abort')
   const now = carryGit(wt, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}').stdout.trim()
   const back = operationInProgress(wt) === undefined && now === at.head
     && carryGit(wt, 'symbolic-ref', '--quiet', 'HEAD').stdout.trim() === at.ref
-  const lock = heldLock(wt, out)
   if (!back) {
-    if (lock !== undefined) return [lockedRow(planId, lock, carry !== undefined)]
+    const lock = heldLock(wt, `${out}${abort?.stdout ?? ''}${abort?.stderr ?? ''}`)
+    if (lock !== undefined) return [lockedRow(planId, lock, carry !== undefined, true)]
     const got = `the rebase onto ${onto} failed and its abort did not bring HEAD back to ${at.head.slice(0, 12)}: ${logSafe(out.trim().slice(0, 200))}`
     return carry !== undefined ? [carryPending(planId, got)]
       : [v('rebase', 'rebase-refused', got, `the worktree back on ${at.ref || at.head.slice(0, 12)} with no rebase in progress, then ${cliAct('ship', planId).line}`)]
@@ -382,8 +400,9 @@ function failedRebase(
     const refused = putBackRefusal(wt, planId, onto, reapply(wt, planId, carry))
     if (refused !== undefined) return refused
   }
-  if (lock !== undefined) return [lockedRow(planId, lock, false)]
   if (replayed.length > 0) return replayConflictViolations(planId, replayed, onto)
+  const lock = heldLock(wt, out)
+  if (lock !== undefined) return [lockedRow(planId, lock, false)]
   return [v('rebase', 'rebase-refused', logSafe(out.trim().slice(0, 200)) || 'git printed nothing',
     `a rebase onto ${onto} git accepts — nothing moved, and the plan's work is back as it was; fix what git names, then ${cliAct('ship', planId).line}`)]
 }

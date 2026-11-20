@@ -177,12 +177,35 @@ export function heldLock(wt: string, out: string, locks: readonly string[] = ['i
 }
 
 // `index-locked` (exit 3, transient): a held lock, the index's or the carry ref's. The lock's path is
-// `got`. Its want says what removing it takes, and whether the work waits in the carry ref.
-export function lockedRow(planId: string, lock: string, carried: boolean): Violation {
+// `got`. Its want says what removing it takes, whether the work waits in the carry ref, and — when
+// witness's own failed rebase could not be undone (`unfinished`) — that it may still be in progress.
+// "Nothing moved" is said only when it is true.
+export function lockedRow(planId: string, lock: string, carried: boolean, unfinished = false): Violation {
   const ship = cliAct('ship', planId).line
-  return v('lock', 'index-locked', lock, carried
-    ? `${shellWord(lock)} released — remove it if no git process is running; ${carryRef(planId)} keeps the plan's work meanwhile, and ${ship} finishes the move`
-    : `${shellWord(lock)} released — remove it if no git process is running, then ${ship}; nothing moved`)
+  const held = `${shellWord(lock)} released — remove it if no git process is running`
+  const work = carried ? `${carryRef(planId)} keeps the plan's work meanwhile, and ${ship} finishes the move` : `then ${ship}`
+  if (unfinished) {
+    return v('lock', 'index-locked', lock, `${held}; witness's own rebase did not finish and was not undone — `
+      + `${shellLine(['git', 'rebase', '--abort'])} ends it if one is still in progress; ${work}`)
+  }
+  return v('lock', 'index-locked', lock, carried ? `${held}; ${work}` : `${held}, ${work}; nothing moved`)
+}
+
+// HEAD's reflog subjects in this worktree, newest first; none where HEAD keeps no reflog.
+export function headReflog(wt: string): string[] {
+  const r = carryGit(wt, 'reflog', 'show', '--format=%gs', 'HEAD')
+  return r.code === 0 ? r.stdout.split('\n').filter((s) => s !== '') : []
+}
+
+// Step 6. After witness's own rebase failed, the operation in progress is witness's to abort only when
+// it is a rebase, git did not refuse because one was already under way, and every HEAD reflog entry
+// written since `before` (read just before the call) carries witness's action. A session's rebase
+// started meanwhile writes its own entries (`rebase (start)`), and is never aborted.
+export function ownRebaseSince(wt: string, op: OpInProgress | undefined, out: string, before: readonly string[]): boolean {
+  if (op !== 'rebase-merge' && op !== 'rebase-apply') return false
+  if (/already a rebase-(?:merge|apply) directory/.test(out)) return false
+  const after = headReflog(wt)
+  return after.slice(0, Math.max(0, after.length - before.length)).every((s) => s.startsWith(`${CARRY_ACTION} `))
 }
 
 // Step 2 (P19). An operation a session started is its own to finish: witness never aborts it, nor
