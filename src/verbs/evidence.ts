@@ -1,4 +1,5 @@
 import { EXIT, type Ctx } from '../cli.js'
+import { clashGuard } from '../clash.js'
 import { checkoutRoot, diffBase, recordEvidence, verifyRed } from '../evidence.js'
 import { loadConfig } from '../config.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -40,6 +41,22 @@ function stepArg(argv: string[], usage: string): Result<string | undefined> {
   return argv.includes('--step') && step === undefined ? refuse([v('--step', 'required', 'absent', usage)]) : ok(step)
 }
 
+// Row 243 (design §4.1.2). No evidence run, verify-red included, starts while a clash in the plan's
+// worktree is unresolved: a suite run over conflict markers journals an outcome of a tree nobody
+// means. Refused before the step is checked and before any run, exit 2 — here exit 1 is the test's
+// own failure. Each file is named on a row of its own, with its remedy. The ship branch is read from
+// the config the run reads, the checkout's (D192: a primary root's config that will not load costs a
+// report, never the run); one that will not load refuses the run itself, with its own rows, before
+// any test runs, so no evidence is written either way.
+function clashRefused(ctx: Ctx, runRoot: string, stateRoot: string, planId: string): number | undefined {
+  const cfg = loadConfig(runRoot)
+  if (!cfg.ok) return undefined
+  const clash = clashGuard(stateRoot, cfg.value, planId)
+  if (clash === undefined) return undefined
+  renderRefusal(clash).forEach(ctx.err)
+  return EXIT.REFUSED
+}
+
 // Row 191 §4.4. The green just journaled is the stream's last line, and whether it closed a step
 // is the plan's progress to say: a step's first passing green after its red does, a re-record or
 // a fix round does not. The report reads the same entries (D192): one read names the step closed
@@ -74,6 +91,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('plan-id', 'unknown-plan', planId, 'an existing plan id')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
+  const clashed = clashRefused(ctx, runRootRes.value, stateRoot, planId)
+  if (clashed !== undefined) return clashed
   // Row 191 §4.3. Checked before the suite runs: a mistyped step costs no run and journals no
   // entry that no step can claim.
   const stepRefused = checkStep(plan, readStream(stateRoot, planId), step, 'evidence')
@@ -147,6 +166,8 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('plan-id', 'unknown-plan', planId, 'an existing plan id')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
+  const clashed = clashRefused(ctx, runRootRes.value, stateRoot, planId)
+  if (clashed !== undefined) return clashed
   // Before the stash/checkout cycle, which rewrites the tree: a mistyped step churns nothing.
   const stepRefused = checkStep(plan, readStream(stateRoot, planId), step, 'evidence')
   if (stepRefused.length) { renderRefusal(stepRefused).forEach(ctx.err); return EXIT.REFUSED }

@@ -23,6 +23,7 @@ import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
+import { clashGuard } from './clash.js'
 import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
 import { heldItem, needYouRows } from './needs-you.js'
 import { driveChild } from './drive-presence.js'
@@ -439,7 +440,12 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
 // exists nothing else commits or pushes it, so CI went green on the old head and that is the
 // commit the merge landed. Never a force-push: a remote head this worktree lacks is someone
 // else's work, and overwriting it is a human's call.
-function pushApproved(ctx: Ctx, wt: string, planId: string, summary: string): Result<string> {
+// Row 243 (design §4.1.2): never while a clash is unresolved — `git add -A` would stage its markers
+// as resolved and the commit would carry them to the PR.
+function pushApproved(ctx: Ctx, root: string, cfg: Config, planId: string, summary: string): Result<string> {
+  const clash = clashGuard(root, cfg, planId)
+  if (clash !== undefined) return refuse(clash)
+  const wt = worktreePath(root, planId)
   if (tryGit(wt, 'status', '--porcelain').out !== '') {
     tryGit(wt, 'add', '-A')
     const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
@@ -577,6 +583,15 @@ async function shipMarked(
   ctx: Ctx, root: string, cfgR: { ok: true; value: Config }, planId: string, canon: ReturnType<typeof loadCanon>,
   plan: CanonDoc, opts: { manual?: boolean },
 ): Promise<number> {
+  // Row 243 (design §4.1.2). Ship carries no plan on while a clash in its worktree is unresolved:
+  // refused first, exit 2, recording nothing (§4.1.3) — each file on a row with its remedy, or, with
+  // a carry ref standing, `witness ship` itself. Asked again before each commit below, since a gate
+  // phase's rebase runs between.
+  const clash = clashGuard(root, cfgR.value, planId)
+  if (clash !== undefined) {
+    renderRefusal(clash).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   // Row 241 (R9). Whoever runs it — a drive session included — ship runs no review and carries no
   // plan on while a step is open: refused before anything journals, naming the step's command.
   const open = openStepRow(root, cfgR.value, plan)
@@ -690,7 +705,13 @@ async function shipMarked(
   if (phase === 'pr') {
     const parent = findById(canon, String(plan!.meta.parent))
     const parentSummary = String(parent?.meta.summary ?? 'witness change')
-    // implement leaves the worktree uncommitted — ship owns the sole code commit
+    // implement leaves the worktree uncommitted — ship owns the sole code commit. Row 243: never
+    // over an unresolved clash, whose markers `git add -A` would stage as resolved.
+    const clashed = clashGuard(root, cfgR.value, planId)
+    if (clashed !== undefined) {
+      renderRefusal(clashed).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
     if (tryGit(wt, 'status', '--porcelain').out !== '') {
       tryGit(wt, 'add', '-A')
       const committed = tryGit(wt, 'commit', '-m', `${planId}: ${parentSummary}`)
@@ -719,7 +740,7 @@ async function shipMarked(
   // watch never rebases: reaching here means shipPhase already established that both the
   // reviewed tree and the base are the ones the battery judged. It does carry that tree to
   // the PR first — a revise answered after the PR opened is otherwise never pushed (F8).
-  const pushed = pushApproved(ctx, wt, planId, String(findById(canon, String(plan!.meta.parent))?.meta.summary ?? 'witness change'))
+  const pushed = pushApproved(ctx, root, cfgR.value, planId, String(findById(canon, String(plan!.meta.parent))?.meta.summary ?? 'witness change'))
   if (!pushed.ok) {
     renderRefusal(pushed.violations).forEach((l) => ctx.err(l))
     recordRefusal(root, planId, pushed.violations, shipBranch)

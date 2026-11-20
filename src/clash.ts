@@ -1,12 +1,14 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cliAct } from './act.js'
 import {
   carryGit, carryRef, keptRefs, operationInProgress, remedyLine, unmergedPaths, type OpInProgress, type UnmergedPath,
 } from './carry.js'
+import type { Config } from './config.js'
 import { tryGitC } from './gitio.js'
 import { v, type Violation } from './refusal.js'
 import { shellWord } from './toon.js'
+import { worktreePath } from './worktree.js'
 
 // Row 243 (design §4.1.2). The guard: one predicate, read by every gate on a plan's worktree, every
 // evidence run, `witness turn` there, and ship, so a clash never reaches a reviewer or a commit.
@@ -158,4 +160,19 @@ export function clashViolations(planId: string, s: ClashSignal, wt: string): Vio
       `${contentRow(file)} · if a label line is the file's own text (a doc or a fixture), not a clash: a human moves ${refs.join(' and ')} `
         + 'out of refs/witness/kept/, to any name outside it, which releases the file — the backup itself is kept')
   })
+}
+
+// §4.1.2 "Who reads it". The one ask every reader makes: the implement and ship gates, test-evidence
+// and verify-red, `witness turn` in a plan's worktree, and ship (first, before its commit, and before
+// pushApproved's `git add -A`). It asks the plan's worktree and answers the refusal's rows, or nothing;
+// the caller renders them and exits 2 (REFUSED) — in the gate, an evidence run and a turn, exit 1
+// already means a verdict or a test's own failure. A worktree that is not there (no `.git` in it)
+// holds no tree to clash, so nothing is asked: from a leftover directory at its path, git would
+// answer from the primary checkout's repository. A carry ref left with the worktree gone is ship's
+// step 0 to refuse (`carry-pending`).
+export function clashGuard(root: string, cfg: Config, planId: string): Violation[] | undefined {
+  const wt = worktreePath(root, planId)
+  if (!existsSync(join(wt, '.git'))) return undefined
+  const s = clashLeft(wt, planId, cfg.ship.branch)
+  return s === undefined ? undefined : clashViolations(planId, s, wt)
 }
