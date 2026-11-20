@@ -1,22 +1,21 @@
-# Issues #86, #87, #80, #76 (rows 243–246) Implementation Plan — the rebuild
+# Issues #86, #87, #80 (rows 243–245) Implementation Plan — the rebuild
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** When the base moves, witness carries the plan's uncommitted work itself, and a clash stays in the files instead of reaching a gate (#86). Every act a screen offers is one `decide` accepts, and a revise the author hands back unchanged is decided again (#87). A session, reviewer or arbiter ends when its turn ends (#80). A repo whose tests open the app can be worked on entirely inside a Windows VM on the user's PC, so the tests never touch the user's screen (#76: a check and a setup guide, no witness code). All four ship as witness 0.30.0.
+**Goal:** When the base moves, witness carries the plan's uncommitted work itself, and a clash stays in the files instead of reaching a gate (#86). Every act a screen offers is one `decide` accepts, and a revise the author hands back unchanged is decided again (#87). A session, reviewer or arbiter ends when its turn ends (#80). All three ship as witness 0.30.0; #76 closes without witness work (decision 13).
 
 **Architecture:**
 - **#86:** a witness-owned carry (`src/carry.ts`) replaces `git rebase --autostash` inside `rebaseIfMoved`. Every ship run starts with step 0, which finishes an interrupted move. One guard predicate (`src/clash.ts`) is read by every gate, evidence run, turn and ship.
 - **#87:** one pure derivation, `liveActs` in `src/rounds.ts`, feeds every screen, hint and refusal, the arbiter's menu, and `decide`'s own acceptance. `witness gate … --unchanged` journals a new `revise-returned` entry, and one owed predicate reads it everywhere.
 - **#80:** `WorkerStream` reports when the turn ends. One end watch (`src/session-end.ts`) gives drive sessions and reviewer attempts a 60 s grace, then stops them and records the harness's own ending status.
-- **#76:** no witness code (decision 12). All of witness for such a repo runs inside a Windows VM on the user's PC. The plan writes the Windows check the user runs, then the README's VM guide from its results. Revision 6's runner is parked in `docs/superpowers/specs/2026-11-19-vm-runner-parked.md`.
+- **#76:** closed without witness work (decision 13). The user runs witness inside a VM themselves; Slice 5 is dropped.
 
 **Tech Stack:**
 - TypeScript (ESM, Node ≥ 20) and vitest.
 - git and gh CLIs. Step 0's comparison needs git ≥ 2.40.
-- PowerShell for the Windows check's scripts.
 - No new dependency.
 
-**Spec:** `docs/superpowers/specs/2026-11-19-remaining-issues-design.md`, revision 8. Revision 6 was approved 2026-11-19 (commit 13b621f); the user's decision 12 then rewrote its #76 part (revision 7), and pass 7 and the build's own rulings amended it (revision 8). Each task names the design section it builds; read that section with the task. Rows 243–246 in `DESIGN.md` are already written.
+**Spec:** `docs/superpowers/specs/2026-11-19-remaining-issues-design.md`, revision 9. Revision 6 was approved 2026-11-19 (commit 13b621f); the user's decision 12 then rewrote its #76 part (revision 7), pass 7 and the build's own rulings amended it (revision 8), and decision 13 dropped #76 (revision 9). Each task names the design section it builds; read that section with the task. Rows 243–245 in `DESIGN.md` are already written.
 
 **Rebuild:** this plan builds from main (0.29.0, b92a461) on branch `remaining-issues-2`, in the worktree `/Users/home/x/personal/witness/.claude/worktrees/remaining-issues-2`. A first build on branch `remaining-issues` (229648f..3ae38f9) stays as a reference, untouched. Its ledger (`/Users/home/x/personal/witness/.claude/worktrees/remaining-issues/.superpowers/sdd/2026-11-19-remaining-issues/progress.md`) says why each choice in the "Settled by the first build" lists below was made, and the design's §4.1.5, §4.2.9 and §4.3 carry the same choices. Do not copy its code.
 
@@ -50,7 +49,7 @@
   2. Spawn a fresh opus agent with the slice's `git diff <slice-start>..HEAD` and the design sections it builds, never the implementer's summary. Ask it for an adversarial review against the real code.
   3. Re-run each finding before fixing it, fix what holds, and log the review in the ledger.
 - **Subagents.** Implementer and reviewer subagents run on opus, never fable.
-- **Order.** Task 18 (the Windows check) needs no code: do it first, so the user can set the VM up and run it while Slices 1–4 build. Task 19 waits for the user's results.
+- **Order.** Tasks 1–17, then Task 20. Task 18 was built first (609ec06..ed92f1a); decision 13 dropped it with Task 19, and the commit that brought revision 9 removes its files.
 - **The first build's knowledge.** Each task's "Settled by the first build" list is part of that task: interface choices and review fixes from the first build, tagged with its ledger entries. The tests it names go into the task's Step 1 beside the others.
 - **Build ledger:** `/Users/home/x/personal/witness/.superpowers/sdd/2026-11-20-remaining-issues-2/progress.md`.
 
@@ -1297,116 +1296,13 @@ git commit -m "fix: reviewers and the arbiter end with their turn; drift runs on
 
 ---
 
-## Slice 5 — #76: witness in a VM (row 246)
+## Slice 5 — #76: dropped (decision 13)
 
-### Task 18: The Windows check of witness running in a VM (design §4.4; W1, W2, W4–W8, W11, W12)
+#76 closes without witness work: the user runs witness inside a VM themselves. Task 18 (the Windows check) was built first, in 609ec06..ed92f1a; the commit that brought revision 9 removes `scripts/vm-check/`, and the zip in `~/Downloads` is the user's to delete. Task 19 (the README's VM guide) is not built.
 
-*Do this task first: it needs no code, and the user needs time to set the VM up.*
+---
 
-**Files:**
-- Create: `scripts/vm-check/README.md`, `scripts/vm-check/AGENT.md`, `scripts/vm-check/vm.ps1`, `scripts/vm-check/pc.ps1`. They stay out of the npm package, whose `files` has no `scripts/`.
-- Ship: `~/Downloads/witness-vm-check.zip`, built from that folder.
-
-**What each script measures.** Each writes one JSON line per sample to a log the user pastes back.
-- **`vm.ps1`** runs inside the VM, as the signed-in user, unelevated.
-  - Every 2 s for `-Minutes`, it writes `{ at, session, console, inputDesktop, width, height, idleMs, displayTimeoutS, black }` (W1, W12). These come from `Add-Type` P/Invoke and `powercfg`:
-    - `WTSGetActiveConsoleSessionId`, beside the script's own session id;
-    - `OpenInputDesktop` with `GetUserObjectInformation` (UOI_NAME), which gives `Default`, or `Winlogon` when the screen is locked or a UAC prompt is up;
-    - `GetSystemMetrics(0)` and `GetSystemMetrics(1)`;
-    - `GetLastInputInfo`, read against `powercfg`'s display timeout;
-    - whether a small screenshot is all black.
-  - `-RunAfter <s> -Command "<cmd>"` runs a command after the delay and logs its exit code and output tail. A second `-RunAfter 3600` run checks the screen after 60 idle minutes (W1, W4).
-- **`pc.ps1`** runs on the PC.
-  - `-Host` prints `(Get-VMHost).EnableEnhancedSessionMode`; it logs `unknown` on a PC without Hyper-V (W2).
-  - `-WatchFocus -Minutes <n>` runs a WinEvent hook on foreground changes (`SetWinEventHook`, `EVENT_SYSTEM_FOREGROUND`) and logs `{ at, process }`: the process name only, never a window title (W5).
-- **`AGENT.md`** is a prompt for an AI agent on the Windows PC, where nothing is set up yet. It walks through the VM (VirtualBox on Windows Home, Hyper-V on Pro), as the design's §4.4.2 sets it up; the app's tests and witness inside the VM; then the steps below and what to bring back. Elevated steps happen only where the setup names them.
-- **`README.md`** gives the order, VirtualBox first, Hyper-V second:
-  1. record memory integrity's state (Windows Security → Device security → Core isolation), then set the VM up as §4.4.2 says:
-     - headless start, the screen size pinned, auto-resize off;
-     - audio, clipboard, drag-and-drop and USB off, the Manager closed;
-     - automatic sign-in with restart sign-on off, no lock, the display never off;
-     - a fixed share of cores and memory;
-     - the PC's sleep set to never;
-  2. in the VM, clone wot-mod-manager and install what its client tests need. Time the first cold build plus the suite, and copy `VBox.log`'s engine line, which shows whether VirtualBox fell back to the Windows Hypervisor Platform (W11);
-  3. start `vm.ps1 -Minutes 90 -RunAfter 120 -Command "<LowPro's client tests>"` with no VM window open;
-  4. on the PC, start `pc.ps1 -WatchFocus -Minutes 90`, and play an online match while the suite runs and while the VM builds cold. If PresentMon is at hand, log frame times with the VM idle and busy. Note ping, sound and stutter (W5, W6);
-  5. midway, open the VM's window for a minute in scaled view, then close it again (W12);
-  6. let the second run go after 60 idle minutes (W1);
-  7. collect both logs. After the guest's next Windows Update restart, and after the PC sleeps and wakes, note whether the VM came back signed in and unlocked (W7);
-  8. start `witness drive --detach` from a terminal on the VM's desktop, close the terminal, and check that the app tests still run on that screen (W8).
-- **What decides:**
-  - W1: with no window open, the samples read `Default`, the full size, the display on and a screenshot that is not black, through the second run;
-  - W4: both suite runs pass;
-  - W5: the focus log shows only the user's game, and the game holds its frame rate and ping;
-  - W6: the online match runs;
-  - W11: the cold build plus the suite finish in a time the user accepts;
-  - W12: the guest stays at 1920×1080 when the window opens.
-
-  If any of them fails, the route changes before Task 19.
-
-- [ ] **Step 1: Write the four files**
-
-- [ ] **Step 2: Scan them**
-
-Run the perl scan on the four files. If `pwsh` is installed, parse each `.ps1` with the PowerShell parser; otherwise note in the ledger that the user's first run on Windows is the parse check.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add scripts/vm-check
-git commit -m "chore: the Windows check of witness running inside a VM (row 246)"
-```
-
-- [ ] **Step 4: Build the zip and hand it to the user**
-
-Build `~/Downloads/witness-vm-check.zip` from `scripts/vm-check/`, and give the steps in plain words. Slices 1–4 build meanwhile.
-
-- [ ] **Step 5: Record the results**
-
-One ledger line per W.
-
-### Task 19: The README's guide to running witness in a VM (design §4.4.2; §4.5)
-
-*Waits for Task 18's results.*
-
-**Files:**
-- Modify:
-  - `README.md`: a section, "Running witness inside a VM".
-  - `DESIGN.md` row 246 and the design's §7 W-list: mark each W the user measured.
-
-**What the section says.** The content is fixed by §4.4.2; the numbers come from the check.
-- **Why:** the tests open the app on the VM's screen, so nothing comes to the front of yours.
-- **The VM:**
-  - VirtualBox, run headless, with the screen size pinned and auto-resize off, audio, clipboard and USB off, and the Manager closed;
-  - memory integrity decided first: off for speed, or on for protection at VirtualBox's slower pace, with the times the user measured;
-  - or Hyper-V, with enhanced sessions off on the host;
-  - at least 1920×1080; automatic sign-in, unlocked, after any restart; no lock; the display never off;
-  - the fixed share of cores and memory that kept the game smooth;
-  - the PC stays awake while drive works.
-- **What it holds:** the tools, the git identity with `gh auth setup-git`, the harness's logins, witness with its skills and its harness's add-on (the witness extension on pi), the clone, and what the suite reads that git does not carry.
-- **How to run:**
-  - drive from the VM's own desktop (`--detach` to close the terminal, with autonomy on), never over SSH;
-  - start it again after the VM restarts;
-  - talk to witness in the VM's window;
-  - `notify:` in the VM's `.witness/config.local.yaml` can send drive's summary to a phone.
-- **What to watch:**
-  - a VM that locks, sleeps its display or restarts makes the app tests fail or drive stop;
-  - some games' anti-cheat refuses a hypervisor or wants memory integrity on;
-  - a cold build can still stutter a game through disk and network.
-- **Proving a new VM:** the Windows check, linked by its GitHub address, `https://github.com/popovych-co/witness/tree/main/scripts/vm-check`, since the npm package does not carry `scripts/`.
-
-- [ ] **Step 1: Write the section and mark the measured Ws**
-
-- [ ] **Step 2: Scan**
-
-Run the perl scan on the changed files. Expected: no hits.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add README.md DESIGN.md docs/superpowers/specs/2026-11-19-remaining-issues-design.md
-git commit -m "docs: running witness inside a VM so app tests never touch your screen (row 246, #76)"
-```
+## Finish
 
 ### Task 20: Whole-branch verification, the PR, and release prep
 
@@ -1416,16 +1312,16 @@ Run the full suite, `npx tsc --noEmit`, the perl scan over `git diff --name-only
 - the baseline plus the new tests passed, with no `AssertionError`;
 - tsc clean;
 - no scan hits;
-- no runner-only names, since the runner is parked.
+- no runner-only names: the runner was never built here.
 
 - [ ] **Step 2: The whole-branch review**
 
-Give a fresh opus agent the design doc and `git diff b92a461..HEAD`, and ask for an adversarial review of the whole branch against the real code. Re-run every finding before fixing it, fix what holds, and commit as `fix: the final review's <n> (rows 243–246)`.
+Give a fresh opus agent the design doc and `git diff b92a461..HEAD`, and ask for an adversarial review of the whole branch against the real code. Re-run every finding before fixing it, fix what holds, and commit as `fix: the final review's <n> (rows 243–245)`.
 
 - [ ] **Step 3: The Windows checks still owed**
 
-Give the user W1–W12, marking the ones Task 18 already measured. The rows say MEASURED only after the user reports.
+Give the user W9 (the carry on Git for Windows, a file held open) and W10 (#80's stop through the job host); both can run in the user's Windows VM. The rows say MEASURED only after the user reports.
 
 - [ ] **Step 4: The PR, with the user's go**
 
-Draft the PR body in the ledger: one paragraph per issue, then the probes, the deferred items and the owed W-list, ending with `Closes #86, #87, #80, #76` (#76 closes on the guide alone). With the user's go, push the branch, open the PR, watch CI to green, and comment on each issue with what changed. Then stop. The user merges and runs `pnpm release minor` → 0.30.0.
+Draft the PR body in the ledger: one paragraph per issue, then the probes, the deferred items and the owed W-list, ending with `Closes #86, #87, #80` (#76 is already closed, decision 13). With the user's go, push the branch, open the PR, watch CI to green, and comment on each issue with what changed. Then stop. The user merges and runs `pnpm release minor` → 0.30.0.

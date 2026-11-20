@@ -1,15 +1,15 @@
-# A clash never reaches a gate, every offered act is accepted, a finished turn ends its session, and tests run on a screen that is not yours
+# A clash never reaches a gate, every offered act is accepted, and a finished turn ends its session
 
-Date: 2026-11-19 · Status: draft, revision 8. Folded in: the grill (decisions 1–10, one question at a time); a verification pass, whose Windows research against Microsoft's docs reversed decision 3; pass 1 (three opus reviewers on the decision notes); pass 2 (three on revision 1 of this doc); passes 3–5 (two each, on what revisions 2–4 changed); pass 6 (two, on the VM part alone); and the user's decision 12, after the plan, which runs all of witness inside the VM and parks revision 6's runner; pass 7 (two, on revision 7); and the build's own rulings and review fixes (§4.1.5, §4.2.9, §4.3). I re-ran every load-bearing finding or read-confirmed it at the cited line (§3) · Fixes issues #86, #87, #80, #76 · Release 0.30.0, one release · DESIGN.md rows 243–246 · Evidence: probes P1–P60 and the research W-R (§6)
+Date: 2026-11-19 · Status: draft, revision 9. Folded in: the grill (decisions 1–10, one question at a time); a verification pass, whose Windows research against Microsoft's docs reversed decision 3; pass 1 (three opus reviewers on the decision notes); pass 2 (three on revision 1 of this doc); passes 3–5 (two each, on what revisions 2–4 changed); pass 6 (two, on the VM part alone); and the user's decision 12, after the plan, which runs all of witness inside the VM and parks revision 6's runner; pass 7 (two, on revision 7); the build's own rulings and review fixes (§4.1.5, §4.2.9, §4.3); and the user's decision 13, during the rebuild, which closes #76 without witness work and drops everything written or built for it (revision 8, commit ad32f77, keeps it). I re-ran every load-bearing finding or read-confirmed it at the cited line (§3) · Fixes issues #86, #87, #80 (#76 closes without witness work, decision 13) · Release 0.30.0, one release · DESIGN.md rows 243–245 · Evidence: probes P1–P60 and the research W-R (§6)
 
 ## 1. Why
 
-There are four open issues; #88–#90 shipped in 0.29.0 (PR #91). #86 and #87 were filed on 2026-11-18 from the same Windows autonomy run that produced #88–#90 (witness 0.28.3, harness `pi`, Windows 11, git 2.56.0.windows.1, `autonomy: on`). #80 and #76 are older.
+There are four open issues; #88–#90 shipped in 0.29.0 (PR #91). #86 and #87 were filed on 2026-11-18 from the same Windows autonomy run that produced #88–#90 (witness 0.28.3, harness `pi`, Windows 11, git 2.56.0.windows.1, `autonomy: on`). #80 and #76 are older; #76 closes without witness work (decision 13).
 
 - **#86.** `rebaseIfMoved` rebases the uncommitted implement tree with `git rebase --autostash` and treats a non-zero exit as the conflict. When re-applying the autostash conflicts, git exits **0**. It leaves the files `UU` with markers and keeps a `stash@{0}: autostash`. Ship then gated the broken tree, twice in one repo: once spending a ship budget's last round, once letting implement rounds re-review markers until the arbiter parked the gate.
 - **#87.** After an arbiter's `stop` at the bound and a human's `--revise --repair`, `decide --show` listed four acts and every one refused `nothing-pending`. Meanwhile `ship` answered "revise owed" and `gate ship` answered "revise changed nothing". Only a cosmetic edit moved the flow.
 - **#80.** Drive ends a session when its process exits. A pi worker whose turn had ended stayed alive because a third-party extension leaked a ref'd timer (pi-lens's vscode-jsonrpc reader). It held its target and slot until `drive.sessionTimeoutMs`: 1 h 20 min and 35 min in the issue. pi's print mode never calls `process.exit()`, and the json stream already says the turn is over.
-- **#76.** wot-mod-manager's client suite installs and launches the real desktop app and drives its window, tray icon, toasts and installer. Witness runs the whole suite for every red, every green, every gate and every ship, so windows keep opening on the user's desktop and coming to the front. The issue's own rule is that running hidden "must not break these tests, or make them check something other than what a player actually gets".
+- **#76.** wot-mod-manager's client suite opens the real desktop app on the user's desktop for every test run. It closes without witness work (decision 13): with all of witness running inside a Windows VM on the user's PC, the app opens on the VM's screen.
 
 Each cause below was checked against the code at main (b92a461, 0.29.0) or by a probe (§6):
 
@@ -32,23 +32,21 @@ Each cause below was checked against the code at main (b92a461, 0.29.0) or by a 
   - pi 1.4.0, the reporter's version, writes `agent_settled` the same way (P18).
   - `spawnSession` settles only on `exit`/`close` (`src/drive.ts:205-410`).
   - The reviewer and arbiter invokers wait for exit under a timeout (`src/reviewer.ts:200-358`). So a finished reviewer that lingers reads as `reviewer-timeout` after its retries, and one stopped after its turn ended exits by signal and reads as `reviewer-invocation` (P46).
-- **#76.**
-  - Every test run starts through one of two places: `runCommand` (`src/runner.ts:69`: criteria, suites, the ship gate's lanes, drift) or `witness turn` (`src/verbs/turn.ts:27-44`). Both are synchronous, and both share `withRunnerTurn`.
-  - The research (W-R) found that nothing on one Windows install keeps the bring-to-front, tray-menu and toast tests real *and* off the user's screen. A hidden desktop has no tray and no input. A switched-away second account's session is "not present" and has no input desktop. Windows inside a virtual machine has a screen of its own, live while it is signed in and unlocked.
 
 **Decided by the user**, one question at a time:
 1. **A clash on the moved base (#86).** It stays in the files for the session or the human to resolve. Witness keeps its backup of the work in a witness-only ref, never on git's shared stash list. Every gate, test run and ship refuses while a clash is unresolved.
 2. **A revise the author hands back unchanged (#87).** It goes back to the **arbiter** (autonomy on), not "stuck · retry". The user picked this over my recommendation (that the human decides), accepting that the arbiter may overrule a revise the human chose.
-3. **Tests real and off the screen (#76).** The first pick was a second Windows account kept signed in in the background. The verification pass showed that such a session has no live input desktop (W-R), so the user revised it to **a machine with a live screen** where witness sends the test runs.
-4. **The test machine unavailable (#76).** Drive pauses, notifies and resumes by itself. It never falls back to the user's desktop. *(Superseded by 12: drive runs inside the VM.)*
-5. **Getting the code there (#76).** Copy only what changed since the last run (git snapshots over the runner's own connection). The machine keeps its own installed packages and build output. The user rejected a shared network folder. *(Superseded by 12: the VM holds its own clone.)*
+3. **Tests real and off the screen (#76).** The first pick was a second Windows account kept signed in in the background. The verification pass showed that such a session has no live input desktop (W-R), so the user revised it to **a machine with a live screen** where witness sends the test runs. *(Dropped by 13.)*
+4. **The test machine unavailable (#76).** Drive pauses, notifies and resumes by itself. It never falls back to the user's desktop. *(Superseded by 12; dropped by 13.)*
+5. **Getting the code there (#76).** Copy only what changed since the last run (git snapshots over the runner's own connection). The machine keeps its own installed packages and build output. The user rejected a shared network folder. *(Superseded by 12; dropped by 13.)*
 6. **Who hands a revise back (#87, after pass 1).** Only an explicit act (`witness gate … --unchanged`). Drive never hands one back for a session.
-7. **One design doc and one plan** for all four issues.
-8. **One release** at the end, knowing #86, #87 and #80 then wait for #76.
+7. **One design doc and one plan** for all four issues *(three after 13)*.
+8. **One release** at the end, knowing #86, #87 and #80 then wait for #76. *(After 13 nothing waits: 0.30.0 carries #86, #87 and #80.)*
 9. **Revising again (#87, after pass 2).** A human may send a handed-back revise back once more with a note saying what to change, and the session gets the note. The arbiter never can.
-10. **Never a separate machine (#76, after pass 2).** The test machine is **a Windows VM on the user's own PC** ("we never want to use a separate machine").
-11. **Approval (after pass 6).** The user approved revision 6, with the VM code to wait for a Windows check run on their PC.
-12. **All of witness in the VM (#76, after the plan).** The user's goal is to play games on the PC while witness works, without the tests ever pulling them out of a game. So all of witness for that repo runs inside the VM, and revision 6's runner is parked in `docs/superpowers/specs/2026-11-19-vm-runner-parked.md` (§4.4).
+10. **Never a separate machine (#76, after pass 2).** The test machine is **a Windows VM on the user's own PC** ("we never want to use a separate machine"). *(Dropped by 13.)*
+11. **Approval (after pass 6).** The user approved revision 6, with the VM code to wait for a Windows check run on their PC. *(Its VM part is dropped by 13.)*
+12. **All of witness in the VM (#76, after the plan).** The user's goal is to play games on the PC while witness works, without the tests ever pulling them out of a game. So all of witness for that repo runs inside the VM, and revision 6's runner is parked in `docs/superpowers/specs/2026-11-19-vm-runner-parked.md` (§4.4). *(Dropped by 13, with the parked doc.)*
+13. **#76 closes without witness work (during the rebuild).** Running witness inside the VM solves #76 by itself, so every piece of work for it goes: the route and the setup guide (§4.4), row 246, the Windows check (`scripts/vm-check/`, the rebuild's Task 18, 609ec06..ed92f1a), the README's VM guide (Task 19), the VM's W-checks and the parked runner's doc. Setting up the VM is the user's, outside witness, and #76 is closed by hand.
 
 The user confirmed the #86/#87 recap before the verification pass. Before the first write-up they asked for verification ("verify yourself first", then "another verify pass first"), and they asked for a short pass on revisions 2 and 3 before approving. Calls marked *(my call)* are the designer's; §11 lists the ones to check while reading.
 
@@ -59,12 +57,10 @@ The user confirmed the #86/#87 recap before the verification pass. Before the fi
 - g2. Every act a screen, hint or refusal offers is one `decide` accepts (#87). A state where every offered act refuses is unreachable.
 - g3. A revise the author hands back unchanged is decided again: by the arbiter under autonomy, by the human otherwise (#87).
 - g4. A session, a reviewer and the arbiter end when their turn ends, not when their process exits (#80).
-- g5. A repo whose tests open the app can be worked on entirely inside a Windows VM on the user's PC (#76). The tests are real, and nothing they open appears on the user's screen.
 
 **Non-goals**
 - n1. No new committed setting and no `witness migrate`. The grace is a constant (row 202's precedent).
 - n2. Witness never resolves a conflict (row 77: "the CLI never freehands a merge").
-- n3. Witness does not build, detect or check the VM. The README says how to set one up, and the Windows check proves it (§4.4).
 - n4. Tests a session runs outside `witness turn` still run where the session runs them (row 218; D133's guard fails open). This is named as a residual (§7).
 
 **Anti-goals**
@@ -77,7 +73,7 @@ The user confirmed the #86/#87 recap before the verification pass. Before the fi
 
 **Constraints**
 - c1. Witness only. Upgrading a consumer is the user's call, made separately.
-- c2. Windows behaviour is measured by the human before a row says MEASURED (W1–W12, §7).
+- c2. Windows behaviour is measured by the human before a row says MEASURED (W9 and W10, §7).
 - c3. 0.30.0 adds a journal entry kind (`revise-returned`). Once a 0.30.0 CLI journals anything, the state floor (the highest `w` stamp in the journal, `src/floor.ts`, row 116) refuses every older CLI at dispatch. An older drive already running keeps 0.29 behaviour until it restarts (`src/cli.ts:187-199`).
 - c4. Built against main at b92a461. Rows 240–242 are merged, and their settle token, busy locks, held records and timers are what this design lands on.
 - c5. Step 0's tree comparison needs git ≥ 2.40 (`merge-tree --write-tree` with `--merge-base`; P40). An older git skips the comparison: a clean tracked tree is re-applied, and anything else refuses `carry-pending`, naming the old git.
@@ -97,8 +93,8 @@ The user confirmed the #86/#87 recap before the verification pass. Before the fi
     - drive's limited-lane, idle-clock and pause lines (`src/drive.ts:937-943`, `:1272`, `:1291-1292`);
     - libuv's Windows `UV_FS_O_NOFOLLOW 0` (`uv/win.h:700`);
     - git's release note for `merge-tree --merge-base` (2.40.0).
-  - The local-file exemption, the readers that swallow a runner refusal, row 71's capture path, drive's limited-lane, idle-clock and pause lines, and libuv's flag served revision 6's runner, now parked (§4.4.3).
-- **W-R, Windows research** by an opus agent from Microsoft Learn, Raymond Chen's blog, and the git, pnpm, Tauri and VirtualBox sources. I re-fetched the two load-bearing quotes verbatim.
+  - The local-file exemption, the readers that swallow a runner refusal, row 71's capture path, drive's limited-lane, idle-clock and pause lines, and libuv's flag served revision 6's runner, dropped with #76 (decision 13).
+- **W-R, Windows research** by an opus agent from Microsoft Learn, Raymond Chen's blog, and the git, pnpm, Tauri and VirtualBox sources. I re-fetched the two load-bearing quotes verbatim. It served #76, which closes without witness work (decision 13), and stays as the record.
 - **pi 1.4.0's own code**, unpacked offline from the npm cache by passes 1-B and 3-H (P18). pi 0.85.1 is installed here.
 
 ## 4. The design
@@ -424,68 +420,24 @@ In the revised and handed-back states the anchor is the run the revise disposed 
   - a `SessionEnd` hook or pi `session_shutdown` work longer than 60 s is cut;
   - 0.85.1's cut-off follow-up waits for the timeout.
 
-### 4.4 Row 246 — witness runs inside a VM on the user's PC (#76)
+### 4.4 #76 — closed without witness work (decision 13)
 
-*(the user's decisions 3, 10 and 12; the setup is my call, from the verification pass and passes 1–6)*
-
-#### 4.4.1 The route
-
-- **All of witness runs in the VM** for a repo whose tests open the app: the clone, witness, the agent harness, drive, every session and every test run. The user's PC hosts the VM and none of that repo's work. Witness gains no code for it.
-- **The user's screen stays theirs.** The app, its tray icon and its toasts open on the VM's own screen. The PC shows the VM only as one window (Hyper-V's VMConnect, or VirtualBox's), and while that window is closed nothing of the VM is on the PC's desktop, so nothing can come to the front during a game (W5).
-- **The tests stay real** (the issue's rule). They run unchanged on a live, signed-in Windows desktop, with a real tray, toasts and bring-to-front, as on the PC today, with one difference: on an idle VM Windows' foreground lock has timed out, so a bring-to-front can succeed there that a busy player's desktop would block (W-R, §7). WebView2 renders in software there (W3).
-- **One place per repo.** Drive runs in the VM only. A clone on the PC may read, but never drives the repo: two drives write state commits from two clones, and `witness sync` pushes both.
-
-#### 4.4.2 The VM's setup (the README's guide)
-
-- **The VM** is a Windows VM on the user's own PC, with its own Windows license (decision 10; the license terms ask for one per instance). A Windows 11 guest works in VirtualBox 7, which emulates TPM 2.0 and Secure Boot.
-- **VirtualBox** (Windows Home, which has no Hyper-V; the user's PC):
-  - **Memory integrity is the user's choice, made first.** Windows 11 turns it on by default, and with it VirtualBox "might fall back to a slower, emulated mode" (W-R). Either it is turned off (Windows Security → Device security → Core isolation), and checked again after updates, which can turn it back on; or it stays on, and VirtualBox runs on the Windows Hypervisor Platform, slower. The check times the build and the suite (W11). If neither is fast enough, the fallback is Windows 11 Pro with Hyper-V. Some games' anti-cheat may want memory integrity on (W6).
-  - **It runs headless:** `VBoxManage startvm "<vm>" --type headless`, so no VirtualBox window exists on the PC (VirtualBox's detachable start is experimental). The VirtualBox Manager stays closed, its update check is off, the VM has no USB filters, and its audio, clipboard sharing and drag-and-drop are off.
-  - **Its screen size is pinned.** The Guest Additions are installed, auto-resize is off, and the size is set after each boot (`VBoxManage controlvm "<vm>" setvideomodehint 1920 1080 32`). When the human opens the VM's window, it shows that screen scaled. Otherwise opening the window would resize the guest mid-run, and the window-size tests would fail as real red (W12).
-  - **Network:** NAT.
-- **Hyper-V** (Windows Pro), for anyone else: a basic session on the Default Switch, with enhanced sessions turned off on the host, once, as admin (Hyper-V Settings → Enhanced Session Mode Policy off, or `Set-VMHost -EnableEnhancedSessionMode $false`). An enhanced session is Remote-Desktop-based: closing its window disconnects Windows inside, and the app tests lose their screen (W-R, W2). Never Remote Desktop into the guest, for the same reason.
-- **Inside the VM:**
-  - Its display is at least 1920×1080, so a 1280×800 window fits.
-  - It never locks and never turns its display off: no lock on idle, no screen saver, the display timeout never (`powercfg`). Witness's keep-awake holds the guest's sleep only, never its display (W1).
-  - It signs in by itself after any restart, unlocked: automatic sign-in on (AutoAdminLogon), and Windows' sign-in-and-lock after a restart off (`DisableAutomaticRestartSignOn=1`), since an update restart's own sign-in leaves the session locked (W-R, W7). Active hours cover the hours drive works, so updates restart it outside them.
-  - Its share of the PC is fixed: a set number of virtual processors and a set amount of memory, so a game keeps its frame rate. Disk and network are not capped by that share; VirtualBox's bandwidth groups can cap downloads (W5).
-- **On the PC:** it stays awake while drive works. Witness's keep-awake runs inside the VM and cannot hold the PC, and VirtualBox pauses its VMs when the PC sleeps. The PC's sleep is set to never for those hours.
-- **What the VM holds:**
-  - the repo's tools (node, pnpm, Rust with the Visual Studio build tools, WebView2);
-  - git with the user's identity, `gh auth login`, and `gh auth setup-git`, so git uses gh's token and never raises a login dialog nobody is there to answer (witness's git calls wait without a timeout);
-  - the logins the agent harness needs;
-  - witness, its skills (`skills add -g`), and the harness's add-on: the witness extension on pi (`witness init --agent pi` installs it), the witness-context plugin on Claude Code;
-  - a clone of the repo, plus whatever its suite reads that git does not carry (ignored files such as `.env.test`, LFS objects, submodules).
-- **How witness runs there:**
-  - Drive starts from a terminal on the VM's own desktop: `witness drive`, or `witness drive --detach` to close the terminal (detach needs autonomy on; it refuses `detach-needs-autonomy` otherwise).
-  - Never over a remote shell such as SSH into the VM. Windows runs an SSH session's programs in Session 0, which has no desktop, so the app tests would fail there (W-R).
-  - A restart of the VM ends drive; the human starts it again.
-  - The human talks to witness in the VM's window when they choose. Witness's notifications show inside the VM; `notify:` in the VM's `.witness/config.local.yaml` (row 184) can send drive's summary to a phone instead.
-- **Before relying on it,** the user runs the Windows check (`scripts/vm-check/`): W1, W4–W8, W11 and W12, and W2 on a Hyper-V PC.
-
-#### 4.4.3 What witness does not do
-
-- **It does not detect, build or check the VM.** A VM that locks, sleeps its display or loses its console session while drive runs makes the app tests fail, and those failures journal as real red (§7). The setup prevents it. The parked runner had a screen check, and it is where to start if this bites.
-- **It does not pause drive for the VM:** drive runs inside it.
-- **It does not keep the PC awake:** its keep-awake runs inside the VM (§4.4.2).
-- **Revision 6's runner is parked whole:** a client on the PC, `witness runner serve` in the VM, an authenticated link, snapshots and bundles, three outcomes through every reader, and drive's hold. It is in `docs/superpowers/specs/2026-11-19-vm-runner-parked.md`, for a future where the work stays on the PC and only the test runs go to a VM.
+No witness code, no guide and no check. The user runs all of witness inside a Windows VM on their PC, so the app the tests open shows on the VM's screen, never on theirs; the VM's setup is theirs. Revision 8 (commit ad32f77) holds the route, the setup guide and the parked runner.
 
 ### 4.5 Docs, prompts and skills
 
 - **The ship skill:** both conflict step sets, the CI-red bullet without a hand force-push (§4.1.3), and the hand-back line.
 - **The implement, decompose, plan and design skills, and the router command:** the hand-back line and lines for the new refusals. `tests/command.test.ts` pins the router's text.
-- **README:** running witness inside a VM (§4.4.2), written from the Windows check's results.
-- **DESIGN.md:** rows 243–246 and the Open / deferred edits (§5).
+- **DESIGN.md:** rows 243–245 and the Open / deferred edits (§5).
 
 ### 4.6 Rollout *(the user's call, made separately)*
 
 - Consumers move to 0.30.0 when the user says so.
 - A revise left open across the upgrade meets a fresh round on its next gate, not a hand-back, because the key's witness version moved (§4.2.4).
-- wot-mod-manager moves into a VM when the user sets one up; the Windows check (`scripts/vm-check/`) proves it before drive runs there.
 
 ## 5. DESIGN.md rows
 
-**New rows** 243–246 (rows 228–236 are reserved by the UI design, and 238 by the paused display rule).
+**New rows** 243–245 (rows 228–236 are reserved by the UI design, and 238 by the paused display rule).
 
 | Row | By | Change |
 | --- | --- | --- |
@@ -513,17 +465,16 @@ In the revised and handed-back states the anchor is the run the revise disposed 
 - 239 (act lines);
 - 240 (the settle lock on a hand-back).
 
-**Open / deferred** gains six entries:
+**Open / deferred** gains five entries:
 - a claude session with a backgrounded call still open waits as today (245);
 - shutdown work longer than 60 s after a turn ends is cut (245);
 - pi 0.85.1 cuts off a follow-up sent from an `agent_settled` handler, so that session waits for its timeout (245);
 - markers `git add`ed in a file that never clashed are judged by the battery; a label-shaped line in a once-clashed file needs its kept ref moved by hand; a clashed file renamed afterwards escapes the label check (243);
-- a VM that locks or loses its screen while drive runs fails the app tests as real red, and nothing checks it; revision 6's runner, which would, is parked (246);
-- `witness turn` passes a Windows exit code on whole, so 256 reads as success to Git Bash's `$?` (246).
+- `witness turn` passes a Windows exit code on whole, so 256 reads as success to Git Bash's `$?` (218).
 
 ## 6. Probes
 
-Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` holds P1–P6 and my re-runs. `pass1-{A,B,C}/`, `pass2-{D,E}/`, `pass3-{G,H}/` and `pass4-{I,J}/` hold the reviewers' originals, and `my-rerun-*.out` my re-runs. P6, P12, P20, P29, P30, P39, P46's libuv half and P54–P60 served revision 6's runner, now parked (§4.4.3); they stay here as its evidence.
+Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` holds P1–P6 and my re-runs. `pass1-{A,B,C}/`, `pass2-{D,E}/`, `pass3-{G,H}/` and `pass4-{I,J}/` hold the reviewers' originals, and `my-rerun-*.out` my re-runs. P6, P12, P20, P29, P30, P39, P46's libuv half and P54–P60 served revision 6's runner, dropped with #76 (decision 13); they stay here as the record.
 
 | Probe | What ran | Result |
 | --- | --- | --- |
@@ -588,7 +539,7 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
 | P59 | pnpm in a checkout another plan used | without a terminal, `pnpm install --frozen-lockfile` aborts a modules purge (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`); with `CI=true` it purges and installs (pass 6-M, live pnpm 10.22.0) |
 | P60 | ignore rules that live only on the PC | the VM's `git clean -fd` deletes `node_modules` and `target` ignored only through `info/exclude` or a global excludes file (pass 6-M; my re-run) |
 
-**W-R — Windows research**, re-fetched by me where load-bearing:
+**W-R — Windows research** (it served #76, closed by decision 13; kept as the record), re-fetched by me where load-bearing:
 - OpenInputDesktop: "If the calling process is running in a disconnected session, the function returns a handle to the desktop that becomes active when the user restores the connection."
 - QUNS_NOT_PRESENT: "A screen saver is displayed, the machine is locked, or a nonactive Fast User Switching session is in progress."
 - What goes with the input desktop:
@@ -608,27 +559,14 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
 
 ## 7. Edge cases and residuals
 
-- **Tests outside `witness turn`** take no turn (row 218, D133), as today. With witness in the VM they still run on the VM's screen.
+- **Tests outside `witness turn`** take no turn (row 218, D133), as today.
 - **claude background calls.** A claude session whose backgrounded call stays open after its last result waits as today, up to `sessionTimeoutMs`. From the stream, a dev server and a long test look alike.
 - **Shutdown work and follow-ups.** A `SessionEnd` hook or pi `session_shutdown` work longer than 60 s is cut. pi 0.85.1's cut-off follow-up (P28) waits for the timeout.
 - **Markers outside a clash.**
   - Markers `git add`ed in a file that never clashed with witness's carry (a hand-made merge) are broken content for the battery.
   - A doc or fixture line starting with a stash-apply label in a once-clashed file holds the guard until its kept ref is moved out by hand.
   - A clashed file renamed afterwards escapes the label check.
-- **What the VM needs set up.** Whatever the suite reads that git does not carry (ignored files such as `.env.test`, LFS objects, submodules) is set up in the VM's clone, as on any new machine.
-- **Rendering.** WebView2 inside the VM renders without a real GPU, in software. That works, but its speed and any GPU-only behaviour differ (W3, W4).
-- **A VM that locks or loses its screen** while drive runs (a lock, a sleeping display, a disconnected session) makes the app tests fail, and the failures journal as real red; sessions may then try to fix code that is not broken. The setup prevents it (§4.4.2), and nothing checks it (§4.4.3).
-- **A remote shell into the VM** (SSH) runs its programs in Session 0, which has no desktop, so app tests started there fail. Drive and anything that runs the suite start on the VM's own desktop.
-- **Notifications** show inside the VM; the human sees them when they open its window.
-- **The VM shares the PC** with the games: its CPU and memory use can still slow a game, so its share is fixed (§4.4.2). Some games' anti-cheat refuses to run beside a hypervisor, Hyper-V or memory integrity (W6).
-- **`witness turn` passes a Windows exit code on whole**, so a command exiting 256 reads as success to Git Bash's `$?` (P39). The CLI's own evidence runs read it correctly; the parked runner fixed the relay, a one-line change if it bites.
-- **The PC's sleep pauses the VM,** and drive with it: witness's keep-awake runs inside the VM and cannot hold the PC (§4.4.2).
-- **A restart of the VM ends drive;** the human starts it again. An update restart signs in locked unless Windows' restart sign-on is off (§4.4.2, W7).
-- **Opening the VM's window resizes the guest** unless auto-resize is off and the size pinned (§4.4.2, W12).
-- **Memory integrity puts VirtualBox on a slower path,** and updates can turn it back on (§4.4.2, W11).
-- **Bring-to-front on an idle VM** can succeed where a busy player's desktop would block it: the foreground lock has timed out there (W-R).
-- **A git login dialog in the VM would wait forever:** witness's git calls have no timeout. `gh auth setup-git` keeps git off the dialog (§4.4.2).
-- **Disk and network are not capped** by the VM's share: a cold build or a download can still stutter a game (W5).
+- **`witness turn` passes a Windows exit code on whole**, so a command exiting 256 reads as success to Git Bash's `$?` (P39). The CLI's own evidence runs read it correctly; the fix is a one-line change if it bites.
 - **Old git.** Step 0's comparison needs git ≥ 2.40. An older git skips it: a clean tracked tree is re-applied, and anything else refuses `carry-pending`, naming the old git.
 - **The arbiter may overrule** a revise or a repair grant the human made (decision 2).
 - **A session that ends without handing back** ends stuck, as today (decision 6).
@@ -648,18 +586,8 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
 - Suspected, not reproduced: aborting witness's own crashed rebase while a session edits mid-resolution; `git am` reading as `rebase-apply` (the refusal names the wrong verb); a `rebase.backend=apply` reflog reading `witness-carry:` (fails safe); a duplicate kept ref after a crash between keep and drop; non-UTF-8 names on Linux.
 
 **Windows measurements owed** (the human, before the row says MEASURED):
-- W1. The VM's screen stays live with no VM window open on the PC (VirtualBox headless; VMConnect closed): console session, input desktop `Default`, at least 1920×1080, and its display on (idle time against `powercfg`'s timeouts; a screenshot that is not black), with the suite run again after 60 idle minutes.
-- W2. (Hyper-V) With Enhanced Session Mode Policy off on the host, VMConnect opens only the basic view.
-- W3. WebView2 renders inside the VM, without a real GPU.
-- W4. LowPro's client suite passes inside the VM with no window open: tray, toasts (a new account's first-hour quiet time), bring-to-front, 1280×800 and restore.
-- W5. While that suite runs and the VM builds cold, the PC's foreground window never changes (a WinEvent-hook focus log) and no sound plays, and the game's frame times (PresentMon) and ping stay as they are with the VM idle.
-- W6. The games the user plays run an online match with the VM's setup in place and the VM running (VirtualBox installed, memory integrity as set; or Hyper-V on).
-- W7. The VM signs in by itself, unlocked, after a Windows Update restart (not only a manual one), and does not lock when the PC sleeps and wakes.
-- W8. A drive started on the VM's desktop and detached keeps running the app tests on that screen after its terminal closes.
 - W9. The carry on git 2.56.0.windows.1, including a file held open (Git for Windows retries an unlink for about 71 ms).
 - W10. #80's stop after the grace, through the job host, and the status it leaves.
-- W11. VirtualBox's engine and speed with memory integrity as set: whether `VBox.log` shows the fall back to the Windows Hypervisor Platform (NEM), and how long a cold Tauri build plus the suite take.
-- W12. Opening the VM's window mid-run (auto-resize off, size pinned, scaled view) leaves the guest at 1920×1080.
 
 ## 8. Testing
 
@@ -679,7 +607,7 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
   - `tests/needs-you.test.ts`;
   - `tests/autonomy.test.ts`;
   - `tests/rounds.test.ts:72-84`, plus a new revise-then-approve case.
-- **Windows:** W1–W12 are the human's.
+- **Windows:** W9 and W10 are the human's.
 
 ## 9. Build order *(my call; one plan, one release, per decisions 7 and 8)*
 
@@ -706,12 +634,10 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
    - end signals;
    - the grace, the timeout, the tail and the stop status;
    - reviewers and drift.
-5. **#76:** the Windows check (written first, so the user can set the VM up while 1–4 build), then the README's VM guide from its results.
-6. **Whole-branch verification;** release 0.30.0.
+5. **Whole-branch verification;** release 0.30.0.
 
 ## 10. Left to the builder
 
-- The README guide's wording, from the Windows check's results.
 - Rule names this doc does not state.
 
 ## 11. Calls for you to check while reading
@@ -721,7 +647,4 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
 3. **On a handed-back revise, the arbiter can** approve despite the finding (recorded as an override), send it upstream, or park it. It never sends it back again (§4.2.6).
 4. **You can send work back again with a note before the session hands it back,** not only after. That is my extension of your answer (§4.2.7).
 5. **`gate --fresh` stays your way to have the reviewers look again** at unchanged work, and it spends a round. Sessions hand a revise back with `--unchanged`, which costs nothing. After you undo an approval, the session cannot hand it back: the reviewers must look again (§4.2.4, §4.2.8).
-6. **Witness runs inside the VM, so drive never pauses for it.** If the VM locks or its display goes off while drive runs, the app tests fail and are recorded as real failures; if your PC sleeps, the VM pauses; if the VM restarts for an update, drive stops until you start it again. The setup prevents the first two; nothing in witness checks them (§4.4.2–4.4.3).
-7. **Everything for wot-mod-manager moves into the VM:** its clone, the tools, the logins, drive and your conversations with witness. Start drive from the VM's own desktop, never over SSH, and open the VM's window when you want to answer witness (§4.4.2).
-8. **After a session's turn ends, witness gives it 60 s to exit, then stops it.** This is fixed, not a setting (§4.3).
-9. **The VM's setup:** on your PC (Windows Home) that means VirtualBox, run headless, with its screen size pinned and its audio off. First choice: memory integrity. Off makes VirtualBox fast; on keeps Windows' protection but slows the VM, and the check times it. The VM signs in by itself unlocked, never locks or turns its display off, and gets a fixed share of cores and memory; your PC must not sleep while drive works. Check your games in an online match with it in place (W6, W11).
+6. **After a session's turn ends, witness gives it 60 s to exit, then stops it.** This is fixed, not a setting (§4.3).
