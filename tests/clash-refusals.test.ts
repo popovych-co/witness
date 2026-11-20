@@ -7,7 +7,7 @@ import '../src/gates/index.js'
 import { cliAct } from '../src/act.js'
 import { carryRef, keepCarry, remedyLine, unmergedPaths } from '../src/carry.js'
 import { clashGuard, clashLeft } from '../src/clash.js'
-import { loadConfig, type Config } from '../src/config.js'
+import { loadConfig } from '../src/config.js'
 import { diffBase } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
 import { diffReviewedSha } from '../src/reviewed.js'
@@ -19,31 +19,45 @@ import {
 
 // Row 243 (design §4.1.2 "Who reads it", "The refusal"). An unresolved clash in a plan's worktree
 // is refused, exit 2, by every gate on that worktree (implement and ship), by test-evidence and
-// verify-red, by `witness turn` there, and by ship — first, again before its commit, and again
-// before pushApproved's `git add -A` — so a clash never reaches a reviewer, an evidence entry or a
-// commit. Ship records nothing for it (§4.1.3's table).
+// verify-red, by `witness turn` there, and by ship — first, and again before each commit
+// (commitApproved: the pr phase's, and pushApproved's before its `git add -A`) — so a clash never
+// reaches a reviewer, an evidence entry or a commit. Ship records nothing for it (§4.1.3's table).
+// No config that will not load hides a clash or refuses where none stands.
 
-// The guard as ship and the gate call it, with a hook a test may hang on its nth call: what a hook
-// does to the tree happens after every earlier ask and before this one, as a clash arriving
-// between two of ship's checks would.
-const guard = vi.hoisted(() => ({ calls: 0, before: [] as Array<(() => void) | undefined> }))
+// Every ask of the guard, as the callers make it (refuseClash, and commitApproved's clashGuard),
+// recorded by its stack, with a hook a test may hang on one caller: what the hook does to the tree
+// happens right before that caller's ask and after every earlier one, as a clash arriving between
+// two of ship's checks would. Keyed on the caller, never on the order: a test of one site cannot
+// pass by catching the clash at another.
+const guard = vi.hoisted(() => {
+  const state = {
+    asks: [] as string[],
+    hooks: [] as Array<{ at: (stack: string) => boolean; run: () => void; fired: boolean }>,
+    ask(): void {
+      const stack = new Error().stack ?? ''
+      state.asks.push(stack)
+      for (const h of state.hooks) if (!h.fired && h.at(stack)) { h.fired = true; h.run() }
+    },
+  }
+  return state
+})
 vi.mock('../src/clash.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/clash.js')>()
   return {
     ...real,
-    clashGuard: (...args: Parameters<typeof real.clashGuard>) => {
-      const n = guard.calls++
-      guard.before[n]?.()
-      return real.clashGuard(...args)
-    },
+    clashGuard: (...args: Parameters<typeof real.clashGuard>) => { guard.ask(); return real.clashGuard(...args) },
+    refuseClash: (...args: Parameters<typeof real.refuseClash>) => { guard.ask(); return real.refuseClash(...args) },
   }
 })
-// Counted from here: the fixture's own evidence runs ask the guard too.
-const armGuard = (before: Array<(() => void) | undefined> = []): void => {
-  guard.calls = 0
-  guard.before = before
+// Recorded from here: the fixture's own evidence runs ask the guard too.
+const armGuard = (hooks: Array<{ at: (stack: string) => boolean; run: () => void }> = []): Array<{ fired: boolean }> => {
+  guard.asks = []
+  guard.hooks = hooks.map((h) => ({ ...h, fired: false }))
+  return guard.hooks
 }
-beforeEach(() => armGuard())
+beforeEach(() => { armGuard() })
+// A stack frame of the named function (V8 prints `at <name> (<file>:<line>:<col>)`).
+const inFrame = (stack: string, fn: string): boolean => new RegExp(`\\bat (?:async )?${fn} \\(`).test(stack)
 
 const g = (cwd: string, ...args: string[]): string =>
   execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -124,31 +138,29 @@ describe('clashGuard asks the plan\'s worktree (row 243)', () => {
     expect(spawnSync('git', ['stash', 'apply', sha], { cwd: root, encoding: 'utf8' }).stdout).toMatch(/CONFLICT/)
     return root
   }
-  const cfg = { ship: { branch: 'main' } } as Config
-
   it('answers nothing with no worktree, nor for a leftover directory, where git would answer from the primary repository', () => {
     const root = clashedPrimary()
-    expect(clashGuard(root, cfg, 'p1')).toBeUndefined()
+    expect(clashGuard(root, 'p1', 'main')).toBeUndefined()
     // a carry ref left standing, and a directory at the worktree's path that is no worktree
     g(root, 'update-ref', carryRef('p1'), g(root, 'rev-parse', 'HEAD'))
     const dir = worktreePath(root, 'p1')
     mkdirSync(dir, { recursive: true })
     expect(clashLeft(dir, 'p1', 'main')).toEqual({ kind: 'carry', ref: carryRef('p1') })
-    expect(clashGuard(root, cfg, 'p1')).toBeUndefined()
+    expect(clashGuard(root, 'p1', 'main')).toBeUndefined()
   })
 
   it('answers the rows of the plan\'s own worktree, never the primary checkout\'s', () => {
     const root = clashedPrimary()
     const wt = worktreePath(root, 'p1')
     g(root, 'worktree', 'add', '-q', '-b', 'witness/p1', wt, 'HEAD~1')
-    expect(clashGuard(root, cfg, 'p1')).toBeUndefined()
+    expect(clashGuard(root, 'p1', 'main')).toBeUndefined()
     writeFileSync(join(wt, 'f.md'), 'a\nPLAN\nc\n')
     const sha = g(wt, 'stash', 'create')
     g(wt, 'checkout', '--', 'f.md')
     writeFileSync(join(wt, 'f.md'), 'a\nBASE\nc\n')
     g(wt, 'commit', '-qam', 'base')
     expect(spawnSync('git', ['stash', 'apply', sha], { cwd: wt, encoding: 'utf8' }).stdout).toMatch(/CONFLICT/)
-    const rows = clashGuard(root, cfg, 'p1')
+    const rows = clashGuard(root, 'p1', 'main')
     expect(rows?.map((x) => [x.field, x.rule, x.got])).toEqual([[shellWord('f.md'), 'clash-unresolved', 'unmerged (UU)']])
   })
 })
@@ -259,9 +271,13 @@ describe('every gate, evidence run, turn and ship refuses an unresolved clash (r
     expect(readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1)
   }, 180_000)
 
-  it('a primary root config that will not load still asks the guard, from the run\'s own copy (D192)', async () => {
-    const { repo, wt, planId } = await clashedShippable()
+  it('no config that will not load hides a clash, even the worktree\'s own config clashing, nor refuses where none stands', async () => {
+    // the plan's edit to witness.config.yaml clashes with the moved base: its markers make the
+    // worktree's own config unreadable, and the primary root's will not load either
+    const { repo, wt, planId } = await clashedShippable(['f.txt', 'witness.config.yaml'])
     patchConfig(repo, { session: { contextLimit: 0 } })
+    expect(loadConfig(wt).ok).toBe(false)
+    expect(loadConfig(repo.root).ok).toBe(false)
     const dir = fakeScenario()
     const script = join(dir, 'mark.cjs')
     writeFileSync(script, "require('node:fs').appendFileSync(process.argv[2], 'ran\\n')")
@@ -269,21 +285,23 @@ describe('every gate, evidence run, turn and ship refuses an unresolved clash (r
     for (const argv of [['test-evidence', planId, '--phase', 'green', '--step', 's1'], ['turn', '--', process.execPath, script, marker]]) {
       const r = await repo.cli(argv, { cwd: wt, env: fixtureEnv() })
       expect(r.code, argv[0]).toBe(2)
-      expect(r.stderr).toContain(`${shellWord('f.txt')},clash-unresolved,unmerged (UU),`)
-      expect(r.stderr).not.toContain('session.contextLimit')
+      const rows = r.stderr.split('\n').filter((l) => l.includes(',clash-unresolved,'))
+      expect(rows.map((l) => l.split(',')[0]!.trim())).toEqual([shellWord('f.txt'), shellWord('witness.config.yaml')])
+      // the clash's rows, never the config's
+      expect(r.stderr).not.toMatch(/yaml-parse|session\.contextLimit|,schema,/)
     }
     expect(existsSync(marker)).toBe(false)
-    // a worktree whose own config will not load: the guard cannot be asked, so the turn is refused
-    // with the config's rows, and the command never runs
-    writeFileSync(join(wt, 'witness.config.yaml'), 'schema: [\n')
+    // resolved, with both configs still unreadable: no clash stands, so the turn runs
+    g(wt, 'checkout', 'HEAD', '--', 'f.txt', 'witness.config.yaml')
+    expect(unmergedPaths(wt)).toEqual([])
+    expect(loadConfig(wt).ok).toBe(false)
     const r = await repo.cli(['turn', '--', process.execPath, script, marker], { cwd: wt })
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('refused[')
-    expect(r.stderr).not.toContain('clash-unresolved')
-    expect(existsSync(marker)).toBe(false)
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe('')
+    expect(readFileSync(marker, 'utf8')).toBe('ran\n')
   }, 180_000)
 
-  it('ship refuses before its commit and before pushApproved\'s add; f.txt stays UU', async () => {
+  it('ship refuses at its first check, before any phase runs: an approved plan\'s clash is never committed, nothing is recorded, f.txt stays UU', async () => {
     const { repo, wt, planId } = await clashedShippable()
     // an approved ship gate: without the guard, the pr phase would `git add -A` the markers and commit them
     shipGated(repo, wt, planId, 'stopped')
@@ -299,17 +317,21 @@ describe('every gate, evidence run, turn and ship refuses an unresolved clash (r
     expect(ghCalls(scenario)).toBe('')
     // ship records nothing for a clash (§4.1.3)
     expect(readStream(repo.root, planId).length).toBe(before)
-    expect(guard.calls).toBe(1)
+    // asked once, by ship's first check, before any phase
+    expect(guard.asks).toHaveLength(1)
+    expect(inFrame(guard.asks[0]!, 'shipMarked')).toBe(true)
+    expect(inFrame(guard.asks[0]!, 'commitApproved')).toBe(false)
   }, 240_000)
 
-  it('a clash that arrives after ship\'s first check is refused before the pr phase\'s commit', async () => {
+  it('a clash that arrives after ship\'s first check is refused by the pr phase\'s commit, before its add', async () => {
     const { repo, wt, planId, clash } = await clashedShippable(['f.txt'], { apply: false })
     shipGated(repo, wt, planId, 'stopped')
     const scenario = fakeScenario()
     const head = g(wt, 'rev-parse', 'HEAD')
-    armGuard([undefined, clash])
+    // the clash arrives as the pr phase's commit asks — commitApproved called by ship itself
+    const [hook] = armGuard([{ at: (st) => inFrame(st, 'commitApproved') && !inFrame(st, 'pushApproved'), run: clash }])
     const r = await repo.cli(['ship', planId], { env: gateEnv(scenario, { WITNESS_SHIP_WATCH_MS: '1' }) })
-    expect(guard.calls).toBe(2)
+    expect(hook!.fired).toBe(true)
     expect(r.code).toBe(2)
     expect(r.stderr).toContain(`${shellWord('f.txt')},clash-unresolved,unmerged (UU),`)
     expect(porcelain(wt)).toMatch(/^UU f\.txt$/m)
@@ -318,15 +340,16 @@ describe('every gate, evidence run, turn and ship refuses an unresolved clash (r
     expect(shipRecords(repo, planId)).toEqual([])
   }, 240_000)
 
-  it('a clash that arrives after ship\'s first check is refused before pushApproved\'s add, and nothing is recorded', async () => {
+  it('a clash that arrives after ship\'s first check is refused by pushApproved, before its add, and nothing is recorded', async () => {
     const { repo, wt, planId, clash } = await clashedShippable(['f.txt'], { apply: false })
     repo.setMeta(planId, { pr: 7 })
     shipGated(repo, wt, planId, 'passed')
     const scenario = fakeScenario()
     const head = g(wt, 'rev-parse', 'HEAD')
-    armGuard([undefined, clash])
+    // the clash arrives as pushApproved's commit asks
+    const [hook] = armGuard([{ at: (st) => inFrame(st, 'pushApproved'), run: clash }])
     const r = await repo.cli(['ship', planId], { env: gateEnv(scenario, { WITNESS_SHIP_WATCH_MS: '1' }) })
-    expect(guard.calls).toBe(2)
+    expect(hook!.fired).toBe(true)
     expect(r.code).toBe(2)
     expect(r.stderr).toContain(`${shellWord('f.txt')},clash-unresolved,unmerged (UU),`)
     expect(porcelain(wt)).toMatch(/^UU f\.txt$/m)

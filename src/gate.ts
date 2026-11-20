@@ -20,7 +20,7 @@ import {
   type ContentKind, type Lens, type LensDoc,
 } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
-import { clashGuard } from './clash.js'
+import { refuseClash } from './clash.js'
 import { gateRunLines, gateRunView } from './gate-run-view.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
 import {
@@ -311,21 +311,18 @@ export async function runGate(
   }
   if (gateName === 'implement' || gateName === 'ship') {
     const rootR = primaryRoot(ctx.cwd)
-    const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
-    const plan = rootR.ok && cfgR?.ok ? findById(loadCanon(rootR.value), target) : undefined
-    if (rootR.ok && cfgR?.ok && plan?.meta.type === 'plan') {
+    const plan = rootR.ok ? findById(loadCanon(rootR.value), target) : undefined
+    if (rootR.ok && plan?.meta.type === 'plan') {
       // Row 243 (design §4.1.2). No review starts on a plan's worktree while a clash is unresolved:
-      // refused first, before the battery, journaling nothing, each file on a row with its remedy.
-      // Exit 2 — here exit 1 is a verdict.
-      const clash = clashGuard(rootR.value, cfgR.value, target)
-      if (clash !== undefined) {
-        renderRefusal(clash).forEach((l) => ctx.err(l))
-        return EXIT.REFUSED
-      }
+      // refused first, before the battery and whatever the config says, journaling nothing, each
+      // file on a row with its remedy.
+      const clashed = refuseClash(ctx, rootR.value, target)
+      if (clashed !== undefined) return clashed
       // Row 241 (R9; the user's decisions 6 and 9). No implement review starts while a plan step is
       // open, whoever starts it: refused before the battery, journaling nothing, naming the step's
       // command. To skip a step, amend the plan and drop it.
-      const open = gateName === 'implement' ? openStepRow(rootR.value, cfgR.value, plan) : undefined
+      const cfgR = gateName === 'implement' ? loadConfig(rootR.value) : undefined
+      const open = cfgR?.ok ? openStepRow(rootR.value, cfgR.value, plan) : undefined
       if (open !== undefined) {
         renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
         return refusedFresh(EXIT.REFUSED)

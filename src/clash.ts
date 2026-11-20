@@ -4,9 +4,10 @@ import { cliAct } from './act.js'
 import {
   carryGit, carryRef, keptRefs, operationInProgress, remedyLine, unmergedPaths, type OpInProgress, type UnmergedPath,
 } from './carry.js'
-import type { Config } from './config.js'
+import { EXIT, type Ctx } from './cli.js'
+import { loadConfig, type Config } from './config.js'
 import { tryGitC } from './gitio.js'
-import { v, type Violation } from './refusal.js'
+import { renderRefusal, v, type Violation } from './refusal.js'
 import { shellWord } from './toon.js'
 import { worktreePath } from './worktree.js'
 
@@ -30,14 +31,16 @@ const LABELS = '(?:<{7,} Updated upstream|>{7,} Stashed changes|\\|{7,} Stash ba
 const ADDED_LABEL = new RegExp(`^\\+${LABELS}`, 'm')
 const LABEL_LINE = new RegExp(`^${LABELS}`, 'm')
 
-export function clashLeft(wt: string, planId: string, shipBranch: string): ClashSignal | undefined {
+// `shipBranch` places signal (b)'s merge-base; (c) and (a) take none. With no branch, (b) reads each
+// listed file itself, failing closed (§4.1.5).
+export function clashLeft(wt: string, planId: string, shipBranch?: string): ClashSignal | undefined {
   const ref = carryRef(planId)
   if (carryGit(wt, 'show-ref', '--verify', '--quiet', ref).code === 0) return { kind: 'carry', ref }
   const unmerged = unmergedPaths(wt)
   if (unmerged.length > 0) return { kind: 'unmerged', files: unmerged }
   const listed = [...new Set(keptRefs(wt, planId).flatMap((k) => k.files))]
   if (listed.length === 0) return undefined
-  const base = mergeBase(wt, shipBranch)
+  const base = shipBranch === undefined ? undefined : mergeBase(wt, shipBranch)
   const files = listed.filter((f) => labelled(wt, base, f))
   return files.length > 0 ? { kind: 'labels', files } : undefined
 }
@@ -162,17 +165,36 @@ export function clashViolations(planId: string, s: ClashSignal, wt: string): Vio
   })
 }
 
-// §4.1.2 "Who reads it". The one ask every reader makes: the implement and ship gates, test-evidence
-// and verify-red, `witness turn` in a plan's worktree, and ship (first, before its commit, and before
-// pushApproved's `git add -A`). It asks the plan's worktree and answers the refusal's rows, or nothing;
-// the caller renders them and exits 2 (REFUSED) — in the gate, an evidence run and a turn, exit 1
-// already means a verdict or a test's own failure. A worktree that is not there (no `.git` in it)
-// holds no tree to clash, so nothing is asked: from a leftover directory at its path, git would
-// answer from the primary checkout's repository. A carry ref left with the worktree gone is ship's
-// step 0 to refuse (`carry-pending`).
-export function clashGuard(root: string, cfg: Config, planId: string): Violation[] | undefined {
+// §4.1.2 "Who reads it". The plan's worktree asked: the refusal's rows, or nothing. A worktree that
+// is not there (no `.git` in it) holds no tree to clash, so nothing is asked: from a leftover
+// directory at its path, git would answer from the primary checkout's repository. A carry ref left
+// with the worktree gone is ship's step 0 to refuse (`carry-pending`).
+export function clashGuard(root: string, planId: string, shipBranch?: string): Violation[] | undefined {
   const wt = worktreePath(root, planId)
   if (!existsSync(join(wt, '.git'))) return undefined
-  const s = clashLeft(wt, planId, cfg.ship.branch)
+  const s = clashLeft(wt, planId, shipBranch)
   return s === undefined ? undefined : clashViolations(planId, s, wt)
+}
+
+// The one call every reader makes: the implement and ship gates, test-evidence and verify-red,
+// `witness turn` in a plan's worktree, and ship's first check. It renders the rows and answers exit
+// 2 (REFUSED) — in the gate, an evidence run and a turn, exit 1 already means a verdict or a test's
+// own failure — or nothing. It never waits on a config: the ship branch comes from the run's own
+// config (`run`, given loaded or as the checkout it lives in), else the primary root's, else none.
+// A config that will not load — even one whose own lines are the clash's markers — neither hides a
+// clash nor refuses where none stands.
+export function refuseClash(ctx: Ctx, root: string, planId: string, run: string | Config = root): number | undefined {
+  const rows = clashGuard(root, planId, shipBranchFor(root, run))
+  if (rows === undefined) return undefined
+  renderRefusal(rows).forEach((l) => ctx.err(l))
+  return EXIT.REFUSED
+}
+
+function shipBranchFor(root: string, run: string | Config): string | undefined {
+  if (typeof run !== 'string') return run.ship.branch
+  for (const at of run === root ? [root] : [run, root]) {
+    const cfg = loadConfig(at)
+    if (cfg.ok) return cfg.value.ship.branch
+  }
+  return undefined
 }

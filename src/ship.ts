@@ -23,7 +23,7 @@ import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
-import { clashGuard } from './clash.js'
+import { clashGuard, refuseClash } from './clash.js'
 import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
 import { heldItem, needYouRows } from './needs-you.js'
 import { driveChild } from './drive-presence.js'
@@ -440,21 +440,10 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
 // exists nothing else commits or pushes it, so CI went green on the old head and that is the
 // commit the merge landed. Never a force-push: a remote head this worktree lacks is someone
 // else's work, and overwriting it is a human's call.
-// Row 243 (design §4.1.2): never while a clash is unresolved — `git add -A` would stage its markers
-// as resolved and the commit would carry them to the PR.
 function pushApproved(ctx: Ctx, root: string, cfg: Config, planId: string, summary: string): Result<string> {
-  const clash = clashGuard(root, cfg, planId)
-  if (clash !== undefined) return refuse(clash)
+  const committed = commitApproved(ctx, root, cfg, planId, summary)
+  if (!committed.ok) return refuse(committed.violations)
   const wt = worktreePath(root, planId)
-  if (tryGit(wt, 'status', '--porcelain').out !== '') {
-    tryGit(wt, 'add', '-A')
-    const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
-    if (!committed.ok) {
-      return refuse([v('commit', 'ship-commit-failed', committed.out.slice(0, 200),
-        'a committable worktree — resolve and re-run witness ship')])
-    }
-    ctx.out(kv('commit', `${planId}: ${summary}`))
-  }
   const branch = branchName(planId)
   tryGit(wt, 'fetch', 'origin', branch)
   const head = tryGit(wt, 'rev-parse', 'HEAD')
@@ -469,6 +458,25 @@ function pushApproved(ctx: Ctx, root: string, cfg: Config, planId: string, summa
   if (!push.ok) return push
   ctx.out(kv('push', `${branch} → the approved tree`))
   return ok(sha)
+}
+
+// Ship's code commit, made in the pr phase and again by pushApproved for a revise answered after the
+// PR opened. Row 243 (design §4.1.2): never over an unresolved clash, whose markers `git add -A`
+// would stage as resolved and the commit carry to the PR. Ship's config is the run's.
+function commitApproved(ctx: Ctx, root: string, cfg: Config, planId: string, summary: string): Result<void> {
+  const clash = clashGuard(root, planId, cfg.ship.branch)
+  if (clash !== undefined) return refuse(clash)
+  const wt = worktreePath(root, planId)
+  if (tryGit(wt, 'status', '--porcelain').out !== '') {
+    tryGit(wt, 'add', '-A')
+    const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
+    if (!committed.ok) {
+      return refuse([v('commit', 'ship-commit-failed', committed.out.slice(0, 200),
+        'a committable worktree — resolve and re-run witness ship')])
+    }
+    ctx.out(kv('commit', `${planId}: ${summary}`))
+  }
+  return ok(undefined)
 }
 
 const WATCH_MS = 1_800_000
@@ -585,13 +593,10 @@ async function shipMarked(
 ): Promise<number> {
   // Row 243 (design §4.1.2). Ship carries no plan on while a clash in its worktree is unresolved:
   // refused first, exit 2, recording nothing (§4.1.3) — each file on a row with its remedy, or, with
-  // a carry ref standing, `witness ship` itself. Asked again before each commit below, since a gate
-  // phase's rebase runs between.
-  const clash = clashGuard(root, cfgR.value, planId)
-  if (clash !== undefined) {
-    renderRefusal(clash).forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
-  }
+  // a carry ref standing, `witness ship` itself. Asked again before each commit (commitApproved),
+  // since a gate phase's rebase runs between.
+  const clashed = refuseClash(ctx, root, planId, cfgR.value)
+  if (clashed !== undefined) return clashed
   // Row 241 (R9). Whoever runs it — a drive session included — ship runs no review and carries no
   // plan on while a step is open: refused before anything journals, naming the step's command.
   const open = openStepRow(root, cfgR.value, plan)
@@ -705,22 +710,11 @@ async function shipMarked(
   if (phase === 'pr') {
     const parent = findById(canon, String(plan!.meta.parent))
     const parentSummary = String(parent?.meta.summary ?? 'witness change')
-    // implement leaves the worktree uncommitted — ship owns the sole code commit. Row 243: never
-    // over an unresolved clash, whose markers `git add -A` would stage as resolved.
-    const clashed = clashGuard(root, cfgR.value, planId)
-    if (clashed !== undefined) {
-      renderRefusal(clashed).forEach((l) => ctx.err(l))
+    // implement leaves the worktree uncommitted — ship owns the sole code commit
+    const committed = commitApproved(ctx, root, cfgR.value, planId, parentSummary)
+    if (!committed.ok) {
+      renderRefusal(committed.violations).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
-    }
-    if (tryGit(wt, 'status', '--porcelain').out !== '') {
-      tryGit(wt, 'add', '-A')
-      const committed = tryGit(wt, 'commit', '-m', `${planId}: ${parentSummary}`)
-      if (!committed.ok) {
-        renderRefusal([v('commit', 'ship-commit-failed', committed.out.slice(0, 200),
-          'a committable worktree — resolve and re-run witness ship')]).forEach((l) => ctx.err(l))
-        return EXIT.REFUSED
-      }
-      ctx.out(kv('commit', `${planId}: ${parentSummary}`))
     }
     // What the approved run did not run, from its own record — the one derivation (row 179).
     const held = (lastGateRun(entries, 'ship')?.checks ?? []).flatMap((c) => c.held ?? [])
