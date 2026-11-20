@@ -88,7 +88,7 @@ describe('unbuilt steps come first (row 241)', () => {
     execFileSync('git', ['add', 'OTHER.md'], { cwd: other })
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-qm', 'Merge PR #9'], { cwd: other })
     execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: other })
-    expect(rebaseIfMoved(wt, repo.root, 'main')).toMatchObject({ ok: true, value: 'rebased' })
+    expect(rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })).toMatchObject({ ok: true, value: 'rebased' })
     expect(humanApprovedPastSteps(readStream(repo.root, planId), plan())).toBe(true)
     expect(await nextLine(repo)).not.toBe(S2_RED(planId))
     // an amendment changes the plan's content: the pass ends, and the step routes

@@ -8,7 +8,7 @@ import { EXIT, type Ctx } from './cli.js'
 import { loadConfig, type Config } from './config.js'
 import { tryGitC } from './gitio.js'
 import { renderRefusal, v, type Violation } from './refusal.js'
-import { shellWord } from './toon.js'
+import { shellLine, shellWord } from './toon.js'
 import { worktreePath } from './worktree.js'
 
 // Row 243 (design §4.1.2). The guard: one predicate, read by every gate on a plan's worktree, every
@@ -139,6 +139,37 @@ function statusCode(stages: UnmergedPath['stages']): string {
   if (has(2) && has(3)) return has(1) ? 'UU' : 'AA'
   if (has(1)) return has(2) ? 'UD' : has(3) ? 'DU' : 'DD'
   return has(2) ? 'AU' : 'UA'
+}
+
+// The step a session takes once a clash or a replay conflict is resolved: the resolution is tested
+// through a witness turn before it travels (§4.1.3).
+const TURN_STEP = 'test the resolution through witness turn -- <test command>'
+
+// Step 7's clash (§4.1.3), refused `textual-conflict` (exit 1, row 77): each file on a row of its own
+// with its kind and remedy, a stash apply's sides, then one row naming the backup and what follows
+// once every file is resolved — ship re-gates the resolved tree (step 9).
+export function carryClashViolations(planId: string, wt: string, files: UnmergedPath[], kept: string, onto: string): Violation[] {
+  const rows = fileRemedies(wt, files, 'stash')
+  const ship = cliAct('ship', planId).line
+  return [
+    ...files.map((f, i) => v(shellWord(f.path), 'textual-conflict',
+      `unmerged (${statusCode(f.stages)}) — the plan's uncommitted work clashed going back onto ${onto}`, rows[i]!)),
+    v(kept, 'textual-conflict', `the plan's uncommitted work as it stood before the move is kept in ${kept}`,
+      `once every file above is resolved: ${TURN_STEP}, then ${ship}, which re-gates`),
+  ]
+}
+
+// Step 6's replay conflict (§4.1.3): the plan's own commits conflict with the moved base. The rebase
+// was aborted and the work put back, so nothing is unmerged in the tree; the row names the files and
+// the four steps, in which the session itself rebases.
+export function replayConflictViolations(planId: string, files: string[], onto: string): Violation[] {
+  const ship = cliAct('ship', planId).line
+  return [v('rebase', 'textual-conflict',
+    `the plan's commits conflict with ${onto} in ${files.map((f) => shellWord(f)).join(', ')} — the rebase was aborted and the uncommitted work put back`,
+    `1) commit the uncommitted work first (in the PR phase ship's code commit already exists, and fix commits of your own are normal) · `
+      + `2) ${shellLine(['git', 'rebase', onto])}, resolve each file, ${remedyLine(['git', 'add', '--', ...files])}, `
+      + `${shellLine(['git', 'rebase', '--continue'])} · 3) ${TURN_STEP} · `
+      + `4) ${ship} — it pushes under witness's own lease, so no hand push`)]
 }
 
 // The refusal `clash-unresolved` (exit 2 everywhere; the caller renders and exits). For (a) and (b)

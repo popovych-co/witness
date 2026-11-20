@@ -23,7 +23,13 @@ import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
-import { clashGuard, refuseClash } from './clash.js'
+import {
+  carryClashViolations, clashGuard, clashLeft, clashViolations, refuseClash, replayConflictViolations,
+} from './clash.js'
+import {
+  baseInTheWay, captureCarry, carryGit, carryPending, cleanTree, heldLock, lockedRow, operationInProgress, operationRefusal,
+  reapply, unmergedPaths, type Reapplied,
+} from './carry.js'
 import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
 import { heldItem, needYouRows } from './needs-you.js'
 import { driveChild } from './drive-presence.js'
@@ -260,7 +266,16 @@ export function baseMoved(wt: string, root: string, shipBranch: string, remote =
   return !stateOnlyAdvance(wt, root, 'HEAD', base)
 }
 
-export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remote = 'origin'): Result<'clean' | 'rebased'> {
+// Row 243 (design §4.1.1 steps 1–2 and 4–8; issue #86). The gate phase moves the plan onto a moved
+// base itself. implement leaves the worktree uncommitted on purpose (ship owns the sole code commit),
+// so the move carries that work across: witness captures it into its own carry ref, cleans the tree,
+// rebases with `--no-autostash`, and puts the work back. `git rebase --autostash` used to, and a
+// clash putting it back exited 0, left the markers for a gate and the work on git's shared stash
+// list. Now a clash stays in the files (UU), the carry is kept, and ship refuses `textual-conflict`.
+// `run` names the plan; `hasPr` and `env` are read by the lease (step 3) and the crash points.
+export function rebaseIfMoved(
+  wt: string, root: string, shipBranch: string, run: { planId: string; hasPr: boolean; env: Ctx['env'] }, remote = 'origin',
+): Result<'clean' | 'rebased'> {
   // Resolve the base from the REMOTE tip, not the local ref: with several flows merging
   // concurrently, local <shipBranch> lags every merge since the human's last pull, so a
   // local ancestry check reports "clean" against a base that is provably behind and the
@@ -281,33 +296,105 @@ export function rebaseIfMoved(wt: string, root: string, shipBranch: string, remo
   // Same predicate as baseMoved: an advance made entirely of witness's own state commits is
   // bookkeeping, and rebasing onto it moves the base term of every reviewed sha for nothing.
   if (stateOnlyAdvance(wt, root, 'HEAD', base)) return ok('clean')
-  // Only push a branch that HAS an upstream. This runs in the gate phase, before createPr has
-  // ever pushed, so on a first ship there is nothing on the remote to update — createPr does the
+  const { planId } = run
+  // Step 1, the guard (§4.1.2): no move over an unresolved clash.
+  const clash = clashLeft(wt, planId, shipBranch)
+  if (clash !== undefined) return refuse(clashViolations(planId, clash, wt))
+  // Step 2 (P19): an operation a session started is its own — never aborted, never applied into.
+  const op = operationInProgress(wt)
+  if (op !== undefined) return refuse([operationRefusal(wt, planId, op)])
+  // Step 3. Only push a branch that HAS an upstream. This runs in the gate phase, before createPr
+  // has ever pushed, so on a first ship there is nothing on the remote to update — createPr does the
   // initial push. Row 242: where an upstream exists, the lease is settled before the rebase, so a
   // PR branch someone else pushed to refuses with the worktree untouched (P27).
   const branch = tryGit(wt, 'symbolic-ref', '--quiet', '--short', 'HEAD')
   const upstream = branch.ok && tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok
   const lease = upstream ? leaseFor(wt, branch.out.trim(), remote) : undefined
   if (lease !== undefined && !lease.ok) return lease
-  // --autostash: this runs in the GATE phase, and implement deliberately leaves the
-  // worktree uncommitted (ship owns the sole code commit, in the pr phase below), so the
-  // tree is normally dirty and a bare rebase refuses with "you have unstaged changes".
-  // Autostash makes the rebase see a clean tree without moving witness's commit ahead of
-  // the human's decision. A pop that conflicts fails the rebase and refuses like any other.
-  const rebase = tryGit(wt, 'rebase', '--autostash', base)
-  if (!rebase.ok) {
-    tryGit(wt, 'rebase', '--abort')
-    return refuse([v('rebase', 'textual-conflict', `${base} moved`,
-      'resolve in the worktree (rebase manually), then re-run witness ship — the CLI never freehands a merge')])
+  // §4.1.5: an untracked file where the base holds one is refused before anything moves — in the
+  // worktree's sparse checkout the rebase would replace it with the base's bytes and exit 0.
+  const inTheWay = baseInTheWay(wt, planId, base)
+  if (!inTheWay.ok) return inTheWay
+  const orig = carryGit(wt, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+  if (orig.code !== 0 || orig.stdout.trim() === '') {
+    return refuse([v('rebase', 'head-unreadable', orig.stderr.slice(0, 200), `a readable HEAD in ${wt}`)])
   }
-  // Where an upstream exists the push result is the whole point: reporting 'rebased' after a
-  // failed push leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody
-  // will merge.
+  const at = { head: orig.stdout.trim(), ref: carryGit(wt, 'symbolic-ref', '--quiet', 'HEAD').stdout.trim() }
+  // Step 4, capture; step 5, a clean tree — only where there is work to carry.
+  const captured = captureCarry(wt, planId)
+  if (!captured.ok) return captured
+  const carry = captured.value
+  if (carry !== undefined) {
+    const cleaned = cleanTree(wt, planId)
+    if (!cleaned.ok) return cleaned
+  }
+  // Step 6. Witness's own rebase (its reflog action `witness-carry`), never stashing anything.
+  const rebase = carryGit(wt, 'rebase', '--no-autostash', base)
+  if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`))
+  // Step 7. The work back, or the refusal that keeps it.
+  if (carry !== undefined) {
+    const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry))
+    if (refused !== undefined) return refuse(refused)
+  }
+  // Step 8. Where an upstream exists the push result is the whole point: reporting 'rebased' after
+  // a failed push leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody
+  // will merge. A clash or a refused put-back withholds it (returned above).
   if (lease !== undefined) {
     const push = pushPr(wt, branch.out.trim(), lease.value, false, remote)
     if (!push.ok) return push
   }
   return ok('rebased')
+}
+
+// Step 7's outcome as ship refuses it, or nothing when the work is back clean.
+function putBackRefusal(wt: string, planId: string, onto: string, put: Reapplied): Violation[] | undefined {
+  switch (put.kind) {
+    case 'clean': return undefined
+    case 'clash': return carryClashViolations(planId, wt, put.files, put.kept, onto)
+    case 'locked': return [lockedRow(planId, put.lock, true)]
+    case 'refused': return [carryPending(planId, put.out)]
+  }
+}
+
+// Step 6 failed. The unmerged paths are read first (a replay conflict's files), then witness's own
+// rebase is aborted — its exit is not read: a rebase that died before it started has nothing to
+// abort, so success is the state itself, no operation in progress and HEAD back where it was. Only
+// then is the carry put back, and its ref deleted only after a clean put-back. A put-back that fails
+// keeps the ref (`carry-pending`, or `index-locked` for a held lock). After a clean one, a replay
+// conflict refuses `textual-conflict` naming the files, and anything else `rebase-refused` in git's
+// own words.
+function failedRebase(
+  wt: string, planId: string, onto: string, carry: string | undefined, at: { head: string; ref: string }, out: string,
+): Violation[] {
+  const replayed = unmergedPaths(wt).map((p) => p.path)
+  carryGit(wt, 'rebase', '--abort')
+  const now = carryGit(wt, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}').stdout.trim()
+  const back = operationInProgress(wt) === undefined && now === at.head
+    && carryGit(wt, 'symbolic-ref', '--quiet', 'HEAD').stdout.trim() === at.ref
+  const lock = heldLock(wt, out)
+  if (!back) {
+    if (lock !== undefined) return [lockedRow(planId, lock, carry !== undefined)]
+    const got = `the rebase onto ${onto} failed and its abort did not bring HEAD back to ${at.head.slice(0, 12)}: ${logSafe(out.trim().slice(0, 200))}`
+    return carry !== undefined ? [carryPending(planId, got)]
+      : [v('rebase', 'rebase-refused', got, `the worktree back on ${at.ref || at.head.slice(0, 12)} with no rebase in progress, then ${cliAct('ship', planId).line}`)]
+  }
+  if (carry !== undefined) {
+    const refused = putBackRefusal(wt, planId, onto, reapply(wt, planId, carry))
+    if (refused !== undefined) return refused
+  }
+  if (lock !== undefined) return [lockedRow(planId, lock, false)]
+  if (replayed.length > 0) return replayConflictViolations(planId, replayed, onto)
+  return [v('rebase', 'rebase-refused', logSafe(out.trim().slice(0, 200)) || 'git printed nothing',
+    `a rebase onto ${onto} git accepts — nothing moved, and the plan's work is back as it was; fix what git names, then ${cliAct('ship', planId).line}`)]
+}
+
+// Row 243 (design §4.1.3's table). The exit a refusal of the move ends ship on: a clash or a replay
+// conflict is the session's work to resolve (1, row 77), a held lock is transient (3), and every
+// other refusal — the carry's and the remote's — is a refusal (2).
+function carryExit(violations: readonly Violation[]): number {
+  if (violations.some((x) => x.rule === 'textual-conflict')) return EXIT.FINDINGS
+  if (violations.some((x) => x.rule === 'index-locked')) return EXIT.BLOCKED
+  return EXIT.REFUSED
 }
 
 // Row 174. Witness merges what it was allowed to ship — and only that. CI can run for half an
@@ -661,14 +748,14 @@ async function shipMarked(
     // actually merge. Reviewing first spends a battery — and a human decision — on a tree
     // without any sibling's merged work, which then lapses (gateSettled's reviewed_sha)
     // the moment the rebase lands.
-    const rebase = rebaseIfMoved(wt, root, shipBranch)
+    const rebase = rebaseIfMoved(wt, root, shipBranch, { planId, hasPr: plan.meta.pr !== undefined, env: ctx.env })
     if (!rebase.ok) {
       renderRefusal(rebase.violations).forEach((l) => ctx.err(l))
       recordRefusal(root, planId, rebase.violations, shipBranch)
-      // A textual conflict is a hand-back, not a refusal: the human resolves it in the
-      // worktree and re-runs. Every other rule (no-remote, fetch-failed, push-failed) is
-      // a genuine refusal and exits REFUSED like the rest of the CLI.
-      return rebase.violations.some((x) => x.rule === 'textual-conflict') ? EXIT.FINDINGS : EXIT.REFUSED
+      // A textual conflict is a hand-back, not a refusal: the session resolves it in the
+      // worktree and re-runs (exit 1). A held lock is transient (exit 3). Every other rule (the
+      // carry's, no-remote, fetch-failed, push-failed) is a genuine refusal (exit 2).
+      return carryExit(rebase.violations)
     }
     if (rebase.value === 'rebased') ctx.out(kv('rebase', `${shipBranch} moved — rebased before the battery`))
     const code = await runGate(ctx, 'ship', planId, { fresh: false, manual, handover: false })

@@ -62,13 +62,13 @@ async function pushedPlan() {
 
 describe('a forced push leases on witness\'s own last push (row 242)', () => {
   it('a re-gate after a refused push never overwrites the collaborator commit (P27)', async () => {
-    const { wt, repo, branch, moveMain, collaborate, onRemote } = await pushedPlan()
+    const { wt, repo, planId, branch, moveMain, collaborate, onRemote } = await pushedPlan()
     const c = collaborate()
     // pushApproved's fetch moves the tracking ref onto the collaborator's commit; its plain push is refused
     g(wt, 'fetch', '-q', 'origin', branch)
     expect(tryG(wt, 'push', 'origin', `HEAD:${branch}`)).toBe(false)
     moveMain('other')
-    const r = rebaseIfMoved(wt, repo.root, 'main')
+    const r = rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })
     expect(r.ok).toBe(false)
     expect(!r.ok && r.violations[0]!.rule).toBe('push-diverged')
     expect(onRemote(c)).toBe(true)
@@ -81,7 +81,7 @@ describe('a forced push leases on witness\'s own last push (row 242)', () => {
     const before = remoteTip()
     moveMain('other')
     const head = g(wt, 'rev-parse', 'HEAD')
-    const r = rebaseIfMoved(wt, repo.root, 'main')
+    const r = rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })
     expect(r.ok).toBe(false)
     expect(!r.ok && r.violations[0]!.rule).toBe('push-diverged')
     expect(remoteTip()).toBe(before)
@@ -93,7 +93,7 @@ describe('a forced push leases on witness\'s own last push (row 242)', () => {
     const { wt, repo, planId, remoteTip, moveMain } = await pushedPlan()
     g(wt, 'update-ref', '-d', pushedRef(planId))
     moveMain('other')
-    expect(rebaseIfMoved(wt, repo.root, 'main')).toEqual({ ok: true, value: 'rebased' })
+    expect(rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })).toEqual({ ok: true, value: 'rebased' })
     const head = g(wt, 'rev-parse', 'HEAD')
     expect(remoteTip()).toBe(head)
     expect(g(wt, 'rev-parse', pushedRef(planId))).toBe(head)
@@ -102,20 +102,20 @@ describe('a forced push leases on witness\'s own last push (row 242)', () => {
   it('a normal rebase still force-pushes when the remote is witness\'s own last push, and records the new one', async () => {
     const { wt, repo, planId, remoteTip, moveMain } = await pushedPlan()
     moveMain('other')
-    expect(rebaseIfMoved(wt, repo.root, 'main')).toEqual({ ok: true, value: 'rebased' })
+    expect(rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })).toEqual({ ok: true, value: 'rebased' })
     const head = g(wt, 'rev-parse', 'HEAD')
     expect(remoteTip()).toBe(head)
     expect(g(wt, 'rev-parse', pushedRef(planId))).toBe(head)
   }, 180_000)
 
   it('a rebase whose earlier push failed still leases on witness\'s own last push, not on HEAD', async () => {
-    const { wt, repo, remoteTip, moveMain } = await pushedPlan()
+    const { wt, repo, planId, remoteTip, moveMain } = await pushedPlan()
     // a rebase that landed locally while its push never did: the remote is witness's push, not an ancestor of HEAD
     moveMain('first')
     g(wt, 'fetch', '-q', 'origin', 'main')
     g(wt, 'rebase', '-q', '--autostash', 'origin/main')
     moveMain('second')
-    expect(rebaseIfMoved(wt, repo.root, 'main')).toEqual({ ok: true, value: 'rebased' })
+    expect(rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })).toEqual({ ok: true, value: 'rebased' })
     expect(remoteTip()).toBe(g(wt, 'rev-parse', 'HEAD'))
   }, 180_000)
 
