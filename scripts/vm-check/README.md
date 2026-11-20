@@ -123,6 +123,8 @@ is lost. Ctrl+C stops a script early.
 3. **Write down the time you start it.** The times in steps 5 and 6 count from then.
 4. Within those 2 minutes, close the VM's window with its **X** and choose **Continue running in
    the background**. Close the VirtualBox Manager too. Nothing of the VM is on your screen now.
+   (Typing and moving the mouse in the VM until you close it is fine: the idle hour counts from
+   the first test run, 2 minutes in.)
 
 ### 4. On your PC: watch your screen, and play
 
@@ -144,9 +146,9 @@ rate and ping, busy and idle; PresentMon's files if you made them (W5).
 ### 5. Leave the VM alone for the first hour
 
 For the first hour after you started step 3's script, don't open the VM's window or the
-VirtualBox Manager. At the hour, the script runs the tests again by itself, after an hour in
-which nobody touched the VM. That's the check that its screen stays live with no window open
-(W1). Use your PC however you like meanwhile.
+VirtualBox Manager. At the hour, the script runs the tests again by itself, after about 58
+minutes (from the first test run, 2 minutes in) in which nobody touched the VM. That's the check
+that its screen stays live with no window open (W1). Use your PC however you like meanwhile.
 
 ### 6. After the hour: open the VM's window for one minute
 
@@ -229,17 +231,19 @@ for later.
 The plan holds only if all six of these hold. If any fails, the route changes before witness's
 setup guide for VMs is written.
 
-- **W1 – the VM's screen stays live.** In the VM's log, from step 3's start to the end of the
-  second test run, every `sample` line taken with the window closed reads: `inputDesktop`
-  `"Default"`; `console` the same number as `session`; `width` 1920 and `height` 1080;
-  `displayTimeoutS` 0 (never); `black` false; and no `error`. And `idleMs` climbs without
-  dropping back until the second run starts, so that run comes after a whole idle hour.
+- **W1 – the VM's screen stays live.** In the VM's log, from the first test run's `run-start`
+  (2 minutes in, after you closed the window in step 3) to the end of the second test run, every
+  `sample` line taken with the window closed (so not during step 6's minute) reads:
+  `inputDesktop` `"Default"`; `console` the same number as `session`; `width` 1920 and `height`
+  1080; `displayTimeoutS` 0 (never); `black` false; and no `error`. And from that `run-start`
+  until the second run starts, `idleMs` climbs without dropping back, so the second run comes
+  after about 58 minutes with nobody touching the VM.
 - **W4 – the tests pass.** Both of step 3's `run-end` lines show `"exit":0`.
 - **W5 – your screen stays yours.** The PC's log names only your game and the windows you
   switched to yourself. VirtualBox's own windows (`VirtualBox`, `VirtualBoxVM`) are yours only
   between the times you wrote down for opening and closing the VM's window (step 6, and step 7
-  if it applies). Anywhere else, they, or anything from the VM or LowPro, mean something came to
-  the front by itself. Nothing popped up or made a sound, and the game kept its frame rate and
+  if it applies; each written time covers its whole minute). Anywhere else, they, or anything
+  from the VM or LowPro, mean something came to the front by itself. Nothing popped up or made a sound, and the game kept its frame rate and
   ping while the VM was busy.
 - **W6 – your game runs.** The online match ran, with VirtualBox installed, memory integrity as
   you set it, and the VM running.
@@ -257,11 +261,13 @@ Checked too, and what they should show:
 
 A few more words in the VM's log:
 
-- `idleMs` is how long since the VM last got keyboard or mouse input. From step 3's start it
-  should climb to about an hour (3600000) by the second run. If it drops back near zero before
-  then, something touched the VM during the idle hour (or the tests themselves send input); the
-  agent works out which, and whether the hour has to be run again. A drop once you open the
-  window in step 6 is expected and does no harm.
+- `idleMs` is how long since the VM last got keyboard or mouse input, in milliseconds. In the
+  first 2 minutes it drops while you type the command and close the window in step 3: that's
+  expected. From the first test run's `run-start` it should climb without dropping, to about 58
+  minutes (3480000 or a bit more: the hour minus the time the window was open in step 3) when
+  the second run starts. A drop between those two points means something touched the VM (or
+  the tests themselves send input); the agent works out which, and whether the hour has to be
+  run again. A drop once you open the window in step 6 is expected and does no harm.
 - `error` says why a field couldn't be read; that field is then `null`.
 - In a `run-end` line, `tail` holds the last lines the tests printed; the whole output is in
   the files named by `out` and `err`.

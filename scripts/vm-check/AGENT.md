@@ -398,25 +398,27 @@ tell them what to type and when.
    `VBox.log` lines (Part 2.6).
 3. **The long check (W1, W4).** First size it from step 2's `seconds` (call it S): step 3's
    first run is cold, like step 2's, so it ends about S + 120 seconds after the start.
-   - S under about 3300 (55 minutes): README's numbers fit as written,
-     `-Minutes 90 -RunAfter "120,3600"`. The first run ends before the hour, and the second
-     starts at 60 minutes.
-   - S longer: the first run would still be going at the hour, so the second would wait for
-     it, and could still be waiting when `-Minutes` end; it is then never started
-     (`run-skipped`). Set the second delay to S + 720 rounded up to a whole minute (120 s
-     start, the cold run, 10 minutes' margin), and `-Minutes` to at least (second delay / 60)
-     + 30. The idle hour counts from the script's start, so a later second run only makes it
-     longer. Give the developer the new command, the same `-Minutes` for `pc.ps1` in step 4,
-     and the new times for README steps 5 and 6 (step 6: about a minute after the second
-     delay).
+   The rule: the second delay is the larger of 3600 and S + 720 rounded up to a whole minute
+   (the 120 s start, the cold run, and 10 minutes' margin, since S was measured on an idle PC
+   and step 3's cold run happens while the game plays). Without that margin the first run can
+   spill past the hour; the second then waits, step 6's window opens before it starts, and it
+   may never start at all (`run-skipped`).
+   - S at most 2880 (48 minutes): README's numbers fit as written,
+     `-Minutes 90 -RunAfter "120,3600"`.
+   - S larger: use the second delay from the rule, and set `-Minutes` to the second delay in
+     minutes plus 30, or more. The idle stretch then runs longer than an hour, which does no
+     harm. Give the developer the new command, the same `-Minutes` for `pc.ps1` in step 4, and
+     the new times for README steps 5 and 6 (step 6: about a minute after the second delay).
 
    Empty the build output (Part 6). Then, in the VM, in the clone's folder (with the sized
    numbers, if they changed):
    `powershell -NoProfile -ExecutionPolicy Bypass -File C:\witness-vm-check\vm.ps1 -Minutes 90 -RunAfter "120,3600" -Command "<the test command>"`.
    The developer writes down the start time, closes the VM's window within 2 minutes (X →
-   Continue running in the background) and closes the Manager. The tests run at 2 and at 60
-   minutes; sampling continues every 2 s throughout, and past `-Minutes` if the second run is
-   still going.
+   Continue running in the background), before the first run starts, and closes the Manager.
+   Input in the VM until then (typing the command, moving to the X) is expected: the idle
+   stretch counts from the first run's `run-start`. The tests run at 2 and at 60 minutes;
+   sampling continues every 2 s throughout, and past `-Minutes` if the second run is still
+   going.
 4. **The PC side (W5, W6).** On the PC, in this folder:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .\pc.ps1 -WatchFocus -Minutes 90`.
    The developer plays an online match while the first run builds and tests (from 2 minutes),
@@ -425,8 +427,8 @@ tell them what to type and when.
    `PresentMon.exe --process_name <game>.exe --output_file busy.csv --timed 60 --terminate_after_timed`
    (flag spellings differ between PresentMon versions; `--help` lists them).
 5. **Hands off for the first hour (W1).** Nobody opens the VM's window or the Manager until the
-   second run has started (60 minutes, or the second delay). That run then comes after an hour
-   without input, and `idleMs` shows it.
+   second run has started (60 minutes, or the second delay). That run then comes after about 58
+   minutes without input, counted from the first run's `run-start`, and `idleMs` shows it.
 6. **The window, opened once, during the second run (W12).** This is the design's "opening the
    VM's window mid-run". About a minute after the second run starts (61 minutes; Task Manager
    shows the VM's CPU high), the developer writes down the time and opens Manager → Show. They
@@ -481,14 +483,20 @@ Reading the VM's log:
   `inputDesktop` `"Default"` is a live screen, and null with "Windows error 5" in `error` means
   the lock screen or a UAC prompt held it; `width`/`height` 1920/1080; `displayTimeoutS` 0;
   `black` false. A null field has its reason in `error`; a screenshot that fails with "The handle
-  is invalid" means the VM had no live screen: that is a W1 result, not a script fault.
-- `idleMs` climbs from the script's start and should be close to an hour (or the second delay)
-  when the second run starts. A drop back near zero before then means the VM got input during
-  the idle hour. Find which: drops that line up with the first run's `run-start`..`run-end` and
-  nothing else point at the tests themselves sending input; a drop at a time the developer
-  opened the window points at the window. If the window caused it, W1's hour has to be run
-  again. If the tests do, say so: W1 then rests on `displayTimeoutS` 0, the screenshot and
-  `inputDesktop`. A drop after the open time in README step 6 is expected and harmless.
+  is invalid" means the VM had no live screen: that is a W1 result, not a script fault. W1 reads
+  the samples from the first run's `run-start` to the second run's end, leaving out the minutes
+  the window was open in README step 6. The samples before that first `run-start` were taken
+  with the window open (step 3) and do not count.
+- `idleMs`: drops before the first run's `run-start` are expected (the developer typing the
+  command and closing the window in step 3). From that `run-start` it should climb without
+  dropping, to the second delay minus the close time when the second run starts: with README's
+  numbers about 58 minutes, 3480000 or a little more. A drop between the two runs' starts means
+  the VM got input during the idle stretch. Find which: drops that line up with the first run's
+  `run-start`..`run-end` and nothing else point at the tests themselves sending input; a drop at
+  a time the developer wrote down for opening the window points at the window. If the window
+  caused it, W1's idle stretch has to be run again. If the tests do, say so: W1 then rests on
+  `displayTimeoutS` 0, the screenshot and `inputDesktop`. A drop after the open time in README
+  step 6 is expected and harmless.
 - `run-start` / `run-end`: one pair per run. `run-due` means a delay came due while the previous
   run was still going (it starts once that one ends). `overtime` means `-Minutes` ended during a
   run. `run-skipped` means a run never started; its `why` says whether its delay came after
@@ -499,7 +507,8 @@ Reading the VM's log:
   VM's display scale is above 100%, the sizes may read scaled: report the scale).
 
 Reading the PC's log: each `focus` line names the program that came to the front, at `at`.
-Read them against the times the developer wrote down.
+Read them against the times the developer wrote down. Those are to the minute while `at` is to
+the second, so each written open or close time covers its whole minute.
 
 - The game, and windows the developer switched to themselves (the PowerShell running `pc.ps1`,
   for one), may appear any time.

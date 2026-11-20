@@ -351,8 +351,8 @@ $nextRun = 0
 $current = $null
 $dueNoted = -1
 $overNoted = $false
-$overRun = $null      # the run still going when -Minutes ended
 $lastInTime = -1      # seconds from the start at the last tick before -Minutes ended
+$lastInRun = $null    # the run going at that tick, if any
 $finished = $false
 
 try {
@@ -366,14 +366,16 @@ try {
         $current = $null
       }
       $over = $now -ge $deadline
-      if (-not $over) { $lastInTime = $elapsed }
+      if (-not $over) {
+        $lastInTime = $elapsed
+        $lastInRun = $(if ($null -ne $current) { $current.n } else { $null })
+      }
       if ($over -and $null -eq $current) {
         $stop = $true
       } else {
         if ($over -and -not $overNoted) {
           Write-Line ([ordered]@{ at = Get-Now; event = 'overtime'; note = ('-Minutes have ended; sampling goes on until run ' + $current.n + ' ends') })
           $overNoted = $true
-          $overRun = $current.n
         }
         if (-not $over -and $nextRun -lt $delays.Count -and $elapsed -ge $delays[$nextRun]) {
           if ($null -eq $current) {
@@ -396,8 +398,10 @@ try {
   }
   while ($nextRun -lt $delays.Count) {
     # A delay reached before -Minutes ended was only skipped because an earlier run was still going.
-    if ($delays[$nextRun] -le $lastInTime -and $null -ne $overRun) {
-      $skipWhy = 'it came due at ' + $delays[$nextRun] + ' s while run ' + $overRun + ' was still going, and that run outlasted -Minutes; give -Minutes more room'
+    # (The earlier run may have ended in the last tick slot before the deadline, or after it.)
+    if ($delays[$nextRun] -le $lastInTime) {
+      $blocker = $(if ($null -ne $lastInRun) { 'run ' + $lastInRun } else { 'an earlier run' })
+      $skipWhy = 'it came due at ' + $delays[$nextRun] + ' s while ' + $blocker + ' was still going, and -Minutes ended before it could start; give -Minutes more room'
     } else {
       $skipWhy = 'its delay came after -Minutes ended'
     }
