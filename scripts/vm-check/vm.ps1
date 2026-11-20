@@ -24,7 +24,9 @@
     start), while sampling goes on. Each run writes a "run-start" line and a "run-end" line with
     its start, end, seconds, exit code and the last lines it printed; its whole output is kept in
     files beside the log. A run still going when the next delay comes due is waited for, then the
-    next run starts. When -Minutes end with a run still going, sampling goes on until it ends.
+    next run starts. When -Minutes end with a run still going, sampling goes on until it ends,
+    but a run still waiting for it is not started ("run-skipped" says so): give -Minutes room
+    for every run.
     The command's stdin is an empty file, so a test runner does not start in watch mode.
 
   While it runs it holds the VM's sleep the way witness's drive does (SetThreadExecutionState with
@@ -349,6 +351,8 @@ $nextRun = 0
 $current = $null
 $dueNoted = -1
 $overNoted = $false
+$overRun = $null      # the run still going when -Minutes ended
+$lastInTime = -1      # seconds from the start at the last tick before -Minutes ended
 $finished = $false
 
 try {
@@ -362,12 +366,14 @@ try {
         $current = $null
       }
       $over = $now -ge $deadline
+      if (-not $over) { $lastInTime = $elapsed }
       if ($over -and $null -eq $current) {
         $stop = $true
       } else {
         if ($over -and -not $overNoted) {
           Write-Line ([ordered]@{ at = Get-Now; event = 'overtime'; note = ('-Minutes have ended; sampling goes on until run ' + $current.n + ' ends') })
           $overNoted = $true
+          $overRun = $current.n
         }
         if (-not $over -and $nextRun -lt $delays.Count -and $elapsed -ge $delays[$nextRun]) {
           if ($null -eq $current) {
@@ -389,7 +395,13 @@ try {
     if ($waitMs -gt 0) { Start-Sleep -Milliseconds $waitMs } else { $nextTick = Get-Date }
   }
   while ($nextRun -lt $delays.Count) {
-    Write-Line ([ordered]@{ at = Get-Now; event = 'run-skipped'; run = ($nextRun + 1); delayS = $delays[$nextRun]; why = 'its delay came after -Minutes ended' })
+    # A delay reached before -Minutes ended was only skipped because an earlier run was still going.
+    if ($delays[$nextRun] -le $lastInTime -and $null -ne $overRun) {
+      $skipWhy = 'it came due at ' + $delays[$nextRun] + ' s while run ' + $overRun + ' was still going, and that run outlasted -Minutes; give -Minutes more room'
+    } else {
+      $skipWhy = 'its delay came after -Minutes ended'
+    }
+    Write-Line ([ordered]@{ at = Get-Now; event = 'run-skipped'; run = ($nextRun + 1); delayS = $delays[$nextRun]; why = $skipWhy })
     $nextRun++
   }
   $finished = $true

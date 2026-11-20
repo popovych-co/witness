@@ -70,8 +70,8 @@ setting (sleep); deleting the app's build folder; running `witness init` in the 
 restamp and commit); turning autonomy on (a committed config change); starting `witness drive`.
 
 **Administrator steps this setup names** (each still needs the developer's yes and their UAC
-click): installing VirtualBox and its Visual C++ runtime; enabling the Windows Hypervisor Platform
-(Part 2.1); on the Hyper-V route, enabling Hyper-V, creating and configuring the VM,
+click): installing VirtualBox and its Visual C++ runtime; listing Windows features and enabling
+the Windows Hypervisor Platform (Part 2.1); on the Hyper-V route, enabling Hyper-V, creating and configuring the VM,
 `Set-VMHost`, `pc.ps1 -Host`, `Copy-VMFile`; in the VM, the Guest Additions, Autologon,
 `DisableAutomaticRestartSignOn`, and the developer tools' installers (Part 5); PresentMon, if
 used. Any other step that needs administrator rights: stop, explain why it is needed, and ask.
@@ -109,21 +109,41 @@ Report these facts in plain words before going on.
 
 ### 2.1 Memory integrity, the developer's choice, made first
 
-Windows 11 turns memory integrity on by default. With it on, VirtualBox "might fall back to a
-slower, emulated mode": it runs on the Windows Hypervisor Platform. Explain both choices and let
-the developer pick:
+Windows 11 turns memory integrity on by default. While Windows' own hypervisor runs, VirtualBox
+"might fall back to a slower, emulated mode": it runs on the Windows Hypervisor Platform. Memory
+integrity is one thing that runs that hypervisor, but not the only one. Explain the choice and
+let the developer pick:
 
 - **Off** (Windows Security → Device security → Core isolation details → Memory integrity; a
-  reboot): VirtualBox runs at full speed. Updates can turn it back on, so it is checked again
-  after them.
-- **On:** VirtualBox runs on the Windows Hypervisor Platform, slower. That needs the optional
-  feature, if `HyperVisorPresent` is true:
-  `Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All` (administrator,
-  reboot).
+  reboot): VirtualBox can run at full speed, if nothing else keeps the hypervisor running.
+  Updates can turn memory integrity back on, so it is checked again after them.
+- **On:** the hypervisor runs, and VirtualBox runs on the Windows Hypervisor Platform, slower.
 - Some games' anti-cheat wants memory integrity on (W6). If neither choice is fast enough
   (W11), the fallback is Windows 11 Pro with Hyper-V.
 
-Record the choice: it is the first thing the developer brings back.
+After the reboot, go by what actually runs, not by the choice alone:
+
+```powershell
+(Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+```
+
+- **False:** VirtualBox can use its own fast engine. Do not enable the Windows Hypervisor
+  Platform: enabling it starts the hypervisor at every boot.
+- **True** (whichever choice was made): VirtualBox needs the Windows Hypervisor Platform feature,
+  `Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All` (administrator,
+  reboot). If the developer turned memory integrity off for speed and it is still True, find
+  what keeps the hypervisor on and tell them:
+  - `Get-WindowsOptionalFeature -Online | Where-Object { $_.State -eq 'Enabled' -and $_.FeatureName -match 'Hyper-V|VirtualMachinePlatform|HypervisorPlatform|Containers-DisposableClientVM|ApplicationGuard' }`
+    (administrator) lists the Windows features that run it: WSL 2 needs VirtualMachinePlatform,
+    and Windows Sandbox is Containers-DisposableClientVM;
+  - `Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard`
+    shows virtualization-based security (`VirtualizationBasedSecurityStatus` 2 means running).
+
+  Turning any of them off is the developer's call (WSL 2 stops working without its feature).
+
+Record the choice and `HypervisorPresent`: they are the first things the developer brings back.
+`pc.ps1`'s start line logs both too (`memoryIntegrity`, `hypervisorPresent`), and README step 2's
+`VBox.log` lines show which engine VirtualBox actually used.
 
 ### 2.2 Install VirtualBox 7
 
@@ -201,8 +221,10 @@ detachable start is experimental; do not use it):
 
 Make the developer a small `.cmd` or `.ps1` on their desktop that does both, with a wait between,
 and say the size is set again after every start. To look at the VM: Manager → the VM → **Show**;
-to close the window, its **X** → **Continue running in the background**; then close the Manager.
-In the window's View menu, Scaled Mode is on and Auto-resize Guest Display is off.
+to close the window, its **X**, or Host key + Q (right Ctrl + Q by default; VirtualBox keeps Host
+key combinations for itself and never passes them to the guest) → **Continue running in the
+background**; then close the Manager. In the window's View menu, Scaled Mode is on and
+Auto-resize Guest Display is off: set them now, during setup, never in the middle of a check.
 
 Find VirtualBox's engine (W11):
 
@@ -284,10 +306,16 @@ Witness's keep-awake runs inside the VM and cannot hold the PC, and VirtualBox p
 when the PC sleeps. With the developer's yes, for the check and the hours drive works:
 
 ```powershell
-powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE   # note the current value, to restore later
+# Note both current values first, so they can be restored. The "Current AC Power Setting Index"
+# is in seconds, in hex; /change takes minutes.
+powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE
+powercfg /query SCHEME_CURRENT SUB_SLEEP HIBERNATEIDLE
 powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
 ```
+
+Tell the developer both old values, and how to put them back
+(`powercfg /change standby-timeout-ac <minutes>`, `powercfg /change hibernate-timeout-ac <minutes>`).
 
 ## Part 5: what the VM holds (in the VM)
 
@@ -362,18 +390,33 @@ One clone drives: a clone on the PC may read the repo but never drives it.
 README's steps, filled in. The developer starts each script in its own PowerShell window; you
 tell them what to type and when.
 
-1. **Setup (W11, W6).** Parts 1 to 5. Record memory integrity on/off and the VM's cores and
-   memory.
+1. **Setup (W11, W6).** Parts 1 to 5. Record memory integrity on/off, `HypervisorPresent` after
+   the reboot (Part 2.1), and the VM's cores and memory.
 2. **First build, timed (W11).** In the VM, in the clone's folder:
    `powershell -NoProfile -ExecutionPolicy Bypass -File C:\witness-vm-check\vm.ps1 -Minutes 1 -RunAfter 0 -Command "<the test command>"`.
    It stops when the run ends; its `run-end` line has `seconds` and `exit`. Then, on the PC, the
    `VBox.log` lines (Part 2.6).
-3. **The long check (W1, W4).** Empty the build output (Part 6). In the VM, in the clone's
-   folder:
+3. **The long check (W1, W4).** First size it from step 2's `seconds` (call it S): step 3's
+   first run is cold, like step 2's, so it ends about S + 120 seconds after the start.
+   - S under about 3300 (55 minutes): README's numbers fit as written,
+     `-Minutes 90 -RunAfter "120,3600"`. The first run ends before the hour, and the second
+     starts at 60 minutes.
+   - S longer: the first run would still be going at the hour, so the second would wait for
+     it, and could still be waiting when `-Minutes` end; it is then never started
+     (`run-skipped`). Set the second delay to S + 720 rounded up to a whole minute (120 s
+     start, the cold run, 10 minutes' margin), and `-Minutes` to at least (second delay / 60)
+     + 30. The idle hour counts from the script's start, so a later second run only makes it
+     longer. Give the developer the new command, the same `-Minutes` for `pc.ps1` in step 4,
+     and the new times for README steps 5 and 6 (step 6: about a minute after the second
+     delay).
+
+   Empty the build output (Part 6). Then, in the VM, in the clone's folder (with the sized
+   numbers, if they changed):
    `powershell -NoProfile -ExecutionPolicy Bypass -File C:\witness-vm-check\vm.ps1 -Minutes 90 -RunAfter "120,3600" -Command "<the test command>"`.
-   The developer closes the VM's window within 2 minutes (X → Continue running in the
-   background) and closes the Manager. The tests run at 2 and at 60 minutes; sampling continues
-   every 2 s throughout, and past 90 minutes if the second run is still going.
+   The developer writes down the start time, closes the VM's window within 2 minutes (X →
+   Continue running in the background) and closes the Manager. The tests run at 2 and at 60
+   minutes; sampling continues every 2 s throughout, and past `-Minutes` if the second run is
+   still going.
 4. **The PC side (W5, W6).** On the PC, in this folder:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .\pc.ps1 -WatchFocus -Minutes 90`.
    The developer plays an online match while the first run builds and tests (from 2 minutes),
@@ -381,14 +424,29 @@ tell them what to type and when.
    have it (it needs administrator rights): about a minute busy and a minute idle, for example
    `PresentMon.exe --process_name <game>.exe --output_file busy.csv --timed 60 --terminate_after_timed`
    (flag spellings differ between PresentMon versions; `--help` lists them).
-5. **The window, opened once (W12).** After the match: Manager → Show, about a minute, no mouse
-   over the VM's screen, then X → Continue running in the background, Manager closed.
-6. **Hands off (W1).** Nobody touches the VM until the end; the second run (60 minutes) comes
-   after an hour without input.
-7. **Logs and later checks (W7).** Copy the VM's log out (Part 2.5) and take the PC's. After the
-   VM's next Windows Update restart, and after the PC sleeps (Start → Power → Sleep) and wakes:
-   open the VM's window, see whether it is at the desktop, signed in and unlocked; after the
-   update restart, run `vm.ps1 -Minutes 1` once (its `bootedAt` shows the restart).
+5. **Hands off for the first hour (W1).** Nobody opens the VM's window or the Manager until the
+   second run has started (60 minutes, or the second delay). That run then comes after an hour
+   without input, and `idleMs` shows it.
+6. **The window, opened once, during the second run (W12).** This is the design's "opening the
+   VM's window mid-run". About a minute after the second run starts (61 minutes; Task Manager
+   shows the VM's CPU high), the developer writes down the time and opens Manager → Show. They
+   keep the pointer off the guest and do not type: the tests are running, and a click or a key
+   would reach them (with mouse integration, even moving over the guest is input). After about a
+   minute they close it without touching the guest: Host key + Q → Continue running in the
+   background, or the title bar's X, reached around the window's edge. Never Alt+F4: that goes to
+   the guest. Then they close the Manager and write down the time.
+   - Opening it only after the second run started keeps W1's idle hour whole: any input it
+     causes lands after that run began.
+   - If the screen wasn't scaled, or its size changed when the window opened, that is a W12
+     failure. They note it; after the window is closed, re-pin the size on the PC
+     (`& $vbox controlvm witness-vm setvideomodehint 1920 1080 32`) so the rest of the run is at
+     size. Do not change the View settings mid-check.
+7. **Logs and later checks (W7).** Wait until both scripts have ended (`focus-end` on the PC;
+   `"event":"end"` in the VM's log), then copy the VM's log out (Part 2.5) and take the PC's. If
+   the VM's window has to be opened while `pc.ps1` still runs, the developer writes down when.
+   After the VM's next Windows Update restart, and after the PC sleeps (Start → Power → Sleep)
+   and wakes: open the VM's window, see whether it is at the desktop, signed in and unlocked;
+   after the update restart, run `vm.ps1 -Minutes 1` once (its `bootedAt` shows the restart).
 8. **drive, detached (W8).** Only with the developer's yes: autonomy must be on in wot-mod-manager
    (a committed setting; ask before changing it), and drive needs work to do; it runs paid agent
    sessions. In the VM: `vm.ps1 -Minutes 60` in one PowerShell window; in a second terminal on the
@@ -402,12 +460,16 @@ VMConnect opened straight onto the screen.
 
 Give the developer one message to paste back, with:
 
-1. Part 1's facts; memory integrity on or off; the VM's cores and memory.
-2. The first build: `seconds` and `exit`; the `VBox.log` lines.
+1. Part 1's facts; memory integrity on or off, and `HypervisorPresent` after the reboot; the
+   VM's cores and memory.
+2. The first build: `seconds` and `exit`; the `VBox.log` lines; the step 3 numbers, if they were
+   sized differently.
 3. `witness-vm-check.jsonl` from the VM and `witness-pc-check.jsonl` from the PC, whole.
 4. The match: ran or not; pop-ups, focus changes, sound; frame rate and ping busy and idle;
    PresentMon's numbers if any.
-5. When the window was opened in step 5.
+5. The time step 3's script started; every time the VM's window was opened and closed while
+   `pc.ps1` ran (README step 6, and step 7 if it applies); whether the screen was scaled and kept
+   its size, and whether the size had to be re-pinned.
 6. W7's two answers; W8's answer and the end of `drive.log` (or "not run").
 7. On Hyper-V: the `-Host` line and the VMConnect answer.
 8. Anything that went wrong, step by step.
@@ -420,18 +482,31 @@ Reading the VM's log:
   the lock screen or a UAC prompt held it; `width`/`height` 1920/1080; `displayTimeoutS` 0;
   `black` false. A null field has its reason in `error`; a screenshot that fails with "The handle
   is invalid" means the VM had no live screen: that is a W1 result, not a script fault.
-- `idleMs` at the second run's start should be close to an hour. If it is much lower, something
-  touched the VM (the mouse over the window in step 5, or the tests themselves sending input):
-  say which.
-- `run-start` / `run-end`: one pair per run; `run-due` means a delay came due while the previous
-  run was still going (it then starts after); `overtime` means the 90 minutes ended during a run;
-  `run-skipped` means a delay came after the end. The full output of each run is in the files its
-  `out` and `err` name, under `witness-vm-check-runs\` beside the log.
+- `idleMs` climbs from the script's start and should be close to an hour (or the second delay)
+  when the second run starts. A drop back near zero before then means the VM got input during
+  the idle hour. Find which: drops that line up with the first run's `run-start`..`run-end` and
+  nothing else point at the tests themselves sending input; a drop at a time the developer
+  opened the window points at the window. If the window caused it, W1's hour has to be run
+  again. If the tests do, say so: W1 then rests on `displayTimeoutS` 0, the screenshot and
+  `inputDesktop`. A drop after the open time in README step 6 is expected and harmless.
+- `run-start` / `run-end`: one pair per run. `run-due` means a delay came due while the previous
+  run was still going (it starts once that one ends). `overtime` means `-Minutes` ended during a
+  run. `run-skipped` means a run never started; its `why` says whether its delay came after
+  `-Minutes` ended, or it came due while an earlier run was still going and that run outlasted
+  `-Minutes` (size the numbers as in Part 7 step 3). The full output of each run is in the files
+  its `out` and `err` name, under `witness-vm-check-runs\` beside the log.
 - `start`: `elevated` must be false; `holdsSleep` true; `dpiAware` true (if it is false and the
   VM's display scale is above 100%, the sizes may read scaled: report the scale).
 
-Reading the PC's log: each `focus` line names the program that came to the front. Only the game
-and windows the developer opened themselves may appear. Any `VirtualBox`, `VirtualBoxVM`,
-`VBoxHeadless`, `VBoxSVC` or LowPro name, or anything the developer did not open, is a W5
-failure. The `start` line records memory integrity, whether a hypervisor runs, and the PC's sleep
-timeout.
+Reading the PC's log: each `focus` line names the program that came to the front, at `at`.
+Read them against the times the developer wrote down.
+
+- The game, and windows the developer switched to themselves (the PowerShell running `pc.ps1`,
+  for one), may appear any time.
+- VirtualBox's own windows (`VirtualBox` for the Manager, `VirtualBoxVM` for the VM's window; on
+  Hyper-V, `vmconnect` and `mmc`) are the developer's only between an open time and its close
+  time (README step 6, and step 7 if the window was opened while `pc.ps1` still ran).
+- Outside those times, any of them, or `VBoxHeadless`, `VBoxSVC`, a LowPro name, or anything the
+  developer did not open, came to the front by itself: a W5 failure. Quote the line.
+
+The `start` line records memory integrity, whether a hypervisor runs, and the PC's sleep timeout.

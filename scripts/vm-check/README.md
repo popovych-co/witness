@@ -44,12 +44,15 @@ is lost. Ctrl+C stops a script early.
 
 1. **Memory integrity, first.** On your PC open Windows Security → Device security → Core
    isolation details, and write down whether **Memory integrity** is On or Off. It's your call:
-   - **Off:** VirtualBox runs at full speed. Big Windows updates can turn it back on, so look
-     again after them.
+   - **Off:** VirtualBox can run at full speed, as long as nothing else keeps Windows' own
+     hypervisor running (WSL 2, Windows Sandbox and some other Windows features do). After the
+     restart, the agent checks whether it still runs. Big Windows updates can turn memory
+     integrity back on, so look again after them.
    - **On:** VirtualBox still works, but slower (it runs on the Windows Hypervisor Platform).
    - Some games' anti-cheat wants it On.
 
-   If neither way is fast enough (step 2 tells you), the fallback is Windows 11 Pro with Hyper-V.
+   Step 2 shows which way VirtualBox actually runs, and how fast. If neither way is fast enough,
+   the fallback is Windows 11 Pro with Hyper-V.
 2. **The VM.** The agent sets it up with you so that:
    - it's a Windows 11 VM in VirtualBox 7, with its own Windows license (VirtualBox gives it the
      TPM 2.0 and Secure Boot Windows 11 needs);
@@ -114,8 +117,11 @@ is lost. Ctrl+C stops a script early.
    It writes a line every 2 seconds for 90 minutes, and runs the tests twice by itself: 2
    minutes from now, and 60 minutes from now. Like witness, it keeps the VM from going to sleep,
    but not its display: whether the display stays on is up to the VM's own settings, and that's
-   what it checks.
-3. Within those 2 minutes, close the VM's window with its **X** and choose **Continue running in
+   what it checks. (If your first build was long, the agent may give you other numbers for
+   `-Minutes` (here and in step 4) and `-RunAfter`, and other times for steps 5 and 6: use its
+   numbers.)
+3. **Write down the time you start it.** The times in steps 5 and 6 count from then.
+4. Within those 2 minutes, close the VM's window with its **X** and choose **Continue running in
    the background**. Close the VirtualBox Manager too. Nothing of the VM is on your screen now.
 
 ### 4. On your PC: watch your screen, and play
@@ -135,29 +141,46 @@ is lost. Ctrl+C stops a script early.
 **Bring back:** did the match run normally (W6); anything that popped up or made a sound; frame
 rate and ping, busy and idle; PresentMon's files if you made them (W5).
 
-### 5. Midway: open the VM's window for one minute
+### 5. Leave the VM alone for the first hour
 
-After your match, open the VirtualBox Manager, pick the VM and click **Show**. The VM's screen
-should appear scaled to the window. (If not: in the window's View menu, turn **Scaled Mode** on
-and **Auto-resize Guest Display** off.) Don't click or move the mouse over the VM's screen.
-After about a minute, close it again with its **X** → **Continue running in the background**,
-and close the Manager.
+For the first hour after you started step 3's script, don't open the VM's window or the
+VirtualBox Manager. At the hour, the script runs the tests again by itself, after an hour in
+which nobody touched the VM. That's the check that its screen stays live with no window open
+(W1). Use your PC however you like meanwhile.
 
-**Bring back:** roughly when you opened and closed it (W12).
+### 6. After the hour: open the VM's window for one minute
 
-### 6. Leave the VM alone
+This checks that opening the window while tests run doesn't change the VM's screen size (W12).
 
-Don't open the VM for the rest of the 90 minutes. One hour after step 3 the script runs the tests
-again by itself, after an hour in which nobody touched the VM. That's the check that its screen
-stays live with no window open (W1). Use your PC however you like meanwhile.
+1. About **61 minutes** after step 3's start, the second test run is going: Task Manager on your
+   PC shows the VM's CPU use high. (If it's already low again, do this anyway, and say so.)
+   **Write down the time**, then open the VirtualBox Manager, pick the VM and click **Show**.
+2. The VM's screen should appear scaled to fit the window. Keep the mouse off the VM's screen
+   and don't type: the tests are running in there, and a click or a key would reach them.
+3. After about a minute, close it without touching the VM's screen: press the **right Ctrl** key
+   and **Q** together (or move the mouse around the window's edge to its **X**, not across the
+   VM's screen), and choose **Continue running in the background**. Close the Manager too.
+   **Write down the time.**
+4. If the VM's screen wasn't scaled, or changed size when the window opened, that's a W12
+   failure. Note it, and once the window is closed, set the size back from PowerShell on your
+   PC (put your VM's name for `<vm>`), so the rest of the check runs at the right size:
+   ```
+   & "$env:ProgramFiles\Oracle\VirtualBox\VBoxManage.exe" controlvm "<vm>" setvideomodehint 1920 1080 32
+   ```
+
+**Bring back:** the two times; whether the screen was scaled and kept its size; whether you had
+to set the size back (W12).
 
 ### 7. Collect the logs, then two later checks
 
-1. When the 90 minutes are over (the PC's script prints a `focus-end` line, and the VM's script's
-   last line has `"event":"end"`), collect both logs:
-   - from the VM, `C:\Users\<you>\witness-vm-check.jsonl`: copy it into the shared folder the
-     agent set up, and it lands on your PC;
+1. Wait until both scripts have ended: the PC's script prints a `focus-end` line, and the VM's
+   script's last line has `"event":"end"` (it may run past 90 minutes if the second test run is
+   still going). Then collect both logs:
+   - from the VM, `C:\Users\<you>\witness-vm-check.jsonl`: open the VM's window and copy it
+     into the shared folder the agent set up, and it lands on your PC;
    - from your PC, `C:\Users\<you>\witness-pc-check.jsonl`.
+
+   If you do open the VM's window while the PC's script is still running, write down when.
 2. The next time **Windows Update restarts the VM** by itself (outside active hours; pressing
    "Restart now" on the VM's Windows Update page counts too), open the VM's window. Is it at the
    desktop, signed in and unlocked, without you typing anything? While it's open, run
@@ -189,14 +212,17 @@ for later.
 
 1. Memory integrity On or Off; the VM's cores and memory (step 1).
 2. The first build: `seconds` and `exit`, and the `VBox.log` lines (step 2).
-3. `witness-vm-check.jsonl` from the VM, whole.
-4. `witness-pc-check.jsonl` from your PC, whole.
-5. The match: did it run; anything that popped up or made a sound; frame rate and ping, busy and
+3. The time you started step 3's script.
+4. `witness-vm-check.jsonl` from the VM, whole.
+5. `witness-pc-check.jsonl` from your PC, whole.
+6. The match: did it run; anything that popped up or made a sound; frame rate and ping, busy and
    idle; PresentMon's files if any (step 4).
-6. When you opened the VM's window (step 5).
-7. After an update restart, and after your PC slept: signed in and unlocked, or not (step 7).
-8. drive after its terminal closed: kept going or not, and the end of `drive.log` (step 8).
-9. Anything else that looked wrong, and at which step.
+7. Every time you opened and closed the VM's window while the PC's script ran (step 6, and step
+   7 if it applies); whether the screen was scaled and kept its size; whether you had to set the
+   size back (step 6).
+8. After an update restart, and after your PC slept: signed in and unlocked, or not (step 7).
+9. drive after its terminal closed: kept going or not, and the end of `drive.log` (step 8).
+10. Anything else that looked wrong, and at which step.
 
 ## What decides
 
@@ -206,17 +232,21 @@ setup guide for VMs is written.
 - **W1 – the VM's screen stays live.** In the VM's log, from step 3's start to the end of the
   second test run, every `sample` line taken with the window closed reads: `inputDesktop`
   `"Default"`; `console` the same number as `session`; `width` 1920 and `height` 1080;
-  `displayTimeoutS` 0 (never); `black` false; and no `error`.
+  `displayTimeoutS` 0 (never); `black` false; and no `error`. And `idleMs` climbs without
+  dropping back until the second run starts, so that run comes after a whole idle hour.
 - **W4 – the tests pass.** Both of step 3's `run-end` lines show `"exit":0`.
 - **W5 – your screen stays yours.** The PC's log names only your game and the windows you
-  switched to yourself: nothing from VirtualBox, the VM or LowPro. Nothing popped up or made a
-  sound, and the game kept its frame rate and ping while the VM was busy.
+  switched to yourself. VirtualBox's own windows (`VirtualBox`, `VirtualBoxVM`) are yours only
+  between the times you wrote down for opening and closing the VM's window (step 6, and step 7
+  if it applies). Anywhere else, they, or anything from the VM or LowPro, mean something came to
+  the front by itself. Nothing popped up or made a sound, and the game kept its frame rate and
+  ping while the VM was busy.
 - **W6 – your game runs.** The online match ran, with VirtualBox installed, memory integrity as
   you set it, and the VM running.
 - **W11 – it's fast enough.** The first build plus the suite (step 2) took a time you can live
   with.
-- **W12 – the size holds.** While the window was open in step 5, the samples still read `width`
-  1920 and `height` 1080.
+- **W12 – the size holds.** While the window was open in step 6, it showed the VM's screen
+  scaled, and the samples still read `width` 1920 and `height` 1080.
 
 Checked too, and what they should show:
 
@@ -227,8 +257,11 @@ Checked too, and what they should show:
 
 A few more words in the VM's log:
 
-- `idleMs` is how long since anyone touched the VM's keyboard or mouse. It should climb to
-  about an hour by the second run.
+- `idleMs` is how long since the VM last got keyboard or mouse input. From step 3's start it
+  should climb to about an hour (3600000) by the second run. If it drops back near zero before
+  then, something touched the VM during the idle hour (or the tests themselves send input); the
+  agent works out which, and whether the hour has to be run again. A drop once you open the
+  window in step 6 is expected and does no harm.
 - `error` says why a field couldn't be read; that field is then `null`.
 - In a `run-end` line, `tail` holds the last lines the tests printed; the whole output is in
   the files named by `out` and `err`.
@@ -248,7 +281,12 @@ On Windows Pro, Hyper-V takes VirtualBox's place. What changes:
 - **Memory integrity and `VBox.log`** don't apply: skip those parts of steps 1 and 2.
 - **"The VM's window"** is Hyper-V's VMConnect (Hyper-V Manager → Connect). It should open
   straight onto the VM's screen. If it first asks you for a display size, enhanced sessions are
-  still on (W2). Closing it leaves the VM running; there is no Manager to close.
+  still on (W2). Closing it leaves the VM running. In step 6, close it with its **X**, moving the
+  mouse around the window's edge (right Ctrl + Q is VirtualBox's); there is no Manager to close.
+  In the PC's log, VMConnect's windows show as `vmconnect` (and Hyper-V Manager's as `mmc`): they
+  count as yours only between the times you wrote down.
+- **Setting the size back** (step 6) doesn't apply: the agent pins the VM's screen size in
+  Hyper-V itself. A changed size is still a W12 failure.
 - Everything else is the same.
 
 **Bring back** also: the `-Host` line, and whether VMConnect opened straight onto the screen.
