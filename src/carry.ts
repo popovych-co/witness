@@ -175,8 +175,9 @@ export function carryPending(planId: string, got: string): Violation {
 }
 
 // The carry ref shown both ways: the worktree versions, and the staged ones `git stash show -p`
-// leaves out (P43).
-function seeWork(ref: string): string {
+// leaves out (P43). Any stash-shaped commit reads so: check shows a leftover autostash entry, a carry
+// ref and a clash's backup with it (§4.1.4).
+export function seeWork(ref: string): string {
   return `see it with ${shellLine(['git', 'stash', 'show', '-p', ref])} beside ${shellLine(['git', 'diff', `${ref}^1`, `${ref}^2`])} (the staged versions)`
 }
 

@@ -1,6 +1,6 @@
 ---
 name: witness-ship
-description: Ship a witness plan — drive the CLI's deterministic ship phases (lanes → gate → PR → CI watch), resolve semantic rebase conflicts, and stop for the human where judgment is owed. Normally invoked by /witness with the plan id.
+description: Ship a witness plan — drive the CLI's deterministic ship phases (lanes → gate → PR → CI watch), resolve the conflicts a moved base leaves, and stop for the human where judgment is owed. Normally invoked by /witness with the plan id.
 ---
 
 # witness-ship — lanes → gate → PR → CI watch
@@ -42,28 +42,44 @@ $WITNESS ship <plan-id>    # append --manual when the run asked for it
 The CLI derives the phase from world state (`pr:` field, journal, PR head) — killed anywhere, re-running converges. **A run that ends with a `relay:` line** has reached this session's context limit, whatever its outcome: render what it printed above that line, print the `relay:` line verbatim, and END YOUR TURN — the next ship pass runs in a fresh session. That holds in the CI loop too: after a relay, never fix and re-run ship here. Otherwise, your job per outcome:
 
 - **Gate ran and stopped** (it *always stops* — the ship gate is a standing stop): render the checks (tests · lint · drift lane), the reviewer findings, and its ranked options verbatim and in full, then END YOUR TURN. The two-lane drift check ran inside: deterministic lane fail-closed, drift-reviewer advisory.
-- **After the human approves** → run `$WITNESS ship <plan-id>` again: it commits the worktree (the sole code commit — implement leaves everything uncommitted), pushes the branch, opens the PR (`pr:` stamped), rebases if main moved, and watches CI.
-- **`semantic-conflict`** → the CLI aborted its mechanical rebase; the conflict is yours (next section), then re-run ship.
-- **CI red** → investigate in the worktree; fix under TDD discipline (a behavior fix gets a red first — reuse the implement protocol); commit, `git push --force-with-lease` if you rebased, plain push otherwise; re-run `$WITNESS ship <plan-id>` to re-watch.
+- **After the human approves** → run `$WITNESS ship <plan-id>` again: it commits the worktree (the sole code commit — implement leaves everything uncommitted), pushes the branch, opens the PR (`pr:` stamped), rebases if main moved, and watches CI. When main moved before the PR opened, ship carries the plan's work across and re-gates by itself: a move changed the tree the battery judged, so a second battery runs on the moved tree and stops like the first.
+- **`textual-conflict`** (exit 1) → main moved under the plan and the two collide; the conflict is yours (next section). Rows naming each file, then a row naming a backup under `refs/witness/kept/`, are a **clash**: the plan's uncommitted work went back onto the moved base with conflicts, and they stay in the files. One row whose steps name `git rebase` is a **replay conflict**: the plan's commits collide with main, the CLI aborted its rebase, and the uncommitted work is back as it was.
+- **`clash-unresolved`** (exit 2) → a clash is still in the plan's files — unmerged entries, or git's stash-apply label lines in a file a backup lists — and every gate, evidence run, `witness turn` and ship on the plan refuses until it is resolved: resolve it by **A clash** below. A row that leads with `witness ship <plan-id>` instead means a move was interrupted and the work may not be in the tree: run that line, which finishes the move, and resolve no file by hand before it has run.
+- **CI red** → investigate in the worktree; fix under TDD discipline (a behavior fix gets a red first — reuse the implement protocol); commit, then re-run `$WITNESS ship <plan-id>`: it carries the fix to the PR under its own lease and re-watches.
 - **CI green** → tell the human the PR is ready to merge. **Never merge it yourself** — merging is the human's act on GitHub; the lazy stamp flips `plan → done`, `spec → live` on the next scan (`$WITNESS next` after merging shows it).
-- **Under `autonomy: on`** (printed by `gate`): the arbiter settles the ship gate's stop, and `witness ship` carries on in the same run — PR, CI watch, and on green it merges the PR itself and prints `merged:`. Never run `witness decide`, and never merge yourself or run a `gh pr merge` line. A `decided: ship … → revise (decided first)` line is a revise like any other: another decider settled the stop first; fix from the revise-context it printed. A `busy:` line means another witness run is acting on this plan now: render it and END YOUR TURN — never retry it, and run no other verb on the plan. A `steps-open` refusal, or `merge: held — <step> is not built yet`, means the plan gained a step: ship nothing, and hand back to /witness, which routes the step. `merge: held — the ship approval lapsed` means re-run `witness ship`, which re-gates. `ci: red` with failing checks is yours: fix it and re-run `witness ship`. A merge or fix stop — `merge: held` for no CI checks, no passing check, a PR aimed at another branch, a closed PR or a refused login, and a `merge-refused` or `push-diverged` refusal — is the human's: render it and END YOUR TURN; running `witness ship` again returns the same stop. A hold that clears by itself — `ci: pending`, a check set or a base that could not be read, a fetch or push the remote did not answer — is drive's to check again: END YOUR TURN. So is a `kept-stop:` line the human's: render it and END YOUR TURN.
+- **Under `autonomy: on`** (printed by `gate`): the arbiter settles the ship gate's stop, and `witness ship` carries on in the same run — PR, CI watch, and on green it merges the PR itself and prints `merged:`. Never run `witness decide`, and never merge yourself or run a `gh pr merge` line. A `decided: ship … → revise (decided first)` line is a revise like any other: another decider settled the stop first; fix from the revise-context it printed. A `busy:` line means another witness run is acting on this plan now: render it and END YOUR TURN — never retry it, and run no other verb on the plan. A `steps-open` refusal, or `merge: held — <step> is not built yet`, means the plan gained a step: ship nothing, and hand back to /witness, which routes the step. `merge: held — the ship approval lapsed` means re-run `witness ship`, which re-gates. `ci: red` with failing checks is yours: fix it and re-run `witness ship`. A merge or fix stop — `merge: held` for no CI checks, no passing check, a PR aimed at another branch, a closed PR or a refused login, and a `merge-refused`, `push-diverged` or `pr-branch-gone` refusal — is the human's: render it and END YOUR TURN; running `witness ship` again returns the same stop. A hold that clears by itself — `ci: pending`, a check set or a base that could not be read, a fetch or push the remote did not answer, a git lock another process held (`index-locked`) — is drive's to check again: END YOUR TURN. So is a `kept-stop:` line the human's: render it and END YOUR TURN.
 
-## Semantic conflict resolution
+## Conflict resolution
 
-In the worktree (`.witness/worktrees/<plan-id>`):
+In the worktree (`.witness/worktrees/<plan-id>`). Witness never resolves a conflict and never drops your work: resolve each file preserving BOTH intents — the plan's behavior and what landed on main; a resolution that drops either is a silent revert. Run each row's own commands, never a remembered flag: which side `--theirs` and `--ours` keep follows the operation, and the row says which.
 
-```bash
-git fetch origin <ship-branch>
-git rebase origin/<ship-branch>   # the REMOTE tip — re-hits the conflict the CLI reported
-                                  # (default branch: main). Rebasing the LOCAL ref recreates
-                                  # the stale base the CLI just refused (D142).
-# resolve each conflicted file preserving BOTH intents — the branch's behavior
-# and what landed on main; a resolution that drops either is a silent revert
-git add -A && git rebase --continue
-<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>
-git push --force-with-lease
-$WITNESS ship <plan-id>          # resume the watch
-```
+### A clash
+
+The refusal names each file on a row of its own, with its kind and its remedy, then the backup of the plan's work as it stood before the move (`refs/witness/kept/<plan-id>/<n>`, deleted when the plan merges).
+
+1. Apply each file's remedy as its row says:
+   - **content** — resolve the conflict markers keeping both intents, then the row's `git add -- <file>`;
+   - **binary, or both changed with no markers** — the row's `git checkout --theirs -- <file>` keeps the plan's version (in a stash apply, *theirs* is the plan's side) and `git checkout --ours -- <file>` keeps main's; then `git add -- <file>`;
+   - **modify/delete** — the row says which side `git rm -- <file>` keeps and which side `git add -- <file>` keeps.
+2. Test through `$WITNESS turn -- <test command>`; the resolution must be green before it travels.
+3. Re-run `$WITNESS ship <plan-id>`, which re-gates: no battery has judged the moved tree.
+
+A `clash-unresolved` row for label lines in a file that is not a clash — a doc or a fixture whose own text starts with a label — names the human's way out: tell the human, and never move the backup yourself.
+
+### A replay conflict
+
+1. Commit the uncommitted work first (in the PR phase ship's code commit already exists, and fix commits of your own are normal).
+2. Rebase onto the REMOTE tip, which re-hits the conflict the CLI reported (default branch: main; rebasing the LOCAL ref recreates the stale base the CLI just refused, D142):
+
+   ```bash
+   git fetch origin <ship-branch>
+   git rebase origin/<ship-branch>
+   # resolve each conflicted file preserving both intents, then
+   git add -- <file>
+   git rebase --continue
+   ```
+3. Test through `$WITNESS turn -- <test command>`; the resolution must be green before it travels.
+4. Re-run `$WITNESS ship <plan-id>`: it pushes under witness's own lease, so there is no hand push.
 
 Any test you run yourself — reproducing a failed lane, checking a resolution — goes through `$WITNESS turn -- <test command>`, so it takes turns with the other worktrees' runs.
 

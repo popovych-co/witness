@@ -190,3 +190,31 @@ describe('the chat waits (row 204)', () => {
     expect(rows.find((l) => l.startsWith('| `wait: needs you`'))).toContain('Tell the human the rows it printed')
   })
 })
+
+// Row 243 (design §4.1.3, §4.5). Each refusal a moved base can leave has a row of its own, matched
+// before the generic exit-2 row, with its way on: what a session may do itself, and where the work
+// is the human's — never a reset, and never a deleted carry ref.
+describe('the router reads the carry\'s refusals (row 243)', () => {
+  const rowFor = (rule: string): string => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| ') && l.includes(`\`${rule}\` refusal`))
+    expect(rows, rule).toHaveLength(1)
+    return rows[0]!
+  }
+  const generic = () => body().split('\n').findIndex((l) => l.startsWith('| any other `next:` line'))
+  it.each([
+    ['clash-unresolved', ['A row that leads with `witness ship <plan>` means a move was interrupted: run that line', 'resolve no file by hand before it has run',
+      'the `witness-ship` skill\'s **A clash** steps', '`$WITNESS turn`']],
+    ['carry-pending', ['never reset the worktree, and never delete or move that ref', '`git switch witness/<plan>`', '**END YOUR TURN**', 'the human\'s call']],
+    ['carry-refused', ['nothing moved', 'intent-to-add', '`git add -- <file>`', '**END YOUR TURN**']],
+    ['operation-in-progress', ['never ends one it did not start', 'If this session started it', '`--continue`', '`--abort`', '**END YOUR TURN**']],
+    ['rebase-refused', ['not a conflict', 'an untracked file this session made', '`git add -- <file>`', 'in git\'s own words', '**END YOUR TURN**']],
+    ['index-locked', ['nothing was lost', 'the next `witness ship` carries on once the lock is released', 'removing the lock file is the human\'s call', '**END YOUR TURN**']],
+    ['pr-branch-gone', ['the PR branch is gone from the remote — recreate or reopen it, or abandon the plan', 'never push the branch yourself',
+      'running `witness ship` again returns the same stop', '**END YOUR TURN**']],
+  ])('a %s refusal has a row of its own, before the generic row', (rule, parts) => {
+    const row = rowFor(rule)
+    for (const p of parts) expect(row, p).toContain(p)
+    expect(body().split('\n').indexOf(row)).toBeLessThan(generic())
+    expect(row).not.toMatch(/git reset|update-ref -d|git stash (drop|pop|clear)/)
+  })
+})

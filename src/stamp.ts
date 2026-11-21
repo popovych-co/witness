@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { cliAct } from './act.js'
+import { carryGit, keptRefs } from './carry.js'
 import type { Ctx } from './cli.js'
 import { deferralMoves } from './deferral.js'
 import { writeDoc } from './fm.js'
@@ -131,6 +132,7 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
         // D141. `next`/`check`/`dashboard` all reach here, including the SessionStart
         // hook — so this is the removal that used to delete the caller's own directory.
         if (!removeWorktree(root, planId, ctx.cwd)) result.kept.push(worktreePath(root, planId))
+        dropKept(root, planId)
         result.stamped.push({ plan: planId, ...(specStamp ? { spec: specStamp.stream } : {}), pr })
       } else {
         result.stale.push({ plan: planId, why: txn.violations.map((x) => x.rule).join(' ') })
@@ -157,4 +159,13 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
   const firstStamped = result.stamped[0]
   if (firstStamped) autoSync(root, ctx, firstStamped.plan, 'merge-stamp')
   return result
+}
+
+// Row 243 (design §4.1.1 step 10). The plan merged, so its kept refs have served their turn: every
+// ref under `refs/witness/kept/<plan>/`, whatever its shape or name, is deleted while it still names
+// what was read. The plan's carry ref is never deleted here, since its work may be in no commit, and
+// an abandon deletes neither (D168: the CLI never discards work). A ref a failed delete (a held
+// lock) or a crash leaves behind is check's to warn of.
+function dropKept(root: string, planId: string): void {
+  for (const k of keptRefs(root, planId)) carryGit(root, 'update-ref', '-d', k.ref, k.sha)
 }

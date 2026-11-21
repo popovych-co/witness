@@ -212,10 +212,65 @@ describe('witness-ship', () => {
     expect(body()).toContain('always stops');
     expect(body()).toContain('decide ship');
   });
-  it('owns semantic-conflict resolution and never merges', () => {
-    expect(body()).toContain('semantic-conflict');
-    expect(body()).toContain('--force-with-lease');
-    expect(body()).toContain('Never merge');
+  // Row 243 (design §4.1.3). The moved base's two refusals are named; the old aborted-rebase
+  // refusal and the hand force-push it asked for are gone (ship pushes under its own lease).
+  it('the ship skill names textual-conflict and clash-unresolved, never semantic-conflict, and no hand --force-with-lease', () => {
+    const s = body();
+    expect(s).toMatch(/textual-conflict/); expect(s).toMatch(/clash-unresolved/);
+    expect(s).not.toMatch(/semantic-conflict|--force-with-lease/);
+    expect(s).toContain('Never merge');
+  });
+  // A heading's section: from the heading to the next heading of any level.
+  const section = (heading: string): string => {
+    const s = body();
+    const start = s.indexOf(`\n${heading}\n`);
+    expect(start, heading).toBeGreaterThan(-1);
+    const rest = s.slice(start + heading.length + 2);
+    const end = rest.search(/^#{2,3} /m);
+    return end < 0 ? rest : rest.slice(0, end);
+  };
+  const inOrder = (text: string, parts: string[]): void => {
+    let at = -1;
+    for (const p of parts) {
+      const next = text.indexOf(p, at + 1);
+      expect(next, `${p} after ${at}`).toBeGreaterThan(at);
+      at = next;
+    }
+  };
+  it('carries the clash steps: each file\'s remedy from its row, a test through the turn, then ship, which re-gates (row 243)', () => {
+    const clash = section('### A clash');
+    inOrder(clash, [
+      '**content**', 'resolve the conflict markers keeping both intents', '`git add -- <file>`',
+      '**binary, or both changed with no markers**', '`git checkout --theirs -- <file>` keeps the plan\'s version', '`git checkout --ours -- <file>` keeps main\'s',
+      '**modify/delete**', 'which side `git rm -- <file>` keeps and which side `git add -- <file>` keeps',
+      'Test through `$WITNESS turn -- <test command>`',
+      'Re-run `$WITNESS ship <plan-id>`, which re-gates',
+    ]);
+    expect(clash).not.toMatch(/git push|git rebase/);
+  });
+  it('carries the replay steps: commit first, rebase the remote tip and continue, test through the turn, re-run ship with no hand push (row 243)', () => {
+    const replay = section('### A replay conflict');
+    inOrder(replay, [
+      'Commit the uncommitted work first',
+      'git rebase origin/<ship-branch>', 'git add -- <file>', 'git rebase --continue',
+      'Test through `$WITNESS turn -- <test command>`',
+      'Re-run `$WITNESS ship <plan-id>`: it pushes under witness\'s own lease, so there is no hand push',
+    ]);
+    expect(replay).not.toMatch(/git push/);
+    expect(replay).not.toContain('git add -A');
+  });
+  it('its CI-red bullet is commit, then re-run witness ship (row 243)', () => {
+    const bullet = body().split('\n').find((l) => l.startsWith('- **CI red**'));
+    expect(bullet).toContain('commit, then re-run `$WITNESS ship <plan-id>`');
+    expect(bullet).not.toMatch(/push/i);
+  });
+  it('says ship re-gates by itself when a move changed the tree the battery judged (row 243)', () => {
+    const bullet = body().split('\n').find((l) => l.startsWith('- **After the human approves**'));
+    expect(bullet).toContain('ship carries the plan\'s work across and re-gates by itself: a move changed the tree the battery judged');
+  });
+  it('names a gone PR branch the human\'s and a held git lock drive\'s (rows 242, 243)', () => {
+    expect(body()).toContain('a `merge-refused`, `push-diverged` or `pr-branch-gone` refusal — is the human\'s');
+    expect(body()).toContain('a git lock another process held (`index-locked`)');
   });
   it('reads a decision another decider landed first as that decision (row 240)', () => {
     expect(body()).toContain('A `decided: ship … → revise (decided first)` line is a revise like any other')
@@ -233,7 +288,7 @@ describe('witness-ship', () => {
     expect(cmd).toContain('| `busy:` is printed | Another witness run is acting on that target now. Do nothing for it')
   });
   it('checks a resolution through witness turn (row 218)', () => {
-    expect(body()).toContain("<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>");
+    expect(body()).toContain('Test through `$WITNESS turn -- <test command>`; the resolution must be green before it travels.');
   });
 });
 
