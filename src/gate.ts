@@ -437,14 +437,15 @@ function handBackHolds(entries: Entry[], gate: string, read: HandBackRead): bool
 }
 
 // Why `--unchanged` handed nothing back, from what the gate does instead (design §4.2.4, P11). Worded
-// without a comma, so the `note:` line prints unquoted.
+// without a comma, so the `note:` line prints unquoted, and never as `witness <word>` before a value,
+// which would read as a witness command printing a bare value (row 239's prose-quote lint).
 function notHandedBack(kind: AppendKind, key: GateKey, disposed: GateRunEntry): string {
   const n = `round ${disposed.round}`
   if (kind.kind === 'cached' && kind.from.run_id === disposed.run_id) return `a check changed since ${n} — the gate replays its verdicts with the checks as they stand`
   if (kind.kind === 'repair') return 'the last round was malformed on this content — the gate repairs it'
   if (fellBack(disposed)) return `${n} fell back from its pin — its verdict answers nothing`
   if (key.reviewed_sha !== disposed.reviewed_sha) return `the content moved since ${n}`
-  if (key.witness !== disposed.witness) return `witness moved from ${disposed.witness} to ${key.witness} since ${n} — its verdict no longer answers the content`
+  if (key.witness !== disposed.witness) return `witness's version moved from ${disposed.witness} to ${key.witness} since ${n} — its verdict no longer answers the content`
   if (!sameKey(keyOf(disposed), key)) return `the reviewer setup (prompts or pin or harness) moved since ${n}`
   return `the gate does not pair this content with ${n}`
 }

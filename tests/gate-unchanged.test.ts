@@ -262,7 +262,7 @@ describe('witness gate --unchanged hands a revise back (row 244, design §4.2.4)
 
     const r = await repo.cli(['gate', 'plan', P, '--unchanged'], { env })
     expect(r.code, r.stderr).toBe(1)
-    expect(r.stdout).toContain(`note: nothing was handed back — witness moved from ${prior} to ${version()} since round 1`)
+    expect(r.stdout).toContain(`note: nothing was handed back — witness's version moved from ${prior} to ${version()} since round 1 — its verdict no longer answers the content`)
     expect(backs(repo, P)).toEqual([])
     const runs = runsOf(repo, P, 'plan')
     expect(runs).toHaveLength(2)
