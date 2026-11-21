@@ -1,9 +1,10 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { cliAct } from './act.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { spawnSync } from './spawn.js'
 import { logSafe, shellLine, shellWord, withheldOn, type Platform } from './toon.js'
+import { branchName } from './worktree.js'
 
 // Row 243 (design §4.1.1). The carry: when the base moves, witness moves the plan's uncommitted
 // work itself, where `git rebase --autostash` used to, so a clash re-applying it stays in the files
@@ -153,9 +154,57 @@ function gitWords(out: string): string {
 // `witness ship`, whose step 0 finishes the move.
 export function carryPending(planId: string, got: string): Violation {
   const ref = carryRef(planId)
+  return v(ref, 'carry-pending', got, `${ref} holds the plan's uncommitted work and is kept — ${seeWork(ref)}; ${cliAct('ship', planId).line} finishes the move`)
+}
+
+// The carry ref shown both ways: the worktree versions, and the staged ones `git stash show -p`
+// leaves out (P43).
+function seeWork(ref: string): string {
+  return `see it with ${shellLine(['git', 'stash', 'show', '-p', ref])} beside ${shellLine(['git', 'diff', `${ref}^1`, `${ref}^2`])} (the staged versions)`
+}
+
+// Step 0.1. The plan's worktree is gone (an abandoned plan): no tree is left for the move to finish
+// in, so the ref is shown and kept, and where the work goes is a human's call (D168).
+export function carryGone(planId: string, wt: string): Violation {
+  const ref = carryRef(planId)
+  return v(ref, 'carry-pending', `the plan's worktree ${shellWord(wt)} is gone, and ${ref} still holds its uncommitted work`,
+    `${ref} is kept and never deleted for you — ${seeWork(ref)}, from the repository; with no worktree to finish the move in, a human decides where the work goes`)
+}
+
+// Step 0.3. HEAD detached or on another branch: the work goes back only onto the plan's branch, so
+// nothing is compared, applied or moved until the worktree is back on it.
+export function offBranchPending(planId: string, head: string): Violation {
+  const ref = carryRef(planId)
+  const branch = branchName(planId)
+  const where = head === '' ? 'HEAD is detached' : `HEAD is on ${shellWord(head.replace(/^refs\/heads\//, ''))}`
+  return v(ref, 'carry-pending', `${where}, not on the plan's branch ${branch}, so the plan's work was not put back`,
+    `the worktree back on the plan's branch with ${shellLine(['git', 'switch', branch])}, then ${cliAct('ship', planId).line}, which finishes the move — `
+      + `${ref} keeps the plan's work meanwhile; ${seeWork(ref)}`)
+}
+
+// Step 0.4 (P43, P52). Unmerged entries the carry did not leave — a session's own clash, its own
+// `git stash pop` say: each named with its way out once the session has resolved it, then the carry
+// ref, kept. Witness resolves none of them (n2).
+export function sessionUnmerged(planId: string, files: readonly UnmergedPath[]): Violation[] {
+  return [
+    ...files.map((f) => v(shellWord(f.path), 'carry-pending',
+      'unmerged — not the carry\'s own clash (its stages are not the carry\'s blobs): a session\'s, from its own git stash pop say',
+      `the session's own clash resolved by the session, then ${remedyLine(['git', 'add', '--', f.path])}`)),
+    carryPending(planId, 'the worktree holds unmerged entries of a session\'s making, so the plan\'s work was not put back into it'),
+  ]
+}
+
+// Step 0.7. Anything else: neither the work already back nor a clean tracked tree. The tree is left
+// as it stands, never reset; the row shows the carry both ways and the steps to put it back by hand
+// (P43: on a clean tracked tree an `--index` apply, or a plain one where git refuses the staged half),
+// and, in words, that a tree already holding the work keeps the ref as a backup rather than deleting it.
+export function restorePending(planId: string, got: string): Violation {
+  const ref = carryRef(planId)
   return v(ref, 'carry-pending', got,
-    `${ref} holds the plan's uncommitted work and is kept — see it with ${shellLine(['git', 'stash', 'show', '-p', ref])} beside `
-      + `${shellLine(['git', 'diff', `${ref}^1`, `${ref}^2`])} (the staged versions); ${cliAct('ship', planId).line} finishes the move`)
+    `${ref} holds the plan's uncommitted work and is kept, and the tree is left as it stands — ${seeWork(ref)}. To put it back by hand, `
+      + `on a clean tracked tree: ${shellLine(['git', 'stash', 'apply', '--index', ref])}, or ${shellLine(['git', 'stash', 'apply', ref])} where git answers `
+      + `conflicts in index. If the tree already holds the work, move ${ref} to an unused number under ${keptPrefix(planId)} rather than `
+      + `deleting it, so the backup is kept; then ${cliAct('ship', planId).line}`)
 }
 
 // §4.1.5 (S1-3). A lock another git process holds, read first from git's own words (C locale), then
@@ -199,19 +248,124 @@ export function headReflog(wt: string): string[] {
   return r.code === 0 ? r.stdout.split('\n').filter((s) => s !== '') : []
 }
 
-// Step 6. After witness's own rebase failed, the operation in progress is witness's to abort only on
-// proof: it is a rebase, git did not refuse because one was already under way, and HEAD's reflog
-// gained entries since `before` (read just before the call), every one carrying witness's action and
-// one of them its `(start)`. Silence is no proof: a repo that keeps no HEAD reflog
-// (`core.logAllRefUpdates=false`), or a session's rebase that has written nothing yet (an editor
-// open on its todo), reads as the session's, which fails safe — never aborted.
-export function ownRebaseSince(wt: string, op: OpInProgress | undefined, out: string, before: readonly string[]): boolean {
-  if (op !== 'rebase-merge' && op !== 'rebase-apply') return false
-  if (/already a rebase-(?:merge|apply) directory/.test(out)) return false
+// Whose rebase is in progress, as HEAD's reflog tells it (steps 0 and 6):
+//   - `witness`: proven witness's own, so witness may abort it;
+//   - `session`: positively a session's — an entry of its own since witness's `(start)` (its
+//     `--continue`, or a rebase it started whose `(start)` is the newer), git's "already a
+//     rebase-… directory", or an orig-head the carry did not leave;
+//   - `silent`: the reflog cannot tell (a repo that keeps no HEAD reflog, `core.logAllRefUpdates
+//     =false`). Silence is never proof: a silent rebase is never aborted. Its rows say what to do if
+//     witness started it, which a positively-a-session's rebase's rows never say.
+export type RebaseOwner = 'witness' | 'session' | 'silent'
+
+const ownEntry = (s: string): boolean => s.startsWith(`${CARRY_ACTION} `)
+
+// The reading both steps share. `entries` newest first, walked back to witness's own `(start)`:
+// every entry on the way carries witness's action, else a session's entry stands after it (or the
+// newest `(start)` is the session's own). No `(start)` reached is silence.
+function readOwner(entries: readonly string[]): RebaseOwner {
+  for (const s of entries) {
+    if (!ownEntry(s)) return 'session'
+    if (s.startsWith(`${CARRY_ACTION} (start)`)) return 'witness'
+  }
+  return 'silent'
+}
+
+// Step 6. After witness's own rebase failed, the operation in progress is read from what HEAD's
+// reflog gained since `before` (read just before the call): every new entry witness's, one of them
+// its `(start)`. An operation that is no rebase, or git's "already a rebase-… directory", is a
+// session's. No new entry at all (no HEAD reflog, or a session's rebase that has written nothing yet,
+// an editor open on its todo) is silence.
+export function rebaseOwnerSince(wt: string, op: OpInProgress | undefined, out: string, before: readonly string[]): RebaseOwner {
+  if (op !== 'rebase-merge' && op !== 'rebase-apply') return 'session'
+  if (/already a rebase-(?:merge|apply) directory/.test(out)) return 'session'
   const after = headReflog(wt)
   const fresh = after.slice(0, Math.max(0, after.length - before.length))
-  return fresh.length > 0 && fresh.every((s) => s.startsWith(`${CARRY_ACTION} `))
-    && fresh.some((s) => s.startsWith(`${CARRY_ACTION} (start)`))
+  return fresh.some((s) => !ownEntry(s)) ? 'session' : readOwner(fresh)
+}
+
+// Step 0.2 (P40, P53). A crashed move's rebase is witness's own only when HEAD's latest `(start)`
+// reflog entry carries witness's action, every HEAD entry after it does too, and its orig-head is
+// `<carry>^1`, where witness's rebase began. A session that continued witness's rebase has written
+// `rebase (continue)` entries of its own, so its resolved commits are never dropped; a session's own
+// rebase from the same HEAD writes its own `(start)`. With no HEAD reflog file, git would read the
+// branch's log in HEAD's place, so silence is read from the file's absence. An orig-head that is not
+// `<carry>^1` is positively not this move's rebase.
+export function witnessOwnRebase(wt: string, carry: string): RebaseOwner {
+  const op = operationInProgress(wt)
+  if (op !== 'rebase-merge' && op !== 'rebase-apply') return 'session'
+  const reading = gitPathExists(wt, 'logs/HEAD') ? readOwner(headReflog(wt)) : 'silent'
+  if (reading === 'session') return 'session'
+  const origHead = readGitPath(wt, `${op}/orig-head`)
+  const base = carryGit(wt, 'rev-parse', '--verify', '--quiet', `${carry}^1`).stdout.trim()
+  return origHead !== undefined && base !== '' && origHead === base ? reading : 'session'
+}
+
+function gitPath(wt: string, name: string): string | undefined {
+  const r = carryGit(wt, 'rev-parse', '--git-path', name)
+  return r.code === 0 ? resolve(wt, r.stdout.replace(/\n$/, '')) : undefined
+}
+
+function gitPathExists(wt: string, name: string): boolean {
+  const path = gitPath(wt, name)
+  return path !== undefined && existsSync(path)
+}
+
+function readGitPath(wt: string, name: string): string | undefined {
+  const path = gitPath(wt, name)
+  if (path === undefined) return undefined
+  try {
+    return readFileSync(path, 'utf8').trim()
+  } catch {
+    return undefined
+  }
+}
+
+// c5. `git merge-tree --write-tree --merge-base` arrived in git 2.40. Read from `git --version`'s
+// line, a Windows build's suffix included; a line that names no version reads as old, which only
+// skips the comparison (step 0.5).
+export function gitAtLeast(versionLine: string, major: number, minor: number): boolean {
+  const m = /\bgit version (\d+)\.(\d+)/.exec(versionLine)
+  if (m === null) return false
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  return a > major || (a === major && b >= minor)
+}
+
+// The blob a commit holds at a path, or nothing where it holds none (step 0.4 compares a stage with
+// it). `<rev>:<path>` reads the path as written: no pathspec magic.
+export function blobAt(wt: string, rev: string, path: string): string | undefined {
+  const r = carryGit(wt, 'rev-parse', '--verify', '--quiet', `${rev}:${path}`)
+  const sha = r.stdout.trim()
+  return r.code === 0 && /^[0-9a-f]+$/.test(sha) ? sha : undefined
+}
+
+// Step 0.5 (P35, P43). Whether the plan's work is already back: the tree compared, both halves, with
+// the carry replayed onto HEAD (`git merge-tree --write-tree --merge-base=<carry>^1 HEAD <side>`, git
+// 2.40 and later). The worktree side is held against the tracked tree a fresh `git stash create`
+// records (untracked files are never in it), the index side against that capture's index; a capture
+// that prints nothing leaves both halves HEAD's tree. A replay that conflicts (exit 1) is never
+// equal. `lock`: the fresh capture met a held index lock (S1-3).
+export function workAlreadyBack(wt: string, carry: string): { back: boolean; lock?: string } {
+  const replayed = (side: string): string | undefined => {
+    const r = carryGit(wt, 'merge-tree', '--write-tree', `--merge-base=${carry}^1`, 'HEAD', side)
+    const tree = r.stdout.split('\n')[0]!.trim()
+    return r.code === 0 && /^[0-9a-f]+$/.test(tree) ? tree : undefined
+  }
+  const worktree = replayed(carry)
+  const index = replayed(`${carry}^2`)
+  if (worktree === undefined || index === undefined) return { back: false }
+  const fresh = carryGit(wt, 'stash', 'create')
+  if (fresh.code !== 0) {
+    const lock = heldLock(wt, `${fresh.stdout}${fresh.stderr}`)
+    return lock === undefined ? { back: false } : { back: false, lock }
+  }
+  const sha = fresh.stdout.trim()
+  const tree = (rev: string): string | undefined => {
+    const r = carryGit(wt, 'rev-parse', '--verify', '--quiet', `${rev}^{tree}`)
+    return r.code === 0 && r.stdout.trim() !== '' ? r.stdout.trim() : undefined
+  }
+  const now = sha === '' ? { worktree: tree('HEAD'), index: tree('HEAD') } : { worktree: tree(sha), index: tree(`${sha}^2`) }
+  return { back: now.worktree !== undefined && now.worktree === worktree && now.index === index }
 }
 
 // Step 2 (P19). An operation a session started is its own to finish: witness never aborts it, nor
@@ -220,17 +374,18 @@ export function ownRebaseSince(wt: string, op: OpInProgress | undefined, out: st
 const OP_VERB: Record<OpInProgress, string> = {
   'rebase-merge': 'rebase', 'rebase-apply': 'rebase', MERGE_HEAD: 'merge', CHERRY_PICK_HEAD: 'cherry-pick', REVERT_HEAD: 'revert',
 }
-// `unproven`: a rebase that may be witness's own, met where its reflog cannot tell (step 0's case too):
-// the want then adds the design's sentence for a human who knows witness started it.
-export function operationRefusal(wt: string, planId: string, op: OpInProgress, unproven = false): Violation {
+// `silent`: a rebase whose reflog cannot tell whose it is (`RebaseOwner`), so it may be witness's own:
+// the want then adds the design's sentence for a human who knows witness started it. A rebase the
+// reflog shows to be a session's never gets it.
+export function operationRefusal(wt: string, planId: string, op: OpInProgress, silent = false): Violation {
   const applying = op === 'rebase-apply' && carryGit(wt, 'rev-parse', '--git-path', 'rebase-apply/applying')
   const verb = applying && applying.code === 0 && existsSync(resolve(wt, applying.stdout.replace(/\n$/, ''))) ? 'am' : OP_VERB[op]
   const ship = cliAct('ship', planId).line
   const abort = shellLine(['git', verb, '--abort'])
-  const own = unproven && verb === 'rebase' ? `; if the rebase is witness's own (its reflog cannot tell), run ${abort}, then re-run ${ship}` : ''
+  const own = silent && verb === 'rebase' ? `; if the rebase is witness's own (its reflog cannot tell), run ${abort}, then re-run ${ship}` : ''
   return v(op, 'operation-in-progress', `a git ${verb} is in progress in the worktree`,
     `it finished with ${shellLine(['git', verb, '--continue'])}, or ended with ${abort} — `
-      + `witness never ends an operation a session started — then ${ship}${own}`)
+      + `an operation a session started is the session's to end, never witness's — then ${ship}${own}`)
 }
 
 // The files an intent-to-add entry (`git add -N`) holds: the worktree side of `git diff` lists them as
@@ -387,8 +542,9 @@ function unapplied(wt: string, out: string): Reapplied {
   return { kind: 'refused', out: `git stash apply refused the plan's work: ${gitWords(out)}` }
 }
 
-// After a clean apply the carry ref goes, checked against the carry itself (S1-6).
-function dropCarry(wt: string, planId: string, carry: string): Reapplied {
+// After a clean apply the carry ref goes, checked against the carry itself (S1-6). Step 0.5 drops it
+// the same way once the work is found already back.
+export function dropCarry(wt: string, planId: string, carry: string): Reapplied {
   const ref = carryRef(planId)
   const dropped = carryGit(wt, 'update-ref', '-d', ref, carry)
   if (dropped.code === 0) return { kind: 'clean' }

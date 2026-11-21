@@ -377,6 +377,10 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     const x = !r.ok ? r.violations : []
     expect(x.map((y) => y.rule)).toEqual(['operation-in-progress', 'carry-pending'])
     expect(x[0]!.want).toContain(shellLine(['git', 'rebase', '--continue']))
+    // the reflog positively shows the session's rebase (its own `rebase (start)`): no row invites a
+    // human to abort it as witness's, and the carry's cell names the session
+    expect(x.some((y) => y.want.includes('its reflog cannot tell') || y.got.includes('its reflog cannot tell'))).toBe(false)
+    expect(x[1]!.got).toMatch(/a session started/)
     // never aborted: the session's rebase still stands, its own entries the newest in HEAD's reflog
     expect(operationInProgress(wt)).toBe('rebase-merge')
     expect(g(wt, 'reflog', '-n', '1', '--format=%gs', 'HEAD')).toMatch(/^rebase \(/)
@@ -403,6 +407,8 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     const x = !r.ok ? r.violations : []
     expect(x.map((y) => y.rule)).toEqual(['operation-in-progress', 'carry-pending'])
     expect(x[0]!.want).toContain(`if the rebase is witness's own (its reflog cannot tell), run ${shellLine(['git', 'rebase', '--abort'])}, then re-run witness ship ${planId}`)
+    // the carry's cell hedges too: the rebase may be witness's own
+    expect(x[1]!.got).toContain('witness\'s own or a session\'s, its reflog cannot tell')
     // never aborted: the session's rebase stands; the work waits in the carry ref
     expect(operationInProgress(wt)).toBe('rebase-merge')
     expect(read(wt, 'g.txt')).toBe('1\n2\n3\n')
