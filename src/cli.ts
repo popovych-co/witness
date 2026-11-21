@@ -94,7 +94,7 @@ const VERB_USAGE: Record<string, string> = {
   diff: 'witness diff <spec-id>',
   drive: 'witness drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] — runs every session itself · under autonomy it needs no terminal and reports when nothing else can move',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
-  gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual]',
+  gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual] [--unchanged]',
   index: 'witness index',
   init: 'witness init [--agent claude-code|pi|auto]',
   migrate: 'witness migrate [--dry-run]',

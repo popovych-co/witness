@@ -27,7 +27,7 @@ import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
 import {
   ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
-  repairGranted, roundsSinceApprove, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LiveActs,
+  repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LiveActs,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
@@ -91,8 +91,7 @@ function renderBound(
 
 // Row 240 (R2). The settler lost the stop: a decision landed after the read its act was built on.
 function settledSince(ctx: Ctx, gate: string, target: string): number {
-  renderRefusal([v('gate', 'settled-since', `${gate} ${target} — decided since it was read`,
-    `the stop as it stands — ${cliAct('decide', gate, target, '--show').line}`)]).forEach((l) => ctx.err(l))
+  renderRefusal([settledSinceViolation(gate, target)]).forEach((l) => ctx.err(l))
   return EXIT.REFUSED
 }
 

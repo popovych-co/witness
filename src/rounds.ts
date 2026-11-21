@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
-import type { Violation } from './refusal.js'
+import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
 // `untrusted` (row 171): the commands the trust list kept this check from running, so the
@@ -479,9 +479,11 @@ export interface LiveActs {
 
 // Design §4.2.2's session lines, by state, on unchanged content. The retracted line ends as the
 // design's table cell does: `--fresh` is the human's re-review (§4.2.8), and a retraction is where a
-// session may run it.
+// session may run it. While the gate's own upstream revise is still owed there, `--unchanged` refuses
+// `upstream-owed`, so the revised line drops its hand-back hint (design §4.2.9, S3-2).
 export const SESSION_LINE = {
   revised: 'change the work and re-run the gate, or hand it back with `--unchanged`',
+  'revised-upstream': 'the work this revise sent upstream is owed there first; re-run the gate once it lands',
   'handed-back-moved': 'change nothing more; the re-gate judges what moved',
   retracted: 're-review with `gate --fresh` (it spends a round), or change the work and re-run the gate; a session may run that `--fresh`',
 } as const
@@ -637,7 +639,7 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')
   const listed = acts.filter((a) => !unnamed(a))
   const slots = [...(atBound ? [] : approveTwin(gate, target, listed)), ...acts.filter(unnamed)]
-  const session = sessionLine(state, moved)
+  const session = sessionLine(state, moved, facts.upstreamOwed)
   return {
     state, anchor, acts: listed, malformedRerun,
     ...(session !== undefined ? { session } : {}), ...(slots.length > 0 ? { slots } : {}),
@@ -646,11 +648,13 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
 
 // Design §4.2.2: the session's line in the revised, handed-back-moved and retracted states. On
 // moved content a revised or retracted gate's one way on is the re-gate its acts name, so neither
-// line, which offers a hand-back or a re-review of unchanged content, is said there.
-function sessionLine(state: GateStateKind, moved: boolean): string | undefined {
+// line, which offers a hand-back or a re-review of unchanged content, is said there. A revised gate
+// whose own upstream revise is still owed offers no hand-back (S3-2).
+function sessionLine(state: GateStateKind, moved: boolean, upstreamOwed: boolean): string | undefined {
   if (state === 'handed-back-moved') return SESSION_LINE['handed-back-moved']
   if (moved) return undefined
-  return state === 'revised' ? SESSION_LINE.revised : state === 'retracted' ? SESSION_LINE.retracted : undefined
+  if (state === 'revised') return upstreamOwed ? SESSION_LINE['revised-upstream'] : SESSION_LINE.revised
+  return state === 'retracted' ? SESSION_LINE.retracted : undefined
 }
 
 // D122. Below the bound `--approve` and `--approve --override` are one act: a screen lists one
@@ -735,6 +739,24 @@ export function openReopen(entries: Entry[], gate: string): DecisionEntry | unde
     }
   }
   return undefined
+}
+
+// Design §4.2.4 (P48; Task 9's review). Is a reopen of `gate` that `by` booked still open: one after the
+// gate's last run and its last disposition (a decision with no `caused_by`), each of which answers every
+// reopen before it. Unlike `openReopen`, which names the latest open reopen for routing, this reads
+// every reopen still open, so a sibling's later reopen of the same gate never hides this one.
+export function reopenOpenBy(entries: Entry[], gate: string, by: { artifact: string; gate: string }): boolean {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]
+    if (isRun(e, gate)) return false
+    if (!isDecision(e, gate)) continue
+    // A journaled field is parsed JSON: a `caused_by` that is not an object names no one.
+    const c = (e as unknown as { caused_by?: unknown }).caused_by
+    if (c === undefined) return false
+    const named = typeof c === 'object' && c !== null ? (c as { artifact?: unknown; gate?: unknown }) : {}
+    if (named.artifact === by.artifact && named.gate === by.gate) return true
+  }
+  return false
 }
 
 export type AppendKind =
@@ -858,4 +880,12 @@ export function settledToken(entries: Entry[], gate: string, runId: string): str
     (e as unknown as GateRunEntry).gate === gate && (e as unknown as GateRunEntry).run_id === runId)
   const after = entries.slice(at + 1).filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
   return createHash('sha1').update(JSON.stringify(after)).digest('hex').slice(0, 12)
+}
+
+// Row 240 (R2). The refusal a token that no longer matches names, for every act that took one: a
+// settler's decision (`decide`) and an author's hand-back (`gate --unchanged`, row 244, S3-1). A
+// decision landed after the read the act was built on, so the act is refused for the stop as it stands.
+export function settledSinceViolation(gate: string, target: string): Violation {
+  return v('gate', 'settled-since', `${gate} ${target} — decided since it was read`,
+    `the stop as it stands — ${cliAct('decide', gate, target, '--show').line}`)
 }

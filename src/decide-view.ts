@@ -94,11 +94,13 @@ export function decideView(root: string, cfg: Config, canon: Canon, gate: GateNa
   })
 
   // Row 244 (design §4.2.5). A handed-back revise is owed its decision again: its run and the set it
-  // is decided from, before the reopen it may answer.
+  // is decided from, before the reopen it may answer. The run is the one the revise disposed of
+  // (`live.anchor`): a malformed round after the hand-back judged nothing and leaves it standing, so it
+  // is never the run shown (Task 10's review).
   if (live.state === 'handed-back' || live.state === 'handed-back-moved') {
     const block = blockOf()
     return {
-      ...head, state: 'handed-back', moved: live.state === 'handed-back-moved', run: gateRunView(last, 'ran', entries),
+      ...head, state: 'handed-back', moved: live.state === 'handed-back-moved', run: gateRunView(judged, 'ran', entries),
       pins: policyPins(entries), disposition: disposition ?? { decision: 'revise' }, ...(block ? { block } : {}), exits: live.acts,
     }
   }

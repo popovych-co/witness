@@ -237,6 +237,33 @@ describe('the router reads decide\'s revise-again refusals (row 244)', () => {
   })
 })
 
+// Row 244 (design §4.2.4, §4.5). The hand-back is the author's act: the router offers it where the
+// changed-nothing screen's session line does — the revised state, no upstream work owed — appends
+// `--manual` when armed, and never decides. Its refusals spend nothing, and `next` routes what is owed.
+describe('the router hands a revise back, and reads the hand-back\'s refusals (row 244)', () => {
+  const generic = () => body().split('\n').findIndex((l) => l.startsWith('| any other `next:` line'))
+  const HAND_BACK = 'when you judge there is nothing to change, hand the revise back with `$WITNESS gate <gate> <target> --unchanged`, and never `decide`'
+  it('a session: line offering --unchanged has a row of its own, before the generic row', () => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| a `session:` line offers `--unchanged`'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain(HAND_BACK)
+    expect(rows[0]).toContain('`outcome: revise changed nothing`')
+    expect(rows[0]).toContain('Append `--manual` when this session is `--manual`-armed')
+    expect(rows[0]).toContain('A plain re-run hands nothing back')
+    expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())
+  })
+  it('the hand-back\'s refusals have one row, before the generic row', () => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| a refusal of `--unchanged`'))
+    expect(rows).toHaveLength(1)
+    for (const rule of ['nothing-to-hand-back', 'upstream-owed', 'retraction-owed', 'hand-back-standing', 'hand-back-at-bound', 'fresh-unchanged', 'settled-since']) {
+      expect(rows[0], rule).toContain(`\`${rule}\``)
+    }
+    expect(rows[0]).toContain('Nothing was handed back and nothing was spent')
+    expect(rows[0]).toContain('never `decide`')
+    expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())
+  })
+})
+
 // Row 243 (design §4.1.3: replay step 1, "a session's fix commits are normal"). The ship session is
 // spawned through /witness, so the router's never-commit rule must leave room for exactly the ship
 // skill's own commits in the plan's worktree — a CI-red fix, and a replay conflict's step 1, without

@@ -40,7 +40,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import {
-  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision, revisedRun,
+  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision, reopenOpenBy, revisedRun,
   type ActFacts, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
@@ -894,7 +894,9 @@ export function actFacts(
 // Design §4.2.4 (P48). The gate's own latest revise sent the work upstream, and it is still owed there:
 // the reopen that revise booked (`decide`'s `upstream` field names its stream and gate) is open, or for
 // decompose, whose upstream is the recap, no recap has landed since the revise. A reopen of this gate
-// by another (`caused_by`) is a revise of this gate, but not one it sent upstream.
+// by another (`caused_by`) is a revise of this gate, but not one it sent upstream. Open means not yet
+// answered by the upstream gate's run or disposition, whichever reopen came last: a sibling that sent
+// the same upstream gate back after this one does not answer it (Task 9's review).
 function upstreamOwed(root: string, gate: string, target: string, entries: Entry[]): boolean {
   let at = entries.length - 1
   for (; at >= 0; at--) {
@@ -908,8 +910,7 @@ function upstreamOwed(root: string, gate: string, target: string, entries: Entry
   const up = revise.upstream
   // A journaled field is parsed JSON: a stream is read only by an id.
   if (typeof up !== 'object' || up === null || typeof up.gate !== 'string' || !isId(up.artifact)) return false
-  const reopen = openReopen(up.artifact === target ? entries : readStream(root, up.artifact), up.gate)
-  return reopen?.caused_by?.artifact === target && reopen.caused_by.gate === gate
+  return reopenOpenBy(up.artifact === target ? entries : readStream(root, up.artifact), up.gate, { artifact: target, gate })
 }
 
 // Row 244 (#87, S2-5). A parked gate's way back as `decide` reads it: the park's live acts, with the

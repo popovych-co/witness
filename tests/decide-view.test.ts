@@ -122,6 +122,23 @@ describe('decide --show is a view (rows 139/203)', () => {
       expect(decideViewLines(view)).toContain('state: handed-back — the author handed the revise back with the content unchanged')
     })
 
+    // Task 10's review. A malformed round judged nothing, so it leaves the hand-back standing: the view
+    // shows the run the revise disposed of, the one being decided again, never the empty round after it.
+    it('handed back, then a malformed round: the run shown is the disposed run', async () => {
+      const { repo, gate, target } = await decideRepo('implement-revised')
+      const disposed = lastGateRun(readStream(repo.root, target), gate)!
+      appendEntry(repo.root, target, { v: 1, t: 'revise-returned', gate: 'implement', artifact: target, run_id: disposed.run_id, sha: disposed.reviewed_sha } as never)
+      appendEntry(repo.root, target, {
+        ...disposed, run_id: 'r-malformed', round: 2, reviewed_sha: 'other-content-sha', outcome: 'malformed',
+        verdicts: [], malformed: [{ reviewer: 'code-reviewer', violations: [] }],
+      } as never)
+      const view = decideView(repo.root, cfgOf(repo.root), loadCanon(repo.root), gate, target)
+      if (view.state !== 'handed-back') throw new Error(view.state)
+      expect(view.run).toEqual(gateRunView(disposed, 'ran', readStream(repo.root, target)))
+      expect(view.run.outcome).toBe('stopped')
+      expect(view.run.findings).toHaveLength(1)
+    })
+
     it('moved after a revise: no block, and the re-gate is the one exit', async () => {
       const { view } = await viewOf('moved-after-revise')
       if (view.state !== 'actionable') throw new Error(view.state)

@@ -126,6 +126,15 @@ describe('what this session did (row 191 §4.5 · §4.7 · §4.8)', () => {
     expect(sessionActed(root, 'h')).toBe(true)
     expect(sessionActed(root, 'other')).toBe(false)
   })
+  // Row 244 (design §4.2.4). A hand-back is the author's own act on a revise — the gate run that would
+  // have answered changed-nothing, journaled as the author's word — so it is stage work, as a gate run is.
+  it('sessionActed counts a hand-back', () => {
+    const root = mkdtempSync(join(tmpdir(), 'witness-slice-'))
+    const dir = join(root, '.witness', 'journal')
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(join(dir, 'p.jsonl'), JSON.stringify({ v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p', run_id: 'r1', sha: 's', ctx: { session: 'hb' } }) + '\n')
+    expect(sessionActed(root, 'hb')).toBe(true)
+  })
   // Final review I3. A vacuous red observed the behavior already there: no act, so a session
   // that only re-runs one cannot hand over. A genuine red is one.
   it('sessionActed does not count a vacuous red', () => {

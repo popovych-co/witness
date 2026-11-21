@@ -65,6 +65,30 @@ describe('a retracted implement or ship approval is re-reviewed, not edited (row
   })
 })
 
+// Row 244 (design §4.2.4 "The skills"). Every stage skill with a gate names its own hand-back in the
+// place a revise re-enters it: the author's act when the revise needs no change, never `decide`. The
+// grill has no gate, and a revise never re-enters it.
+export const HAND_BACK = (cmd: string) =>
+  `When you judge there is nothing to change, hand the revise back with \`${cmd}\`, and never \`decide\` — a plain re-gate hands nothing back.`
+describe('the hand-back line (row 244)', () => {
+  for (const [name, cmd] of [
+    ['witness-decompose', '$WITNESS gate decompose --effort <effort> --unchanged'],
+    ['witness-design', '$WITNESS gate design <spec-id> --unchanged'],
+    ['witness-plan', '$WITNESS gate plan <plan-id> --unchanged'],
+    ['witness-implement', '$WITNESS gate implement <plan-id> --unchanged'],
+    ['witness-ship', '$WITNESS gate ship <plan-id> --unchanged'],
+  ] as const) {
+    it(`${name} hands a revise back with its own gate, where a revise re-enters it`, () => {
+      const lines = readFileSync(skillPath(name), 'utf8').split('\n').filter((l) => l.includes(HAND_BACK(cmd)))
+      expect(lines, name).toHaveLength(1)
+      expect(lines[0]).toMatch(/Re-entered after `--revise`|`decide ship <plan-id> --revise` re-enters here/)
+    })
+  }
+  it('witness-brainstorm has no gate to hand back', () => {
+    expect(readFileSync(skillPath('witness-brainstorm'), 'utf8')).not.toContain('--unchanged')
+  })
+})
+
 describe('witness-brainstorm', () => {
   const body = () => readFileSync(skillPath('witness-brainstorm'), 'utf8');
   it('interviews one question at a time and persists via witness recap', () => {
