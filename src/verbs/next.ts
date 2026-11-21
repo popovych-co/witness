@@ -650,8 +650,9 @@ export function githubCheck(root: string, ctx: Ctx, cfg: Config, canon: Canon, v
 
 // Row 242 (design §4.3.2, One predicate). A plan is held while a merge or fix record stands — the
 // plan stream's latest entry, on the worktree's HEAD — and nothing above its ship row routes: no
-// plan reopen or plan-gate rework (row 244), no open step. `flowStep`, `needsYou` and drive all read
-// this one predicate.
+// plan reopen or plan-gate rework (row 244), no open step, and no decision owed on the flow's own gate
+// (row 244, S3-A: `flowStep` routes it first). `flowStep`, `needsYou` and drive all read this one
+// predicate.
 export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcomeEntry | undefined {
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const id = String(plan.meta.id)
@@ -660,7 +661,7 @@ export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcome
   const entries = readStream(root, id)
   const head = tryGit(wt, 'rev-parse', 'HEAD')
   const rec = standingRecord(entries, head.ok ? head.out.trim() : undefined)
-  if (rec === undefined || openReopen(entries, 'plan') !== undefined || planReworkOwed(entries, id) ||
+  if (rec === undefined || flowDecision(entries) !== undefined || planReopenOwed(entries) || planReworkOwed(entries, id) ||
     openStepRow(root, cfg, plan) !== undefined) return undefined
   return rec
 }
@@ -683,10 +684,35 @@ export function openStepRow(root: string, cfg: Config, plan: CanonDoc): { row: N
 export const stepsOpenViolation = (o: { row: NextAction; step: string }): Violation =>
   v('steps', 'steps-open', `${o.step} is open`, `${o.row.line} — ${o.step} is not built yet`)
 
+// The gates a flow's own journal holds, upstream first: tier 2's order (`pendingDecisionsAll`).
+const FLOW_GATES = ['plan', 'implement', 'ship'] as const
+
+// Row 244 (design §4.2.5; review finding S3-A). The flow's own gate a decision is owed on —
+// `decisionOwed`'s: a pending stop, or a standing hand-back — the first in tier 2's order. Every row of
+// the flow waits on it, in every reader of one flow (`flowStep`, so `--flow`, a worktree's `next` and
+// status's flows table) as in `computeNext`'s tier 1 (`flowBlocked`): a handed-back gate is owed its
+// decision, never the re-gate that answers changed-nothing, the re-authoring a reopen asked for, nor
+// the implement work past it.
+function flowDecision(entries: Entry[]): string | undefined {
+  return FLOW_GATES.find((gate) => decisionOwed(entries, gate) !== undefined)
+}
+
+// Row 95; row 244 (design §4.2.5). A reopen of the plan's own plan gate owes the plan's re-authoring —
+// unless its author handed it back: then the reopen is a decision owed again (`decisionOwed`), never a
+// re-author. `openReopen` itself still reads it open, so the gate stays unsettled and unparked, and a
+// parent decompose's reopen still holds the flow (`flowBlocked`).
+function planReopenOwed(entries: Entry[]): boolean {
+  return openReopen(entries, 'plan') !== undefined && standingHandBack(entries, 'plan') === undefined
+}
+
 function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): NextAction | undefined {
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const entries = readStream(root, id)
+  // Review finding S3-A. A decision owed on the flow's own gate is its next action, as tier 2 routes it:
+  // its screen, `decide <gate> <plan> --show`, wherever the worktree stands — the decision needs none.
+  const owed = flowDecision(entries)
+  if (owed !== undefined) return { ...runs(cliAct('decide', owed, id, '--show')), target: id }
   const wt = worktreePath(root, id)
   const pinR = stagePin(cfg, 'implement')
   const pin = pinR.ok ? pinR.value : undefined
@@ -700,8 +726,8 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   // the flow past a reopen saying the plan itself is wrong. Row 241 extends it above the `pr`
   // row too: a plan sent back after its PR opened is re-authored before it ships (P8). No
   // `home:` — plan authoring writes canon at the root, and this matches what computeNext's
-  // plans-first loop prints.
-  if (openReopen(entries, 'plan') !== undefined) {
+  // plans-first loop prints. Row 244: a handed-back reopen is the decision above, never this.
+  if (planReopenOwed(entries)) {
     const act = planWriteAction(root, liveEfforts(root), id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'plan gate reopened — re-author, then re-gate the plan') }
   }
@@ -816,16 +842,16 @@ function flowRank(a: NextAction): number {
 // created). Such a flow is NOT tier-1 motion — offering it would loop the driving loop
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
-// Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s, a standing hand-back included, read
-// here ahead of flowStep's own routing — a handed-back plan gate is neither the rework
-// `planReworkOwed` routes nor a re-gate `planGateStep` could run, and its implement work waits.
+// Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s, a standing hand-back included
+// (`flowDecision`) — a handed-back plan gate is neither the rework `planReworkOwed` routes nor a
+// re-gate `planGateStep` could run, and its implement work waits. `flowStep` reads the same predicate
+// first (S3-A), so a reader of one flow routes the decision tier 2 routes here.
 function flowBlocked(root: string, plan: CanonDoc, entries: Entry[], taken: TakenBack): boolean {
   // A parked gate blocks the flow the same way an owed decision does, and for the same
   // reason: offering it loops the driving loop on an act the human already declined. It
   // does not disappear — `status`'s parked table names it and the run that un-parks it.
-  if (['plan', 'implement', 'ship'].some((gate) =>
-    decisionOwed(entries, gate) !== undefined || gateParked(entries, gate) ||
-    (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
+  if (flowDecision(entries) !== undefined || FLOW_GATES.some((gate) =>
+    gateParked(entries, gate) || (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
   // Row 95's split: a reopen on the plan's own plan gate is NOT a block — flowAction routes
   // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
   // and tier 3 is where it surfaces. Keyed on the effort that owns the PARENT SPEC, which is

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -13,9 +14,9 @@ import { decisionOwed, gateRuns, lastGateRun, liveActs, standingHandBack, type G
 import { findById, loadCanon, type CanonDoc } from '../src/scan.js'
 import { settleOwed } from '../src/settle.js'
 import { runShip, shipPhase } from '../src/ship.js'
-import { authoringOwed, owedDecisions, owedRun } from '../src/verbs/next.js'
+import { authoringOwed, heldPlan, owedDecisions, owedRun } from '../src/verbs/next.js'
 import {
-  PLAN_BLOCKING, TOKEN_FIXED, addOrigin, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, shippableRepo,
+  PLAN_BLOCKING, TOKEN_FIXED, addOrigin, commitEntry, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, shippableRepo,
   writePlan, writeSpec, type CliResult, type TestRepo,
 } from './helpers.js'
 
@@ -346,5 +347,116 @@ describe('ship with a standing hand-back (design §4.2.5)', () => {
     expect(refused.stderr).toContain('stale-verdict')
     // decide --show, the screen next names, reads the same.
     expect((await ok(f.repo, ['decide', 'ship', P, '--show'], f.env)).stdout).toContain(`run: ${cliAct('gate', 'ship', P).line}`)
+  }, 300_000)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Review finding S3-A (Slice 3 close). `next` in a plan's worktree, `next --flow` and status's flows
+// table read one flow through `flowAction`, which read no owed decision: only `computeNext`'s tier 1
+// filtered it (`flowBlocked`). A handed-back implement gate routed `witness gate implement`, which
+// answers changed-nothing, journals nothing and exits 1, so an implement session seated in its worktree
+// looped; a handed-back plan-gate reopen routed its re-authoring, and a handed-back plan gate on an
+// in-progress plan its implement work. A pending stop on that path routed the gate too. Every reader of
+// one flow now routes the decision first, as tier 2 does.
+
+// The three readers of one flow agree with status's gates row: each names `decide <gate> <plan> --show`.
+async function flowRoutesDecision(
+  repo: TestRepo, wt: string, env: Record<string, string>, gate: string, round: number, outcome: string,
+): Promise<void> {
+  const line = show(gate, P)
+  const ambient = await repo.cli(['next'], { env, cwd: wt })
+  expect(ambient.code, `${ambient.stdout}\n${ambient.stderr}`).toBe(0)
+  expect(ambient.stdout).toContain(`flow: ${P} — inferred from cwd`)
+  expect(ambient.stdout).toContain(`next: ${line}`)
+  expect((await ok(repo, ['next', '--flow', P], env)).stdout).toContain(`next: ${line}`)
+  const status = (await ok(repo, [], env)).stdout
+  expect(status).toContain(`  ${P},gate,${line},present,—`)
+  expect(status).toContain(`  ${gate},${P},${round},${outcome}`)
+}
+
+describe('next in a worktree, next --flow and status flows route an owed decision (S3-A, rows 94, 173, 244)', () => {
+  it('a pending implement stop, then its hand-back: the decision, never the re-gate that changes nothing', async () => {
+    const { repo, wt } = await shippableRepo()
+    expect(cfgOf(repo).autonomy).toBe(false)
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'implement', P], env, 1)
+    const run = lastGateRun(readStream(repo.root, P), 'implement')!
+    // The pending stop on the ambient path (it routed the gate before).
+    await flowRoutesDecision(repo, wt, env, 'implement', run.round, 'stopped')
+
+    await ok(repo, ['decide', 'implement', P, '--revise', '--note', 'bound the rotation'], env)
+    // The revise owes the author an edit, in the worktree.
+    expect((await ok(repo, ['next', '--flow', P], env)).stdout).toContain('revise owed — edit the code in the worktree')
+    const back = await repo.cli(['gate', 'implement', P, '--unchanged'], { env, cwd: wt })
+    expect(back.code, back.stderr).toBe(1)
+    expect(back.stdout).toContain('outcome: handed back')
+    await flowRoutesDecision(repo, wt, env, 'implement', run.round, 'handed back')
+
+    // The line the worktree used to route answers changed-nothing and journals nothing: the loop.
+    const before = readStream(repo.root, P).length
+    const regate = await repo.cli(['gate', 'implement', P], { env, cwd: wt })
+    expect(regate.stdout).toContain('revise changed nothing')
+    expect(readStream(repo.root, P)).toHaveLength(before)
+    // The line it routes now is the decision's own screen.
+    const screen = await repo.cli(['decide', 'implement', P, '--show'], { env, cwd: wt })
+    expect(screen.code, screen.stderr).toBe(0)
+    expect(screen.stdout).toContain('state: handed-back')
+  }, 300_000)
+
+  it('a handed-back plan-gate reopen on an in-progress plan: the decision, never the re-authoring', async () => {
+    const { repo, wt } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: PLAN_BLOCKING.coverage, findings: [] })
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'plan', P], env)
+    putVerdict(scenario, BLOCKING)
+    await ok(repo, ['gate', 'implement', P], env, 1)
+    // The implement gate sends its finding upstream: a reopen of the plan's own plan gate.
+    await ok(repo, ['decide', 'implement', P, '--revise', '--upstream', P, '--note', 'step s1 leaves the rotation unbounded'], env)
+    const reauthor = 'plan gate reopened — re-author'
+    expect((await ok(repo, ['next', '--flow', P], env)).stdout).toContain(reauthor)
+
+    const back = await ok(repo, ['gate', 'plan', P, '--unchanged'], env, 1)
+    expect(back.stdout).toContain('outcome: handed back')
+    expect(standingHandBack(readStream(repo.root, P), 'plan')).toBeDefined()
+    const run = lastGateRun(readStream(repo.root, P), 'plan')!
+    await flowRoutesDecision(repo, wt, env, 'plan', run.round, 'handed back')
+    const ambient = await repo.cli(['next'], { env, cwd: wt })
+    expect(ambient.stdout).not.toContain(reauthor)
+    expect(ambient.stdout).not.toContain('next: witness write')
+  }, 300_000)
+
+  it('a pending plan stop, then its hand-back, on an in-progress plan: the decision, never implement work', async () => {
+    const { repo, wt } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'plan', P], env, 1)
+    const run = lastGateRun(readStream(repo.root, P), 'plan')!
+    await flowRoutesDecision(repo, wt, env, 'plan', run.round, 'stopped')
+
+    await ok(repo, ['decide', 'plan', P, '--revise', '--note', 'make step s1 testable'], env)
+    await ok(repo, ['gate', 'plan', P, '--unchanged'], env, 1)
+    await flowRoutesDecision(repo, wt, env, 'plan', run.round, 'handed back')
+    const ambient = await repo.cli(['next'], { env, cwd: wt })
+    expect(ambient.stdout).not.toContain('next: witness gate implement')
+    expect(ambient.stdout).not.toContain('stage: implement')
+  }, 300_000)
+
+  // `heldPlan` answers whether anything above the ship row routes, for `next`, needsYou and drive alike:
+  // the decision `flowStep` now routes first holds nothing.
+  it('a ship record standing after a stop on the flow\'s own gate holds nothing: the decision comes first', async () => {
+    const { repo, wt } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'plan', P], env, 1)
+    const run = lastGateRun(readStream(repo.root, P), 'plan')!
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()
+    commitEntry(repo, P, { t: 'ship-outcome', artifact: P, head, outcome: 'merge', reason: 'no CI checks reported' })
+    expect(heldPlan(repo.root, cfgOf(repo), findById(loadCanon(repo.root), P)!)).toBeUndefined()
+    await flowRoutesDecision(repo, wt, env, 'plan', run.round, 'stopped')
   }, 300_000)
 })
