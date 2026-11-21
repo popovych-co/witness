@@ -12,8 +12,8 @@ import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cliAct, runRow } from './act.js'
-import { cmd, kv, shellWord } from './toon.js'
+import { cliAct, exitsLine, reopenRows } from './act.js'
+import { cmd, kv } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
 import {
   docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt,
@@ -27,12 +27,12 @@ import {
   basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
 } from './delta.js'
 import {
-  appendKind, boundReached, lastGateRun, liveExits,
+  actKey, appendKind, boundReached, lastGateRun, liveActs,
   roundsSinceApprove, runsSinceReset,
-  type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
+  type ActFacts, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { gateParked, gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
+import { actFacts, gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
@@ -244,40 +244,69 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 // prints the run's view itself — `gateRunLines` — and never reaches this tail).
 // Rows 139/203. The run's lines come from its view (src/gate-run-view.ts); only the help tail,
 // which loads canon and the trust list, stays here.
+// `sha`: the content's sha now, where the caller holds it (the gate that just resolved it); without
+// it the choices compute it, as `decide` does.
 export function renderGateRun(
   ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume',
-  opts: { entries?: Entry[]; help?: boolean; upstream?: string } = {},
+  opts: { entries?: Entry[]; help?: boolean; upstream?: string; sha?: string } = {},
 ): void {
   gateRunLines(gateRunView(entry, mode, opts.entries)).forEach((l) => ctx.out(l))
   // Without `entries` this stays a pure formatter over the entry it was handed, and the
   // off-bound triple is the right answer; with them it tells the truth at the bound too.
   if (entry.outcome !== 'passed' && opts.help !== false) {
-    renderChoices(ctx, entry.gate, entry.artifact, opts.entries ?? [], opts.upstream)
+    renderChoices(ctx, entry.gate, entry.artifact, opts.entries ?? [], opts.upstream, { sha: opts.sha })
   }
+}
+
+// Row 244 (#87, design §4.2.1, §4.2.9). The facts `decide` reads beside the journal (`actFacts`):
+// staleness and lifted holds against the last run that judged something, the upstream, and owed
+// work. `sha` is the content's sha now when the caller holds it; otherwise the gate computes it.
+function factsHere(
+  root: string, cfg: Config | undefined, canon: Canon, gate: string, target: string, entries: Entry[],
+  upstream: string | undefined, sha?: string,
+): ActFacts {
+  const now = sha ?? (cfg !== undefined ? gateSpec(gate)?.currentSha?.(root, canon, cfg, target) : undefined)
+  return actFacts(root, cfg, canon, gate, target, entries, { sha: now, upstream })
+}
+
+// The gate's state and its live acts, as `decide` would read them now.
+function liveHere(root: string, gate: string, target: string, entries: Entry[]): LiveActs {
+  const cfgR = loadConfig(root)
+  const cfg = cfgR.ok ? cfgR.value : undefined
+  const canon = loadCanon(root)
+  const upstream = gateSpec(gate)?.upstreamOf?.(root, canon, target)
+  return liveActs(gate, target, entries, factsHere(root, cfg, canon, gate, target, entries, upstream))
 }
 
 // D121: the exits line stated which commands would not refuse and never which to take, so
 // --approve read as the default at stops with a live blocking finding. The block ranks them.
 // One renderer for all four decision surfaces in this file — a per-site copy is how D119's
 // nine hand-copied exits sets happened, and three of these four sites were among them.
-// `undefined` from `recommend` means no anchor resolves at this state — stale with no
-// decision pending (reopened, or already revised), where every decide verb refuses with
-// nothing-pending and the exits line's single re-gate act is the whole live set (D131).
+// Row 244 (#87): both read the gate's live acts, through the facts `decide` reads (S2-1), so a
+// screen offers exactly what `decide` accepts. `undefined` from `recommend` is a state with no
+// block — the revised state on moved content, where the re-gate is the one act (D131), a settled
+// gate's retraction, a park's way back — and the exits line names its live acts. `session` prints
+// the session's line (design §4.2.2) above them, on the changed-nothing screen.
 function renderChoices(
   ctx: Ctx, gate: string, target: string, entries: Entry[], upstream: string | undefined,
-  stale = false,
+  opts: { sha?: string; session?: boolean } = {},
 ): void {
   // D154. Resolved here rather than threaded through four call sites, on this file's own
   // precedent (`printSliceShape` loads canon itself so the entry-renderers stay
-  // pure formatters). Best-effort: a root that will not resolve costs the trust variants,
-  // never the block.
+  // pure formatters). Best-effort: a root that will not resolve costs the trust variants and the
+  // facts beside the journal, never the block.
   const rootR = primaryRoot(ctx.cwd)
-  const untrustedCmds = rootR.ok
-    ? untrustedCmdsFor(rootR.value, criteriaOwner(loadCanon(rootR.value), target))
-    : []
-  const d = recommend({ gate, target, entries, upstream, stale, untrustedCmds })
+  const canon = rootR.ok ? loadCanon(rootR.value) : undefined
+  const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
+  const untrustedCmds = rootR.ok && canon !== undefined ? untrustedCmdsFor(rootR.value, criteriaOwner(canon, target)) : []
+  const facts: ActFacts = rootR.ok && canon !== undefined
+    ? factsHere(rootR.value, cfgR?.ok ? cfgR.value : undefined, canon, gate, target, entries, upstream, opts.sha)
+    : { upstream, stale: false, holdLifted: false, owed: false, upstreamOwed: false }
+  const live = liveActs(gate, target, entries, facts)
+  if (opts.session === true && live.session !== undefined) ctx.out(kv('session', live.session))
+  const d = recommend({ gate, target, entries, upstream, stale: facts.stale || facts.holdLifted, untrustedCmds })
   if (d) renderDecision(d).forEach((l) => ctx.out(l))
-  else ctx.out(cmd('help', liveExits(gate, target, entries, stale, upstream)))
+  else if (live.acts.length > 0) ctx.out(cmd('help', exitsLine(live.acts)))
 }
 
 // Row 79: the human approving a plan sees the run's shape before it starts. Row 191 §4.10:
@@ -300,12 +329,14 @@ export async function runGate(
   ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean; handover?: boolean },
 ): Promise<number> {
   // Row 241 (R11). A `--fresh` refused on a parked gate is a human's call: the way back that can
-  // succeed is the revise that sends the gate back to work, named on a row of its own.
-  const parkedFresh = flags.fresh && parkedHere(ctx, gateName, target)
+  // succeed is the revise that sends the gate back to work, named on a row of its own. Row 244: the
+  // park's live acts but the `--fresh` just refused — the revise below the bound, the endgame at it.
+  const parked = flags.fresh ? parkedHere(ctx, gateName, target) : undefined
   const refusedFresh = (code: number): number => {
-    if (parkedFresh && code === EXIT.REFUSED) {
+    if (parked !== undefined && code === EXIT.REFUSED) {
+      const fresh = actKey(cliAct('gate', gateName, target, '--fresh'))
       ctx.err(`help: ${gateName} ${target} is parked — sending it back to work is a human's call`)
-      ctx.err(runRow(cliAct('decide', gateName, target, '--revise', '--note', '<why>'), 'revise'))
+      reopenRows(parked.acts.filter((a) => actKey(a) !== fresh)).forEach((l) => ctx.err(l))
     }
     return code
   }
@@ -352,9 +383,12 @@ export async function runGate(
   return settledCode(code, settled)
 }
 
-function parkedHere(ctx: Ctx, gateName: string, target: string): boolean {
+// The park's live acts, when the gate is parked.
+function parkedHere(ctx: Ctx, gateName: string, target: string): LiveActs | undefined {
   const rootR = primaryRoot(ctx.cwd)
-  return rootR.ok && gateParked(readStream(rootR.value, target), gateName)
+  if (!rootR.ok) return undefined
+  const live = liveHere(rootR.value, gateName, target, readStream(rootR.value, target))
+  return live.state === 'parked' ? live : undefined
 }
 
 async function judge(
@@ -445,12 +479,18 @@ async function judge(
   // row 94 removed its other job (escaping the changed-nothing deadlock), so it can
   // refuse and send the human through the verb that states a retraction and its reason.
   const settledBefore = gateSettled(entries, spec.gate)
-  if (flags.fresh && settledBefore) {
-    // Row 239. A shape: the target is quoted, and the slot is the human's to fill.
-    renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
-      `witness decide ${shellWord(spec.gate)} ${shellWord(target)} --revise --note "<why>" — retract the approval, then re-gate`)])
-      .forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
+  // Row 244 (P8, S2-3). Refused only for the content the settlement judged, as `liveActs` reads it:
+  // on moved content the approval lapsed (D75) and `--fresh` runs. The want names the settled
+  // state's live act, the retraction, then the `--fresh` that re-judges after it (design §4.2.3).
+  if (flags.fresh) {
+    const facts = factsHere(root, cfgR.value, canon, spec.gate, target, entries, upstreamId, input.reviewedSha)
+    const settled = liveActs(spec.gate, target, entries, facts)
+    if (settled.state === 'settled' && !facts.stale && !facts.holdLifted) {
+      renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
+        `${exitsLine(settled.acts)} — retract the settlement, then ${cliAct('gate', spec.gate, target, '--fresh').line} re-judges it`)])
+        .forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
   }
 
   let kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
@@ -487,7 +527,7 @@ async function judge(
   }
   if (kind.kind === 'resume') {
     renderGateRun(ctx, kind.entry, 'resume', {
-      entries, upstream: upstreamId,
+      entries, upstream: upstreamId, sha: input.reviewedSha,
       ...(kind.entry.outcome === 'stopped' && leftToTail(entries) ? { help: false } : {}),
     })
     printSliceShape(ctx, root, spec.gate, target)
@@ -498,13 +538,14 @@ async function judge(
     ctx.out(kv('outcome', 'revise changed nothing — reviewed content is identical to the last round'))
     // The owed work is an EDIT, so the exits are the decisions that remain legal without
     // one — the same set every other screen shows, rather than prose naming two of four.
-    renderChoices(ctx, spec.gate, target, entries, upstreamId)
+    // Row 244: the state's live acts, under the session's line (design §4.2.2).
+    renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha, session: true })
     return EXIT.FINDINGS
   }
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId)
+    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha })
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -625,7 +666,7 @@ async function judge(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      if (!leftToTail(entriesNow)) renderChoices(ctx, spec.gate, target, entriesNow, upstreamId)
+      if (!leftToTail(entriesNow)) renderChoices(ctx, spec.gate, target, entriesNow, upstreamId, { sha: input.reviewedSha })
       return EXIT.BLOCKED
     }
 
@@ -713,7 +754,7 @@ async function judge(
 
     const after = [...entriesNow, entry as unknown as Entry]
     renderGateRun(ctx, entry, 'ran', {
-      entries: after, upstream: upstreamId,
+      entries: after, upstream: upstreamId, sha: input.reviewedSha,
       ...(entry.outcome === 'stopped' && leftToTail(after) ? { help: false } : {}),
     })
     printSliceShape(ctx, root, spec.gate, target)

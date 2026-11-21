@@ -3,9 +3,11 @@ import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { actOn, cliAct } from '../src/act.js'
 import { loadConfig } from '../src/config.js'
-import { appendEntry } from '../src/journal.js'
+import { appendEntry, readStream } from '../src/journal.js'
 import { type NeedYou, needsYou, needsYouToken, needYouRows } from '../src/needs-you.js'
+import { actKey, actLive, liveActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
+import { gateParked } from '../src/verbs/next.js'
 import { approve, autonomyOn, fakeCtx, hermeticEnv, seededRepo, writePlan, writeSpec } from './helpers.js'
 import { controlStrings, needsYouRepo } from './model-fixtures.js'
 
@@ -176,6 +178,32 @@ describe('what needs you is a model (rows 139/203)', () => {
     expect(below).toHaveLength(3)
     expect(below[1]).toMatch(/^ {2}revise: witness decide plan auth-refresh-plan-2 --revise --note "<why>"$/)
     expect(below[2]).toMatch(/^ {2}fresh: witness gate plan /)
+  })
+
+  // Row 244 (#87, design §4.2.1): every act a decision or parked row offers is one `decide` accepts
+  // — the parked rows' reopen is a view over `liveActs` — and a malformed re-review after a park
+  // judged nothing, so the park stands and its row reads the run the stop disposed of (S2-2).
+  it('every act a row offers is live, and a malformed re-review leaves the park standing (row 244, S2-2)', async () => {
+    const { repo, asides } = await needsYouRepo()
+    const stream = (t: string) => readStream(repo.root, t)
+    // plan-2 parked below the bound, then a malformed re-review
+    appendEntry(repo.root, 'auth-refresh-plan-2', { v: 1, t: 'gate-run', gate: 'plan', artifact: 'auth-refresh-plan-2', round: 2,
+      run_id: 'r2', reviewed_sha: 'sha-2', prompts_sha: 'p', witness: '0', model: 'm', checks: [], outcome: 'malformed',
+      malformed: [{ reviewer: 'plan-critic', violations: [] }] } as never)
+    expect(gateParked(stream('auth-refresh-plan-2'), 'plan')).toBe(true)
+    const items = needsYou(repo.root, { env: {} }, cfgOf(repo.root), loadCanon(repo.root), asides)
+    const parked2 = items.find((i) => i.kind === 'parked' && i.target === 'auth-refresh-plan-2')
+    expect(parked2).toMatchObject({ gate: 'plan', round: 1, why: 'parked by the policy — drive cap: plan ran 16 rounds' })
+    for (const item of items) {
+      const acts = item.kind === 'parked' ? item.reopen : item.kind === 'decision' ? [] : undefined
+      if (acts === undefined) continue
+      const { gate } = item as { gate: string }
+      const live = liveActs(gate, item.target, stream(item.target),
+        { upstream: 'auth-refresh', stale: false, holdLifted: false, owed: false, upstreamOwed: false })
+      for (const a of acts) expect(actLive(live, actKey(a)), `${item.key}: ${a.line}`).toBe(true)
+      // A decision row points at the gate's own screen, a read, never an act of its own.
+      if (item.kind === 'decision') expect(item.show).toEqual(cliAct('decide', gate, item.target, '--show'))
+    }
   })
 
   // Ruling R16(a), pinned per field. Prose a doc, a journal or drive wrote on a head line is spelled

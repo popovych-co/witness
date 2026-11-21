@@ -291,6 +291,9 @@ const walk = (dir: string): string[] =>
   })
 
 describe('no source builds its own exits set', () => {
+  // Row 244 (#87, design §4.2.1): a set is the gate's live acts, and those hold gate acts too — the
+  // re-gate, `--fresh`, `--unchanged` — so a set joining them by hand is caught as one joining
+  // decisions is, and a refusal's want that names acts reads them off `liveActs`.
   it('only rounds.ts composes decision verbs into a set', () => {
     const offenders: string[] = []
     for (const file of walk(SRC)) {
@@ -304,8 +307,8 @@ describe('no source builds its own exits set', () => {
         // --stop`) rather than an exits set — it fires on a usage error, before any
         // anchoring run is known, so it must not be routed through `liveExits`, which
         // would answer with upstream and repair options that are meaningless there.
-        const flags = (line.match(/--(approve|revise|stop|override|repair)/g) ?? []).length
-        if (flags >= 2 && line.includes(' | ') && line.includes('witness decide')) {
+        const flags = (line.match(/--(approve|revise|stop|override|repair|fresh|unchanged)\b/g) ?? []).length
+        if (flags >= 2 && line.includes(' | ') && (line.includes('witness decide') || line.includes('witness gate'))) {
           offenders.push(`${file}:${i + 1}`)
         }
       }

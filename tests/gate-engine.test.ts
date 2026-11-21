@@ -211,7 +211,10 @@ describe('gate engine', () => {
     const ctx2 = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l: string) => out2.push(l) })
     expect(await runGate(ctx2, 'plan', 'auth-refresh', { fresh: false, manual: false })).toBe(3)
     const text = out2.join('\n')
-    expect(text).toContain('--approve --override')
+    // Row 244 (#87, S2-1): the content moved after the stop and no battery read it, so the endgame
+    // offers no approve — `decide` would refuse it `stale-verdict`.
+    expect(text).not.toContain('--approve --override')
+    expect(text).toContain('--revise --repair')
     expect(text).toContain('--revise --upstream')
     expect(text).toContain('witness abandon auth-refresh')
   })

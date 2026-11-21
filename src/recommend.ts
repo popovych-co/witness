@@ -1,8 +1,8 @@
 import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
-  anchorRecurrence, boundReached, ladderSpent, lastGateRun, pendingDecision, repairsOnRegate,
-  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry,
+  actKey, actLive, anchorRecurrence, boundReached, ladderSpent, lastGateRun, liveActs, pendingDecision, repairsOnRegate,
+  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type GateStateKind, type LiveActs,
 } from './rounds.js'
 import { hasControl, visible } from './toon.js'
 
@@ -137,11 +137,126 @@ export function recommend(ctx: GateContext): Decision | undefined {
   return d === undefined ? undefined : withTrustVariants(d, ctx.untrustedCmds ?? [])
 }
 
+// Row 244 (#87, design §4.2.1, §4.2.2). The block offers only acts `decide` accepts: its options are
+// drawn from the gate's live acts (`liveActs`, from the same journal, upstream and staleness). A
+// stopped run awaiting its decision and the bound keep the rule table, each option kept only while
+// live; the states a revise leaves are built from their own acts; a settled, a parked (below the
+// bound) or an abandoned gate has no block, and its screen prints its acts.
 function recommendCore(ctx: GateContext): Decision | undefined {
   const { gate, target, entries, upstream, stale } = ctx
   const last = lastGateRun(entries, gate)
   if (!last) return undefined
+  const live = liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false })
+  if (live.state === 'pending' || live.state === 'at-bound' || (live.state === 'parked' && boundReached(entries, gate))) {
+    const d = ruleTable(ctx, last)
+    const options = d?.options.filter((o) => o.act !== undefined && actLive(live, actKey(o.act))) ?? []
+    return d !== undefined && options.length > 0 ? { ...d, options } : undefined
+  }
+  return REVISED_FAMILY.has(live.state) ? revisedBlock(ctx, live, last) : undefined
+}
 
+// The condition on the revised state's re-gate (design §4.2.2): it is the recommended act only once
+// the author has changed the work, since on unchanged content the gate answers changed-nothing.
+export const AFTER_EDIT = 'after you change the work'
+
+const REVISED_FAMILY: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['revised', 'handed-back', 'handed-back-moved', 'retracted'])
+
+// Row 244 (design §4.2.2). The block of a state a revise left, one option per live act, in the order
+// the state offers them, and the rule each records:
+//   revised      `revised`: the re-gate, "after you change the work", then the acts;
+//   handed back  `revise-returned`: the park first — neither the author nor a reviewer found a fix;
+//   moved since  `stale-below-bound`: the re-gate first (§4.2.9), so the policy's stale arm takes it;
+//   retracted    `retracted`: the re-review (`--fresh`) first, or on moved content the re-gate.
+// Each carries the run's primary anchor, so an upstream taken here spends D123's ladder (P47). On
+// moved content a revised gate's one act is the re-gate, and its exits line says so (D131): no block.
+function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Decision | undefined {
+  const { gate, target, entries } = ctx
+  if (live.malformedRerun) return malformedBlock(ctx, last)
+  if (live.state === 'revised' && live.acts.length === 1) return undefined
+  const primary = live.anchor === undefined ? undefined : blockingAnchors(live.anchor)[0]
+  const budget = roundBudget(entries, gate)
+  const nextRound = roundsSinceApprove(entries, gate) + 1
+  const spends = `spends round ${nextRound} of ${budget}${nextRound >= budget ? ' — the last before the bound' : ''}`
+  const handedBack = live.state === 'handed-back' || live.state === 'handed-back-moved'
+  const retracted = live.state === 'retracted'
+  const optionOf = (a: Act): Option => {
+    const w = a.argv
+    if (w[0] === 'gate' && w.includes('--fresh')) {
+      return retracted
+        ? option(a, 'root', { why: 'the revise retracted a settled verdict and asked for no edit — a re-review judges the same content again', tradeoff: spends })
+        : option(a, 'root', { when: 'you want the same content judged again without an edit', tradeoff: `${spends} on unchanged content` })
+    }
+    if (w[0] === 'gate') {
+      return option(a, 'root', {
+        why: live.state === 'handed-back-moved'
+          ? 'the author handed the revise back, and the content or a hold moved since — no battery has read what moved'
+          : 'the content moved since the revise — the re-gate judges what moved',
+        tradeoff: spends,
+      })
+    }
+    if (w.includes('--approve')) {
+      return w.includes('--override')
+        ? option(a, 'deferral', {
+          when: retracted ? 'the retraction was wrong and the verdict stands' : 'you have read the finding and judge it wrong',
+          tradeoff: 'stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)',
+        })
+        : option(a, 'root', {
+          when: retracted ? 'the retraction was wrong and the verdict stands' : 'the work needs no change',
+          tradeoff: 'stamps the artifact as the last round judged it',
+        })
+    }
+    if (w.includes('--stop')) {
+      return option(a, 'terminal', {
+        ...(live.state === 'handed-back' ? { why: 'the author handed the revise back unchanged — neither the author nor a reviewer found a fix' } : { when: 'this work should not continue as scoped' }),
+        tradeoff: 'parks the flow — next stops offering it and reopening is an explicit act',
+      })
+    }
+    if (w.includes('--upstream')) {
+      return option(a, 'root', { when: 'the parent artifact is what is wrong', tradeoff: 'reopens the parent stage and resets this budget' })
+    }
+    return option(a, 'root', {
+      when: retracted ? 'the work needs an edit, not a re-review'
+        : handedBack ? 'you can name the change the author did not find' : 'the author needs another instruction than the revise gave',
+      tradeoff: 'sends the work back with your words; the round is spent by the re-gate that follows it',
+    })
+  }
+  const acts = live.state === 'handed-back'
+    ? [...live.acts.filter((a) => a.argv.includes('--stop')), ...live.acts.filter((a) => !a.argv.includes('--stop'))]
+    : live.acts
+  const options = acts.map(optionOf)
+  const rule = live.state === 'handed-back' ? 'revise-returned' : live.state === 'handed-back-moved' ? 'stale-below-bound' : live.state
+  const conditional = live.state === 'revised'
+    ? [option(cliAct('gate', gate, target), 'root', {
+      when: AFTER_EDIT,
+      why: 'the revise sent the work back to its author — once the work changes, the re-gate judges it',
+      tradeoff: spends,
+    })]
+    : []
+  return { key: 'decide', rule, ...(primary !== undefined ? { anchor: primary } : {}), options: [...conditional, ...options] }
+}
+
+// 1 — malformed. D126 removed it from pendingDecision, so reaching here means a caller asked anyway;
+// answer with the act that actually helps rather than four dispositions. Since row 212 the re-run is
+// the only one.
+function malformedBlock(ctx: GateContext, last: GateRunEntry): Decision {
+  const { gate, target, entries, stale } = ctx
+  return {
+    key: 'next', rule: 'malformed-rerun',
+    options: [
+      option(cliAct('gate', gate, target), 'root', {
+        why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
+          // A promise of what appendKind does (row 209): moved content is a fresh round, every
+          // lens asked; a revise since makes it changed-nothing; a fallen-back round re-runs.
+          last.malformed?.length && !stale && repairsOnRegate(entries, gate)
+            ? `, and on unchanged content and setup it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
+        note: 'a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy',
+      }),
+    ],
+  }
+}
+
+function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
+  const { gate, target, entries, upstream, stale } = ctx
   const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
   const up = d('--revise', '--upstream', upstream ?? '<effort>')
   // Row 239. Bare where the run holds facts: no reviewer text reaches a command.
@@ -188,24 +303,8 @@ function recommendCore(ctx: GateContext): Decision | undefined {
     tradeoff: 'buys exactly one round; the discharge is that round passing, and the grant does not refresh until an approve, a revise-upstream or a passed run',
   })
 
-  // 1 — malformed. D126 removed it from pendingDecision, so reaching here means a caller
-  // asked anyway; answer with the act that actually helps rather than four dispositions.
-  // Since row 212 the re-run is the only one.
-  if (last.outcome === 'malformed') {
-    return {
-      key: 'next', rule: 'malformed-rerun',
-      options: [
-        option(cliAct('gate', gate, target), 'root', {
-          why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
-            // A promise of what appendKind does (row 209): moved content is a fresh round, every
-            // lens asked; a revise since makes it changed-nothing; a fallen-back round re-runs.
-            last.malformed?.length && !stale && repairsOnRegate(entries, gate)
-              ? `, and on unchanged content and setup it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
-          note: 'a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy',
-        }),
-      ],
-    }
-  }
+  // 1 — malformed (`malformedBlock`).
+  if (last.outcome === 'malformed') return malformedBlock(ctx, last)
 
   // 2 — stale below the bound. Staleness blocks STAMPING, not judging: `--approve` asserts
   // about current content and `decide` refuses it with `stale-verdict`, while a stop, a

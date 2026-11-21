@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
 import { decideView, decideViewLines } from '../src/decide-view.js'
 import { findingRows, findingViews, gateRunLines, gateRunView, type GateRunView } from '../src/gate-run-view.js'
-import type { Entry } from '../src/journal.js'
-import { ROUND_BOUND, type GateRunEntry } from '../src/rounds.js'
+import { appendEntry, readStream, type Entry } from '../src/journal.js'
+import { ROUND_BOUND, lastGateRun, type GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import {
   DECIDE_STATE_NAMES, EVERY_LINE_RUN, REVIEWER_ANCHOR, cfgOf, controlPaths, controlStrings, decideRepo, type DecideState,
@@ -28,13 +28,20 @@ describe('decide --show is a view (rows 139/203)', () => {
     expect(view.run.held).toStrictEqual([{ criterion: 'ac-prod', need: 'prod', satisfy: 'witness satisfy auth-refresh --need prod' }])
     expect(view.pins).toStrictEqual([{ ordinal: 1, text: 'render the service in full' }])
     expect(view.disposition).toStrictEqual({ decision: 'revise', note: 'fix the expiry' })
-    expect(view.block?.rule).toBe('blocking-here')
+    // Row 244 (#87, design §4.2.2): the revised state's block — the re-gate "after you change the
+    // work", then its live acts; never the bare revise `decide` refuses there.
+    expect(view.block?.rule).toBe('revised')
+    expect(view.block?.anchor).toBe('src/token.ts')
     expect(view.block?.options.map((o) => o.act?.argv)).toEqual([
-      ['decide', 'implement', target, '--revise'],
-      ['decide', 'implement', target, '--revise', '--upstream', target],     // implement's upstream is the plan
+      ['gate', 'implement', target],
       ['decide', 'implement', target, '--approve', '--override'],
       ['decide', 'implement', target, '--stop'],
+      ['decide', 'implement', target, '--revise', '--upstream', target],     // implement's upstream is the plan
+      ['gate', 'implement', target, '--fresh'],
+      ['decide', 'implement', target, '--revise', '--note', '<why>'],
     ])
+    expect(view.block?.options[0]?.when).toBe('after you change the work')
+    expect(view.exits).toEqual(view.block?.options.slice(1).map((o) => o.act))
     // R7: no string anywhere in the view holds a raw control or bidi character
     expect(controlStrings(view)).toEqual([])
     expect(JSON.parse(JSON.stringify(view))).toEqual(view)
@@ -75,14 +82,44 @@ describe('decide --show is a view (rows 139/203)', () => {
       })
     })
 
-    it('settled: the disposition with who selected it, and the last run — no exits', async () => {
+    // Row 244 (design §4.2.2): a settled gate's one live act is the retraction, after which
+    // `gate --fresh` re-judges.
+    it('settled: the disposition with who selected it, the last run, and the retraction', async () => {
       const { view, shas } = await viewOf('settled-arbiter')
       expect(view).toStrictEqual({
         gate: 'decompose', target: 'auth-hardening', autonomy: false, state: 'settled',
         disposition: { decision: 'approve', selected: 'arbiter', reason: 'the slice covers g1',
           arbiter: { model: 'test-model-1', prompts_sha: 'p' } },
         last: { round: 1, sha: shas[0]!.slice(0, 7), outcome: 'stopped' },
+        exits: [cliAct('decide', 'decompose', 'auth-hardening', '--revise', '--note', '<why>')],
       })
+    })
+
+    // A pass settles with no disposition: the screen names the run's outcome and the retraction.
+    it('settled by a pass: no disposition, the retraction', async () => {
+      const { repo, gate, target } = await decideRepo('settled-arbiter')
+      const passed = { ...lastGateRun(readStream(repo.root, target), gate)!, run_id: 'r2', round: 2, outcome: 'passed' as const }
+      appendEntry(repo.root, target, passed as never)
+      const view = decideView(repo.root, cfgOf(repo.root), loadCanon(repo.root), gate, target)
+      if (view.state !== 'settled') throw new Error(view.state)
+      expect(view).not.toHaveProperty('disposition')
+      expect(view.exits).toEqual([cliAct('decide', gate, target, '--revise', '--note', '<why>')])
+      expect(decideViewLines(view)).toContain('state: settled — passed')
+    })
+
+    // Row 244 (design §4.2.5): a handed-back revise is decided again, from its run and its live set.
+    it('handed back: its own state, the run, the disposition and the live set', async () => {
+      const { repo, gate, target } = await decideRepo('implement-revised')
+      appendEntry(repo.root, target, { v: 1, t: 'revise-returned', gate: 'implement', artifact: target, run_id: 'r1', sha: 'sha-impl' } as never)
+      const view = decideView(repo.root, cfgOf(repo.root), loadCanon(repo.root), gate, target)
+      if (view.state !== 'handed-back') throw new Error(view.state)
+      expect(view.moved).toBe(false)
+      expect(view.disposition).toStrictEqual({ decision: 'revise', note: 'fix the expiry' })
+      expect(view.block?.rule).toBe('revise-returned')
+      expect(view.block?.options.map((o) => o.act?.argv.slice(3))).toEqual([
+        ['--stop'], ['--approve', '--override'], ['--revise', '--upstream', target], ['--fresh'], ['--revise', '--note', '<why>'],
+      ])
+      expect(decideViewLines(view)).toContain('state: handed-back — the author handed the revise back with the content unchanged')
     })
 
     it('moved after a revise: no block, and the re-gate is the one exit', async () => {

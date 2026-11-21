@@ -79,8 +79,10 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
 // reports it, and a fresh run brings it back. No sha term on purpose: an approval is of
 // BYTES and lapses when they move (gateSettled above), while a park is a decision about
 // the flow — moving the tree underneath it does not cancel it.
+// Row 244 (S2-2): read from the last run that judged something, as `liveActs` reads it — a
+// malformed re-review judged nothing, so it leaves the park standing.
 export function gateParked(entries: Entry[], gate: string): boolean {
-  const last = lastGateRun(entries, gate)
+  const last = lastJudgedRun(entries, gate)
   if (!last) return false
   // a reopen from another gate's `--revise --upstream` un-parks exactly as it un-settles:
   // the upstream instruction is live work, and it outranks the park it lands on
@@ -734,8 +736,9 @@ const roundOf = (r: unknown): number | undefined => (Number.isInteger(r) && (r a
 // gate's latest act before the park sent work upstream, the plan's own gate is reopened, or — read
 // with the config — the flow routes implement work other than the gate (a step, an evidence row,
 // an edit a revise asked for).
+// Row 244 (S2-2): the acts since the last run that judged something, as `gateParked` reads them.
 export function parkOwed(root: string, cfg: Config | undefined, canon: Canon, gate: string, target: string, entries: Entry[]): boolean {
-  const last = lastGateRun(entries, gate)
+  const last = lastJudgedRun(entries, gate)
   const acts = last === undefined ? [] : entries.slice(entries.lastIndexOf(last as unknown as Entry) + 1)
     .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate && (e as unknown as DecisionEntry).caused_by === undefined)
     .map((e) => e as unknown as DecisionEntry)
@@ -823,7 +826,8 @@ export function parkedGates(
   for (const { id, parent, gates } of seen) {
     const entries = readStream(root, id)
     for (const gate of gates) {
-      const last = lastGateRun(entries, gate)
+      // Row 244 (S2-2): the run the stop disposed of, a malformed re-review after it skipped.
+      const last = lastJudgedRun(entries, gate)
       if (!last) continue
       if (!gateParked(entries, gate)) continue
       const anchors = (last.verdicts ?? [])

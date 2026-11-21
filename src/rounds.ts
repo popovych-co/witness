@@ -403,18 +403,15 @@ function parkedActs(
 // in three more states.
 // `upstream` is REQUIRED and has no default: it used to default to the literal `<id>`,
 // which shipped an unrunnable command on every screen (D129). `undefined` means no
-// upstream exists — `decide` refuses that with `unknown-owner`, so the option is not legal
-// and is omitted rather than printed as a placeholder.
-// Row 244: the endgame and the pending sets are `liveActs`' own.
+// upstream exists, so the option has no id to print and the exits line omits it rather than
+// print a placeholder; one the human fills is still accepted (`LiveActs.slots`, row 244).
+// Row 244 (design §4.2.1): a view over `liveActs`, so the exits line offers exactly what `decide`
+// accepts in every state, the revised and settled ones included. `stale` stands for moved content
+// and lifted holds alike; the parked state's owed work is `reopenActs`' to say.
 export function exitActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
 ): Act[] {
-  // The bound outranks staleness.
-  if (boundReached(entries, gate)) return endgameActs(gate, target, entries, stale, upstream)
-  // The pending check is what separates this from the reopened and revised screens, where no
-  // anchor resolves and every decide verb refuses.
-  if (stale && pendingDecision(entries, gate) === undefined) return [cliAct('gate', gate, target)]
-  return pendingActs(gate, target, entries, stale, upstream)
+  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false }).acts
 }
 
 // Rows 139/203. The exits line: `exitActs` rendered in one line.
@@ -441,11 +438,13 @@ export function unparkAt(entries: Entry[], i: number): boolean {
   return (before as unknown as DecisionEntry | undefined)?.decision === 'stop'
 }
 
-// A parked gate's way back (`parkedActs`), as every parked row offers it.
+// A parked gate's way back, as every parked row offers it: a view over `liveActs` (row 244). A
+// caller with no content sha passes no staleness, so at the bound it may list an approve that
+// `decide` would refuse `stale-verdict` (a screen that has the sha reads `liveActs` itself).
 export function reopenActs(
   gate: string, target: string, entries: Entry[], upstream: string | undefined, owed: boolean,
 ): Act[] {
-  return parkedActs(gate, target, entries, upstream, owed, false)
+  return liveActs(gate, target, entries, { upstream, stale: false, holdLifted: false, owed, upstreamOwed: false }).acts
 }
 
 // Rows 139/203. The reopen as one line: `reopenActs` rendered.
@@ -470,17 +469,28 @@ export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'ha
 
 // Row 244. A gate's state and its legal acts, in the order the screens offer them. `anchor` is the
 // run a decision now disposes of. `malformedRerun`: a malformed round is the gate's last word, so
-// its free re-run leads the acts (design §4.2.2). `slots` are acts `decide` accepts that no screen
-// lists: below the bound, the other spelling of the listed approve (D122).
+// its free re-run leads the acts (design §4.2.2). `slots` are acts `decide` accepts that no exits
+// line lists: below the bound, the other spelling of the listed approve (D122); and where no parent
+// resolves, the send-upstream the state would offer, as `--upstream <effort>` for the human to fill
+// (design §4.2.9) — a block may show it, never runnable, and an exits line leaves it out.
 export interface LiveActs {
   state: GateStateKind
   anchor?: GateRunEntry
   acts: Act[]
   malformedRerun: boolean
-  // Design §4.2.2's session line, where a state has one. Unset until the screens read liveActs.
+  // Design §4.2.2's session line, where a state has one: the changed-nothing screen prints it.
   session?: string
   slots?: Act[]
 }
+
+// Design §4.2.2's session lines, by state, on unchanged content. The retracted line ends as the
+// design's table cell does: `--fresh` is the human's re-review (§4.2.8), and a retraction is where a
+// session may run it.
+export const SESSION_LINE = {
+  revised: 'change the work and re-run the gate, or hand it back with `--unchanged`',
+  'handed-back-moved': 'change nothing more; the re-gate judges what moved',
+  retracted: 're-review with `gate --fresh` (it spends a round), or change the work and re-run the gate; a session may run that `--fresh`',
+} as const
 
 // Row 244 (design §4.2.3, "one pairing"). The run the gate's latest revise disposed of: the latest
 // run before it that judged something. A malformed round judged nothing, so a revise after one
@@ -574,6 +584,9 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const revised = decision === 'revise' || decision === 'revise-upstream'
   const moved = facts.stale || facts.holdLifted
   const atBound = boundReached(entries, gate)
+  // Where no parent resolves, the send-upstream a state offers carries `<effort>` for the human to
+  // fill, and is held in `slots` below, never listed (design §4.2.9).
+  const upstream = facts.upstream ?? '<effort>'
   const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
   const noted = d('--revise', '--note', '<why>')
   const fresh = cliAct('gate', gate, target, '--fresh')
@@ -582,10 +595,10 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   let acts: Act[]
   if (decision === 'stop') {
     state = 'parked'
-    acts = parkedActs(gate, target, entries, facts.upstream, facts.owed, moved)
+    acts = parkedActs(gate, target, entries, upstream, facts.owed, moved)
   } else if (atBound) {
     state = 'at-bound'
-    acts = endgameActs(gate, target, entries, moved, facts.upstream)
+    acts = endgameActs(gate, target, entries, moved, upstream)
   } else if (decision === 'approve' || (!revised && anchor.outcome === 'passed')) {
     // The retraction alone, after which `gate --fresh` re-judges; on moved content the approval
     // lapsed and the re-gate judges what moved.
@@ -603,9 +616,8 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
       // Send upstream where a parent exists, the latest revise was not upstream, and D123's ladder
       // is unspent for the run's primary anchor (an upstream taken here spends it, P47).
       const primary = blocking[0]
-      const up = facts.upstream !== undefined && decision !== 'revise-upstream' &&
-        !(primary !== undefined && ladderSpent(entries, gate, primary))
-        ? [d('--revise', '--upstream', facts.upstream)] : []
+      const up = decision !== 'revise-upstream' && !(primary !== undefined && ladderSpent(entries, gate, primary))
+        ? [d('--revise', '--upstream', upstream)] : []
       const handedBack = standingHandBack(entries, gate) !== undefined
       state = handedBack ? (moved ? 'handed-back-moved' : 'handed-back') : 'revised'
       // Moved content after a revise is the author's edit, and the re-gate judges it; after a
@@ -616,15 +628,31 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
     }
   } else {
     state = 'pending'
-    acts = pendingActs(gate, target, entries, moved, facts.upstream)
+    acts = pendingActs(gate, target, entries, moved, upstream)
   }
 
   // A malformed round after the revise (or the pending run) keeps the state's acts and leads with
   // its free re-run, which repairs the round (design §4.2.2, P50).
   const malformedRerun = malformedLast && LEADS.has(state)
   if (malformedRerun && (acts[0] === undefined || actKey(acts[0]) !== actKey(regate))) acts = [regate, ...acts]
-  const slots = atBound ? [] : approveTwin(gate, target, acts)
-  return { state, anchor, acts, malformedRerun, ...(slots.length > 0 ? { slots } : {}) }
+  // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
+  const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')
+  const listed = acts.filter((a) => !unnamed(a))
+  const slots = [...(atBound ? [] : approveTwin(gate, target, listed)), ...acts.filter(unnamed)]
+  const session = sessionLine(state, moved)
+  return {
+    state, anchor, acts: listed, malformedRerun,
+    ...(session !== undefined ? { session } : {}), ...(slots.length > 0 ? { slots } : {}),
+  }
+}
+
+// Design §4.2.2: the session's line in the revised, handed-back-moved and retracted states. On
+// moved content a revised or retracted gate's one way on is the re-gate its acts name, so neither
+// line, which offers a hand-back or a re-review of unchanged content, is said there.
+function sessionLine(state: GateStateKind, moved: boolean): string | undefined {
+  if (state === 'handed-back-moved') return SESSION_LINE['handed-back-moved']
+  if (moved) return undefined
+  return state === 'revised' ? SESSION_LINE.revised : state === 'retracted' ? SESSION_LINE.retracted : undefined
 }
 
 // D122. Below the bound `--approve` and `--approve --override` are one act: a screen lists one
