@@ -34,12 +34,13 @@ import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../re
 import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
 import { renderDecision, type Decision } from '../recommend.js'
-import { cliAct, type Act } from '../act.js'
+import { cliAct, exitsLine, type Act } from '../act.js'
+import { contentSha } from '../content-sha.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import {
-  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, openReopen, pendingDecision, reopenActs, reopenCommand,
+  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision,
   type ActFacts, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
@@ -397,7 +398,9 @@ export function principlesApproval(
   const plans = canon.docs.filter((d) => d.meta.type === 'plan')
   const amended = `principles.md is draft — ${owner} amended it and its decompose gate approves it`
   if (gateParked(e.entries, 'decompose')) {
-    const reopen = reopenCommand('decompose', owner, e.entries, upstreamFor(root, 'decompose', owner))
+    const cfgR = loadConfig(root)
+    const reopen = exitsLine(parkedReopen(root, cfgR.ok ? cfgR.value : undefined, canon, 'decompose', owner, e.entries,
+      upstreamFor(root, 'decompose', owner)))
     return {
       action: { ...runs(cliAct('check')), note: `${amended} · its decompose is parked — witness status names its reopen` },
       remedy: `${amended} · its decompose is parked — reopen it: ${reopen}`,
@@ -794,6 +797,16 @@ function upstreamOwed(root: string, gate: string, target: string, entries: Entry
   return reopen?.caused_by?.artifact === target && reopen.caused_by.gate === gate
 }
 
+// Row 244 (#87, S2-5). A parked gate's way back as `decide` reads it: the park's live acts, with the
+// content's staleness and lifted holds read against the run the stop disposed of (`actFacts`), and
+// owed work. At the bound the way back is the endgame, and on moved content it holds no approve.
+function parkedReopen(
+  root: string, cfg: Config | undefined, canon: Canon, gate: string, id: string, entries: Entry[], upstream: string | undefined,
+): Act[] {
+  const sha = contentSha(root, canon, cfg, gate, id)
+  return liveActs(gate, id, entries, actFacts(root, cfg, canon, gate, id, entries, { sha, upstream })).acts
+}
+
 // Row 241. Who parked a gate, and why, for the parked head: the arbiter with its reason, the policy
 // with its note, or a human at the anchor the stop disposed of.
 export function parkedBy(entries: Entry[], gate: string, anchor: string): string {
@@ -837,7 +850,7 @@ export function parkedGates(
       out.push({
         gate, target: id, ...(round !== undefined ? { round } : {}),
         anchor: anchors[0] ?? last.standing ?? last.outcome,
-        reopen: reopenActs(gate, id, entries, upstreamFor(root, gate, id, parent), parkOwed(root, cfg, canon, gate, id, entries)),
+        reopen: parkedReopen(root, cfg, canon, gate, id, entries, upstreamFor(root, gate, id, parent)),
       })
     }
   }

@@ -30,6 +30,21 @@ describe('stage skills — shared contract', () => {
   }
 });
 
+// Row 244 (#87, design §4.2.2). A settled gate's `decide --show` now prints an `exits:` line: the
+// human's retraction. `revise-human` does not refuse a chat session drive did not start, so the stage
+// skills say outright that a session never runs it, and follow `help: witness next`.
+export const SETTLED_EXITS = 'A `settled` state\'s `exits:` line is the human\'s retraction, never run by a session: follow `help: witness next`.'
+describe('a settled exits line is the human\'s (row 244)', () => {
+  for (const name of ['witness-decompose', 'witness-design', 'witness-implement', 'witness-plan', 'witness-ship']) {
+    it(`${name} keeps the reopened guidance and says a settled exits line is never a session's`, () => {
+      const body = readFileSync(skillPath(name), 'utf8');
+      expect(body).toContain('a `reopened` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.');
+      expect(body).toContain(SETTLED_EXITS);
+      expect(body).not.toContain('a `reopened` or `settled` state means');
+    });
+  }
+});
+
 describe('witness-brainstorm', () => {
   const body = () => readFileSync(skillPath('witness-brainstorm'), 'utf8');
   it('interviews one question at a time and persists via witness recap', () => {

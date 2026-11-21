@@ -16,6 +16,7 @@ import { laneCheck, runCriteria } from '../criteria.js'
 import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
+import { contentSha } from '../content-sha.js'
 import type { GateCheck } from '../rounds.js'
 import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
@@ -197,14 +198,10 @@ registerGate({
     })
   },
 
+  // undefined is "cannot compute", never "moved": an unresolvable base must not
+  // un-settle a gate or invert `decide --show`'s staleness line.
   currentSha(root, canon, cfg, planId) {
-    const wt = worktreePath(root, planId)
-    const plan = findById(canon, planId)
-    if (!existsSync(wt) || !plan) return undefined
-    const baseR = diffBase(wt, cfg)
-    // undefined is "cannot compute", never "moved": an unresolvable base must not
-    // un-settle a gate or invert `decide --show`'s staleness line.
-    return baseR.ok ? implementReviewedSha(wt, baseR.value, plan) : undefined
+    return contentSha(root, canon, cfg, 'implement', planId)
   },
 
   // The implement gate judges a plan's CODE, so upstream is the plan itself — reopening

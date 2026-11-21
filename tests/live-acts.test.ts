@@ -428,16 +428,17 @@ describe('corner states (design §4.2.9)', () => {
   })
 })
 
-// Task 10 turns these into views over liveActs; until then they share its helpers.
+// Row 244 (Task 10): both are views over liveActs.
 describe('exitActs and reopenActs share liveActs\' own sets', () => {
   it('pending and at the bound, exitActs; parked, reopenActs', () => {
     expect(live(j.pending).acts).toEqual(exitActs(G, T, j.pending, false, 'e1'))
     expect(live(j.pending, { stale: true }).acts).toEqual(exitActs(G, T, j.pending, true, 'e1'))
     expect(live(BOUND).acts).toEqual(exitActs(G, T, BOUND, false, 'e1'))
     expect(live(BOUND, { stale: true }).acts).toEqual(exitActs(G, T, BOUND, true, 'e1'))
-    expect(live(j.parked).acts).toEqual(reopenActs(G, T, j.parked, 'e1', false))
-    expect(live(j.parked, { owed: true }).acts).toEqual(reopenActs(G, T, j.parked, 'e1', true))
+    expect(live(j.parked).acts).toEqual(reopenActs(G, T, j.parked, false, 'e1', false))
+    expect(live(j.parked, { owed: true }).acts).toEqual(reopenActs(G, T, j.parked, false, 'e1', true))
     const parkedAtBound = [...BOUND, dec('stop')]
-    expect(live(parkedAtBound).acts).toEqual(reopenActs(G, T, parkedAtBound, 'e1', false))
+    expect(live(parkedAtBound).acts).toEqual(reopenActs(G, T, parkedAtBound, false, 'e1', false))
+    expect(live(parkedAtBound, { stale: true }).acts).toEqual(reopenActs(G, T, parkedAtBound, true, 'e1', false))
   })
 })

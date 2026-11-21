@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cliAct } from '../act.js'
-import { designCurrentSha, designGateSha, designRel, designReviewed, designUnseen, htmlSha, validateDesignArtifact } from '../design.js'
+import { designGateSha, designRel, designReviewed, designUnseen, htmlSha, validateDesignArtifact } from '../design.js'
 import { registerGate, type GateInput, type MetaStamp } from '../gate.js'
+import { contentSha } from '../content-sha.js'
 import { latestRecap } from '../journal.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
@@ -75,9 +76,7 @@ registerGate({
   },
 
   currentSha(root, canon, cfg, specId) {
-    const spec = findById(canon, specId)
-    if (!spec || spec.meta.type !== 'spec') return undefined
-    return designCurrentSha(root, cfg.paths, spec)
+    return contentSha(root, canon, cfg, 'design', specId)
   },
 
   // Upstream from the design gate is the spec's SLICING, which reopens the owning

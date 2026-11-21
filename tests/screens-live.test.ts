@@ -2,7 +2,7 @@ import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from '
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { cliAct, type Act } from '../src/act.js'
+import { cliAct, exitsLine, type Act } from '../src/act.js'
 import { menuFor } from '../src/arbiter.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { decideView, type DecideView } from '../src/decide-view.js'
@@ -82,6 +82,7 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind]> = [
   ['parked', (s) => [run(1, s), dec('stop')], 'parked'],
   ['parked, then a malformed re-review (S2-2)', (s) => [run(1, s), dec('stop'), run(2, s, 'malformed')], 'parked'],
   ['parked at the bound', (s) => [...bound(s), dec('stop', ARBITER)], 'parked'],
+  ['parked at the bound, content moved (S2-5)', () => [...bound(MOVED), dec('stop', ARBITER)], 'parked'],
   ['parked at the bound, then reopened', (s) => [...bound(s), dec('stop', ARBITER), dec('revise', REOPEN)], 'at-bound'],
   ['settled by an approve', (s) => [run(1, s), dec('approve', { override: true })], 'settled'],
   ['settled by a pass', (s) => [run(1, s, 'passed')], 'settled'],
@@ -212,6 +213,13 @@ async function wantActs(name: string): Promise<Act[]> {
   return acts
 }
 
+// The acts `witness status` names for the effort: its parked rows' reopen, read from the text.
+async function statusActs(name: string): Promise<Act[]> {
+  const r = await cli(stateRoot(name), ['status'])
+  expect(r.code, r.stderr).toBe(0)
+  return actsIn(r.stdout).filter((a) => a[a[0] === 'abandon' ? 1 : 2] === base.effort).map((w) => cliAct(...w))
+}
+
 // Every act each screen shows in a state, named by the screen that shows it.
 async function shownIn(name: string): Promise<{ live: LiveActs; shown: Array<[string, Act]>; block?: Decision }> {
   const root = stateRoot(name)
@@ -228,6 +236,7 @@ async function shownIn(name: string): Promise<{ live: LiveActs; shown: Array<[st
   add('needs you', needsYou(root, fakeCtx(root), cfg, canon, []).filter((i) => i.target === base.effort).flatMap((i) =>
     i.kind === 'parked' ? i.reopen : i.kind === 'decision' ? [i.show] : []))
   if (block !== undefined) add('the arbiter\'s menu', menuFor(block, live.anchor ?? lastGateRun(entries, G)!).map((o) => o.act))
+  add('witness status', await statusActs(name))
   add('a refusal\'s want', await wantActs(name))
   return { live, shown, ...(block ? { block } : {}) }
 }
@@ -420,17 +429,24 @@ describe('the first build\'s corners (S2-1, S2-2, S2-5)', () => {
     for (const a of named) expect(actLive(live, actKey(a)), a.join(' ')).toBe(true)
   }, 120_000)
 
-  // S2-5. Parked at the bound, the way back is the endgame, and on moved content it holds no approve.
+  // S2-5. Parked at the bound, the way back is the endgame, and on moved content it holds no approve —
+  // on decide --show, in what needs you, and in `witness status`, whose parked rows read the content's
+  // sha as `decide` does.
   it('a gate parked at the bound on moved content offers no approve (S2-5)', async () => {
-    const root = repoWith([...bound(MOVED), dec('stop', ARBITER)])
+    const root = stateRoot('parked at the bound, content moved (S2-5)')
     const { live } = liveIn(root)
     expect(live.state).toBe('parked')
     expect(live.acts.filter((a) => a.argv.includes('--approve'))).toEqual([])
     const view = decideView(root, cfgOf(root), loadCanon(root), G, base.effort)
     if (view.state !== 'parked') throw new Error(`state ${view.state}`)
     expect(view.reopen).toEqual(live.acts)
-    const r = await cli(root, ['decide', G, base.effort, '--show'])
-    expect(r.stdout).not.toContain('--approve')
+    const show = await cli(root, ['decide', G, base.effort, '--show'])
+    expect(show.stdout).not.toContain('--approve')
+    const parked = needsYou(root, fakeCtx(root), cfgOf(root), loadCanon(root), []).find((i) => i.kind === 'parked' && i.target === base.effort)
+    expect(parked).toMatchObject({ kind: 'parked', reopen: live.acts })
+    const status = await cli(root, ['status'])
+    expect(status.stdout).toContain(`exits: ${exitsLine(live.acts)}`)
+    expect(status.stdout).not.toContain('--approve')
   }, 120_000)
 })
 

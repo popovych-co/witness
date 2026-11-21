@@ -36,6 +36,9 @@ const stoppedRun = (round: number): GateRunEntry => ({
 })
 
 describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
+  // Row 244 (#87, S2-5), re-recorded by hand: plan-3 is parked at the bound on content that moved
+  // since its rounds (`sha-N`), so its endgame row no longer offers the approve `decide` refuses
+  // `stale-verdict`; the parked rows read the content's sha as `decide` does.
   it('what needs you: every kind, its key and its rows', async () => {
     const { repo, asides } = await needsYouRepo()
     const items = needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root), asides)
@@ -92,7 +95,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       parked:auth-refresh-plan-3:plan
       parked: auth-refresh-plan-3 · plan round 3 — parked by a human at auth-refresh-plan-3 > ## Steps
-        exits: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
+        exits: witness decide plan auth-refresh-plan-3 --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
 
       stuck:x-plan-1
       stuck: x-plan-1 — no progress on witness ship x-plan-1

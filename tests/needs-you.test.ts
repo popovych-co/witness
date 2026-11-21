@@ -7,7 +7,9 @@ import { appendEntry, readStream } from '../src/journal.js'
 import { type NeedYou, needsYou, needsYouToken, needYouRows } from '../src/needs-you.js'
 import { actKey, actLive, liveActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { gateParked } from '../src/verbs/next.js'
+import { gateSpec } from '../src/gate.js'
+import '../src/gates/index.js'
+import { actFacts, gateParked } from '../src/verbs/next.js'
 import { approve, autonomyOn, fakeCtx, hermeticEnv, seededRepo, writePlan, writeSpec } from './helpers.js'
 import { controlStrings, needsYouRepo } from './model-fixtures.js'
 
@@ -194,12 +196,25 @@ describe('what needs you is a model (rows 139/203)', () => {
     const items = needsYou(repo.root, { env: {} }, cfgOf(repo.root), loadCanon(repo.root), asides)
     const parked2 = items.find((i) => i.kind === 'parked' && i.target === 'auth-refresh-plan-2')
     expect(parked2).toMatchObject({ gate: 'plan', round: 1, why: 'parked by the policy — drive cap: plan ran 16 rounds' })
+    // The facts `decide` reads beside the journal: the plans' content moved since their journaled
+    // rounds (`sha-N`), so plan-3, parked at the bound, offers the endgame minus the approve (S2-5).
+    const cfg = cfgOf(repo.root)
+    const canon = loadCanon(repo.root)
+    const liveOf = (gate: string, target: string) => {
+      const spec = gateSpec(gate)!
+      const entries = stream(target)
+      return liveActs(gate, target, entries, actFacts(repo.root, cfg, canon, gate, target, entries,
+        { sha: spec.currentSha!(repo.root, canon, cfg, target), upstream: spec.upstreamOf!(repo.root, canon, target) }))
+    }
+    const atBound = items.find((i) => i.kind === 'parked' && i.target === 'auth-refresh-plan-3')
+    if (atBound?.kind !== 'parked') throw new Error('plan-3 is not parked')
+    expect(liveOf('plan', 'auth-refresh-plan-3').acts.filter((a) => a.argv.includes('--approve'))).toEqual([])
+    expect(atBound.reopen).toEqual(liveOf('plan', 'auth-refresh-plan-3').acts)
     for (const item of items) {
       const acts = item.kind === 'parked' ? item.reopen : item.kind === 'decision' ? [] : undefined
       if (acts === undefined) continue
       const { gate } = item as { gate: string }
-      const live = liveActs(gate, item.target, stream(item.target),
-        { upstream: 'auth-refresh', stale: false, holdLifted: false, owed: false, upstreamOwed: false })
+      const live = liveOf(gate, item.target)
       for (const a of acts) expect(actLive(live, actKey(a)), `${item.key}: ${a.line}`).toBe(true)
       // A decision row points at the gate's own screen, a read, never an act of its own.
       if (item.kind === 'decision') expect(item.show).toEqual(cliAct('decide', gate, item.target, '--show'))

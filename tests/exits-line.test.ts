@@ -200,12 +200,16 @@ describe('the exits line renders the live acts (rows 139/203)', () => {
   // beside a fresh run otherwise — and at the bound the endgame acts stay.
   it('reopens with a revise (and a fresh run when nothing is owed) below the bound and with the endgame acts at it', () => {
     const revise = cliAct('decide', 'plan', 'p1', '--revise', '--note', '<why>')
-    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh', false))
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], false, 'auth-refresh', false))
       .toEqual([revise, cliAct('gate', 'plan', 'p1', '--fresh')])
-    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh', true)).toEqual([revise])
-    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], 'auth-refresh', false)
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], false, 'auth-refresh', true)).toEqual([revise])
+    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], false, 'auth-refresh', false)
     expect(atBound).toEqual(exitActs('plan', 'p1', [...BOUND, decided('stop')], false, 'auth-refresh'))
     expect(atBound.at(-1)).toEqual(cliAct('abandon', 'p1'))
+    // Row 244 (S2-5): staleness is required — on moved content the endgame holds no approve.
+    const moved = reopenActs('plan', 'p1', [...BOUND, decided('stop')], true, 'auth-refresh', false)
+    expect(moved).toEqual(atBound.filter((a) => !a.argv.includes('--approve')))
+    expect(moved).toHaveLength(atBound.length - 1)
   })
 })
 

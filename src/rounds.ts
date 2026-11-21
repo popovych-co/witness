@@ -438,20 +438,14 @@ export function unparkAt(entries: Entry[], i: number): boolean {
   return (before as unknown as DecisionEntry | undefined)?.decision === 'stop'
 }
 
-// A parked gate's way back, as every parked row offers it: a view over `liveActs` (row 244). A
-// caller with no content sha passes no staleness, so at the bound it may list an approve that
-// `decide` would refuse `stale-verdict` (a screen that has the sha reads `liveActs` itself).
+// A parked gate's way back, as every parked row offers it: a view over `liveActs` (row 244). `stale`
+// is REQUIRED, as `upstream` is (D129): at the bound the way back is the endgame, and on moved
+// content it holds no approve, so a caller that dropped the staleness would offer an approve `decide`
+// refuses `stale-verdict` (S2-5). It stands for moved content and lifted holds alike.
 export function reopenActs(
-  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed: boolean,
+  gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined, owed: boolean,
 ): Act[] {
-  return liveActs(gate, target, entries, { upstream, stale: false, holdLifted: false, owed, upstreamOwed: false }).acts
-}
-
-// Rows 139/203. The reopen as one line: `reopenActs` rendered.
-export function reopenCommand(
-  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed = false,
-): string {
-  return exitsLine(reopenActs(gate, target, entries, upstream, owed))
+  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed, upstreamOwed: false }).acts
 }
 
 // Row 244 (#87, design §4.2.1). The facts beside the journal that decide which acts are legal. The

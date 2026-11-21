@@ -15,6 +15,7 @@ import { diffReviewedSha, effortOf } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
+import { contentSha } from '../content-sha.js'
 import { gateSettled, openStepRow } from '../verbs/next.js'
 import { lastGateRun, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
@@ -120,12 +121,9 @@ registerGate({
     })
   },
 
-  currentSha(root, _canon, cfg, planId) {
-    const wt = worktreePath(root, planId)
-    if (!existsSync(wt)) return undefined
-    const baseR = diffBase(wt, cfg)
-    // undefined is "cannot compute", never "moved" — same doctrine as the implement gate.
-    return baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
+  // undefined is "cannot compute", never "moved" — same doctrine as the implement gate.
+  currentSha(root, canon, cfg, planId) {
+    return contentSha(root, canon, cfg, 'ship', planId)
   },
 
   // Same as the implement gate: what ships is a plan's code, so upstream is the plan.

@@ -8,6 +8,7 @@ import { findCycle, findById, type CanonDoc } from '../scan.js'
 import { effortCanon, effortReviewedSha, effortWrites } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput, type Stamp } from '../gate.js'
+import { contentSha } from '../content-sha.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
 import type { GateCheck } from '../rounds.js'
 import { shellWord } from '../toon.js'
@@ -135,8 +136,8 @@ registerGate({
     })
   },
 
-  currentSha(root, canon, _cfg, effort) {
-    return effortReviewedSha(root, canon, effort).sha
+  currentSha(root, canon, cfg, effort) {
+    return contentSha(root, canon, cfg, 'decompose', effort)
   },
 
   // Upstream from decompose is the scope itself — `decide` routes it to `witness recap
