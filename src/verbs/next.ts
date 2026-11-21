@@ -4,11 +4,11 @@ import { EXIT, type Ctx } from '../cli.js'
 import { askText, nextAsk, type AskStatus } from '../ask.js'
 import { draftLine } from '../drafts.js'
 import { isId } from '../dsl.js'
-import { unmetNeeds, type UnmetNeed } from '../needs.js'
+import { liftedHolds, unmetNeeds, type UnmetNeed } from '../needs.js'
 import { loadConfig, type Config } from '../config.js'
 import { pendingTxn } from '../txn.js'
 import { fetchBranch, primaryRoot, stateOnlyAdvance, tryGit } from '../gitio.js'
-import { findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
+import { criteriaOwner, findById, loadCanon, planFinished, plannableParent, type Canon, type CanonDoc } from '../scan.js'
 import { templateDraft } from '../principles.js'
 import { designArtifactCurrent, designCurrentSha, designPending, designUnseen } from '../design.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
@@ -38,7 +38,10 @@ import { cliAct, type Act } from '../act.js'
 import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
-import { ROUND_BOUND, boundReached, lastGateRun, openReopen, pendingDecision, reopenActs, reopenCommand, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import {
+  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, openReopen, pendingDecision, reopenActs, reopenCommand,
+  type ActFacts, type DecisionEntry, type GateRunEntry,
+} from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
 
@@ -746,6 +749,46 @@ export function parkOwed(root: string, cfg: Config | undefined, canon: Canon, ga
   }
   const row = flowStep(root, cfg, plan)
   return row !== undefined && row.stage === 'implement' && !row.line.startsWith('witness gate ')
+}
+
+// Row 244 (#87, design §4.2.1, §4.2.9). The facts beside the journal that `liveActs` reads, computed
+// once for every reader. The caller passes what only the gate registry knows — the content's sha now
+// (`currentSha`; undefined when it cannot be computed, which never reads as moved) and the upstream
+// (`upstreamOf`) — since this module cannot import gate.ts. Staleness and lifted holds are read
+// against the last run that judged something, which is the run `liveActs` anchors on (S2-1).
+export function actFacts(
+  root: string, cfg: Config | undefined, canon: Canon, gate: string, target: string, entries: Entry[],
+  spec: { sha?: string; upstream?: string },
+): ActFacts {
+  const judged = lastJudgedRun(entries, gate)
+  return {
+    upstream: spec.upstream,
+    stale: judged !== undefined && spec.sha !== undefined && spec.sha !== judged.reviewed_sha,
+    holdLifted: liftedHolds(criteriaOwner(canon, target), judged).length > 0,
+    owed: parkOwed(root, cfg, canon, gate, target, entries),
+    upstreamOwed: upstreamOwed(root, gate, target, entries),
+  }
+}
+
+// Design §4.2.4 (P48). The gate's own latest revise sent the work upstream, and it is still owed there:
+// the reopen that revise booked (`decide`'s `upstream` field names its stream and gate) is open, or for
+// decompose, whose upstream is the recap, no recap has landed since the revise. A reopen of this gate
+// by another (`caused_by`) is a revise of this gate, but not one it sent upstream.
+function upstreamOwed(root: string, gate: string, target: string, entries: Entry[]): boolean {
+  let at = entries.length - 1
+  for (; at >= 0; at--) {
+    const e = entries[at]!
+    if (e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate &&
+      ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision)) break
+  }
+  const revise = entries[at] as unknown as DecisionEntry | undefined
+  if (revise?.decision !== 'revise-upstream') return false
+  if (gate === 'decompose') return !entries.slice(at + 1).some((e) => e.t === 'recap')
+  const up = revise.upstream
+  // A journaled field is parsed JSON: a stream is read only by an id.
+  if (typeof up !== 'object' || up === null || typeof up.gate !== 'string' || !isId(up.artifact)) return false
+  const reopen = openReopen(up.artifact === target ? entries : readStream(root, up.artifact), up.gate)
+  return reopen?.caused_by?.artifact === target && reopen.caused_by.gate === gate
 }
 
 // Row 241. Who parked a gate, and why, for the parked head: the arbiter with its reason, the policy

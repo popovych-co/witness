@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { cliAct, type Act } from '../src/act.js'
 import type { Entry } from '../src/journal.js'
 import {
-  actKey, actLive, disposedRun, exitActs, liveActs, reopenActs, standingHandBack,
+  VALUED_FLAGS, actKey, actLive, disposedRun, exitActs, liveActs, reopenActs, standingHandBack,
   type ActFacts, type GateStateKind,
 } from '../src/rounds.js'
+import { decisionAct } from '../src/verbs/decide.js'
 
 // Row 244 (#87, design §4.2.1–§4.2.3, §4.2.5, §4.2.9). One pure derivation gives a gate's state and
 // the exact acts that are legal in it, so every screen and `decide` itself read the same list.
@@ -223,6 +224,25 @@ describe('membership (design §4.2.1)', () => {
     expect(actKey(['gate', G, T, '--unchanged'])).not.toBe(actKey(['gate', G, T]))
     expect(actKey(['gate', G, T, '--unchanged'])).not.toBe(actKey(['gate', G, T, '--fresh']))
     expect(key('--override', '--approve')).toBe(key('--approve', '--override'))
+  })
+
+  // `decisionAct` and verbs/gate.ts read their gate and target and ignore a positional word after them,
+  // so a stray word makes no other act: accepted as it always was, never a new refusal.
+  it('reads only the gate and the target of decide and gate, as their parsers do', () => {
+    expect(actKey(['decide', G, T, 'stray', '--approve'])).toBe(key('--approve'))
+    expect(actKey(['decide', G, T, '--approve', 'stray'])).toBe(key('--approve'))
+    expect(actKey(['gate', G, T, 'stray', '--fresh'])).toBe(actKey(['gate', G, T, '--fresh']))
+    expect(actLive(live(j.pending), actKey(['decide', G, T, 'stray', '--approve']))).toBe(true)
+    expect(decisionAct([G, T, 'stray', '--approve'])).toEqual({ ok: true, value: { gate: G, target: T, decision: 'approve' } })
+    // abandon reads every target it names (D190)
+    expect(actKey(['abandon', 'e1', 'e2'])).not.toBe(actKey(['abandon', 'e1']))
+  })
+
+  // One valued-flags set for decide's parser and for actKey: a word after any of them is its value.
+  it.each([...VALUED_FLAGS])('decide\'s parser and actKey both read the word after %s as its value', (flag) => {
+    expect(actKey(['decide', G, T, '--revise', flag, '--approve'])).toBe(actKey(['decide', G, T, '--revise', ...(flag === '--upstream' ? ['--upstream', 'x'] : [])]))
+    const parsed = decisionAct([G, T, '--revise', flag, '--approve'])
+    expect(parsed.ok ? parsed.value.decision : parsed.violations[0]!.rule).not.toBe('one-of-required')
   })
 
   it('names the verb, the gate and the target, and reads an act as its argv', () => {

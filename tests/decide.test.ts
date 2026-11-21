@@ -641,7 +641,8 @@ describe('applyDecision — the one door (A4)', () => {
     const run = (readStream(repo.root, 'auth-refresh').filter((e) => e.t === 'gate-run').at(-1) as unknown as { run_id: string }).run_id
     expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'revise', note: 'x', selected: 'policy', runId: run })).toBe(0)
     expect(await applyDecision(h.ctx, { gate: 'plan', target: 'auth-refresh', decision: 'revise', note: 'x', selected: 'policy', runId: run })).toBe(2)
-    expect(h.err()).toMatch(/nothing-pending|anchor-moved/)
+    // Row 244 (design §4.2.7): a second policy revise is a revise again, a human's act, refused first.
+    expect(h.err()).toMatch(/nothing-pending|anchor-moved|revise-human/)
     expect(decisions(repo)).toHaveLength(1)
   })
   it('only a policy act may park past the anchor rule or name its own rule (B5)', async () => {

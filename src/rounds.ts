@@ -183,6 +183,17 @@ export function lastGateRun(entries: Entry[], gate: string): GateRunEntry | unde
   return undefined
 }
 
+// Row 244 (design §4.2.9). The gate's last run that judged something: a malformed round judged
+// nothing, so staleness and lifted holds are read against the run before it, as `liveActs` anchors.
+export function lastJudgedRun(entries: Entry[], gate: string): GateRunEntry | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (isRun(entries[i], gate) && (entries[i] as unknown as GateRunEntry).outcome !== 'malformed') {
+      return entries[i] as unknown as GateRunEntry
+    }
+  }
+  return undefined
+}
+
 export const ROUND_BOUND = 3
 
 // a "reset" opens a fresh round budget: human approve, a passed run, or a
@@ -625,17 +636,22 @@ function approveTwin(gate: string, target: string, acts: readonly Act[]): Act[] 
   return listed(accounted) ? [plain] : listed(plain) ? [accounted] : []
 }
 
-// `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells.
-const VALUED_FLAGS = new Set(['--note', '--upstream', '--pin', '--via'])
+// `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells. One set
+// for `decide`'s parser (`decideWords`) and for `actKey`, so the two never disagree on which word is a
+// value.
+export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via'])
 // The flags that make an act another act (design §4.2.1). Notes, `--pin`, `--via`, `--trust-cmds`,
 // `--manual` and the upstream's value never do.
 const COUNTED_FLAGS: Record<string, readonly string[]> = {
   decide: ['--approve', '--revise', '--stop', '--override', '--repair', '--upstream'],
   gate: ['--fresh', '--unchanged'],
 }
+// `decide` and `gate` read their gate and target and ignore any positional word after them
+// (`decisionAct`, verbs/gate.ts), so a stray word never makes another act.
+const READ_POSITIONALS: Record<string, number> = { decide: 2, gate: 2 }
 
 // Row 244. An act's identity, for membership: its verb, its positionals (gate and target, or the
-// target abandoned) and the flags that count, in one order. Read the way `decide` reads argv: a
+// targets abandoned) and the flags that count, in one order. Read the way `decide` reads argv: a
 // valued flag takes the next word whatever it spells, and counts only with a value, since `decide`
 // reads an upstream only through its value.
 export function actKey(act: Act | readonly string[]): string {
@@ -649,7 +665,8 @@ export function actKey(act: Act | readonly string[]): string {
     if (!VALUED_FLAGS.has(w)) flags.add(w)
     else if (rest[i + 1] !== undefined) { flags.add(w); i++ }
   }
-  return JSON.stringify([verb, ...positional, ...(COUNTED_FLAGS[verb] ?? []).filter((f) => flags.has(f))])
+  const read = positional.slice(0, READ_POSITIONALS[verb] ?? positional.length)
+  return JSON.stringify([verb, ...read, ...(COUNTED_FLAGS[verb] ?? []).filter((f) => flags.has(f))])
 }
 
 // Row 244. Is the act with this key legal now: one the state lists, or one of its slots.

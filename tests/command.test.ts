@@ -221,6 +221,22 @@ describe('the router reads the carry\'s refusals (row 243)', () => {
   })
 })
 
+// Row 244 (design §4.2.7). Revising a gate again, or retracting a settled one, takes the human's words
+// and the human: a session asks for the note and never writes it, and a refused actor stops.
+describe('the router reads decide\'s revise-again refusals (row 244)', () => {
+  const generic = () => body().split('\n').findIndex((l) => l.startsWith('| any other `next:` line'))
+  it.each([
+    ['note-required', ['retracting a settled one', 'the human\'s own words', 'what to change', 'Ask the human for them and **END YOUR TURN**',
+      'run the same revise with `--note "<their words>"`', 'Never write the note yourself']],
+    ['revise-human', ['retracting a settled one', 'the human\'s act in their own chat or terminal', 'a session\'s a drive started', '**END YOUR TURN**']],
+  ])('a %s refusal has a row of its own, before the generic row', (rule, parts) => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| ') && l.includes(`\`${rule}\` refusal`))
+    expect(rows, rule).toHaveLength(1)
+    for (const p of parts) expect(rows[0], p).toContain(p)
+    expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())
+  })
+})
+
 // Row 243 (design §4.1.3: replay step 1, "a session's fix commits are normal"). The ship session is
 // spawned through /witness, so the router's never-commit rule must leave room for exactly the ship
 // skill's own commits in the plan's worktree — a CI-red fix, and a replay conflict's step 1, without
