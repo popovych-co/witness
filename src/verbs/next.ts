@@ -70,6 +70,87 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   return after === undefined ? last.outcome === 'passed' : after.decision === 'approve'
 }
 
+// Row 244 (design §4.2.3), review finding S2-B. Approve and pass leave canon stamps — a plan's
+// `approved`, an effort's approved specs, a spec's `design:` meta — and canon is never rewritten, so a
+// retraction (`decide --revise --note` after a settlement) leaves the stamp standing while the gate no
+// longer reads settled. A router that reads a stamp reads these beside it, as it reads an open reopen.
+//
+// `stampUnsettled`: the gate's journal holds a judged round and no longer reads settled — the stamp
+// alone does not say the gate settled. A gate no round has judged reads its stamp alone (a fixture's
+// stamp, an older journal).
+export function stampUnsettled(entries: Entry[], gate: string): boolean {
+  return lastJudgedRun(entries, gate) !== undefined && !gateSettled(entries, gate)
+}
+
+// `settlementTaken`: the gate's latest settlement (a pass, or an approve) was taken back by its own
+// act — a retraction, or a park — and nothing has settled it since: a re-review or an edit that follows
+// keeps it taken until a round passes or an approve lands. A reopen by another gate (`caused_by`) un-
+// settles it without taking it back (`openReopen` reads that). Narrower than `stampUnsettled` on
+// purpose: an amendment's or a sibling's re-gate un-settles a gate no human took back, and row 52
+// keeps the approved specs moving through those (row 18's soft lock), while the work standing on a
+// settlement a human took back waits for it.
+export function settlementTaken(entries: Entry[], gate: string): boolean {
+  let settled = false
+  let taken = false
+  for (const e of entries) {
+    if (e.t === 'gate-run' && (e as unknown as GateRunEntry).gate === gate) {
+      const run = e as unknown as GateRunEntry
+      if (run.outcome === 'malformed') continue
+      settled = run.outcome === 'passed'
+      if (settled) taken = false
+    } else if (e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate) {
+      const d = e as unknown as DecisionEntry
+      if (d.caused_by !== undefined) { settled = false; continue }
+      if (d.decision === 'approve') { settled = true; taken = false; continue }
+      if (['revise', 'revise-upstream', 'stop'].includes(d.decision)) {
+        if (settled) taken = true
+        settled = false
+      }
+    }
+  }
+  return taken
+}
+
+// What liveActs reads of a gate's state where no facts but the journal and the content matter.
+const JOURNAL_FACTS: ActFacts = { upstream: undefined, stale: false, holdLifted: false, owed: false, upstreamOwed: false }
+
+// Design §4.2.2's retracted row, as a route. A retraction asks for a re-review, not an edit: its lead
+// is `gate --fresh` (a session may run it), or the re-gate on moved content, under the session's line.
+// Undefined in any other state, where the router's own rule (the authoring owed, else the gate) holds:
+// for a retraction that rule would route an authoring with nothing to change.
+function retractedLead(gate: string, target: string, entries: Entry[], sha: string | undefined): NextAction | undefined {
+  const judged = lastJudgedRun(entries, gate)
+  const stale = judged !== undefined && sha !== undefined && sha !== judged.reviewed_sha
+  const live = liveActs(gate, target, entries, { ...JOURNAL_FACTS, stale })
+  const lead = live.acts[0]
+  return live.state === 'retracted' && lead !== undefined ? { ...runs(lead), target, ...noteOf(live.session) } : undefined
+}
+
+// Row 244 (S2-B). A plan's own plan gate owes it work its stamp hides: revised or retracted since its
+// approval, with no reopen (row 95's branch reads that). A park or an owed decision blocks the flow
+// instead (`flowBlocked`).
+function planReworkOwed(entries: Entry[], id: string): boolean {
+  if (lastJudgedRun(entries, 'plan') === undefined) return false
+  const state = liveActs('plan', id, entries, JOURNAL_FACTS).state
+  return state === 'revised' || state === 'retracted'
+}
+
+// Row 244 (S2-B). What stands on a settlement a human took back, read once per walk from the streams
+// it already holds: every artifact a live effort wrote whose decompose's settlement is taken (`slices`),
+// and every ui spec whose look's is (`looks`). Their stamps stand, so every rung that reads them waits on
+// this, as an open decompose reopen holds them.
+interface TakenBack { slices: ReadonlySet<string>; looks: ReadonlySet<string> }
+function takenBack(root: string, efforts: Array<{ slug: string; entries: Entry[] }>, specs: CanonDoc[]): TakenBack {
+  return {
+    slices: new Set(efforts.filter((e) => settlementTaken(e.entries, 'decompose')).flatMap((e) => [...effortWrites(root, e.slug).keys()])),
+    looks: new Set(specs.filter((d) => d.meta.ui === true && settlementTaken(readStream(root, String(d.meta.id)), 'design'))
+      .map((d) => String(d.meta.id))),
+  }
+}
+// A plan waits where the spec it derives from stands on a settlement taken back: its slicing, or its look.
+const planTaken = (t: TakenBack, plan: CanonDoc): boolean =>
+  t.slices.has(String(plan.meta.parent)) || t.looks.has(String(plan.meta.parent))
+
 // D124, corrected while building it. The plan folded `stop` into `gateSettled` to stop
 // `next` re-offering a stopped flow, but that predicate answers a DIFFERENT question for
 // its other callers — ship's `implement-gate` check (gates/ship.ts) and ship's phases
@@ -360,20 +441,24 @@ function effortFinished(specs: CanonDoc[], plans: CanonDoc[]): boolean {
 // reached one way or another. The shortcut stands in for a gate-run, so an OPEN REOPEN
 // un-discharges it too: otherwise it short-circuits past gateSettled and the reopen is
 // never routed. Row 52: so does an amendment no round has settled, unless the effort is
-// finished.
+// finished. Row 244 (S2-B): and so does a journal that no longer reads settled — a retraction
+// leaves the specs approved — exactly as an open reopen does.
 function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, specs: CanonDoc[], plans: CanonDoc[]): boolean {
-  const reopened = openReopen(e.entries, 'decompose') !== undefined
+  const reopened = openReopen(e.entries, 'decompose') !== undefined || stampUnsettled(e.entries, 'decompose')
   const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft') &&
     (!amendedSinceSettled(e.entries) || effortFinished(specs, plans))
   return !specsApproved && !gateSettled(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha) &&
     !gateParked(e.entries, 'decompose')
 }
 
-// The step an effort's owed decompose takes: re-authoring when a revise is owed — the gate would
-// only say it changed nothing — else the gate. One derivation for the effort's own rung and for a
-// chore routed to the effort that owns its draft principles (row 221).
+// The step an effort's owed decompose takes: a retraction's re-review (row 244), re-authoring when a
+// revise is owed — the gate would only say it changed nothing — else the gate. One derivation for the
+// effort's own rung and for a chore routed to the effort that owns its draft principles (row 221).
 function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, judge: string | undefined): NextAction {
-  return authoringOwed(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha)
+  const sha = effortReviewedSha(root, canon, e.slug).sha
+  const lead = retractedLead('decompose', e.slug, e.entries, sha)
+  if (lead !== undefined) return lead
+  return authoringOwed(e.entries, 'decompose', sha)
     ? {
         line: `witness write <spec-id> --effort ${shellWord(e.slug)} --meta m.json --body b.md`,
         stage: 'decompose', target: e.slug,
@@ -541,7 +626,8 @@ export function githubCheck(root: string, ctx: Ctx, cfg: Config, canon: Canon, v
 
 // Row 242 (design §4.3.2, One predicate). A plan is held while a merge or fix record stands — the
 // plan stream's latest entry, on the worktree's HEAD — and nothing above its ship row routes: no
-// plan reopen, no open step. `flowStep`, `needsYou` and drive all read this one predicate.
+// plan reopen or plan-gate rework (row 244), no open step. `flowStep`, `needsYou` and drive all read
+// this one predicate.
 export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcomeEntry | undefined {
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const id = String(plan.meta.id)
@@ -550,7 +636,8 @@ export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcome
   const entries = readStream(root, id)
   const head = tryGit(wt, 'rev-parse', 'HEAD')
   const rec = standingRecord(entries, head.ok ? head.out.trim() : undefined)
-  if (rec === undefined || openReopen(entries, 'plan') !== undefined || openStepRow(root, cfg, plan) !== undefined) return undefined
+  if (rec === undefined || openReopen(entries, 'plan') !== undefined || planReworkOwed(entries, id) ||
+    openStepRow(root, cfg, plan) !== undefined) return undefined
   return rec
 }
 
@@ -593,6 +680,13 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   if (openReopen(entries, 'plan') !== undefined) {
     const act = planWriteAction(root, liveEfforts(root), id, String(plan.meta.parent), id)
     return { ...act, ...noteOf(act.note, 'plan gate reopened — re-author, then re-gate the plan') }
+  }
+  // Row 244 (S2-B). The plan's own gate un-settled since its approval — a retraction, or a revise after
+  // its re-review — is routable motion too, for the same reason: the in-flight status is a stamp, and
+  // the plan gate's work comes before the flow's. Read the plans-first rung's way (`planGateStep`).
+  if (planReworkOwed(entries, id)) {
+    const canon = loadCanon(root)
+    return planGateStep(root, liveEfforts(root), plan, entries, planShaOf(root, canon, plan), judge)
   }
   // Row 241 (R7; reverses row 191's Plan's call 5). A plan's unbuilt steps are its next work before
   // and after an implement gate, and above its PR: an amendment that adds a step after either is
@@ -694,7 +788,7 @@ function flowRank(a: NextAction): number {
 // created). Such a flow is NOT tier-1 motion — offering it would loop the driving loop
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
-function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
+function flowBlocked(root: string, plan: CanonDoc, entries: Entry[], taken: TakenBack): boolean {
   // A parked gate blocks the flow the same way an owed decision does, and for the same
   // reason: offering it loops the driving loop on an act the human already declined. It
   // does not disappear — `status`'s parked table names it and the run that un-parks it.
@@ -705,8 +799,10 @@ function flowBlocked(root: string, plan: CanonDoc, entries: Entry[]): boolean {
   // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
   // and tier 3 is where it surfaces. Keyed on the effort that owns the PARENT SPEC, which is
   // where `decide --revise --upstream <spec>` books it.
+  // Row 244 (S2-B): and so is a settlement the plan stands on that a human took back — the parent's
+  // decompose or its look, retracted or parked after it settled — whose stamps still read approved.
   const effort = effortOf(root, String(plan.meta.parent))
-  return effort !== undefined && openReopen(readStream(root, effort), 'decompose') !== undefined
+  return (effort !== undefined && openReopen(readStream(root, effort), 'decompose') !== undefined) || planTaken(taken, plan)
 }
 
 // The upstream artifact a gate's `--revise --upstream` books its reopen against. The gate
@@ -755,7 +851,7 @@ export function parkOwed(root: string, cfg: Config | undefined, canon: Canon, ga
   if (acts.at(-2)?.decision === 'revise-upstream') return true
   const plan = findById(canon, target)
   if (plan?.meta.type !== 'plan') return false
-  if (openReopen(entries, 'plan') !== undefined) return true
+  if (openReopen(entries, 'plan') !== undefined || planReworkOwed(entries, target)) return true
   if (cfg === undefined) {
     const p = stepProgress(plan, entries)
     return p.known && p.next !== undefined && !humanApprovedPastSteps(entries, plan)
@@ -1052,6 +1148,29 @@ function planWriteAction(
       }
 }
 
+// The plan gate's reviewed identity as `next` reads it: the plan paired with its parent's content and
+// carried decisions. Undefined when the parent is missing — "cannot compute", never "moved".
+function planShaOf(root: string, canon: Canon, plan: CanonDoc): string | undefined {
+  const parent = findById(canon, String(plan.meta.parent))
+  return parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
+}
+
+// The step a plan's own plan gate owes, once it is neither settled nor parked: a retraction's re-review
+// (row 244), the rewrite a revise asked for — the gate would only say it changed nothing — else the
+// gate. One derivation for the plans-first rung and for a flow whose plan gate was un-settled (S2-B).
+function planGateStep(
+  root: string, efforts: Array<{ slug: string }>, plan: CanonDoc, entries: Entry[], planSha: string | undefined, judge: string | undefined,
+): NextAction {
+  const id = String(plan.meta.id)
+  const lead = retractedLead('plan', id, entries, planSha)
+  if (lead !== undefined) return lead
+  if (!authoringOwed(entries, 'plan', planSha)) {
+    return { ...runs(cliAct('gate', 'plan', id)), target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
+  }
+  const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
+  return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
+}
+
 // Rule B's note: the ladder is exhausted. Exported because drive tells a scoped session's
 // "nothing more for this target" from every other `witness check` by it.
 export const NOTHING_OWED = 'nothing is owed — no effort, spec or plan has a next step; a clean check confirms it'
@@ -1102,13 +1221,15 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
   const specs = canon.docs.filter((d) => d.meta.type === 'spec')
     .sort((a, b) => String(a.meta.id).localeCompare(String(b.meta.id)))
+  // Row 244 (S2-B): what stands on a settlement a human took back, read once for every rung below.
+  const taken = takenBack(root, efforts, specs)
 
   // TIER 1 — advance something already in flight. A flow that can move must never wait
   // on a human decision belonging to a DIFFERENT flow: ship always stops (gates/ship.ts),
   // so a global decision-halt freezes every other flow at the first ship gate.
   const flows = plans
     .filter((plan) => admits(String(plan.meta.id)))
-    .filter((plan) => !flowBlocked(root, plan, readStream(root, String(plan.meta.id))))
+    .filter((plan) => !flowBlocked(root, plan, readStream(root, String(plan.meta.id)), taken))
     .map((plan) => flowAction(root, cfg, plan, judge, ctx.env))
     .filter((a): a is NextAction => a !== undefined)
     .sort((a, b) => flowRank(b) - flowRank(a) || String(a.target).localeCompare(String(b.target)))
@@ -1208,13 +1329,17 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
 
   for (const spec of specs) {
     if (String(spec.meta.status) !== 'approved') continue
-    if (!admits(String(spec.meta.id))) continue
-    if (resliced.has(String(spec.meta.id))) continue
-    if (!designPending(root, spec)) continue
     const id = String(spec.meta.id)
+    if (!admits(id)) continue
+    // Row 244 (S2-B): a spec whose effort's decompose a human took back waits on it, as above.
+    if (resliced.has(id) || taken.slices.has(id)) continue
+    const entries = readStream(root, id)
+    // Row 244 (S2-B): a look whose gate no longer reads settled — a retraction leaves its `design:`
+    // stamp standing — is owed again, as a pending one is.
+    if (!designPending(root, spec) && !stampUnsettled(entries, 'design')) continue
     // A parked design gate is off the board too — routing to `witness design` or its gate
     // re-offers work the human stopped. `status`'s parked row is where it stays named.
-    if (gateParked(readStream(root, id), 'design')) continue
+    if (gateParked(entries, 'design')) continue
     // An artifact authored for the CURRENT spec content is awaiting its gate → gate it.
     // Otherwise (no artifact, or one authored before a later amendment) → the design
     // skill authors fresh or, in amend mode, decides re-design vs --reconfirm.
@@ -1229,8 +1354,10 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     if (designUnseen(root, cfg.paths, id) !== undefined) return { ...runs(cliAct('design', id, '--open')), stage: 'design', target: id }
     // Row 194. A revise on bytes the gate already judged owes a new look, not a re-gate the CLI
     // would decline as `changed nothing` — the rule decompose and plan route by. Every step
-    // of the design session, its gate included, carries the stage: it is the chat's.
-    const entries = readStream(root, id)
+    // of the design session, its gate included, carries the stage: it is the chat's. Row 244: a
+    // retraction owes a re-review of the same look, not a new one.
+    const lead = retractedLead('design', id, entries, designCurrentSha(root, cfg.paths, spec))
+    if (lead !== undefined) return { ...lead, stage: 'design' }
     if (authoringOwed(entries, 'design', designCurrentSha(root, cfg.paths, spec))) {
       return { line: `witness design ${shellWord(id)} --file <html>`, stage: 'design', target: id,
         note: `revise owed — re-author the look from ${cliAct('decide', 'design', id, '--show').line}` }
@@ -1260,6 +1387,8 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     .filter((d) => d.meta.type === 'spec' && plannableParent(d))
     .filter((d) => admits(String(d.meta.id)))
     .filter((d) => !resliced.has(String(d.meta.id)))
+    // Row 244 (S2-B): nor one standing on a slicing or a look a human took back.
+    .filter((d) => !taken.slices.has(String(d.meta.id)) && !taken.looks.has(String(d.meta.id)))
     .filter((d) => !plans.some((p) => String(p.meta.parent) === String(d.meta.id) && !planFinished(p)))
     .filter((d) => ((d.meta.depends ?? []) as string[]).every(ready))
     // last on purpose: the only filter that costs a subprocess — the in-memory ones above
@@ -1290,22 +1419,22 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   }
 
   // plans-first: every written plan gates before any plan starts or advances —
-  // an approved sibling must not short-circuit a draft out of review (stage-major order)
+  // an approved sibling must not short-circuit a draft out of review (stage-major order).
+  // Row 244 (S2-B): an approved plan whose plan gate no longer reads settled — a retraction leaves
+  // `approved` standing — gates as a draft does; a plan standing on a slicing or a look a human took
+  // back waits on it.
   for (const plan of plans) {
     const id = String(plan.meta.id)
-    if (String(plan.meta.status) !== 'draft') continue
-    if (!admits(id)) continue
-    const parent = findById(canon, String(plan.meta.parent))
-    const planSha = parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
+    const status = String(plan.meta.status)
+    if ((status !== 'draft' && status !== 'approved') || !admits(id)) continue
     const entries = readStream(root, id)
+    if (status === 'approved' && !stampUnsettled(entries, 'plan')) continue
+    if (planTaken(taken, plan)) continue
+    const planSha = planShaOf(root, canon, plan)
     // Parked skips for the same reason settled does — the gate is off the board until a
     // fresh run brings it back, and `status` is where it stays visible meanwhile.
     if (gateSettled(entries, 'plan', planSha) || gateParked(entries, 'plan')) continue
-    if (!authoringOwed(entries, 'plan', planSha)) {
-      return { ...runs(cliAct('gate', 'plan', id)), target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
-    }
-    const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
-    return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
+    return planGateStep(root, efforts, plan, entries, planSha, judge)
   }
 
   // Starting a flow is tier 3, not tier 1: an approved-but-unstarted plan is new work,
@@ -1315,7 +1444,10 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
   // manual or env need blocks. Only when every approved plan waits does the rung route to a
   // blocked start, whose refusal is the human's stop. Cmd needs are start's to judge — `next`
   // never executes a command (a recorded residual); an env need is a read of the environment.
-  const approved = plans.filter((p) => String(p.meta.status) === 'approved' && admits(String(p.meta.id)))
+  // Row 244 (S2-B): `approved` is a stamp. A plan whose plan gate no longer reads settled is not
+  // started (the rung above routes it), nor one standing on a slicing or a look a human took back.
+  const approved = plans.filter((p) => String(p.meta.status) === 'approved' && admits(String(p.meta.id)) &&
+    !stampUnsettled(readStream(root, String(p.meta.id)), 'plan') && !planTaken(taken, p))
   if (approved.length > 0) {
     const manual = unmetNeeds(canon).filter((u) => u.blocks === 'start')
     const waitsOn = (p: CanonDoc): string[] => {

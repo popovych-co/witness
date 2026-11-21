@@ -45,6 +45,15 @@ describe('a settled exits line is the human\'s (row 244)', () => {
   }
 });
 
+// Row 244 (S2-B). A retracted look keeps its `design:` stamp, and `next` routes its re-review with
+// `stage: design`: the skill runs the `--fresh` it names rather than re-authoring the look.
+export const RETRACTED_LOOK = 'A `retracted` state (the human took the look\'s approval back) asks for a re-review of the same look, not a new one: when `witness next` names `witness gate design <spec-id> --fresh`, run it as named, as the gate above.'
+describe('a retracted look is re-reviewed, not re-authored (row 244)', () => {
+  it('witness-design runs the --fresh next names for a retracted look', () => {
+    expect(readFileSync(skillPath('witness-design'), 'utf8')).toContain(RETRACTED_LOOK)
+  })
+})
+
 describe('witness-brainstorm', () => {
   const body = () => readFileSync(skillPath('witness-brainstorm'), 'utf8');
   it('interviews one question at a time and persists via witness recap', () => {
