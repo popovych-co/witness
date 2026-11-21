@@ -153,10 +153,10 @@ export async function runVerifyRed(ctx: Ctx, argv: string[]): Promise<number> {
     renderRefusal([v('plan-id', 'unknown-plan', planId, 'an existing plan id')]).forEach(ctx.err)
     return EXIT.REFUSED
   }
-  // Row 243: verify-red too, before the stash/checkout cycle sets aside a tree that holds a clash.
+  // Row 243: verify-red too, before the set-aside/checkout cycle sets aside a tree that holds a clash.
   const clashed = refuseClash(ctx, stateRoot, planId, runRootRes.value)
   if (clashed !== undefined) return clashed
-  // Before the stash/checkout cycle, which rewrites the tree: a mistyped step churns nothing.
+  // Before the set-aside/checkout cycle, which rewrites the tree: a mistyped step churns nothing.
   const stepRefused = checkStep(plan, readStream(stateRoot, planId), step, 'evidence')
   if (stepRefused.length) { renderRefusal(stepRefused).forEach(ctx.err); return EXIT.REFUSED }
   const cfg = loadConfig(runRootRes.value)

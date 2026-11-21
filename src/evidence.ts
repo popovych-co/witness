@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
@@ -9,7 +10,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
-import { git, stateCommit, tryGit } from './gitio.js'
+import { git, gitWith, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
 import { kv } from './toon.js'
 import { withTxn } from './txn.js'
@@ -185,6 +186,114 @@ export function changedFiles(runRoot: string, base: string): string[] {
 const inCommit = (runRoot: string, ref: string, rel: string): boolean =>
   tryGit(runRoot, 'cat-file', '-e', `${ref}:${rel}`).ok
 
+// S1-C (row 243, #86; was final review F1). verify-red sets the plan's non-test work aside while the
+// red runs, and nothing of it lands on git's shared stash list: `refs/stash` is ONE list for every
+// worktree of the repo, and witness's repo lock serializes only witness, so a session's own `git
+// stash push` or `pop` between witness's push and drop made witness drop that session's entry or
+// hand one plan's work to another checkout. The work is held instead in a stash-shaped commit built
+// through scratch indexes — the real index and `refs/stash` are never written — and kept at
+// `refs/witness/verify-red/<plan>` until it is back:
+//   - its index commit (second parent) is HEAD with each path as the index holds it, or without it;
+//   - its tree is that with each path the index tracks as the worktree holds it, or without it;
+//   - its third parent, when there is one, holds the untracked paths' bytes.
+// `git stash show -p` and `git stash apply` read it as a stash entry, so after a crash a human finds
+// the work there as before. Nothing differing from HEAD: no commit.
+function holdWork(runRoot: string, planId: string, paths: readonly string[], untracked: ReadonlySet<string>): string | undefined {
+  const head = git(runRoot, 'rev-parse', '--verify', 'HEAD^{commit}')
+  const headTree = git(runRoot, 'rev-parse', '--verify', `${head}^{tree}`)
+  const want = new Set(paths)
+  // the index's own entries for the paths, read NUL-separated and matched exactly: a name is the
+  // file's, never git's quoting of it nor a directory a pathspec would also match
+  const staged = new Map<string, string>()
+  for (const record of git(runRoot, '--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...paths).split('\0')) {
+    const m = /^(\d+) ([0-9a-f]+) 0\t([^]*)$/.exec(record)
+    if (m !== null && want.has(m[3]!)) staged.set(m[3]!, `${m[1]},${m[2]},${m[3]}`)
+  }
+  const tracked = paths.filter((p) => staged.has(p))
+  const others = paths.filter((p) => !staged.has(p) && untracked.has(p))
+  // git stash names a fallback identity for its commits; so does this one, where none is set
+  const ident: Record<string, string> = tryGit(runRoot, 'var', 'GIT_AUTHOR_IDENT').ok && tryGit(runRoot, 'var', 'GIT_COMMITTER_IDENT').ok ? {}
+    : { GIT_AUTHOR_NAME: 'witness', GIT_AUTHOR_EMAIL: 'witness@verify-red', GIT_COMMITTER_NAME: 'witness', GIT_COMMITTER_EMAIL: 'witness@verify-red' }
+  const commit = (tree: string, parents: string[], message: string): string =>
+    gitWith(runRoot, ident, 'commit-tree', tree, ...parents.flatMap((p) => ['-p', p]), '-m', message)
+  const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
+  try {
+    const scratch = (name: string): Record<string, string> => ({ GIT_INDEX_FILE: join(dir, name) })
+    gitWith(runRoot, scratch('index'), 'read-tree', head)
+    const entries = paths.flatMap((p) => (staged.has(p) ? ['--cacheinfo', staged.get(p)!] : []))
+    if (entries.length) gitWith(runRoot, scratch('index'), 'update-index', '--add', ...entries)
+    const unstaged = paths.filter((p) => !staged.has(p))
+    if (unstaged.length) gitWith(runRoot, scratch('index'), 'update-index', '--force-remove', '--', ...unstaged)
+    const indexTree = gitWith(runRoot, scratch('index'), 'write-tree')
+    gitWith(runRoot, scratch('work'), 'read-tree', indexTree)
+    if (tracked.length) gitWith(runRoot, scratch('work'), 'update-index', '--add', '--remove', '--', ...tracked)
+    const workTree = gitWith(runRoot, scratch('work'), 'write-tree')
+    if (indexTree === headTree && workTree === headTree && others.length === 0) return undefined
+    const on = `verify-red ${planId}: the plan's non-test work, held while the red runs`
+    const parents = [head, commit(indexTree, [head], `index on ${on}`)]
+    if (others.length) {
+      gitWith(runRoot, scratch('others'), 'update-index', '--add', '--', ...others)
+      parents.push(commit(gitWith(runRoot, scratch('others'), 'write-tree'), [], `untracked files on ${on}`))
+    }
+    return commit(workTree, parents, `WIP on ${on}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// The paths as HEAD holds them, in the index and in the worktree — what `git stash push --
+// <paths>` left: HEAD's version checked out, and a path HEAD lacks taken out of the index and off
+// the disk. It clears the work once it is held, and, when nothing was held, the red run's tree.
+function toHead(runRoot: string, paths: readonly string[]): void {
+  const inHead = new Set(paths.filter((p) => inCommit(runRoot, 'HEAD', p)))
+  const absent = paths.filter((p) => !inHead.has(p))
+  if (inHead.size) git(runRoot, '--literal-pathspecs', 'checkout', 'HEAD', '--', ...inHead)
+  if (absent.length) git(runRoot, 'update-index', '--force-remove', '--', ...absent)
+  for (const p of absent) rmSync(join(runRoot, p), { force: true })
+}
+
+// The entries a tree holds at `paths`, matched exactly, each as `--cacheinfo` takes it.
+function treeEntries(runRoot: string, rev: string, paths: ReadonlySet<string>): Map<string, string> {
+  const found = new Map<string, string>()
+  for (const record of git(runRoot, 'ls-tree', '-r', '-z', '--full-tree', rev).split('\0')) {
+    const m = /^(\d+) \w+ ([0-9a-f]+)\t([^]*)$/.exec(record)
+    if (m !== null && paths.has(m[3]!)) found.set(m[3]!, `${m[1]},${m[2]},${m[3]}`)
+  }
+  return found
+}
+
+// The held work back exactly, path by path, over whatever the red run left there: each path's
+// worktree bytes from the held tree (an untracked one's from its third parent) written through a
+// scratch index, a path held in neither taken off the disk, and each index entry set as the held
+// index commit has it, or removed. No merge runs, so nothing else the index stages or the worktree
+// holds is touched — `git stash apply --index` resets the whole index to HEAD part way, and refuses
+// whenever another path is staged.
+function restoreHeld(runRoot: string, held: string, paths: readonly string[]): void {
+  const want = new Set(paths)
+  const index = treeEntries(runRoot, `${held}^2`, want)
+  const work = treeEntries(runRoot, held, want)
+  const untracked = tryGit(runRoot, 'rev-parse', '--verify', '-q', `${held}^3`).ok
+    ? treeEntries(runRoot, `${held}^3`, want) : new Map<string, string>()
+  const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
+  try {
+    for (const [name, rev, entries] of [['work', held, work], ['untracked', `${held}^3`, untracked]] as const) {
+      if (entries.size === 0) continue
+      const scratch = { GIT_INDEX_FILE: join(dir, name) }
+      gitWith(runRoot, scratch, 'read-tree', rev)
+      gitWith(runRoot, scratch, 'checkout-index', '-f', '--', ...entries.keys())
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  for (const p of paths) if (!work.has(p) && !untracked.has(p)) rmSync(join(runRoot, p), { force: true })
+  const entries = paths.flatMap((p) => (index.has(p) ? ['--cacheinfo', index.get(p)!] : []))
+  if (entries.length) git(runRoot, 'update-index', '--add', ...entries)
+  const unstaged = paths.filter((p) => !index.has(p))
+  if (unstaged.length) git(runRoot, 'update-index', '--force-remove', '--', ...unstaged)
+  // the entries just set carry no stat data: refreshed, plumbing reads them as unchanged
+  tryGit(runRoot, 'update-index', '-q', '--refresh')
+}
+
 export async function verifyRed(
   runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string, base: string, step?: string,
 ): Promise<Result<{ redOk: boolean; greenOk: boolean; vacuous: boolean }>> {
@@ -196,27 +305,22 @@ export async function verifyRed(
     return refuse([v('diff', 'no-test-changes', `${files.length} changed files, none are tests`, 'a diff that adds or modifies tagged tests')])
   }
   const nonTest = files.filter((f) => !isTestPath(f))
-  const untracked = new Set(git(runRoot, 'ls-files', '--others', '--exclude-standard').split('\n').filter(Boolean))
+  const untracked = new Set(git(runRoot, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean))
   const trackedNonTest = nonTest.filter((f) => !untracked.has(f))
 
-  // Final review F1. `refs/stash` is ONE stack for every worktree of the repo, so two plans
-  // verifying at once popped each other's work. The stash commit is taken off the shared
-  // stack the moment it is made — under the repo lock, for that ~100 ms only — and held by a
-  // per-plan ref until it is applied back, which also keeps it recoverable after a crash.
+  // S1-C. The work is held in a per-plan ref, off git's shared stash list (`holdWork`), until it is
+  // put back (`restoreHeld`); the ref is what keeps it recoverable after a crash. The capture runs
+  // under the repo lock, as the set-aside always has.
   const held = `refs/witness/verify-red/${planId}`
   let stashed = false
   if (nonTest.length) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
     try {
-      const top = () => tryGit(runRoot, 'rev-parse', '-q', '--verify', 'refs/stash')
-      const before = top()
-      git(runRoot, 'stash', 'push', '--include-untracked', '--', ...nonTest)
-      const after = top()
-      stashed = after.ok && (!before.ok || after.out.trim() !== before.out.trim())
-      if (stashed) {
-        git(runRoot, 'update-ref', held, after.out.trim())
-        git(runRoot, 'stash', 'drop', '-q')
+      const work = holdWork(runRoot, planId, nonTest, untracked)
+      if (work !== undefined) {
+        git(runRoot, 'update-ref', held, work)
+        stashed = true
       }
     } finally {
       lock.value()
@@ -224,21 +328,21 @@ export async function verifyRed(
   }
   let red: Result<SpecTestRun>
   try {
+    if (stashed) toHead(runRoot, nonTest)
     for (const rel of trackedNonTest) {
       if (inCommit(runRoot, base, rel)) git(runRoot, 'checkout', base, '--', rel)
       else if (existsSync(join(runRoot, rel))) rmSync(join(runRoot, rel))
     }
     red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra)
   } finally {
-    for (const rel of trackedNonTest) {
-      if (inCommit(runRoot, 'HEAD', rel)) git(runRoot, 'checkout', 'HEAD', '--', rel)
-    }
     if (stashed) {
-      git(runRoot, 'stash', 'apply', '-q', held)
+      restoreHeld(runRoot, held, nonTest)
       git(runRoot, 'update-ref', '-d', held)
+    } else {
+      toHead(runRoot, nonTest)
     }
   }
-  // D148. The stash/checkout cycle above rewrote every non-test file on disk — the agent's
+  // D148. The set-aside/checkout cycle above rewrote every non-test file on disk — the agent's
   // prior reads are stale, and witness is what made them stale. Announced rather than left
   // to the harness's "file modified since read" refusal, which names witness nowhere.
   if (nonTest.length) {

@@ -24,6 +24,12 @@ export function git(root: string, ...args: string[]): string {
   return gitRun(root, args)
 }
 
+// `git` with `env` over the process's own: verify-red builds its held commit through a scratch
+// `GIT_INDEX_FILE` (row 243).
+export function gitWith(root: string, env: Record<string, string>, ...args: string[]): string {
+  return gitRun(root, args, { ...process.env, ...env })
+}
+
 export function tryGit(root: string, ...args: string[]): { ok: boolean; out: string } {
   return tryGitWith(root, args)
 }

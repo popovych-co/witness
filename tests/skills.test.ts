@@ -20,6 +20,13 @@ describe('stage skills — shared contract', () => {
       expect(body).toContain(SKILL_PIN_PREFIX);
       for (const rule of SKILL_GROUND_RULES) expect(body, rule).toContain(rule);
     });
+    // S1-C (row 243). verify-red sets the non-test work aside in a ref of its own, and nothing
+    // lands on git's shared stash list, so no skill says it stashes.
+    it(`${name} says verify-red sets the work aside, never that it stashes (row 243)`, () => {
+      const body = readFileSync(skillPath(name), 'utf8');
+      expect(body).toContain('`verify-red`\'s set-aside cycle');
+      expect(body).not.toMatch(/stash cycle|stashes (?:non-test|every)/);
+    });
   }
 });
 

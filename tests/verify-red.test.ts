@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { worktreePath } from '../src/worktree.js'
 import { readStream } from '../src/journal.js'
@@ -144,6 +144,99 @@ describe('witness verify-red', () => {
     repo.git('commit', '-m', 'implement rotation')
     const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--base', base, '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(0)
+  })
+})
+
+// S1-C (row 243, #86). Nothing witness does lands on git's shared stash list: verify-red holds the
+// plan's non-test work in its own ref, built off the list, and puts it back exactly — the index
+// state with the worktree bytes. A reference-transaction hook in the test repo's own hooks dir logs
+// every update git makes to refs/stash, so a push and drop between two reads still shows. The test
+// repo's core.hooksPath is pinned to that dir, so no global hooksPath takes the hook elsewhere.
+describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)', () => {
+  const stashLog = (repo: TestRepo): string => {
+    const hooks = join(resolve(repo.root, repo.git('rev-parse', '--git-common-dir')), 'hooks')
+    repo.git('config', 'core.hooksPath', hooks)
+    mkdirSync(hooks, { recursive: true })
+    const log = join(hooks, '..', 'stash-updates.log')
+    const hook = join(hooks, 'reference-transaction')
+    writeFileSync(hook, `#!/bin/sh\n[ "$1" = committed ] || exit 0\nwhile read -r old new ref; do\n  if [ "$ref" = refs/stash ]; then echo "$old $new $ref" >> '${log}'; fi\ndone\nexit 0\n`)
+    chmodSync(hook, 0o755)
+    return log
+  }
+  // Everything a restore must give back for `files`: each index entry, each path's status, and each
+  // file's bytes. Only theirs: the run's own state commit moves HEAD and adds the plan's journal.
+  const tree = (repo: TestRepo, files: string[]): Record<string, string> => ({
+    index: repo.git('ls-files', '-s', '--', ...files),
+    status: repo.git('status', '--porcelain=v1', '--untracked-files=all', '--', ...files),
+    ...Object.fromEntries(files.map((f) => [f, existsSync(join(repo.root, f)) ? repo.read(f) : '(none)'])),
+  })
+
+  it('no update reaches refs/stash, and an entry already on the list survives byte-identical', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.git('commit', '-m', 'tagged tests')
+    // a session's own entry, already on the list (built inside this throwaway repo only)
+    repo.write('src/token.ts', 'a session\'s own work\n')
+    const theirs = repo.git('stash', 'create')
+    repo.git('stash', 'store', '-m', 'On plan-wt: a session\'s own work', theirs)
+    repo.git('checkout', '--', 'src/token.ts')
+    const reflog = resolve(repo.root, repo.git('rev-parse', '--git-path', 'logs/refs/stash'))
+    const before = { top: repo.git('rev-parse', 'refs/stash'), list: repo.git('stash', 'list', '--format=%H %gd %gs'), log: readFileSync(reflog) }
+    const log = stashLog(repo)
+    repo.write('src/token.ts', TOKEN_FIXED) // dirty, never committed
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe('')
+    expect(repo.git('rev-parse', 'refs/stash')).toBe(before.top)
+    expect(repo.git('stash', 'list', '--format=%H %gd %gs')).toBe(before.list)
+    expect(readFileSync(reflog)).toEqual(before.log)
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(phases(repo).map((e) => e.phase)).toEqual(['red', 'green'])
+    expect(repo.git('for-each-ref', 'refs/witness/verify-red/')).toBe('')
+  })
+
+  it('a staged-only change, a staged change edited again, and an untracked file come back exactly', async () => {
+    const repo = await tddRepo()
+    repo.write('src/notes.ts', 'export const notes = 1\n')
+    repo.git('add', 'src/notes.ts')
+    repo.git('commit', '-m', 'notes')
+    // the tagged tests staged, never committed: a staged path the held work leaves alone
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', 'src/token.ts') // staged only: the worktree matches the index
+    repo.write('src/notes.ts', 'export const notes = 2\n')
+    repo.git('add', 'src/notes.ts')
+    repo.write('src/notes.ts', 'export const notes = 3\n') // staged 2, worktree 3
+    repo.write('src/helper.ts', 'export const helper = true\n') // untracked
+    const files = ['tests/token.test.ts', 'src/token.ts', 'src/notes.ts', 'src/helper.ts']
+    const before = tree(repo, files)
+    const log = stashLog(repo)
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(tree(repo, files)).toEqual(before)
+    expect(repo.git('show', ':src/notes.ts')).toBe('export const notes = 2')
+    expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe('')
+    expect(repo.git('for-each-ref', 'refs/witness/verify-red/')).toBe('')
+  })
+
+  it('a file the plan deleted stays deleted, never put back staged from the base', async () => {
+    const repo = await tddRepo()
+    repo.write('src/old.ts', 'export const old = 1\n')
+    repo.git('add', 'src/old.ts')
+    repo.git('commit', '-m', 'old helper on the base')
+    repo.git('branch', '-f', 'main')
+    repo.git('rm', '-q', 'src/old.ts')
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.git('commit', '-m', 'tagged tests; old helper gone')
+    repo.write('src/token.ts', TOKEN_FIXED) // dirty, never committed
+    const files = ['src/token.ts', 'src/old.ts']
+    const before = tree(repo, files)
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(tree(repo, files)).toEqual(before)
   })
 })
 
