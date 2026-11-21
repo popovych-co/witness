@@ -650,9 +650,9 @@ export function githubCheck(root: string, ctx: Ctx, cfg: Config, canon: Canon, v
 
 // Row 242 (design §4.3.2, One predicate). A plan is held while a merge or fix record stands — the
 // plan stream's latest entry, on the worktree's HEAD — and nothing above its ship row routes: no
-// plan reopen or plan-gate rework (row 244), no open step, and no decision owed on the flow's own gate
-// (row 244, S3-A: `flowStep` routes it first). `flowStep`, `needsYou` and drive all read this one
-// predicate.
+// plan reopen or plan-gate rework (row 244), no open step, and no stop on the flow's own gates — a
+// decision owed, the bound's endgame or a park (row 244, S3-A: `flowStep` routes it first).
+// `flowStep`, `needsYou` and drive all read this one predicate.
 export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcomeEntry | undefined {
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const id = String(plan.meta.id)
@@ -661,7 +661,7 @@ export function heldPlan(root: string, cfg: Config, plan: CanonDoc): ShipOutcome
   const entries = readStream(root, id)
   const head = tryGit(wt, 'rev-parse', 'HEAD')
   const rec = standingRecord(entries, head.ok ? head.out.trim() : undefined)
-  if (rec === undefined || flowDecision(entries) !== undefined || planReopenOwed(entries) || planReworkOwed(entries, id) ||
+  if (rec === undefined || flowStop(entries) !== undefined || planReopenOwed(entries) || planReworkOwed(entries, id) ||
     openStepRow(root, cfg, plan) !== undefined) return undefined
   return rec
 }
@@ -687,14 +687,27 @@ export const stepsOpenViolation = (o: { row: NextAction; step: string }): Violat
 // The gates a flow's own journal holds, upstream first: tier 2's order (`pendingDecisionsAll`).
 const FLOW_GATES = ['plan', 'implement', 'ship'] as const
 
-// Row 244 (design §4.2.5; review finding S3-A). The flow's own gate a decision is owed on —
-// `decisionOwed`'s: a pending stop, or a standing hand-back — the first in tier 2's order. Every row of
-// the flow waits on it, in every reader of one flow (`flowStep`, so `--flow`, a worktree's `next` and
-// status's flows table) as in `computeNext`'s tier 1 (`flowBlocked`): a handed-back gate is owed its
-// decision, never the re-gate that answers changed-nothing, the re-authoring a reopen asked for, nor
-// the implement work past it.
-function flowDecision(entries: Entry[]): string | undefined {
-  return FLOW_GATES.find((gate) => decisionOwed(entries, gate) !== undefined)
+// Tier 2's note on a decision owed at the round bound, where the gate short-circuits and no pending
+// run can be created.
+const BOUND_NOTE = 'round bound reached — human decision required'
+
+// Row 244 (design §4.2.5; review finding S3-A and its fix round 2). The stop the flow's own gates stand
+// on — everything that holds the flow out of `computeNext`'s tier 1 (`flowBlocked`) — with the note its
+// row carries, in tier 2's order (`owedFrom`):
+//   - a decision owed (`decisionOwed`): a pending stop, or a standing hand-back;
+//   - the round bound's endgame, owed with no pending run (`owedRun`'s second half), under tier 2's note;
+//   - a park (D124): off the board until a human sends it back, which tier 2 never routes.
+// Every reader of one flow (`flowStep`, so `--flow`, a worktree's `next` and status's flows table) routes
+// its screen, `decide <gate> <plan> --show`, first: never the re-gate that answers changed-nothing, the
+// round a parked gate would resume, the re-authoring a reopen asked for, nor the implement work past it.
+interface FlowStop { gate: string; note?: string }
+function flowStop(entries: Entry[]): FlowStop | undefined {
+  const owed = FLOW_GATES.find((gate) => decisionOwed(entries, gate) !== undefined)
+  if (owed !== undefined) return { gate: owed }
+  const bound = FLOW_GATES.find((gate) => owedRun(entries, gate) !== undefined)
+  if (bound !== undefined) return { gate: bound, note: BOUND_NOTE }
+  const parked = FLOW_GATES.find((gate) => gateParked(entries, gate))
+  return parked === undefined ? undefined : { gate: parked, note: `${parked} parked — sending it back to work is a human's call` }
 }
 
 // Row 95; row 244 (design §4.2.5). A reopen of the plan's own plan gate owes the plan's re-authoring —
@@ -709,10 +722,18 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
   const id = String(plan.meta.id)
   if (String(plan.meta.status) !== 'in-progress') return undefined
   const entries = readStream(root, id)
-  // Review finding S3-A. A decision owed on the flow's own gate is its next action, as tier 2 routes it:
+  // Review finding S3-A. A stop on the flow's own gate is its next action, as tier 2 routes a decision:
   // its screen, `decide <gate> <plan> --show`, wherever the worktree stands — the decision needs none.
-  const owed = flowDecision(entries)
-  if (owed !== undefined) return { ...runs(cliAct('decide', owed, id, '--show')), target: id }
+  const stop = flowStop(entries)
+  if (stop !== undefined) return { ...runs(cliAct('decide', stop.gate, id, '--show')), target: id, ...noteOf(stop.note) }
+  return flowWork(root, cfg, plan, entries, judge)
+}
+
+// The flow's work beneath its stops: what `flowStep` routes once none stands, and what `parkOwed` reads
+// beneath the park it asks about.
+function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], judge?: string): NextAction | undefined {
+  const id = String(plan.meta.id)
+  if (String(plan.meta.status) !== 'in-progress') return undefined
   const wt = worktreePath(root, id)
   const pinR = stagePin(cfg, 'implement')
   const pin = pinR.ok ? pinR.value : undefined
@@ -842,16 +863,16 @@ function flowRank(a: NextAction): number {
 // created). Such a flow is NOT tier-1 motion — offering it would loop the driving loop
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
-// Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s, a standing hand-back included
-// (`flowDecision`) — a handed-back plan gate is neither the rework `planReworkOwed` routes nor a
-// re-gate `planGateStep` could run, and its implement work waits. `flowStep` reads the same predicate
-// first (S3-A), so a reader of one flow routes the decision tier 2 routes here.
+// Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s, a standing hand-back included — a
+// handed-back plan gate is neither the rework `planReworkOwed` routes nor a re-gate `planGateStep` could
+// run, and its implement work waits. One predicate for the three holds, `flowStop`, which `flowStep`
+// reads first (S3-A), so a reader of one flow routes the stop that holds the flow here.
 function flowBlocked(root: string, plan: CanonDoc, entries: Entry[], taken: TakenBack): boolean {
   // A parked gate blocks the flow the same way an owed decision does, and for the same
   // reason: offering it loops the driving loop on an act the human already declined. It
   // does not disappear — `status`'s parked table names it and the run that un-parks it.
-  if (flowDecision(entries) !== undefined || FLOW_GATES.some((gate) =>
-    gateParked(entries, gate) || (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
+  // At the bound the gate is parked or its endgame is owed (`owedRun`), so `flowStop` reads every hold.
+  if (flowStop(entries) !== undefined) return true
   // Row 95's split: a reopen on the plan's own plan gate is NOT a block — flowAction routes
   // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
   // and tier 3 is where it surfaces. Keyed on the effort that owns the PARENT SPEC, which is
@@ -913,7 +934,8 @@ export function parkOwed(root: string, cfg: Config | undefined, canon: Canon, ga
     const p = stepProgress(plan, entries)
     return p.known && p.next !== undefined && !humanApprovedPastSteps(entries, plan)
   }
-  const row = flowStep(root, cfg, plan)
+  // The work beneath the stops: `flowStep` would route this very park's screen.
+  const row = flowWork(root, cfg, plan, entries)
   return row !== undefined && row.stage === 'implement' && !row.line.startsWith('witness gate ')
 }
 
@@ -1324,7 +1346,7 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // Row 239 (the plan's B8). At the bound too the line is one command: `--show` prints the
     // endgame's options as a block. It was `liveExits`' menu, which pasted whole is one pipeline
     // that runs `--approve --override` and `abandon` together.
-    return { ...show, target: owed.target, note: 'round bound reached — human decision required' }
+    return { ...show, target: owed.target, note: BOUND_NOTE }
   }
 
   // TIER 3 — start new work. Row 176: the oldest unanswered ask comes first, so a new ask

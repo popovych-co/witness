@@ -490,4 +490,77 @@ describe('next in a worktree, next --flow and status flows route an owed decisio
     expect(heldPlan(repo.root, cfgOf(repo), findById(loadCanon(repo.root), P)!)).toBeUndefined()
     await flowRoutesDecision(repo, wt, env, 'plan', run.round, 'stopped')
   }, 300_000)
+
+  // Fix round 2: the rest of what holds a flow in tier 1 (`flowBlocked`) — the round bound's endgame,
+  // owed with no pending run (`owedRun`'s second half), and a park. The readers of one flow route its
+  // screen under the note that says why, never a line that answers changed-nothing or resumes a round.
+  async function flowRoutes(repo: TestRepo, wt: string, env: Record<string, string>, line: string, note: string): Promise<void> {
+    const ambient = await repo.cli(['next'], { env, cwd: wt })
+    expect(ambient.code, `${ambient.stdout}\n${ambient.stderr}`).toBe(0)
+    expect(ambient.stdout).toContain(`flow: ${P} — inferred from cwd`)
+    expect(ambient.stdout).toContain(`next: ${line}`)
+    expect(ambient.stdout).toContain(note)
+    const flow = (await ok(repo, ['next', '--flow', P], env)).stdout
+    expect(flow).toContain(`next: ${line}`)
+    expect(flow).toContain(note)
+    expect((await ok(repo, [], env)).stdout).toContain(`  ${P},gate,${line},present,—`)
+  }
+
+  // The reviewer's journal: a plan gate at the bound, parked by the arbiter, then reopened by the
+  // implement gate's upstream revise. It reads `at-bound`, and tier 2 routes its endgame; the flow's
+  // readers routed the re-authoring, whose re-gate answers changed-nothing (journal +0) and whose
+  // hand-back refuses `hand-back-at-bound` — a loop.
+  it('a plan gate at the bound, parked, then reopened: the endgame decision under the bound note, never the re-authoring', async () => {
+    const { repo, wt } = await shippableRepo()
+    const implement = fakeScenario()
+    putVerdict(implement, BLOCKING)
+    await ok(repo, ['gate', 'implement', P], gateEnv(implement), 1)
+    await ok(repo, ['decide', 'implement', P, '--revise', '--upstream', P, '--note', 'the plan misses rotation'], gateEnv(implement))
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'plan', P], env, 1)
+    const real = lastGateRun(readStream(repo.root, P), 'plan')!
+    const dec = (decision: string, extra: Record<string, unknown> = {}) =>
+      ({ v: 1, t: 'human-decision' as const, gate: 'plan', artifact: P, round: 1, decision, ...extra })
+    for (const e of [
+      dec('revise', { note: 'a' }), { ...real, run_id: 'pr2', round: 2 },
+      dec('revise', { note: 'b' }), { ...real, run_id: 'pr3', round: 3 },
+      dec('stop', { selected: 'arbiter', reason: 'bound', arbiter: { model: 'm', prompts_sha: 'p' } }),
+      dec('revise', { caused_by: { artifact: P, gate: 'implement', round: 1 }, note: 'the plan misses rotation, again' }),
+    ]) commitEntry(repo, P, e as unknown as Parameters<typeof commitEntry>[2])
+    const entries = readStream(repo.root, P)
+    expect(liveActs('plan', P, entries, { upstream: undefined, stale: false, holdLifted: false, owed: false, upstreamOwed: false }).state)
+      .toBe('at-bound')
+    expect(decisionOwed(entries, 'plan')).toBeUndefined()
+    expect(owedRun(entries, 'plan')?.run_id).toBe('pr3')
+
+    const line = show('plan', P)
+    const bound = kv('note', 'round bound reached — human decision required')
+    const root = (await ok(repo, ['next'], env)).stdout
+    expect(root).toContain(`next: ${line}`)
+    expect(root).toContain(bound)
+    await flowRoutes(repo, wt, env, line, bound)
+    expect((await repo.cli(['next'], { env, cwd: wt })).stdout).not.toContain('plan gate reopened')
+  }, 300_000)
+
+  // The park: root `next` skips a parked flow (D124), and the flow's readers routed `gate implement`,
+  // which resumes the parked round, exits 1 and journals nothing — a loop. They route the park's screen,
+  // whose acts are the way back, a human's call.
+  it('a parked implement gate below the bound: the park\'s screen, never a gate that resumes the parked round', async () => {
+    const { repo, wt } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'implement', P], env, 1)
+    await ok(repo, ['decide', 'implement', P, '--stop'], env)
+    const line = show('implement', P)
+    await flowRoutes(repo, wt, env, line, kv('note', "implement parked — sending it back to work is a human's call"))
+    // Root `next` still skips the parked flow; status's parked table names its way back.
+    expect((await ok(repo, ['next'], env)).stdout).not.toContain(`next: ${cliAct('gate', 'implement', P).line}`)
+    const screen = await repo.cli(['decide', 'implement', P, '--show'], { env, cwd: wt })
+    expect(screen.code, screen.stderr).toBe(0)
+    expect(screen.stdout).toContain('state: parked')
+    expect(screen.stdout).toContain(`fresh: ${cliAct('gate', 'implement', P, '--fresh').line}`)
+  }, 300_000)
 })
