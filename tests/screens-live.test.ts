@@ -31,10 +31,12 @@ import {
 // needs you, the arbiter's menu and every refusal's want, each read off the one derivation `decide`
 // accepts by (`liveActs`). The walk runs on the real decompose gate, whose upstream is the effort
 // itself, with each state's journal written into a seeded effort stream (the twin of
-// tests/decide-live.test.ts, which runs every live act).
+// tests/decide-live.test.ts, which runs every live act). Every round in it is the real gate's round,
+// its key and checks, so a re-gate a screen recommends meets it as it would a human's (S2-C).
 
 const G = 'decompose'
 const MOVED = 'moved-content-sha'
+const OTHER = 'other-content-sha'
 const ANCHOR = 'auth-refresh > ## Behavior'
 const VERDICT = {
   coverage: [{ anchor: ANCHOR, note: 'read' }],
@@ -43,24 +45,36 @@ const VERDICT = {
 const ARBITER = { selected: 'arbiter', reason: 'the bound is spent', arbiter: { model: 'm', prompts_sha: 'p' } }
 const REOPEN = { caused_by: { artifact: 'auth-refresh', gate: 'design', round: 1 }, note: 'the slicing is wrong' }
 
-let base: { repo: TestRepo; sha: string; scenario: string; effort: string }
+let base: { repo: TestRepo; sha: string; scenario: string; effort: string; real: GateRunEntry }
 beforeAll(async () => {
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   const scenario = fakeScenario()
   putVerdict(scenario, VERDICT)
-  base = { repo, sha: effortReviewedSha(repo.root, loadCanon(repo.root), repo.effort).sha, scenario, effort: repo.effort }
+  const sha = effortReviewedSha(repo.root, loadCanon(repo.root), repo.effort).sha
+  // One round of the real gate, in a copy: the key every round of the walk carries (S2-C).
+  const ran = copyOf(repo.root)
+  const g = await repo.cli(['gate', G, repo.effort], { cwd: ran, env: gateEnv(scenario) })
+  if (g.code !== 1) throw new Error(`gate: ${g.stdout}\n${g.stderr}`)
+  const real = lastGateRun(readStream(ran, repo.effort), G)!
+  if (real.reviewed_sha !== sha) throw new Error(`the real round judged ${real.reviewed_sha}, not ${sha}`)
+  base = { repo, sha, scenario, effort: repo.effort, real }
 }, 120_000)
 
 type Outcome = 'passed' | 'stopped' | 'malformed'
-const run = (n: number, sha: string, outcome: Outcome = 'stopped'): Entry => ({
-  v: 1, t: 'gate-run', gate: G, artifact: base.effort, round: n, run_id: `r${n}`, reviewed_sha: sha,
-  prompts_sha: 'p', witness: '0', model: 'm', checks: [],
-  ...(outcome === 'malformed'
-    ? { verdicts: [], malformed: [{ reviewer: 'slicing-critic', violations: [] }] }
-    : { verdicts: [{ reviewer: 'slicing-critic', coverage: VERDICT.coverage, findings: outcome === 'stopped' ? VERDICT.findings : [] }] }),
-  outcome,
-} as unknown as Entry)
+// A round as the real gate journals it, on content `sha`: the real round's key and checks, never its
+// tree, basis or delta (a round of the walk is no delta base). A pass carries no standing stop.
+const run = (n: number, sha: string, outcome: Outcome = 'stopped'): Entry => {
+  const { reviewed_tree: _t, basis_sha: _b, delta: _d, carried: _c, standing, verdicts: _v, malformed: _m, ...key } = base.real
+  return {
+    ...key, ...(outcome !== 'passed' && standing !== undefined ? { standing } : {}),
+    round: n, run_id: `r${n}`, reviewed_sha: sha,
+    ...(outcome === 'malformed'
+      ? { verdicts: [], malformed: [{ reviewer: 'slicing-critic', violations: [] }] }
+      : { verdicts: [{ reviewer: 'slicing-critic', coverage: VERDICT.coverage, findings: outcome === 'stopped' ? VERDICT.findings : [] }] }),
+    outcome,
+  } as unknown as Entry
+}
 const dec = (decision: string, extra: Record<string, unknown> = {}): Entry =>
   ({ v: 1, t: 'human-decision', gate: G, artifact: base.effort, round: 1, decision, ...extra } as unknown as Entry)
 const back = (runId: string, sha: string): Entry =>
@@ -94,6 +108,10 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind]> = [
   ['handed back, then --fresh', (s) => [run(1, s), dec('revise'), back('r1', s), run(2, s)], 'pending'],
   ['handed back, then revised again', (s) => [run(1, s), dec('revise'), back('r1', s), dec('revise', { note: 'change the expiry' })], 'revised'],
   ['retracted', (s) => [run(1, s), dec('approve', { override: true }), dec('revise', { note: 'the stamp was wrong' })], 'retracted'],
+  // S3-3: a malformed round after the revise on other content, the content back on the disposed run's.
+  ['malformed on other content after the revise (S3-3)', (s) => [run(1, s), dec('revise', { note: 'tighten the slicing' }), run(2, OTHER, 'malformed')], 'revised'],
+  ['handed back, then malformed on other content (S3-3)', (s) => [run(1, s), dec('revise'), back('r1', s), run(2, OTHER, 'malformed')], 'handed-back'],
+  ['retracted, then malformed on other content (S3-3)', (s) => [run(1, s, 'passed'), dec('revise', { note: 'the pass was wrong' }), run(2, OTHER, 'malformed')], 'retracted'],
 ]
 const STATE = new Map(STATES.map(([name, journal, kind]) => [name, { journal, kind }]))
 
@@ -256,6 +274,21 @@ describe('every screen offers only live acts (design §4.2.1, #87)', () => {
       expect(shown.filter(([, a]) => actKey(a) === actKey(['decide', G, base.effort, '--revise']) && !a.argv.includes('--note'))).toEqual([])
     }
   }, 300_000)
+
+  // A screen's `run:` is never a dead loop: a re-gate the block recommends unconditionally journals a
+  // round on the real gate, never the changed-nothing that re-prints the same `run:` (S2-A, S3-3).
+  it.each(STATES.map(([name]) => name))('%s: a recommended re-gate journals a round', async (name) => {
+    const root = stateRoot(name)
+    const { facts, entries, upstream } = liveIn(root)
+    const first = recommend({ gate: G, target: base.effort, entries, upstream, stale: facts.stale || facts.holdLifted })?.options[0]
+    if (first?.act === undefined || first.act.argv[0] !== 'gate' || !first.runnable || conditional(first)) return
+    const at = copyOf(root)
+    const runs = readStream(at, base.effort).filter((e) => e.t === 'gate-run').length
+    const r = await cli(at, first.act.argv as string[])
+    expect(r.stdout, first.act.line).not.toContain('revise changed nothing')
+    expect(r.code, `${first.act.line}: ${r.stdout}\n${r.stderr}`).toBeLessThanOrEqual(1)
+    expect(readStream(at, base.effort).filter((e) => e.t === 'gate-run')).toHaveLength(runs + 1)
+  }, 120_000)
 })
 
 describe('the refusals name live acts (design §4.2.3, P8)', () => {

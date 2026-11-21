@@ -8,7 +8,10 @@ import { decideView } from '../src/decide-view.js'
 import { designCurrentSha } from '../src/design.js'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { effortReviewedSha } from '../src/reviewed.js'
-import { actKey, liveActs, settledToken, type ActFacts, type DecisionEntry, type GateStateKind } from '../src/rounds.js'
+import { AFTER_EDIT } from '../src/recommend.js'
+import {
+  actKey, lastGateRun, liveActs, settledToken, type ActFacts, type DecisionEntry, type GateRunEntry, type GateStateKind,
+} from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { applyDecision } from '../src/verbs/decide.js'
 import { actFacts } from '../src/verbs/next.js'
@@ -18,10 +21,13 @@ import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, type
 // accepts exactly the acts `liveActs` offers: every act a state offers lands, an act it does not offer
 // refuses with the rule that says why, and revising again or retracting takes a human and a note.
 // The walk runs on the real decompose gate, whose upstream is the effort itself and whose endgame
-// abandons it, with each state's journal written into a seeded effort stream.
+// abandons it, with each state's journal written into a seeded effort stream. Every round in it is
+// the real gate's round, its key and checks, so a re-gate of unchanged content meets it as it meets a
+// human's: resumed, repaired, or answered changed-nothing — which journals nothing and lands nothing.
 
 const G = 'decompose'
 const MOVED = 'moved-content-sha'
+const OTHER = 'other-content-sha'
 const ANCHOR = 'auth-refresh > ## Behavior'
 const VERDICT = {
   coverage: [{ anchor: ANCHOR, note: 'read' }],
@@ -30,24 +36,37 @@ const VERDICT = {
 const ARBITER = { selected: 'arbiter', reason: 'the bound is spent', arbiter: { model: 'm', prompts_sha: 'p' } }
 const REOPEN = { caused_by: { artifact: 'auth-refresh', gate: 'design', round: 1 }, note: 'the slicing is wrong' }
 
-let base: { repo: TestRepo; sha: string; scenario: string; effort: string }
+let base: { repo: TestRepo; sha: string; scenario: string; effort: string; real: GateRunEntry }
 beforeAll(async () => {
   const repo = await seededRepo()
   await writeSpec(repo, 'auth-refresh')
   const scenario = fakeScenario()
   putVerdict(scenario, VERDICT)
-  base = { repo, sha: effortReviewedSha(repo.root, loadCanon(repo.root), repo.effort).sha, scenario, effort: repo.effort }
+  const sha = effortReviewedSha(repo.root, loadCanon(repo.root), repo.effort).sha
+  // One round of the real gate, in a copy: the key every round of the walk carries (S2-C). A made-up
+  // key never meets the gate's, so every re-gate ran a fresh round and counted as landed.
+  const ran = copyOf(repo.root)
+  const g = await repo.cli(['gate', G, repo.effort], { cwd: ran, env: gateEnv(scenario) })
+  if (g.code !== 1) throw new Error(`gate: ${g.stdout}\n${g.stderr}`)
+  const real = lastGateRun(readStream(ran, repo.effort), G)!
+  if (real.reviewed_sha !== sha) throw new Error(`the real round judged ${real.reviewed_sha}, not ${sha}`)
+  base = { repo, sha, scenario, effort: repo.effort, real }
 }, 120_000)
 
 type Outcome = 'passed' | 'stopped' | 'malformed'
-const run = (n: number, sha: string, outcome: Outcome = 'stopped'): Entry => ({
-  v: 1, t: 'gate-run', gate: G, artifact: base.effort, round: n, run_id: `r${n}`, reviewed_sha: sha,
-  prompts_sha: 'p', witness: '0', model: 'm', checks: [],
-  ...(outcome === 'malformed'
-    ? { verdicts: [], malformed: [{ reviewer: 'slicing-critic', violations: [] }] }
-    : { verdicts: [{ reviewer: 'slicing-critic', coverage: VERDICT.coverage, findings: outcome === 'stopped' ? VERDICT.findings : [] }] }),
-  outcome,
-} as unknown as Entry)
+// A round as the real gate journals it, on content `sha`: the real round's key and checks, never its
+// tree, basis or delta (a round of the walk is no delta base). A pass carries no standing stop.
+const run = (n: number, sha: string, outcome: Outcome = 'stopped'): Entry => {
+  const { reviewed_tree: _t, basis_sha: _b, delta: _d, carried: _c, standing, verdicts: _v, malformed: _m, ...key } = base.real
+  return {
+    ...key, ...(outcome !== 'passed' && standing !== undefined ? { standing } : {}),
+    round: n, run_id: `r${n}`, reviewed_sha: sha,
+    ...(outcome === 'malformed'
+      ? { verdicts: [], malformed: [{ reviewer: 'slicing-critic', violations: [] }] }
+      : { verdicts: [{ reviewer: 'slicing-critic', coverage: VERDICT.coverage, findings: outcome === 'stopped' ? VERDICT.findings : [] }] }),
+    outcome,
+  } as unknown as Entry
+}
 const dec = (decision: string, extra: Record<string, unknown> = {}): Entry =>
   ({ v: 1, t: 'human-decision', gate: G, artifact: base.effort, round: 1, decision, ...extra } as unknown as Entry)
 const back = (runId: string, sha: string): Entry =>
@@ -79,6 +98,12 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind, boolean]> = 
   ['handed back, then --fresh', (s) => [run(1, s), dec('revise'), back('r1', s), run(2, s)], 'pending', false],
   ['handed back, then revised again', (s) => [run(1, s), dec('revise'), back('r1', s), dec('revise', { note: 'change the expiry' })], 'revised', false],
   ['retracted', (s) => [run(1, s), dec('approve', { override: true }), dec('revise', { note: 'the stamp was wrong' })], 'retracted', false],
+  // S3-3: a malformed round after the revise on other content, the content back on the disposed run's.
+  // It leaves the pairing with the disposed run, so a re-gate answers changed-nothing: no state leads
+  // with a re-run there.
+  ['malformed on other content after the revise (S3-3)', (s) => [run(1, s), dec('revise', { note: 'tighten the slicing' }), run(2, OTHER, 'malformed')], 'revised', false],
+  ['handed back, then malformed on other content (S3-3)', (s) => [run(1, s), dec('revise'), back('r1', s), run(2, OTHER, 'malformed')], 'handed-back', false],
+  ['retracted, then malformed on other content (S3-3)', (s) => [run(1, s, 'passed'), dec('revise', { note: 'the pass was wrong' }), run(2, OTHER, 'malformed')], 'retracted', false],
 ]
 const STATE = new Map(STATES.map(([name, journal, kind, stale]) => [name, { journal, kind, stale }]))
 
@@ -156,7 +181,12 @@ describe('decide accepts every act a state offers (design §4.2.1, #87)', () => 
     if (!cfg.ok) throw new Error('config')
     const view = decideView(root, cfg.value, loadCanon(root), G, base.effort)
     if (view.state !== 'actionable') throw new Error(`state ${view.state}`)
-    const shown = [...(view.block?.options ?? []).flatMap((o) => (o.act ? [o.act] : [])), ...view.exits]
+    // The one exemption (design §4.2.1): the revised state's re-gate "after you change the work" is
+    // conditional, since on unchanged content the gate answers changed-nothing.
+    const conditional = (o: { when?: string; act?: Act }) =>
+      o.when === AFTER_EDIT && o.act !== undefined && actKey(o.act) === actKey(['gate', G, base.effort])
+    expect((view.block?.options ?? []).filter(conditional)).toHaveLength(1)
+    const shown = [...(view.block?.options ?? []).filter((o) => !conditional(o)).flatMap((o) => (o.act ? [o.act] : [])), ...view.exits]
     const acts = shown.filter((a, i) => shown.findIndex((b) => b.line === a.line) === i)
     expect(acts.length).toBeGreaterThanOrEqual(4)
     for (const act of acts) {
