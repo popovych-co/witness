@@ -32,6 +32,9 @@ export interface Decision {
   options: Option[]
   rule: string
   anchor?: string
+  // Row 244. The gate state the block was built for (`liveActs`), so a reader holding the block alone
+  // knows whose acts it offers there: the arbiter's menu drops the ones only a human may take (§4.2.6).
+  state?: GateStateKind
 }
 
 // Commands are emitted raw (D120). Row 239: each is its act's line, which the quoter already
@@ -101,6 +104,9 @@ export function option(
 // Order: malformed · stale-below-bound · ladder-spent · bound+recurrence · bound ·
 //        recurrence · pin-contradiction · blocking-parent · blocking-here ·
 //        checks-failed · non-blocking-only · reserved-stop-clean · manual-stop
+// Row 244 (design §4.2.6). A revise the author handed back is decided by `revise-returned`
+// (`revisedBlock`): after stale-below-bound, whose moved row it is once the content or a hold moved
+// since, and before malformed-rerun when the revise follows the malformed run (§4.2.3).
 // D154. Trust must never be the toll for approval. Where a plain `--approve` is offered
 // and the artifact carries untrusted `cmd:` criteria, the block renders BOTH forms — plain
 // first, so approving without granting stays the easy path — and names the commands, because
@@ -146,7 +152,8 @@ export function recommend(ctx: GateContext): Decision | undefined {
 // drawn from the gate's live acts (`liveActs`, from the same journal, upstream and staleness). A
 // stopped run awaiting its decision and the bound keep the rule table, each option kept only while
 // live; the states a revise leaves are built from their own acts; a settled, a parked (below the
-// bound) or an abandoned gate has no block, and its screen prints its acts.
+// bound) or an abandoned gate has no block, and its screen prints its acts. Every block carries the
+// state it was built for.
 function recommendCore(ctx: GateContext): Decision | undefined {
   const { gate, target, entries, upstream, stale } = ctx
   const last = lastGateRun(entries, gate)
@@ -155,9 +162,10 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   if (live.state === 'pending' || live.state === 'at-bound' || (live.state === 'parked' && boundReached(entries, gate))) {
     const d = ruleTable(ctx, last)
     const options = d?.options.filter((o) => o.act !== undefined && actLive(live, actKey(o.act))) ?? []
-    return d !== undefined && options.length > 0 ? { ...d, options } : undefined
+    return d !== undefined && options.length > 0 ? { ...d, options, state: live.state } : undefined
   }
-  return REVISED_FAMILY.has(live.state) ? revisedBlock(ctx, live, last) : undefined
+  const d = REVISED_FAMILY.has(live.state) ? revisedBlock(ctx, live, last) : undefined
+  return d === undefined ? undefined : { ...d, state: live.state }
 }
 
 // The condition on the revised state's re-gate (design §4.2.2): it is the recommended act only once
@@ -171,7 +179,8 @@ const REVISED_FAMILY: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['revi
 //   revised      `revised`: the re-gate, "after you change the work", then the acts;
 //   handed back  `revise-returned`: send upstream first where the blocking finding's anchor is in the
 //                parent (rule 8's test, while D123's ladder is unspent), else the park — neither the
-//                author nor a reviewer found a fix (§4.2.2, review fix S2-D);
+//                author nor a reviewer found a fix (§4.2.2, §4.2.6, review fix S2-D). The policy hands
+//                it to the arbiter, whose menu holds no revise of it (`menuFor`);
 //   moved since  `stale-below-bound`: the re-gate first (§4.2.9), so the policy's stale arm takes it;
 //   retracted    `retracted`: the re-review (`--fresh`) first, or on moved content the re-gate.
 // Each carries the run's primary anchor, so an upstream taken here spends D123's ladder (P47). On

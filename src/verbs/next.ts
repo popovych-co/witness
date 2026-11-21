@@ -195,6 +195,17 @@ export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefine
   return undefined
 }
 
+// Row 173. The owed run a settler decides under autonomy: none when nothing is owed, or when `--manual`
+// keeps the stop for a human "for that run regardless" — the run's own `--manual` (Review Focus 4), or,
+// row 244 (design §4.2.4), a hand-back journaled under `--manual`, which goes to the human in every
+// settle that reads it. One reading for the settle (`judgeStop`) and the gate's tail (`leftToTail`), so a
+// gate never leaves to its tail a stop the tail will not touch.
+export function settlerOwed(entries: Entry[], gate: string): GateRunEntry | undefined {
+  const owed = owedRun(entries, gate)
+  if (owed === undefined || owed.manual === true || standingHandBack(entries, gate)?.manual === true) return undefined
+  return owed
+}
+
 // `runGate` answers `changed-nothing` without appending an entry (`appendKind`) when the gate's
 // standing revise disposed of a run whose key the re-gate would meet again. Routing there asks the
 // human to invoke a verb the CLI will immediately decline, and — since nothing is appended — `next`

@@ -32,7 +32,7 @@ import {
   type ActFacts, type AppendKind, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { actFacts, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
+import { actFacts, openStepRow, settlerOwed, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
@@ -516,13 +516,10 @@ async function judge(
   if (!flags.manual) autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
   // Row 173. Under autonomy the tail settles the stop, so the block is ITS to print — the
   // human's when the stop is kept, nobody's when the CLI decides. Left in place for a stop
-  // the tail will not touch: a `--manual` run's, a parked or settled one, a malformed round.
+  // the tail will not touch: a `--manual` run's or a `--manual` hand-back's (row 244), a parked or
+  // settled one, a malformed round — the settle's own reading (`settlerOwed`).
   const autonomous = cfgR.value.autonomy && !flags.manual
-  const leftToTail = (es: Entry[]): boolean => {
-    if (!autonomous) return false
-    const owed = owedRun(es, gateName)
-    return owed !== undefined && !owed.manual
-  }
+  const leftToTail = (es: Entry[]): boolean => autonomous && settlerOwed(es, gateName) !== undefined
   const canon = loadCanon(root)
   // Row 244 (#87, design §4.2.4, §4.2.9). `--unchanged` is read from the journal before `resolve`, so a
   // refusal spends no lane and no battery and journals nothing. The read keeps the run the revise
@@ -673,8 +670,10 @@ async function judge(
     ctx.out(kv('outcome', 'revise changed nothing — reviewed content is identical to the last round'))
     // The owed work is an EDIT, so the exits are the decisions that remain legal without
     // one — the same set every other screen shows, rather than prose naming two of four.
-    // Row 244: the state's live acts, under the session's line (design §4.2.2).
-    renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha, session: true })
+    // Row 244: the state's live acts, under the session's line (design §4.2.2). A standing hand-back
+    // is a decision owed, not an edit: under autonomy its block is the tail's, which settles it (row
+    // 173, design §4.2.2), and a `--manual` one's stays here for the human.
+    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha, session: true })
     return EXIT.FINDINGS
   }
   if (boundReached(entries, spec.gate)) {

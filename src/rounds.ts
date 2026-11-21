@@ -461,6 +461,13 @@ export interface ActFacts {
 // Row 244 (design §4.2.2). Where a gate stands, for every reader alike.
 export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'handed-back-moved' | 'at-bound' | 'settled' | 'retracted' | 'parked'
 
+// Row 244 (design §4.2.6, §4.2.7). The states where a plain revise — neither upstream nor a repair —
+// revises the gate again (revised, handed back, retracted) or retracts its settlement (settled): a
+// human's act alone, carrying the human's words. One set for the two readers that must agree on it:
+// `decide`, which refuses the act for the policy, the arbiter and a drive child (`revise-human`), and
+// the arbiter's menu, which never offers it (`menuFor`).
+export const REVISE_HUMAN: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['revised', 'handed-back', 'handed-back-moved', 'retracted', 'settled'])
+
 // Row 244. A gate's state and its legal acts, in the order the screens offer them. `anchor` is the
 // run a decision now disposes of. `malformedRerun`: a malformed round is the gate's last word, so
 // its free re-run leads the acts (design §4.2.2). `slots` are acts `decide` accepts that no exits

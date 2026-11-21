@@ -26,7 +26,7 @@ import { short } from '../sha.js'
 import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
 import {
-  ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
+  REVISE_HUMAN, ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
   repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LiveActs,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
@@ -95,9 +95,6 @@ function settledSince(ctx: Ctx, gate: string, target: string): number {
   return EXIT.REFUSED
 }
 
-// Row 244 (design §4.2.7). The states where a plain revise revises the gate again (revised, handed
-// back, retracted) or retracts its settlement (settled): a human's act, carrying the human's words.
-const REVISE_AGAIN: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['revised', 'handed-back', 'handed-back-moved', 'retracted', 'settled'])
 // Design §4.2.9. The states where an approve the screens withhold still anchors, so the blocker that
 // withholds it is named. In the settled, parked and none states nothing is pending a verdict.
 const WITHHOLDS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'handed-back-moved', 'retracted', 'at-bound'])
@@ -385,7 +382,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // before the anchor rule, since no state makes them a settler's. Each carries the human's words: a
   // revise again says what to change, and a retraction why (D99), so a bare revise refuses where the
   // noted one would land.
-  const again = plainRevise && REVISE_AGAIN.has(live.state)
+  const again = plainRevise && REVISE_HUMAN.has(live.state)
   const retraction = live.state === 'settled'
   if (again && notHuman) {
     renderRefusal([v('decide', 'revise-human',
