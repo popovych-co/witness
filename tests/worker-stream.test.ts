@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { lineSink } from '../src/drive.js'
 import { logSafe } from '../src/toon.js'
-import { ACTION_MAX, actionLine, claudeStream, piStream, shellCommand } from '../src/worker-stream.js'
+import { ACTION_MAX, actionLine, claudeStream, envelopeStream, piStream, shellCommand } from '../src/worker-stream.js'
 
 // One stdout record, as each harness writes it in its streaming mode (P1, P3, P8, P12).
 const r = (event: object): string => JSON.stringify(event)
@@ -357,5 +358,265 @@ describe('claudeStream (row 214)', () => {
     ['a result with no result', { type: 'result' }],
   ])('a known event with %s renders nothing and never throws (issue #64)', (_name, event) => {
     expect(claudeStream('/r').line(r(event))).toEqual([])
+  })
+})
+
+// Row 245 (issue #80). A session ends when its turn ends, not when its process exits: a pi worker
+// whose extension leaks a handle lives on after its turn (P5). The streams say whether the turn's
+// end signal stands and whether a run ever started; drive and the reviewers time the grace on it.
+describe("the turn's end (row 245)", () => {
+  const home = '/r'
+  const header = r({ type: 'session', version: 3, id: 'S1', timestamp: '2026-11-19T10:36:00.000Z', cwd: home })
+  const settled = r({ type: 'agent_settled' })
+  // What pi writes for a message an extension posts while the agent is idle (sendCustomMessage).
+  const note = { role: 'custom', customType: 'note', content: 'lint clean', display: true, timestamp: 1 }
+  const custom = [
+    r({ type: 'message_start', message: note }),
+    r({ type: 'message_end', message: note }),
+    r({ type: 'entry_appended', entry: { type: 'custom_message', id: 'e9', parentId: 'e8', timestamp: '2026-11-19T10:36:01.000Z', customType: 'note', content: 'lint clean', display: true } }),
+  ]
+  const init = r({ type: 'system', subtype: 'init', session_id: 'S2', cwd: home, tools: ['Bash'], model: 'claude-opus-4-6' })
+  const said = (text: string): string => r({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+  const use = (id: string, name: string, input: object): string =>
+    r({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } })
+  const toolResult = (id: string, content: string): string =>
+    r({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content }] } })
+  const done = (extra: object = {}): string => r({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', ...extra })
+
+  it('pi: agent_end, agent_settled → ended(); a later turn_start clears it (P4, P18)', () => {
+    const s = piStream(home)
+    for (const rec of ['{"type":"agent_start"}', '{"type":"agent_end","messages":[]}', '{"type":"agent_settled"}']) s.line(rec)
+    expect(s.ended()).toBe(true)
+    s.line('{"type":"turn_start"}')
+    expect(s.ended()).toBe(false)
+    // Re-arming: the next settle is the turn's end again.
+    s.line(settled)
+    expect(s.ended()).toBe(true)
+  })
+
+  it('pi: nothing has ended before agent_settled, agent_end included: a retry may follow it (P4, P18)', () => {
+    const s = piStream(home)
+    for (const rec of [
+      header,
+      r({ type: 'agent_start' }),
+      r({ type: 'turn_start' }),
+      r({ type: 'turn_end', message: { role: 'assistant', content: [] }, toolResults: [] }),
+      r({ type: 'agent_end', messages: [], willRetry: true }),
+    ]) {
+      s.line(rec)
+      expect(s.ended(), rec).toBe(false)
+    }
+  })
+
+  it('pi: queue_update, entry_appended, session_info_changed and non-JSON lines never clear it (P17, P49)', () => {
+    const s = piStream(home)
+    s.line(r({ type: 'agent_start' }))
+    s.line(settled)
+    for (const rec of [
+      r({ type: 'queue_update', steering: [], followUp: ['and the docs'] }),
+      r({ type: 'entry_appended', entry: { type: 'session_info', id: 'e2', parentId: 'e1', timestamp: '2026-11-19T10:36:02.000Z', name: 'p1' } }),
+      r({ type: 'session_info_changed', name: 'p1' }),
+      'chatty-stdout tick 1',                        // P17: a leaky extension that logs after the turn
+      '',
+      '{"type":"turn_start"',                        // half a record is no record
+      '[{"type":"agent_start"}]',                    // nor is an array
+      r({ type: 'message_start', message: null }),   // a message_start naming no message starts nothing
+      r({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop' } }),
+      r({ type: 'tool_execution_end', toolCallId: 'c1', result: { content: [] } }),
+      r({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false }),
+      r({ type: 'auto_retry_end', success: true, attempt: 1 }),
+      r({ type: 'agent_end', messages: [] }),
+      r({ type: 'brand_new' }),
+    ]) {
+      s.line(rec)
+      expect(s.ended(), rec).toBe(true)
+    }
+  })
+
+  it('pi: started() stays false through the header and extension records, and turns true at agent_start (P27, P49)', () => {
+    const s = piStream(home)
+    for (const rec of [
+      header,
+      'No API key found for anthropic.',             // P49: no login
+      r({ type: 'session_info_changed', name: 'p1' }),  // P49: an extension that names the session
+      r({ type: 'entry_appended', entry: { type: 'session_info', id: 'e1', parentId: null, timestamp: '2026-11-19T10:36:00.000Z', name: 'p1' } }),
+      r({ type: 'queue_update', steering: [], followUp: [] }),
+      '[addon] before_agent_start: waiting',          // P27: a handler that runs before agent_start
+      r({ type: 'addon_status', text: 'ready' }),    // an extension's own JSON
+    ]) {
+      s.line(rec)
+      expect(s.started(), rec).toBe(false)
+    }
+    expect(s.ended()).toBe(false)
+    s.line(r({ type: 'agent_start' }))
+    expect(s.started()).toBe(true)
+  })
+
+  it.each([
+    ['agent_start', { type: 'agent_start' }],
+    ['turn_start', { type: 'turn_start' }],
+    ["a user message's message_start", { type: 'message_start', message: { role: 'user', content: 'and the docs' } }],
+    ["an assistant message's message_start", { type: 'message_start', message: { role: 'assistant', content: [] } }],
+    ["a tool result's message_start", { type: 'message_start', message: { role: 'toolResult', toolCallId: 'c1', content: [] } }],
+    ['tool_execution_start', { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'bash', args: { command: 'ls' } }],
+    ['compaction_start', { type: 'compaction_start', reason: 'threshold' }],
+    ['auto_retry_start', { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: '529 overloaded' }],
+  ])('pi: %s starts a run: it clears a standing end and counts as a start', (_name, event) => {
+    const s = piStream(home)
+    s.line(settled)
+    expect([s.ended(), s.started()]).toEqual([true, false])
+    s.line(r(event))
+    expect([s.ended(), s.started()]).toEqual([false, true])
+  })
+
+  // S4-3: the leaky extension #80 is about may post a note after the turn, and a note that held
+  // the session would hold it for good. A custom message that triggers a turn brings its own
+  // agent_start.
+  it("pi: an extension's custom message after agent_settled neither cancels the grace nor counts as a start (S4-3)", () => {
+    const s = piStream(home)
+    s.line(r({ type: 'agent_start' }))
+    s.line(settled)
+    for (const rec of custom) {
+      s.line(rec)
+      expect(s.ended(), rec).toBe(true)
+    }
+    const early = piStream(home)
+    for (const rec of [header, ...custom]) early.line(rec)
+    expect(early.started()).toBe(false)
+  })
+
+  it.each(['bashExecution', 'branchSummary', 'compactionSummary'])("pi: a %s message's message_start starts no run (S4-3)", (role) => {
+    const s = piStream(home)
+    s.line(settled)
+    s.line(r({ type: 'message_start', message: { role, timestamp: 1 } }))
+    expect([s.ended(), s.started()]).toEqual([true, false])
+  })
+
+  it('claude: a top-level result ends; one with parent_tool_use_id does not; an open backgrounded call holds the end until its task ends', () => {
+    const s = claudeStream(home)
+    s.line(init)
+    s.line(said('Reviewing.'))
+    expect(s.ended()).toBe(false)
+    // A subagent's result names the call that ran it: the session's own turn goes on.
+    s.line(done({ parent_tool_use_id: 't1' }))
+    expect(s.ended()).toBe(false)
+    s.line(done({ parent_tool_use_id: null }))
+    expect(s.ended()).toBe(true)
+
+    // P12: a command left running in the background. claude writes a result and carries on once
+    // the task notifies: a second init names the same session, and a second result closes.
+    const b = claudeStream(home)
+    for (const rec of [
+      init,
+      use('t3', 'Bash', { command: '$WITNESS ship p1' }),
+      r({ type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 't3', task_type: 'local_bash', is_backgrounded: true }),
+      toolResult('t3', 'Command running in background with ID: b1.'),
+      done({ result: 'Waiting on CI.' }),
+    ]) b.line(rec)
+    expect(b.ended()).toBe(false)
+    b.line(r({ type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 't3', status: 'completed' }))
+    expect(b.ended()).toBe(false)                     // a task's end is no result
+    for (const rec of [init, use('t4', 'Read', { file_path: '/tmp/b1.output' }), toolResult('t4', '1\tmerged'), done({ result: 'Merged.' })]) b.line(rec)
+    expect(b.ended()).toBe(true)
+  })
+
+  // Final review I1 (row 214): claude 2.1.312 moves a Bash that outran its limit to the background
+  // with a task_updated patch.
+  it('claude: a call moved to the background holds the end too, until a task_updated ends it', () => {
+    const s = claudeStream(home)
+    for (const rec of [
+      init,
+      use('t7', 'Bash', { command: 'cargo test' }),
+      r({ type: 'system', subtype: 'task_started', task_id: 'b7', tool_use_id: 't7', is_backgrounded: false }),
+      r({ type: 'system', subtype: 'task_updated', task_id: 'b7', patch: { is_backgrounded: true } }),
+      toolResult('t7', 'Command did not complete within its 120s timeout and was moved to the background (ID: b7)'),
+      done({ result: 'Waiting on the tests.' }),
+    ]) s.line(rec)
+    expect(s.ended()).toBe(false)
+    s.line(r({ type: 'system', subtype: 'task_updated', task_id: 'b7', patch: { status: 'killed' } }))
+    expect(s.ended()).toBe(false)
+    s.line(done({ result: 'Stopped.' }))
+    expect(s.ended()).toBe(true)
+  })
+
+  it('claude: started() turns true at system:init, not before', () => {
+    const s = claudeStream(home)
+    for (const rec of [
+      r({ type: 'system', subtype: 'hook_started', hook_name: 'SessionStart:startup' }),
+      r({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }),
+      'Warning: x',
+    ]) {
+      s.line(rec)
+      expect(s.started(), rec).toBe(false)
+    }
+    s.line(init)
+    expect(s.started()).toBe(true)
+  })
+
+  it.each([
+    ['system:init', init],
+    ['an assistant record', said('More.')],
+    ['a user record', toolResult('t1', 'ok')],
+    ['a backgrounded task_started', r({ type: 'system', subtype: 'task_started', task_id: 'b2', tool_use_id: 't2', is_backgrounded: true })],
+    ['a task_updated moving a call to the background', r({ type: 'system', subtype: 'task_updated', task_id: 'b2', patch: { is_backgrounded: true } })],
+  ])('claude: %s starts a run: it clears a standing end and counts as a start', (_name, rec) => {
+    const s = claudeStream(home)
+    s.line(done())
+    expect([s.ended(), s.started()]).toEqual([true, false])
+    s.line(rec)
+    expect([s.ended(), s.started()]).toEqual([false, true])
+  })
+
+  it('claude: records that start no run never clear it', () => {
+    const s = claudeStream(home)
+    s.line(init)
+    s.line(done())
+    for (const rec of [
+      r({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }),
+      r({ type: 'system', subtype: 'hook_started', hook_name: 'Stop' }),
+      r({ type: 'system', subtype: 'task_started', task_id: 'a5', tool_use_id: 't5', task_type: 'local_agent', is_backgrounded: false }),
+      r({ type: 'system', subtype: 'task_updated', task_id: 'a5', patch: { status: 'completed' } }),
+      r({ type: 'system', subtype: 'task_notification', task_id: 'a5', tool_use_id: 't5', status: 'completed' }),
+      done({ parent_tool_use_id: 't5' }),
+      'Warning: x',
+      '{"type":"assistant"',
+    ]) {
+      s.line(rec)
+      expect(s.ended(), rec).toBe(true)
+    }
+  })
+
+  // claude json mode, the reviewers' (row 217): one result envelope, at the end.
+  it('envelopeStream: ended once a type:result object parses', () => {
+    const s = envelopeStream()
+    expect([s.ended(), s.started()]).toEqual([false, true])   // json mode writes nothing before it ends
+    for (const rec of ['Warning: x', '{"type":"result","subtype":"succ', '[{"type":"result"}]', r({ type: 'system', subtype: 'init' })]) {
+      expect(s.line(rec)).toEqual([])
+      expect(s.ended(), rec).toBe(false)
+    }
+    expect(s.line(r({ type: 'result', subtype: 'success', is_error: false, result: '{"verdict":"approve"}' }))).toEqual([])
+    expect([s.ended(), s.started(), s.failed()]).toEqual([true, true, false])
+  })
+
+  it("envelopeStream: the envelope's is_error is the failure (row 182)", () => {
+    const s = envelopeStream()
+    s.line(r({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1793313000' }))
+    expect([s.ended(), s.failed()]).toEqual([true, true])
+  })
+
+  // Review Focus: a Windows pipe writes CRLF and splits wherever it likes. drive's own sink feeds
+  // the stream, so it is what this reads through.
+  it('an agent_settled record split across two chunks, with CRLF, ends the turn (Review Focus)', () => {
+    const s = piStream(home); const sink = lineSink((rec) => s.line(rec))
+    sink.push('{"type":"agent_start"}\r\n{"type":"agent_se')
+    expect([s.started(), s.ended()]).toEqual([true, false])
+    sink.push('ttled"}\r\n')
+    expect(s.ended()).toBe(true)
+    // Split between the CR and its LF.
+    const t = piStream(home); const split = lineSink((rec) => t.line(rec))
+    split.push('{"type":"agent_start"}\r\n{"type":"agent_settled"}\r')
+    expect(t.ended()).toBe(false)
+    split.push('\n')
+    expect(t.ended()).toBe(true)
   })
 })

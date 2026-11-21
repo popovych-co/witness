@@ -16,6 +16,16 @@ import { logSafe } from './toon.js'
 // record that is not a JSON object passes through, capped. So a new shape makes the log quieter,
 // never a crash: drive's own `started`, `still running`, `journal:` and `ended` lines are drive's,
 // and stay.
+//
+// Row 245 (issue #80). A session ends when its turn ends, not when its process exits: a pi worker
+// whose extension leaks a handle lives on after its turn (P5) and held its target until the
+// timeout. Each stream says whether its harness's end signal stands — pi's `agent_settled`, or
+// claude's top-level `result` with no backgrounded call open — and whether a run has started. A
+// record that starts a run clears a standing end, and only such a record: non-JSON lines and
+// records about the session rather than a run (pi's `queue_update`, `entry_appended`,
+// `session_info_changed`, a custom message an extension posts) leave it standing, or a leaky
+// extension that logs would hold the session for good (P17, S4-3). How long a turn may linger
+// after its end signal is drive's and the reviewer's to time, never the stream's.
 
 export type WorkerLine =
   | { kind: 'show'; text: string }       // printed under the session's prefix, logSafe'd
@@ -26,6 +36,8 @@ export interface WorkerStream {
   line(record: string): WorkerLine[]     // one stdout record, LF and trailing CR gone; never throws
   inFlight(): string | undefined         // the oldest open tool call's action line, else 'the model' while it is awaited
   failed(): boolean                      // the session's last answer was an error
+  ended(): boolean                       // the turn's end signal stands: no run-starting record since it (row 245)
+  started(): boolean                     // a run-starting record has been seen (row 245)
 }
 
 // One action line is one terminal line: a heredoc or a 40 KB `Write` must not flood the log.
@@ -201,6 +213,17 @@ const oldestForeground = (open: Map<string, string>, background: ReadonlySet<str
   return oldest(open)
 }
 
+// Row 245. The pi records that start a run (§4.3 "What cancels it"). A `message_start` counts only
+// for a user, assistant or tool-result message: a custom message an extension posts after the turn
+// starts nothing, and one that triggers a turn brings its own `agent_start` (S4-3).
+const PI_RUN_STARTS = new Set(['agent_start', 'turn_start', 'tool_execution_start', 'compaction_start', 'auto_retry_start'])
+const PI_RUN_ROLES = new Set(['user', 'assistant', 'toolResult'])
+function piRunStart(e: Json): boolean {
+  const type = str(e.type)
+  if (type === 'message_start') return PI_RUN_ROLES.has(str(obj(e.message)?.role) ?? '')
+  return type !== undefined && PI_RUN_STARTS.has(type)
+}
+
 // A tool's result is heard and never shown, error or not: both harnesses mark every non-zero exit
 // as a tool error (pi throws "Command exited with code N", claude answers `Exit code 1`), so a
 // `failed` line would fire on every red test run and every grep that found nothing. The action
@@ -211,15 +234,24 @@ const oldestForeground = (open: Map<string, string>, background: ReadonlySet<str
 // `turn_end`, `agent_end` carrying the whole conversation, and `auto_retry_start` /
 // `compaction_start`. pi writes an answer's `message_start` only once the provider's stream has
 // begun, so the model is awaited from its turn's start until that answer ends.
+//
+// Row 245: a run opens with `agent_start` and closes with `agent_settled`, which pi writes after
+// any retry, compaction or queued continuation (P4, P18) — `agent_end` may still be followed by a
+// retry. Extensions' `session_start` and `before_agent_start` handlers run between the header and
+// `agent_start` (P27), and may write records of their own there (P49).
 export function piStream(home: string): WorkerStream {
   const open = new Map<string, string>()       // toolCallId → action line, oldest first
   let named: string | undefined                // the session id last emitted
   let turn = false                             // the model is awaited: a turn started, its answer has not ended
   let stop: string | undefined                 // the last assistant message's stopReason
+  let ended = false                            // agent_settled, and no run-starting record since
+  let started = false                          // a run-starting record has been seen
   return {
     line(record) {
       const e = parse(record)
       if (e === undefined) return [{ kind: 'show', text: passthrough(record) }]
+      if (piRunStart(e)) { started = true; ended = false }
+      else if (e.type === 'agent_settled') ended = true
       switch (e.type) {
         case 'session': {
           const id = str(e.id)
@@ -265,6 +297,8 @@ export function piStream(home: string): WorkerStream {
     },
     inFlight: () => oldest(open) ?? (turn ? 'the model' : undefined),
     failed: () => stop === 'error' || stop === 'aborted',
+    ended: () => ended,
+    started: () => started,
   }
 }
 
@@ -272,6 +306,18 @@ export function piStream(home: string): WorkerStream {
 const READ_NUMBER = /^\s*\d+\t/
 // The statuses a `task_updated` patch ends a task with.
 const TASK_ENDED = new Set(['completed', 'failed', 'killed'])
+
+// Row 245. The claude records that start a run (§4.3 "What cancels it"): `system:init`, any
+// `assistant` or `user` record, and a task that puts a call in the background — claude carries on
+// once that task ends (P12), so a move to the background told after the result reopens the turn.
+function claudeRunStart(e: Json): boolean {
+  if (e.type === 'assistant' || e.type === 'user') return true
+  if (e.type !== 'system') return false
+  if (e.subtype === 'init') return true
+  if (e.subtype === 'task_started') return e.is_backgrounded === true
+  if (e.subtype === 'task_updated') return obj(e.patch)?.is_backgrounded === true
+  return false
+}
 
 // claude (`claude -p --output-format stream-json --verbose`): `system:init` naming the session,
 // one `assistant` record per content block (thinking, text, tool_use), a `user` record carrying
@@ -288,6 +334,10 @@ const TASK_ENDED = new Set(['completed', 'failed', 'killed'])
 // open; claude 2.1.312 moves a Bash that outruns its limit to the background with a
 // `task_updated` whose patch says so (its SDK schema: "A later move to the background arrives as
 // task_updated patch.is_backgrounded"), not with a second `task_started`.
+//
+// Row 245: so a result ends the turn only when it is the session's own — a subagent's names its
+// call in `parent_tool_use_id` — and no backgrounded call is open; while one is, the next top-level
+// result is the one that can end it. The run has started from `system:init`.
 export function claudeStream(home: string): WorkerStream {
   const open = new Map<string, string>()       // tool_use id → action line, oldest first
   const calls = new Map<string, string>()      // every tool_use id → its action line
@@ -300,6 +350,8 @@ export function claudeStream(home: string): WorkerStream {
   let awaiting = false
   let said: string | undefined                 // the last text shown: a result often repeats it
   let failed = false
+  let ended = false                            // a top-level result with no backgrounded call open, and no run-starting record since
+  let started = false                          // a run-starting record has been seen
   const close = (id: string | undefined): void => {
     if (id === undefined) return
     background.delete(id)
@@ -317,6 +369,7 @@ export function claudeStream(home: string): WorkerStream {
     line(record) {
       const e = parse(record)
       if (e === undefined) return [{ kind: 'show', text: passthrough(record) }]
+      if (claudeRunStart(e)) { started = true; ended = false }
       switch (e.type) {
         case 'system':
           switch (e.subtype) {
@@ -405,6 +458,7 @@ export function claudeStream(home: string): WorkerStream {
         case 'result': {
           awaiting = false
           failed = e.is_error === true
+          if ((e.parent_tool_use_id === undefined || e.parent_tool_use_id === null) && background.size === 0) ended = true
           // Its text when it says something not just shown; P8's error subtypes carry no text,
           // only `errors[]`, and an error with neither is named by its subtype.
           const text = str(e.result)
@@ -423,5 +477,28 @@ export function claudeStream(home: string): WorkerStream {
     },
     inFlight: () => oldestForeground(open, background) ?? (awaiting ? 'the model' : undefined),
     failed: () => failed,
+    ended: () => ended,
+    started: () => started,
+  }
+}
+
+// Row 245. claude json mode (`claude -p --output-format json`), the reviewers' (row 217): nothing
+// until one result envelope at the end, so the turn has ended once a record parses as one, and the
+// run counts as started from the spawn, since nothing before the envelope could say it began. The
+// envelope's `is_error` is the failure (row 182). It renders nothing: a reviewer's stdout is its
+// verdict, which the harness's parseEnvelope reads whole, never a log.
+export function envelopeStream(): WorkerStream {
+  let ended = false
+  let failed = false
+  return {
+    line(record) {
+      const e = parse(record)
+      if (e?.type === 'result') { ended = true; failed = e.is_error === true }
+      return []
+    },
+    inFlight: () => undefined,
+    failed: () => failed,
+    ended: () => ended,
+    started: () => true,
   }
 }
