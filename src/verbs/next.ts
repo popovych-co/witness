@@ -40,8 +40,8 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import {
-  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision, reopenOpenBy, revisedRun,
-  type ActFacts, type DecisionEntry, type GateRunEntry,
+  ROUND_BOUND, boundReached, decisionOwed, lastGateRun, lastJudgedRun, liveActs, openReopen, reopenOpenBy, revisedRun,
+  standingHandBack, type ActFacts, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
 import { reportHandover, reportOpening } from '../slice.js'
@@ -185,8 +185,9 @@ export function gateParked(entries: Entry[], gate: string): boolean {
 // gate short-circuits and no pending decision can ever be created — the last run, until
 // the endgame is settled or parked. The two halves `next`'s tier 2 has always walked,
 // named once so the gate's tail and `next` settle exactly the same stops.
+// Row 244 (design §4.2.5): the first half is `decisionOwed`, so a standing hand-back is owed here too.
 export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefined {
-  const pending = pendingDecision(entries, gate)
+  const pending = decisionOwed(entries, gate)
   if (pending !== undefined) return pending
   if (boundReached(entries, gate) && !gateSettled(entries, gate) && !gateParked(entries, gate)) {
     return lastGateRun(entries, gate)
@@ -209,8 +210,12 @@ export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefine
 // every reader, so wherever this routes the gate, the gate never answers changed-nothing, whatever the
 // setup. Where the setup moved with no such round, this routes the authoring while the gate would run
 // a round: the safe direction, never a loop.
+// Row 244 (design §4.2.5): false while a hand-back stands — the author judged there is nothing to
+// change, and the revise is a decision owed again (`decisionOwed`), not an edit. Read before the
+// pairing, whose revise (a reopen by `caused_by` included) the hand-back answered.
 export function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
   if (currentSha === undefined) return false
+  if (standingHandBack(entries, gate) !== undefined) return false
   return revisedRun(entries, gate, currentSha) !== undefined
 }
 
@@ -800,12 +805,15 @@ function flowRank(a: NextAction): number {
 // created). Such a flow is NOT tier-1 motion — offering it would loop the driving loop
 // on an action that only re-reports "awaiting decision", and would starve tier 2 of the
 // very decision that unblocks it.
+// Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s, a standing hand-back included, read
+// here ahead of flowStep's own routing — a handed-back plan gate is neither the rework
+// `planReworkOwed` routes nor a re-gate `planGateStep` could run, and its implement work waits.
 function flowBlocked(root: string, plan: CanonDoc, entries: Entry[], taken: TakenBack): boolean {
   // A parked gate blocks the flow the same way an owed decision does, and for the same
   // reason: offering it loops the driving loop on an act the human already declined. It
   // does not disappear — `status`'s parked table names it and the run that un-parks it.
   if (['plan', 'implement', 'ship'].some((gate) =>
-    pendingDecision(entries, gate) !== undefined || gateParked(entries, gate) ||
+    decisionOwed(entries, gate) !== undefined || gateParked(entries, gate) ||
     (boundReached(entries, gate) && !gateSettled(entries, gate)))) return true
   // Row 95's split: a reopen on the plan's own plan gate is NOT a block — flowAction routes
   // it — but a reopen on the PARENT's decompose is, because that work belongs to the effort
@@ -1037,32 +1045,34 @@ interface PendingDecisionRef { gate: string; target: string }
 
 // Every human-owed decision in the repo, in the order tier 2 would surface them. One
 // source for both tiers: tier 2 takes the first, tier 1 rides them all in `note:`.
+// Row 244 (design §4.2.5): owed is `decisionOwed` — a pending run, or a standing hand-back.
 function pendingDecisionsAll(
   root: string, efforts: Array<{ slug: string; entries: Entry[] }>,
   specs: CanonDoc[], plans: CanonDoc[],
 ): PendingDecisionRef[] {
   const out: PendingDecisionRef[] = []
   for (const e of efforts) {
-    if (pendingDecision(e.entries, 'decompose')) out.push({ gate: 'decompose', target: e.slug })
+    if (decisionOwed(e.entries, 'decompose')) out.push({ gate: 'decompose', target: e.slug })
   }
   for (const plan of plans) {
     const id = String(plan.meta.id)
     const entries = readStream(root, id)
     for (const gate of ['plan', 'implement', 'ship']) {
-      if (pendingDecision(entries, gate)) out.push({ gate, target: id })
+      if (decisionOwed(entries, gate)) out.push({ gate, target: id })
     }
   }
   for (const spec of specs) {
     const id = String(spec.meta.id)
-    if (pendingDecision(readStream(root, id), 'design')) out.push({ gate: 'design', target: id })
+    if (decisionOwed(readStream(root, id), 'design')) out.push({ gate: 'design', target: id })
   }
   return out
 }
 
-// Row 173. Every decision the repo owes, in tier 2's order: the pending ones, then the bound
-// endgames (where the gate short-circuits, so no pending decision can ever be created) that
-// are neither settled nor parked. One derivation for tier 2's single line and for the
-// settling `next` does under autonomy, so the two can never disagree about what is owed.
+// Row 173. Every decision the repo owes, in tier 2's order: the pending ones (row 244: and the
+// standing hand-backs, `decisionOwed`), then the bound endgames (where the gate short-circuits,
+// so no pending decision can ever be created) that are neither settled nor parked. One
+// derivation for tier 2's single line and for the settling `next` does under autonomy, so the
+// two can never disagree about what is owed.
 export interface OwedDecision { gate: string; target: string; bound: boolean }
 
 function owedFrom(

@@ -722,6 +722,19 @@ export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | 
   return undefined
 }
 
+// Row 244 (#87, design §4.2.5; amends rows 94's half 2 and 173). The run a decision is owed on: the
+// pending one, or else the run a standing hand-back names — the revise the author handed back is
+// decided again. The two never hold together: a pending run has no disposition after it, and a
+// hand-back stands on a revise. The one owed predicate every reader reads — `owedRun`, `next`'s tier 2
+// and tier-1 waiting list (and through them settle and needs-you), `flowBlocked`, check's
+// `gate-awaiting-decision`, status's gates table — so a hand-back is owed everywhere a stop is.
+// Staleness is judged where the decision is made (P34): the predicate reads no current sha.
+export function decisionOwed(entries: Entry[], gate: string): GateRunEntry | undefined {
+  const pending = pendingDecision(entries, gate)
+  if (pending !== undefined) return pending
+  return standingHandBack(entries, gate) === undefined ? undefined : disposedRun(entries, gate)?.run
+}
+
 // A decision carrying `caused_by` is a REOPEN — another gate's `--revise --upstream`
 // instructing this stage to re-author. It is not a disposition of the run above it and
 // can never settle it. Discharged by a later gate-run OR a later human-decision for the

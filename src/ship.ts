@@ -13,7 +13,7 @@ import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result, type Violation } from './refusal.js'
 import { cmd, kv, logSafe, shellLine } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
-import { lastGateRun, lastJudgedRun, liveExits, type DecisionEntry } from './rounds.js'
+import { lastGateRun, lastJudgedRun, liveExits, standingHandBack, type DecisionEntry } from './rounds.js'
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
@@ -50,6 +50,12 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
   // touched the worktree, so the tree sha still matches. Routing on the tree alone would
   // detect the moved base forever and never rebase — only the gate phase rebases, and it
   // is the rebase that finally moves the tree.
+  // Row 244 (design §4.2.5, §4.2.9). A standing hand-back is a decision owed, with or without a PR: the
+  // revise is decided again, never re-gated (the gate would answer changed-nothing) nor edited (the
+  // author judged there is nothing to change). Blind to the tree, the base and the holds, as a stop
+  // awaiting its decision is: staleness is judged where the decision is made (P34), and the block
+  // below reads it.
+  if (standingHandBack(entries, 'ship') !== undefined) return 'awaiting-decision'
   if (plan.meta.pr !== undefined) {
     // Final review F1: a hold lifted since the ship gate ran is a verdict that never ran a
     // criterion now owed, so it re-gates exactly as a moved tree does.
@@ -995,9 +1001,16 @@ async function shipMarked(
     const up = gateSpec('ship')?.upstreamOf?.(root, canon, planId)
     // D154. The ship gate runs criteria too, so its approve carries the same two prices.
     const untrustedCmds = untrustedCmdsFor(root, criteriaOwner(canon, planId))
-    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale: liftedNow.length > 0, untrustedCmds })
+    // Row 244 (design §4.2.5, P34). Content staleness too, read as `decide` reads it — the tree as it
+    // stands against the last run that judged something, the run the decision disposes of — so on a
+    // moved tree the block offers only live acts: the re-gate first, never an approve `decide` refuses
+    // `stale-verdict`. An unresolvable base reads as unmoved ("cannot compute", never "moved").
+    const judged = lastJudgedRun(entries, 'ship')
+    const treeMoved = reviewedSha !== undefined && judged !== undefined && judged.reviewed_sha !== reviewedSha
+    const stale = treeMoved || liftedNow.length > 0
+    const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale, untrustedCmds })
     if (d) renderDecision(d).forEach((l) => ctx.out(l))
-    else ctx.out(cmd('help', liveExits('ship', planId, entries, false, up)))
+    else ctx.out(cmd('help', liveExits('ship', planId, entries, stale, up)))
     return EXIT.FINDINGS
   }
   if (phase === 'pr') {

@@ -1,7 +1,7 @@
 import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
-  actKey, actLive, anchorRecurrence, boundReached, ladderSpent, lastGateRun, liveActs, pendingDecision, repairsOnRegate,
+  actKey, actLive, anchorRecurrence, boundReached, decisionOwed, ladderSpent, lastGateRun, liveActs, repairsOnRegate,
   repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type GateStateKind, type LiveActs,
 } from './rounds.js'
 import { hasControl, visible } from './toon.js'
@@ -330,11 +330,14 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
   // 2 — stale below the bound. Staleness blocks STAMPING, not judging: `--approve` asserts
   // about current content and `decide` refuses it with `stale-verdict`, while a stop, a
   // revise and an upstream judge the WORK and are all legal (probed 2026-08-12, all exit 0).
-  // Gated on a pending decision because that is what resolves an anchor: on the reopened
+  // Gated on a decision owed because that is what resolves an anchor: on the reopened
   // and revised screens every decide verb refuses with `nothing-pending`, and there the
   // caller's single re-gate act is the honest answer.
+  // Row 244 (design §4.2.5, P34): owed is `decisionOwed`'s, so the guard admits a standing hand-back.
+  // Its moved row — the re-gate first, no approve, under this rule — is `revisedBlock`'s, built from
+  // the handed-back-moved state's live acts before this table is read; here owed is the pending run.
   if (stale && !atBound) {
-    if (pendingDecision(entries, gate) === undefined) return undefined
+    if (decisionOwed(entries, gate) === undefined) return undefined
     const nextRound = spent + 1
     return {
       key: 'decide', rule: 'stale-below-bound',

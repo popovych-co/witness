@@ -25,7 +25,7 @@ import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
-import { pendingDecision } from '../rounds.js'
+import { decisionOwed } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
 import { findById, findCycle, loadCanon, planFinished, type Canon } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
@@ -247,20 +247,22 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         findings.push(f('warn', 'motion', id, 'missing-worktree', `${cliAct('start', id).line} recreates it`))
       }
     }
+    // Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s — a pending run, or a standing
+    // hand-back — so check names every decision `next` routes.
     for (const gate of ['plan', 'implement', 'ship']) {
-      if (pendingDecision(readStream(root, id), gate)) {
+      if (decisionOwed(readStream(root, id), gate)) {
         findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', cliAct('decide', gate, id, '--show').line))
       }
     }
   }
   for (const slug of effortStreams(root)) {
-    if (pendingDecision(readStream(root, slug), 'decompose')) {
+    if (decisionOwed(readStream(root, slug), 'decompose')) {
       findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', cliAct('decide', 'decompose', slug, '--show').line))
     }
   }
   for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
     const id = String(spec.meta.id)
-    if (pendingDecision(readStream(root, id), 'design')) {
+    if (decisionOwed(readStream(root, id), 'design')) {
       findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', cliAct('decide', 'design', id, '--show').line))
     }
     if (designPending(root, spec) && String(spec.meta.status) === 'approved') {
