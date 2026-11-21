@@ -118,9 +118,11 @@ describe('an approve after a revise on the ship gate goes on to ship (P9)', () =
 // Fix round 2 (design §4.2.2, §4.2.4). A retraction asks for a re-review, not an edit: `witness ship`
 // re-judges the tree the retracted approval judged (the ship gate's `--fresh`, after its own rebase),
 // where it printed "revise owed — edit the code". `next` and `status` keep naming `witness ship`, the
-// ship session's one verb, and `decide --show` leads with the `gate ship --fresh` it runs.
+// ship session's one verb, and `decide --show` leads with the `gate ship --fresh` it runs. A plain
+// approve leaves the gate's setup as the run judged it, so only `--fresh` gets past changed-nothing;
+// an override mints an obligation, which moves the setup and would run a round anyway.
 describe('a retracted ship approval: witness ship re-reviews (row 244)', () => {
-  it('witness ship runs the ship gate fresh, never "revise owed", after a retraction', async () => {
+  it.each([[['--approve']], [['--approve', '--override']]])('witness ship runs the ship gate fresh, never "revise owed", after retracting %j', async (approveWith) => {
     const seed = await shippableRepo()
     addOrigin(seed.repo)
     const scenario = fakeScenario()
@@ -130,7 +132,7 @@ describe('a retracted ship approval: witness ship re-reviews (row 244)', () => {
     await runGate(ctx, 'implement', seed.planId, { fresh: false, manual: false })
     putVerdict(scenario, BLOCKING)
     expect(await runShip(ctx, seed.planId)).toBe(1)                     // the ship gate stops
-    expect((await seed.repo.cli(['decide', 'ship', seed.planId, '--approve', '--override'], { env })).code).toBe(0)
+    expect((await seed.repo.cli(['decide', 'ship', seed.planId, ...approveWith], { env })).code).toBe(0)
     const retract = await seed.repo.cli(['decide', 'ship', seed.planId, '--revise', '--note', 'the approval missed the drift'], { env })
     expect(retract.code, retract.stderr).toBe(0)
     const show = await seed.repo.cli(['decide', 'ship', seed.planId, '--show'], { env })
