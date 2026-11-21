@@ -246,7 +246,8 @@ function malformedBlock(ctx: GateContext, last: GateRunEntry): Decision {
       option(cliAct('gate', gate, target), 'root', {
         why: `the battery emitted ${last.malformed?.length ?? 0} schema violation(s) and no verdict — this round judged nothing, and malformed rounds do not spend the budget, so re-running is free${
           // A promise of what appendKind does (row 209): moved content is a fresh round, every
-          // lens asked; a revise since makes it changed-nothing; a fallen-back round re-runs.
+          // lens asked; a revise after it, on the content of the run that revise disposed of, makes
+          // it changed-nothing (row 244's pairing); a fallen-back round re-runs.
           last.malformed?.length && !stale && repairsOnRegate(entries, gate)
             ? `, and on unchanged content and setup it re-asks only ${last.malformed.map((m) => m.reviewer).join(' · ')}` : ''}`,
         note: 'a second malformed round on the same pin and prompts trips malformed-streak, which names the config remedy',

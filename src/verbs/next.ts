@@ -40,7 +40,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import {
-  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision,
+  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision, revisedRun,
   type ActFacts, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
@@ -52,8 +52,12 @@ import { reportHandover, reportOpening } from '../slice.js'
 // Same doctrine as designPending (design.ts:74) — approval is a fact about a sha, not a
 // permanent fact. Callers that cannot cheaply compute a current sha omit it and get
 // today's behavior.
+// Row 244 (design §4.2.3, §4.2.9): read as `liveActs` reads its settled state — from the last run that
+// judged something (a malformed round judged nothing, so it leaves a settlement standing for the
+// content that was judged), and by that run's last disposition, after a pass too: a retraction
+// (`decide --revise --note`) un-settles a pass, and a stop after one parks it.
 export function gateSettled(entries: Entry[], gate: string, currentSha?: string): boolean {
-  const last = lastGateRun(entries, gate)
+  const last = lastJudgedRun(entries, gate)
   if (!last) return false
   // above BOTH settling branches deliberately: a human --approve --override is granted
   // against a specific tree too, and lapses with it
@@ -61,10 +65,9 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
   // an explicit reopen from another gate's --revise --upstream un-settles this one until
   // it is discharged, exactly as a moved sha does — one predicate, both staleness terms
   if (openReopen(entries, gate) !== undefined) return false
-  if (last.outcome === 'passed') return true
   // Read by position, not by presence — the last disposition is the state (D94).
   const after = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
-  return after !== undefined && after.decision === 'approve'
+  return after === undefined ? last.outcome === 'passed' : after.decision === 'approve'
 }
 
 // D124, corrected while building it. The plan folded `stop` into `gateSettled` to stop
@@ -110,16 +113,16 @@ export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefine
 // immediately decline, and — since nothing is appended — `next` says it again next turn.
 // The work owed is AUTHORING, so route to the stage. The design stage already does this
 // via designArtifactCurrent; this is the same rule for decompose and plan.
+// The LAST decision is the state (D94). `.some()` read by presence, so an approve answering a
+// revise left this still claiming authoring — the same read-by-position defect as decide --show's
+// disposition. A reopen (`caused_by`) is a revise of this gate, so an open one is owed the same way.
+// Row 244 (design §4.2.3, "one pairing"): exactly where the gate's own changed-nothing would answer,
+// read through the same pairing (`revisedRun`) — the revise and the run it disposed of, malformed runs
+// skipped — so `next` never routes a re-gate that changes nothing, nor withholds one that repairs a
+// malformed round (P50) or judges content no run read.
 export function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
-  const last = lastGateRun(entries, gate)
-  if (!last) return false
-  if (currentSha === undefined || last.reviewed_sha !== currentSha) return false
-  if (openReopen(entries, gate) !== undefined) return true
-  // The LAST decision is the state (D94). `.some()` read by presence, so an approve
-  // answering a revise left this still claiming authoring — the same read-by-position
-  // defect as decide --show's disposition.
-  const recent = lastDisposition(entries, gate, entries.lastIndexOf(last as unknown as Entry))
-  return recent !== undefined && ['revise', 'revise-upstream'].includes(recent.decision)
+  if (currentSha === undefined) return false
+  return revisedRun(entries, gate, (r) => r.reviewed_sha === currentSha) !== undefined
 }
 
 // D75 re-arms a gate whose reviewed sha has moved — under row 96 that is the diff moving
@@ -160,7 +163,8 @@ function lapseNote(
   // lapse is rare. Nothing below the guards may be paid for on the settled path.
   cause: () => LapseCause | undefined,
 ): string | undefined {
-  const last = lastGateRun(entries, gate)
+  // Row 244: the run the settlement judged, as `gateSettled` reads it — a malformed round judged nothing.
+  const last = lastJudgedRun(entries, gate)
   if (!last || currentSha === undefined || last.reviewed_sha === currentSha) return undefined
   // sha-free: asks "was it ever settled", which is the only thing that can lapse
   if (!gateSettled(entries, gate)) return undefined

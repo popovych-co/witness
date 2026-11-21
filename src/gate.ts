@@ -27,12 +27,12 @@ import {
   basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
 } from './delta.js'
 import {
-  actKey, appendKind, boundReached, lastGateRun, liveActs,
+  actKey, appendKind, boundReached, liveActs,
   roundsSinceApprove, runsSinceReset,
   type ActFacts, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { actFacts, gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
+import { actFacts, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
@@ -473,24 +473,29 @@ async function judge(
   // this setup resumes, meets changed-nothing or replays, whether it was a full or a delta round.
   // Only a fresh key plans a delta, further down.
   const key: GateKey = fullKey
-  // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
-  // Content moving is a legitimate, self-explaining reason. A flag is not — `--fresh`
-  // discarded a human decision with nothing printed and nothing journaled about it, and
-  // row 94 removed its other job (escaping the changed-nothing deadlock), so it can
-  // refuse and send the human through the verb that states a retraction and its reason.
-  const settledBefore = gateSettled(entries, spec.gate)
-  // Row 244 (P8, S2-3). Refused only for the content the settlement judged, as `liveActs` reads it:
-  // on moved content the approval lapsed (D75) and `--fresh` runs. The want names the settled
-  // state's live act, the retraction, then the `--fresh` that re-judges after it (design §4.2.3).
-  if (flags.fresh) {
+  // D99: a new run that judges something un-settles the gate. Content moving is a legitimate,
+  // self-explaining reason. A flag is not — `--fresh` discarded a human decision with nothing
+  // printed and nothing journaled about it, and row 94 removed its other job (escaping the
+  // changed-nothing deadlock), so it can refuse and send the human through the verb that states a
+  // retraction and its reason.
+  // Row 244 (P8, S2-3). Settled for the content the settlement judged, as `liveActs` reads it: on
+  // moved content the approval lapsed (D75) and `--fresh` runs; after a retraction or a stop the
+  // gate is no longer settled (design §4.2.3). One reading for the refusal and for the setup-change
+  // warning below, so neither speaks of a settlement the other does not see. Read once, and only
+  // where one of them asks: the facts can cost a flow read.
+  let settledRead: { live: LiveActs; settled: boolean } | undefined
+  const settledBefore = (): { live: LiveActs; settled: boolean } => settledRead ??= (() => {
     const facts = factsHere(root, cfgR.value, canon, spec.gate, target, entries, upstreamId, input.reviewedSha)
-    const settled = liveActs(spec.gate, target, entries, facts)
-    if (settled.state === 'settled' && !facts.stale && !facts.holdLifted) {
-      renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
-        `${exitsLine(settled.acts)} — retract the settlement, then ${cliAct('gate', spec.gate, target, '--fresh').line} re-judges it`)])
-        .forEach((l) => ctx.err(l))
-      return EXIT.REFUSED
-    }
+    const live = liveActs(spec.gate, target, entries, facts)
+    return { live, settled: live.state === 'settled' && !facts.stale && !facts.holdLifted }
+  })()
+  // The want names the settled state's live act, the retraction, then the `--fresh` that re-judges
+  // after it (design §4.2.3).
+  if (flags.fresh && settledBefore().settled) {
+    renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
+      `${exitsLine(settledBefore().live.acts)} — retract the settlement, then ${cliAct('gate', spec.gate, target, '--fresh').line} re-judges it`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
   }
 
   let kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
@@ -520,9 +525,8 @@ async function judge(
   }
   // A key that moved for a NON-content reason — edited prompt, re-pinned model, new
   // witness version — un-settles just as quietly as --fresh did. Content moving explains
-  // itself; this does not.
-  const lastRun = lastGateRun(entries, spec.gate)
-  if (settledBefore && kind.kind === 'fresh' && lastRun && lastRun.reviewed_sha === input.reviewedSha) {
+  // itself; this does not. `settledBefore` is already for the content as it stands (row 244).
+  if (kind.kind === 'fresh' && settledBefore().settled) {
     ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
   }
   if (kind.kind === 'resume') {

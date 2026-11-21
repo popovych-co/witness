@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { actOn } from '../src/act.js'
-import { option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
+import { AFTER_EDIT, option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
@@ -151,6 +151,40 @@ describe('the re-ask suffix promises only what the re-gate will do', () => {
   it('says nothing of a re-ask once a revise follows it — the re-gate is changed-nothing', () => {
     const entries = [run(1, 'a', 'S'), { ...malformed(), round: 2, run_id: 'r-2' } as Entry, decision('revise')]
     expect(recommend(ctxFor(entries))!.options[0]!.why ?? '').not.toContain('re-asks')
+  })
+})
+
+// Row 244 (design §4.2.3). The revised-state rules, `revise-returned` included, match before
+// `malformed-rerun` when a revise follows the malformed run; a malformed round after the revise keeps
+// its free re-run first, and that re-run repairs it (P50).
+describe('a malformed round around a revise (design §4.2.3)', () => {
+  const malformed = (round: number, sha: string) =>
+    run(round, sha, 'S', { run_id: `r-${round}`, outcome: 'malformed', verdicts: [], malformed: [{ reviewer: 'code-reviewer', violations: [] }] })
+
+  it('a revise after a malformed round: the revised-state rule matches first (P45)', () => {
+    const entries = [run(1, 'a', 'S'), malformed(2, 'a'), decision('revise')]
+    const d = recommend(ctxFor(entries))!
+    expect(d.rule).toBe('revised')
+    expect(d.anchor).toBe('S')
+    expect(d.options[0]).toMatchObject({ command: 'witness gate plan p1', when: AFTER_EDIT })
+    // handed back after that revise: the hand-back's rule, never the re-run that would change nothing
+    const back = { v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: 'r-1', sha: 'a' } as unknown as Entry
+    const handed = recommend(ctxFor([...entries, back]))!
+    expect(handed.rule).toBe('revise-returned')
+    expect(handed.options.map((o) => o.command)).not.toContain('witness gate plan p1')
+  })
+
+  it('a malformed round after the revise leads with its re-run, which promises the repair (P50)', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'S'), decision('revise'), malformed(2, 'a')]))!
+    expect(d.rule).toBe('malformed-rerun')
+    expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
+  })
+
+  it('a revise after a malformed-only round: the re-gate repairs it, and the block says so (S2-4)', () => {
+    const d = recommend(ctxFor([malformed(1, 'a'), decision('revise')]))!
+    expect(d.rule).toBe('malformed-rerun')
+    expect(d.options.map((o) => o.command)).toEqual(['witness gate plan p1'])
+    expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
   })
 })
 

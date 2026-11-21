@@ -740,20 +740,54 @@ export type AppendKind =
   | { kind: 'repair'; from: GateRunEntry }
   | { kind: 'fresh' }
 
-const revisedAfter = (entries: Entry[], runIdx: number, gate: string): boolean =>
-  entries.slice(runIdx + 1).some((e) =>
-    isDecision(e, gate) && ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision))
+// Is the gate's last disposition after the run at `runIdx` a revise of any kind? Read by position,
+// not by presence (D94): an approve or a stop that answered the revise is the state (design §4.2.3).
+function revisedAfter(entries: Entry[], runIdx: number, gate: string): boolean {
+  for (let i = entries.length - 1; i > runIdx; i--) {
+    if (isDecision(entries[i], gate)) return isRevise(entries[i], gate)
+  }
+  return false
+}
+
+const lastRunAt = (entries: Entry[], gate: string, judged = false): number => {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (isRun(entries[i], gate) && (!judged || (entries[i] as unknown as GateRunEntry).outcome !== 'malformed')) return i
+  }
+  return -1
+}
+
+// Row 244 (design §4.2.3, "one pairing everywhere"). The run a re-gate of content `same` accepts would
+// answer changed-nothing about: the run the gate's standing revise disposed of (`disposedRun`). That
+// holds while
+//   - no run that judged something follows the revise (one that did answered it);
+//   - the gate's last disposition after that run is the revise (any kind): an approve or a stop that
+//     answered it ends it, so an approve after a revise on unchanged content goes on (P9);
+//   - that run did not fall back (row 106: a substituted round is evidence for nothing);
+//   - and it read what `same` accepts.
+// A malformed round after the revise that read the same, though, is the gate's last word: its free
+// re-run repairs it (P50). One before the revise, or after it on other content, judged nothing, so the
+// pairing stays with the disposed run (P45, S3-3). With no run disposed of — a revise after malformed
+// rounds alone, a journal older than 0.30 — nothing pairs, and the malformed round is repaired (S2-4).
+export function revisedRun(entries: Entry[], gate: string, same: (run: GateRunEntry) => boolean): GateRunEntry | undefined {
+  const disposed = disposedRun(entries, gate)
+  if (disposed === undefined || lastRunAt(entries, gate, true) !== disposed.at || !revisedAfter(entries, disposed.at, gate)) return undefined
+  if (fellBack(disposed.run) || !same(disposed.run)) return undefined
+  const last = lastRunAt(entries, gate)
+  if (last > disposed.at && !revisedAfter(entries, last, gate) && same(entries[last] as unknown as GateRunEntry)) return undefined
+  return disposed.run
+}
 
 // Row 209: does a re-gate on unchanged content and setup repair the last run — re-ask only its
 // lenses with no verdict — rather than re-run, resume or refuse? appendKind's own rule, minus the
-// key only the gate can build, so the recommender's promise of a repair reads the same rule.
+// key only the gate can build, so the recommender's promise of a repair reads the same rule: the
+// last run is malformed and did not fall back, and the re-gate on its key is not the disposed run's
+// changed-nothing (row 244's pairing, `revisedRun`).
 export function repairsOnRegate(entries: Entry[], gate: string): boolean {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (!isRun(entries[i], gate)) continue
-    const last = entries[i] as unknown as GateRunEntry
-    return last.outcome === 'malformed' && !fellBack(last) && !revisedAfter(entries, i, gate)
-  }
-  return false
+  const at = lastRunAt(entries, gate)
+  if (at < 0) return false
+  const last = entries[at] as unknown as GateRunEntry
+  return last.outcome === 'malformed' && !fellBack(last) &&
+    revisedRun(entries, gate, (r) => sameKey(keyOf(r), keyOf(last))) === undefined
 }
 
 // Row 215 (D3). Does this journaled run answer `key` — the one evidence rule for the gate's
@@ -764,10 +798,13 @@ export function answersKey(run: GateRunEntry, key: GateKey): boolean {
 }
 
 export function appendKind(entries: Entry[], gate: string, key: GateKey): AppendKind {
-  let lastRunIdx = -1
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (isRun(entries[i], gate)) { lastRunIdx = i; break }
-  }
+  // Row 244 (design §4.2.3). Changed-nothing pairs the gate's standing revise with the run it disposed
+  // of, malformed runs skipped, and reads the gate's LAST disposition: an approve after a revise on
+  // unchanged content resumes, so ship goes on (P9); a malformed round after the revise on this
+  // content is repaired below (P50).
+  const revised = revisedRun(entries, gate, (r) => sameKey(keyOf(r), key))
+  if (revised !== undefined) return { kind: 'changed-nothing', entry: revised }
+  const lastRunIdx = lastRunAt(entries, gate)
   if (lastRunIdx >= 0) {
     const last = entries[lastRunIdx] as unknown as GateRunEntry
     // Row 106: a substituted round is not evidence for another one, and `resume` and
@@ -780,9 +817,9 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
     // that was never the problem. Re-SHOWING the entry is `decide --show`'s job.
     // Row 209. A malformed round judged nothing, so there is nothing to resume: re-showing it
     // re-ran nothing while its own block said re-running is free. A re-gate repairs it instead —
-    // the lenses that answered are carried and the ones that did not are asked again.
+    // the lenses that answered are carried and the ones that did not are asked again. Every
+    // malformed last round no revise pairs past is repaired (S2-4).
     if (!fellBack(last) && sameKey(keyOf(last), key)) {
-      if (revisedAfter(entries, lastRunIdx, gate)) return { kind: 'changed-nothing', entry: last }
       return last.outcome === 'malformed' ? { kind: 'repair', from: last } : { kind: 'resume', entry: last }
     }
   }

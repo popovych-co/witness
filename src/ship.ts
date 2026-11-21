@@ -13,7 +13,7 @@ import { criteriaOwner, findById, loadCanon, type CanonDoc } from './scan.js'
 import { humanCall, ok, refuse, renderRefusal, v, type Result, type Violation } from './refusal.js'
 import { cmd, kv, logSafe, shellLine } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
-import { lastGateRun, liveExits, type DecisionEntry } from './rounds.js'
+import { lastGateRun, lastJudgedRun, liveExits, type DecisionEntry } from './rounds.js'
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
@@ -55,11 +55,15 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
     // criterion now owed, so it re-gates exactly as a moved tree does.
     return gateSettled(entries, 'ship', treeSha) && !baseMoved && !holdLifted ? 'watch' : 'gate'
   }
-  const last = lastGateRun(entries, 'ship')
-  if (!last) return 'gate'
-  const after = entries.slice(entries.indexOf(last as unknown as Entry) + 1)
-  const decision = after.find((e) =>
-    e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === 'ship') as unknown as DecisionEntry | undefined
+  if (!lastGateRun(entries, 'ship')) return 'gate'
+  // Row 244 (design §4.2.3; P9, amends row 77). The gate's LAST disposition after the run it disposed
+  // of, read by position as every reader reads it: an approve that answered a revise on unchanged
+  // content goes on to the PR, and a retraction after an approve re-gates. A malformed round judged
+  // nothing, so the disposition is read after the last run that judged something.
+  const judged = lastJudgedRun(entries, 'ship')
+  const decision = entries.slice(judged === undefined ? 0 : entries.lastIndexOf(judged as unknown as Entry) + 1)
+    .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === 'ship')
+    .at(-1) as unknown as DecisionEntry | undefined
   // awaiting-decision is deliberately blind to baseMoved: a human reading
   // `decide ship --show` is reading findings pinned to a sha, and rebasing under them
   // would lapse the very gate they are deciding on.
