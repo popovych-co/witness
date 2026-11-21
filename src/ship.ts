@@ -67,7 +67,13 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
   if (decision.decision !== 'approve') return 'gate'
   // An approval is against a base as well as a tree — opening the PR on a base that has
   // since moved is the same stale-review bug one step earlier.
-  return baseMoved || holdLifted ? 'gate' : 'pr'
+  // Row 243 (design §4.1.1 step 9; P32, amends row 77). And against the tree the battery judged:
+  // ship's carry moves the plan onto a moved base itself, and a clash, a refused apply or a crash
+  // ends that run before any battery judges the moved tree. The next run then finds the base
+  // unmoved and the approval still the last word. The reviewed sha's base term moves with the
+  // carry, and a state-only advance leaves it (stateOnlyAdvance), so the approval routes to the PR
+  // only while the gate is settled for the tree as it now stands.
+  return baseMoved || holdLifted || !gateSettled(entries, 'ship', treeSha) ? 'gate' : 'pr'
 }
 
 // `code`: gh's exit status, or null when it ended on a signal (its timeout) — row 242 reads both.
@@ -100,7 +106,9 @@ function recordOutcome(root: string, planId: string, outcome: ShipOutcome, reaso
 // Row 242. A refusal of the remote — no origin, a fetch, a push, a PR create — as the outcome it is:
 // a human's fix (a branch holding commits the worktree lacks, a lease refused, a refused login, no
 // remote), or one drive re-checks (the remote did not answer, or another push or create failure).
-// The session's own work — a commit that failed, an unreadable HEAD, a rebase conflict — is no record.
+// Row 243: a git lock the move met is re-checked too (transient). The session's own work — a commit
+// that failed, an unreadable HEAD, a clash or replay conflict, any other refusal of the carry — is no
+// record (design §4.1.3's table).
 function recordRefusal(root: string, planId: string, violations: readonly Violation[], shipBranch: string): void {
   const o = violations[0] !== undefined ? refusalOutcome(violations[0]) : undefined
   if (o !== undefined) recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
@@ -131,6 +139,11 @@ export function refusalOutcome(x: Violation): { outcome: ShipOutcome; reason: st
     case 'pr-url-unparseable': return { outcome: 'transient', reason: 'the PR create answered no PR' }
     // Row 243: the PR's branch the lease read is gone — recreating it, or abandoning the plan, is the human's call.
     case 'pr-branch-gone': return { outcome: 'fix', reason: BRANCH_GONE }
+    // Row 243 (design §4.1.3's table): a held lock — the index's or the carry ref's, at any step of
+    // the move — is drive's to re-check; the next ship run carries on, step 0 finishing the move.
+    // The carry's other refusals (textual-conflict, clash-unresolved, operation-in-progress,
+    // carry-refused, carry-pending, rebase-refused) record nothing.
+    case 'index-locked': return { outcome: 'transient', reason: 'a git lock was held — the next ship run carries on once it is released' }
     default: return undefined
   }
 }
