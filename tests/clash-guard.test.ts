@@ -284,10 +284,58 @@ describe('fileRemedies (design §4.1.3, S1-4, S1-5, S1-7)', () => {
     expect(unmergedPaths(wt).map((f) => f.path)).toEqual(['f.md', 'gone.md'])
   })
 
-  it('both changed with no markers is named for what it is', () => {
+  // S1-A. A side is offered only while the file still holds a version git left in a stage: then
+  // checking either side out throws nothing away. A file the session resolved, or partly resolved,
+  // and has not staged yet holds bytes only the worktree has.
+  it('a text file still holding one side\'s version as git left it is both changed, no markers, with both checkouts', () => {
     stashClash(['f.md'])
-    put('f.md', 'a\nno markers left\nc\n')
-    expect(fileRemedies(wt, unmergedPaths(wt), 'stash')[0]).toMatch(/^both changed, no markers — /)
+    put('f.md', 'a\nPLAN\nc\n') // stage 3's bytes: the plan's version in a stash apply
+    const [row] = fileRemedies(wt, unmergedPaths(wt), 'stash')
+    expect(row).toBe(`both changed, no markers — ${shellLine(['git', 'checkout', '--theirs', '--', 'f.md'])} keeps the plan's version, `
+      + `${shellLine(['git', 'checkout', '--ours', '--', 'f.md'])} keeps the base's version; then ${shellLine(['git', 'add', '--', 'f.md'])}`)
+  })
+
+  it('a text file resolved but not staged is told it has no markers left, and offered no checkout of a side (S1-A)', () => {
+    stashClash(['f.md'])
+    put('f.md', 'a\nMAIN+PLAN\nc\n')
+    const [row] = fileRemedies(wt, unmergedPaths(wt), 'stash')
+    expect(row).toBe(`no markers left — no conflict markers are left in it: if this is the resolution, ${shellLine(['git', 'add', '--', 'f.md'])} `
+      + `records it; ${shellLine(['git', 'checkout', '-m', '--', 'f.md'])} puts the markers back`)
+    expect(row).not.toMatch(/--theirs|--ours/)
+    // the guard's row is prose, never a runnable line
+    const v = clashViolations('p1', clashLeft(wt, 'p1', 'main')!, wt)
+    expect(v[0]!.want).toBe(row)
+    expect(v[0]!.remedy).toBeUndefined()
+    // and what it names does what it says: checkout -m puts the markers back, still unmerged
+    g(wt, 'checkout', '-m', '--', 'f.md')
+    expect(readFileSync(join(wt, 'f.md'), 'utf8')).toMatch(/^<{7} /m)
+    expect(unmergedPaths(wt).map((f) => f.path)).toEqual(['f.md'])
+  })
+
+  it('a text file with one marker left is still content to finish resolving (S1-A)', () => {
+    stashClash(['f.md', 'g.md'])
+    put('f.md', 'a\n<<<<<<< Updated upstream\nMAIN\n=======\nPLAN\nc\n') // the closing marker removed
+    put('g.md', 'a\nMAIN and PLAN\n>>>>>>> Stashed changes\nc\n') // the opening marker removed
+    const rows = fileRemedies(wt, unmergedPaths(wt), 'stash')
+    expect(rows).toEqual(['f.md', 'g.md'].map((f) =>
+      `content — resolve the conflict markers keeping both sides' intent, then ${shellLine(['git', 'add', '--', f])}`))
+  })
+
+  it('a binary file rewritten since git left it offers its staging first, and names what a side\'s checkout replaces (S1-A)', () => {
+    put('b.bin', Buffer.from('bin\0base'))
+    g(wt, 'add', 'b.bin')
+    g(wt, 'commit', '-qm', 'bin')
+    put('b.bin', Buffer.from('bin\0PLAN'))
+    const carry = carryGit(wt, 'stash', 'create').stdout.trim()
+    g(wt, 'reset', '-q', '--hard')
+    put('b.bin', Buffer.from('bin\0MAIN'))
+    g(wt, 'commit', '-qam', 'main moved')
+    carryGit(wt, 'stash', 'apply', carry)
+    put('b.bin', Buffer.from('bin\0REGENERATED'))
+    const [row] = fileRemedies(wt, unmergedPaths(wt), 'stash')
+    expect(row).toBe(`binary, neither side's version — if these bytes are the resolution, ${shellLine(['git', 'add', '--', 'b.bin'])} records them; `
+      + `${shellLine(['git', 'checkout', '--theirs', '--', 'b.bin'])} would replace them with the plan's version, `
+      + `${shellLine(['git', 'checkout', '--ours', '--', 'b.bin'])} with the base's version`)
   })
 
   it('a rebase\'s clash and a merge\'s clash name their sides for that operation (S1-5)', () => {

@@ -105,10 +105,28 @@ const CLOSES = /^>{7,}(?: |\r?$)/m
 const contentRow = (file: string): string =>
   `content — resolve the conflict markers keeping both sides' intent, then ${remedyLine(['git', 'add', '--', file])}`
 
+// The blob `git add` would store for the worktree's file, through the path's own filters (`git
+// hash-object -- <file>` reads attributes for it; a stage holds the cleaned bytes), or nothing where
+// git cannot say. Compared with the stages' blobs: equal to one, the file still holds a version git
+// left, and checking out a side throws nothing away.
+function worktreeBlob(wt: string, path: string): string | undefined {
+  const r = carryGit(wt, 'hash-object', '--', path)
+  const sha = r.stdout.trim()
+  return r.code === 0 && /^[0-9a-f]+$/.test(sha) ? sha : undefined
+}
+
 // §4.1.3's per-file rows, one per file in order, each `<kind> — <remedy>`, its kind read from the
-// stages and the file: content (it holds conflict markers), binary or both changed with no markers,
-// and modify/delete. Every command goes through `remedyLine`. None is a runnable `remedy`: `git
-// add` before the markers are resolved would stage them, so no row offers it as `run:`.
+// stages and the file: content (it holds a conflict marker, even one left alone), binary or both
+// changed with no markers, no markers left, and modify/delete. Every command goes through
+// `remedyLine`. None is a runnable `remedy`: `git add` before the markers are resolved would stage
+// them, so no row offers it as `run:`.
+//
+// S1-A. `git checkout --theirs`/`--ours` writes a side over the file, so a row offers it only while
+// the worktree still holds a version git left in a stage (or no file at all): a file the session
+// resolved, or rewrote, and has not staged yet holds bytes only the worktree has. A text file with
+// no markers and none of the stages' bytes reads as resolved: its row says so in prose, with the
+// `git add` that records it and the `git checkout -m` that puts the markers back. A binary file
+// rewritten the same way is offered its staging first, and the checkouts as what replaces it.
 export function fileRemedies(wt: string, files: UnmergedPath[], op: ClashOp): string[] {
   const s = SIDES[op]
   const other = s.plan === 3 ? 2 : 3
@@ -125,11 +143,22 @@ export function fileRemedies(wt: string, files: UnmergedPath[], op: ClashOp): st
       return `modify/delete — ${deleted} deleted it and ${changed} changed it: ${rm} keeps the deletion, ${add} keeps the change`
     }
     const bytes = readWorktree(wt, path)
+    const binary = bytes !== undefined && bytes.subarray(0, 8000).includes(0)
     const text = bytes?.toString('latin1') ?? ''
-    if (OPENS.test(text) && CLOSES.test(text)) return contentRow(path)
-    const kind = bytes !== undefined && bytes.subarray(0, 8000).includes(0) ? 'binary' : 'both changed, no markers'
-    return `${kind} — ${remedyLine(['git', 'checkout', keepPlan, '--', path])} keeps ${s.planVersion}, `
-      + `${remedyLine(['git', 'checkout', keepOther, '--', path])} keeps ${s.otherVersion}; then ${add}`
+    if (!binary && (OPENS.test(text) || CLOSES.test(text))) return contentRow(path)
+    const theirs = remedyLine(['git', 'checkout', keepPlan, '--', path])
+    const ours = remedyLine(['git', 'checkout', keepOther, '--', path])
+    const blob = bytes === undefined ? undefined : worktreeBlob(wt, path)
+    const asGitLeftIt = bytes === undefined || (blob !== undefined && Object.values(stages).includes(blob))
+    if (asGitLeftIt) {
+      return `${binary ? 'binary' : 'both changed, no markers'} — ${theirs} keeps ${s.planVersion}, ${ours} keeps ${s.otherVersion}; then ${add}`
+    }
+    if (binary) {
+      return `binary, neither side's version — if these bytes are the resolution, ${add} records them; `
+        + `${theirs} would replace them with ${s.planVersion}, ${ours} with ${s.otherVersion}`
+    }
+    return `no markers left — no conflict markers are left in it: if this is the resolution, ${add} records it; `
+      + `${remedyLine(['git', 'checkout', '-m', '--', path])} puts the markers back`
   })
 }
 

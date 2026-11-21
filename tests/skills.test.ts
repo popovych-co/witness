@@ -241,7 +241,12 @@ describe('witness-ship', () => {
     const clash = section('### A clash');
     inOrder(clash, [
       '**content**', 'resolve the conflict markers keeping both intents', '`git add -- <file>`',
-      '**binary, or both changed with no markers**', '`git checkout --theirs -- <file>` keeps the plan\'s version', '`git checkout --ours -- <file>` keeps main\'s',
+      'a file with one marker left is still content',
+      '**binary, or both changed with no markers**', 'offered only while the file still holds a version git left',
+      '`git checkout --theirs -- <file>` keeps the plan\'s version', '`git checkout --ours -- <file>` keeps main\'s',
+      '**no markers left**', 'the row\'s `git add -- <file>` records it', '`git checkout -m -- <file>` puts the markers back',
+      'Never check out a side over it',
+      '**binary, neither side\'s version**', 'the row\'s checkouts would replace it with a side',
       '**modify/delete**', 'which side `git rm -- <file>` keeps and which side `git add -- <file>` keeps',
       'Test through `$WITNESS turn -- <test command>`',
       'Re-run `$WITNESS ship <plan-id>`, which re-gates',

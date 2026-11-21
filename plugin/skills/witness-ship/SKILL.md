@@ -58,8 +58,10 @@ In the worktree (`.witness/worktrees/<plan-id>`). Witness never resolves a confl
 The refusal names each file on a row of its own, with its kind and its remedy, then the backup of the plan's work as it stood before the move (`refs/witness/kept/<plan-id>/<n>`, deleted when the plan merges).
 
 1. Apply each file's remedy as its row says:
-   - **content** — resolve the conflict markers keeping both intents, then the row's `git add -- <file>`;
-   - **binary, or both changed with no markers** — the row's `git checkout --theirs -- <file>` keeps the plan's version (in a stash apply, *theirs* is the plan's side) and `git checkout --ours -- <file>` keeps main's; then `git add -- <file>`;
+   - **content** — resolve the conflict markers keeping both intents, then the row's `git add -- <file>`; a file with one marker left is still content: finish resolving it;
+   - **binary, or both changed with no markers** — offered only while the file still holds a version git left: the row's `git checkout --theirs -- <file>` keeps the plan's version (in a stash apply, *theirs* is the plan's side) and `git checkout --ours -- <file>` keeps main's; then `git add -- <file>`;
+   - **no markers left** — the file holds neither side's version and no conflict marker, so it reads as resolved: if it is your resolution, the row's `git add -- <file>` records it, and `git checkout -m -- <file>` puts the markers back. Never check out a side over it: that throws your resolution away;
+   - **binary, neither side's version** — a binary file you rewrote: if it is your resolution, the row's `git add -- <file>` records it; the row's checkouts would replace it with a side;
    - **modify/delete** — the row says which side `git rm -- <file>` keeps and which side `git add -- <file>` keeps.
 2. Test through `$WITNESS turn -- <test command>`; the resolution must be green before it travels.
 3. Re-run `$WITNESS ship <plan-id>`, which re-gates: no battery has judged the moved tree.
