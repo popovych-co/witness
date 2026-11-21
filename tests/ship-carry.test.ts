@@ -421,7 +421,7 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
   it('a session\'s merge begun during the lease\'s fetch refuses operation-in-progress before anything moves; the reset never ends it', async () => {
     const { wt, repo, planId, moveMain, run } = await movedPlan()
     const branch = branchName(planId)
-    // a PR branch witness pushed, so the lease fetches it; the tracking ref lags, so the fetch updates it
+    // a PR's branch witness pushed, so the lease fetches it; the tracking ref lags, so the fetch updates it
     g(wt, 'push', '-q', '-u', 'origin', branch)
     recordPushed(wt, planId, head(wt))
     g(wt, 'update-ref', `refs/remotes/origin/${branch}`, 'HEAD~1')
@@ -445,7 +445,7 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
       'exit 0',
     ].join('\n'))
     const before = head(wt)
-    const r = rebaseIfMoved(wt, repo.root, 'main', run)
+    const r = rebaseIfMoved(wt, repo.root, 'main', { ...run, hasPr: true })
     expect(existsSync(marker)).toBe(true)
     expect(r.ok).toBe(false)
     const x = !r.ok ? r.violations : []

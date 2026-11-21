@@ -106,11 +106,13 @@ function recordRefusal(root: string, planId: string, violations: readonly Violat
   if (o !== undefined) recordOutcome(root, planId, o.outcome, o.reason, shipBranch)
 }
 
+const BRANCH_GONE = 'the PR branch is gone from the remote — recreate or reopen it, or abandon the plan'
+
 // A failed fetch, read for what it means (C locale): a login git refused is the human's fix — as on a
 // push — and so is a PR branch gone from the remote; anything else is a remote that did not answer.
 export function fetchOutcome(out: string, transient: string): { outcome: 'fix' | 'transient'; reason: string } {
   if (classifyGit(out) === 'login') return { outcome: 'fix', reason: 'git refused the login — sign in to the remote again' }
-  if (/couldn't find remote ref/i.test(out)) return { outcome: 'fix', reason: 'the PR branch is gone from the remote — recreate or reopen it, or abandon the plan' }
+  if (/couldn't find remote ref/i.test(out)) return { outcome: 'fix', reason: BRANCH_GONE }
   return { outcome: 'transient', reason: transient }
 }
 
@@ -127,6 +129,8 @@ export function refusalOutcome(x: Violation): { outcome: ShipOutcome; reason: st
       ? { outcome: 'fix', reason: 'GitHub refused the login — gh auth login' }
       : { outcome: 'transient', reason: 'the PR could not be created' }
     case 'pr-url-unparseable': return { outcome: 'transient', reason: 'the PR create answered no PR' }
+    // Row 243: the PR's branch the lease read is gone — recreating it, or abandoning the plan, is the human's call.
+    case 'pr-branch-gone': return { outcome: 'fix', reason: BRANCH_GONE }
     default: return undefined
   }
 }
@@ -176,9 +180,16 @@ const DIVERGED_WANT =
 // pushed before 0.29 has no record, and overwriting what HEAD contains loses nothing); anything
 // else is someone else's work. The push then leases on that exact sha, so a commit landing
 // between this fetch and the push is refused by the remote itself.
-function leaseFor(wt: string, branch: string, remote = 'origin'): Result<string> {
-  const fetched = tryGitC(wt, 'fetch', remote, branch)
+// Row 243 (design §4.1.1 step 3; P37, P42). The fetch names its refspec, so the tracking ref exists
+// after it in a single-branch or shallow clone too, and whether the branch exists at all is read from
+// this fetch alone — never from `@{upstream}` or a tracking ref, which such a clone never has and a
+// branch deleted on the remote leaves behind, stale. A branch the remote lacks is `absent` (git's
+// words, read in the C locale); what that means is the caller's to say: the first push while the plan
+// has no PR, the PR branch gone once it has one.
+export function leaseFor(wt: string, branch: string, remote = 'origin'): Result<{ tip: string } | { absent: true }> {
+  const fetched = tryGitC(wt, 'fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`)
   if (!fetched.ok) {
+    if (fetched.out.includes(`couldn't find remote ref refs/heads/${branch}`)) return ok({ absent: true })
     return refuse([v('fetch', 'fetch-failed', fetched.out.slice(0, 200), `${shellLine(['git', 'fetch', remote, branch])} to succeed`)])
   }
   const tip = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}^{commit}`)
@@ -186,9 +197,17 @@ function leaseFor(wt: string, branch: string, remote = 'origin'): Result<string>
   const sha = tip.out.trim()
   const planId = branch.startsWith('witness/') ? branch.slice('witness/'.length) : undefined
   const recorded = planId === undefined ? undefined : tryGit(wt, 'rev-parse', '--verify', '--quiet', `${pushedRef(planId)}^{commit}`)
-  if (recorded?.ok && recorded.out.trim() === sha) return ok(sha)
-  if (tryGit(wt, 'merge-base', '--is-ancestor', sha, 'HEAD').ok) return ok(sha)
+  if (recorded?.ok && recorded.out.trim() === sha) return ok({ tip: sha })
+  if (tryGit(wt, 'merge-base', '--is-ancestor', sha, 'HEAD').ok) return ok({ tip: sha })
   return refuse([humanCall(v('push', 'push-diverged', `${remote}/${branch} at ${sha.slice(0, 12)}`, DIVERGED_WANT))])
+}
+
+// Row 243 (design §4.1.1 step 3). A plan with a PR whose branch the remote lacks, whether or not
+// witness recorded a push (a PR opened by 0.28 or earlier has no record): no ship push recreates it.
+// Recreating or reopening it, or abandoning the plan, is a human's call.
+function branchGone(remote: string, branch: string): Violation {
+  return humanCall(v('push', 'pr-branch-gone', `${remote} has no ${branch}`,
+    `the PR's branch on ${remote} — it is gone, and recreating or reopening it, or abandoning the plan, is a human's call`))
 }
 
 // A push of HEAD to the PR branch, forced only under a lease from `leaseFor`, read in the C
@@ -216,14 +235,16 @@ export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, par
   if (!tryGit(root, 'remote', 'get-url', 'origin').ok) {
     return refuse([v('origin', 'no-remote', '(none)', 'an origin remote — gh pr create needs one')])
   }
-  // A forced push once an upstream exists: the rebase now runs in the GATE phase, so a
-  // re-entered pr phase pushes a rebased branch and a plain push is no longer a fast-forward.
-  // Row 242: the lease is witness's own last push (or a tip the worktree holds), never the
-  // tracking ref, so it refuses to clobber anything pushed by someone else.
-  const hasUpstream = tryGit(wt, 'rev-parse', '--verify', `refs/remotes/origin/${branch}`).ok
-  const lease = hasUpstream ? leaseFor(wt, branch) : undefined
-  if (lease !== undefined && !lease.ok) return lease
-  const push = pushPr(wt, branch, lease?.value, true)
+  // A forced push once the branch exists: the rebase runs in the GATE phase, so a re-entered pr
+  // phase pushes a rebased branch and a plain push is no longer a fast-forward. Row 242: the lease
+  // is witness's own last push (or a tip the worktree holds), never the tracking ref, so it refuses
+  // to clobber anything pushed by someone else. Row 243 (P42): whether the branch exists is read
+  // from leaseFor's own fetch; a branch the remote lacks is the first push, which createPr alone
+  // makes, plain, and only while the plan has no PR — with one, it is the PR branch gone.
+  const lease = leaseFor(wt, branch)
+  if (!lease.ok) return lease
+  if ('absent' in lease.value && plan.meta.pr !== undefined) return refuse([branchGone('origin', branch)])
+  const push = pushPr(wt, branch, 'tip' in lease.value ? lease.value.tip : undefined, true)
   if (!push.ok) return push
   const found = existingPr(ctx, root, branch)
   if (found !== undefined) return ok(found)
@@ -307,14 +328,16 @@ export function rebaseIfMoved(
   // Step 2 (P19): an operation a session started is its own — never aborted, never applied into.
   const op = operationInProgress(wt)
   if (op !== undefined) return refuse([operationRefusal(wt, planId, op)])
-  // Step 3. Only push a branch that HAS an upstream. This runs in the gate phase, before createPr
-  // has ever pushed, so on a first ship there is nothing on the remote to update — createPr does the
-  // initial push. Row 242: where an upstream exists, the lease is settled before the rebase, so a
-  // PR branch someone else pushed to refuses with the worktree untouched (P27).
-  const branch = tryGit(wt, 'symbolic-ref', '--quiet', '--short', 'HEAD')
-  const upstream = branch.ok && tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok
-  const lease = upstream ? leaseFor(wt, branch.out.trim(), remote) : undefined
+  // Step 3, the lease (row 242), settled before anything moves, so a PR branch someone else pushed to
+  // refuses with the worktree untouched (P27). The PR branch is named from the plan, never from HEAD,
+  // and whether it exists is read from leaseFor's own fetch (P37). With no PR the move never pushes:
+  // createPr makes the first push (P42). With a PR, a branch the remote lacks is the PR branch gone,
+  // whether or not a push was recorded — a PR opened by 0.28 or earlier has no record.
+  const branch = branchName(planId)
+  const lease = run.hasPr ? leaseFor(wt, branch, remote) : undefined
   if (lease !== undefined && !lease.ok) return lease
+  if (lease !== undefined && 'absent' in lease.value) return refuse([branchGone(remote, branch)])
+  const tip = lease !== undefined && 'tip' in lease.value ? lease.value.tip : undefined
   // Step 2 once more, now the lease's fetch is done: a session's merge, cherry-pick or revert begun
   // meanwhile would be ended by step 5's `git reset --hard`, so it refuses here, with nothing moved.
   const begun = operationInProgress(wt)
@@ -354,11 +377,12 @@ export function rebaseIfMoved(
     const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry))
     if (refused !== undefined) return refuse(refused)
   }
-  // Step 8. Where an upstream exists the push result is the whole point: reporting 'rebased' after
-  // a failed push leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody
-  // will merge. A clash or a refused put-back withholds it (returned above).
-  if (lease !== undefined) {
-    const push = pushPr(wt, branch.out.trim(), lease.value, false, remote)
+  // Step 8. With a PR the push result is the whole point: reporting 'rebased' after a failed push
+  // leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody will merge. A
+  // clash or a refused put-back withholds it (returned above); the next ship run carries it, under
+  // the same lease, in pushApproved (P21).
+  if (tip !== undefined) {
+    const push = pushPr(wt, branch, tip, false, remote)
     if (!push.ok) return push
   }
   return ok('rebased')
@@ -646,23 +670,28 @@ export function mergeOwnPr(ctx: Ctx, root: string, cfg: Config, planId: string, 
 // The approved tree is what the PR must carry before CI is watched (F8). Ship owns the code
 // commit, and a revise at the ship gate leaves its fix uncommitted in the worktree — once a PR
 // exists nothing else commits or pushes it, so CI went green on the old head and that is the
-// commit the merge landed. Never a force-push: a remote head this worktree lacks is someone
-// else's work, and overwriting it is a human's call.
-function pushApproved(ctx: Ctx, root: string, cfg: Config, planId: string, summary: string): Result<string> {
+// commit the merge landed. Row 243 (design §4.1.1 step 8; P21): forced only under leaseFor's lease,
+// like every ship push. A remote tip that is witness's own last push is overwritten under it, so a
+// push a clash, a refused apply, a crash or a session's hand rebase held back is carried here instead
+// of reading as push-diverged; a tip that is neither that nor one HEAD holds is someone else's work,
+// and overwriting it is a human's call. A branch the remote lacks is the PR branch gone: this push
+// never recreates it. The commit comes first (commitApproved: the clash guard, then `git add -A`).
+export function pushApproved(ctx: Ctx, root: string, cfg: Config, planId: string, summary: string): Result<string> {
   const committed = commitApproved(ctx, root, cfg, planId, summary)
   if (!committed.ok) return refuse(committed.violations)
   const wt = worktreePath(root, planId)
   const branch = branchName(planId)
-  tryGit(wt, 'fetch', 'origin', branch)
   const head = tryGit(wt, 'rev-parse', 'HEAD')
   if (!head.ok) return refuse([v('push', 'head-unreadable', head.out.slice(0, 200), `a readable HEAD in ${wt}`)])
   const sha = head.out.trim()
-  const remote = tryGit(wt, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)
+  const lease = leaseFor(wt, branch)
+  if (!lease.ok) return lease
+  if ('absent' in lease.value) return refuse([branchGone('origin', branch)])
   // Row 242: the remote already IS the approved tree — witness's own record says so from here on.
-  if (remote.ok && sha === remote.out.trim()) { recordPushed(wt, planId, sha); return ok(sha) }
+  if (sha === lease.value.tip) { recordPushed(wt, planId, sha); return ok(sha) }
   // Row 242: a rejection is the remote holding commits this worktree lacks (push-diverged); any
   // other failure is the push's own (push-failed), classified by its words for the record.
-  const push = pushPr(wt, branch, undefined, true)
+  const push = pushPr(wt, branch, lease.value.tip, true)
   if (!push.ok) return push
   ctx.out(kv('push', `${branch} → the approved tree`))
   return ok(sha)
