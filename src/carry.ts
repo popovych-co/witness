@@ -191,21 +191,27 @@ export function lockedRow(planId: string, lock: string, carried: boolean, unfini
   return v('lock', 'index-locked', lock, carried ? `${held}; ${work}` : `${held}, ${work}; nothing moved`)
 }
 
-// HEAD's reflog subjects in this worktree, newest first; none where HEAD keeps no reflog.
+// HEAD's reflog subjects in this worktree, newest first. Where HEAD keeps no reflog of its own, git
+// reads the branch's in its place while HEAD is attached, and none while it is detached; neither
+// ever holds witness's `(start)`, which only HEAD's own log records — so no proof is read from it.
 export function headReflog(wt: string): string[] {
   const r = carryGit(wt, 'reflog', 'show', '--format=%gs', 'HEAD')
   return r.code === 0 ? r.stdout.split('\n').filter((s) => s !== '') : []
 }
 
-// Step 6. After witness's own rebase failed, the operation in progress is witness's to abort only when
-// it is a rebase, git did not refuse because one was already under way, and every HEAD reflog entry
-// written since `before` (read just before the call) carries witness's action. A session's rebase
-// started meanwhile writes its own entries (`rebase (start)`), and is never aborted.
+// Step 6. After witness's own rebase failed, the operation in progress is witness's to abort only on
+// proof: it is a rebase, git did not refuse because one was already under way, and HEAD's reflog
+// gained entries since `before` (read just before the call), every one carrying witness's action and
+// one of them its `(start)`. Silence is no proof: a repo that keeps no HEAD reflog
+// (`core.logAllRefUpdates=false`), or a session's rebase that has written nothing yet (an editor
+// open on its todo), reads as the session's, which fails safe — never aborted.
 export function ownRebaseSince(wt: string, op: OpInProgress | undefined, out: string, before: readonly string[]): boolean {
   if (op !== 'rebase-merge' && op !== 'rebase-apply') return false
   if (/already a rebase-(?:merge|apply) directory/.test(out)) return false
   const after = headReflog(wt)
-  return after.slice(0, Math.max(0, after.length - before.length)).every((s) => s.startsWith(`${CARRY_ACTION} `))
+  const fresh = after.slice(0, Math.max(0, after.length - before.length))
+  return fresh.length > 0 && fresh.every((s) => s.startsWith(`${CARRY_ACTION} `))
+    && fresh.some((s) => s.startsWith(`${CARRY_ACTION} (start)`))
 }
 
 // Step 2 (P19). An operation a session started is its own to finish: witness never aborts it, nor
@@ -214,12 +220,17 @@ export function ownRebaseSince(wt: string, op: OpInProgress | undefined, out: st
 const OP_VERB: Record<OpInProgress, string> = {
   'rebase-merge': 'rebase', 'rebase-apply': 'rebase', MERGE_HEAD: 'merge', CHERRY_PICK_HEAD: 'cherry-pick', REVERT_HEAD: 'revert',
 }
-export function operationRefusal(wt: string, planId: string, op: OpInProgress): Violation {
+// `unproven`: a rebase that may be witness's own, met where its reflog cannot tell (step 0's case too):
+// the want then adds the design's sentence for a human who knows witness started it.
+export function operationRefusal(wt: string, planId: string, op: OpInProgress, unproven = false): Violation {
   const applying = op === 'rebase-apply' && carryGit(wt, 'rev-parse', '--git-path', 'rebase-apply/applying')
   const verb = applying && applying.code === 0 && existsSync(resolve(wt, applying.stdout.replace(/\n$/, ''))) ? 'am' : OP_VERB[op]
+  const ship = cliAct('ship', planId).line
+  const abort = shellLine(['git', verb, '--abort'])
+  const own = unproven && verb === 'rebase' ? `; if the rebase is witness's own (its reflog cannot tell), run ${abort}, then re-run ${ship}` : ''
   return v(op, 'operation-in-progress', `a git ${verb} is in progress in the worktree`,
-    `it finished with ${shellLine(['git', verb, '--continue'])}, or ended with ${shellLine(['git', verb, '--abort'])} — `
-      + `witness never ends an operation a session started — then ${cliAct('ship', planId).line}`)
+    `it finished with ${shellLine(['git', verb, '--continue'])}, or ended with ${abort} — `
+      + `witness never ends an operation a session started — then ${ship}${own}`)
 }
 
 // The files an intent-to-add entry (`git add -N`) holds: the worktree side of `git diff` lists them as

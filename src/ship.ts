@@ -311,6 +311,10 @@ export function rebaseIfMoved(
   const upstream = branch.ok && tryGit(wt, 'rev-parse', '--verify', '--quiet', '@{upstream}').ok
   const lease = upstream ? leaseFor(wt, branch.out.trim(), remote) : undefined
   if (lease !== undefined && !lease.ok) return lease
+  // Step 2 once more, now the lease's fetch is done: a session's merge, cherry-pick or revert begun
+  // meanwhile would be ended by step 5's `git reset --hard`, so it refuses here, with nothing moved.
+  const begun = operationInProgress(wt)
+  if (begun !== undefined) return refuse([operationRefusal(wt, planId, begun)])
   // §4.1.5: an untracked file where the base holds one is refused before anything moves — in the
   // worktree's sparse checkout the rebase would replace it with the base's bytes and exit 0.
   const inTheWay = baseInTheWay(wt, planId, base)
@@ -363,9 +367,9 @@ function putBackRefusal(wt: string, planId: string, onto: string, put: Reapplied
 
 // An operation a session started under the move (step 2, met late): the session's to finish, never
 // aborted nor applied into. Work already carried stays in the carry ref (`carry-pending`); step 0
-// puts it back once the operation is over.
-function sessionOperation(wt: string, planId: string, op: OpInProgress, carry: string | undefined): Violation[] {
-  return [operationRefusal(wt, planId, op), ...(carry === undefined ? [] : [carryPending(planId,
+// puts it back once the operation is over. `unproven`: a rebase that may be witness's own.
+function sessionOperation(wt: string, planId: string, op: OpInProgress, carry: string | undefined, unproven = false): Violation[] {
+  return [operationRefusal(wt, planId, op, unproven), ...(carry === undefined ? [] : [carryPending(planId,
     'a git operation started in the worktree while the move was under way, so the plan\'s work was not put back into it')])]
 }
 
@@ -384,7 +388,11 @@ function failedRebase(
 ): Violation[] {
   const replayed = unmergedPaths(wt).map((p) => p.path)
   const op = operationInProgress(wt)
-  if (op !== undefined && !ownRebaseSince(wt, op, out, reflog)) return sessionOperation(wt, planId, op, carry)
+  // Not proven witness's own: the session's, never aborted. A rebase git did not refuse as already
+  // under way may still be witness's, so its row says what to do if it is.
+  if (op !== undefined && !ownRebaseSince(wt, op, out, reflog)) {
+    return sessionOperation(wt, planId, op, carry, !/already a rebase-(?:merge|apply) directory/.test(out))
+  }
   const abort = op === undefined ? undefined : carryGit(wt, 'rebase', '--abort')
   const now = carryGit(wt, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}').stdout.trim()
   const back = operationInProgress(wt) === undefined && now === at.head

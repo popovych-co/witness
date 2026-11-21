@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,8 +8,9 @@ import { captureCarry, carryRef, cleanTree, keptRefs, operationInProgress, reapp
 import { clashLeft } from '../src/clash.js'
 import { readStream } from '../src/journal.js'
 import { gateRuns } from '../src/rounds.js'
-import { rebaseIfMoved } from '../src/ship.js'
+import { rebaseIfMoved, recordPushed } from '../src/ship.js'
 import { shellLine, shellWord } from '../src/toon.js'
+import { branchName } from '../src/worktree.js'
 import { addOrigin, shippableRepo } from './helpers.js'
 
 // Row 243 (design §4.1.1 steps 1–2 and 4–7, §4.1.3, §4.1.5; issue #86). When the base moves, ship
@@ -384,6 +385,72 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     expect(read(wt, 'g.txt')).toBe('1\n2\n3\n')
     expect(hasCarry(wt, planId)).toBe(true)
     expect(g(wt, 'diff', `${carryRef(planId)}^1`, carryRef(planId))).toContain('+WORK')
+    expect(stashList(wt)).toBe('')
+  }, 180_000)
+
+  it('with no HEAD reflog (core.logAllRefUpdates=false) a session\'s rebase reads as the session\'s: never aborted, the step-0 sentence named', async () => {
+    const { wt, repo, planId, moveMain, run } = await movedPlan()
+    // a repo that keeps no HEAD reflog: silence, where witness's own rebase would have written its (start)
+    g(wt, 'config', 'core.logAllRefUpdates', 'false')
+    const headLog = resolve(wt, g(wt, 'rev-parse', '--git-path', 'logs/HEAD'))
+    rmSync(headLog, { force: true })
+    hook(wt, 'pre-rebase', 'unset GIT_REFLOG_ACTION\ngit rebase --no-verify --force-rebase --exec false HEAD~1 >/dev/null 2>&1\nexit 1')
+    put(wt, 'g.txt', '1\n2\nWORK\n')
+    moveMain({ 'm.txt': 'main\n' })
+    expect(existsSync(headLog)).toBe(false)
+    const r = rebaseIfMoved(wt, repo.root, 'main', run)
+    expect(r.ok).toBe(false)
+    const x = !r.ok ? r.violations : []
+    expect(x.map((y) => y.rule)).toEqual(['operation-in-progress', 'carry-pending'])
+    expect(x[0]!.want).toContain(`if the rebase is witness's own (its reflog cannot tell), run ${shellLine(['git', 'rebase', '--abort'])}, then re-run witness ship ${planId}`)
+    // never aborted: the session's rebase stands; the work waits in the carry ref
+    expect(operationInProgress(wt)).toBe('rebase-merge')
+    expect(read(wt, 'g.txt')).toBe('1\n2\n3\n')
+    expect(hasCarry(wt, planId)).toBe(true)
+    expect(stashList(wt)).toBe('')
+    // and HEAD still keeps no reflog of its own: there was none to read as proof
+    expect(existsSync(headLog)).toBe(false)
+  }, 180_000)
+
+  it('a session\'s merge begun during the lease\'s fetch refuses operation-in-progress before anything moves; the reset never ends it', async () => {
+    const { wt, repo, planId, moveMain, run } = await movedPlan()
+    const branch = branchName(planId)
+    // a PR branch witness pushed, so the lease fetches it; the tracking ref lags, so the fetch updates it
+    g(wt, 'push', '-q', '-u', 'origin', branch)
+    recordPushed(wt, planId, head(wt))
+    g(wt, 'update-ref', `refs/remotes/origin/${branch}`, 'HEAD~1')
+    g(wt, 'branch', 'side')
+    g(wt, 'checkout', '-q', 'side')
+    put(wt, 's.txt', 'side\n')
+    g(wt, 'add', 's.txt')
+    g(wt, 'commit', '-qm', 'side')
+    g(wt, 'checkout', '-q', '-')
+    put(wt, 'g.txt', '1\n2\nWORK\n')
+    moveMain({ 'm.txt': 'main\n' })
+    // as the lease's fetch moves the PR branch's tracking ref, a session starts its own merge
+    const marker = join(wt, '..', `${planId}-merge-begun`)
+    hook(wt, 'reference-transaction', [
+      '[ "$1" = committed ] || exit 0',
+      `grep -q ' refs/remotes/origin/${branch}$' || exit 0`,
+      `[ -e '${marker}' ] && exit 0`,
+      `: > '${marker}'`,
+      'unset GIT_REFLOG_ACTION',
+      'git merge --no-ff --no-commit side >/dev/null 2>&1',
+      'exit 0',
+    ].join('\n'))
+    const before = head(wt)
+    const r = rebaseIfMoved(wt, repo.root, 'main', run)
+    expect(existsSync(marker)).toBe(true)
+    expect(r.ok).toBe(false)
+    const x = !r.ok ? r.violations : []
+    expect(x.map((y) => y.rule)).toEqual(['operation-in-progress'])
+    expect(x[0]!.want).toContain(shellLine(['git', 'merge', '--abort']))
+    // nothing moved: the session's merge stands with its state, the work in the tree, no carry taken
+    expect(operationInProgress(wt)).toBe('MERGE_HEAD')
+    expect(head(wt)).toBe(before)
+    expect(read(wt, 'g.txt')).toBe('1\n2\nWORK\n')
+    expect(read(wt, 's.txt')).toBe('side\n')
+    expect(hasCarry(wt, planId)).toBe(false)
     expect(stashList(wt)).toBe('')
   }, 180_000)
 
