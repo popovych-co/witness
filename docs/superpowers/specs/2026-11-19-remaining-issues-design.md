@@ -237,7 +237,13 @@ The build of Tasks 1–7 and its slice review settled these. Tags name entries i
 - **verify-red holds its non-test work off the shared stash list** (S1-C; it ran `git stash push` and `drop` before).
   - The work is held in a stash-shaped commit built through scratch indexes at `refs/witness/verify-red/<plan>`. Its index commit holds the paths' staged state, its tree their worktree bytes, a third parent the untracked ones, and its message the run's pid and the paths as JSON.
   - It is put back path by path, each index entry and its worktree bytes, with no merge. `git stash apply --index` resets the whole index to HEAD part way, and refuses whenever another path is staged.
-  - A held ref is never overwritten. It is written create-only. One standing when a run starts is a run's that never finished. Its work goes back first, by the same restore, only when its process is gone and every listed path holds only what that run left (the held, HEAD-at-capture or base version, or nothing). Anything else refuses `verify-red-pending` (exit 2, nothing recorded), naming the ref and how to see and restore it by hand; deleting it is the human's, in prose.
+  - A held ref is never overwritten. It is written create-only. One standing when a run starts is a run's that never finished. Its work goes back first, by the same restore, only when all three hold:
+    - the run is in the checkout the ref records (its `--show-toplevel`; refs are every checkout's, so from another one the work would land in the wrong tree);
+    - its process is gone;
+    - every listed path holds only what that run left (the held, HEAD-at-capture or base version, or nothing).
+
+    Anything else refuses `verify-red-pending` (exit 2, nothing recorded), naming the ref, the checkout that set it aside, and how to see and restore it by hand; deleting it is the human's, in prose.
+  - Unmerged entries in the checkout verify-red runs in refuse with the guard's signal (a) rows (`clash-unresolved`) before anything is held. The guard itself reads only the plan's worktree, and no hold captures an unmerged path.
 - **Step 2 is asked again after the capture, before the reset** (S1-D). An operation a session began while the work was captured is refused `operation-in-progress`, and the carry ref just written is dropped against its sha, with nothing moved.
 
 ### 4.2 Row 244 — every offered act is accepted, and a handed-back revise is decided again (#87)

@@ -10,7 +10,8 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { cliAct } from './act.js'
-import { seeWork } from './carry.js'
+import { seeWork, unmergedPaths } from './carry.js'
+import { clashViolations } from './clash.js'
 import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
 import { git, gitWith, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
@@ -239,29 +240,36 @@ function holdWork(runRoot: string, planId: string, paths: readonly string[], unt
       gitWith(runRoot, scratch('others'), 'update-index', '--add', '--', ...others)
       parents.push(commit(gitWith(runRoot, scratch('others'), 'write-tree'), [], `untracked files on ${on}`))
     }
-    return commit(workTree, parents, `WIP on ${on}\n\npid: ${process.pid}\nfiles: ${JSON.stringify(paths)}`)
+    return commit(workTree, parents,
+      `WIP on ${on}\n\npid: ${process.pid}\ncheckout: ${JSON.stringify(runRoot)}\nfiles: ${JSON.stringify(paths)}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 }
 
 // What a held commit's message records, read from the raw commit so no configured encoding
-// re-spells a name: the holding run's process and the paths it set aside. A ref that records no
-// paths — written by an older witness's `git stash push`, or by a hand — reads as nothing.
-function heldRecord(runRoot: string, held: string): { pid?: number; files: string[] } | undefined {
+// re-spells a name: the holding run's process, the checkout it set the work aside in (its
+// `--show-toplevel`, as JSON), and the paths it set aside. A ref that records no paths — written by
+// an older witness's `git stash push`, or by a hand — reads as nothing.
+interface HeldRecord { pid?: number; checkout?: string; files: string[] }
+function heldRecord(runRoot: string, held: string): HeldRecord | undefined {
   const raw = tryGit(runRoot, 'cat-file', 'commit', held)
   const start = raw.ok ? raw.out.indexOf('\n\n') : -1
   if (start < 0) return undefined
   const lines = raw.out.slice(start + 2).split('\n')
-  const filesLine = lines.find((l) => l.startsWith('files: '))
-  const pidLine = lines.find((l) => /^pid: \d+$/.test(l))
-  if (filesLine === undefined) return undefined
-  try {
-    const files: unknown = JSON.parse(filesLine.slice('files: '.length))
-    if (!Array.isArray(files) || !files.every((f) => typeof f === 'string')) return undefined
-    return { files, ...(pidLine !== undefined ? { pid: Number(pidLine.slice('pid: '.length)) } : {}) }
-  } catch {
-    return undefined
+  const json = (key: string): unknown => {
+    const line = lines.find((l) => l.startsWith(`${key}: `))
+    if (line === undefined) return undefined
+    try { return JSON.parse(line.slice(key.length + 2)) } catch { return undefined }
+  }
+  const files = json('files')
+  if (!Array.isArray(files) || !files.every((f) => typeof f === 'string')) return undefined
+  const pid = json('pid')
+  const checkout = json('checkout')
+  return {
+    files,
+    ...(typeof pid === 'number' && Number.isInteger(pid) ? { pid } : {}),
+    ...(typeof checkout === 'string' ? { checkout } : {}),
   }
 }
 
@@ -316,20 +324,26 @@ function touchedSinceHeld(runRoot: string, held: string, files: readonly string[
 
 // `verify-red-pending` (exit 2; nothing is journaled): a held ref verify-red may neither put back
 // nor overwrite. The row names the ref and how to see and restore it by hand; deleting it is a
-// human's act, said in prose, never a runnable line (D168).
-function heldPending(planId: string, held: string, step: string | undefined, why: string): Violation {
+// human's act, said in prose, never a runnable line (D168). `where`: the checkout that set the work
+// aside, when the run is in another — the run there puts it back itself.
+function heldPending(planId: string, held: string, step: string | undefined, why: string, where?: string): Violation {
   const again = cliAct('verify-red', planId, ...(step !== undefined ? ['--step', step] : [])).line
+  const hand = `${seeWork(held)}. To put it back by hand${where === undefined ? '' : ` in ${shellWord(where)}`}, `
+    + `${shellLine(['git', 'stash', 'apply', held])} brings back its worktree versions, and with --index its staged ones too, on a tree with `
+    + `nothing else staged. Once the work is back, or a human decides it is not wanted, a human deletes ${held} by hand (git update-ref -d); `
+    + 'witness never does'
   return v(held, 'verify-red-pending', `${held} holds non-test work a verify-red set aside — ${why} — so it was neither put back nor overwritten`,
-    `${seeWork(held)}. To put it back by hand, ${shellLine(['git', 'stash', 'apply', held])} brings back its worktree versions, and with --index `
-      + `its staged ones too, on a tree with nothing else staged. Once the work is back, or a human decides it is not wanted, a human deletes `
-      + `${held} by hand (git update-ref -d); witness never does. Then ${again}`)
+    where === undefined ? `${hand}. Then ${again}`
+      : `${again} run in ${shellWord(where)}, the checkout that set it aside, puts it back there itself when nothing there changed since — ${hand}`)
 }
 
 // A held ref verify-red finds at its start is a run's that never put its work back. Witness never
 // overwrites it. It puts the work back itself, through the same path-by-path restore a run ends
-// with, only when the holding process is gone and the tree holds nothing but what that run left
-// (`touchedSinceHeld`); the ref is then dropped against its own sha. Anything else refuses
-// `verify-red-pending`, the tree and the ref untouched. The paths put back, or the refusal.
+// with, only into the checkout that set it aside (refs are every checkout's: from another one the
+// put-back would write the plan's work into the wrong tree), only when the holding process is gone,
+// and only when that tree holds nothing but what the run left (`touchedSinceHeld`); the ref is then
+// dropped against its own sha. Anything else refuses `verify-red-pending`, the tree and the ref
+// untouched. The paths put back, or the refusal.
 function putBackHeld(runRoot: string, planId: string, held: string, base: string, step: string | undefined): Result<string[]> {
   const sha = git(runRoot, 'rev-parse', '--verify', held)
   const record = heldRecord(runRoot, sha)
@@ -337,8 +351,15 @@ function putBackHeld(runRoot: string, planId: string, held: string, base: string
     return refuse([heldPending(planId, held, step,
       'it lists no files (an older witness or a hand wrote it), so witness cannot tell what in the tree is the run\'s')])
   }
+  if (record.checkout === undefined) {
+    return refuse([heldPending(planId, held, step, 'it does not record the checkout that set it aside, so witness cannot tell where it goes back')])
+  }
   if (record.pid !== undefined && record.pid !== process.pid && isAlive(record.pid)) {
-    return refuse([heldPending(planId, held, step, `the verify-red that set it aside (pid ${record.pid}) is still running`)])
+    return refuse([heldPending(planId, held, step, `the verify-red that set it aside (pid ${record.pid}) is still running`, record.checkout)])
+  }
+  if (record.checkout !== runRoot) {
+    return refuse([heldPending(planId, held, step,
+      `it was set aside in ${shellWord(record.checkout)}, and this run is in ${shellWord(runRoot)}`, record.checkout)])
   }
   const touched = touchedSinceHeld(runRoot, sha, record.files, base)
   if (touched === undefined) return refuse([heldPending(planId, held, step, 'git could not read the tree against it')])
@@ -414,6 +435,13 @@ export async function verifyRed(
   // Row 191 §4.3: a reconstructed cycle closes a plan step as a witnessed one does, so both of
   // its entries name the step.
   const extra = { reconstructed: true, ...(step !== undefined ? { step } : {}) }
+  // Fix round 2. The guard (§4.1.2) reads the plan's worktree, while verify-red sets aside the
+  // checkout it runs in: from the primary root or another plan's worktree, another one. An unmerged
+  // entry there is a session's half-done resolution, which no hold captures (only stage 0 is
+  // staged, and git lists no unmerged path as untracked): refused with signal (a)'s own rows, each
+  // file with its remedy, before anything is put back, held or checked out.
+  const unmerged = unmergedPaths(runRoot)
+  if (unmerged.length) return refuse(clashViolations(planId, { kind: 'unmerged', files: unmerged }, runRoot))
   // S1-C. The work is held in a per-plan ref, off git's shared stash list (`holdWork`), until it is
   // put back (`restoreHeld`); the ref is what keeps it recoverable after a crash. A ref already
   // standing is a crashed run's, never overwritten: its work goes back first, before the tree is

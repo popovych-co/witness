@@ -264,10 +264,10 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
   }
   // A verify-red in a process of its own that dies once the work is set aside and the red's tree laid
   // out, before the red runs (the crash point's exit 9): nothing restores it.
-  const crashed = (repo: TestRepo): Promise<number | null> => new Promise((done) => {
+  const crashed = (repo: TestRepo, cwd = repo.root): Promise<number | null> => new Promise((done) => {
     const REPO = resolve(import.meta.dirname, '..')
     const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', 'auth-refresh-plan-1', '--step', 's1'],
-      { cwd: repo.root, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+      { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
     c.on('close', (code) => done(code))
   })
   // Every update git makes to the held ref, as `<old> <new>` lines.
@@ -352,7 +352,7 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
     // the parent process stands for a live holder: verify-red runs here in process, and its own pid
     // in a record can only be a reused one, never a run still going
     const live = repo.git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-p', 'HEAD', '-m',
-      `WIP on verify-red auth-refresh-plan-1\n\npid: ${process.ppid}\nfiles: ${JSON.stringify(['src/token.ts'])}`)
+      `WIP on verify-red auth-refresh-plan-1\n\npid: ${process.ppid}\ncheckout: ${JSON.stringify(repo.root)}\nfiles: ${JSON.stringify(['src/token.ts'])}`)
     repo.git('update-ref', HELD, live)
     const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
     expect(res.code).toBe(2)
@@ -360,6 +360,62 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
     expect(res.stderr).toContain(`pid ${process.ppid}`)
     expect(heldSha(repo)).toBe(live)
     expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(phases(repo)).toEqual([])
+  })
+
+  // Fix round 2. Refs are shared by every checkout of the repo, so a held ref is found from any of
+  // them; its work goes back only into the checkout that set it aside, which the ref records.
+  it('a held ref set aside in the plan\'s worktree is put back only there: from the primary root it refuses, naming that checkout', async () => {
+    const repo = await tddRepo()
+    const wt = `${repo.root}-wt`
+    repo.git('worktree', 'add', '-q', '-b', 'witness/auth-refresh-plan-1', wt, 'plan-wt')
+    writeFileSync(join(wt, 'tests', 'token.test.ts'), TOKEN_TESTS_TAGGED)
+    writeFileSync(join(wt, 'src', 'token.ts'), TOKEN_FIXED) // the plan's work, never committed
+    expect(await crashed(repo, wt)).toBe(9)
+    const left = heldSha(repo)
+    expect(left).not.toBe('')
+    const status = repo.git('status', '--porcelain=v1', '--untracked-files=all')
+    const primary = repo.read('src/token.ts')
+    const fromRoot = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(fromRoot.code).toBe(2)
+    expect(fromRoot.stderr).toContain('verify-red-pending')
+    expect(fromRoot.stderr).toContain(wt)
+    expect(heldSha(repo)).toBe(left)
+    expect(repo.read('src/token.ts')).toBe(primary)
+    expect(repo.git('status', '--porcelain=v1', '--untracked-files=all')).toBe(status)
+    expect(phases(repo)).toEqual([])
+    // from the checkout that set it aside, the work goes back and the run completes
+    const fromWt = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { cwd: wt, env: fixtureEnv() })
+    expect(fromWt.code).toBe(0)
+    expect(fromWt.stdout).toMatch(/^held-work: /m)
+    expect(readFileSync(join(wt, 'src', 'token.ts'), 'utf8')).toBe(TOKEN_FIXED)
+    expect(heldSha(repo)).toBe('')
+    expect(phases(repo).map((e) => e.phase)).toEqual(['red', 'green'])
+  }, 60_000)
+
+  // Fix round 2. The clash guard reads the plan's worktree; verify-red sets aside the checkout it runs
+  // in. An unmerged non-test file there is a session's half-done resolution, refused with the guard's
+  // own rows before anything is held, never checked out over and deleted.
+  it('an unmerged file in the checkout it runs in refuses clash-unresolved before anything is set aside', async () => {
+    const repo = await tddRepo()
+    repo.write('src/token.ts', `${TOKEN_BROKEN}// the plan's\n`)
+    const clash = repo.git('stash', 'create')
+    repo.git('checkout', '--', 'src/token.ts')
+    repo.write('src/token.ts', `${TOKEN_BROKEN}// another flow's\n`)
+    repo.git('commit', '-qam', 'another flow')
+    try { repo.git('-c', 'merge.conflictStyle=merge', 'stash', 'apply', clash) } catch { /* the clash: exit 1 */ }
+    repo.write('src/token.ts', `${TOKEN_BROKEN}// both, the session's resolution, not yet added\n`)
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    const stages = repo.git('ls-files', '-s', '--', 'src/token.ts')
+    expect(stages.split('\n')).toHaveLength(3)
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('clash-unresolved')
+    expect(res.stderr).toContain('src/token.ts')
+    expect(res.stdout).not.toContain('stale-reads')
+    expect(repo.read('src/token.ts')).toBe(`${TOKEN_BROKEN}// both, the session's resolution, not yet added\n`)
+    expect(repo.git('ls-files', '-s', '--', 'src/token.ts')).toBe(stages)
+    expect(heldSha(repo)).toBe('')
     expect(phases(repo)).toEqual([])
   })
 })
