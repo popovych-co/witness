@@ -626,8 +626,12 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   }
 
   // A malformed round after the revise (or the pending run) keeps the state's acts and leads with
-  // its free re-run, which repairs the round (design §4.2.2, P50).
-  const malformedRerun = malformedLast && LEADS.has(state)
+  // its free re-run, which repairs the round (design §4.2.2, P50) — only where the re-gate would
+  // repair it. One on other content leaves the pairing with the disposed run (S3-3): on unchanged
+  // content the re-gate answers changed-nothing, so leading with it would loop. Unmoved, the content
+  // is the anchor's, the disposed run's whenever a revise stands.
+  const malformedRerun = malformedLast && LEADS.has(state) &&
+    (moved || revisedRun(entries, gate, anchor.reviewed_sha) === undefined)
   if (malformedRerun && (acts[0] === undefined || actKey(acts[0]) !== actKey(regate))) acts = [regate, ...acts]
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')

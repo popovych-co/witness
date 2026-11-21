@@ -31,6 +31,9 @@ const dec = (decision: string, extra: Record<string, unknown> = {}): Entry =>
 const back = (runId: string, gate = G): Entry =>
   ({ v: 1, t: 'revise-returned', gate, artifact: T, run_id: runId, sha: 's1' } as unknown as Entry)
 const reopen = { caused_by: { artifact: T, gate: 'ship', round: 1 } }
+// A round on the content the revise asked about, the disposed run r1's (every `run` reads its own
+// sha): a malformed one there is repaired by the re-gate, so its free re-run leads (P50).
+const onR1 = (e: Entry): Entry => ({ ...e, reviewed_sha: 's1' } as unknown as Entry)
 
 // Each state's journal. Upstream `e1` exists, and a blocking finding stands on the anchor.
 const j = {
@@ -43,7 +46,7 @@ const j = {
   passed: [run(1, 'passed')],
   retracted: [run(1), dec('approve', { override: true }), dec('revise', { note: 'the stamp was wrong' })],
   parked: [run(1), dec('stop')],
-  revisedThenMalformed: [run(1), dec('revise'), run(2, 'malformed')],
+  revisedThenMalformed: [run(1), dec('revise'), onR1(run(2, 'malformed'))],
 }
 const BOUND = [run(1), dec('revise'), run(2), dec('revise'), run(3)]
 
@@ -163,7 +166,7 @@ describe('the standing hand-back (design §4.2.5)', () => {
     expect(standingHandBack(j.back, G)).toEqual(j.back[2])
     expect(live(j.back).state).toBe('handed-back')
 
-    const malformed = [...j.back, run(2, 'malformed')]
+    const malformed = [...j.back, onR1(run(2, 'malformed'))]
     expect(standingHandBack(malformed, G)).toEqual(j.back[2])
     expect(live(malformed).state).toBe('handed-back')
     expect(live(malformed).malformedRerun).toBe(true)
@@ -361,7 +364,7 @@ describe('corner states (design §4.2.9)', () => {
   })
 
   it('the malformed lead applies in pending, revised, handed back (both) and retracted', () => {
-    const m = run(9, 'malformed')
+    const m = onR1(run(9, 'malformed'))
     // The pending revise is `reviseAct`'s, whose prefill reads the gate's last run: after a malformed
     // round it keeps the `<why>` slot, as `exitActs` and `decide`'s journaled note do (one act either way).
     const lead: Array<[Entry[], Partial<ActFacts>, GateStateKind, string[]]> = [
@@ -383,6 +386,35 @@ describe('corner states (design §4.2.9)', () => {
       expect(l.malformedRerun).toBe(true)
       expect(shown(l.acts)).toEqual(acts)
     }
+  })
+
+  // S3-3. A malformed round after the revise on other content judged nothing and leaves the pairing
+  // with the disposed run: with the content back on that run's, the re-gate answers changed-nothing,
+  // so no state leads with it, and each keeps its own acts. Moved content, or a disposed run that fell
+  // back, pairs with nothing, and the re-gate runs: the lead stays.
+  it('a malformed round on other content after the revise leads with nothing (S3-3)', () => {
+    const m = run(9, 'malformed')
+    const none: Array<[Entry[], GateStateKind, string[]]> = [
+      [[...j.revised, m], 'revised', REVISED],
+      [[...j.back, m], 'handed-back', REVISED],
+      [[...j.retracted, m], 'retracted', A('gate implement p1 --fresh', 'decide implement p1 --approve --override',
+        'decide implement p1 --stop', 'decide implement p1 --revise --note <why>')],
+      [[run(1, 'passed'), dec('revise', { note: 'the pass was wrong' }), m], 'retracted', A('gate implement p1 --fresh',
+        'decide implement p1 --approve', 'decide implement p1 --stop', 'decide implement p1 --revise --note <why>')],
+    ]
+    for (const [entries, state, acts] of none) {
+      const l = live(entries)
+      expect(l.state).toBe(state)
+      expect(l.malformedRerun).toBe(false)
+      expect(shown(l.acts)).toEqual(acts)
+    }
+    for (const entries of [[...j.revised, m], [...j.back, m], [...j.retracted, m]]) {
+      expect(live(entries, { stale: true }).malformedRerun).toBe(true)
+      expect(live(entries, { holdLifted: true }).malformedRerun).toBe(true)
+    }
+    const fellBack = [{ ...run(1), pin: 'another-model' } as unknown as Entry, dec('revise'), m]
+    expect(live(fellBack).malformedRerun).toBe(true)
+    expect(shown(live(fellBack).acts)[0]).toBe('gate implement p1')
   })
 
   it('the malformed lead never applies at the bound, settled or parked (S2-2)', () => {

@@ -171,6 +171,9 @@ const REVISED_FAMILY: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['revi
 // moved content a revised gate's one act is the re-gate, and its exits line says so (D131): no block.
 function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Decision | undefined {
   const { gate, target, entries } = ctx
+  // The malformed round's re-run leads only where `liveActs` leads with it: where the re-gate repairs
+  // the round. One on other content after the revise leaves the pairing with the disposed run, and the
+  // state's own block stands (S3-3).
   if (live.malformedRerun) return malformedBlock(ctx, last)
   if (live.state === 'revised' && live.acts.length === 1) return undefined
   const primary = live.anchor === undefined ? undefined : blockingAnchors(live.anchor)[0]

@@ -180,6 +180,26 @@ describe('a malformed round around a revise (design §4.2.3)', () => {
     expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
   })
 
+  // S3-3. One on other content leaves the pairing with the disposed run: with the content back on that
+  // run's the re-gate answers changed-nothing, so the block is the state's own and its re-gate is the
+  // conditional one, never the re-run's promise of a repair.
+  it('a malformed round after the revise on other content: the state\'s own block, no re-run (S3-3)', () => {
+    const entries = [run(1, 'a', 'S'), decision('revise', { note: 'x' }), malformed(2, 'b')]
+    const d = recommend(ctxFor(entries))!
+    expect(d.rule).toBe('revised')
+    expect(d.options[0]).toMatchObject({ command: 'witness gate plan p1', when: AFTER_EDIT })
+    expect(d.options.map((o) => o.why ?? '').join(' ')).not.toContain('re-asks')
+    const back = { v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: 'r-1', sha: 'a' } as unknown as Entry
+    const handed = recommend(ctxFor([run(1, 'a', 'S'), decision('revise', { note: 'x' }), back, malformed(2, 'b')]))!
+    expect(handed.rule).toBe('revise-returned')
+    expect(handed.options.map((o) => o.command)).not.toContain('witness gate plan p1')
+    const retracted = recommend(ctxFor([run(1, 'a', 'S', { outcome: 'passed', verdicts: [] }), decision('revise', { note: 'x' }), malformed(2, 'b')]))!
+    expect(retracted.rule).toBe('retracted')
+    expect(retracted.options[0]!.command).toBe('witness gate plan p1 --fresh')
+    // moved content pairs with nothing: the re-run leads again
+    expect(recommend(ctxFor(entries, { stale: true }))!.rule).toBe('malformed-rerun')
+  })
+
   it('a revise after a malformed-only round: the re-gate repairs it, and the block says so (S2-4)', () => {
     const d = recommend(ctxFor([malformed(1, 'a'), decision('revise')]))!
     expect(d.rule).toBe('malformed-rerun')
