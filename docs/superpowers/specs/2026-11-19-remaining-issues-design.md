@@ -228,6 +228,17 @@ The build of Tasks 1–7 and its slice review settled these. Tags name entries i
     - Step 0's output names it with `git show <ref>`.
     - A backup that cannot be written refuses `carry-pending` without aborting.
 - **The PR branch** is named from the plan (`witness/<plan>`), never from HEAD. `pr-branch-gone` is a human's call, recorded `fix` (Tasks 5, 6).
+- **A side's checkout is offered only while the file holds a version git left** (S1-A). `git checkout --theirs`/`--ours` overwrites the worktree, so a file the session resolved or rewrote and has not staged is never offered one.
+  - A text file with no marker, matching no stage (`git hash-object` against the stage blobs), gets a prose row: no conflict markers are left; if this is the resolution, `git add -- <file>` records it, and `git checkout -m -- <file>` puts the markers back.
+  - A text file with either marker left alone is content.
+  - A binary file rewritten since git left it gets an add-first row that names what each checkout would replace.
+  - A binary or text file still holding a stage's version keeps §4.1.3's checkout row.
+- **The carry's git runs with `GIT_MERGE_VERBOSITY=2`** (S1-B), git's default, over a user's `merge.verbosity` and any inherited value. At 0 a clashing apply prints no `CONFLICT`, and step 7 would read the clash as a refused apply.
+- **verify-red holds its non-test work off the shared stash list** (S1-C; it ran `git stash push` and `drop` before).
+  - The work is held in a stash-shaped commit built through scratch indexes at `refs/witness/verify-red/<plan>`. Its index commit holds the paths' staged state, its tree their worktree bytes, a third parent the untracked ones, and its message the run's pid and the paths as JSON.
+  - It is put back path by path, each index entry and its worktree bytes, with no merge. `git stash apply --index` resets the whole index to HEAD part way, and refuses whenever another path is staged.
+  - A held ref is never overwritten. It is written create-only. One standing when a run starts is a run's that never finished. Its work goes back first, by the same restore, only when its process is gone and every listed path holds only what that run left (the held, HEAD-at-capture or base version, or nothing). Anything else refuses `verify-red-pending` (exit 2, nothing recorded), naming the ref and how to see and restore it by hand; deleting it is the human's, in prose.
+- **Step 2 is asked again after the capture, before the reset** (S1-D). An operation a session began while the work was captured is refused `operation-in-progress`, and the carry ref just written is dropped against its sha, with nothing moved.
 
 ### 4.2 Row 244 — every offered act is accepted, and a handed-back revise is decided again (#87)
 

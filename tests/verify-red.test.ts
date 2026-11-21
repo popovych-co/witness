@@ -238,6 +238,130 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
     expect(res.code).toBe(0)
     expect(tree(repo, files)).toEqual(before)
   })
+
+  // A crashed run leaves its held ref as the only copy of the non-test work it took off the tree. The
+  // next run never overwrites it: it puts the work back first when the tree holds only what the
+  // crashed run left, and otherwise refuses `verify-red-pending`, the ref and the tree untouched.
+  const HELD = 'refs/witness/verify-red/auth-refresh-plan-1'
+  const heldSha = (repo: TestRepo): string => {
+    try { return repo.git('rev-parse', '--verify', '-q', HELD) } catch { return '' }
+  }
+  // the work of the staged/edited/untracked test above, on the tagged tests staged in the index
+  const workRepo = async (): Promise<{ repo: TestRepo; files: string[] }> => {
+    const repo = await tddRepo()
+    repo.write('src/notes.ts', 'export const notes = 1\n')
+    repo.git('add', 'src/notes.ts')
+    repo.git('commit', '-m', 'notes')
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', 'src/token.ts')
+    repo.write('src/notes.ts', 'export const notes = 2\n')
+    repo.git('add', 'src/notes.ts')
+    repo.write('src/notes.ts', 'export const notes = 3\n')
+    repo.write('src/helper.ts', 'export const helper = true\n')
+    return { repo, files: ['tests/token.test.ts', 'src/token.ts', 'src/notes.ts', 'src/helper.ts'] }
+  }
+  // A verify-red in a process of its own that dies once the work is set aside and the red's tree laid
+  // out, before the red runs (the crash point's exit 9): nothing restores it.
+  const crashed = (repo: TestRepo): Promise<number | null> => new Promise((done) => {
+    const REPO = resolve(import.meta.dirname, '..')
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', 'auth-refresh-plan-1', '--step', 's1'],
+      { cwd: repo.root, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+    c.on('close', (code) => done(code))
+  })
+  // Every update git makes to the held ref, as `<old> <new>` lines.
+  const heldLog = (repo: TestRepo): (() => string[]) => {
+    const hooks = join(resolve(repo.root, repo.git('rev-parse', '--git-common-dir')), 'hooks')
+    repo.git('config', 'core.hooksPath', hooks)
+    mkdirSync(hooks, { recursive: true })
+    const log = join(hooks, '..', 'held-updates.log')
+    const hook = join(hooks, 'reference-transaction')
+    writeFileSync(hook, `#!/bin/sh\n[ "$1" = committed ] || exit 0\nwhile read -r old new ref; do\n  if [ "$ref" = ${HELD} ]; then echo "$old $new" >> '${log}'; fi\ndone\nexit 0\n`)
+    chmodSync(hook, 0o755)
+    return () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [])
+  }
+  const zero = /^0+$/
+
+  it('after a crash between hold and restore, the next run puts the held work back first, and never overwrites the ref', async () => {
+    const { repo, files } = await workRepo()
+    const before = tree(repo, files)
+    const updates = heldLog(repo)
+    expect(await crashed(repo)).toBe(9)
+    const left = heldSha(repo)
+    expect(left).not.toBe('')
+    expect(repo.read('src/token.ts')).not.toBe(TOKEN_FIXED) // the red's tree, as the crash left it
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toMatch(new RegExp(`^held-work: ${HELD} — .*src/token\\.ts`, 'm'))
+    expect(tree(repo, files)).toEqual(before)
+    expect(phases(repo).map((e) => e.phase)).toEqual(['red', 'green'])
+    expect(heldSha(repo)).toBe('')
+    // created by the crashed run, deleted once its work was back, then the second run's own: never moved
+    const lines = updates()
+    expect(lines[0]).toBe(`${'0'.repeat(left.length)} ${left}`)
+    expect(lines[1]).toBe(`${left} ${'0'.repeat(left.length)}`)
+    expect(lines.every((l) => { const [o, n] = l.split(' '); return zero.test(o!) || zero.test(n!) })).toBe(true)
+  }, 60_000)
+
+  it('after a crash, a held file the session edited since refuses verify-red-pending: the ref, the edit and the journal untouched', async () => {
+    const { repo } = await workRepo()
+    expect(await crashed(repo)).toBe(9)
+    const left = heldSha(repo)
+    repo.write('src/token.ts', 'a session edit after the crash\n')
+    const status = repo.git('status', '--porcelain=v1', '--untracked-files=all')
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('verify-red-pending')
+    expect(res.stderr).toContain(HELD)
+    expect(res.stderr).toContain('src/token.ts')
+    expect(res.stderr).toContain('git stash show -p')
+    expect(res.stderr).not.toMatch(/^\s*run:/m)
+    expect(heldSha(repo)).toBe(left)
+    expect(repo.read('src/token.ts')).toBe('a session edit after the crash\n')
+    expect(repo.git('status', '--porcelain=v1', '--untracked-files=all')).toBe(status)
+    expect(phases(repo)).toEqual([])
+  }, 60_000)
+
+  it('a held ref that lists no files (an older witness\'s, or a hand\'s) refuses verify-red-pending and is never overwritten', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.git('commit', '-m', 'tagged tests')
+    repo.write('src/token.ts', 'work only this ref holds\n')
+    const planted = repo.git('stash', 'create')
+    repo.git('update-ref', HELD, planted)
+    repo.git('checkout', '--', 'src/token.ts')
+    repo.write('src/token.ts', TOKEN_FIXED)
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('verify-red-pending')
+    expect(res.stderr).toContain('lists no files')
+    expect(res.stderr).not.toMatch(/^\s*run:/m)
+    expect(heldSha(repo)).toBe(planted)
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(phases(repo)).toEqual([])
+  })
+
+  it('a held ref whose run is still alive refuses verify-red-pending: a running verify-red\'s work is never taken back from it', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.git('add', 'tests/token.test.ts')
+    repo.git('commit', '-m', 'tagged tests')
+    repo.write('src/token.ts', TOKEN_FIXED)
+    // the parent process stands for a live holder: verify-red runs here in process, and its own pid
+    // in a record can only be a reused one, never a run still going
+    const live = repo.git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-p', 'HEAD', '-m',
+      `WIP on verify-red auth-refresh-plan-1\n\npid: ${process.ppid}\nfiles: ${JSON.stringify(['src/token.ts'])}`)
+    repo.git('update-ref', HELD, live)
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('verify-red-pending')
+    expect(res.stderr).toContain(`pid ${process.ppid}`)
+    expect(heldSha(repo)).toBe(live)
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(phases(repo)).toEqual([])
+  })
 })
 
 // Final review F1. `refs/stash` is ONE stack for every worktree of a repo: A pushes, B pushes,

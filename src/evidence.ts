@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -8,13 +8,15 @@ import { loadConfig } from './config.js'
 import { entryLine, appendEntry, journalRel, readStream } from './journal.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
-import { ok, refuse, v, type Result } from './refusal.js'
+import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { cliAct } from './act.js'
+import { seeWork } from './carry.js'
 import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
 import { git, gitWith, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
-import { kv } from './toon.js'
-import { withTxn } from './txn.js'
-import { acquireLock } from './lock.js'
+import { kv, shellLine, shellWord } from './toon.js'
+import { crashPoint, withTxn } from './txn.js'
+import { acquireLock, isAlive } from './lock.js'
 
 export function isTestPath(rel: string): boolean {
   if (/\.(test|spec)\./.test(rel)) return true
@@ -196,8 +198,10 @@ const inCommit = (runRoot: string, ref: string, rel: string): boolean =>
 //   - its index commit (second parent) is HEAD with each path as the index holds it, or without it;
 //   - its tree is that with each path the index tracks as the worktree holds it, or without it;
 //   - its third parent, when there is one, holds the untracked paths' bytes.
-// `git stash show -p` and `git stash apply` read it as a stash entry, so after a crash a human finds
-// the work there as before. Nothing differing from HEAD: no commit.
+// `git stash show -p` and `git stash apply` read it as a stash entry, so a human finds the work there
+// too. Its message records the run (`heldRecord`): its process, and every non-test path it set
+// aside, so a later run that finds the ref left by a crash knows what to put back. Nothing differing
+// from HEAD: no commit.
 function holdWork(runRoot: string, planId: string, paths: readonly string[], untracked: ReadonlySet<string>): string | undefined {
   const head = git(runRoot, 'rev-parse', '--verify', 'HEAD^{commit}')
   const headTree = git(runRoot, 'rev-parse', '--verify', `${head}^{tree}`)
@@ -235,10 +239,116 @@ function holdWork(runRoot: string, planId: string, paths: readonly string[], unt
       gitWith(runRoot, scratch('others'), 'update-index', '--add', '--', ...others)
       parents.push(commit(gitWith(runRoot, scratch('others'), 'write-tree'), [], `untracked files on ${on}`))
     }
-    return commit(workTree, parents, `WIP on ${on}`)
+    return commit(workTree, parents, `WIP on ${on}\n\npid: ${process.pid}\nfiles: ${JSON.stringify(paths)}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// What a held commit's message records, read from the raw commit so no configured encoding
+// re-spells a name: the holding run's process and the paths it set aside. A ref that records no
+// paths — written by an older witness's `git stash push`, or by a hand — reads as nothing.
+function heldRecord(runRoot: string, held: string): { pid?: number; files: string[] } | undefined {
+  const raw = tryGit(runRoot, 'cat-file', 'commit', held)
+  const start = raw.ok ? raw.out.indexOf('\n\n') : -1
+  if (start < 0) return undefined
+  const lines = raw.out.slice(start + 2).split('\n')
+  const filesLine = lines.find((l) => l.startsWith('files: '))
+  const pidLine = lines.find((l) => /^pid: \d+$/.test(l))
+  if (filesLine === undefined) return undefined
+  try {
+    const files: unknown = JSON.parse(filesLine.slice('files: '.length))
+    if (!Array.isArray(files) || !files.every((f) => typeof f === 'string')) return undefined
+    return { files, ...(pidLine !== undefined ? { pid: Number(pidLine.slice('pid: '.length)) } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
+// The listed paths where the tree now holds something a crashed run did not leave. That run wrote
+// only these: the held state itself (before its clear, or part way back), HEAD's version from its
+// clear (the held commit's first parent), the base's from the red's tree, and a path taken away. A
+// worktree file whose bytes, or an index entry whose mode and blob, are none of those is a
+// session's since the crash, and putting the held work back over it would lose it. A directory where
+// a listed file was, an unmerged entry, or anything git cannot read counts too. `undefined`: git
+// could not read the tree at all.
+function touchedSinceHeld(runRoot: string, held: string, files: readonly string[], base: string): string[] | undefined {
+  const want = new Set(files)
+  const untracked = tryGit(runRoot, 'rev-parse', '--verify', '-q', `${held}^3`).ok ? [`${held}^3`] : []
+  const read = (rev: string): Map<string, TreeEntry> | undefined => {
+    try { return treeEntries(runRoot, rev, want) } catch { return undefined }
+  }
+  const sides = (revs: string[]): Array<Map<string, TreeEntry>> | undefined => {
+    const maps = revs.map(read)
+    return maps.every((m) => m !== undefined) ? maps as Array<Map<string, TreeEntry>> : undefined
+  }
+  const indexSides = sides([`${held}^2`, `${held}^1`, base])
+  const workSides = sides([held, ...untracked, `${held}^2`, `${held}^1`, base])
+  if (indexSides === undefined || workSides === undefined) return undefined
+  const listed = tryGit(runRoot, '--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...files)
+  if (!listed.ok) return undefined
+  const index = new Map<string, string>()
+  for (const record of listed.out.split('\0')) {
+    const m = /^(\d+) ([0-9a-f]+) ([0-3])\t([^]*)$/.exec(record)
+    if (m !== null && want.has(m[4]!)) index.set(m[4]!, m[3] === '0' ? `${m[1]} ${m[2]}` : 'unmerged')
+  }
+  const kinds = new Map(files.map((p) => {
+    try {
+      const s = lstatSync(join(runRoot, p))
+      return [p, s.isFile() || s.isSymbolicLink() ? 'file' : 'other'] as const
+    } catch {
+      return [p, 'absent'] as const
+    }
+  }))
+  const present = files.filter((p) => kinds.get(p) === 'file')
+  const hashed = present.length ? tryGit(runRoot, 'hash-object', '--', ...present) : { ok: true, out: '' }
+  if (!hashed.ok) return undefined
+  const blobs = new Map(present.map((p, i) => [p, hashed.out.split('\n')[i]]))
+  return files.filter((p) => {
+    const staged = index.get(p)
+    const stagedKnown = staged === undefined
+      || indexSides.some((side) => { const e = side.get(p); return e !== undefined && `${e.mode} ${e.sha}` === staged })
+    const kind = kinds.get(p)
+    const fileKnown = kind === 'absent' || (kind === 'file' && workSides.some((side) => side.get(p)?.sha === blobs.get(p)))
+    return !stagedKnown || !fileKnown
+  })
+}
+
+// `verify-red-pending` (exit 2; nothing is journaled): a held ref verify-red may neither put back
+// nor overwrite. The row names the ref and how to see and restore it by hand; deleting it is a
+// human's act, said in prose, never a runnable line (D168).
+function heldPending(planId: string, held: string, step: string | undefined, why: string): Violation {
+  const again = cliAct('verify-red', planId, ...(step !== undefined ? ['--step', step] : [])).line
+  return v(held, 'verify-red-pending', `${held} holds non-test work a verify-red set aside — ${why} — so it was neither put back nor overwritten`,
+    `${seeWork(held)}. To put it back by hand, ${shellLine(['git', 'stash', 'apply', held])} brings back its worktree versions, and with --index `
+      + `its staged ones too, on a tree with nothing else staged. Once the work is back, or a human decides it is not wanted, a human deletes `
+      + `${held} by hand (git update-ref -d); witness never does. Then ${again}`)
+}
+
+// A held ref verify-red finds at its start is a run's that never put its work back. Witness never
+// overwrites it. It puts the work back itself, through the same path-by-path restore a run ends
+// with, only when the holding process is gone and the tree holds nothing but what that run left
+// (`touchedSinceHeld`); the ref is then dropped against its own sha. Anything else refuses
+// `verify-red-pending`, the tree and the ref untouched. The paths put back, or the refusal.
+function putBackHeld(runRoot: string, planId: string, held: string, base: string, step: string | undefined): Result<string[]> {
+  const sha = git(runRoot, 'rev-parse', '--verify', held)
+  const record = heldRecord(runRoot, sha)
+  if (record === undefined) {
+    return refuse([heldPending(planId, held, step,
+      'it lists no files (an older witness or a hand wrote it), so witness cannot tell what in the tree is the run\'s')])
+  }
+  if (record.pid !== undefined && record.pid !== process.pid && isAlive(record.pid)) {
+    return refuse([heldPending(planId, held, step, `the verify-red that set it aside (pid ${record.pid}) is still running`)])
+  }
+  const touched = touchedSinceHeld(runRoot, sha, record.files, base)
+  if (touched === undefined) return refuse([heldPending(planId, held, step, 'git could not read the tree against it')])
+  if (touched.length) {
+    return refuse([heldPending(planId, held, step,
+      `the tree changed since that run stopped: ${touched.map((p) => shellWord(p)).join(', ')} hold versions it neither held nor wrote`)])
+  }
+  restoreHeld(runRoot, sha, record.files)
+  git(runRoot, 'update-ref', '-d', held, sha)
+  return ok(record.files)
 }
 
 // The paths as HEAD holds them, in the index and in the worktree — what `git stash push --
@@ -252,12 +362,13 @@ function toHead(runRoot: string, paths: readonly string[]): void {
   for (const p of absent) rmSync(join(runRoot, p), { force: true })
 }
 
-// The entries a tree holds at `paths`, matched exactly, each as `--cacheinfo` takes it.
-function treeEntries(runRoot: string, rev: string, paths: ReadonlySet<string>): Map<string, string> {
-  const found = new Map<string, string>()
+// The entries a tree holds at `paths`, matched exactly.
+interface TreeEntry { mode: string; sha: string }
+function treeEntries(runRoot: string, rev: string, paths: ReadonlySet<string>): Map<string, TreeEntry> {
+  const found = new Map<string, TreeEntry>()
   for (const record of git(runRoot, 'ls-tree', '-r', '-z', '--full-tree', rev).split('\0')) {
     const m = /^(\d+) \w+ ([0-9a-f]+)\t([^]*)$/.exec(record)
-    if (m !== null && paths.has(m[3]!)) found.set(m[3]!, `${m[1]},${m[2]},${m[3]}`)
+    if (m !== null && paths.has(m[3]!)) found.set(m[3]!, { mode: m[1]!, sha: m[2]! })
   }
   return found
 }
@@ -273,7 +384,7 @@ function restoreHeld(runRoot: string, held: string, paths: readonly string[]): v
   const index = treeEntries(runRoot, `${held}^2`, want)
   const work = treeEntries(runRoot, held, want)
   const untracked = tryGit(runRoot, 'rev-parse', '--verify', '-q', `${held}^3`).ok
-    ? treeEntries(runRoot, `${held}^3`, want) : new Map<string, string>()
+    ? treeEntries(runRoot, `${held}^3`, want) : new Map<string, TreeEntry>()
   const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
   try {
     for (const [name, rev, entries] of [['work', held, work], ['untracked', `${held}^3`, untracked]] as const) {
@@ -286,7 +397,10 @@ function restoreHeld(runRoot: string, held: string, paths: readonly string[]): v
     rmSync(dir, { recursive: true, force: true })
   }
   for (const p of paths) if (!work.has(p) && !untracked.has(p)) rmSync(join(runRoot, p), { force: true })
-  const entries = paths.flatMap((p) => (index.has(p) ? ['--cacheinfo', index.get(p)!] : []))
+  const entries = paths.flatMap((p) => {
+    const e = index.get(p)
+    return e !== undefined ? ['--cacheinfo', `${e.mode},${e.sha},${p}`] : []
+  })
   if (entries.length) git(runRoot, 'update-index', '--add', ...entries)
   const unstaged = paths.filter((p) => !index.has(p))
   if (unstaged.length) git(runRoot, 'update-index', '--force-remove', '--', ...unstaged)
@@ -300,6 +414,27 @@ export async function verifyRed(
   // Row 191 §4.3: a reconstructed cycle closes a plan step as a witnessed one does, so both of
   // its entries name the step.
   const extra = { reconstructed: true, ...(step !== undefined ? { step } : {}) }
+  // S1-C. The work is held in a per-plan ref, off git's shared stash list (`holdWork`), until it is
+  // put back (`restoreHeld`); the ref is what keeps it recoverable after a crash. A ref already
+  // standing is a crashed run's, never overwritten: its work goes back first, before the tree is
+  // read for this run's diff, or the run refuses (`putBackHeld`). The capture and that put-back run
+  // under the repo lock, as the set-aside always has.
+  const held = `refs/witness/verify-red/${planId}`
+  if (tryGit(runRoot, 'rev-parse', '--verify', '-q', held).ok) {
+    const lock = acquireLock(stateRoot)
+    if (!lock.ok) return lock
+    let back: Result<string[]>
+    try {
+      back = putBackHeld(runRoot, planId, held, base, step)
+    } finally {
+      lock.value()
+    }
+    if (!back.ok) return back
+    const shown = back.value.slice(0, 12)
+    const more = back.value.length > shown.length ? ` (+${back.value.length - shown.length} more)` : ''
+    ctx.out(kv('held-work', `${held} — the non-test work a crashed verify-red set aside is back in the tree: `
+      + `${shown.join(' · ')}${more} — re-read before editing`))
+  }
   const files = changedFiles(runRoot, base)
   if (!files.some(isTestPath)) {
     return refuse([v('diff', 'no-test-changes', `${files.length} changed files, none are tests`, 'a diff that adds or modifies tagged tests')])
@@ -308,19 +443,23 @@ export async function verifyRed(
   const untracked = new Set(git(runRoot, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean))
   const trackedNonTest = nonTest.filter((f) => !untracked.has(f))
 
-  // S1-C. The work is held in a per-plan ref, off git's shared stash list (`holdWork`), until it is
-  // put back (`restoreHeld`); the ref is what keeps it recoverable after a crash. The capture runs
-  // under the repo lock, as the set-aside always has.
-  const held = `refs/witness/verify-red/${planId}`
-  let stashed = false
+  // The ref is made create-only (`''` as its old value), so a run that raced this one to it is never
+  // overwritten either: nothing has left the tree yet, and the run refuses.
+  let holding: string | undefined
   if (nonTest.length) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
     try {
       const work = holdWork(runRoot, planId, nonTest, untracked)
       if (work !== undefined) {
-        git(runRoot, 'update-ref', held, work)
-        stashed = true
+        const wrote = tryGit(runRoot, 'update-ref', held, work, '')
+        if (!wrote.ok) {
+          if (tryGit(runRoot, 'rev-parse', '--verify', '-q', held).ok) {
+            return refuse([heldPending(planId, held, step, 'another verify-red of this plan set its work aside there meanwhile')])
+          }
+          throw new Error(`git update-ref ${held} failed: ${wrote.out}`)
+        }
+        holding = work
       }
     } finally {
       lock.value()
@@ -328,16 +467,18 @@ export async function verifyRed(
   }
   let red: Result<SpecTestRun>
   try {
-    if (stashed) toHead(runRoot, nonTest)
+    if (holding !== undefined) toHead(runRoot, nonTest)
     for (const rel of trackedNonTest) {
       if (inCommit(runRoot, base, rel)) git(runRoot, 'checkout', base, '--', rel)
       else if (existsSync(join(runRoot, rel))) rmSync(join(runRoot, rel))
     }
+    // Test-only crash point, on txn.ts's seam: the red's tree laid out, the work held and not back.
+    crashPoint(ctx.env, 'verify-red-held')
     red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra)
   } finally {
-    if (stashed) {
-      restoreHeld(runRoot, held, nonTest)
-      git(runRoot, 'update-ref', '-d', held)
+    if (holding !== undefined) {
+      restoreHeld(runRoot, holding, nonTest)
+      git(runRoot, 'update-ref', '-d', held, holding)
     } else {
       toHead(runRoot, nonTest)
     }

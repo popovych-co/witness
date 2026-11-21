@@ -205,6 +205,8 @@ describe('the router reads the carry\'s refusals (row 243)', () => {
     ['clash-unresolved', ['A row that leads with `witness ship <plan>` means a move was interrupted: run that line', 'resolve no file by hand before it has run',
       'the `witness-ship` skill\'s **A clash** steps', '`$WITNESS turn`']],
     ['carry-pending', ['never reset the worktree, and never delete or move that ref', '`git switch witness/<plan>`', '**END YOUR TURN**', 'the human\'s call']],
+    ['verify-red-pending', ['`refs/witness/verify-red/<plan>`', 'neither put it back nor overwrote it', 'Never delete or move that ref',
+      '**END YOUR TURN**', 'the human\'s call']],
     ['carry-refused', ['nothing moved', 'intent-to-add', '`git add -- <file>`', '**END YOUR TURN**']],
     ['operation-in-progress', ['never ends one it did not start', 'If this session started it', '`--continue`', '`--abort`', '**END YOUR TURN**']],
     ['rebase-refused', ['not a conflict', 'an untracked file this session made', '`git add -- <file>`', 'in git\'s own words', '**END YOUR TURN**']],
