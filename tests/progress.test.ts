@@ -13,6 +13,11 @@ describe('movesFlow (D206)', () => {
     expect(movesFlow({ v: 1, t: 'retry', artifact: 'p' })).toBe(true)
   })
 
+  // Row 244: a hand-back is the author's act on a revise (`gate --unchanged`), so it moves the flow.
+  it('reads a revise handed back as motion (row 244)', () => {
+    expect(movesFlow({ v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: 'r1', sha: 's1' })).toBe(true)
+  })
+
   it('reads an unknown kind from a hand-edited journal as no motion', () => {
     expect(movesFlow({ v: 1, t: 'made-up' as never })).toBe(false)
   })

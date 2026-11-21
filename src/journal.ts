@@ -34,6 +34,9 @@ export type EntryType =
   // Row 242. The outcome `witness ship` ended on — a merge left to the human, a hold only they can
   // fix, one drive re-checks, a red CI, a re-gate, a merge — so every reader classifies from it.
   | 'ship-outcome'
+  // Row 244 (#87). The author's word that a revise needs no change: `gate --unchanged` journals it
+  // where the gate would answer changed-nothing, and it asks the revise to be decided again.
+  | 'revise-returned'
 
 export interface Entry {
   v: 1
@@ -71,6 +74,11 @@ export interface StatusEntry {
   by?: string
   note?: string
 }
+
+// Row 244 (design §4.2.4). A revise handed back: `run_id` is the run the revise disposed of
+// (`disposedRun`, malformed runs skipped), `sha` the content handed back as unchanged, and `manual`
+// a hand-back made under `--manual`, which goes to the human in every settle that reads it.
+export interface ReviseReturnedEntry { v: 1; t: 'revise-returned'; gate: string; artifact: string; run_id: string; sha: string; manual?: true }
 
 // Row 191 §4.8. The session a line was written in, as a hash (the journal is committed, so
 // never the raw id), and the harness's reading beside it when that reading was trusted.

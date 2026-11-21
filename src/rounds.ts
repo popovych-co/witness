@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
-import type { Entry } from './journal.js'
+import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
 import type { Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
@@ -137,6 +137,11 @@ const isRun = (e: Entry | undefined, gate: string): e is GateRunEntry & Entry =>
   e !== undefined && e.t === 'gate-run' && (e as unknown as GateRunEntry).gate === gate
 const isDecision = (e: Entry | undefined, gate: string): e is DecisionEntry & Entry =>
   e !== undefined && e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate
+// A revise of any kind: plain, repair, un-park, upstream, or another gate's reopen (`caused_by`).
+const isRevise = (e: Entry | undefined, gate: string): boolean =>
+  isDecision(e, gate) && ['revise', 'revise-upstream'].includes((e as unknown as DecisionEntry).decision)
+const isHandBack = (e: Entry | undefined, gate: string): boolean =>
+  e !== undefined && e.t === 'revise-returned' && (e as unknown as ReviseReturnedEntry).gate === gate
 
 export function keyOf(run: GateRunEntry): GateKey {
   const { reviewed_sha, gate, witness } = run
@@ -259,6 +264,12 @@ const anchorsOf = (r: GateRunEntry): string[] =>
     .filter((f) => f.blocking && f.contradicts_pin === undefined)
     .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
 
+// Every blocking finding's anchor, a pin contradiction's included: the first is the run's primary
+// anchor, the one `recommend` names and D123's ladder is spent for.
+const blockingAnchorsOf = (r: GateRunEntry): string[] =>
+  (r.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking)
+    .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
+
 // D123, memory one: how many honest attempts have failed at this seam IN THE CURRENT GAME.
 // Distinct shas only — a resumed or unchanged round is not an attempt. Malformed and
 // fallen-back rounds are excluded for the same reason row 67 and row 107 exempt them from
@@ -323,6 +334,55 @@ export function reviseAct(gate: string, target: string, entries: Entry[]): Act {
     : cliAct('decide', gate, target, '--revise', '--note', '<why>')
 }
 
+// D67's endgame set: the acts left at the round bound, where the gate short-circuits and will
+// not run again (gate.ts), so "re-gate" is the D67 lie whatever the sha says. Stale content only
+// removes APPROVE from it — a human cannot honestly stamp bytes no battery read — which is the
+// same set decide's stale-verdict refusal names.
+function endgameActs(
+  gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
+): Act[] {
+  const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
+  const up = upstream === undefined ? [] : [d('--revise', '--upstream', upstream)]
+  // Row 109: the repair grant is an exit exactly while it is unspent, and it is the one
+  // the human standing at the bound with a fixed finding actually wants — naming it
+  // beside `--upstream` is what stops "fix it and re-gate" from being a move the tool
+  // advertises nowhere and refuses twice.
+  // `witness abandon` joins the set here because the hardcoded branch this replaces
+  // printed it (`help: or discard the plan`) and nothing else offers it — and under D124
+  // `--stop` becomes *park*, which would otherwise leave the bound screen with no
+  // discarding act at all.
+  const repair = repairGranted(entries, gate) ? [] : [d('--revise', '--repair')]
+  const approve = stale ? [] : [d('--approve', '--override')]
+  return [...approve, ...up, ...repair, d('--stop'), cliAct('abandon', target)]
+}
+
+// Below the bound, a stopped run awaiting its decision. Stale removes --approve and nothing
+// else: `decide` refuses that one with `stale-verdict` because a stamp asserts about current
+// content, while a stop or a revise judges the work. Both halves are measured (2026-08-12).
+function pendingActs(
+  gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
+): Act[] {
+  const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
+  const up = upstream === undefined ? [] : [d('--revise', '--upstream', upstream)]
+  const note = reviseAct(gate, target, entries)
+  return [stale ? cliAct('gate', gate, target) : d('--approve'), note, ...up, d('--stop')]
+}
+
+// What un-parks a gate stopped under D124. At the bound the gate short-circuits before invoking
+// anything, so `--fresh` is the D67 lie: the only live acts there are the endgame set, and on
+// moved content it offers no approve (S2-5). Below it, row 241 (R11): a human's revise sends the
+// gate back to work — alone while work is `owed` (an open step, a plan reopen, an evidence row, or
+// work the gate's last act sent upstream), since a fresh run would only judge the work as it
+// stands; otherwise beside a fresh run, which re-reviews it (the content is unchanged, so a plain
+// re-gate would answer `changed-nothing`).
+function parkedActs(
+  gate: string, target: string, entries: Entry[], upstream: string | undefined, owed: boolean, stale: boolean,
+): Act[] {
+  if (boundReached(entries, gate)) return endgameActs(gate, target, entries, stale, upstream)
+  const revise = cliAct('decide', gate, target, '--revise', '--note', '<why>')
+  return owed ? [revise] : [revise, cliAct('gate', gate, target, '--fresh')]
+}
+
 // Which decisions are legal RIGHT NOW is a pure function of journal state, so it lives
 // where the state is — it was in `gate.ts`, which `next.ts` cannot import back (gate.ts
 // already imports next.ts), and that one-way edge is precisely why `next` grew three
@@ -334,38 +394,16 @@ export function reviseAct(gate: string, target: string, entries: Entry[]): Act {
 // which shipped an unrunnable command on every screen (D129). `undefined` means no
 // upstream exists — `decide` refuses that with `unknown-owner`, so the option is not legal
 // and is omitted rather than printed as a placeholder.
+// Row 244: the endgame and the pending sets are `liveActs`' own.
 export function exitActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
 ): Act[] {
-  const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
-  const up = upstream === undefined ? [] : [d('--revise', '--upstream', upstream)]
-  const note = reviseAct(gate, target, entries)
-  // The bound outranks staleness: at the bound the gate short-circuits and will not run
-  // again (gate.ts), so "re-gate" is the D67 lie whatever the sha says. Stale content only
-  // removes APPROVE from the endgame — a human cannot honestly stamp bytes no battery
-  // read — which is the same set decide's stale-verdict refusal names.
-  if (boundReached(entries, gate)) {
-    // Row 109: the repair grant is an exit exactly while it is unspent, and it is the one
-    // the human standing at the bound with a fixed finding actually wants — naming it
-    // beside `--upstream` is what stops "fix it and re-gate" from being a move the tool
-    // advertises nowhere and refuses twice.
-    // `witness abandon` joins the set here because the hardcoded branch this replaces
-    // printed it (`help: or discard the plan`) and nothing else offers it — and under D124
-    // `--stop` becomes *park*, which would otherwise leave the bound screen with no
-    // discarding act at all.
-    const repair = repairGranted(entries, gate) ? [] : [d('--revise', '--repair')]
-    const approve = stale ? [] : [d('--approve', '--override')]
-    return [...approve, ...up, ...repair, d('--stop'), cliAct('abandon', target)]
-  }
-  // Stale removes --approve and nothing else: `decide` refuses that one with `stale-verdict`
-  // because a stamp asserts about current content, while a stop or a revise judges the work.
-  // Both halves are measured (2026-08-12). The pending check is what separates this from the
-  // reopened and revised screens, where no anchor resolves and every decide verb refuses.
-  if (stale) {
-    if (pendingDecision(entries, gate) === undefined) return [cliAct('gate', gate, target)]
-    return [cliAct('gate', gate, target), note, ...up, d('--stop')]
-  }
-  return [d('--approve'), note, ...up, d('--stop')]
+  // The bound outranks staleness.
+  if (boundReached(entries, gate)) return endgameActs(gate, target, entries, stale, upstream)
+  // The pending check is what separates this from the reopened and revised screens, where no
+  // anchor resolves and every decide verb refuses.
+  if (stale && pendingDecision(entries, gate) === undefined) return [cliAct('gate', gate, target)]
+  return pendingActs(gate, target, entries, stale, upstream)
 }
 
 // Rows 139/203. The exits line: `exitActs` rendered in one line.
@@ -392,19 +430,11 @@ export function unparkAt(entries: Entry[], i: number): boolean {
   return (before as unknown as DecisionEntry | undefined)?.decision === 'stop'
 }
 
-// What un-parks a gate stopped under D124. At the bound the gate short-circuits before invoking
-// anything, so `--fresh` is the D67 lie: the only live acts there are the endgame set, which
-// exitActs already knows. Below it, row 241 (R11): a human's revise sends the gate back to work —
-// alone while work is `owed` (an open step, a plan reopen, an evidence row, or work the gate's
-// last act sent upstream), since a fresh run would only judge the work as it stands; otherwise
-// beside a fresh run, which re-reviews it (the content is unchanged, so a plain re-gate would
-// answer `changed-nothing`).
+// A parked gate's way back (`parkedActs`), as every parked row offers it.
 export function reopenActs(
   gate: string, target: string, entries: Entry[], upstream: string | undefined, owed: boolean,
 ): Act[] {
-  if (boundReached(entries, gate)) return exitActs(gate, target, entries, false, upstream)
-  const revise = cliAct('decide', gate, target, '--revise', '--note', '<why>')
-  return owed ? [revise] : [revise, cliAct('gate', gate, target, '--fresh')]
+  return parkedActs(gate, target, entries, upstream, owed, false)
 }
 
 // Rows 139/203. The reopen as one line: `reopenActs` rendered.
@@ -412,6 +442,219 @@ export function reopenCommand(
   gate: string, target: string, entries: Entry[], upstream: string | undefined, owed = false,
 ): string {
   return exitsLine(reopenActs(gate, target, entries, upstream, owed))
+}
+
+// Row 244 (#87, design §4.2.1). The facts beside the journal that decide which acts are legal. The
+// caller computes them, since some need canon, config or the worktree.
+export interface ActFacts {
+  upstream: string | undefined   // the parent a send-upstream names; undefined = none
+  stale: boolean                 // content moved since the anchor run
+  holdLifted: boolean            // a hold lifted since the anchor run (row 179)
+  owed: boolean                  // row 241's owed work: open step, plan reopen, evidence row, upstream work
+  upstreamOwed: boolean          // the gate's own latest revise is upstream and its work is still owed there (P48)
+}
+
+// Row 244 (design §4.2.2). Where a gate stands, for every reader alike.
+export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'handed-back-moved' | 'at-bound' | 'settled' | 'retracted' | 'parked'
+
+// Row 244. A gate's state and its legal acts, in the order the screens offer them. `anchor` is the
+// run a decision now disposes of. `malformedRerun`: a malformed round is the gate's last word, so
+// its free re-run leads the acts (design §4.2.2). `slots` are acts `decide` accepts that no screen
+// lists: below the bound, the other spelling of the listed approve (D122).
+export interface LiveActs {
+  state: GateStateKind
+  anchor?: GateRunEntry
+  acts: Act[]
+  malformedRerun: boolean
+  // Design §4.2.2's session line, where a state has one. Unset until the screens read liveActs.
+  session?: string
+  slots?: Act[]
+}
+
+// Row 244 (design §4.2.3, "one pairing"). The run the gate's latest revise disposed of: the latest
+// run before it that judged something. A malformed round judged nothing, so a revise after one
+// disposes of the run before it (P45), and one after the revise leaves the pairing alone (P50).
+// Every staleness read and every changed-nothing check pairs through it. `at` is its index.
+export function disposedRun(entries: Entry[], gate: string): { run: GateRunEntry; at: number } | undefined {
+  let i = entries.length - 1
+  while (i >= 0 && !isRevise(entries[i], gate)) i--
+  for (i--; i >= 0; i--) {
+    const e = entries[i]
+    if (isRun(e, gate) && (e as unknown as GateRunEntry).outcome !== 'malformed') return { run: e as unknown as GateRunEntry, at: i }
+  }
+  return undefined
+}
+
+// Row 244 (design §4.2.5). A revise the author handed back, still waiting for its decision: the
+// gate's latest disposition is a revise, a `revise-returned` naming the run it disposed of follows
+// it, and no run that judged something has come since (P33). A malformed run judged nothing, so it
+// leaves the hand-back standing. Any later disposition ends it, since then the latest is no longer
+// that revise.
+export function standingHandBack(entries: Entry[], gate: string): ReviseReturnedEntry | undefined {
+  const disposed = disposedRun(entries, gate)
+  if (disposed === undefined) return undefined
+  let revise = entries.length - 1
+  while (revise >= 0 && !isDecision(entries[revise], gate)) revise--
+  if (!isRevise(entries[revise], gate)) return undefined
+  let standing: ReviseReturnedEntry | undefined
+  for (const e of entries.slice(revise + 1)) {
+    if (isRun(e, gate) && (e as unknown as GateRunEntry).outcome !== 'malformed') return undefined
+    if (isHandBack(e, gate) && (e as unknown as ReviseReturnedEntry).run_id === disposed.run.run_id) {
+      standing = e as unknown as ReviseReturnedEntry
+    }
+  }
+  return standing
+}
+
+// Row 244 (design §4.2.4). Was the gate settled when the revise at `reviseAt` was journaled: the
+// gate's decision before it, since the run at `runAt`, is an approve, or there is none and that run
+// passed. Such a revise, with no `caused_by`, retracts the settlement.
+function settledBefore(entries: Entry[], gate: string, runAt: number, reviseAt: number): boolean {
+  for (let i = reviseAt - 1; i > runAt; i--) {
+    if (isDecision(entries[i], gate)) return (entries[i] as unknown as DecisionEntry).decision === 'approve'
+  }
+  return (entries[runAt] as unknown as GateRunEntry).outcome === 'passed'
+}
+
+// Design §4.2.2: the free re-run leads in these states, and never at the bound, settled or parked.
+const LEADS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'handed-back-moved', 'retracted'])
+
+// Row 244 (#87, design §4.2.1–§4.2.3, §4.2.9). A gate's state and the acts that are legal in it,
+// from one pure derivation, so a screen never offers an act `decide` refuses. The states, first
+// match wins:
+//   none        no run, or the effort abandoned;
+//   parked      the latest disposition since the last run that judged something is a stop;
+//   at-bound    the round budget is spent: the endgame set;
+//   settled     an approve, or a pass with no disposition since;
+//   retracted   a revise un-settled an approve or a pass (no `caused_by`);
+//   handed-back the author handed the revise back (-moved: content or a hold moved since);
+//   revised     any other revise;
+//   pending     a stopped run awaiting its decision, or only malformed rounds.
+// Moved content and a lifted hold read alike: a stamp asserts about bytes a battery read (D75).
+export function liveActs(gate: string, target: string, entries: Entry[], facts: ActFacts): LiveActs {
+  let lastRun = -1
+  let judged = -1
+  let lastDecision = -1
+  let abandoned = false
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i]!
+    if (isRun(e, gate)) {
+      lastRun = i
+      if ((e as unknown as GateRunEntry).outcome !== 'malformed') judged = i
+    } else if (e.t === 'human-decision' && (e as unknown as DecisionEntry).decision === 'abandon-effort') {
+      // D190 journals the effort's end under its own gate (`effort`): it ends every gate of the stream.
+      abandoned = true
+      if (isDecision(e, gate)) lastDecision = i
+    } else if (isDecision(e, gate)) {
+      lastDecision = i
+      abandoned = false
+    }
+  }
+  if (lastRun < 0 || abandoned) return { state: 'none', acts: [], malformedRerun: false }
+
+  const regate = cliAct('gate', gate, target)
+  // D126, row 209: a malformed round with no decision since is the gate's last word.
+  const malformedLast = (entries[lastRun] as unknown as GateRunEntry).outcome === 'malformed' && lastRun > lastDecision
+  if (judged < 0) return { state: 'pending', acts: [regate], malformedRerun: malformedLast }
+
+  const anchor = entries[judged] as unknown as GateRunEntry
+  const disposition = lastDecision > judged ? (entries[lastDecision] as unknown as DecisionEntry) : undefined
+  const decision = disposition?.decision
+  const revised = decision === 'revise' || decision === 'revise-upstream'
+  const moved = facts.stale || facts.holdLifted
+  const atBound = boundReached(entries, gate)
+  const d = (...rest: string[]) => cliAct('decide', gate, target, ...rest)
+  const noted = d('--revise', '--note', '<why>')
+  const fresh = cliAct('gate', gate, target, '--fresh')
+
+  let state: GateStateKind
+  let acts: Act[]
+  if (decision === 'stop') {
+    state = 'parked'
+    acts = parkedActs(gate, target, entries, facts.upstream, facts.owed, moved)
+  } else if (atBound) {
+    state = 'at-bound'
+    acts = endgameActs(gate, target, entries, moved, facts.upstream)
+  } else if (decision === 'approve' || (!revised && anchor.outcome === 'passed')) {
+    // The retraction alone, after which `gate --fresh` re-judges; on moved content the approval
+    // lapsed and the re-gate judges what moved.
+    state = 'settled'
+    acts = [moved ? regate : noted]
+  } else if (revised) {
+    // D122: below the bound the screens name the accounted approve while a blocking finding stands.
+    const blocking = blockingAnchorsOf(anchor)
+    const approve = blocking.length > 0 ? d('--approve', '--override') : d('--approve')
+    if (disposition?.caused_by === undefined && settledBefore(entries, gate, judged, lastDecision)) {
+      // A retraction asks for a re-review, not an edit: no hand-back, no upstream.
+      state = 'retracted'
+      acts = moved ? [regate, d('--stop'), noted] : [fresh, approve, d('--stop'), noted]
+    } else {
+      // Send upstream where a parent exists, the latest revise was not upstream, and D123's ladder
+      // is unspent for the run's primary anchor (an upstream taken here spends it, P47).
+      const primary = blocking[0]
+      const up = facts.upstream !== undefined && decision !== 'revise-upstream' &&
+        !(primary !== undefined && ladderSpent(entries, gate, primary))
+        ? [d('--revise', '--upstream', facts.upstream)] : []
+      const handedBack = standingHandBack(entries, gate) !== undefined
+      state = handedBack ? (moved ? 'handed-back-moved' : 'handed-back') : 'revised'
+      // Moved content after a revise is the author's edit, and the re-gate judges it; after a
+      // hand-back it moved under a verdict nobody re-read, so no approve, and the re-gate leads.
+      acts = state === 'handed-back-moved' ? [regate, d('--stop'), ...up, noted]
+        : moved ? [regate]
+        : [approve, d('--stop'), ...up, fresh, noted]
+    }
+  } else {
+    state = 'pending'
+    acts = pendingActs(gate, target, entries, moved, facts.upstream)
+  }
+
+  // A malformed round after the revise (or the pending run) keeps the state's acts and leads with
+  // its free re-run, which repairs the round (design §4.2.2, P50).
+  const malformedRerun = malformedLast && LEADS.has(state)
+  if (malformedRerun && (acts[0] === undefined || actKey(acts[0]) !== actKey(regate))) acts = [regate, ...acts]
+  const slots = atBound ? [] : approveTwin(gate, target, acts)
+  return { state, anchor, acts, malformedRerun, ...(slots.length > 0 ? { slots } : {}) }
+}
+
+// D122. Below the bound `--approve` and `--approve --override` are one act: a screen lists one
+// spelling, and the other is accepted beside it. At the bound only the accounted one is.
+function approveTwin(gate: string, target: string, acts: readonly Act[]): Act[] {
+  const plain = cliAct('decide', gate, target, '--approve')
+  const accounted = cliAct('decide', gate, target, '--approve', '--override')
+  const listed = (a: Act) => acts.some((x) => actKey(x) === actKey(a))
+  return listed(accounted) ? [plain] : listed(plain) ? [accounted] : []
+}
+
+// `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells.
+const VALUED_FLAGS = new Set(['--note', '--upstream', '--pin', '--via'])
+// The flags that make an act another act (design §4.2.1). Notes, `--pin`, `--via`, `--trust-cmds`,
+// `--manual` and the upstream's value never do.
+const COUNTED_FLAGS: Record<string, readonly string[]> = {
+  decide: ['--approve', '--revise', '--stop', '--override', '--repair', '--upstream'],
+  gate: ['--fresh', '--unchanged'],
+}
+
+// Row 244. An act's identity, for membership: its verb, its positionals (gate and target, or the
+// target abandoned) and the flags that count, in one order. Read the way `decide` reads argv: a
+// valued flag takes the next word whatever it spells, and counts only with a value, since `decide`
+// reads an upstream only through its value.
+export function actKey(act: Act | readonly string[]): string {
+  const argv = 'argv' in act ? act.argv : act
+  const [verb = '', ...rest] = argv
+  const positional: string[] = []
+  const flags = new Set<string>()
+  for (let i = 0; i < rest.length; i++) {
+    const w = rest[i]!
+    if (!w.startsWith('--')) { positional.push(w); continue }
+    if (!VALUED_FLAGS.has(w)) flags.add(w)
+    else if (rest[i + 1] !== undefined) { flags.add(w); i++ }
+  }
+  return JSON.stringify([verb, ...positional, ...(COUNTED_FLAGS[verb] ?? []).filter((f) => flags.has(f))])
+}
+
+// Row 244. Is the act with this key legal now: one the state lists, or one of its slots.
+export function actLive(live: LiveActs, key: string): boolean {
+  return [...live.acts, ...(live.slots ?? [])].some((a) => actKey(a) === key)
 }
 
 export function pendingDecision(entries: Entry[], gate: string): GateRunEntry | undefined {
