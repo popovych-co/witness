@@ -1685,7 +1685,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const scope = marked ? (t: string | undefined) => t === marked.target : undefined
   const settleScope = scope ?? (live !== undefined ? (t: string) => !driveWillDecide(live, t) : undefined)
   // Row 239 (the plan's B9): the re-run as its act, never its line read back.
-  let routed: { act: Act; target: string; row?: NextAction } | undefined
+  let routed: { act: Act; target: string; row?: NextAction; note?: string } | undefined
   // Row 240. A drive from before 0.29 runs this repo: it settles stops and runs ships with no busy
   // lock, so this `next` settles nothing and routes nothing beside it — the human stops it first.
   const older = cfgR.value.autonomy && marked === undefined ? olderDrive(root) : undefined
@@ -1702,7 +1702,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       const line = settledLine(r)
       if (line !== undefined) ctx.out(line)
       if (routed === undefined && r.settled.kind === 'routed') {
-        routed = { act: r.settled.act, target: r.target, ...(r.settled.row !== undefined ? { row: r.settled.row } : {}) }
+        routed = {
+          act: r.settled.act, target: r.target,
+          ...(r.settled.row !== undefined ? { row: r.settled.row } : {}), ...(r.settled.note !== undefined ? { note: r.settled.note } : {}),
+        }
       }
     }
   }
@@ -1739,7 +1742,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // A design gate's re-run is a step of the design session (row 194), so it carries the stage.
     const design = routed.act.argv[0] === 'gate' && routed.act.argv[1] === 'design'
     // Row 241 (R12): a plan step's re-run is its whole row — stage implement, home the worktree.
-    action = routed.row ?? { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}) }
+    // Row 244 (design §4.2.2, S3-C): a moved hand-back's re-gate carries the session's line, as a
+    // retraction's lead does (`retractedLead`) — the one place it reaches the session.
+    action = routed.row ?? { ...runs(routed.act), target: routed.target, ...(design ? { stage: 'design' } : {}), ...noteOf(routed.note) }
   }
   action = withDeferralNote(root, canon, action)
   // Row 195. An unmarked chat under autonomy keeps the human's own work while drive runs the

@@ -7,10 +7,10 @@ import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { liftedHolds } from './needs.js'
 import { gateSpec } from './gate.js'
-import { readStream } from './journal.js'
+import { readStream, type Entry } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal, type Result } from './refusal.js'
-import { settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { actKey, liveActs, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { criteriaOwner, findById, loadCanon } from './scan.js'
 import { cmd, kv } from './toon.js'
 import { applyDecision, decisionAct, printReviseContext, type DecisionAct } from './verbs/decide.js'
@@ -36,7 +36,9 @@ export type Settled =
   // A re-run the CLI names and never executes. Row 239 (the plan's B9): with its act, which
   // `next` and drive route by, never by the line read back.
   // Row 241 (R12): `row`, the flow's whole step row when the re-run is a plan step's.
-  | { kind: 'routed'; act: Act; line: string; row?: NextAction }
+  // Row 244 (design §4.2.2, review finding S3-C): `note`, the state's session line when the re-run is a
+  // moved hand-back's re-gate — the session is told to change nothing more.
+  | { kind: 'routed'; act: Act; line: string; row?: NextAction; note?: string }
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   // limit: the usage limit that refused the arbiter. act: the refused act (row 240), which drive
@@ -83,6 +85,17 @@ export async function settleStop(
   } finally {
     lock.release()
   }
+}
+
+// Row 244 (design §4.2.2, review finding S3-C). The session's line for a hand-back whose content or a
+// hold moved since — change nothing more; the re-gate judges what moved — on the re-gate the policy
+// routes for it. The changed-nothing screen, which prints the other states' lines, is never reached
+// there: the gate runs a round instead, so the routed re-gate is where the line reaches the session.
+// Read from `liveActs`, as every screen reads its session line; `stale` is this settle's own read.
+function movedHandBackLine(gate: string, target: string, entries: Entry[], stale: boolean, act: Act): string | undefined {
+  if (actKey(act) !== actKey(cliAct('gate', gate, target))) return undefined
+  const live = liveActs(gate, target, entries, { upstream: undefined, stale, holdLifted: false, owed: false, upstreamOwed: false })
+  return live.state === 'handed-back-moved' ? live.session : undefined
 }
 
 // Local wall-clock HH:MM, for the lines that name when a holder started.
@@ -246,7 +259,8 @@ async function judgeStop(
       // Not a decision: a re-run the CLI names and never executes — the stage owns it.
       const line = cmd('autonomy', `re-run owed — ${act.line}`)
       ctx.out(line)
-      return { kind: 'routed', act, line }
+      const note = movedHandBackLine(gate, target, entries, stale, act)
+      return { kind: 'routed', act, line, ...(note !== undefined ? { note } : {}) }
     }
     const actR = parsed(act.argv)
     if (!actR.ok) {

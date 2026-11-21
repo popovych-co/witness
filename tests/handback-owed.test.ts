@@ -10,13 +10,14 @@ import '../src/gates/index.js'
 import { readStream, type Entry } from '../src/journal.js'
 import { needsYou } from '../src/needs-you.js'
 import { recommend } from '../src/recommend.js'
-import { decisionOwed, gateRuns, lastGateRun, liveActs, standingHandBack, type GateRunEntry } from '../src/rounds.js'
+import { SESSION_LINE, decisionOwed, gateRuns, lastGateRun, liveActs, standingHandBack, type GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon, type CanonDoc } from '../src/scan.js'
 import { settleOwed } from '../src/settle.js'
 import { runShip, shipPhase } from '../src/ship.js'
+import { kv } from '../src/toon.js'
 import { authoringOwed, heldPlan, owedDecisions, owedRun } from '../src/verbs/next.js'
 import {
-  PLAN_BLOCKING, TOKEN_FIXED, addOrigin, commitEntry, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, shippableRepo,
+  PLAN_BLOCKING, TOKEN_FIXED, addOrigin, autonomyOn, commitEntry, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, shippableRepo,
   writePlan, writeSpec, type CliResult, type TestRepo,
 } from './helpers.js'
 
@@ -206,6 +207,36 @@ describe('a standing hand-back is owed to every reader (row 244, design §4.2.5)
     expect(regate.stdout).not.toContain('revise changed nothing')
     expect(gateRuns(readStream(root, P), 'plan')).toHaveLength(2)
     expect(standingHandBack(readStream(root, P), 'plan')).toBeUndefined()
+  }, 180_000)
+
+  // Review finding S3-C. Design §4.2.2's session line for a moved hand-back printed only on the
+  // changed-nothing screen, which a moved hand-back never reaches: the gate runs a round instead. It
+  // reaches the session on the re-gate `next` routes, where under autonomy the policy takes the stale
+  // re-run — and only there: a routed re-gate of a plain stop carries no such line.
+  it('under autonomy the re-gate next routes for a moved hand-back carries its session line (S3-C)', async () => {
+    const regate = cliAct('gate', 'plan', P).line
+    const line = kv('note', SESSION_LINE['handed-back-moved'])
+    const f = await revisedPlan()
+    await f.handBack()
+    expect((await writePlan(f.repo, P, {}, '## Step: s1\nImplement rotation with TDD, due at 80% of the TTL.\n')).code).toBe(0)
+    autonomyOn(f.repo)
+    const next = await ok(f.repo, ['next'], f.env)
+    expect(next.stdout).toContain(`autonomy: re-run owed — ${regate}`)
+    expect(next.stdout).toContain(`next: ${regate}`)
+    expect(next.stdout).toContain(line)
+    expect(standingHandBack(readStream(f.repo.root, P), 'plan')).toBeDefined()
+
+    // A plain stop on moved content: the same routed re-gate, without the hand-back's line.
+    const repo = await plannedRepo({ autonomy: false })
+    const scenario = fakeScenario()
+    putVerdict(scenario, PLAN_BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'plan', P], env, 1)
+    expect((await writePlan(repo, P, {}, '## Step: s1\nImplement rotation with TDD, due at 80% of the TTL.\n')).code).toBe(0)
+    autonomyOn(repo)
+    const plain = await ok(repo, ['next'], env)
+    expect(plain.stdout).toContain(`next: ${regate}`)
+    expect(plain.stdout).not.toContain(SESSION_LINE['handed-back-moved'])
   }, 180_000)
 
   // Carried from the Slice 2 close review: planReworkOwed and planGateStep read a handed-back plan
