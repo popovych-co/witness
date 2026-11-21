@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { cliAct } from '../src/act.js'
-import { classifyAction, driveLoop, lineSink, spawnSession } from '../src/drive.js'
+import { classifyAction, driveLoop, lineSink, resolveDecision, spawnSession } from '../src/drive.js'
 import { option, renderDecision, type Decision } from '../src/recommend.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
@@ -19,10 +19,10 @@ import { appendEntry, readStream } from '../src/journal.js'
 import { effortReviewedSha } from '../src/reviewed.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
-import { ROUND_BOUND } from '../src/rounds.js'
+import { ROUND_BOUND, lastGateRun } from '../src/rounds.js'
 import { containmentLine, jobHost } from '../src/contain.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, closedStep, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, closedStep, commitEntry, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -770,6 +770,26 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     expect(out).toContain('drive: running — witness recover --complete')
     expect(out.some((l) => l.startsWith('recovered: completed as '))).toBe(true)
     expect(existsSync(join(repo.root, '.witness', 'txn.json'))).toBe(false)
+  }, 30000)
+
+  // Row 244 (review finding S2-E). A handed-back gate's decision row (Slice 3's, autonomy off) is
+  // `decide --show`'s handed-back view, whose block numbers its options as the actionable view's
+  // does: `decide>` takes them, never "no option 1 in this block".
+  it('decide> takes the options of a handed-back view (row 244)', async () => {
+    const repo = await gatedEffort()
+    expect((await repo.cli(['decide', 'decompose', repo.effort, '--revise', '--note', 'state the window'])).code).toBe(0)
+    const run = lastGateRun(readStream(repo.root, repo.effort), 'decompose')!
+    commitEntry(repo, repo.effort, { v: 1, t: 'revise-returned', gate: 'decompose', artifact: repo.effort, run_id: run.run_id, sha: run.reviewed_sha })
+    const shown = (await repo.cli(['decide', 'decompose', repo.effort, '--show'])).stdout
+    expect(shown).toContain('state: handed-back')
+    const out: string[] = []
+    const show = cliAct('decide', 'decompose', repo.effort, '--show')
+    const r = await resolveDecision({ kind: 'decision', gate: 'decompose', target: repo.effort },
+      { ...{ line: show.line, act: show }, target: repo.effort }, askCtx(repo, ['1'], out))
+    expect(out.join('\n')).not.toContain('no option 1 in this block')
+    expect(out).toContain(`drive: running — witness decide decompose ${repo.effort} --stop`)
+    expect(r).toBe('executed')
+    expect(lastDecision(repo)).toMatchObject({ decision: 'stop' })
   }, 30000)
 
   // D143: the block a human reads at `decide>` is the one they would read in a chat session.

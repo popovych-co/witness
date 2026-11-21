@@ -1505,8 +1505,9 @@ const ASK_LIMIT = 3
 // from the same view, so no printed line is parsed back to learn what to run.
 //
 // `executed` when the decision ran (the loop derives again), `stands` when the human left it
-// standing, `refused` when the render or the chosen command refused.
-async function resolveDecision(
+// standing, `refused` when the render or the chosen command refused. Exported for its test: no
+// route reaches a handed-back view's decision row before Slice 3's owed predicate.
+export async function resolveDecision(
   step: Extract<DriveStep, { kind: 'decision' }>, action: NextAction, ctx: Ctx,
 ): Promise<'executed' | 'stands' | 'refused'> {
   let options: readonly Option[] = []
@@ -1517,7 +1518,8 @@ async function resolveDecision(
     const view = shownView(ctx, step.gate, step.target)
     if (view === undefined) return 'refused'
     decideViewLines(view).forEach((l) => ctx.out(l))
-    if (view.state === 'actionable') options = view.block?.options ?? []
+    // Row 244: a handed-back view's block numbers its options as an actionable one's does.
+    if (view.state === 'actionable' || view.state === 'handed-back') options = view.block?.options ?? []
   } else {
     ctx.out(`drive: decision — ${action.line}`)
   }
