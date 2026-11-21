@@ -135,6 +135,31 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     expect(readStream(repo.root, planId).filter((e) => e.t === 'ship-outcome')).toHaveLength(0)
   }, 180_000)
 
+  // S1-B. git prints no `CONFLICT` line under a user's merge.verbosity=0 or GIT_MERGE_VERBOSITY=0,
+  // yet leaves the files unmerged: the carry reads its clash whatever they say.
+  for (const quiet of ['config', 'environment'] as const) {
+    it(`a clash under merge verbosity 0 (set in the ${quiet}) is still a clash on the first ship: textual-conflict, exit 1 (S1-B)`, async () => {
+      const { repo, wt, planId } = await movedClash()
+      const was = process.env.GIT_MERGE_VERBOSITY
+      if (quiet === 'config') repo.git('config', 'merge.verbosity', '0')
+      else process.env.GIT_MERGE_VERBOSITY = '0'
+      let r: Awaited<ReturnType<typeof repo.cli>>
+      try {
+        r = await repo.cli(['ship', planId])
+      } finally {
+        if (was === undefined) delete process.env.GIT_MERGE_VERBOSITY
+        else process.env.GIT_MERGE_VERBOSITY = was
+      }
+      expect(r.stderr).toMatch(/textual-conflict/)
+      expect(r.stderr).not.toMatch(/carry-pending/)
+      expect(r.code).toBe(1)
+      expect(g(wt, 'status', '--porcelain')).toMatch(/^UU f\.txt$/m)
+      expect(keptRefs(wt, planId).map((k) => k.files)).toEqual([['f.txt']])
+      expect(hasCarry(wt, planId)).toBe(false)
+      expect(stashList(wt)).toBe('')
+    }, 180_000)
+  }
+
   it('staged-only work survives the move (reset --hard, not checkout -- .) (P13)', async () => {
     const { wt, repo, planId, moveMain, onMain, run } = await movedPlan()
     put(wt, 'g.txt', '1\nSTAGED\n3\n')

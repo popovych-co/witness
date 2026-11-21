@@ -22,7 +22,9 @@ const GIT_MAX_BUFFER = 256 * 1024 * 1024
 // git as the carry runs it: under the C locale, so the words read below (`CONFLICT`, "conflicts in
 // index", a held lock) are git's untranslated ones, and with witness's reflog action. Both streams
 // are kept: a clash's `CONFLICT` goes to stdout, "conflicts in index" to stderr. A git that could
-// not start reads as `code: null`, with the reason on stderr.
+// not start reads as `code: null`, with the reason on stderr. `GIT_MERGE_VERBOSITY=2`, git's
+// default, outranks a user's `merge.verbosity` and any inherited value (S1-B): at 0 a clashing
+// apply prints no `CONFLICT` line, and step 7 would read its clash as a refused apply.
 export function carryGit(wt: string, ...args: string[]): { code: number | null; stdout: string; stderr: string } {
   return carryGitWith(wt, {}, ...args)
 }
@@ -34,7 +36,7 @@ function carryGitWith(wt: string, env: Record<string, string>, ...args: string[]
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: GIT_MAX_BUFFER,
-    env: { ...process.env, ...env, LC_ALL: 'C', GIT_REFLOG_ACTION: CARRY_ACTION },
+    env: { ...process.env, ...env, LC_ALL: 'C', GIT_REFLOG_ACTION: CARRY_ACTION, GIT_MERGE_VERBOSITY: '2' },
   })
   const failed = r.error !== undefined ? r.error.message : ''
   return { code: r.status, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${failed}` }
