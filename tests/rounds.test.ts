@@ -121,12 +121,17 @@ describe('appendKind', () => {
       expect(repairsOnRegate([r1, revise(1), m], 'plan')).toBe(true)
     })
 
-    // The key is the content AND the setup: a malformed round after the revise under another setup
-    // asked another question, so back on the disposed run's setup the revise still changed nothing.
-    it('a malformed round after the revise under another setup leaves the pairing (one key for every reader)', () => {
+    // Fix round 2: P50's exception reads the CONTENT. A malformed round after the revise on the content
+    // the revise asked about ends the pairing whatever its setup, so every reader agrees in every setup:
+    // the setup reverted replays the disposed run (a journaled round, no battery), the setup kept
+    // repairs the malformed round, and a third setup runs fresh. None answers changed-nothing.
+    it('a malformed round after the revise on that content ends the pairing under any setup (one rule for every reader)', () => {
       const m = { ...malformed('a'), prompts_sha: 'p2' }
-      expect(appendKind([r1, revise(1), m], 'plan', key('a'))).toEqual({ kind: 'changed-nothing', entry: r1 })
-      expect(appendKind([r1, revise(1), m], 'plan', { ...key('a'), prompts_sha: 'p2' })).toEqual({ kind: 'repair', from: m })
+      const entries = [r1, revise(1), m]
+      expect(appendKind(entries, 'plan', key('a'))).toEqual({ kind: 'cached', from: r1 })
+      expect(appendKind(entries, 'plan', { ...key('a'), prompts_sha: 'p2' })).toEqual({ kind: 'repair', from: m })
+      expect(appendKind(entries, 'plan', { ...key('a'), prompts_sha: 'p3' })).toEqual({ kind: 'fresh' })
+      expect(repairsOnRegate(entries, 'plan')).toBe(true)
     })
 
     it('a run that judged something after the revise answered it: no pairing', () => {

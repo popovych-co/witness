@@ -40,8 +40,7 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import {
-  ROUND_BOUND, boundReached, disposedRun, keyOf, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision,
-  revisedRun, sameKey,
+  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision, revisedRun,
   type ActFacts, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
@@ -116,18 +115,17 @@ export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefine
 // already does this via designArtifactCurrent; this is the same rule for decompose and plan.
 // The LAST decision is the state (D94): an approve or a stop that answered the revise ends it. A
 // reopen (`caused_by`) is a revise of this gate, so an open one is owed the same way.
-// Row 244 (design §4.2.3, "one pairing"): the gate's own pairing (`revisedRun`) with the gate's own
-// key comparison — the revise and the run it disposed of, malformed runs skipped — so `next` never
-// routes a re-gate that changes nothing, nor withholds one that repairs a malformed round (P50) or
-// judges content no run read. `next` knows the content's sha but not the reviewer setup the gate
-// would build; a re-gate can answer changed-nothing only under the disposed run's setup, so the key
-// is that setup over the current sha. Where the setup moved, this routes the authoring while the
-// gate would run a round: the safe direction, never a loop.
+// Row 244 (design §4.2.3, "one pairing"): the gate's own pairing (`revisedRun`) — the revise and the
+// run it disposed of, malformed runs skipped — so `next` never routes a re-gate that changes nothing,
+// nor withholds one that repairs a malformed round (P50) or judges content no run read. `next` knows
+// the content's sha, not the reviewer setup the gate would build, so it pairs on the sha; the one
+// exception that could tell the two apart, a malformed round after the revise, reads the content for
+// every reader, so wherever this routes the gate, the gate never answers changed-nothing, whatever the
+// setup. Where the setup moved with no such round, this routes the authoring while the gate would run
+// a round: the safe direction, never a loop.
 export function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
-  const disposed = disposedRun(entries, gate)
-  if (currentSha === undefined || disposed === undefined) return false
-  const key = { ...keyOf(disposed.run), reviewed_sha: currentSha }
-  return revisedRun(entries, gate, (r) => sameKey(keyOf(r), key)) !== undefined
+  if (currentSha === undefined) return false
+  return revisedRun(entries, gate, currentSha) !== undefined
 }
 
 // D75 re-arms a gate whose reviewed sha has moved — under row 96 that is the diff moving

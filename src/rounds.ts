@@ -756,24 +756,30 @@ const lastRunAt = (entries: Entry[], gate: string, judged = false): number => {
   return -1
 }
 
-// Row 244 (design §4.2.3, "one pairing everywhere"). The run a re-gate of content `same` accepts would
-// answer changed-nothing about: the run the gate's standing revise disposed of (`disposedRun`). That
-// holds while
+// Row 244 (design §4.2.3, "one pairing everywhere"). The run a re-gate of content `sha` would answer
+// changed-nothing about: the run the gate's standing revise disposed of (`disposedRun`). That holds while
 //   - no run that judged something follows the revise (one that did answered it);
 //   - the gate's last disposition after that run is the revise (any kind): an approve or a stop that
 //     answered it ends it, so an approve after a revise on unchanged content goes on (P9);
 //   - that run did not fall back (row 106: a substituted round is evidence for nothing);
-//   - and it read what `same` accepts.
-// A malformed round after the revise that read the same, though, is the gate's last word: its free
-// re-run repairs it (P50). One before the revise, or after it on other content, judged nothing, so the
-// pairing stays with the disposed run (P45, S3-3). With no run disposed of — a revise after malformed
-// rounds alone, a journal older than 0.30 — nothing pairs, and the malformed round is repaired (S2-4).
-export function revisedRun(entries: Entry[], gate: string, same: (run: GateRunEntry) => boolean): GateRunEntry | undefined {
+//   - and it matches the re-gate: `same`, which the gate reads as its whole key (content and setup) and
+//     a reader that knows only the content as the sha.
+// A malformed round after the revise on content `sha` — the content the revise asked about — ends the
+// pairing, whatever setup it ran under: its free re-run leads (P50, §4.2.2). The exception reads the
+// content alone, for every reader alike, so `next` and the gate agree in every setup: the gate then
+// repairs that round (its setup kept), replays the disposed run (the setup reverted) or runs fresh (a
+// third one), and `next` routes it. A malformed round before the revise, or after it on other content,
+// judged nothing, so the pairing stays with the disposed run (P45, S3-3). With no run disposed of — a
+// revise after malformed rounds alone, a journal older than 0.30 — nothing pairs, and the malformed
+// round is repaired (S2-4).
+export function revisedRun(
+  entries: Entry[], gate: string, sha: string, same: (run: GateRunEntry) => boolean = (r) => r.reviewed_sha === sha,
+): GateRunEntry | undefined {
   const disposed = disposedRun(entries, gate)
   if (disposed === undefined || lastRunAt(entries, gate, true) !== disposed.at || !revisedAfter(entries, disposed.at, gate)) return undefined
   if (fellBack(disposed.run) || !same(disposed.run)) return undefined
   const last = lastRunAt(entries, gate)
-  if (last > disposed.at && !revisedAfter(entries, last, gate) && same(entries[last] as unknown as GateRunEntry)) return undefined
+  if (last > disposed.at && !revisedAfter(entries, last, gate) && (entries[last] as unknown as GateRunEntry).reviewed_sha === sha) return undefined
   return disposed.run
 }
 
@@ -787,7 +793,7 @@ export function repairsOnRegate(entries: Entry[], gate: string): boolean {
   if (at < 0) return false
   const last = entries[at] as unknown as GateRunEntry
   return last.outcome === 'malformed' && !fellBack(last) &&
-    revisedRun(entries, gate, (r) => sameKey(keyOf(r), keyOf(last))) === undefined
+    revisedRun(entries, gate, last.reviewed_sha, (r) => sameKey(keyOf(r), keyOf(last))) === undefined
 }
 
 // Row 215 (D3). Does this journaled run answer `key` — the one evidence rule for the gate's
@@ -801,8 +807,9 @@ export function appendKind(entries: Entry[], gate: string, key: GateKey): Append
   // Row 244 (design §4.2.3). Changed-nothing pairs the gate's standing revise with the run it disposed
   // of, malformed runs skipped, and reads the gate's LAST disposition: an approve after a revise on
   // unchanged content resumes, so ship goes on (P9); a malformed round after the revise on this
-  // content is repaired below (P50).
-  const revised = revisedRun(entries, gate, (r) => sameKey(keyOf(r), key))
+  // content ends the pairing, and below it is repaired, or the disposed run replayed, or a fresh
+  // round run, as the setup says (P50).
+  const revised = revisedRun(entries, gate, key.reviewed_sha, (r) => sameKey(keyOf(r), key))
   if (revised !== undefined) return { kind: 'changed-nothing', entry: revised }
   const lastRunIdx = lastRunAt(entries, gate)
   if (lastRunIdx >= 0) {
