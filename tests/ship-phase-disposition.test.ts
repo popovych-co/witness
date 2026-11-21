@@ -115,6 +115,38 @@ describe('an approve after a revise on the ship gate goes on to ship (P9)', () =
   }, 300_000)
 })
 
+// Fix round 2 (design §4.2.2, §4.2.4). A retraction asks for a re-review, not an edit: `witness ship`
+// re-judges the tree the retracted approval judged (the ship gate's `--fresh`, after its own rebase),
+// where it printed "revise owed — edit the code". `next` and `status` keep naming `witness ship`, the
+// ship session's one verb, and `decide --show` leads with the `gate ship --fresh` it runs.
+describe('a retracted ship approval: witness ship re-reviews (row 244)', () => {
+  it('witness ship runs the ship gate fresh, never "revise owed", after a retraction', async () => {
+    const seed = await shippableRepo()
+    addOrigin(seed.repo)
+    const scenario = fakeScenario()
+    putVerdict(scenario, CLEAN)
+    const env = gateEnv(scenario)
+    const ctx = fakeCtx(seed.repo.root, { env })
+    await runGate(ctx, 'implement', seed.planId, { fresh: false, manual: false })
+    putVerdict(scenario, BLOCKING)
+    expect(await runShip(ctx, seed.planId)).toBe(1)                     // the ship gate stops
+    expect((await seed.repo.cli(['decide', 'ship', seed.planId, '--approve', '--override'], { env })).code).toBe(0)
+    const retract = await seed.repo.cli(['decide', 'ship', seed.planId, '--revise', '--note', 'the approval missed the drift'], { env })
+    expect(retract.code, retract.stderr).toBe(0)
+    const show = await seed.repo.cli(['decide', 'ship', seed.planId, '--show'], { env })
+    expect(show.stdout).toContain(`run: ${cliAct('gate', 'ship', seed.planId, '--fresh').line}`)
+    const next = await seed.repo.cli(['next'], { env })
+    expect(next.stdout).toContain(`next: witness ship ${seed.planId}`)
+
+    const out: string[] = []
+    const shipCtx = fakeCtx(seed.repo.root, { env, out: (l) => out.push(l), err: (l) => out.push(l) })
+    expect(await runShip(shipCtx, seed.planId), out.join('\n')).toBe(1)  // the re-review stops, as the ship gate always does
+    expect(out.join('\n')).not.toContain('revise owed')
+    expect(out.join('\n')).not.toContain('revise changed nothing')
+    expect(gateRuns(readStream(seed.repo.root, seed.planId), 'ship')).toHaveLength(2)
+  }, 300_000)
+})
+
 // ---------------------------------------------------------------------------------------------
 // gateSettled reads the last disposition after a pass too, against the last run that judged something
 

@@ -54,6 +54,17 @@ describe('a retracted look is re-reviewed, not re-authored (row 244)', () => {
   })
 })
 
+// Fix round 2. A retracted implement approval routes its re-review (`gate implement --fresh`), and a
+// retracted ship approval is re-reviewed by `witness ship` itself: neither skill asks for an edit.
+export const RETRACTED_IMPLEMENT = 'A `retracted` state (the human took the approval back) asks for a re-review of the same diff, not an edit: when `witness next` names `witness gate implement <plan-id> --fresh`, run it as named, as the gate above.'
+export const RETRACTED_SHIP = 'A `retracted` state (the human took the approval back) asks for a re-review, not an edit: re-run `$WITNESS ship <plan-id>`, which re-judges the same tree itself (the ship gate\'s `--fresh`, after its rebase).'
+describe('a retracted implement or ship approval is re-reviewed, not edited (row 244)', () => {
+  it('witness-implement runs the --fresh next names; witness-ship re-runs ship, which re-reviews', () => {
+    expect(readFileSync(skillPath('witness-implement'), 'utf8')).toContain(RETRACTED_IMPLEMENT)
+    expect(readFileSync(skillPath('witness-ship'), 'utf8')).toContain(RETRACTED_SHIP)
+  })
+})
+
 describe('witness-brainstorm', () => {
   const body = () => readFileSync(skillPath('witness-brainstorm'), 'utf8');
   it('interviews one question at a time and persists via witness recap', () => {

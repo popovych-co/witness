@@ -17,7 +17,7 @@ import { lastGateRun, lastJudgedRun, liveExits, type DecisionEntry } from './rou
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
-import { authoringOwed, gateSettled, openStepRow, stepsOpenViolation } from './verbs/next.js'
+import { authoringOwed, gateSettled, openStepRow, reReviewOwed, stepsOpenViolation } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
 import { handOverIfDue } from './slice.js'
@@ -938,10 +938,13 @@ async function shipMarked(
   }
 
   if (phase === 'gate') {
+    // Row 244 (design §4.2.2, §4.2.4). A retraction asks for a re-review, not an edit: on the tree
+    // the retracted approval judged, the gate below re-judges it (`--fresh`), after the rebase.
+    const reReview = reReviewOwed('ship', planId, entries, reviewedSha)
     // D94: the gate cannot judge unchanged content twice — it answers changed-nothing
     // and appends nothing, so routing the human back at it burns a turn on a command
     // that has already declined. The owed work is the edit the revise asked for.
-    if (authoringOwed(entries, 'ship', reviewedSha)) {
+    if (!reReview && authoringOwed(entries, 'ship', reviewedSha)) {
       ctx.out(kv('ship', `${planId} — revise owed`))
       // Row 239. The re-run it names is an act's line.
       ctx.out(`help: edit the code in ${wt} · then re-run ${cliAct('ship', planId).line}`)
@@ -961,7 +964,7 @@ async function shipMarked(
       return carryExit(rebase.violations)
     }
     if (rebase.value === 'rebased') ctx.out(kv('rebase', `${shipBranch} moved — rebased before the battery`))
-    const code = await runGate(ctx, 'ship', planId, { fresh: false, manual, handover: false })
+    const code = await runGate(ctx, 'ship', planId, { fresh: reReview, manual, handover: false })
     if (code !== EXIT.FINDINGS && code !== EXIT.OK) return code
     // No second exits line here: the gate's own render already printed the complete set
     // through liveExits. An approve-only line directly beneath it is two answers to one

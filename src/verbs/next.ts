@@ -118,6 +118,11 @@ const JOURNAL_FACTS: ActFacts = { upstream: undefined, stale: false, holdLifted:
 // is `gate --fresh` (a session may run it), or the re-gate on moved content, under the session's line.
 // Undefined in any other state, where the router's own rule (the authoring owed, else the gate) holds:
 // for a retraction that rule would route an authoring with nothing to change.
+// `reReviewOwed`: the lead is the re-review itself — a retraction on the content the settlement
+// judged, where a plain re-gate would answer changed-nothing. `witness ship` runs it in its gate phase.
+export function reReviewOwed(gate: string, target: string, entries: Entry[], sha: string | undefined): boolean {
+  return retractedLead(gate, target, entries, sha)?.act?.argv.includes('--fresh') === true
+}
 function retractedLead(gate: string, target: string, entries: Entry[], sha: string | undefined): NextAction | undefined {
   const judged = lastJudgedRun(entries, gate)
   const stale = judged !== undefined && sha !== undefined && sha !== judged.reviewed_sha
@@ -442,9 +447,12 @@ function effortFinished(specs: CanonDoc[], plans: CanonDoc[]): boolean {
 // un-discharges it too: otherwise it short-circuits past gateSettled and the reopen is
 // never routed. Row 52: so does an amendment no round has settled, unless the effort is
 // finished. Row 244 (S2-B): and so does a journal that no longer reads settled — a retraction
-// leaves the specs approved — exactly as an open reopen does.
+// leaves the specs approved — exactly as an open reopen does, except on a finished effort: there an
+// amendment's re-gate that stopped re-arms nothing (row 52's escape), and only a human's own
+// retraction of its decompose (`settlementTaken`) does.
 function decomposeOwed(root: string, canon: Canon, e: { slug: string; entries: Entry[] }, specs: CanonDoc[], plans: CanonDoc[]): boolean {
-  const reopened = openReopen(e.entries, 'decompose') !== undefined || stampUnsettled(e.entries, 'decompose')
+  const reopened = openReopen(e.entries, 'decompose') !== undefined ||
+    (stampUnsettled(e.entries, 'decompose') && (!effortFinished(specs, plans) || settlementTaken(e.entries, 'decompose')))
   const specsApproved = !reopened && specs.length > 0 && specs.every((d) => String(d.meta.status) !== 'draft') &&
     (!amendedSinceSettled(e.entries) || effortFinished(specs, plans))
   return !specsApproved && !gateSettled(e.entries, 'decompose', effortReviewedSha(root, canon, e.slug).sha) &&
@@ -747,6 +755,10 @@ function flowStep(root: string, cfg: Config, plan: CanonDoc, judge?: string): Ne
       ...inFlight,
     }
   }
+  // Row 244 (design §4.2.2, §4.2.4). A retraction asks for a re-review, not an edit: its lead —
+  // `gate implement --fresh` on the judged diff — comes before the edit a plain revise owes.
+  const lead = retractedLead('implement', id, entries, diffSha)
+  if (lead !== undefined) return { ...lead, ...inWorktree, ...inFlight }
   // D94: with the content unchanged the gate answers `changed-nothing` and appends
   // nothing, so routing there returns this same line every turn. The revise asked for an
   // edit — say that, and seat the session where the edit happens.

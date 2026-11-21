@@ -4,9 +4,11 @@ import { readStream } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { gateParked, gateSettled } from '../src/verbs/next.js'
 import {
-  approve, fakeScenario, gateEnv, PLAN_BLOCKING, plannedRepo, putVerdict, seededRepo, witnessDesign, writeDesign, writePlan,
-  writeSpec, type CliResult, type TestRepo,
+  approve, fakeCtx, fakeScenario, gateEnv, PLAN_BLOCKING, plannedRepo, putVerdict, seededRepo, shippableRepo, stampLive, witnessDesign,
+  writeDesign, writePlan, writeSpec, type CliResult, type TestRepo,
 } from './helpers.js'
+import { runGate } from '../src/gate.js'
+import '../src/gates/index.js'
 
 // Row 244 (design §4.2.3), review finding S2-B. A retraction (`decide --revise --note` after an approve
 // or a pass) un-settles the gate, but approve and pass leave their canon stamps: a plan's `approved`, an
@@ -175,4 +177,67 @@ describe('a retracted design approval: the design stamp stays (S2-B)', () => {
     expect(gateParked(readStream(repo.root, S), 'design')).toBe(true)
     await agreeParked(repo, env, 'design', S, [`witness write ${P}`, `witness design ${S}`])
   }, 180_000)
+})
+
+// Fix round 2 (row 52). A finished effort keeps its stamp shortcut: an amendment's re-gate that stopped
+// and was revised is no re-slice of shipped work, so `next` stays where it was — a critic round on
+// shipped work, and under autonomy a headless decompose session rewriting live specs, are what the
+// escape exists to prevent. A human's own retraction of its decompose still re-arms it (S2-B).
+describe('a finished effort stays finished unless a human retracts it (row 52)', () => {
+  const D = [{ id: 'd1', text: 'Rotation is server-side' }, { id: 'd2', text: 'Rotate at 80% of the TTL' }]
+  async function finishedEffort(): Promise<{ repo: TestRepo; env: Record<string, string> }> {
+    const repo = await seededRepo()
+    await writeSpec(repo, S)
+    const scenario = fakeScenario()
+    putVerdict(scenario, { coverage: [{ anchor: ANCHOR, note: 'read' }], findings: [] })
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'decompose', '--effort', E], env, 1)   // a feature's scope stop
+    await ok(repo, ['decide', 'decompose', E, '--approve'], env)
+    expect((await writePlan(repo, P)).code).toBe(0)
+    repo.flipStatus(P, 'done')
+    stampLive(repo, S)
+    expect(await nextOf(repo, env)).toBe('witness check')
+    return { repo, env }
+  }
+
+  it('an amendment re-gated and revised on a finished effort: next stays at witness check', async () => {
+    const { repo, env } = await finishedEffort()
+    await ok(repo, ['recap', '--amend', '--file', repo.writeRecap({ decisions: D })], env)
+    expect(await nextOf(repo, env)).toBe('witness check')
+    await ok(repo, ['gate', 'decompose', '--effort', E], env, 1)
+    await ok(repo, ['decide', 'decompose', E, '--revise', '--note', 'carry the decisions'], env)
+    const next = await nextOf(repo, env)
+    expect(next).toBe('witness check')
+    expect(next).not.toContain('witness write')
+    expect(lineOf((await statusOf(repo, env)).stdout)).toBe(next)
+  }, 180_000)
+
+  it('a human\'s retraction of a finished effort\'s decompose re-arms it: next routes the retracted lead', async () => {
+    const { repo, env } = await finishedEffort()
+    await ok(repo, ['decide', 'decompose', E, '--revise', '--note', 'the slicing was wrong'], env)
+    const next = await nextOf(repo, env)
+    expect(next).toBe(`witness gate decompose ${E} --fresh`)
+    expect(lineOf((await statusOf(repo, env)).stdout)).toBe(next)
+  }, 180_000)
+})
+
+// Fix round 2 (design §4.2.2, §4.2.4: a retraction asks for a re-review, not an edit). A retracted
+// implement approval routes its lead, `gate implement --fresh`, ahead of the edit a plain revise owes,
+// so `next`, `status` and `decide --show` name one act.
+describe('a retracted implement approval routes gate implement --fresh (row 244)', () => {
+  it('next and status route gate implement --fresh, never the edit a plain revise owes', async () => {
+    const seed = await shippableRepo()
+    const scenario = fakeScenario()
+    const coverage = ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' }))
+    putVerdict(scenario, { coverage, findings: [] })
+    const env = gateEnv(scenario)
+    expect(await runGate(fakeCtx(seed.repo.root, { env }), 'implement', seed.planId, { fresh: false, manual: false })).toBe(0)
+    expect(await nextOf(seed.repo, env)).toBe(`witness ship ${seed.planId}`)
+    await ok(seed.repo, ['decide', 'implement', seed.planId, '--revise', '--note', 'the pass missed the expiry'], env)
+    const next = await nextOf(seed.repo, env)
+    expect(next).toBe(`witness gate implement ${seed.planId} --fresh`)
+    expect(lineOf((await statusOf(seed.repo, env)).stdout)).toBe(next)
+    const show = await seed.repo.cli(['decide', 'implement', seed.planId, '--show'], { env })
+    expect(show.stdout).toContain(`run: ${next}`)
+  }, 240_000)
 })
