@@ -914,8 +914,11 @@ async function shipMarked(
   const moved = baseMoved(wt, root, shipBranch)
   const baseR = diffBase(wt, cfgR.value)
   let reviewedSha = baseR.ok ? diffReviewedSha(wt, baseR.value) : undefined
+  // Row 244 (design §4.2.9): read against the last run that judged something — the run an approval
+  // disposed of. A malformed round after it no longer un-settles the gate, and its checks may have
+  // run a criterion the approval never did, so it never speaks for the approval's holds.
   const lifted = (): string[] =>
-    liftedHolds(criteriaOwner(loadCanon(root), planId), lastGateRun(readStream(root, planId), 'ship'))
+    liftedHolds(criteriaOwner(loadCanon(root), planId), lastJudgedRun(readStream(root, planId), 'ship'))
   const liftedNow = lifted()
   let phase = shipPhase(plan, entries, reviewedSha, moved, liftedNow.length > 0)
   if (moved) ctx.out(kv('ship', `${shipBranch} moved — rebasing and re-reviewing before the watch`))
@@ -1003,8 +1006,9 @@ async function shipMarked(
       renderRefusal(committed.violations).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
-    // What the approved run did not run, from its own record — the one derivation (row 179).
-    const held = (lastGateRun(entries, 'ship')?.checks ?? []).flatMap((c) => c.held ?? [])
+    // What the approved run did not run, from its own record — the one derivation (row 179). Row 244:
+    // the approved run is the last that judged something, never a malformed round after it.
+    const held = (lastJudgedRun(entries, 'ship')?.checks ?? []).flatMap((c) => c.held ?? [])
     const created = createPr(ctx, wt, root, plan!, parentSummary, held)
     if (!created.ok) {
       renderRefusal(created.violations).forEach((l) => ctx.err(l))

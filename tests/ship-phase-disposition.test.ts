@@ -10,7 +10,7 @@ import { gateSpec, runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { diffReviewedSha, effortReviewedSha } from '../src/reviewed.js'
-import { gateRuns, lastGateRun, liveActs, type GateRunEntry } from '../src/rounds.js'
+import { appendKind, gateRuns, keyOf, lastGateRun, liveActs, type GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon, type CanonDoc } from '../src/scan.js'
 import { runShip, shipPhase } from '../src/ship.js'
 import { actFacts, authoringOwed, gateSettled } from '../src/verbs/next.js'
@@ -166,6 +166,21 @@ describe('gateSettled reads the last disposition, after a pass too (design §4.2
     // the last disposition, by position: an approve answered the revise
     expect(authoringOwed([run(G, 1, 'a'), dec(G, 'revise'), dec(G, 'approve')], G, 'a')).toBe(false)
   })
+
+  // The gate pairs on its whole key, content and setup; `next` sees only the content's sha. A re-gate
+  // can answer changed-nothing only under the disposed run's setup, so `authoringOwed` reads the key
+  // with that setup: a malformed round after the revise under another setup does not pair, for either.
+  it('authoringOwed and the gate pair on one key: a malformed round under another setup', () => {
+    const r1 = run(G, 1, 'a')
+    const m = { ...(run(G, 2, 'a', 'malformed') as unknown as Record<string, unknown>), prompts_sha: 'p2' } as unknown as Entry
+    const entries = [r1, dec(G, 'revise'), m]
+    expect(authoringOwed(entries, G, 'a')).toBe(true)
+    expect(appendKind(entries, G, { ...keyOf(r1 as unknown as GateRunEntry) }).kind).toBe('changed-nothing')
+    // the same setup is the malformed round's re-run, for both
+    const same = [r1, dec(G, 'revise'), run(G, 2, 'a', 'malformed')]
+    expect(authoringOwed(same, G, 'a')).toBe(false)
+    expect(appendKind(same, G, keyOf(r1 as unknown as GateRunEntry)).kind).toBe('repair')
+  })
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -311,5 +326,33 @@ describe('a malformed round between a stopped run and a revise (design §4.2.3, 
     expect(runs.at(-1)!.outcome).not.toBe('malformed')
     // and `next` routes that re-gate, not the authoring a changed-nothing would owe
     expect(authoringOwed(revised, G, edited)).toBe(false)
+  }, 180_000)
+})
+
+// Fix round 1. `next` sees the content's sha, the gate its whole key. With a malformed round after the
+// revise on the same content but another setup, and the setup back on the disposed run's, the gate
+// answers changed-nothing — so `next` must route the authoring, not the gate it would route every turn
+// while the gate journals nothing (D94's loop).
+describe('next and the gate pair on one key (design §4.2.3)', () => {
+  it('a malformed round after the revise under another setup: next routes authoring, and the gate changes nothing', async () => {
+    const root = copyOf(base.repo.root)
+    const g = await cli(root, ['gate', G, base.effort])
+    expect(g.code, `${g.stdout}\n${g.stderr}`).toBe(1)
+    const stopped = lastGateRun(readStream(root, base.effort), G)!
+    const { reviewed_tree: _t, basis_sha: _b, delta: _d, carried: _c, setup_sha: _s, ...key } = stopped
+    const malformed = {
+      ...key, round: stopped.round + 1, run_id: 'r-malformed', prompts_sha: 'another-setup',
+      verdicts: [], malformed: (stopped.verdicts ?? []).map((v) => ({ reviewer: v.reviewer, violations: [] })), outcome: 'malformed',
+    }
+    const at = repoWith([effortDec('revise', { note: 'tighten the slicing' }), malformed as unknown as Entry], root)
+    const entries = readStream(at, base.effort)
+    expect(authoringOwed(entries, G, stopped.reviewed_sha)).toBe(true)
+    const next = await cli(at, ['next'])
+    expect(next.code, next.stderr).toBe(0)
+    expect(next.stdout).toContain('revise owed')
+    expect(next.stdout).not.toContain(`witness gate ${G}`)
+    const regate = await cli(at, ['gate', G, base.effort])
+    expect(regate.stdout).toContain('revise changed nothing')
+    expect(runsIn(at)).toHaveLength(2)
   }, 180_000)
 })

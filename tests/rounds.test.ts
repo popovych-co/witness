@@ -121,6 +121,14 @@ describe('appendKind', () => {
       expect(repairsOnRegate([r1, revise(1), m], 'plan')).toBe(true)
     })
 
+    // The key is the content AND the setup: a malformed round after the revise under another setup
+    // asked another question, so back on the disposed run's setup the revise still changed nothing.
+    it('a malformed round after the revise under another setup leaves the pairing (one key for every reader)', () => {
+      const m = { ...malformed('a'), prompts_sha: 'p2' }
+      expect(appendKind([r1, revise(1), m], 'plan', key('a'))).toEqual({ kind: 'changed-nothing', entry: r1 })
+      expect(appendKind([r1, revise(1), m], 'plan', { ...key('a'), prompts_sha: 'p2' })).toEqual({ kind: 'repair', from: m })
+    })
+
     it('a run that judged something after the revise answered it: no pairing', () => {
       const r2 = run('b', 'stopped', 2, { run_id: 'r-2' })
       expect(appendKind([r1, revise(1), r2], 'plan', key('b'))).toEqual({ kind: 'resume', entry: r2 })

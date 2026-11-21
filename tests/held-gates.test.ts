@@ -9,7 +9,7 @@ import { heldSatisfy, type HeldRow } from '../src/needs.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import type { CanonDoc } from '../src/scan.js'
 import { prBody, runShip } from '../src/ship.js'
-import { addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
+import { addOrigin, commitEntry, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
 
 const HELD_META = (cmd = 'false') => ({
   criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd }],
@@ -153,5 +153,71 @@ describe('a hold lifted after the gate ran (A10 · final review F1)', () => {
     expect(existsSync(gh) ? readFileSync(gh, 'utf8') : '').not.toContain('pr create')
     const lane = laneOf(runs(repo, planId).filter((r) => r.gate === 'ship').at(-1)!)
     expect(lane).toMatchObject({ ok: false, detail: 'ac-rotate:ok · ac-prod:fail' })
+  })
+})
+
+// Row 244 (design §4.2.9): lifted holds are read against the last run that judged something. Since
+// a malformed round no longer un-settles an approval, ship reaches the PR and the watch past one, so
+// it must read the holds — and the PR body's held list — off the approved run, never off the
+// malformed round after it, whose checks may have run what the approval never did.
+describe('ship reads holds off the run that judged, not a malformed round after it (row 244)', () => {
+  // A ship round that judged nothing, journaled after the approved one, whose lane ran `ac-prod`.
+  function malformedAfter(repo: TestRepo, planId: string, lane: GateRunEntry['checks'][number]): void {
+    const approved = runs(repo, planId).filter((r) => r.gate === 'ship').at(-1)!
+    const { reviewed_tree: _t, basis_sha: _b, delta: _d, carried: _c, ...key } = approved
+    commitEntry(repo, planId, {
+      ...key, round: approved.round + 1, run_id: 'rs-malformed', outcome: 'malformed', verdicts: [],
+      malformed: (approved.verdicts ?? []).map((v) => ({ reviewer: v.reviewer, violations: [] })),
+      checks: approved.checks.map((c) => (c.name === 'drift-lane' ? lane : c)),
+    })
+  }
+  const RAN = { name: 'drift-lane', ok: false, detail: 'ac-rotate:ok · ac-prod:fail' }
+  const shipRuns = (repo: TestRepo, planId: string) => runs(repo, planId).filter((r) => r.gate === 'ship')
+  const ghCalls = (scenario: string) => (existsSync(join(scenario, 'gh-calls')) ? readFileSync(join(scenario, 'gh-calls'), 'utf8') : '')
+
+  it('a hold lifted after the approve, then a malformed re-gate: ship re-gates, no PR on the approval', async () => {
+    const { repo, planId, scenario, ctx } = await heldFlow()
+    addOrigin(repo)
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runShip(ctx, planId)                                         // gate phase → the ship stop, ac-prod held
+    expect((await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })).code).toBe(0)
+    await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])
+    malformedAfter(repo, planId, RAN)
+    expect(await runShip(ctx, planId)).toBe(1)                         // re-gated: ac-prod runs and fails
+    expect(ghCalls(scenario)).not.toContain('pr create')
+    const last = shipRuns(repo, planId).at(-1)!
+    expect(last.outcome).not.toBe('malformed')
+    expect(laneOf(last)).toMatchObject({ ok: false, detail: 'ac-rotate:ok · ac-prod:fail' })
+  })
+
+  it('with a PR open, the same journal re-gates instead of watching CI', async () => {
+    const { repo, planId, scenario, ctx } = await heldFlow()
+    addOrigin(repo)
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runShip(ctx, planId)
+    expect((await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })).code).toBe(0)
+    expect(await runShip(ctx, planId)).toBe(0)                         // pr → watch
+    expect(ghCalls(scenario)).toContain('pr create')
+    await repo.cli(['satisfy', 'auth-refresh', '--need', 'prod'])
+    malformedAfter(repo, planId, RAN)
+    const before = shipRuns(repo, planId).length
+    expect(await runShip(ctx, planId)).toBe(1)                         // re-gated, not watched
+    expect(shipRuns(repo, planId)).toHaveLength(before + 1)
+    expect(laneOf(shipRuns(repo, planId).at(-1)!)).toMatchObject({ ok: false, detail: 'ac-rotate:ok · ac-prod:fail' })
+  })
+
+  it('the PR body\'s held list is the approved run\'s', async () => {
+    const { repo, planId, scenario, ctx } = await heldFlow()
+    addOrigin(repo)
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runShip(ctx, planId)
+    expect((await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })).code).toBe(0)
+    // the need is still unmet; the malformed round's record holds nothing
+    malformedAfter(repo, planId, { name: 'drift-lane', ok: true, detail: 'ac-rotate:ok' })
+    expect(await runShip(ctx, planId)).toBe(0)                         // pr → watch
+    const calls = ghCalls(scenario)
+    expect(calls).toContain('pr create')
+    expect(calls).toContain('Held — not verified while a need is unmet:')
+    expect(calls).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
   })
 })

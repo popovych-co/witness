@@ -40,7 +40,8 @@ import { recoverChoice } from './recover.js'
 import { autonomyLines, keptStopLine, policyFor, unmetNeedLine } from '../autonomy.js'
 import { grantRows, shownCmd, trustOwed, type RunCommand } from '../allowlist.js'
 import {
-  ROUND_BOUND, boundReached, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision, revisedRun,
+  ROUND_BOUND, boundReached, disposedRun, keyOf, lastGateRun, lastJudgedRun, liveActs, openReopen, pendingDecision,
+  revisedRun, sameKey,
   type ActFacts, type DecisionEntry, type GateRunEntry,
 } from '../rounds.js'
 import { OLDER_DRIVE_LINE, driveChild, driveHolder, olderDrive, stopCommand, watchLine } from '../drive-presence.js'
@@ -72,11 +73,12 @@ export function gateSettled(entries: Entry[], gate: string, currentSha?: string)
 
 // D124, corrected while building it. The plan folded `stop` into `gateSettled` to stop
 // `next` re-offering a stopped flow, but that predicate answers a DIFFERENT question for
-// three other callers — `--fresh`'s refusal (gate.ts:249), ship's `implement-gate` check
-// (gates/ship.ts:68) and ship's watch/gate branch (ship.ts:31) all ask *may this flow
-// advance*. Teaching it `stop` made a human's park read as a green light: the ship gate
-// reported `implement-gate,true,last implement round 1: stopped`, and it also refused the
-// `--fresh` that `status` advertises as the way back, so parking became a one-way door.
+// its other callers — ship's `implement-gate` check (gates/ship.ts) and ship's phases
+// (`shipPhase`, ship.ts) ask *may this flow advance*, and so, when it was built, did
+// `--fresh`'s refusal, which row 244 moved to `liveActs`' settled state. Teaching it `stop`
+// made a human's park read as a green light: the ship gate reported
+// `implement-gate,true,last implement round 1: stopped`, and it also refused the `--fresh`
+// that `status` advertises as the way back, so parking became a one-way door.
 //
 // So the two questions get two predicates. Settled = judgment stands, the flow may
 // advance. Parked = a human took it off the board; `next` stops offering it, `status`
@@ -107,22 +109,25 @@ export function owedRun(entries: Entry[], gate: string): GateRunEntry | undefine
   return undefined
 }
 
-// `runGate` short-circuits `changed-nothing` without appending an entry (gate.ts:170)
-// whenever the last run's reviewed sha still matches current content and a revise or
-// reopen sits after it. Routing there asks the human to invoke a verb the CLI will
-// immediately decline, and — since nothing is appended — `next` says it again next turn.
-// The work owed is AUTHORING, so route to the stage. The design stage already does this
-// via designArtifactCurrent; this is the same rule for decompose and plan.
-// The LAST decision is the state (D94). `.some()` read by presence, so an approve answering a
-// revise left this still claiming authoring — the same read-by-position defect as decide --show's
-// disposition. A reopen (`caused_by`) is a revise of this gate, so an open one is owed the same way.
-// Row 244 (design §4.2.3, "one pairing"): exactly where the gate's own changed-nothing would answer,
-// read through the same pairing (`revisedRun`) — the revise and the run it disposed of, malformed runs
-// skipped — so `next` never routes a re-gate that changes nothing, nor withholds one that repairs a
-// malformed round (P50) or judges content no run read.
+// `runGate` answers `changed-nothing` without appending an entry (`appendKind`) when the gate's
+// standing revise disposed of a run whose key the re-gate would meet again. Routing there asks the
+// human to invoke a verb the CLI will immediately decline, and — since nothing is appended — `next`
+// says it again next turn. The work owed is AUTHORING, so route to the stage. The design stage
+// already does this via designArtifactCurrent; this is the same rule for decompose and plan.
+// The LAST decision is the state (D94): an approve or a stop that answered the revise ends it. A
+// reopen (`caused_by`) is a revise of this gate, so an open one is owed the same way.
+// Row 244 (design §4.2.3, "one pairing"): the gate's own pairing (`revisedRun`) with the gate's own
+// key comparison — the revise and the run it disposed of, malformed runs skipped — so `next` never
+// routes a re-gate that changes nothing, nor withholds one that repairs a malformed round (P50) or
+// judges content no run read. `next` knows the content's sha but not the reviewer setup the gate
+// would build; a re-gate can answer changed-nothing only under the disposed run's setup, so the key
+// is that setup over the current sha. Where the setup moved, this routes the authoring while the
+// gate would run a round: the safe direction, never a loop.
 export function authoringOwed(entries: Entry[], gate: string, currentSha: string | undefined): boolean {
-  if (currentSha === undefined) return false
-  return revisedRun(entries, gate, (r) => r.reviewed_sha === currentSha) !== undefined
+  const disposed = disposedRun(entries, gate)
+  if (currentSha === undefined || disposed === undefined) return false
+  const key = { ...keyOf(disposed.run), reviewed_sha: currentSha }
+  return revisedRun(entries, gate, (r) => sameKey(keyOf(r), key)) !== undefined
 }
 
 // D75 re-arms a gate whose reviewed sha has moved — under row 96 that is the diff moving
