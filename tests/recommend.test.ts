@@ -208,6 +208,44 @@ describe('a malformed round around a revise (design §4.2.3)', () => {
   })
 })
 
+// Design §4.2.2's handed-back row (review finding S2-D): recommend sending upstream when the blocking
+// finding's anchor is in the parent — the author found nothing to change because the fault is above —
+// else park. The parent test is the rule table's own (`blocking-parent`), and D123's ladder holds: once
+// spent for the anchor, the upstream is not offered and the park leads.
+describe('a handed-back revise (design §4.2.2, S2-D)', () => {
+  const back = (runId: string) => ({ v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: runId, sha: 'a' } as unknown as Entry)
+  const IN_PARENT = 'auth-refresh > ## Behavior'
+  const lead = (entries: Entry[]) => recommend(ctxFor(entries))!
+
+  it('the anchor is in the parent: send upstream is recommended, the park after it', () => {
+    const d = lead([run(1, 'a', IN_PARENT), decision('revise', { note: 'x' }), back('r-1')])
+    expect(d.rule).toBe('revise-returned')
+    expect(d.anchor).toBe(IN_PARENT)
+    expect(d.options[0]!.act?.argv).toEqual(['decide', 'plan', 'p1', '--revise', '--upstream', 'auth-refresh'])
+    expect(d.options[0]!.why).toContain('auth-refresh')
+    expect(renderDecision(d).at(-1)).toBe('run: witness decide plan p1 --revise --upstream auth-refresh')
+    expect(d.options.map((o) => o.act?.argv.at(-1))).toContain('--stop')
+  })
+
+  it('the anchor is in this artifact: the park is recommended', () => {
+    const d = lead([run(1, 'a', 'p1 > ## Step: s1'), decision('revise', { note: 'x' }), back('r-1')])
+    expect(d.rule).toBe('revise-returned')
+    expect(d.options[0]!.act?.argv).toEqual(['decide', 'plan', 'p1', '--stop'])
+    expect(d.options[0]!.why).toContain('neither the author nor a reviewer found a fix')
+  })
+
+  it('the anchor is in the parent but its ladder is spent: no upstream, the park is recommended (D123)', () => {
+    const spent = [
+      run(1, 'a', IN_PARENT), decision('revise-upstream', { anchor: IN_PARENT, upstream: { artifact: 'auth-refresh', gate: 'design' } }),
+      run(2, 'a', IN_PARENT), decision('revise', { note: 'x' }), back('r-2'),
+    ]
+    const d = lead(spent)
+    expect(d.rule).toBe('revise-returned')
+    expect(d.options[0]!.act?.argv).toEqual(['decide', 'plan', 'p1', '--stop'])
+    expect(d.options.some((o) => o.act?.argv.includes('--upstream'))).toBe(false)
+  })
+})
+
 describe('the rule table is ordered and total', () => {
   it('blocking-here: one blocking finding anchored in this artifact', () => {
     const d = recommend(ctxFor([run(1, 'a', 'p1 > ## Step: s1')]))!

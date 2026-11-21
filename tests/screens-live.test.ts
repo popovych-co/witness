@@ -388,7 +388,7 @@ describe('decide --show on a handed-back gate (design §4.2.5)', () => {
     if (view.state !== 'handed-back') throw new Error(`state ${view.state}`)
     expect(view.moved).toBe(false)
     expect(view.disposition).toStrictEqual({ decision: 'revise' })
-    // The park leads for now (Task 14 adds the upstream when the finding's anchor is in the parent).
+    // The finding anchors in the spec, not in the parent (the effort), so the park leads (§4.2.2, S2-D).
     expect(view.block?.rule).toBe('revise-returned')
     expect(view.block?.anchor).toBe(ANCHOR)
     expect(view.block?.options[0]?.act?.argv).toEqual(['decide', G, base.effort, '--stop'])

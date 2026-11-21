@@ -76,6 +76,11 @@ const blockingAnchors = (r: GateRunEntry): string[] =>
   (r.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking)
     .map((f) => (typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`)))
 
+// Rule 8's test (`blocking-parent`), one reading for the rule table and the handed-back block: every
+// blocking finding anchors to the parent, so the artifact is faithful to a parent that is wrong.
+const parentAnchored = (anchors: readonly string[], upstream: string | undefined): boolean =>
+  upstream !== undefined && anchors.length > 0 && anchors.every((a) => a.startsWith(`${upstream} `) || a.startsWith(`${upstream}>`))
+
 // Rows 139/203. Every option that offers a command is built from its act: the block prints the
 // act's line, and the option pastes unless a word of it is one the human must fill. Row 239: nor
 // when it is withheld (`Act.withheld`). The command is still shown, and its note says why.
@@ -164,7 +169,9 @@ const REVISED_FAMILY: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['revi
 // Row 244 (design §4.2.2). The block of a state a revise left, one option per live act, in the order
 // the state offers them, and the rule each records:
 //   revised      `revised`: the re-gate, "after you change the work", then the acts;
-//   handed back  `revise-returned`: the park first — neither the author nor a reviewer found a fix;
+//   handed back  `revise-returned`: send upstream first where the blocking finding's anchor is in the
+//                parent (rule 8's test, while D123's ladder is unspent), else the park — neither the
+//                author nor a reviewer found a fix (§4.2.2, review fix S2-D);
 //   moved since  `stale-below-bound`: the re-gate first (§4.2.9), so the policy's stale arm takes it;
 //   retracted    `retracted`: the re-review (`--fresh`) first, or on moved content the re-gate.
 // Each carries the run's primary anchor, so an upstream taken here spends D123's ladder (P47). On
@@ -176,12 +183,16 @@ function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Dec
   // state's own block stands (S3-3).
   if (live.malformedRerun) return malformedBlock(ctx, last)
   if (live.state === 'revised' && live.acts.length === 1) return undefined
-  const primary = live.anchor === undefined ? undefined : blockingAnchors(live.anchor)[0]
+  const anchors = live.anchor === undefined ? [] : blockingAnchors(live.anchor)
+  const primary = anchors[0]
   const budget = roundBudget(entries, gate)
   const nextRound = roundsSinceApprove(entries, gate) + 1
   const spends = `spends round ${nextRound} of ${budget}${nextRound >= budget ? ' — the last before the bound' : ''}`
   const handedBack = live.state === 'handed-back' || live.state === 'handed-back-moved'
   const retracted = live.state === 'retracted'
+  // The state offers the upstream only where a parent exists and the anchor's ladder is unspent.
+  const isUp = (a: Act) => a.argv.includes('--upstream')
+  const upFirst = live.state === 'handed-back' && parentAnchored(anchors, ctx.upstream) && live.acts.some(isUp)
   const optionOf = (a: Act): Option => {
     const w = a.argv
     if (w[0] === 'gate' && w.includes('--fresh')) {
@@ -210,12 +221,19 @@ function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Dec
     }
     if (w.includes('--stop')) {
       return option(a, 'terminal', {
-        ...(live.state === 'handed-back' ? { why: 'the author handed the revise back unchanged — neither the author nor a reviewer found a fix' } : { when: 'this work should not continue as scoped' }),
+        ...(live.state === 'handed-back' && !upFirst
+          ? { why: 'the author handed the revise back unchanged — neither the author nor a reviewer found a fix' }
+          : { when: 'this work should not continue as scoped' }),
         tradeoff: 'parks the flow — next stops offering it and reopening is an explicit act',
       })
     }
     if (w.includes('--upstream')) {
-      return option(a, 'root', { when: 'the parent artifact is what is wrong', tradeoff: 'reopens the parent stage and resets this budget' })
+      return option(a, 'root', {
+        ...(upFirst
+          ? { why: `${anchors.length} of ${anchors.length} blocking finding${anchors.length === 1 ? '' : 's'} anchor to ${ctx.upstream}, not to this artifact — the author handed the revise back unchanged, and the fix belongs in the parent` }
+          : { when: 'the parent artifact is what is wrong' }),
+        tradeoff: 'reopens the parent stage and resets this budget',
+      })
     }
     return option(a, 'root', {
       when: retracted ? 'the work needs an edit, not a re-review'
@@ -223,9 +241,8 @@ function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Dec
       tradeoff: 'sends the work back with your words; the round is spent by the re-gate that follows it',
     })
   }
-  const acts = live.state === 'handed-back'
-    ? [...live.acts.filter((a) => a.argv.includes('--stop')), ...live.acts.filter((a) => !a.argv.includes('--stop'))]
-    : live.acts
+  const leads = upFirst ? isUp : (a: Act) => a.argv.includes('--stop')
+  const acts = live.state === 'handed-back' ? [...live.acts.filter(leads), ...live.acts.filter((a) => !leads(a))] : live.acts
   const options = acts.map(optionOf)
   const rule = live.state === 'handed-back' ? 'revise-returned' : live.state === 'handed-back-moved' ? 'stale-below-bound' : live.state
   const conditional = live.state === 'revised'
@@ -420,8 +437,7 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
 
   // 8 / 9 — blocking findings, by where they anchor.
   if (anchors.length > 0) {
-    const parented = upstream !== undefined && anchors.every((a) => a.startsWith(`${upstream} `) || a.startsWith(`${upstream}>`))
-    return parented
+    return parentAnchored(anchors, upstream)
       ? {
           key: 'decide', rule: 'blocking-parent', anchor: primary,
           options: [
