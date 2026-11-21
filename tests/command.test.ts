@@ -218,3 +218,27 @@ describe('the router reads the carry\'s refusals (row 243)', () => {
     expect(row).not.toMatch(/git reset|update-ref -d|git stash (drop|pop|clear)/)
   })
 })
+
+// Row 243 (design §4.1.3: replay step 1, "a session's fix commits are normal"). The ship session is
+// spawned through /witness, so the router's never-commit rule must leave room for exactly the ship
+// skill's own commits in the plan's worktree — a CI-red fix, and a replay conflict's step 1, without
+// which `git rebase` refuses a dirty tree or autostashes it onto the shared stash list (#86) — and
+// for nothing broader. Ship's own commit is the first code commit, no longer the sole one.
+describe('the router allows the ship skill\'s own fix commits and nothing broader (row 243)', () => {
+  const NARROW = 'with two exceptions, both the `witness-ship` skill\'s own and both in the plan\'s worktree: a CI-red fix, and step 1 of a replay conflict (the uncommitted work committed before the rebase).'
+  it('names the two cases, keeps never-commit for everything else, and calls ship\'s commit the first', () => {
+    const lines = body().split('\n').filter((l) => l.includes('git commit'))
+    expect(lines).toHaveLength(1)
+    const rule = lines[0]!
+    expect(rule).toContain('**never `git commit` yourself, anywhere, at any stage**')
+    expect(rule).toContain(NARROW)
+    expect(rule.match(/exception/g)).toHaveLength(1)
+    expect(rule).toContain('the ship phase makes the first code commit')
+    expect(rule).not.toContain('sole code commit')
+  })
+  it('the ship skill calls its own commit the first code commit, never the sole one', () => {
+    const ship = readFileSync(join(__dirname, '..', 'plugin', 'skills', 'witness-ship', 'SKILL.md'), 'utf8')
+    expect(ship).toContain('it commits the worktree (the first code commit')
+    expect(ship).not.toContain('sole code commit')
+  })
+})
