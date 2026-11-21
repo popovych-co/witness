@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { cliAct } from './act.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { spawnSync } from './spawn.js'
@@ -23,12 +24,17 @@ const GIT_MAX_BUFFER = 256 * 1024 * 1024
 // are kept: a clash's `CONFLICT` goes to stdout, "conflicts in index" to stderr. A git that could
 // not start reads as `code: null`, with the reason on stderr.
 export function carryGit(wt: string, ...args: string[]): { code: number | null; stdout: string; stderr: string } {
+  return carryGitWith(wt, {}, ...args)
+}
+
+// The same, with `env` added: step 0's backup builds its tree through a scratch `GIT_INDEX_FILE`.
+function carryGitWith(wt: string, env: Record<string, string>, ...args: string[]): { code: number | null; stdout: string; stderr: string } {
   const r = spawnSync('git', args, {
     cwd: wt,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: GIT_MAX_BUFFER,
-    env: { ...process.env, LC_ALL: 'C', GIT_REFLOG_ACTION: CARRY_ACTION },
+    env: { ...process.env, ...env, LC_ALL: 'C', GIT_REFLOG_ACTION: CARRY_ACTION },
   })
   const failed = r.error !== undefined ? r.error.message : ''
   return { code: r.status, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${failed}` }
@@ -131,17 +137,28 @@ export function keepCarry(wt: string, planId: string, carry: string, files: stri
   const resolved = carryGit(wt, 'rev-parse', '--verify', '--quiet', `${carry}^{commit}`)
   const sha = resolved.stdout.trim()
   if (resolved.code !== 0 || sha === '') return pending(`reading the carry ${carry}`, resolved.stderr)
-  const message = `witness kept ${planId}\n\nfiles: ${JSON.stringify(files)}`
-  const made = carryGit(wt, 'commit-tree', `${sha}^{tree}`, '-p', `${sha}^1`, '-p', `${sha}^2`, '-m', message)
+  const made = carryGit(wt, 'commit-tree', `${sha}^{tree}`, '-p', `${sha}^1`, '-p', `${sha}^2`, '-m', keptMessage(planId, files))
   const keptSha = made.stdout.trim()
   if (made.code !== 0 || keptSha === '') return pending('writing the kept commit', made.stderr)
-  const n = Math.max(0, ...keptNames(wt, planId).flatMap((k) => (k.n !== undefined ? [k.n] : []))) + 1
-  const kept = `${keptPrefix(planId)}${n}`
+  const kept = nextKept(wt, planId)
   const created = carryGit(wt, 'update-ref', kept, keptSha, '')
   if (created.code !== 0) return pending(`creating ${kept}`, created.stderr)
   const dropped = carryGit(wt, 'update-ref', '-d', ref, sha)
   if (dropped.code !== 0) return pending(`deleting ${ref} after ${kept} was made`, dropped.stderr)
   return ok(kept)
+}
+
+// A kept ref's commit message: the files as JSON, each name exactly as git gave it, on the line
+// `keptFiles` reads; `note` (ending in a blank line) says what the backup is when it is no carry.
+function keptMessage(planId: string, files: readonly string[], note = ''): string {
+  return `witness kept ${planId}\n\n${note}files: ${JSON.stringify(files)}`
+}
+
+// The plan's next kept ref: one past the highest number, so a backup is never overwritten (the ref
+// is then made create-only).
+function nextKept(wt: string, planId: string): string {
+  const n = Math.max(0, ...keptNames(wt, planId).flatMap((k) => (k.n !== undefined ? [k.n] : []))) + 1
+  return `${keptPrefix(planId)}${n}`
 }
 
 // git's own words in a refusal's cell: cut, and spelled out where they hold a control character.
@@ -199,12 +216,26 @@ export function sessionUnmerged(planId: string, files: readonly UnmergedPath[]):
 // (P43: on a clean tracked tree an `--index` apply, or a plain one where git refuses the staged half),
 // and, in words, that a tree already holding the work keeps the ref as a backup rather than deleting it.
 export function restorePending(planId: string, got: string): Violation {
+  return v(carryRef(planId), 'carry-pending', got, restoreSteps(planId))
+}
+
+function restoreSteps(planId: string): string {
   const ref = carryRef(planId)
-  return v(ref, 'carry-pending', got,
-    `${ref} holds the plan's uncommitted work and is kept, and the tree is left as it stands — ${seeWork(ref)}. To put it back by hand, `
-      + `on a clean tracked tree: ${shellLine(['git', 'stash', 'apply', '--index', ref])}, or ${shellLine(['git', 'stash', 'apply', ref])} where git answers `
-      + `conflicts in index. If the tree already holds the work, move ${ref} to an unused number under ${keptPrefix(planId)} rather than `
-      + `deleting it, so the backup is kept; then ${cliAct('ship', planId).line}`)
+  return `${ref} holds the plan's uncommitted work and is kept, and the tree is left as it stands — ${seeWork(ref)}. To put it back by hand, `
+    + `on a clean tracked tree: ${shellLine(['git', 'stash', 'apply', '--index', ref])}, or ${shellLine(['git', 'stash', 'apply', ref])} where git answers `
+    + `conflicts in index. If the tree already holds the work, move ${ref} to an unused number under ${keptPrefix(planId)} rather than `
+    + `deleting it, so the backup is kept; then ${cliAct('ship', planId).line}`
+}
+
+// Step 0.2, fix round 1. Witness's own crashed rebase, touched since it stopped (a session partway
+// through resolving it, say), is never aborted: finishing or dropping it is the human's choice, given
+// in prose and never as a runnable row, beside the restore steps.
+export function touchedRebasePending(planId: string, why: string): Violation {
+  return v(carryRef(planId), 'carry-pending',
+    `witness's own rebase from the interrupted move was touched since it stopped — ${why} — so it was not aborted`,
+    `the rebase is a human's to finish: ${shellLine(['git', 'rebase', '--continue'])} once every file is resolved and staged, or `
+      + `${shellLine(['git', 'rebase', '--abort'])}, which drops what was resolved in it — then ${cliAct('ship', planId).line}, which finishes the move. `
+      + restoreSteps(planId))
 }
 
 // §4.1.5 (S1-3). A lock another git process holds, read first from git's own words (C locale), then
@@ -318,6 +349,74 @@ function readGitPath(wt: string, name: string): string | undefined {
     return readFileSync(path, 'utf8').trim()
   } catch {
     return undefined
+  }
+}
+
+// Step 0.2, fix round 1. Witness's own crashed rebase may be aborted only at git's fresh stop, since a
+// session resolving it by hand writes no reflog entry until `git rebase --continue`, and the abort
+// would wipe what it resolved (D168, n2). A fresh stop is all three:
+//   (a) something is still unmerged — witness's rebase is non-interactive and stops only on a
+//       conflict, so nothing unmerged while it is in progress means a resolution was staged;
+//   (b) the worktree differs from the index only in the conflicted files;
+//   (c) the index is the one git's stop wrote: the stopped commit (REBASE_HEAD) replayed onto HEAD
+//       with `git merge-tree --merge-base` (git 2.40 and later) differs from it only in the conflicted
+//       files — one conflict of two resolved and staged passes (a) and (b), and only this shows it.
+// Anything git cannot answer reads as touched: never aborted. `unmerged`: the conflicted files, which
+// the caller keeps before the abort.
+export type StopReading = { fresh: true; unmerged: UnmergedPath[] } | { fresh: false; why: string }
+export function freshStop(wt: string): StopReading {
+  const unmerged = unmergedPaths(wt)
+  if (unmerged.length === 0) return { fresh: false, why: 'nothing is unmerged any more: its conflicts were resolved and staged' }
+  const conflicted = new Set(unmerged.map((p) => p.path))
+  const outside = (out: string): string[] => [...new Set(out.split('\0'))].filter((p) => p !== '' && !conflicted.has(p))
+  const named = (paths: string[]): string => paths.map((p) => shellWord(p)).join(', ')
+  const worktree = carryGit(wt, 'diff', '--name-only', '-z', '--no-renames', '--no-relative')
+  if (worktree.code !== 0) return { fresh: false, why: `git could not list the worktree's changes: ${gitWords(worktree.stderr)}` }
+  const edited = outside(worktree.stdout)
+  if (edited.length > 0) return { fresh: false, why: `files changed in the worktree beyond the conflicted ones: ${named(edited)}` }
+  const pick = carryGit(wt, 'rev-parse', '--verify', '--quiet', 'REBASE_HEAD^{commit}').stdout.trim()
+  if (pick === '') return { fresh: false, why: 'the commit the rebase stopped on (REBASE_HEAD) cannot be read' }
+  const replay = carryGit(wt, 'merge-tree', '--write-tree', `--merge-base=${pick}^`, 'HEAD', pick)
+  const tree = replay.stdout.split('\n')[0]!.trim()
+  if ((replay.code !== 0 && replay.code !== 1) || !/^[0-9a-f]+$/.test(tree)) {
+    return { fresh: false, why: `git could not replay the stopped commit to compare the index (git merge-tree --merge-base, git 2.40 and later): ${gitWords(replay.stderr)}` }
+  }
+  const index = carryGit(wt, 'diff', '--cached', '--name-only', '-z', '--no-renames', '--no-relative', tree)
+  if (index.code !== 0) return { fresh: false, why: `git could not compare the index: ${gitWords(index.stderr)}` }
+  const restaged = outside(index.stdout)
+  if (restaged.length > 0) return { fresh: false, why: `staged changes the rebase's stop did not make: ${named(restaged)}` }
+  return { fresh: true, unmerged }
+}
+
+// Step 0.2, fix round 1. Before witness aborts its own stopped rebase, the conflicted files' worktree
+// bytes are kept in the plan's next kept ref, so an edit inside a still-unmerged file that was never
+// staged survives the abort. The tree is built in a scratch index (`GIT_INDEX_FILE`, seeded from
+// HEAD, the files added from the worktree, a deleted one removed): the real index is untouched and
+// nothing lands on the stash list. The commit's parent is the stop's HEAD, so `git show <ref>` shows
+// the files against it. Any failed step refuses `carry-pending`, and nothing is aborted.
+export function keepStopped(wt: string, planId: string, files: readonly string[]): Result<string> {
+  const pending = (step: string, out: string): Result<string> =>
+    refuse([carryPending(planId, `${step} failed, so witness's own stopped rebase was not aborted: ${gitWords(out)}`)])
+  const dir = mkdtempSync(join(tmpdir(), 'witness-kept-'))
+  try {
+    const scratch = { GIT_INDEX_FILE: join(dir, 'index') }
+    const seeded = carryGitWith(wt, scratch, 'read-tree', 'HEAD')
+    if (seeded.code !== 0) return pending('seeding a scratch index from HEAD', seeded.stderr)
+    const added = carryGitWith(wt, scratch, 'update-index', '--add', '--remove', '--', ...files)
+    if (added.code !== 0) return pending('adding the conflicted files to the scratch index', added.stderr)
+    const written = carryGitWith(wt, scratch, 'write-tree')
+    const tree = written.stdout.trim()
+    if (written.code !== 0 || tree === '') return pending('writing the scratch tree', written.stderr)
+    const note = 'the conflicted files of witness\'s stopped rebase as the worktree held them, kept before step 0 aborted it\n\n'
+    const made = carryGit(wt, 'commit-tree', tree, '-p', 'HEAD', '-m', keptMessage(planId, files, note))
+    const sha = made.stdout.trim()
+    if (made.code !== 0 || sha === '') return pending('writing the kept commit', made.stderr)
+    const kept = nextKept(wt, planId)
+    const created = carryGit(wt, 'update-ref', kept, sha, '')
+    if (created.code !== 0) return pending(`creating ${kept}`, created.stderr)
+    return ok(kept)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 }
 

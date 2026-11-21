@@ -30,8 +30,9 @@ import {
 } from './clash.js'
 import {
   baseInTheWay, blobAt, captureCarry, carryGit, carryGone, carryPending, carryRef, cleanTree, dropCarry, gitAtLeast, headReflog,
-  heldLock, keepCarry, lockedRow, offBranchPending, operationInProgress, operationRefusal, reapply, rebaseOwnerSince,
-  restorePending, sessionUnmerged, unmergedPaths, witnessOwnRebase, workAlreadyBack, type OpInProgress, type Reapplied,
+  freshStop, heldLock, keepCarry, keepStopped, lockedRow, offBranchPending, operationInProgress, operationRefusal, reapply,
+  rebaseOwnerSince, restorePending, sessionUnmerged, touchedRebasePending, unmergedPaths, witnessOwnRebase, workAlreadyBack,
+  type OpInProgress, type Reapplied,
 } from './carry.js'
 import { classifyGh, classifyGit, journalOutcome, standingRecord, type ShipOutcome } from './ship-outcome.js'
 import { heldItem, needYouRows } from './needs-you.js'
@@ -439,9 +440,12 @@ function carryExit(violations: readonly Violation[]): number {
 // Row 243 (design §4.1.1 step 0). A carry ref standing means a move was interrupted, and the plan's
 // work may not be in the tree. Every ship run finishes it first, in the design's sub-order:
 //   1. the worktree gone refuses carry-pending, the ref shown and kept;
-//   2. an operation in progress: witness's own rebase, proven (`witnessOwnRebase`), is aborted and
-//      the move goes on; any other refuses operation-in-progress before anything is compared,
-//      applied or moved — a session's is never aborted nor applied into (P40, P53);
+//   2. an operation in progress: witness's own rebase, proven (`witnessOwnRebase`), is aborted only
+//      at git's fresh stop (`freshStop`; fix round 1), its conflicted files kept first in a kept ref
+//      (`keepStopped`, named through `say`), and the move goes on; touched since it stopped, it
+//      refuses carry-pending and is never aborted. Any other operation refuses operation-in-progress
+//      before anything is compared, applied or moved — a session's is never aborted nor applied into
+//      (P40, P53);
 //   3. HEAD off the plan's branch refuses carry-pending, naming `git switch`;
 //   4. unmerged entries: the carry's own (stages 1 and 3 its blobs) are step 7's clash, the carry
 //      kept and textual-conflict; a session's refuse carry-pending, naming the files (P43, P52);
@@ -450,7 +454,7 @@ function carryExit(violations: readonly Violation[]): number {
 //   7. anything else refuses carry-pending with the restore steps, and never resets.
 // A held lock met on the way is index-locked (exit 3), the ref kept. `'none'`: no carry ref. It lives
 // here, not in carry.ts: it renders clash.ts's rows, and carry.ts importing clash.ts closes a cycle.
-export function finishMove(root: string, wt: string, planId: string): Result<'none' | 'finished'> {
+export function finishMove(root: string, wt: string, planId: string, say: (line: string) => void = () => {}): Result<'none' | 'finished'> {
   const ref = carryRef(planId)
   if (carryGit(root, 'show-ref', '--verify', '--quiet', ref).code !== 0) return ok('none')
   if (!existsSync(join(wt, '.git'))) return refuse([carryGone(planId, wt)])
@@ -464,7 +468,13 @@ export function finishMove(root: string, wt: string, planId: string): Result<'no
   if (op !== undefined) {
     const owner = witnessOwnRebase(wt, carry)
     if (owner !== 'witness') return refuse(sessionOperation(wt, planId, op, carry, owner === 'silent'))
+    const stop = freshStop(wt)
+    if (!stop.fresh) return refuse([touchedRebasePending(planId, stop.why)])
+    const kept = keepStopped(wt, planId, stop.unmerged.map((p) => p.path))
+    if (!kept.ok) return refuse(kept.violations)
     const abort = carryGit(wt, 'rebase', '--abort')
+    say(kv('kept', `${kept.value} — the conflicted files of witness's stopped rebase as they stood, kept before it was aborted · `
+      + `see them with ${shellLine(['git', 'show', kept.value])}`))
     if (operationInProgress(wt) !== undefined) {
       const out = `${abort.stdout}${abort.stderr}`
       const lock = heldLock(wt, out)
@@ -793,7 +803,7 @@ async function shipMarked(
   // the clash guard, whose carry signal names this very run, and before row 241's open-step refusal,
   // the revise-owed and standing-record exits and the phase routing — any of them first would loop.
   // Its refusals exit as the move's do and go through the same record.
-  const finished = finishMove(root, worktreePath(root, planId), planId)
+  const finished = finishMove(root, worktreePath(root, planId), planId, (l) => ctx.out(l))
   if (!finished.ok) {
     renderRefusal(finished.violations).forEach((l) => ctx.err(l))
     recordRefusal(root, planId, finished.violations, cfgR.value.ship.branch)

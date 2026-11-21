@@ -217,6 +217,16 @@ The build of Tasks 1–7 and its slice review settled these. Tags name entries i
 - **Dropping the carry ref is checked.** A failed drop after a clean apply is a held lock (exit 3) or `carry-pending`, never a leftover that loops `clash-unresolved` (S1-6).
 - **The "conflicts in index" fallback's kept ref** lists the carry's staged files (`git diff <carry>^1 <carry>^2`), so the guard reads them, finds no labels, and the move proceeds (Task 3).
 - **The kept ref** is a stash-shaped commit with the carry's tree and parents, whose message lists the files as JSON, made create-only and numbered (the plan, Task 1).
+- **Step 0 aborts witness's own crashed rebase only at git's fresh stop, and keeps the files first** (Task 4, fix round 1). A session partway through resolving that rebase writes no HEAD reflog entry until `git rebase --continue`. So the reflog and orig-head alone read the rebase as witness's own, and the abort wiped the session's staged resolution and its other edits (the intent of P53, D168 and n2 outranks step 0.2's wording).
+  - **A fresh stop** is all three:
+    - something is still unmerged: witness's non-interactive rebase stops only on a conflict;
+    - `git diff` (worktree against index) names no file outside the unmerged ones;
+    - outside the unmerged files, the index matches the stopped commit (`REBASE_HEAD`) replayed onto HEAD with `git merge-tree --merge-base`. One of two conflicts resolved and staged passes the first two checks, and only this one shows it. It needs git 2.40 or later; an older git, or anything git cannot answer, reads as touched.
+  - **Touched since it stopped**, the rebase refuses `carry-pending` and is never aborted. `git rebase --continue` and `git rebase --abort` are the human's choice, in prose, beside the restore steps, and the carry ref is kept.
+  - **At a fresh stop**, the unmerged files' worktree bytes go first to the plan's next kept ref, so an edit inside a still-unmerged file that was never staged survives the abort.
+    - The ref is built through a scratch `GIT_INDEX_FILE` seeded from HEAD, made create-only, and lists the files as JSON; the real index and the stash list are untouched.
+    - Step 0's output names it with `git show <ref>`.
+    - A backup that cannot be written refuses `carry-pending` without aborting.
 - **The PR branch** is named from the plan (`witness/<plan>`), never from HEAD. `pr-branch-gone` is a human's call, recorded `fix` (Tasks 5, 6).
 
 ### 4.2 Row 244 — every offered act is accepted, and a handed-back revise is decided again (#87)

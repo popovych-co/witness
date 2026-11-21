@@ -45,6 +45,7 @@ const head = (wt: string): string => g(wt, 'rev-parse', 'HEAD')
 const lastReflog = (wt: string, n = 1): string => g(wt, 'reflog', '-n', String(n), '--format=%gs', 'HEAD')
 const hasCarry = (cwd: string, planId: string): boolean => tryG(cwd, 'show-ref', '--verify', '--quiet', carryRef(planId))
 const staged = (wt: string, f: string): string => g(wt, 'show', `:${f}`)
+const unmergedCount = (wt: string): number => g(wt, 'ls-files', '-u').split('\n').filter((l) => l !== '').length
 const STEP0_SENTENCE = 'its reflog cannot tell'
 
 const CLEAN = {
@@ -197,7 +198,15 @@ describe('step 0 finishes an interrupted move at every ship run (row 243, #86)',
     expect(since[start]).toMatch(/^witness-carry \(start\)/)
     expect(start).toBeGreaterThan(0)
     expect(since.slice(0, start + 1).every((s) => s.startsWith('witness-carry '))).toBe(true)
-    expect(finishMove(repo.root, wt, planId)).toEqual({ ok: true, value: 'finished' })
+    const stoppedF = read(wt, 'f.txt')
+    expect(stoppedF).toMatch(/^<{7} /m)
+    const said: string[] = []
+    expect(finishMove(repo.root, wt, planId, (l) => said.push(l))).toEqual({ ok: true, value: 'finished' })
+    // at git's fresh stop, untouched: the conflicted file kept first (fix round 1), then the abort
+    const kept = keptRefs(wt, planId)
+    expect(kept.map((k) => k.files)).toEqual([['f.txt']])
+    expect(g(wt, 'show', `${kept[0]!.ref}:f.txt`)).toBe(stoppedF.replace(/\n$/, ''))
+    expect(said.join('\n')).toContain(shellLine(['git', 'show', kept[0]!.ref]))
     // aborted: back on the plan's branch at its own commit, no rebase in progress
     expect(operationInProgress(wt)).toBeUndefined()
     expect(g(wt, 'symbolic-ref', 'HEAD')).toBe(`refs/heads/${branchName(planId)}`)
@@ -206,6 +215,106 @@ describe('step 0 finishes an interrupted move at every ship run (row 243, #86)',
     // and the carry re-applied, both halves
     expectWork(wt)
     expect(hasCarry(wt, planId)).toBe(false)
+    expect(stashList(wt)).toBe('')
+  }, 240_000)
+
+  // Fix round 1. Witness's own crashed rebase is aborted only at git's fresh stop: something still
+  // unmerged, no worktree change outside the conflicted files, and the index as git's stop left it.
+  // A session partway through resolving it writes no reflog entry, so the reflog alone would read
+  // the rebase as witness's and the abort would wipe the session's resolution.
+  async function crashedStop(twoConflicts = false) {
+    const p = await movedPlan()
+    put(p.wt, 'f.txt', 'a\nPLAN1\nc\n')
+    if (twoConflicts) put(p.wt, 'g.txt', '1\nPLAN-G\n3\n')
+    g(p.wt, 'commit', '-qam', 'session fix 1')
+    put(p.wt, 'h.txt', 'x\ny\nz\nWORK-H\n')
+    p.moveMain(twoConflicts ? { 'f.txt': 'a\nMAIN1\nc\n', 'g.txt': '1\nMAIN-G\n3\n' } : { 'f.txt': 'a\nMAIN1\nc\n' })
+    crashAt(p.repo, p.wt, p.planId, 'mid-rebase')
+    expect(operationInProgress(p.wt)).toBe('rebase-merge')
+    expect(porcelain(p.wt)).toMatch(/^UU f\.txt$/m)
+    if (twoConflicts) expect(porcelain(p.wt)).toMatch(/^UU g\.txt$/m)
+    return { ...p, stop: head(p.wt) }
+  }
+  // Refused carry-pending, the rebase left exactly as the session has it.
+  function expectTouched(r: ReturnType<typeof finishMove>, wt: string, planId: string, stop: string): void {
+    expect(r.ok).toBe(false)
+    const x = !r.ok ? r.violations : []
+    expect(x.map((y) => y.rule)).toEqual(['carry-pending'])
+    expect(x[0]!.got).toMatch(/touched since it stopped/)
+    // the human's choice, in prose: never a runnable row
+    expect(x[0]!.want).toContain(shellLine(['git', 'rebase', '--continue']))
+    expect(x[0]!.want).toContain(shellLine(['git', 'rebase', '--abort']))
+    expect(x[0]!.remedy).toBeUndefined()
+    // and the restore steps carry-pending gives
+    const ref = carryRef(planId)
+    expect(x[0]!.want).toContain(shellLine(['git', 'stash', 'show', '-p', ref]))
+    expect(x[0]!.want).toContain(shellLine(['git', 'stash', 'apply', '--index', ref]))
+    expect(x[0]!.want).toContain(keptPrefix(planId))
+    // nothing aborted: the rebase stands where the session has it, the carry kept, no backup made
+    expect(operationInProgress(wt)).toBe('rebase-merge')
+    expect(head(wt)).toBe(stop)
+    expect(lastReflog(wt, 5)).not.toMatch(/abort/)
+    expect(hasCarry(wt, planId)).toBe(true)
+    expect(keptRefs(wt, planId)).toEqual([])
+    expect(stashList(wt)).toBe('')
+  }
+
+  it('mid-resolution: a session resolved and staged witness\'s stopped conflict, no --continue → carry-pending, nothing aborted (fix round 1)', async () => {
+    const { repo, wt, planId, stop } = await crashedStop()
+    put(wt, 'f.txt', 'a\nMAIN1+PLAN1\nc\n')
+    expect(session(wt, 'add', 'f.txt').code).toBe(0)
+    put(wt, 'h.txt', 'x\ny\nz\nSESSION-H\n')
+    // the session wrote no reflog entry: the reflog alone still reads the rebase as witness's own
+    expect(lastReflog(wt)).toMatch(/^witness-carry /)
+    expect(unmergedCount(wt)).toBe(0)
+    expectTouched(finishMove(repo.root, wt, planId), wt, planId, stop)
+    // the resolution, staged, and the other edit are where the session left them
+    expect(read(wt, 'f.txt')).toBe('a\nMAIN1+PLAN1\nc\n')
+    expect(staged(wt, 'f.txt')).toBe('a\nMAIN1+PLAN1\nc')
+    expect(read(wt, 'h.txt')).toBe('x\ny\nz\nSESSION-H\n')
+  }, 240_000)
+
+  it('a tracked edit beside the still-unmerged conflict → carry-pending, nothing aborted (fix round 1)', async () => {
+    const { repo, wt, planId, stop } = await crashedStop()
+    put(wt, 'h.txt', 'x\ny\nz\nSESSION-H\n')
+    expectTouched(finishMove(repo.root, wt, planId), wt, planId, stop)
+    expect(porcelain(wt)).toMatch(/^UU f\.txt$/m)
+    expect(read(wt, 'h.txt')).toBe('x\ny\nz\nSESSION-H\n')
+  }, 240_000)
+
+  it('one of two conflicts resolved and staged, the other still unmerged → carry-pending, nothing aborted (fix round 1)', async () => {
+    const { repo, wt, planId, stop } = await crashedStop(true)
+    put(wt, 'f.txt', 'a\nMAIN1+PLAN1\nc\n')
+    expect(session(wt, 'add', 'f.txt').code).toBe(0)
+    // still unmerged, and no worktree change outside the conflicted files: only the index tells
+    expect(porcelain(wt)).toMatch(/^UU g\.txt$/m)
+    expect([...new Set(g(wt, 'diff', '--name-only').split('\n'))]).toEqual(['g.txt'])
+    expectTouched(finishMove(repo.root, wt, planId), wt, planId, stop)
+    expect(staged(wt, 'f.txt')).toBe('a\nMAIN1+PLAN1\nc')
+    expect(porcelain(wt)).toMatch(/^UU g\.txt$/m)
+  }, 240_000)
+
+  it('a fresh stop with an edit never staged inside the unmerged file → aborted, the carry re-applied, the edit kept (fix round 1)', async () => {
+    const { repo, wt, planId } = await crashedStop()
+    put(wt, 'f.txt', 'a\nHALF-RESOLVED\nc\n')
+    expect(porcelain(wt)).toMatch(/^UU f\.txt$/m)
+    const said: string[] = []
+    expect(finishMove(repo.root, wt, planId, (l) => said.push(l))).toEqual({ ok: true, value: 'finished' })
+    // the file's bytes were kept before the abort, in the plan's next kept ref
+    const kept = keptRefs(wt, planId)
+    expect(kept.map((k) => k.files)).toEqual([['f.txt']])
+    expect(kept[0]!.ref).toBe(`${keptPrefix(planId)}1`)
+    expect(g(wt, 'show', `${kept[0]!.ref}:f.txt`)).toBe('a\nHALF-RESOLVED\nc')
+    expect(said.join('\n')).toContain(kept[0]!.ref)
+    expect(said.join('\n')).toContain(shellLine(['git', 'show', kept[0]!.ref]))
+    // aborted, and the carry back on the plan's branch
+    expect(operationInProgress(wt)).toBeUndefined()
+    expect(g(wt, 'symbolic-ref', 'HEAD')).toBe(`refs/heads/${branchName(planId)}`)
+    expect(read(wt, 'f.txt')).toBe('a\nPLAN1\nc\n')
+    expect(read(wt, 'h.txt')).toBe('x\ny\nz\nWORK-H\n')
+    expect(porcelain(wt)).toBe(' M h.txt')
+    expect(hasCarry(wt, planId)).toBe(false)
+    // the backup went through a scratch index: the stash list untouched
     expect(stashList(wt)).toBe('')
   }, 240_000)
 
