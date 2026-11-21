@@ -371,6 +371,10 @@ export function rebaseIfMoved(
   if (carry !== undefined) {
     // Test-only crash points, on txn.ts's seam: step 0's tests stop the move here (row 243).
     crashPoint(run.env, 'carry-after-capture')
+    // S1-D. Step 2 once more, now the work is captured: a merge, cherry-pick or revert a session began
+    // since the check above would be ended by step 5's `git reset --hard`. Nothing has moved yet.
+    const during = operationInProgress(wt)
+    if (during !== undefined) return refuse(captureOverOperation(wt, planId, carry, during))
     const cleaned = cleanTree(wt, planId)
     if (!cleaned.ok) return cleaned
     crashPoint(run.env, 'carry-after-reset')
@@ -399,6 +403,22 @@ export function rebaseIfMoved(
     if (!push.ok) return push
   }
   return ok('rebased')
+}
+
+// S1-D. A session's operation begun while the work was captured is refused as step 2 refuses one,
+// with nothing moved: the work never left the tree, so the carry ref just written goes, and only
+// while it still names this carry. A drop that fails keeps the ref (a held lock, or `carry-pending`);
+// step 0 drops it once the operation is over and it finds the work already back.
+function captureOverOperation(wt: string, planId: string, carry: string, op: OpInProgress): Violation[] {
+  const refusal = operationRefusal(wt, planId, op)
+  const ref = carryRef(planId)
+  const dropped = carryGit(wt, 'update-ref', '-d', ref, carry)
+  if (dropped.code === 0) return [refusal]
+  const out = `${dropped.stdout}${dropped.stderr}`
+  const lock = heldLock(wt, out, [`${ref}.lock`])
+  if (lock !== undefined) return [refusal, lockedRow(planId, lock, true)]
+  return [refusal, carryPending(planId,
+    `the plan's work is still in the tree, but deleting ${ref} after the capture failed: ${logSafe(out.trim().slice(0, 200)) || 'git printed nothing'}`)]
 }
 
 // Step 7's outcome as ship refuses it, or nothing when the work is back clean.

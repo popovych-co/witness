@@ -485,6 +485,47 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     expect(stashList(wt)).toBe('')
   }, 180_000)
 
+  // S1-D. The window after the last re-check: a session's merge begun as the capture writes the carry
+  // ref would be ended by the clean step's `git reset --hard`. Witness never aborts a session's
+  // operation, so it asks once more after the capture and, with nothing moved, drops its carry ref.
+  it('a session\'s merge begun as the work is captured refuses operation-in-progress; the carry ref is dropped and the reset never ends it (S1-D)', async () => {
+    const { wt, repo, planId, moveMain, run } = await movedPlan()
+    g(wt, 'branch', 'side')
+    g(wt, 'checkout', '-q', 'side')
+    put(wt, 's.txt', 'side\n')
+    g(wt, 'add', 's.txt')
+    g(wt, 'commit', '-qm', 'side')
+    g(wt, 'checkout', '-q', '-')
+    put(wt, 'g.txt', '1\n2\nWORK\n')
+    moveMain({ 'm.txt': 'main\n' })
+    // as the capture writes the carry ref, a session starts its own merge
+    const marker = join(wt, '..', `${planId}-merge-begun`)
+    hook(wt, 'reference-transaction', [
+      '[ "$1" = committed ] || exit 0',
+      `grep -q ' ${carryRef(planId)}$' || exit 0`,
+      `[ -e '${marker}' ] && exit 0`,
+      `: > '${marker}'`,
+      'unset GIT_REFLOG_ACTION',
+      'git merge --no-ff --no-commit side >/dev/null 2>&1',
+      'exit 0',
+    ].join('\n'))
+    const before = head(wt)
+    const r = rebaseIfMoved(wt, repo.root, 'main', run)
+    expect(existsSync(marker)).toBe(true)
+    expect(r.ok).toBe(false)
+    const x = !r.ok ? r.violations : []
+    expect(x.map((y) => y.rule)).toEqual(['operation-in-progress'])
+    expect(x[0]!.want).toContain(shellLine(['git', 'merge', '--abort']))
+    // nothing moved: the session's merge stands with its state, the work in the tree, the carry ref gone
+    expect(operationInProgress(wt)).toBe('MERGE_HEAD')
+    expect(head(wt)).toBe(before)
+    expect(read(wt, 'g.txt')).toBe('1\n2\nWORK\n')
+    expect(read(wt, 's.txt')).toBe('side\n')
+    expect(hasCarry(wt, planId)).toBe(false)
+    expect(keptRefs(wt, planId)).toEqual([])
+    expect(stashList(wt)).toBe('')
+  }, 180_000)
+
   it('a held index.lock refuses index-locked with the lock as got, and keeps the carry ref (S1-3)', async () => {
     const { wt, repo, planId, moveMain, run } = await movedPlan()
     // the lock appears once the work is captured and the tree clean: as the rebase starts
