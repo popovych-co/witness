@@ -37,7 +37,7 @@ export interface WorkerStream {
   inFlight(): string | undefined         // the oldest open tool call's action line, else 'the model' while it is awaited
   failed(): boolean                      // the session's last answer was an error
   ended(): boolean                       // the turn's end signal stands: no run-starting record since it (row 245)
-  started(): boolean                     // a run-starting record has been seen (row 245)
+  started(): boolean                     // a run-starting record has been seen, or for pi a record of a type it does not know (row 245)
 }
 
 // Line-buffered because a pipe's chunks split wherever the kernel felt like it: printing
@@ -252,6 +252,21 @@ function piRunStart(e: Json): boolean {
   if (type === 'message_start') return PI_RUN_ROLES.has(str(obj(e.message)?.role) ?? '')
   return type !== undefined && PI_RUN_STARTS.has(type)
 }
+// Every record type pi 0.85.1 writes in JSON mode: the session header, pi-agent-core's AgentEvent
+// and the session's own events (dist/core/agent-session.d.ts's AgentSessionEvent). A record of any
+// other type, or of none, is a pi whose protocol moved on, and counts as a run that started (a
+// build ruling, S4-C): were its run-start events renamed, drive's never-started window would stop
+// every working pi session at 5 min, where row 214 holds that a new shape makes the log quieter,
+// never a crash. So P31's header and P49's extension records are still no start, while an
+// extension's own JSON is one, and such a pi that never starts waits for its timeout, as before
+// row 245. It starts nothing else: it never clears a standing end (P17).
+const PI_KNOWN = new Set([
+  ...PI_RUN_STARTS, 'message_start', 'session', 'agent_end', 'agent_settled', 'turn_end',
+  'message_update', 'message_end', 'tool_execution_update', 'tool_execution_end', 'queue_update',
+  'entry_appended', 'session_info_changed', 'thinking_level_changed', 'compaction_end',
+  'auto_retry_end', 'summarization_retry_scheduled', 'summarization_retry_attempt_start',
+  'summarization_retry_finished', 'bash_execution_update',
+])
 
 // A tool's result is heard and never shown, error or not: both harnesses mark every non-zero exit
 // as a tool error (pi throws "Command exited with code N", claude answers `Exit code 1`), so a
@@ -274,13 +289,14 @@ export function piStream(home: string): WorkerStream {
   let turn = false                             // the model is awaited: a turn started, its answer has not ended
   let stop: string | undefined                 // the last assistant message's stopReason
   let ended = false                            // agent_settled, and no run-starting record since
-  let started = false                          // a run-starting record has been seen
+  let started = false                          // a run-starting record, or one of a type not known, has been seen
   return {
     line(record) {
       const e = parse(record)
       if (e === undefined) return [{ kind: 'show', text: passthrough(record) }]
       if (piRunStart(e)) { started = true; ended = false }
       else if (e.type === 'agent_settled') ended = true
+      else if (!PI_KNOWN.has(str(e.type) ?? '')) started = true
       switch (e.type) {
         case 'session': {
           const id = str(e.id)

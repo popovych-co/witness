@@ -259,6 +259,24 @@ describe('a drive session ends when its turn ends (row 245, #80)', () => {
     expect(lines.at(-1)).toMatch(/\] ended \d\d:\d\d:\d\d · timed out · \S+$/)
   }, 30_000)
 
+  // S4-C (rows 214, 245): a pi release renamed its run-start events, and witness has not caught up.
+  // A record of a type witness does not know is a run that started, so this pi, working on, meets
+  // its timeout (400 s: 4 s real) as before row 245, never stopped at 5 min as a run that never
+  // started: a new shape makes the log quieter, never a crash.
+  it('a pi that speaks only events witness does not know is never "never started" (S4-C)', async () => {
+    const call = say({ type: 'tool_call_begin', toolCallId: 'c1', toolName: 'bash', args: { command: 'cargo test' } })
+    const { end, lines } = await session([
+      header, say({ type: 'run_begin' }),
+      `( while :; do ${call}; sleep 0.05; done ) &`,
+      'echo "calls $!" >> "$FAKE_PIDS"',
+      LINGER,
+    ], { timeoutMs: 400_000 })
+    expect(end.outcome).toBe('timeout')
+    expect(end.ending).toBeUndefined()
+    expect(lines.at(-1)).toMatch(/\] ended \d\d:\d\d:\d\d · timed out · \S+$/)
+    expect(lines.some((l) => l.includes('tool_call_begin') || l.includes('run_begin'))).toBe(false)
+  }, 30_000)
+
   it('the recorded code is never the stop\'s own status (P46)', async () => {
     const shapes: Array<[string, string[], 'pi' | 'claude-code']> = [
       // P46: a lingering pi stopped after agent_settled exits by SIGTERM (code null).

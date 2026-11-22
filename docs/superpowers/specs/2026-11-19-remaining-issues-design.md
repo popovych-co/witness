@@ -442,6 +442,7 @@ In the revised and handed-back states the anchor is the run the revise disposed 
   - The end watch never throws: a stream that cannot answer reads as not ended and started, so the timeout alone holds (Task 16).
   - The recorded code after a stop at the end signal is 1 for a run that never started, 1 when the harness is not pi and the stream failed (a claude error result), and 0 otherwise; pi's JSON mode exits 0 on an error answer (Task 16).
   - Drift's `noWait` refusal says to wait for the reset, inside drive too (Task 17).
+  - A pi record whose type witness does not know counts as a run start for the never-started window, never for the grace. Otherwise a pi release that renamed its run-start events would stop every working pi session at 5 min, and row 214's rule is that a new shape makes the log quieter, never a crash. The known types are all the types pi 0.85.1 writes in JSON mode, so P31 and P49 are still caught. A pi that never starts while an extension writes JSON of its own waits for its timeout, as before row 245 (review fix S4-C).
 - **Residuals** (§7):
   - a claude session whose backgrounded call stays open waits as today;
   - a `SessionEnd` hook or pi `session_shutdown` work longer than 60 s is cut;

@@ -13,7 +13,9 @@ import type { WorkerStream } from './worker-stream.js'
 //
 // A watch given `neverStartedMs` also ends a session whose stream shows no run-starting record
 // within that much awake time of its spawn: drive's pi sessions, whose missing key or expired
-// login leaves only a header while a startup handle leaks (P31, P49).
+// login leaves only a header while a startup handle leaks (P31, P49). A pi record of a type the
+// stream does not know counts as a start, so a pi release that renames its events never trips it
+// (S4-C, row 214).
 //
 // The watch is read from a pipe listener and from the clock's timer, where a throw takes drive down
 // and leaves the session running unwatched (P16). So it never throws: a stream that cannot answer

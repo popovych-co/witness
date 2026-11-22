@@ -440,22 +440,33 @@ describe('drive says how a session goes (row 214)', () => {
   }, 20000)
 
   // Review Focus 1: a harness whose event shapes changed renders nothing, and drive still says so.
-  // claude's (the default judge): a pi that shows no run-starting record is ended at this same
-  // 5 min mark as a run that never started (row 245, tests/drive-turn-end.test.ts).
-  it('a session that renders nothing still says it runs (issue #64)', async () => {
+  // For pi a record of a type witness does not know is also a run that started, so the 5 min
+  // never-started window does not stop the session at this same mark (rows 214, 245; S4-C). Its
+  // fake writes the header and that record in one write, and its time stands still until drive has
+  // shown the header, so the record is read before the window could fall due.
+  it.each(['claude-code', 'pi'] as const)('a session that renders nothing still says it runs (issue #64) · %s', async (harness) => {
     const repo = await seededRepo()
+    if (harness === 'pi') patchConfig(repo, { harness: 'pi' })
     const flag = join(fakeScenario(), 'seen')
-    const bin = fakeAgent(`${say({ type: 'brand_new' })}\n${awaitFlag(flag)}`)
+    const header = harness === 'pi' ? `'${JSON.stringify({ type: 'session', version: 3, id: 'S-1' })}' ` : ''
+    const bin = fakeAgent(`printf '%s\\n' ${header}'${JSON.stringify({ type: 'brand_new' })}'\n${awaitFlag(flag)}`)
     const lines: string[] = []
     let quiet: string | undefined
+    let shown = harness !== 'pi'
     const ctx = fakeCtx(repo.root, {
       env: { WITNESS_DRIVE_AGENT_BIN: bin },
-      out: (l) => { lines.push(l); if (quiet === undefined && l.includes('] still running · ')) { quiet = l; writeFileSync(flag, '') } },
+      out: (l) => {
+        lines.push(l)
+        if (l.startsWith('[1 implement/p1] session ')) shown = true
+        if (quiet === undefined && l.includes('] still running · ')) { quiet = l; writeFileSync(flag, '') }
+      },
     })
     const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 7_200_000 } }
-    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker() })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker(() => shown) })
     expect(quiet).toMatch(/still running · \d+m(\d+s)? of 2h · quiet 5m$/)
     expect(lines.some((l) => l.includes('brand_new'))).toBe(false)
+    expect(end).toMatchObject({ outcome: 'exited', code: 0 })
+    expect(end.ending).toBeUndefined()
   }, 20000)
 
   // Review Focus 4: drive's own lines carry text a child controls (its session id): one emitter

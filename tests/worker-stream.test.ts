@@ -454,7 +454,6 @@ describe("the turn's end (row 245)", () => {
       r({ type: 'entry_appended', entry: { type: 'session_info', id: 'e1', parentId: null, timestamp: '2026-11-19T10:36:00.000Z', name: 'p1' } }),
       r({ type: 'queue_update', steering: [], followUp: [] }),
       '[addon] before_agent_start: waiting',          // P27: a handler that runs before agent_start
-      r({ type: 'addon_status', text: 'ready' }),    // an extension's own JSON
     ]) {
       s.line(rec)
       expect(s.started(), rec).toBe(false)
@@ -462,6 +461,60 @@ describe("the turn's end (row 245)", () => {
     expect(s.ended()).toBe(false)
     s.line(r({ type: 'agent_start' }))
     expect(s.started()).toBe(true)
+  })
+
+  // The never-started window catches P31 and P49 only while every record type pi writes outside a
+  // run reads as no start: pi 0.85.1's session header, and each AgentSessionEvent
+  // (dist/core/agent-session.d.ts, with pi-agent-core's AgentEvent) that is not a run start.
+  it('pi: no record type pi 0.85.1 writes outside a run counts as a start (P31, P49)', () => {
+    const s = piStream(home)
+    const assistant = { role: 'assistant', content: [], stopReason: 'stop' }
+    for (const rec of [
+      header,
+      r({ type: 'message_start', message: note }),
+      r({ type: 'message_update', usage: {}, assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'x' } }),
+      r({ type: 'message_end', message: note }),
+      r({ type: 'turn_end', message: assistant, toolResults: [] }),
+      r({ type: 'agent_end', messages: [], willRetry: false }),
+      settled,
+      r({ type: 'tool_execution_update', toolCallId: 'c1', toolName: 'bash', args: {}, partialResult: {} }),
+      r({ type: 'tool_execution_end', toolCallId: 'c1', toolName: 'bash', result: { content: [] }, isError: false }),
+      r({ type: 'queue_update', steering: [], followUp: [] }),
+      r({ type: 'entry_appended', entry: { type: 'session_info', id: 'e1', parentId: null, timestamp: '2026-11-19T10:36:00.000Z', name: 'p1' } }),
+      r({ type: 'session_info_changed', name: 'p1' }),
+      r({ type: 'thinking_level_changed', level: 'high' }),
+      r({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false }),
+      r({ type: 'auto_retry_end', success: true, attempt: 1 }),
+      r({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: '529 overloaded' }),
+      r({ type: 'summarization_retry_attempt_start', source: 'compaction', reason: 'threshold' }),
+      r({ type: 'summarization_retry_finished' }),
+      r({ type: 'bash_execution_update', id: 'b1', delta: 'x' }),
+    ]) {
+      s.line(rec)
+      expect(s.started(), rec).toBe(false)
+    }
+  })
+
+  // Rows 214, 245 (a build ruling, design §4.3): a record of a type witness does not know is a pi
+  // whose protocol moved on, and that pi has started. Were its run-start events renamed, the
+  // never-started window would otherwise stop every working session at 5 min, where row 214 holds
+  // that a new shape makes the log quieter, never a crash. An extension's own JSON reads the same,
+  // so such a pi that never starts waits for its timeout, as before row 245. Starting is all it
+  // does: it renders nothing, and it never clears a standing end (P17).
+  it.each([
+    ['a renamed run start', { type: 'run_begin' }],
+    ["an extension's own JSON", { type: 'addon_status', text: 'ready' }],
+    ['a record with no type', { event: 'agent_start' }],
+  ])('pi: %s, a type witness does not know, counts as a start and never clears a standing end (rows 214, 245)', (_name, event) => {
+    const s = piStream(home)
+    s.line(header)
+    expect(s.started()).toBe(false)
+    expect(s.line(r(event))).toEqual([])
+    expect([s.ended(), s.started()]).toEqual([false, true])
+    const settledFirst = piStream(home)
+    settledFirst.line(settled)
+    settledFirst.line(r(event))
+    expect([settledFirst.ended(), settledFirst.started()]).toEqual([true, true])
   })
 
   it.each([
