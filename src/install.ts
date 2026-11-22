@@ -236,11 +236,18 @@ export function retireAtRoot(root: string, harness: Harness, settings: string | 
 // base and fail its lint. Dropped once the base no longer carries them, never while it still does: a
 // base not yet moved still runs them. Retired paths are every harness's. A tracked one leaves the
 // index in one commit; every dropped one leaves the disk. The dropped paths, sorted.
+//
+// The base is the plan's cut point, which says nothing about this tree's own wiring: while the
+// branch's settings still run a retired command (no carry has brought the base's yet), nothing goes,
+// or the worktree loses its guard (slice 2 review).
 export function dropRetired(wt: string, base: string, planId: string): string[] {
   const retired = new Set<string>()
   for (const name of HARNESSES) {
     const harness = loadHarness(name)
-    if (harness.ok) for (const rel of harness.value.retired) retired.add(rel)
+    if (!harness.ok) continue
+    const settings = harness.value.settings === undefined ? undefined : readIfExists(wt, harness.value.settings)
+    if (settings !== undefined && namesRetired(settings)) return []
+    for (const rel of harness.value.retired) retired.add(rel)
   }
   const dropped: string[] = []
   const tracked: string[] = []

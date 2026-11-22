@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { loadHarness } from '../src/harness.js'
 import { dropRetired, namesRetired, retireAtRoot } from '../src/install.js'
+import { refreshSparse } from '../src/worktree.js'
 import { git, legacyHooksPlan, tmpRepo, unwrap } from './helpers.js'
 
 const OLD = ['.claude/hooks/canon-guard.mjs', '.claude/hooks/guard-state.mjs', '.claude/hooks/session-dashboard.sh']
@@ -80,5 +81,35 @@ describe("witness's retired-file removals never follow a symlinked parent out of
     const outside = linkedHooks(repo.root)
     expect(dropRetired(repo.root, base, 'p')).toEqual([])
     expect(readFileSync(join(outside, 'guard-state.mjs'), 'utf8')).toBe('// not witness\'s\n')
+  })
+})
+
+// Slice 2 review C1: `read-tree -mu HEAD` resets the index, so a worktree's staged work was lost.
+describe("refreshing a worktree's sparse patterns keeps its work (row 250, slice 2 review)", () => {
+  it('init into an old-pattern worktree keeps a staged edit, a staged new file and an unstaged edit', async () => {
+    const { repo, wt } = await legacyHooksPlan('base-had')
+    writeFileSync(join(wt, '.claude/hooks/enforce-pnpm.sh'), '#!/bin/sh\nexit 1\n')
+    git(wt, 'add', '.claude/hooks/enforce-pnpm.sh')                   // staged edit
+    mkdirSync(join(wt, 'src'), { recursive: true })
+    writeFileSync(join(wt, 'src/new.ts'), 'export const n = 1\n')
+    git(wt, 'add', 'src/new.ts')                                       // staged new file
+    writeFileSync(join(wt, 'witness.config.yaml'), `${readFileSync(join(wt, 'witness.config.yaml'), 'utf8')}# mine\n`)   // unstaged
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
+    expect(readFileSync(join(wt, '.claude/hooks/enforce-pnpm.sh'), 'utf8')).toBe('#!/bin/sh\nexit 1\n')
+    expect(readFileSync(join(wt, 'src/new.ts'), 'utf8')).toBe('export const n = 1\n')
+    expect(readFileSync(join(wt, 'witness.config.yaml'), 'utf8')).toMatch(/# mine\n$/)
+    expect(git(wt, 'diff', '--cached', '--name-only').split('\n')).toEqual(['.claude/hooks/enforce-pnpm.sh', 'src/new.ts'])
+    expect(git(wt, 'ls-files', '-t', '--', '.witness/hooks').split('\n')).toEqual(NEW.map((p) => `H ${p}`))
+  })
+
+  it('never touches a directory under .witness/worktrees that is not its own worktree', () => {
+    const repo = tmpRepo()
+    const patterns = join(repo.root, '.git', 'info', 'sparse-checkout')
+    mkdirSync(dirname(patterns), { recursive: true })
+    writeFileSync(patterns, '/*\n')
+    const stale = join(repo.root, '.witness', 'worktrees', 'stale')
+    mkdirSync(stale, { recursive: true })
+    expect(refreshSparse(repo.root, stale)).toBe(false)
+    expect(readFileSync(patterns, 'utf8')).toBe('/*\n')
   })
 })

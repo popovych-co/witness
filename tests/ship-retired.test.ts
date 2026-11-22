@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import '../src/gates/index.js'
@@ -45,6 +45,21 @@ describe('the ship gate drops witness payload its base no longer carries (row 25
     expect(git(wt, 'ls-files', '--', OLD)).toBe('')
     expect(git(wt, 'log', '-1', '--format=%s')).toBe(`ship(${planId}): witness's retired payload dropped — the base no longer carries it`)
     expect(git(wt, 'diff', '--name-only', 'origin/main', 'HEAD', '--', '.claude')).toBe('')
+  })
+
+  // Slice 2 review I1: the base is the cut point, so a branch whose own settings still run the old
+  // hooks (no carry yet) would lose its guard.
+  it("keeps an old hook while the branch's own settings still run it", async () => {
+    const { wt, planId, ctx, out } = await shipReady()
+    mkdirSync(join(wt, '.claude/hooks'), { recursive: true })
+    copyFileSync(join(REPO, 'plugin/hooks/guard-state.mjs'), join(wt, OLD))
+    writeFileSync(join(wt, '.claude/settings.json'), `${JSON.stringify({ hooks: { PreToolUse: [
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-state.mjs"' }] }] } }, null, 2)}\n`)
+    git(wt, 'add', OLD, '.claude/settings.json')
+    git(wt, 'commit', '-m', 'init(claude-code): agent payloads')
+    await runShip(ctx, planId)
+    expect(out()).not.toContain('payload-retired')
+    expect(existsSync(join(wt, OLD))).toBe(true)
   })
 
   it('keeps an old hook its base still carries', async () => {

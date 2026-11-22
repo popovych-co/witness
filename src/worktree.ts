@@ -89,16 +89,29 @@ function sparseText(root: string): string {
 // Row 250 (#95). A worktree cut before the hooks moved holds the old patterns, which drop all of
 // .witness/: there `git add` refuses a new .witness/hooks file, and a rebase brings the hooks in
 // skip-worktree, missing on disk (probe t0b-sparse.sh). So a worktree whose patterns differ from
-// today's gets today's and re-reads its tree. Never a refusal: what read-tree declines is residue,
+// today's gets today's and re-applies them. Never a refusal: what the apply declines is residue,
 // and `start` and `check` judge residue. Whether it rewrote anything.
 export function refreshSparse(root: string, wtPath: string): boolean {
+  // Only a worktree of its own (slice 2 review): a stale plain directory under .witness/worktrees
+  // resolves to the root's git dir, whose patterns are not this function's to rewrite.
+  const top = tryGit(wtPath, 'rev-parse', '--show-toplevel')
+  if (!top.ok || realpathSync(top.out) !== realpathSync(wtPath)) return false
   const gitDir = tryGit(wtPath, 'rev-parse', '--path-format=absolute', '--git-dir')
   if (!gitDir.ok) return false
   const file = join(gitDir.out, 'info', 'sparse-checkout')
   if (!existsSync(file) || readFileSync(file, 'utf8') === sparseText(root)) return false
   writeFileSync(file, sparseText(root))
-  tryGit(wtPath, 'read-tree', '-mu', 'HEAD')
+  applySparse(wtPath)
   return true
+}
+
+// Row 250 (slice 2 review C1). The patterns applied to a worktree, touching only its skip-worktree
+// bits: `sparse-checkout reapply` (git 2.27; witness binds 2.31). `read-tree -mu HEAD` reset the
+// index to HEAD, so a staged edit went back to HEAD's content and a staged new file left the disk —
+// and the implement stage leaves worktrees dirty by design, ship's carry restores staged work. A
+// dirty path it cannot update stays where it is with a warning; the residue check judges it.
+function applySparse(wtPath: string): void {
+  tryGit(wtPath, 'sparse-checkout', 'reapply')
 }
 
 // How a canon path came to be visible inside a worktree. An OBSERVATION, never a severity
@@ -147,14 +160,15 @@ export function materializedCanon(root: string, wtPath: string): CanonResidue[] 
 }
 
 // Applied AND verified: sparse-checkout is a checkout policy, so "we asked git to hide it"
-// is not the same fact as "it is hidden", and the second one is the invariant. read-tree
+// is not the same fact as "it is hidden", and the second one is the invariant. Applying
 // declines a dirty path with a warning and exit 0 (measured), so the verification below is
 // the only thing that can tell the two apart.
 //
-// The low-level mechanism (patterns file + `core.sparseCheckout` + `read-tree -mu HEAD`)
-// rather than the `sparse-checkout` porcelain: the porcelain's flags moved across git
-// 2.25–2.37 (`init --no-cone`, `set --no-cone`), while this trio is stable across the whole
-// range `primaryRoot` already binds (git >=2.31, via `rev-parse --path-format`).
+// The low-level mechanism (patterns file + `core.sparseCheckout` + an apply) rather than the
+// `sparse-checkout` porcelain's set-up verbs: their flags moved across git 2.25–2.37
+// (`init --no-cone`, `set --no-cone`), while this trio is stable across the whole range
+// `primaryRoot` already binds (git >=2.31, via `rev-parse --path-format`). The apply is
+// `sparse-checkout reapply` (2.27, flagless; row 250 — `read-tree -mu HEAD` reset staged work).
 export function excludeCanon(root: string, wtPath: string): Result<void> {
   // git's own caveat: enabling worktreeConfig relocates these two to per-worktree scope.
   // Witness must not silently move a setting the user made, so it refuses instead.
@@ -175,10 +189,11 @@ export function excludeCanon(root: string, wtPath: string): Result<void> {
   git(root, 'config', 'extensions.worktreeConfig', 'true')
   git(wtPath, 'config', '--worktree', 'core.sparseCheckout', 'true')
   git(wtPath, 'config', '--worktree', 'core.sparseCheckoutCone', 'false')
-  // tryGit: an unstaged edit elsewhere in the tree is the NORMAL mid-slice state (the
-  // implement stage leaves the worktree dirty by design) and read-tree carries it through
-  // untouched; a dirty canon path is what it declines, and the residue check is the judge.
-  tryGit(wtPath, 'read-tree', '-mu', 'HEAD')
+  // An edit elsewhere in the tree, staged or not, is the NORMAL mid-slice state (the implement
+  // stage leaves the worktree dirty by design) and `applySparse` carries it through untouched
+  // (row 250: read-tree used to reset staged work); a dirty canon path is what it declines, and
+  // the residue check is the judge.
+  applySparse(wtPath)
   const residue = materializedCanon(root, wtPath)
   if (residue.length) {
     return refuse(residue.map((r) => v(r.rel, 'canon-in-worktree', RESIDUE_GOT[r.how],
