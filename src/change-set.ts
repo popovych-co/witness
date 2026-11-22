@@ -1,3 +1,4 @@
+import { lstatSync, rmSync, type Stats } from 'node:fs'
 import { git } from './gitio.js'
 import { HARNESSES, loadHarness } from './harness.js'
 
@@ -43,4 +44,24 @@ function changedFiles(runRoot: string, base: string): string[] {
 export function planChangeSet(runRoot: string, base: string): string[] {
   const owned = new Set(witnessPaths())
   return changedFiles(runRoot, base).filter((rel) => !owned.has(rel))
+}
+
+// Row 248 (slice 1 review). A listed path's entry on disk, or undefined when there is none. With both
+// paths of a rename listed, a rename between a file and a directory of one name lists a path under
+// what is now a file: lstat says ENOTDIR there, which `throwIfNoEntry` does not cover, and the path
+// is just as absent. Every reader that stats a listed path asks here.
+export function lstatListed(abs: string): Stats | undefined {
+  try {
+    return lstatSync(abs, { throwIfNoEntry: false })
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOTDIR') return undefined
+    throw e
+  }
+}
+
+// A listed path taken off the disk. One under what is now a file is already gone, and one that is
+// now a directory holds the other path of the same rename: neither is a file to remove.
+export function removeListed(abs: string): void {
+  const st = lstatListed(abs)
+  if (st !== undefined && !st.isDirectory()) rmSync(abs, { force: true })
 }

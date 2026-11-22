@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readlinkSync } from 'node:fs'
+import { existsSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { canonicalJson, canonicalSha, planContentSha } from './sha.js'
-import { planChangeSet } from './change-set.js'
+import { lstatListed, planChangeSet } from './change-set.js'
 import { git, tryGit } from './gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from './journal.js'
 import type { Canon, CanonDoc } from './scan.js'
@@ -37,7 +37,7 @@ const DELETED_BLOB = '(deleted)'
 //  - anything else: a constant marker, like DELETED_BLOB, so presence still counts.
 function blobOf(runRoot: string, rel: string): string {
   const abs = join(runRoot, rel)
-  const st = lstatSync(abs, { throwIfNoEntry: false })
+  const st = lstatListed(abs)
   if (!st) return DELETED_BLOB
   if (st.isSymbolicLink()) return `(link)${readlinkSync(abs)}`
   if (st.isFile()) return git(runRoot, 'hash-object', '--', rel)

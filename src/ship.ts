@@ -102,8 +102,9 @@ function gh(ctx: Ctx, cwd: string, args: readonly string[], timeout = 120_000, i
   }
 }
 
-// Row 249 (#94). Every text witness hands gh goes on stdin through `--body-file -`, never as an
-// argument: Windows caps a command line at 32,767 characters, and a PR body has no such bound.
+// Row 249 (#94). Every body witness hands gh goes on stdin through `--body-file -`, never as an
+// argument: Windows caps a command line at 32,767 characters, and a PR body has no such bound. A
+// title stays an argument: an id and a summary of at most 120 characters.
 // `createPr` sends its body here, and so will any later `gh pr edit`.
 export function ghBody(ctx: Ctx, cwd: string, args: readonly string[], body: string, timeout = 120_000): { ok: boolean; out: string; code: number | null } {
   return gh(ctx, cwd, [...args, '--body-file', '-'], timeout, body)

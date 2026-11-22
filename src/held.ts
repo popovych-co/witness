@@ -5,6 +5,7 @@ import { cliAct, type Act } from './act.js'
 import { seeWork } from './carry.js'
 import { EXIT, type Ctx } from './cli.js'
 import { loadConfig } from './config.js'
+import { removeListed } from './change-set.js'
 import { checkoutRoot, diffBase } from './evidence.js'
 import { git, gitWith, tryGit } from './gitio.js'
 import { acquireLock, isAlive } from './lock.js'
@@ -255,7 +256,8 @@ export function toHead(runRoot: string, paths: readonly string[]): void {
   const absent = paths.filter((p) => !inHead.has(p))
   if (inHead.size) git(runRoot, '--literal-pathspecs', 'checkout', 'HEAD', '--', ...inHead)
   if (absent.length) git(runRoot, 'update-index', '--force-remove', '--', ...absent)
-  for (const p of absent) rmSync(join(runRoot, p), { force: true })
+  // Row 248: a rename between a file and a directory of one name lists both — `removeListed`
+  for (const p of absent) removeListed(join(runRoot, p))
 }
 
 // The entries a tree holds at `paths`, matched exactly.
@@ -292,14 +294,16 @@ export function restoreHeld(runRoot: string, held: string, paths: readonly strin
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
-  for (const p of paths) if (!work.has(p) && !untracked.has(p)) rmSync(join(runRoot, p), { force: true })
+  for (const p of paths) if (!work.has(p) && !untracked.has(p)) removeListed(join(runRoot, p))
+  // Removals first (row 248): a rename between a file and a directory of one name lists both, and
+  // the index refuses `src/x` while it still holds `src/x/index.ts`.
+  const unstaged = paths.filter((p) => !index.has(p))
+  if (unstaged.length) git(runRoot, 'update-index', '--force-remove', '--', ...unstaged)
   const entries = paths.flatMap((p) => {
     const e = index.get(p)
     return e !== undefined ? ['--cacheinfo', `${e.mode},${e.sha},${p}`] : []
   })
   if (entries.length) git(runRoot, 'update-index', '--add', ...entries)
-  const unstaged = paths.filter((p) => !index.has(p))
-  if (unstaged.length) git(runRoot, 'update-index', '--force-remove', '--', ...unstaged)
   // the entries just set carry no stat data: refreshed, plumbing reads them as unchanged
   tryGit(runRoot, 'update-index', '-q', '--refresh')
 }

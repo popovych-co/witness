@@ -1,7 +1,7 @@
-import { existsSync, lstatSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { witnessExcludes } from './change-set.js'
+import { lstatListed, witnessExcludes } from './change-set.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { execFileSync } from './spawn.js'
 
@@ -26,7 +26,7 @@ function run(cwd: string, args: string[], opts: { input?: string; env?: NodeJS.P
 // `ls-files --others` prints for a nested repo is silently ignored. `undefined` is a removal.
 function indexRecord(runRoot: string, path: string): { mode: string; sha: string } | undefined {
   const abs = join(runRoot, path)
-  const st = lstatSync(abs, { throwIfNoEntry: false })
+  const st = lstatListed(abs)
   if (!st) return undefined
   if (st.isSymbolicLink()) return { mode: '120000', sha: run(runRoot, ['hash-object', '-w', '--stdin'], { input: readlinkSync(abs) }) }
   if (st.isFile()) return { mode: st.mode & 0o100 ? '100755' : '100644', sha: run(runRoot, ['hash-object', '-w', '--', path]) }
