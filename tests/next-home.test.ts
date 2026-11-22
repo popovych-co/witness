@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { changedFiles, diffBase } from '../src/evidence.js'
+import { diffBase } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { loadConfig } from '../src/config.js'
 import { fakeCtx, fakeScenario, gateEnv, nextLine, putVerdict, shippableRepo } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
@@ -13,7 +14,7 @@ import { worktreePath } from '../src/worktree.js'
 async function settleImplementGate(repo: { root: string }, wt: string, planId: string): Promise<void> {
   const cfg = loadConfig(repo.root)
   const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-  const files = changedFiles(wt, base.ok ? base.value : '')
+  const files = planChangeSet(wt, base.ok ? base.value : '')
   const scenario = fakeScenario()
   putVerdict(scenario, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] })
   const code = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId,

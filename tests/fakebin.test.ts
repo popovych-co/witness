@@ -143,6 +143,13 @@ describe('fake gh', () => {
     expect(runFake('gh', ['pr', 'checks', '1'], dir)).toContain('successful')
     expect(() => runFake('gh', ['pr', 'view', '9', '--json', 'state'], dir)).toThrow()
   })
+
+  it('records a --body-file - body from stdin (row 249)', () => {
+    const dir = fakeScenario()
+    runFake('gh', ['pr', 'create', '--head', 'x', '--title', 't', '--body-file', '-'], dir, 'line one\nline two')
+    expect(readFileSync(join(dir, 'gh-stdin'), 'utf8')).toBe('== pr create\nline one\nline two\n')
+    expect(readFileSync(join(dir, 'gh-calls'), 'utf8')).toBe('pr create --head x --title t --body-file -\n')
+  })
 })
 
 describe('fake pi', () => {

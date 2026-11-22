@@ -21,6 +21,8 @@ import {
 } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
 import { refuseClash } from './clash.js'
+import { refuseHeld } from './held.js'
+import { worktreePath } from './worktree.js'
 import { gateRunLines, gateRunView } from './gate-run-view.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
 import {
@@ -359,6 +361,10 @@ export async function runGate(
       // file on a row with its remedy.
       const clashed = refuseClash(ctx, rootR.value, target)
       if (clashed !== undefined) return clashed
+      // Row 247. Nor over a crashed verify-red's set-aside state: the plan's work goes back first, or
+      // the gate refuses verify-red-pending — a battery over the base's tree judges code nobody wrote.
+      const held = refuseHeld(ctx, rootR.value, target, worktreePath(rootR.value, target))
+      if (held !== undefined) return held
       // Row 241 (R9; the user's decisions 6 and 9). No implement review starts while a plan step is
       // open, whoever starts it: refused before the battery, journaling nothing, naming the step's
       // command. To skip a step, amend the plan and drop it.

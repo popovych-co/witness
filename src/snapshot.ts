@@ -1,6 +1,7 @@
-import { existsSync, lstatSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { foreignRetired, lstatListed, witnessExcludes } from './change-set.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { execFileSync } from './spawn.js'
 
@@ -25,7 +26,7 @@ function run(cwd: string, args: string[], opts: { input?: string; env?: NodeJS.P
 // `ls-files --others` prints for a nested repo is silently ignored. `undefined` is a removal.
 function indexRecord(runRoot: string, path: string): { mode: string; sha: string } | undefined {
   const abs = join(runRoot, path)
-  const st = lstatSync(abs, { throwIfNoEntry: false })
+  const st = lstatListed(abs)
   if (!st) return undefined
   if (st.isSymbolicLink()) return { mode: '120000', sha: run(runRoot, ['hash-object', '-w', '--stdin'], { input: readlinkSync(abs) }) }
   if (st.isFile()) return { mode: st.mode & 0o100 ? '100755' : '100644', sha: run(runRoot, ['hash-object', '-w', '--', path]) }
@@ -83,8 +84,11 @@ export function treePaths(root: string, tree: string): string[] {
   return run(root, ['ls-tree', '-r', '-t', '--name-only', '-z', tree]).split('\0').filter((p) => p !== '')
 }
 
+// Row 246: both delta readers exclude witness's payload paths, so a snapshot written before the row
+// (one that still holds a payload file at the plan's version) never shows that file to a delta round.
+// Row 250 (final review): a retired path the newer tree holds with a plan's bytes is shown.
 export function changedPaths(root: string, from: string, to: string): string[] {
-  return run(root, ['diff', '--name-only', '-z', '--no-renames', from, to]).split('\0').filter((p) => p !== '')
+  return run(root, ['diff', '--name-only', '-z', '--no-renames', from, to, '--', ...witnessExcludes(foreignRetired(root, to))]).split('\0').filter((p) => p !== '')
 }
 
 // The unified diff from → to. Its text joins a delta round's `prompts_sha`, so every knob a
@@ -96,7 +100,7 @@ export function treeDiff(root: string, from: string, to: string): string {
     '-c', 'diff.suppressBlankEmpty=false', '-c', 'core.quotePath=true',
     'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-relative', '--full-index',
     '--diff-algorithm=myers', '--indent-heuristic', '-U3', '--inter-hunk-context=0',
-    '--src-prefix=a/', '--dst-prefix=b/', from, to,
+    '--src-prefix=a/', '--dst-prefix=b/', from, to, '--', ...witnessExcludes(foreignRetired(root, to)),
   ])
 }
 

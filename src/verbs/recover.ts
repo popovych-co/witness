@@ -1,12 +1,17 @@
 import { parseArgs } from 'node:util'
 import { cliAct } from '../act.js'
 import { EXIT, type Ctx } from '../cli.js'
-import { dirtyStatePaths, primaryRoot } from '../gitio.js'
+import { dirtyStatePaths, primaryRoot, tryGit } from '../gitio.js'
+import { checkoutRoot } from '../evidence.js'
+import { heldPending, heldWorkLine, putBackHeld, standingHeld, treeBase } from '../held.js'
+import { acquireLock } from '../lock.js'
+import type { Result, Violation } from '../refusal.js'
+import { shellWord } from '../toon.js'
 import { option, renderDecision, type Decision } from '../recommend.js'
 import { kv } from '../toon.js'
 import { renderRefusal } from '../refusal.js'
 import { completeTxn, landedJournal, pendingTxn, rollbackTxn, type TxnMarker } from '../txn.js'
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 // D121. The interrupted transaction's own state ranks this: `completeTxn` appends only the
@@ -54,7 +59,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const marker = pendingTxn(root)
   if (!marker) {
     ctx.out('recover: no pending transaction')
-    return EXIT.OK
+    return recoverHeld(ctx, root)
   }
   if (dirtyStatePaths(root).length === 0) {
     rmSync(join(root, '.witness', 'txn.json'), { force: true })
@@ -84,4 +89,55 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   ctx.out(kv('recovered', `completed as ${res.value.sha.slice(0, 7)}`))
   return EXIT.OK
+}
+
+// Row 247 (#92). With no transaction pending, every held ref a crashed verify-red left goes back into
+// the checkout its record names, wherever recover runs from — under verify-red's own rules
+// (`putBackHeld`), against the base the record names, else that checkout's. A ref whose checkout is
+// gone, or whose work cannot go back safely, refuses `verify-red-pending` and stays; nothing is
+// written anywhere else. Exit 0 when every ref went back (or none stood), 2 with every refusal
+// rendered (3 when the repo lock is held). A pending transaction is handled first, by itself (D121):
+// the held refs wait for the next recover.
+const HELD_PREFIX = 'refs/witness/verify-red/'
+function recoverHeld(ctx: Ctx, root: string): number {
+  const listed = tryGit(root, 'for-each-ref', '--format=%(refname)', HELD_PREFIX)
+  const refs = listed.ok ? listed.out.split('\n').filter((r) => r.startsWith(HELD_PREFIX)).sort() : []
+  const refused: Violation[] = []
+  let locked = false
+  for (const ref of refs) {
+    const planId = ref.slice(HELD_PREFIX.length)
+    const held = standingHeld(root, planId)
+    if (held === undefined) continue                     // dropped since the listing
+    const then = cliAct('next')
+    const checkout = held.record?.checkout
+    if (checkout !== undefined && !checkoutStands(checkout)) {
+      refused.push(heldPending(planId, ref, `the checkout that set it aside, ${shellWord(checkout)}, is gone`, then))
+      continue
+    }
+    const lock = acquireLock(root)
+    if (!lock.ok) { refused.push(...lock.violations); locked = true; continue }
+    let back: Result<string[]> | undefined
+    try {
+      const now = standingHeld(root, planId)             // re-read under the lock: a run may have finished
+      if (now !== undefined) {
+        back = putBackHeld(checkout ?? root, planId, now, checkout !== undefined ? treeBase(root, checkout) : undefined, then)
+      }
+    } finally {
+      lock.value()
+    }
+    if (back === undefined) continue
+    if (!back.ok) { refused.push(...back.violations); continue }
+    ctx.out(heldWorkLine(ref, back.value, checkout))
+  }
+  if (refused.length === 0) return EXIT.OK
+  renderRefusal(refused).forEach((l) => ctx.err(l))
+  return locked ? EXIT.BLOCKED : EXIT.REFUSED
+}
+
+// A checkout that still stands where its record says: the directory exists and git names it as its
+// own top level (a directory reused for something else is no longer that checkout).
+function checkoutStands(checkout: string): boolean {
+  if (!existsSync(checkout)) return false
+  const top = checkoutRoot(checkout)
+  return top.ok && top.value === checkout
 }

@@ -2,11 +2,14 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { version } from './cli.js'
-import { tryGit } from './gitio.js'
-import { type Harness } from './harness.js'
+import { commitWithTrailer, git, tryGit } from './gitio.js'
+import { HARNESSES, loadHarness, type Harness } from './harness.js'
+import { presentInTree, removeListed } from './change-set.js'
+import { DEFAULT_JSON_STYLE, formatJson, type JsonStyle } from './json-format.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { SETTINGS } from './settings.js'
 import { NPX_LATEST, compareTriple, pinIn } from './version.js'
+import { refreshSparse } from './worktree.js'
 
 // dist/install.js and src/install.ts both sit one level under the package root, so the
 // same '..' works built and under vitest — the pattern model.ts:14 already uses. This is
@@ -19,8 +22,17 @@ export function packageRoot(): string {
 // Project-scope hook commands. ${CLAUDE_PLUGIN_ROOT} exists only for plugin installs;
 // a project install anchors on $CLAUDE_PROJECT_DIR, which Claude Code substitutes in
 // hook commands (verified against 2.1.220).
-const GUARD_CMD = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-state.mjs"'
-const DASHBOARD_CMD = 'sh "$CLAUDE_PROJECT_DIR/.claude/hooks/session-dashboard.sh"'
+// Row 250 (#95): the hooks moved to .witness/hooks/ (PAYLOAD_HOME).
+const GUARD_CMD = 'node "$CLAUDE_PROJECT_DIR/.witness/hooks/guard-state.mjs"'
+const DASHBOARD_CMD = 'sh "$CLAUDE_PROJECT_DIR/.witness/hooks/session-dashboard.sh"'
+// Row 250 (#95). Every command string witness ever wrote into .claude/settings.json and no longer
+// writes, to its successor — read from all eleven versions of this file, exactly two. Only these
+// exact strings are rewired: a hand-edited variant is the human's.
+const RETIRED_CMDS = new Map([
+  ['node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-state.mjs"', GUARD_CMD],
+  ['sh "$CLAUDE_PROJECT_DIR/.claude/hooks/session-dashboard.sh"', DASHBOARD_CMD],
+])
+const WITNESS_CMDS = new Set([GUARD_CMD, DASHBOARD_CMD])
 
 interface HookEntry { matcher?: string; hooks: Array<{ type: string; command: string }> }
 
@@ -56,7 +68,10 @@ const ENGINE_SOURCE = 'plugin/commands/witness.md'
 //
 // harness.settings is deliberately outside the dirty guard: mergeSettings appends and
 // never clobbers, so a dirty settings file is not at risk.
-export function preflightPayload(root: string, harness: Harness): Result<void> {
+//
+// Row 250 (#95): with `retiring` — the root, where init removes witness's retired files — the dirty
+// guard covers those too, since their removal is a clobber like any overwrite.
+export function preflightPayload(root: string, harness: Harness, opts: { retiring?: boolean } = {}): Result<void> {
   const targets = harness.payload.map((p) => p.to)
   const ignored = [...targets, ...(harness.settings ? [harness.settings] : [])]
     .filter((rel) => tryGit(root, 'check-ignore', '-q', '--', rel).ok)
@@ -69,7 +84,8 @@ export function preflightPayload(root: string, harness: Harness): Result<void> {
   // A failed status call is not evidence of dirt: primaryRoot already proved this is a
   // repo, and inventing a refusal out of a git error would block the upgrade this row
   // exists to deliver.
-  const status = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...targets)
+  const guarded = opts.retiring ? [...targets, ...harness.retired] : targets
+  const status = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...guarded)
   const dirty = status.ok
     ? status.out.split('\n').filter((l) => l !== '').map((l) => l.slice(3).trim())
     : []
@@ -162,6 +178,19 @@ export function payloadStale(root: string, harness: Harness): string[] {
     .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
 }
 
+// Row 246. Every payload file a home lacks while the harness is installed (any of its payload at the
+// root), the root named by its bare path and a worktree as `<home>: <to>`, in `payloadHomes` order. The
+// plan change set leaves witness's payload out of what reviewers see, so a session that deletes a
+// witness hook is named here, as an edited one is by `payloadStale` — in its worktree, and at the root
+// once a plan that deleted one has shipped. Separate from `payloadStale`, which `next`'s Pi fallback
+// also reads (row 204): a missing file says nothing about the root chat's add-on being old.
+export function payloadMissing(root: string, harness: Harness): string[] {
+  if (!harness.payload.some((p) => existsSync(join(root, p.to)))) return []
+  return payloadHomes(root).flatMap((home) => harness.payload
+    .filter((p) => !existsSync(join(home, p.to)))
+    .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
+}
+
 // Preflight EVERY home before writing ANY. install.ts's standing doctrine is that a
 // refusal leaves nothing half-installed; across homes that matters more, not less — a
 // half-upgraded set of homes IS the skew row 116 refuses and this row prevents.
@@ -170,7 +199,7 @@ export function installAllHomes(
 ): Result<Array<{ home: string; synced: SyncResult }>> {
   const homes = payloadHomes(root)
   const failures = homes.flatMap((home) => {
-    const pre = preflightPayload(home, harness)
+    const pre = preflightPayload(home, harness, { retiring: home === root })
     // Name the home in the field, or a `payload-dirty` row over `.claude/commands/witness.md`
     // is ambiguous across four checkouts of the same repository.
     return pre.ok ? [] : pre.violations.map((x) => ({ ...x, field: home === root ? x.field : `${home}: ${x.field}` }))
@@ -179,11 +208,66 @@ export function installAllHomes(
 
   const out: Array<{ home: string; synced: SyncResult }> = []
   for (const home of homes) {
+    // Row 250 (#95): a worktree cut before the hooks moved gets today's sparse patterns first, or
+    // its payload commit under .witness/hooks/ refuses
+    if (home !== root) refreshSparse(root, home)
     const synced = installPayload(home, harness)
     if (!synced.ok) return refuse(synced.violations)
     out.push({ home, synced: synced.value })
   }
   return ok(out)
+}
+
+// Row 250 (#95). witness's retired files taken off the root's disk, once its settings no longer wire
+// them — a settings file witness could not rewrite may still run them, so then none goes. A worktree
+// keeps its own: its settings are its branch's, which init never writes (the ship gate drops them,
+// `dropRetired`). No commit here: init adds the removed paths to its root commit. The removed paths,
+// sorted.
+export function retireAtRoot(root: string, harness: Harness, settings: string | undefined): string[] {
+  if (settings !== undefined && namesRetired(settings)) return []
+  // presentInTree / removeListed: never through a linked `.claude/hooks` (security review)
+  const removed = harness.retired.filter((rel) => presentInTree(root, rel))
+  for (const rel of removed) removeListed(root, rel)
+  return [...removed].sort()
+}
+
+// Row 250 (#95). A plan branch can carry witness's retired hooks — sync commits from before the move,
+// which a rebase onto the moved base re-adds (probe F/S) — and they would ride the PR back into the
+// base and fail its lint. Dropped once the base no longer carries them, never while it still does: a
+// base not yet moved still runs them. Retired paths are every harness's. A tracked one leaves the
+// index in one commit; every dropped one leaves the disk. The dropped paths, sorted.
+//
+// The base is the plan's cut point, which says nothing about this tree's own wiring: while the
+// branch's settings still run a retired command (no carry has brought the base's yet), nothing goes,
+// or the worktree loses its guard (slice 2 review).
+export function dropRetired(wt: string, base: string, planId: string): string[] {
+  const retired = new Set<string>()
+  for (const name of HARNESSES) {
+    const harness = loadHarness(name)
+    if (!harness.ok) continue
+    const settings = harness.value.settings === undefined ? undefined : readIfExists(wt, harness.value.settings)
+    if (settings !== undefined && namesRetired(settings)) return []
+    for (const rel of harness.value.retired) retired.add(rel)
+  }
+  const dropped: string[] = []
+  const tracked: string[] = []
+  for (const rel of [...retired].sort()) {
+    const inIndex = tryGit(wt, '--literal-pathspecs', 'ls-files', '--error-unmatch', '--', rel).ok
+    // presentInTree / removeListed: never through a linked `.claude/hooks` (security review)
+    if (!inIndex && !presentInTree(wt, rel)) continue
+    if (tryGit(wt, 'cat-file', '-e', `${base}:${rel}`).ok) continue
+    if (inIndex) {
+      git(wt, '--literal-pathspecs', 'rm', '-q', '--cached', '--', rel)
+      tracked.push(rel)
+    }
+    removeListed(wt, rel)
+    dropped.push(rel)
+  }
+  if (tracked.length > 0) {
+    const committed = commitWithTrailer(wt, tracked, `ship(${planId}): witness's retired payload dropped — the base no longer carries it`)
+    if (!committed.ok) throw new Error(committed.violations.map((x) => x.got).join('; '))
+  }
+  return dropped
 }
 
 function hasCommand(entries: HookEntry[] | undefined, command: string): boolean {
@@ -212,10 +296,55 @@ function withEntry(current: unknown, name: string, value: unknown): Record<strin
   return Object.hasOwn(current, name) ? undefined : { ...current, [name]: value }
 }
 
+// Whether `text` still wires one of witness's retired hook commands — matched as a JSON string
+// literal, so a human's command that merely starts the same way is not one.
+export function namesRetired(text: string): boolean {
+  return [...RETIRED_CMDS.keys()].some((cmd) => text.includes(JSON.stringify(cmd)))
+}
+
+// Row 250 (#95). witness's own hook entries rewired in place: each retired command becomes its
+// successor where it stands, and then, per event, an entry holding exactly one witness command goes
+// when an earlier entry has the same matcher and that same command — a file wired from both homes
+// keeps one set. Whether anything changed.
+function rewireHooks(hooks: Record<string, unknown>): boolean {
+  let changed = false
+  for (const list of Object.values(hooks)) {
+    if (!Array.isArray(list)) continue
+    for (const entry of list as unknown[]) {
+      const inner = (entry as { hooks?: unknown } | null)?.hooks
+      if (!Array.isArray(inner)) continue
+      for (const h of inner as Array<{ command?: unknown } | null>) {
+        const next = typeof h?.command === 'string' ? RETIRED_CMDS.get(h.command) : undefined
+        if (next !== undefined) { h!.command = next; changed = true }
+      }
+    }
+    const single = (e: unknown): string | undefined => {
+      const inner = (e as { hooks?: unknown } | null)?.hooks
+      if (!Array.isArray(inner) || inner.length !== 1) return undefined
+      const cmd = (inner[0] as { command?: unknown } | null)?.command
+      return typeof cmd === 'string' && WITNESS_CMDS.has(cmd) ? cmd : undefined
+    }
+    const kept: unknown[] = []
+    for (const entry of list as unknown[]) {
+      const cmd = single(entry)
+      const matcher = (entry as { matcher?: unknown }).matcher
+      if (cmd !== undefined && kept.some((k) => single(k) === cmd && (k as { matcher?: unknown }).matcher === matcher)) {
+        changed = true
+        continue
+      }
+      kept.push(entry)
+    }
+    list.splice(0, list.length, ...kept)
+  }
+  return changed
+}
+
 // Merge, never replace: .claude/settings.json is the human's file and may already carry
-// their own hooks, model pin and permissions. We append only what is missing, matched
-// by command string, and preserve every other key byte for byte.
-export function mergeSettings(existing: string | undefined): { text: string; changed: boolean } {
+// their own hooks, model pin and permissions. witness rewires its own retired hook commands in
+// place (row 250), appends only what is missing, matched by command string, and keeps every
+// other key's value. A changed file is written in `style` (row 250: the formatter's), so the
+// repo's own `biome check` stays clean on it.
+export function mergeSettings(existing: string | undefined, style: JsonStyle = DEFAULT_JSON_STYLE): { text: string; changed: boolean } {
   let doc: Record<string, unknown> = {}
   if (existing !== undefined && existing.trim() !== '') {
     try {
@@ -227,7 +356,7 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
     }
   }
   const hooks = (doc.hooks ?? {}) as Record<string, HookEntry[] | undefined>
-  let changed = false
+  let changed = typeof hooks === 'object' && hooks !== null && !Array.isArray(hooks) ? rewireHooks(hooks) : false
   const pre = [...(hooks.PreToolUse ?? [])]
   for (const matcher of ['Edit|Write|MultiEdit', 'Bash']) {
     if (!pre.some((e) => e.matcher === matcher && hasCommand([e], GUARD_CMD))) {
@@ -267,7 +396,7 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
   doc.permissions = { ...perms, allow }
   if (marketplaces !== undefined) doc.extraKnownMarketplaces = marketplaces
   if (plugins !== undefined) doc.enabledPlugins = plugins
-  return { text: `${JSON.stringify(doc, null, 2)}\n`, changed: true }
+  return { text: formatJson(doc, style), changed: true }
 }
 
 // The config rung of Decision 5's ladder, and rung ONE of Decision 105's judgment ladder.

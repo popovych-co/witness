@@ -1,0 +1,132 @@
+import { lstatSync, rmSync, type Stats } from 'node:fs'
+import { join } from 'node:path'
+import { git } from './gitio.js'
+import { HARNESSES, loadHarness } from './harness.js'
+import { RETIRED_BLOBS } from './retired-payload.js'
+
+// Row 246 (#93). The plan change set: what a plan changed, which is the diff against its base minus
+// witness's own files. `init --agent` commits each harness's payload into every home, a started
+// plan's worktree included, so a consumer's in-flight plan carried witness's hooks and commands in
+// its diff — reviewers anchored findings and coverage on them, and the reviewed identity moved with
+// every witness upgrade. Every reader of the diff asks here: the reviewed identity, the reviewer
+// prompt's file list and diff, the coverage pool, the snapshot and the delta, evidence's tags and
+// regression specs, verify-red's held set and `next`.
+//
+// Witness-owned is the union of every harness's payload targets, whichever harness is installed: a
+// repo that ran pi's init once still carries pi's files after it moved to claude-code.
+// `.claude/settings.json` is shared with the user's own settings, so it stays a plan change.
+export function witnessPaths(): readonly string[] {
+  return [...new Set([...payloadPaths('current'), ...payloadPaths('retired')])].sort()
+}
+
+// Every harness's current payload targets, or its retired ones (row 250, #95).
+function payloadPaths(kind: 'current' | 'retired'): Set<string> {
+  const paths = new Set<string>()
+  for (const name of HARNESSES) {
+    const harness = loadHarness(name)
+    if (!harness.ok) continue
+    if (kind === 'current') for (const { to } of harness.value.payload) paths.add(to)
+    else for (const to of harness.value.retired) paths.add(to)
+  }
+  return paths
+}
+
+// Row 250 (#95, final review). A retired target stays witness-owned while plan branches still carry
+// it — but only while it holds bytes witness wrote there (RETIRED_BLOBS). Any other bytes at that path
+// are a plan's: an edit the reviewers must see, since nothing else in witness ever looks at a retired
+// file again. A path gone from the tree is witness's either way: its removal is the retirement.
+function retiredIsWitness(rel: string, blob: string | undefined): boolean {
+  return blob === undefined || (RETIRED_BLOBS[rel]?.has(blob) ?? false)
+}
+
+// The git blob a retired path holds on disk in `runRoot`: undefined when absent, '' when it is not a
+// regular file (a link or a directory there is never witness's).
+function diskBlob(runRoot: string, rel: string): string | undefined {
+  if (!parentsInTree(runRoot, rel)) return ''
+  const st = lstatListed(join(runRoot, rel))
+  if (st === undefined) return undefined
+  return st.isFile() ? git(runRoot, 'hash-object', '--', rel) : ''
+}
+
+// The retired paths a tree or commit holds with bytes witness never wrote there (row 250, final
+// review): what a delta between two snapshots must still show.
+export function foreignRetired(root: string, rev: string): string[] {
+  const retired = payloadPaths('retired')
+  const found: string[] = []
+  if (retired.size === 0) return found
+  for (const record of git(root, 'ls-tree', '-r', '-z', '--full-tree', rev, '--', ...retired).split('\0')) {
+    const m = /^(\d+) \w+ ([0-9a-f]+)\t([^]*)$/.exec(record)
+    if (m === null || !retired.has(m[3]!)) continue
+    const regular = m[1] === '100644' || m[1] === '100755'
+    if (!regular || !retiredIsWitness(m[3]!, m[2]!)) found.push(m[3]!)
+  }
+  return found.sort()
+}
+
+// One exclude pathspec per witness path, for git commands that take pathspecs. `top` anchors it at
+// the repository root from any cwd, and `literal` keeps a name's `*`, `?` or `[` from matching
+// anything else. A path in `keep` is not excluded: a retired path holding a plan's bytes (row 250).
+export function witnessExcludes(keep: readonly string[] = []): string[] {
+  const kept = new Set(keep)
+  return witnessPaths().filter((p) => !kept.has(p)).map((p) => `:(top,literal,exclude)${p}`)
+}
+
+// `-z` on both: with core.quotePath on (git's default), a non-ASCII or special path is printed
+// quoted, and a quoted name is no path — the edit was invisible to the reviewed identity, the
+// snapshot and the delta view alike.
+function changedFiles(runRoot: string, base: string): string[] {
+  // Row 248. git follows `diff.renames` by default, so a moved file listed only its new path: the
+  // old one fell out of verify-red's red tree, the snapshot and the reviewed identity.
+  const tracked = git(runRoot, 'diff', '--no-renames', '--name-only', '-z', base).split('\0').filter(Boolean)
+  const untracked = git(runRoot, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean)
+  return [...new Set([...tracked, ...untracked])].sort()
+}
+
+export function planChangeSet(runRoot: string, base: string): string[] {
+  const current = payloadPaths('current')
+  const retired = payloadPaths('retired')
+  return changedFiles(runRoot, base)
+    .filter((rel) => !current.has(rel) && !(retired.has(rel) && retiredIsWitness(rel, diskBlob(runRoot, rel))))
+}
+
+// Row 248 (slice 1 review). A listed path's entry on disk, or undefined when there is none. With both
+// paths of a rename listed, a rename between a file and a directory of one name lists a path under
+// what is now a file: lstat says ENOTDIR there, which `throwIfNoEntry` does not cover, and the path
+// is just as absent. Every reader that stats a listed path asks here.
+export function lstatListed(abs: string): Stats | undefined {
+  try {
+    return lstatSync(abs, { throwIfNoEntry: false })
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOTDIR') return undefined
+    throw e
+  }
+}
+
+// Row 250 (security review). Whether every parent of `rel` under `root` is a real directory, or
+// absent: none is a symlink. A branch can commit `.claude/hooks` as a link to anywhere, and a removal
+// through it would delete a file outside the tree.
+export function parentsInTree(root: string, rel: string): boolean {
+  let at = root
+  for (const part of rel.split('/').slice(0, -1)) {
+    at = join(at, part)
+    const st = lstatListed(at)
+    if (st === undefined || !st.isDirectory()) return st === undefined || !st.isSymbolicLink()
+  }
+  return true
+}
+
+// Whether `rel` is on disk inside the tree: an entry of its own (a link counts as itself), reached
+// through no linked parent.
+export function presentInTree(root: string, rel: string): boolean {
+  return parentsInTree(root, rel) && lstatListed(join(root, rel)) !== undefined
+}
+
+// A listed path taken off the disk. One under what is now a file is already gone, and one that is
+// now a directory holds the other path of the same rename: neither is a file to remove. One reached
+// through a linked parent is outside the tree, and stays.
+export function removeListed(root: string, rel: string): void {
+  if (!parentsInTree(root, rel)) return
+  const abs = join(root, rel)
+  const st = lstatListed(abs)
+  if (st !== undefined && !st.isDirectory()) rmSync(abs, { force: true })
+}

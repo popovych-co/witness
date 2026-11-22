@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { changedFiles } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { diffReviewedSha } from '../src/reviewed.js'
 import { blobText, changedPaths, snapshotFiles, snapshotTree, treeDiff, treeReadable } from '../src/snapshot.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
@@ -22,7 +22,7 @@ describe('snapshotTree', () => {
     repo.write('src/a.ts', 'a2\n'); repo.write('src/new.ts', 'new\n'); rmSync(join(repo.root, 'src/b.ts'))
     symlinkSync('a.ts', join(repo.root, 'src/link.ts'))
     repo.write('bin/run.sh', '#!/bin/sh\n'); chmodSync(join(repo.root, 'bin/run.sh'), 0o755)
-    const tree = snapshotTree(repo.root, base, changedFiles(repo.root, base))!
+    const tree = snapshotTree(repo.root, base, planChangeSet(repo.root, base))!
     expect(repo.git('cat-file', 'blob', `${tree}:src/a.ts`)).toBe('a2')
     expect(repo.git('cat-file', 'blob', `${tree}:src/new.ts`)).toBe('new')
     expect(entry(repo, tree, 'src/b.ts')).toBeUndefined()
@@ -41,7 +41,7 @@ describe('snapshotTree', () => {
     const head = gitIn('rev-parse', 'HEAD')
     mkdirSync(join(repo.root, 'vendor/pinned'))
     repo.git('update-index', '--add', '--cacheinfo', `160000,${head},vendor/pinned`)
-    const files = changedFiles(repo.root, base)
+    const files = planChangeSet(repo.root, base)
     expect(files).toContain('vendor/lib/')                          // the trailing-slash form
     const tree = snapshotTree(repo.root, base, files)!
     expect(entry(repo, tree, 'vendor/lib')).toBe(`160000 commit ${head}\tvendor/lib`)
@@ -56,9 +56,9 @@ describe('snapshotTree', () => {
     const base = repo.git('rev-parse', 'HEAD~1')
     const before = diffReviewedSha(repo.root, base)
     repo.write('src/café.ts', 'v2\n')
-    expect(changedFiles(repo.root, base)).toContain('src/café.ts')
+    expect(planChangeSet(repo.root, base)).toContain('src/café.ts')
     expect(diffReviewedSha(repo.root, base)).not.toBe(before)
-    const tree = snapshotTree(repo.root, base, changedFiles(repo.root, base))!
+    const tree = snapshotTree(repo.root, base, planChangeSet(repo.root, base))!
     expect(repo.git('cat-file', 'blob', `${tree}:src/café.ts`)).toBe('v2')
   })
 
@@ -76,7 +76,7 @@ describe('snapshotTree', () => {
     repo.write('src/a.ts', 'a2\n')
     const r1 = snapshotTree(repo.root, base, ['src/a.ts'])!
     repo.write('src/a.ts', 'a\n')
-    const r2 = snapshotTree(repo.root, base, changedFiles(repo.root, base))!
+    const r2 = snapshotTree(repo.root, base, planChangeSet(repo.root, base))!
     expect(changedPaths(repo.root, r1, r2)).toEqual(['src/a.ts'])
     const diff = treeDiff(repo.root, r1, r2)
     expect(diff).toContain('-a2'); expect(diff).toContain('+a'); expect(diff).not.toContain('deleted file')
@@ -94,7 +94,7 @@ describe('snapshotTree', () => {
     gitWt('read-tree', '-mu', 'HEAD')
     writeFileSync(join(wt, 'src/c.ts'), 'c\n')
     const base = gitWt('rev-parse', 'HEAD')
-    const tree = snapshotTree(wt, base, changedFiles(wt, base))!
+    const tree = snapshotTree(wt, base, planChangeSet(wt, base))!
     expect(repo.git('cat-file', 'blob', `${tree}:src/c.ts`)).toBe('c')
     expect(gitWt('ls-files', '-t', '--', 'specs/s.md')).toBe('S specs/s.md')   // skip-worktree untouched
   })

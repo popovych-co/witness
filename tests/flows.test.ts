@@ -3,7 +3,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { changedFiles, diffBase } from '../src/evidence.js'
+import { diffBase } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { loadConfig } from '../src/config.js'
 import {
   approve, fakeCtx, fakeScenario, gateEnv, ghState, nextLine, putVerdict, seededRepo, shippableRepo,
@@ -18,7 +19,7 @@ import type { TestRepo } from './helpers.js'
 async function settleImplementGate(repo: { root: string }, wt: string, planId: string): Promise<void> {
   const cfg = loadConfig(repo.root)
   const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-  const files = changedFiles(wt, base.ok ? base.value : '')
+  const files = planChangeSet(wt, base.ok ? base.value : '')
   const scenario = fakeScenario()
   putVerdict(scenario, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] })
   const code = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
@@ -29,7 +30,7 @@ async function settleImplementGate(repo: { root: string }, wt: string, planId: s
 async function stopShipGate(repo: TestRepo, wt: string, planId: string): Promise<void> {
   const cfg = loadConfig(repo.root)
   const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-  const files = changedFiles(wt, base.ok ? base.value : '')
+  const files = planChangeSet(wt, base.ok ? base.value : '')
   const scenario = fakeScenario()
   putVerdict(scenario, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] })
   await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: false, manual: false })
@@ -272,7 +273,7 @@ describe('a settled implement gate outranks the evidence hint', () => {
     // The stop here comes from the red regression check, which is the point of the test.
     const cfg = loadConfig(repo.root)
     const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-    const files = changedFiles(wt, base.ok ? base.value : '')
+    const files = planChangeSet(wt, base.ok ? base.value : '')
     putVerdict(scenario, { coverage: files.map((f) => ({ anchor: f, note: 'read' })), findings: [] })
     const gate = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
     expect(gate).toBe(1)                                  // stopped: the regression check is red
@@ -290,7 +291,7 @@ describe('a settled implement gate outranks the evidence hint', () => {
 async function stopImplementGate(repo: TestRepo, wt: string, planId: string): Promise<void> {
   const cfg = loadConfig(repo.root)
   const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-  const files = changedFiles(wt, base.ok ? base.value : '')
+  const files = planChangeSet(wt, base.ok ? base.value : '')
   const scenario = fakeScenario()
   putVerdict(scenario, {
     coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })),

@@ -7,7 +7,8 @@ import {
   HARNESSES, judgeLine, loadHarness, resolveDriver, resolveJudge, resolveSkills, skillPins,
   type HarnessName,
 } from '../harness.js'
-import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadStale } from '../install.js'
+import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadMissing, payloadStale } from '../install.js'
+import { payloadLinted, payloadLintedDetail } from '../lint-config.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
@@ -33,6 +34,8 @@ import { kv, rows, shellLine, shellWord, visible } from '../toon.js'
 import { pendingTxn } from '../txn.js'
 import { cliAct } from '../act.js'
 import { seeWork } from '../carry.js'
+import { standingHeld } from '../held.js'
+import { isAlive } from '../lock.js'
 import { listWorktrees, materializedCanon, RESIDUE_GOT, worktreePath } from '../worktree.js'
 
 interface Finding {
@@ -127,6 +130,22 @@ function leftovers(root: string, canon: Canon): Finding[] {
     out.push(f('warn', 'git', visible(ref), 'witness-ref-left', kept
       ? `${shellWord(planId)} is ${which}, and this backup of its work stays — ${see}; ${drop}`
       : `${shellWord(planId)} is ${which}, and this ref holds its uncommitted work from a move that never finished — it may be the only copy; ${see}; ${drop}`))
+  }
+  // Row 247 (#92). A held ref a crashed verify-red left: that plan's non-test work is set aside, and the
+  // checkout it came from holds base versions until recover puts it back. Quiet while the run that set
+  // it aside is alive — it is in progress, not left. A record naming no checkout or no files is read
+  // as an unknown checkout, shown how to see by hand.
+  const held = tryGitC(root, 'for-each-ref', '--format=%(refname)', 'refs/witness/verify-red/')
+  for (const ref of held.ok ? held.out.split('\n').filter((r) => r.startsWith('refs/witness/verify-red/')) : []) {
+    const planId = ref.slice('refs/witness/verify-red/'.length)
+    const standing = standingHeld(root, planId)
+    if (standing === undefined) continue
+    const record = standing.record
+    if (record?.pid !== undefined && record.pid !== process.pid && isAlive(record.pid)) continue
+    const known = record?.checkout !== undefined && record.files.length > 0 ? record.checkout : undefined
+    out.push(f('warn', 'git', visible(ref), 'verify-red-held', known !== undefined
+      ? `${shellWord(planId)}'s verify-red stopped before putting its non-test work back into ${shellWord(known)} — ${cliAct('recover').line} puts it back when nothing there changed since; ${seeWork(ref)}`
+      : `${shellWord(planId)}'s verify-red stopped before putting its non-test work back into an unknown checkout — ${seeWork(ref)}`))
   }
   return out
 }
@@ -490,6 +509,17 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (stale.length > 0) {
         findings.push(f('warn', 'harness', `${name}: payload`, 'payload-stale',
           `${stale.join(' · ')} differ from what ${version()} ships — run ${NPX_LATEST} init --agent ${name}`))
+      }
+      // Row 246: reviewers no longer see a witness path change, so a hook deleted in a worktree is named here.
+      const missing = payloadMissing(root, harness)
+      if (missing.length > 0) {
+        findings.push(f('warn', 'harness', `${name}: payload`, 'payload-missing',
+          `${missing.join(' · ')} — witness's files are missing there; run ${NPX_LATEST} init --agent ${name}, which writes them in every home`))
+      }
+      // Row 250 (#95): the repo's own lint would read witness's files — said before its CI turns red
+      const linted = payloadLinted(root, installed.map((p) => p.to))
+      if (linted !== undefined) {
+        findings.push(f('warn', 'harness', `${name}: payload`, 'payload-linted', payloadLintedDetail(linted)))
       }
     }
 

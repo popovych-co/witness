@@ -92,7 +92,18 @@ export function stateDirs(root: string): string[] {
   return [p.specs, p.plans, p.designs, '.witness']
 }
 
+// Row 250 (#95). witness's hooks sit under .witness/, which consumers' lint already skips, but they
+// are payload, not state: every checkout carries them. This is the one carve-out — state commits
+// refuse the home, the hand-edit and residue checks skip it, and every worktree's sparse patterns
+// re-include it — while `stateDirs` stays as it was, so journaled `canonDirs` keep their bytes.
+export const PAYLOAD_HOME = '.witness/hooks'
+
+export function inPayloadHome(rel: string): boolean {
+  return rel === PAYLOAD_HOME || rel.startsWith(`${PAYLOAD_HOME}/`)
+}
+
 export function isStatePath(root: string, rel: string): boolean {
+  if (inPayloadHome(rel)) return false
   return stateDirs(root).some((d) => rel === d || rel.startsWith(d + '/'))
 }
 
@@ -120,7 +131,9 @@ export function stateOnlyAdvance(wt: string, root: string, from: string, to: str
     // Per COMMIT, never the range's union diff: a commit that adds and deletes a source
     // file inside the range cancels out in a union and would read as state-only. An empty
     // name list (a merge commit) is unjudgeable here and therefore not state-only.
-    const touched = tryGit(wt, 'show', '--pretty=format:', '--name-only', sha)
+    // Row 248. git follows `diff.renames` by default, so a moved file listed only its new path: a
+    // trailered commit moving a source file into a state dir read as bookkeeping.
+    const touched = tryGit(wt, 'show', '--no-renames', '--pretty=format:', '--name-only', sha)
     if (!touched.ok) return false
     const paths = touched.out.split('\n').filter(Boolean)
     return paths.length > 0 && paths.every((p) => isStatePath(root, p))
@@ -167,7 +180,7 @@ export function dirtyStatePaths(root: string): string[] {
     // a rename (e.g. from `git mv`) porcelain-formats as "old -> new" on one line —
     // split it into its two paths so each is checked against the caller's planned set
     .flatMap((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> '))
-    .filter((p) => !LOCAL_STATE_FILES.has(p) && !LOCAL_STATE_DIRS.some((d) => p.startsWith(d)))
+    .filter((p) => !LOCAL_STATE_FILES.has(p) && !LOCAL_STATE_DIRS.some((d) => p.startsWith(d)) && !inPayloadHome(p))
 }
 
 export const TRAILER = 'Witness-State: 1'

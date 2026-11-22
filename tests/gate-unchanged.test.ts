@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
 import { version } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
-import { changedFiles, diffBase } from '../src/evidence.js'
+import { diffBase } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { gateSpec, registerGate } from '../src/gate.js'
 // The gates register on this import, before any synthetic wrapper below replaces one for a test.
 import '../src/gates/index.js'
@@ -65,7 +66,7 @@ describe('witness gate --unchanged hands a revise back (row 244, design §4.2.4)
     const { repo, wt, planId } = await shippableRepo()
     const cfg = loadConfig(repo.root)
     const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-    const files = changedFiles(wt, base.ok ? base.value : '')
+    const files = planChangeSet(wt, base.ok ? base.value : '')
     const scenario = fakeScenario()
     putVerdict(scenario, {
       coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })),

@@ -1,5 +1,6 @@
 import { EXIT, type Ctx } from '../cli.js'
 import { refuseClash } from '../clash.js'
+import { refuseHeld } from '../held.js'
 import { contained, JOB_HOST_ENV, jobHost } from '../contain.js'
 import { primaryRoot } from '../gitio.js'
 import { renderRefusal } from '../refusal.js'
@@ -35,6 +36,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (rootR.ok && planId !== undefined) {
     const clashed = refuseClash(ctx, rootR.value, planId, worktreePath(rootR.value, planId))
     if (clashed !== undefined) return clashed
+    // Row 247: and the plan's code is back in the tree before the command reads it.
+    const held = refuseHeld(ctx, rootR.value, planId, worktreePath(rootR.value, planId))
+    if (held !== undefined) return held
   }
   return withRunnerTurn(ctx.cwd, ctx, cmd.join(' '), (turnEnv) => {
     const host = jobHost(turnEnv)

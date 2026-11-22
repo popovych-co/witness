@@ -27,14 +27,15 @@ describe('witness init --agent', () => {
     const repo = tmpRepo()
     expect((await repo.cli(['init', '--agent', 'claude-code'])).code).toBe(0)
     expect(repo.read('.claude/commands/witness.md')).toContain('witness next')
-    expect(repo.read('.claude/hooks/guard-state.mjs')).toContain('canon-guard.mjs')
-    expect(repo.read('.claude/hooks/canon-guard.mjs')).toContain('canonGuard')
+    expect(repo.read('.witness/hooks/guard-state.mjs')).toContain('canon-guard.mjs')
+    expect(repo.read('.witness/hooks/canon-guard.mjs')).toContain('canonGuard')
+    expect(existsSync(join(repo.root, '.claude/hooks'))).toBe(false)
     const settings = JSON.parse(repo.read('.claude/settings.json'))
     expect(settings.hooks.PreToolUse.map((e: { matcher: string }) => e.matcher)).toEqual(['Edit|Write|MultiEdit', 'Bash'])
     for (const e of settings.hooks.PreToolUse) {
-      expect(e.hooks[0].command).toContain('$CLAUDE_PROJECT_DIR/.claude/hooks/guard-state.mjs')
+      expect(e.hooks[0].command).toContain('$CLAUDE_PROJECT_DIR/.witness/hooks/guard-state.mjs')
     }
-    expect(settings.hooks.SessionStart[0].hooks[0].command).toContain('session-dashboard.sh')
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toContain('.witness/hooks/session-dashboard.sh')
     expect(repo.git('status', '--porcelain')).toBe('')
   })
 

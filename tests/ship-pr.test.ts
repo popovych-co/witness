@@ -1,11 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import '../src/gates/index.js'
 import { runGate } from '../src/gate.js'
-import { rebaseIfMoved, runShip } from '../src/ship.js'
+import { ghBody, rebaseIfMoved, runShip } from '../src/ship.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
 
@@ -37,6 +38,26 @@ async function approvedShip(opts: { commit?: boolean } = {}) {
 }
 
 describe('witness ship', () => {
+  it('creates the PR with --body-file - and the body on stdin, never --body (row 249, #94)', async () => {
+    const { planId, scenario, ctx } = await approvedShip()
+    expect(await runShip(ctx, planId)).toBe(0)
+    const create = readFileSync(join(scenario, 'gh-calls'), 'utf8').split('\n').find((l) => l.startsWith('pr create'))!
+    expect(create).toMatch(/ --body-file -$/)
+    expect(create).not.toContain('--body ')
+    expect(readFileSync(join(scenario, 'gh-stdin'), 'utf8'))
+      .toMatch(/^== pr create\nRealizes spec auth-refresh at [0-9a-f]{7} \(witness\)\.\n$/)
+  })
+
+  it('keeps the command line short for a 40,000-character body (row 249, #94)', () => {
+    const scenario = fakeScenario()
+    const dir = mkdtempSync(join(tmpdir(), 'witness-gh-'))
+    const body = 'x'.repeat(40_000)
+    const r = ghBody(fakeCtx(dir, { env: gateEnv(scenario) }), dir, ['pr', 'create', '--head', 'witness/p', '--title', 'p: t'], body)
+    expect(r.ok).toBe(true)
+    expect(readFileSync(join(scenario, 'gh-calls'), 'utf8')).toBe('pr create --head witness/p --title p: t --body-file -\n')
+    expect(readFileSync(join(scenario, 'gh-stdin'), 'utf8')).toBe(`== pr create\n${body}\n`)
+  })
+
   it('phases: gate stop → approve → push + PR + pr-stamp → CI watch', async () => {
     const { repo, planId, scenario, ctx } = await approvedShip()
     const code = await runShip(ctx, planId)                        // pr → watch

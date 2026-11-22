@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { loadConfig } from '../src/config.js'
-import { changedFiles, diffBase } from '../src/evidence.js'
+import { diffBase } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { canonicalSha, planContentSha } from '../src/sha.js'
 import {
   fakeCtx, fakeScenario, gateEnv, nextLine, putVerdict, shippableRepo, writePlan,
@@ -13,7 +14,7 @@ import {
 async function settleImplementGate(repo: { root: string }, wt: string, planId: string): Promise<void> {
   const cfg = loadConfig(repo.root)
   const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-  const files = changedFiles(wt, base.ok ? base.value : '')
+  const files = planChangeSet(wt, base.ok ? base.value : '')
   const scenario = fakeScenario()
   putVerdict(scenario, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] })
   const code = await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
@@ -133,7 +134,7 @@ describe('the implement gate re-arms on plan content', () => {
     const note = out.split('\n').find((l) => l.startsWith('note:')) ?? ''
 
     // exactly six named, the remainder counted rather than dropped. The list is
-    // `changedFiles` sorted, so it interleaves the fixture's own paths with the nine added
+    // `planChangeSet` sorted, so it interleaves the fixture's own paths with the nine added
     // here — assert the CAP, not which paths won the sort.
     const listed = /changed vs base: (.+?)(?: \(\+(\d+) more\))? — re-gate/.exec(note)
     expect(listed, `no changed-paths clause in: ${note}`).not.toBeNull()

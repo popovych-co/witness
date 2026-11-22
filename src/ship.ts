@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { heldGuard, heldWorkLine, refuseHeld } from './held.js'
 import { cliAct } from './act.js'
 import { EXIT, type Ctx } from './cli.js'
 import { autonomyAt, loadConfig, type Config } from './config.js'
@@ -87,16 +88,26 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
 }
 
 // `code`: gh's exit status, or null when it ended on a signal (its timeout) — row 242 reads both.
-function gh(ctx: Ctx, cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string; code: number | null } {
+// `input`, when given, is gh's stdin (row 249).
+function gh(ctx: Ctx, cwd: string, args: readonly string[], timeout = 120_000, input?: string): { ok: boolean; out: string; code: number | null } {
   try {
     const out = execFileSync('gh', args, {
       cwd, env: ctx.env as NodeJS.ProcessEnv, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024,
+      ...(input === undefined ? {} : { input }),
     })
     return { ok: true, out, code: 0 }
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string; message?: string; status?: number | null }
     return { ok: false, out: `${err.stdout ?? ''}${err.stderr ?? ''}` || String(err.message), code: typeof err.status === 'number' ? err.status : null }
   }
+}
+
+// Row 249 (#94). Every body witness hands gh goes on stdin through `--body-file -`, never as an
+// argument: Windows caps a command line at 32,767 characters, and a PR body has no such bound. A
+// title stays an argument: an id and a summary of at most 120 characters.
+// `createPr` sends its body here, and so will any later `gh pr edit`.
+export function ghBody(ctx: Ctx, cwd: string, args: readonly string[], body: string, timeout = 120_000): { ok: boolean; out: string; code: number | null } {
+  return gh(ctx, cwd, [...args, '--body-file', '-'], timeout, body)
 }
 
 // Row 242 (design §4.3.1). The outcome a ship run ends on, journaled for every reader: the PR it is
@@ -271,9 +282,8 @@ export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, par
   if (!push.ok) return push
   const found = existingPr(ctx, root, branch)
   if (found !== undefined) return ok(found)
-  const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
-    '--title', `${String(plan.meta.id)}: ${parentSummary}`,
-    '--body', prBody(plan, held)])
+  const created = ghBody(ctx, wt, ['pr', 'create', '--head', branch,
+    '--title', `${String(plan.meta.id)}: ${parentSummary}`], prBody(plan, held))
   if (!created.ok) {
     return refuse([v('gh', 'pr-create-failed', created.out.slice(0, 200),
       'gh authenticated with push access — witness check probes gh auth status')])
@@ -767,6 +777,11 @@ function commitApproved(ctx: Ctx, root: string, cfg: Config, planId: string, sum
   const clash = clashGuard(root, planId, cfg.ship.branch)
   if (clash !== undefined) return refuse(clash)
   const wt = worktreePath(root, planId)
+  // Row 247: nor over a crashed verify-red's set-aside state, which `git add -A` would commit as the plan.
+  const held = heldGuard(root, planId, wt)
+  if (!held.ok) return held
+  for (const { ref, paths } of held.value.back) ctx.out(heldWorkLine(ref, paths))
+  if (held.value.refused.length > 0) return refuse(held.value.refused)
   if (tryGit(wt, 'status', '--porcelain').out !== '') {
     tryGit(wt, 'add', '-A')
     const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
@@ -910,6 +925,10 @@ async function shipMarked(
   // since a gate phase's rebase runs between.
   const clashed = refuseClash(ctx, root, planId, cfgR.value)
   if (clashed !== undefined) return clashed
+  // Row 247. Ship reads, rebases and commits the plan's tree: a crashed verify-red's held work goes
+  // back first, or ship refuses verify-red-pending, recording nothing. Asked again before each commit.
+  const held = refuseHeld(ctx, root, planId, worktreePath(root, planId))
+  if (held !== undefined) return held
   // Row 241 (R9). Whoever runs it — a drive session included — ship runs no review and carries no
   // plan on while a step is open: refused before anything journals, naming the step's command.
   const open = openStepRow(root, cfgR.value, plan)

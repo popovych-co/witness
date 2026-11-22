@@ -15,7 +15,10 @@ import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } f
 import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner, runJudgedPlan } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
-import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
+import { diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
+import { planChangeSet } from '../change-set.js'
+import { heldHere, standingHeld } from '../held.js'
+import { isAlive } from '../lock.js'
 import {
   greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, presentGreenOwed, redCycleClosed, redInFlight, stepProgress, stepsLine,
   type StepState,
@@ -776,6 +779,19 @@ function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], j
     const canon = loadCanon(root)
     return planGateStep(root, liveEfforts(root), plan, entries, planShaOf(root, canon, plan), judge)
   }
+  // Row 247 (#92). A crashed verify-red left this plan's non-test work set aside: the tree holds base
+  // versions, so every row below would read the plan's code as missing (a red on the base, a step
+  // owed again). `recover` puts it back; this row only routes it — next never writes a worktree. The
+  // ref is the repo's, so the plan's own held ref stands here whichever checkout recorded it — and so
+  // does another plan's whose record names this worktree (slice 2 review I2).
+  const setAside = standingHeld(wt, id) ?? heldHere(root, id, wt)[0]
+  if (setAside !== undefined) {
+    const pid = setAside.record?.pid
+    const note = pid !== undefined && pid !== process.pid && isAlive(pid)
+      ? `a verify-red of this plan is running (pid ${pid}) with its non-test work set aside — recover puts it back if that run ends without doing so`
+      : `a verify-red stopped before putting this plan's non-test work back — it is held in ${setAside.ref}; recover puts it back`
+    return { ...runs(cliAct('recover')), target: id, ...noteOf(note) }
+  }
   // Row 241 (R7; reverses row 191's Plan's call 5). A plan's unbuilt steps are its next work before
   // and after an implement gate, and above its PR: an amendment that adds a step after either is
   // built before the plan ships (#89, P8, P21) — unless a human approved the implement gate past it
@@ -800,7 +816,7 @@ function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], j
   }
   if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
-  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
+  const files = baseR.ok ? planChangeSet(wt, baseR.value) : []
   // Rows 95 + 96: the identity is the diff plus the plan's content, never the worktree, and
   // it comes from the SAME derivation the implement gate keys on — deriving it here a second
   // way is what made every settled gate read as lapsed. undefined means the base cannot be

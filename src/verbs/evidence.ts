@@ -1,5 +1,6 @@
 import { EXIT, type Ctx } from '../cli.js'
 import { refuseClash } from '../clash.js'
+import { refuseHeld } from '../held.js'
 import { checkoutRoot, diffBase, recordEvidence, verifyRed } from '../evidence.js'
 import { loadConfig } from '../config.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
@@ -80,6 +81,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // refused before the step is checked and before any run, the run's own config read for the branch.
   const clashed = refuseClash(ctx, stateRoot, planId, runRootRes.value)
   if (clashed !== undefined) return clashed
+  // Row 247. Nor over a crashed verify-red's set-aside state: its held work goes back first, or the run
+  // refuses — a red recorded on the base's tree is the plan's code read as missing.
+  const held = refuseHeld(ctx, stateRoot, planId, runRootRes.value)
+  if (held !== undefined) return held
   // Row 191 §4.3. Checked before the suite runs: a mistyped step costs no run and journals no
   // entry that no step can claim.
   const stepRefused = checkStep(plan, readStream(stateRoot, planId), step, 'evidence')

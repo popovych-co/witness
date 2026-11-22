@@ -9,11 +9,14 @@ import { configCommands, grantCommands } from '../src/allowlist.js'
 import { scenariosMade } from './scenarios.js'
 import { main, type Ctx } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
+import { diffBase } from '../src/evidence.js'
+import type { Result } from '../src/refusal.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
 import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
+import { stateDirs } from '../src/gitio.js'
 import type { Clock } from '../src/usage.js'
 import { parseDocument, stringify } from 'yaml'
 import { defaultValues, withValues } from '../src/settings.js'
@@ -650,6 +653,193 @@ export async function startedThreeStepPlan(
   const wt = worktreePath(repo.root, planId)
   cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
   return { repo, wt, planId }
+}
+
+// Row 246. A started `threeStepPlan` whose main carries both harnesses' payload sets (claude-code's,
+// then pi's — pi's init warns that claude-code still judges), with the vitest-single fixture copied
+// into the worktree. `base` is the plan's diff base.
+export async function payloadPlan(): Promise<{ repo: TestRepo; wt: string; planId: string; base: string }> {
+  const repo = await threeStepPlan()
+  for (const agent of ['claude-code', 'pi']) {
+    const r = await repo.cli(['init', '--agent', agent])
+    if (r.code !== 0) throw new Error(`init --agent ${agent}: ${r.stdout}\n${r.stderr}`)
+  }
+  const planId = 'auth-refresh-plan-1'
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+  const base = unwrap(diffBase(wt, unwrap(loadConfig(repo.root))))
+  return { repo, wt, planId, base }
+}
+
+// Row 247's held-work fixtures. The base: the fixture's package.json, the broken implementation and
+// untagged tests on main before the plan starts (node_modules ignored, so a run's cache is never held).
+export function seedBase(repo: TestRepo): void {
+  repo.write('package.json', readFileSync(join(fixturePath('vitest-single'), 'package.json'), 'utf8'))
+  repo.write('src/token.ts', TOKEN_BROKEN)
+  repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)
+  repo.write('.gitignore', `${repo.read('.gitignore')}node_modules/\n`)
+  repo.git('add', 'package.json', 'src/token.ts', 'tests/token.test.ts', '.gitignore')
+  repo.git('commit', '-m', 'base: broken behavior')
+}
+
+// A plan whose only step is scaffolding, so `next` routes its evidence by the diff: the spec's
+// `-plan-1` done and the spec stamped live, `seedBase` on main, and `auth-refresh-plan-2` approved,
+// started and its step closed. `config` patches the committed runner config.
+export async function scaffoldingPlan(config: Record<string, unknown> = {}): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await seededRepo()
+  writeFileSync(join(repo.root, 'witness.config.yaml'), configYaml(withValues(singlePatch('filtered'), config)))
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+  trustConfig(repo)
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  repo.flipStatus('auth-refresh-plan-1', 'done')
+  stampLive(repo, 'auth-refresh')
+  seedBase(repo)
+  const planId = 'auth-refresh-plan-2'
+  const w = await writePlan(repo, planId, { steps: [{ id: 's1', title: 'tidy', scaffolding: true }] }, '## Step: s1\nTidy.\n')
+  if (w.code !== 0) throw new Error(`write ${planId}: ${w.stdout}\n${w.stderr}`)
+  repo.flipStatus(planId, 'approved')
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  const closed = await repo.cli(['step-close', planId, '--step', 's1'], { cwd: wt })
+  if (closed.code !== 0) throw new Error(`step-close: ${closed.stdout}\n${closed.stderr}`)
+  return { repo, wt, planId }
+}
+
+// A verify-red in a process of its own that dies once the work is set aside and the red's tree laid
+// out, before the red runs (the crash seam's exit 9): nothing puts the work back.
+export function crashVerifyRed(cwd: string, planId: string, args: string[] = []): Promise<number | null> {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  return new Promise((done) => {
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', planId, ...args],
+      { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+    c.on('close', (code) => done(code))
+  })
+}
+
+// Row 250. A worktree's sparse patterns as 0.30.0 wrote them — every state dir dropped, the hooks'
+// home not yet re-included — and the tree re-read under them.
+export function writeOldSparsePatterns(repo: TestRepo, wt: string): void {
+  const gitDir = git(wt, 'rev-parse', '--path-format=absolute', '--git-dir')
+  writeFileSync(join(gitDir, 'info', 'sparse-checkout'), `${['/*', ...stateDirs(repo.root).map((d) => `!/${d}/`)].join('\n')}\n`)
+  git(wt, 'read-tree', '-mu', 'HEAD')
+}
+
+// Row 250. A 0.30.0 claude-code layout on `threeStepPlan`: fewhats' `.claude/settings.json` and a human
+// hook (`enforce-pnpm.sh`) on main, and witness's old hooks plus its command file in `.claude/`.
+// `base-had` commits those on main before `start`; `branch-added` starts first, then commits them on
+// main and, separately, on the plan branch (fewhats' shape). Either way the worktree ends on the old
+// sparse patterns.
+export async function legacyHooksPlan(shape: 'branch-added' | 'base-had'): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const repo = await threeStepPlan()
+  repo.write('.claude/settings.json', readFileSync(join(REPO, 'fixtures/settings/fewhats-before.json'), 'utf8'))
+  repo.write('.claude/hooks/enforce-pnpm.sh', '#!/bin/sh\nexit 0\n')
+  repo.git('add', '.claude/settings.json', '.claude/hooks/enforce-pnpm.sh')
+  repo.git('commit', '-m', "the human's settings and hook")
+  const old: Array<[string, string]> = [
+    ['plugin/hooks/canon-guard.mjs', '.claude/hooks/canon-guard.mjs'],
+    ['plugin/hooks/guard-state.mjs', '.claude/hooks/guard-state.mjs'],
+    ['plugin/hooks/session-dashboard.sh', '.claude/hooks/session-dashboard.sh'],
+    ['plugin/commands/witness.md', '.claude/commands/witness.md'],
+  ]
+  const commitOld = (cwd: string): void => {
+    for (const [from, to] of old) {
+      mkdirSync(dirname(join(cwd, to)), { recursive: true })
+      writeFileSync(join(cwd, to), readFileSync(join(REPO, from)))
+    }
+    git(cwd, 'add', ...old.map(([, to]) => to))
+    git(cwd, 'commit', '-m', 'init(claude-code): agent payloads')
+  }
+  if (shape === 'base-had') commitOld(repo.root)
+  const planId = 'auth-refresh-plan-1'
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  if (shape === 'branch-added') {
+    commitOld(repo.root)
+    commitOld(wt)
+  }
+  writeOldSparsePatterns(repo, wt)
+  return { repo, wt, planId }
+}
+
+// A worktree's index, status and contents at `files` (`(none)` for an absent one): the state a held
+// put-back must return exactly.
+export function worktreeState(repo: TestRepo, wt: string, files: string[]): Record<string, string> {
+  return {
+    index: git(wt, 'ls-files', '-s', '--', ...files),
+    status: git(wt, 'status', '--porcelain=v1', '--untracked-files=all', '--', ...files),
+    ...Object.fromEntries(files.map((f) => [f, existsSync(join(wt, f)) ? readFileSync(join(wt, f), 'utf8') : '(none)'])),
+  }
+}
+
+// Row 247. A plan's worktree with committed work under it, an uncommitted tweak and an untracked file
+// on top, and — unless `crash` is false — a verify-red that died with that work set aside (the crash
+// seam), no red journaled before it. `stepped` is a criteria step (`threeStepPlan` + `seedBase`, the
+// crash on `--step s1`); `scaffolding` routes its evidence by the diff (`scaffoldingPlan`). `before` is
+// the state the put-back must return.
+export async function heldWorktree(
+  shape: 'stepped' | 'scaffolding' = 'stepped',
+  opts: { crash?: boolean; tests?: string; config?: Record<string, unknown> } = {},
+): Promise<{ repo: TestRepo; wt: string; planId: string; ref: string; before: Record<string, string> }> {
+  let repo: TestRepo
+  let wt: string
+  let planId: string
+  if (shape === 'stepped') {
+    repo = await threeStepPlan(opts.config)
+    seedBase(repo)
+    planId = 'auth-refresh-plan-1'
+    const started = await repo.cli(['start', planId])
+    if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+    wt = worktreePath(repo.root, planId)
+  } else {
+    ({ repo, wt, planId } = await scaffoldingPlan(opts.config))
+  }
+  writeFileSync(join(wt, 'tests/token.test.ts'), opts.tests ?? TOKEN_TESTS_TAGGED)
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  git(wt, 'add', 'tests/token.test.ts', 'src/token.ts')
+  git(wt, 'commit', '-m', 'impl + tagged tests')
+  writeFileSync(join(wt, 'src/token.ts'), `${TOKEN_FIXED}// uncommitted tweak\n`)
+  writeFileSync(join(wt, 'src/extra.ts'), 'export const extra = 1\n')
+  const before = worktreeState(repo, wt, ['src/token.ts', 'src/extra.ts'])
+  if (opts.crash !== false) {
+    const code = await crashVerifyRed(wt, planId, shape === 'stepped' ? ['--step', 's1'] : [])
+    if (code !== 9) throw new Error(`crashVerifyRed exited ${code}, not the crash seam's 9`)
+  }
+  return { repo, wt, planId, ref: `refs/witness/verify-red/${planId}`, before }
+}
+
+// The held commit re-recorded through `edit` (its tree and parents kept), the ref moved against its
+// old value: an older witness's record, or a live holder's. The new sha.
+export function replantHeld(repo: TestRepo, planId: string, edit: (message: string) => string): string {
+  const ref = `refs/witness/verify-red/${planId}`
+  const old = git(repo.root, 'rev-parse', '--verify', ref)
+  const raw = execFileSync('git', ['cat-file', 'commit', old], { cwd: repo.root, encoding: 'utf8' })
+  const message = raw.slice(raw.indexOf('\n\n') + 2)
+  const parents = git(repo.root, 'rev-list', '--parents', '-n', '1', old).split(' ').slice(1)
+  const fresh = execFileSync('git', ['commit-tree', `${old}^{tree}`, ...parents.flatMap((p) => ['-p', p]), '-F', '-'],
+    { cwd: repo.root, encoding: 'utf8', input: edit(message) }).trim()
+  git(repo.root, 'update-ref', ref, fresh, old)
+  return fresh
+}
+
+// A Result's value, or a throw naming its violations.
+export function unwrap<T>(r: Result<T>): T {
+  if (!r.ok) throw new Error(`refused: ${JSON.stringify(r.violations)}`)
+  return r.value
+}
+
+// Every regex metacharacter escaped, for a pattern built from a ref or a path.
+export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+
+// git in `cwd`, its output with the trailing newline trimmed.
+export function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).replace(/\n$/, '')
 }
 
 // `threeStepPlan`, started, where s1's behavior predates the plan: main already holds it under an

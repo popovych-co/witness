@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 import { basisSha } from '../src/delta.js'
-import { changedFiles, diffBase } from '../src/evidence.js'
+import { diffBase } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
@@ -71,7 +72,7 @@ describe('every gate run journals what its battery read', () => {
     writeFileSync(join(wt, 'src/expiry.ts'), 'export const EXPIRY_MS = 900_000\n')
     const cfg = loadConfig(repo.root)
     const base = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-    const files = changedFiles(wt, base.ok ? base.value : '')
+    const files = planChangeSet(wt, base.ok ? base.value : '')
     const s = fakeScenario(); putVerdict(s, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] })
     await runGate(fakeCtx(repo.root, { env: gateEnv(s) }), 'implement', planId, F)
     const [r] = runsOf(repo.root, planId)

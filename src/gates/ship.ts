@@ -7,12 +7,15 @@ import { contextDigest } from '../delta.js'
 import { snapshotTree } from '../snapshot.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
 import { findById } from '../scan.js'
-import { changedFiles, diffBase } from '../evidence.js'
+import { diffBase } from '../evidence.js'
+import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
 import { execCommand } from '../runner.js'
 import { ensureTrusted } from '../allowlist.js'
 import { diffReviewedSha, effortOf } from '../reviewed.js'
-import { worktreePath } from '../worktree.js'
+import { refreshSparse, worktreePath } from '../worktree.js'
+import { dropRetired } from '../install.js'
+import { kv } from '../toon.js'
 import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
 import { contentSha } from '../content-sha.js'
@@ -55,7 +58,13 @@ registerGate({
     const baseR = diffBase(wt, cfg)
     if (!baseR.ok) return baseR
     const base = baseR.value
-    const files = changedFiles(wt, base)
+    // Row 250 (#95). Before any lane reads the tree: a worktree cut before the hooks moved gets
+    // today's sparse patterns (the carry's rebase left the moved hooks skip-worktree on the old
+    // ones), and witness's retired files leave a plan whose base no longer carries them.
+    refreshSparse(root, wt)
+    const dropped = dropRetired(wt, base, planId)
+    if (dropped.length > 0) ctx.out(kv('payload-retired', `${dropped.join(' · ')} — dropped from ${planId}: its base no longer carries them`))
+    const files = planChangeSet(wt, base)
     const checks: GateCheck[] = []
 
     const entries = readStream(root, planId)
