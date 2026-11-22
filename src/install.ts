@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { version } from './cli.js'
-import { tryGit } from './gitio.js'
-import { type Harness } from './harness.js'
+import { commitWithTrailer, git, tryGit } from './gitio.js'
+import { HARNESSES, loadHarness, type Harness } from './harness.js'
 import { DEFAULT_JSON_STYLE, formatJson, type JsonStyle } from './json-format.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { SETTINGS } from './settings.js'
@@ -227,6 +227,37 @@ export function retireAtRoot(root: string, harness: Harness, settings: string | 
   const removed = harness.retired.filter((rel) => existsSync(join(root, rel)))
   for (const rel of removed) rmSync(join(root, rel), { force: true })
   return [...removed].sort()
+}
+
+// Row 250 (#95). A plan branch can carry witness's retired hooks — sync commits from before the move,
+// which a rebase onto the moved base re-adds (probe F/S) — and they would ride the PR back into the
+// base and fail its lint. Dropped once the base no longer carries them, never while it still does: a
+// base not yet moved still runs them. Retired paths are every harness's. A tracked one leaves the
+// index in one commit; every dropped one leaves the disk. The dropped paths, sorted.
+export function dropRetired(wt: string, base: string, planId: string): string[] {
+  const retired = new Set<string>()
+  for (const name of HARNESSES) {
+    const harness = loadHarness(name)
+    if (harness.ok) for (const rel of harness.value.retired) retired.add(rel)
+  }
+  const dropped: string[] = []
+  const tracked: string[] = []
+  for (const rel of [...retired].sort()) {
+    const inIndex = tryGit(wt, '--literal-pathspecs', 'ls-files', '--error-unmatch', '--', rel).ok
+    if (!inIndex && !existsSync(join(wt, rel))) continue
+    if (tryGit(wt, 'cat-file', '-e', `${base}:${rel}`).ok) continue
+    if (inIndex) {
+      git(wt, '--literal-pathspecs', 'rm', '-q', '--cached', '--', rel)
+      tracked.push(rel)
+    }
+    rmSync(join(wt, rel), { force: true })
+    dropped.push(rel)
+  }
+  if (tracked.length > 0) {
+    const committed = commitWithTrailer(wt, tracked, `ship(${planId}): witness's retired payload dropped — the base no longer carries it`)
+    if (!committed.ok) throw new Error(committed.violations.map((x) => x.got).join('; '))
+  }
+  return dropped
 }
 
 function hasCommand(entries: HookEntry[] | undefined, command: string): boolean {
