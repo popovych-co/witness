@@ -17,6 +17,8 @@ describe('upgrading moves the hooks at the root and leaves started worktrees on 
     const res = await repo.cli(['init', '--agent', 'claude-code'])
     expect(res.code).toBe(0)
     expect(res.stdout).toContain(`payload-retired: ${OLD.join(' · ')}`)
+    // final review: open sessions snapshot their hooks, and worktrees and ships read origin
+    expect(res.stdout).toMatch(/^payload-retired: .* restart open Claude Code sessions in this repo and push this commit;/m)
     // the root: moved, rewired, one commit, nothing left dirty
     for (const p of OLD) expect(existsSync(join(repo.root, p))).toBe(false)
     expect(repo.git('ls-tree', '-r', '--name-only', 'HEAD', '--', '.claude/hooks')).toBe('.claude/hooks/enforce-pnpm.sh')

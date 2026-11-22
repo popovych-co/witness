@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { lstatListed, witnessExcludes } from './change-set.js'
+import { foreignRetired, lstatListed, witnessExcludes } from './change-set.js'
 import { gitBlob, tryGit } from './gitio.js'
 import { execFileSync } from './spawn.js'
 
@@ -86,8 +86,9 @@ export function treePaths(root: string, tree: string): string[] {
 
 // Row 246: both delta readers exclude witness's payload paths, so a snapshot written before the row
 // (one that still holds a payload file at the plan's version) never shows that file to a delta round.
+// Row 250 (final review): a retired path the newer tree holds with a plan's bytes is shown.
 export function changedPaths(root: string, from: string, to: string): string[] {
-  return run(root, ['diff', '--name-only', '-z', '--no-renames', from, to, '--', ...witnessExcludes()]).split('\0').filter((p) => p !== '')
+  return run(root, ['diff', '--name-only', '-z', '--no-renames', from, to, '--', ...witnessExcludes(foreignRetired(root, to))]).split('\0').filter((p) => p !== '')
 }
 
 // The unified diff from → to. Its text joins a delta round's `prompts_sha`, so every knob a
@@ -99,7 +100,7 @@ export function treeDiff(root: string, from: string, to: string): string {
     '-c', 'diff.suppressBlankEmpty=false', '-c', 'core.quotePath=true',
     'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-relative', '--full-index',
     '--diff-algorithm=myers', '--indent-heuristic', '-U3', '--inter-hunk-context=0',
-    '--src-prefix=a/', '--dst-prefix=b/', from, to, '--', ...witnessExcludes(),
+    '--src-prefix=a/', '--dst-prefix=b/', from, to, '--', ...witnessExcludes(foreignRetired(root, to)),
   ])
 }
 

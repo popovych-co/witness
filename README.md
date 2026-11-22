@@ -152,9 +152,12 @@ decision is journaled, and `floor` is the one verb that still runs under a bound
 From **0.30.1** witness's Claude Code hooks live in `.witness/hooks/`, which a repo's lint
 usually skips. `init --agent claude-code` moves them from `.claude/hooks/` at the root,
 rewires `.claude/settings.json` and writes it in your formatter's default style; your own
-hooks in `.claude/hooks/` stay where they are. A worktree started earlier keeps its old
-hooks until `witness ship` carries it onto the moved base. `witness check` warns
-`payload-linted` when your Biome config would still check witness's files.
+hooks in `.claude/hooks/` stay where they are. The settings file is rewritten and committed
+once, so commit your own edits to it first. Restart any open Claude Code session in the
+repo (a session keeps the hooks it started with) and push the init commit (new worktrees
+and `witness ship` read the remote). A worktree started earlier keeps its old hooks until
+`witness ship` carries it onto the moved base. `witness check` warns `payload-linted` when
+your Biome config would still check witness's files.
 
 ### Support tiers
 

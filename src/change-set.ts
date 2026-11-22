@@ -2,6 +2,7 @@ import { lstatSync, rmSync, type Stats } from 'node:fs'
 import { join } from 'node:path'
 import { git } from './gitio.js'
 import { HARNESSES, loadHarness } from './harness.js'
+import { RETIRED_BLOBS } from './retired-payload.js'
 
 // Row 246 (#93). The plan change set: what a plan changed, which is the diff against its base minus
 // witness's own files. `init --agent` commits each harness's payload into every home, a started
@@ -15,22 +16,59 @@ import { HARNESSES, loadHarness } from './harness.js'
 // repo that ran pi's init once still carries pi's files after it moved to claude-code.
 // `.claude/settings.json` is shared with the user's own settings, so it stays a plan change.
 export function witnessPaths(): readonly string[] {
+  return [...new Set([...payloadPaths('current'), ...payloadPaths('retired')])].sort()
+}
+
+// Every harness's current payload targets, or its retired ones (row 250, #95).
+function payloadPaths(kind: 'current' | 'retired'): Set<string> {
   const paths = new Set<string>()
   for (const name of HARNESSES) {
     const harness = loadHarness(name)
     if (!harness.ok) continue
-    for (const { to } of harness.value.payload) paths.add(to)
-    // Row 250 (#95): a retired target stays witness-owned while plan branches still carry it.
-    for (const to of harness.value.retired) paths.add(to)
+    if (kind === 'current') for (const { to } of harness.value.payload) paths.add(to)
+    else for (const to of harness.value.retired) paths.add(to)
   }
-  return [...paths].sort()
+  return paths
+}
+
+// Row 250 (#95, final review). A retired target stays witness-owned while plan branches still carry
+// it — but only while it holds bytes witness wrote there (RETIRED_BLOBS). Any other bytes at that path
+// are a plan's: an edit the reviewers must see, since nothing else in witness ever looks at a retired
+// file again. A path gone from the tree is witness's either way: its removal is the retirement.
+function retiredIsWitness(rel: string, blob: string | undefined): boolean {
+  return blob === undefined || (RETIRED_BLOBS[rel]?.has(blob) ?? false)
+}
+
+// The git blob a retired path holds on disk in `runRoot`: undefined when absent, '' when it is not a
+// regular file (a link or a directory there is never witness's).
+function diskBlob(runRoot: string, rel: string): string | undefined {
+  if (!parentsInTree(runRoot, rel)) return ''
+  const st = lstatListed(join(runRoot, rel))
+  if (st === undefined) return undefined
+  return st.isFile() ? git(runRoot, 'hash-object', '--', rel) : ''
+}
+
+// The retired paths a tree or commit holds with bytes witness never wrote there (row 250, final
+// review): what a delta between two snapshots must still show.
+export function foreignRetired(root: string, rev: string): string[] {
+  const retired = payloadPaths('retired')
+  const found: string[] = []
+  if (retired.size === 0) return found
+  for (const record of git(root, 'ls-tree', '-r', '-z', '--full-tree', rev, '--', ...retired).split('\0')) {
+    const m = /^(\d+) \w+ ([0-9a-f]+)\t([^]*)$/.exec(record)
+    if (m === null || !retired.has(m[3]!)) continue
+    const regular = m[1] === '100644' || m[1] === '100755'
+    if (!regular || !retiredIsWitness(m[3]!, m[2]!)) found.push(m[3]!)
+  }
+  return found.sort()
 }
 
 // One exclude pathspec per witness path, for git commands that take pathspecs. `top` anchors it at
 // the repository root from any cwd, and `literal` keeps a name's `*`, `?` or `[` from matching
-// anything else.
-export function witnessExcludes(): string[] {
-  return witnessPaths().map((p) => `:(top,literal,exclude)${p}`)
+// anything else. A path in `keep` is not excluded: a retired path holding a plan's bytes (row 250).
+export function witnessExcludes(keep: readonly string[] = []): string[] {
+  const kept = new Set(keep)
+  return witnessPaths().filter((p) => !kept.has(p)).map((p) => `:(top,literal,exclude)${p}`)
 }
 
 // `-z` on both: with core.quotePath on (git's default), a non-ASCII or special path is printed
@@ -45,8 +83,10 @@ function changedFiles(runRoot: string, base: string): string[] {
 }
 
 export function planChangeSet(runRoot: string, base: string): string[] {
-  const owned = new Set(witnessPaths())
-  return changedFiles(runRoot, base).filter((rel) => !owned.has(rel))
+  const current = payloadPaths('current')
+  const retired = payloadPaths('retired')
+  return changedFiles(runRoot, base)
+    .filter((rel) => !current.has(rel) && !(retired.has(rel) && retiredIsWitness(rel, diskBlob(runRoot, rel))))
 }
 
 // Row 248 (slice 1 review). A listed path's entry on disk, or undefined when there is none. With both

@@ -221,7 +221,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         ctx.out(kv('payload-overwritten', `${synced.overwritten.join(' · ')} — replaced with what ${version()} ships; the previous content is one git revert away`))
       }
       if (retired.length > 0) {
-        ctx.out(kv('payload-retired', `${retired.join(' · ')} — witness's hooks moved to .witness/hooks/; a worktree started earlier keeps its own until ship carries it onto a base without them`))
+        // final review: an open Claude Code session snapshots its hooks at start, so it still runs the
+        // files just removed; and worktrees and ships read origin, so the move must be pushed
+        ctx.out(kv('payload-retired', `${retired.join(' · ')} — witness's hooks moved to .witness/hooks/; restart open Claude Code sessions in this repo and push this commit; a worktree started earlier keeps its own until ship carries it onto a base without them`))
       }
       // Row 250 (#95): the repo's own lint would read witness's files
       const linted = payloadLinted(root, harness.payload.map((p) => p.to).filter((rel) => existsSync(join(root, rel))))

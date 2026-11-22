@@ -24,7 +24,8 @@ import { cliAct } from '../act.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
   // Row 246: the diff text is the plan change set's — witness's payload files never reach a reviewer.
-  const diff = git(wt, 'diff', base, '--', ...witnessExcludes())
+  // Row 250: a retired path in `files` holds a plan's bytes, and its diff is shown
+  const diff = git(wt, 'diff', base, '--', ...witnessExcludes(files))
   const untracked = files.filter((f) => {
     const abs = join(wt, f)
     if (!existsSync(abs) || !statSync(abs).isFile()) return false
