@@ -39,9 +39,21 @@ export function criteriaExcludes(cfg: Config): string[] {
   return [`${cfg.paths.specs}/**`, `${cfg.paths.plans}/**`, '.witness/**', ...cfg.criteria.exclude]
 }
 
+// Row 247. `signal`: the run was ended by a signal before it finished — no outcome at all, never a red.
 export interface RunOutcome {
   exitZero: boolean
   output: string
+  signal?: NodeJS.Signals
+}
+
+// Row 247. The exit codes a shell, or a runner that catches the signal, reports a signal by: 128 + N
+// for SIGHUP, SIGINT, SIGKILL and SIGTERM. vitest catches SIGTERM and exits 143 (probed 2026-11-21).
+const SIGNAL_EXIT: Readonly<Record<number, NodeJS.Signals>> = { 129: 'SIGHUP', 130: 'SIGINT', 137: 'SIGKILL', 143: 'SIGTERM' }
+
+// Row 247. A run a signal ended saw no outcome: refused, and nothing is journaled.
+export function interrupted(signal: NodeJS.Signals): Violation {
+  return v('criteria.runner', 'run-interrupted', `the test run was ended by ${signal} before it finished`,
+    're-run it where nothing stops it before the suite ends — no outcome was recorded')
 }
 
 export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
@@ -90,8 +102,12 @@ function runCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
     }
     return { exitZero: true, output: String(out).slice(-4000) }
   } catch (e) {
-    const err = e as { stdout?: unknown; stderr?: unknown }
-    return { exitZero: false, output: `${String(err.stdout ?? '')}${String(err.stderr ?? '')}`.slice(-4000) }
+    const err = e as { stdout?: unknown; stderr?: unknown; signal?: NodeJS.Signals | null; status?: number | null }
+    const signal = err.signal ?? (typeof err.status === 'number' ? SIGNAL_EXIT[err.status] : undefined)
+    return {
+      exitZero: false, output: `${String(err.stdout ?? '')}${String(err.stderr ?? '')}`.slice(-4000),
+      ...(signal ? { signal } : {}),
+    }
   }
 }
 
@@ -129,6 +145,8 @@ export async function runFullSuite(
   }
   for (const f of reportFiles(runRoot, rc.reportGlob)) rmSync(join(runRoot, f))
   const run = execCommand(runRoot, ctx, rc.suiteCmd)
+  // Row 247: a killed suite's report is never read — whatever it holds is a run cut short.
+  if (run.signal !== undefined) return refuse([interrupted(run.signal)])
   const merged = mergeReports(runRoot, rc.reportGlob)
   if (!merged.ok) return merged
   return ok({ run, tests: merged.value })

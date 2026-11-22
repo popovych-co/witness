@@ -13,7 +13,7 @@ import { heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, re
 import { planChangeSet } from './change-set.js'
 import { unmergedPaths } from './carry.js'
 import { clashViolations } from './clash.js'
-import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
+import { interrupted, runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
 import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
 import { kv } from './toon.js'
@@ -67,6 +67,8 @@ export async function runSpecTests(
     }
     const run = await runFiltered(runRoot, ctx, rc.template, parentId, trustRoot)
     if (!run.ok) return run
+    // Row 247: a run a signal ended is no outcome — never a red, never a green.
+    if (run.value.signal !== undefined) return refuse([interrupted(run.value.signal)])
     if (rc.reportGlob === undefined) {
       const tests = [{ name: `@spec:${parentId}`, ok: run.value.exitZero }]
       return ok({ runner: 'filtered', tests, allOk: run.value.exitZero })
