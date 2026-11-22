@@ -228,7 +228,7 @@ describe('the router reads decide\'s revise-again refusals (row 244)', () => {
   it.each([
     ['note-required', ['retracting a settled one', 'the human\'s own words', 'what to change', 'Ask the human for them and **END YOUR TURN**',
       'run the same revise with `--note "<their words>"`', 'Never write the note yourself']],
-    ['revise-human', ['retracting a settled one', 'the human\'s act in their own chat or terminal', 'a session\'s a drive started', '**END YOUR TURN**']],
+    ['revise-human', ['retracting a settled one', 'the human\'s act in their own chat or terminal', 'or that of a session a drive started', '**END YOUR TURN**']],
   ])('a %s refusal has a row of its own, before the generic row', (rule, parts) => {
     const rows = body().split('\n').filter((l) => l.startsWith('| ') && l.includes(`\`${rule}\` refusal`))
     expect(rows, rule).toHaveLength(1)

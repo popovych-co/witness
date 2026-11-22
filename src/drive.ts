@@ -1543,8 +1543,9 @@ const ASK_LIMIT = 3
 // from the same view, so no printed line is parsed back to learn what to run.
 //
 // `executed` when the decision ran (the loop derives again), `stands` when the human left it
-// standing, `refused` when the render or the chosen command refused. Exported for its test: no
-// route reaches a handed-back view's decision row before Slice 3's owed predicate.
+// standing, `refused` when the render or the chosen command refused. Exported for its test. Row 244:
+// a standing hand-back is an owed decision (`decisionOwed`), so tier 2 routes its `decide --show`
+// here as it routes a pending stop, and the view rendered is the handed-back one.
 export async function resolveDecision(
   step: Extract<DriveStep, { kind: 'decision' }>, action: NextAction, ctx: Ctx,
 ): Promise<'executed' | 'stands' | 'refused'> {
