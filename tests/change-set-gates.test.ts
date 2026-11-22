@@ -17,7 +17,7 @@ describe('the code gates read the plan change set (row 246, #93)', () => {
   async function payloadInDiff() {
     const { repo, wt, planId } = await shippableRepo()
     const init = await repo.cli(['init', '--agent', 'claude-code'])
-    expect(init.stdout).toMatch(/^payload-synced: .*\.claude\/hooks\/guard-state\.mjs/m)
+    expect(init.stdout).toMatch(/^payload-synced: .*\.witness\/hooks\/guard-state\.mjs/m)
     return { repo, wt, planId }
   }
 
@@ -27,13 +27,13 @@ describe('the code gates read the plan change set (row 246, #93)', () => {
     const { repo, wt, planId } = await payloadInDiff()
     const base = unwrap(diffBase(wt, unwrap(loadConfig(repo.root))))
     const files = planChangeSet(wt, base)
-    expect(files.some((f) => f.startsWith('.claude/'))).toBe(false)
+    expect(files.some((f) => f.startsWith('.claude/') || f.startsWith('.witness/'))).toBe(false)
     const scenario = fakeScenario()
     putVerdict(scenario, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [] })
     expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })).toBe(0)
     const prompt = readFileSync(join(callFor(scenario, 'code-reviewer')!, 'stdin'), 'utf8')
     expect(prompt).toContain(`### Changed files\n${files.join('\n')}\n\n### Diff vs base`)
-    expect(prompt).not.toContain('.claude/hooks/guard-state.mjs')
+    expect(prompt).not.toContain('.witness/hooks/guard-state.mjs')
     expect(prompt).not.toContain('.claude/commands/witness.md')
     const run = readStream(repo.root, planId).filter((e) => e.t === 'gate-run').at(-1) as unknown as GateRunEntry
     expect(git(wt, 'diff', '--name-only', base, run.reviewed_tree!)).not.toMatch(/\.claude\//)
@@ -42,8 +42,8 @@ describe('the code gates read the plan change set (row 246, #93)', () => {
   it('a delta from a snapshot that still holds a payload change shows nothing for it', async () => {
     const { wt } = await payloadInDiff()
     const head = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: wt, encoding: 'utf8' }).trim()
-    writeFileSync(join(wt, '.claude/hooks/guard-state.mjs'), '// a pre-row-246 snapshot held this\n')
-    const old = snapshotTree(wt, 'HEAD', ['.claude/hooks/guard-state.mjs'])!
+    writeFileSync(join(wt, '.witness/hooks/guard-state.mjs'), '// a pre-row-246 snapshot held this\n')
+    const old = snapshotTree(wt, 'HEAD', ['.witness/hooks/guard-state.mjs'])!
     expect(changedPaths(wt, old, head)).toEqual([])
     expect(treeDiff(wt, old, head)).toBe('')
   })

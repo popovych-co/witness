@@ -2,7 +2,7 @@ import {
   appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync,
 } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { git, stateDirs, tryGit } from './gitio.js'
+import { git, inPayloadHome, PAYLOAD_HOME, stateDirs, tryGit } from './gitio.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 export function worktreesDir(root: string): string {
@@ -74,8 +74,11 @@ export function ensureExcluded(root: string): void {
 //
 // Non-cone patterns, and `/*` first: cone mode cannot express "keep docs/, drop
 // docs/plans/", which is exactly what a repo with relocated `paths:` needs.
+//
+// Row 250 (#95): the payload's home under .witness/ is re-included last, so every worktree checks
+// out witness's hooks while the journal stays hidden.
 export function canonPatterns(root: string): string[] {
-  return ['/*', ...stateDirs(root).map((d) => `!/${d}/`)]
+  return ['/*', ...stateDirs(root).map((d) => `!/${d}/`), `/${PAYLOAD_HOME}/`]
 }
 
 // How a canon path came to be visible inside a worktree. An OBSERVATION, never a severity
@@ -111,14 +114,14 @@ export function materializedCanon(root: string, wtPath: string): CanonResidue[] 
   if (tracked.ok && tracked.out !== '') {
     for (const line of tracked.out.split('\n')) {
       const rel = line.slice(2)
-      if (rel === '') continue
+      if (rel === '' || inPayloadHome(rel)) continue   // row 250: payload, not canon
       if (line[0] !== 'S') found.set(rel, 'materialized')
       else if (existsSync(join(wtPath, rel))) found.set(rel, 'planted')
     }
   }
   const others = tryGit(wtPath, 'ls-files', '--full-name', '--others', '--exclude-standard', '--', ...dirs)
   if (others.ok && others.out !== '') {
-    for (const rel of others.out.split('\n')) if (rel !== '') found.set(rel, 'untracked')
+    for (const rel of others.out.split('\n')) if (rel !== '' && !inPayloadHome(rel)) found.set(rel, 'untracked')
   }
   return [...found].map(([rel, how]) => ({ rel, how }))
 }

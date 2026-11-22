@@ -19,8 +19,9 @@ export function packageRoot(): string {
 // Project-scope hook commands. ${CLAUDE_PLUGIN_ROOT} exists only for plugin installs;
 // a project install anchors on $CLAUDE_PROJECT_DIR, which Claude Code substitutes in
 // hook commands (verified against 2.1.220).
-const GUARD_CMD = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-state.mjs"'
-const DASHBOARD_CMD = 'sh "$CLAUDE_PROJECT_DIR/.claude/hooks/session-dashboard.sh"'
+// Row 250 (#95): the hooks moved to .witness/hooks/ (PAYLOAD_HOME).
+const GUARD_CMD = 'node "$CLAUDE_PROJECT_DIR/.witness/hooks/guard-state.mjs"'
+const DASHBOARD_CMD = 'sh "$CLAUDE_PROJECT_DIR/.witness/hooks/session-dashboard.sh"'
 
 interface HookEntry { matcher?: string; hooks: Array<{ type: string; command: string }> }
 

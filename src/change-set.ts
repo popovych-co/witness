@@ -19,6 +19,8 @@ export function witnessPaths(): readonly string[] {
     const harness = loadHarness(name)
     if (!harness.ok) continue
     for (const { to } of harness.value.payload) paths.add(to)
+    // Row 250 (#95): a retired target stays witness-owned while plan branches still carry it.
+    for (const to of harness.value.retired) paths.add(to)
   }
   return [...paths].sort()
 }

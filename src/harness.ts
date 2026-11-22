@@ -46,6 +46,10 @@ export interface Harness {
   // witness's add-on runs the wait and wakes it.
   waitMode: 'background' | 'add-on'
   payload: Array<{ from: string; to: string }>
+  // Row 250 (#95). Targets witness once wrote and no longer ships: the plan change set keeps them
+  // witness-owned, init removes them at the root, and the ship gate drops them from a plan whose base
+  // lacks them.
+  retired: readonly string[]
   skills: { project: string; global: string }
   // The judgment lane: how THIS harness runs a headless reviewer and what its stdout
   // means. spawn(undefined) is the session default (no model flag). The exact flag
@@ -157,10 +161,12 @@ const REGISTRY: Record<HarnessName, Harness> = {
     bundled: true,
     payload: [
       { from: 'plugin/commands/witness.md', to: '.claude/commands/witness.md' },
-      { from: 'plugin/hooks/canon-guard.mjs', to: '.claude/hooks/canon-guard.mjs' },
-      { from: 'plugin/hooks/guard-state.mjs', to: '.claude/hooks/guard-state.mjs' },
-      { from: 'plugin/hooks/session-dashboard.sh', to: '.claude/hooks/session-dashboard.sh' },
+      // Row 250 (#95): the hooks live where a repo's lint does not look (PAYLOAD_HOME)
+      { from: 'plugin/hooks/canon-guard.mjs', to: '.witness/hooks/canon-guard.mjs' },
+      { from: 'plugin/hooks/guard-state.mjs', to: '.witness/hooks/guard-state.mjs' },
+      { from: 'plugin/hooks/session-dashboard.sh', to: '.witness/hooks/session-dashboard.sh' },
     ],
+    retired: ['.claude/hooks/canon-guard.mjs', '.claude/hooks/guard-state.mjs', '.claude/hooks/session-dashboard.sh'],
     skills: { project: '.claude/skills', global: '.claude/skills' },
     reviewer: {
       // Row 217. Sealed off from the repo it judges: --safe-mode loads none of its hooks, CLAUDE.md
@@ -218,6 +224,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
       { from: 'plugin/hooks/witness-pi.ts', to: '.pi/extensions/witness.ts' },
       { from: 'plugin/hooks/session-dashboard.sh', to: '.pi/extensions/session-dashboard.sh' },
     ],
+    retired: [],
     skills: { project: '.pi/skills', global: '.pi/agent/skills' },
     // Hermetic (Decision 88): every omitted flag here is a machine-local variable that
     // would silently change reviewer behavior — this machine's `defaultThinkingLevel:
