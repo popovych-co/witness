@@ -61,9 +61,10 @@ describe('held criteria at the gates (A10)', () => {
     await runShip(ctx, planId)                                         // gate phase → the ship stop
     await repo.cli(['decide', 'ship', planId, '--approve'], { env: gateEnv(scenario) })
     expect(await runShip(ctx, planId)).toBe(0)                         // pr → watch
-    const calls = readFileSync(join(scenario, 'gh-calls'), 'utf8')
-    expect(calls).toContain('Held — not verified while a need is unmet:')
-    expect(calls).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
+    expect(readFileSync(join(scenario, 'gh-calls'), 'utf8')).toContain('pr create')
+    const body = readFileSync(join(scenario, 'gh-stdin'), 'utf8')
+    expect(body).toContain('Held — not verified while a need is unmet:')
+    expect(body).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
   })
 })
 
@@ -215,9 +216,9 @@ describe('ship reads holds off the run that judged, not a malformed round after 
     // the need is still unmet; the malformed round's record holds nothing
     malformedAfter(repo, planId, { name: 'drift-lane', ok: true, detail: 'ac-rotate:ok' })
     expect(await runShip(ctx, planId)).toBe(0)                         // pr → watch
-    const calls = ghCalls(scenario)
-    expect(calls).toContain('pr create')
-    expect(calls).toContain('Held — not verified while a need is unmet:')
-    expect(calls).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
+    expect(ghCalls(scenario)).toContain('pr create')
+    const body = readFileSync(join(scenario, 'gh-stdin'), 'utf8')
+    expect(body).toContain('Held — not verified while a need is unmet:')
+    expect(body).toContain('- ac-prod: prod unmet — witness satisfy auth-refresh --need prod')
   })
 })

@@ -88,16 +88,25 @@ export function shipPhase(plan: CanonDoc, entries: Entry[], treeSha?: string, ba
 }
 
 // `code`: gh's exit status, or null when it ended on a signal (its timeout) — row 242 reads both.
-function gh(ctx: Ctx, cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string; code: number | null } {
+// `input`, when given, is gh's stdin (row 249).
+function gh(ctx: Ctx, cwd: string, args: readonly string[], timeout = 120_000, input?: string): { ok: boolean; out: string; code: number | null } {
   try {
     const out = execFileSync('gh', args, {
       cwd, env: ctx.env as NodeJS.ProcessEnv, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024,
+      ...(input === undefined ? {} : { input }),
     })
     return { ok: true, out, code: 0 }
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string; message?: string; status?: number | null }
     return { ok: false, out: `${err.stdout ?? ''}${err.stderr ?? ''}` || String(err.message), code: typeof err.status === 'number' ? err.status : null }
   }
+}
+
+// Row 249 (#94). Every text witness hands gh goes on stdin through `--body-file -`, never as an
+// argument: Windows caps a command line at 32,767 characters, and a PR body has no such bound.
+// `createPr` sends its body here, and so will any later `gh pr edit`.
+export function ghBody(ctx: Ctx, cwd: string, args: readonly string[], body: string, timeout = 120_000): { ok: boolean; out: string; code: number | null } {
+  return gh(ctx, cwd, [...args, '--body-file', '-'], timeout, body)
 }
 
 // Row 242 (design §4.3.1). The outcome a ship run ends on, journaled for every reader: the PR it is
@@ -272,9 +281,8 @@ export function createPr(ctx: Ctx, wt: string, root: string, plan: CanonDoc, par
   if (!push.ok) return push
   const found = existingPr(ctx, root, branch)
   if (found !== undefined) return ok(found)
-  const created = gh(ctx, wt, ['pr', 'create', '--head', branch,
-    '--title', `${String(plan.meta.id)}: ${parentSummary}`,
-    '--body', prBody(plan, held)])
+  const created = ghBody(ctx, wt, ['pr', 'create', '--head', branch,
+    '--title', `${String(plan.meta.id)}: ${parentSummary}`], prBody(plan, held))
   if (!created.ok) {
     return refuse([v('gh', 'pr-create-failed', created.out.slice(0, 200),
       'gh authenticated with push access — witness check probes gh auth status')])
