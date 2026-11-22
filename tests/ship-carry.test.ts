@@ -11,7 +11,19 @@ import { gateRuns } from '../src/rounds.js'
 import { rebaseIfMoved, recordPushed } from '../src/ship.js'
 import { shellLine, shellWord } from '../src/toon.js'
 import { branchName } from '../src/worktree.js'
-import { addOrigin, shippableRepo } from './helpers.js'
+import { addOrigin, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+
+// A clean verdict, so a `witness ship` that gets past the move meets a fake reviewer, never a real one.
+const CLEAN = {
+  coverage: [
+    { anchor: '.gitignore', note: 'read' },
+    { anchor: 'package.json', note: 'read' },
+    { anchor: 'src/token.ts', note: 'read' },
+    { anchor: 'tests/token.test.ts', note: 'read' },
+  ],
+  findings: [],
+}
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // Row 243 (design §4.1.1 steps 1–2 and 4–7, §4.1.3, §4.1.5; issue #86). When the base moves, ship
 // carries the plan's uncommitted work itself: it captures it (`git stash create`, into a witness-only
@@ -240,7 +252,8 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     put(wt, 'f.txt', 'a\nb\nc\n')
     put(wt, 'g.txt', '1\n2\nWORK\n')
     moveMain({ 'f.txt': 'a\nMAIN\nc\n' })
-    expect(rebaseIfMoved(wt, repo.root, 'main', run)).toEqual({ ok: true, value: 'rebased' })
+    const said: string[] = []
+    expect(rebaseIfMoved(wt, repo.root, 'main', { ...run, say: (l) => said.push(l) })).toEqual({ ok: true, value: 'rebased' })
     // the plain apply put the worktree side back; the staged-only version survives in the kept ref
     expect(read(wt, 'f.txt')).toBe('a\nMAIN\nc\n')
     expect(read(wt, 'g.txt')).toBe('1\n2\nWORK\n')
@@ -249,9 +262,31 @@ describe('ship carries the plan\'s work itself when the base moves (row 243, #86
     expect(g(wt, 'diff', `${kept[0]!.ref}^1`, `${kept[0]!.ref}^2`)).toContain('+STAGED')
     expect(hasCarry(wt, planId)).toBe(false)
     expect(stashList(wt)).toBe('')
+    // and the move says so (the final review's M2): a `kept:` line names the ref and how to see the
+    // staged versions, which went back nowhere else and go when the plan merges
+    expect(said).toEqual([expect.stringMatching(new RegExp(`^kept: ${kept[0]!.ref} — `))])
+    expect(said[0]).toContain(shellLine(['git', 'diff', `${kept[0]!.ref}^1`, `${kept[0]!.ref}^2`]))
+    expect(said[0]).toContain('without its staged versions')
+    expect(said[0]).toContain('when the plan merges')
     // the guard reads the listed file, finds no labels, and the move proceeds
     expect(clashLeft(wt, planId, 'main')).toBeUndefined()
   }, 180_000)
+
+  it('"conflicts in index" through witness ship: the kept: line is printed beside the rebase line (M2)', async () => {
+    const { wt, repo, planId, moveMain } = await movedPlan()
+    put(wt, 'f.txt', 'a\nSTAGED\nc\n')
+    g(wt, 'add', 'f.txt')
+    put(wt, 'f.txt', 'a\nb\nc\n')
+    moveMain({ 'f.txt': 'a\nMAIN\nc\n' })
+    const scenario = fakeScenario()
+    putVerdict(scenario, CLEAN)
+    const r = await repo.cli(['ship', planId], { env: gateEnv(scenario) })
+    const kept = keptRefs(wt, planId)
+    expect(kept.map((k) => k.files)).toEqual([['f.txt']])
+    const lines = r.stdout.split('\n')
+    expect(lines).toContainEqual(expect.stringMatching(new RegExp(`^kept: ${kept[0]!.ref} — .*${escapeRe(shellLine(['git', 'diff', `${kept[0]!.ref}^1`, `${kept[0]!.ref}^2`]))}`)))
+    expect(lines).toContain('rebase: main moved — rebased before the battery')
+  }, 240_000)
 
   it('a replay conflict aborts, puts the work back, and refuses textual-conflict with the replay steps naming the files (P26)', async () => {
     const { wt, repo, planId, moveMain, run } = await movedPlan()

@@ -320,9 +320,11 @@ export function baseMoved(wt: string, root: string, shipBranch: string, remote =
 // rebases with `--no-autostash`, and puts the work back. `git rebase --autostash` used to, and a
 // clash putting it back exited 0, left the markers for a gate and the work on git's shared stash
 // list. Now a clash stays in the files (UU), the carry is kept, and ship refuses `textual-conflict`.
-// `run` names the plan; `hasPr` and `env` are read by the lease (step 3) and the crash points.
+// `run` names the plan; `hasPr` and `env` are read by the lease (step 3) and the crash points; `say`
+// prints what the move did that its outcome does not say (a `kept:` line, step 7's fallback).
 export function rebaseIfMoved(
-  wt: string, root: string, shipBranch: string, run: { planId: string; hasPr: boolean; env: Ctx['env'] }, remote = 'origin',
+  wt: string, root: string, shipBranch: string,
+  run: { planId: string; hasPr: boolean; env: Ctx['env']; say?: (line: string) => void }, remote = 'origin',
 ): Result<'clean' | 'rebased'> {
   // Resolve the base from the REMOTE tip, not the local ref: with several flows merging
   // concurrently, local <shipBranch> lags every merge since the human's last pull, so a
@@ -345,6 +347,7 @@ export function rebaseIfMoved(
   // bookkeeping, and rebasing onto it moves the base term of every reviewed sha for nothing.
   if (stateOnlyAdvance(wt, root, 'HEAD', base)) return ok('clean')
   const { planId } = run
+  const say = run.say ?? (() => {})
   // Step 1, the guard (§4.1.2): no move over an unresolved clash.
   const clash = clashLeft(wt, planId, shipBranch)
   if (clash !== undefined) return refuse(clashViolations(planId, clash, wt))
@@ -398,10 +401,10 @@ export function rebaseIfMoved(
   const rebase = carryGit(wt, 'rebase', '--no-autostash', base)
   // A rebase stopped on a conflict is still in progress here; a clean one is done, the work not back.
   crashPoint(run.env, 'carry-mid-rebase')
-  if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`, reflog))
+  if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`, reflog, say))
   // Step 7. The work back, or the refusal that keeps it.
   if (carry !== undefined) {
-    const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry))
+    const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry), say)
     if (refused !== undefined) return refuse(refused)
   }
   // Step 8. With a PR the push result is the whole point: reporting 'rebased' after a failed push
@@ -431,14 +434,27 @@ function captureOverOperation(wt: string, planId: string, carry: string, op: OpI
     `the plan's work is still in the tree, but deleting ${ref} after the capture failed: ${logSafe(out.trim().slice(0, 200)) || 'git printed nothing'}`)]
 }
 
-// Step 7's outcome as ship refuses it, or nothing when the work is back clean.
-function putBackRefusal(wt: string, planId: string, onto: string, put: Reapplied): Violation[] | undefined {
+// Step 7's outcome as ship refuses it, or nothing when the work is back clean. Back clean through
+// git's "conflicts in index" fallback (P25), the staged versions live only in the kept ref, which
+// goes when the plan merges (`dropKept`), so `say` names it (the final review's M2).
+function putBackRefusal(
+  wt: string, planId: string, onto: string, put: Reapplied, say: (line: string) => void = () => {},
+): Violation[] | undefined {
   switch (put.kind) {
-    case 'clean': return undefined
+    case 'clean':
+      if (put.kept !== undefined) say(stagedKeptLine(put.kept))
+      return undefined
     case 'clash': return carryClashViolations(planId, wt, put.files, put.kept, onto)
     case 'locked': return [lockedRow(planId, put.lock, true)]
     case 'refused': return [carryPending(planId, put.out)]
   }
+}
+
+// The fallback's kept ref, said: the work went back, its staged versions only in the ref. Worded with no
+// comma, so the `kept:` line prints unquoted.
+function stagedKeptLine(ref: string): string {
+  return kv('kept', `${ref} — the plan's work went back without its staged versions (git could not put them back staged) · `
+    + `see them with ${shellLine(['git', 'diff', `${ref}^1`, `${ref}^2`])} · the ref is deleted when the plan merges`)
 }
 
 // An operation in progress that witness may not end (step 2 met late, and step 0.2): the session's to
@@ -465,7 +481,7 @@ function sessionOperation(wt: string, planId: string, op: OpInProgress, carry: s
 // git's own words.
 function failedRebase(
   wt: string, planId: string, onto: string, carry: string | undefined, at: { head: string; ref: string }, out: string,
-  reflog: readonly string[],
+  reflog: readonly string[], say: (line: string) => void,
 ): Violation[] {
   const replayed = unmergedPaths(wt).map((p) => p.path)
   const op = operationInProgress(wt)
@@ -485,7 +501,7 @@ function failedRebase(
       : [v('rebase', 'rebase-refused', got, `the worktree back on ${at.ref || at.head.slice(0, 12)} with no rebase in progress, then ${cliAct('ship', planId).line}`)]
   }
   if (carry !== undefined) {
-    const refused = putBackRefusal(wt, planId, onto, reapply(wt, planId, carry))
+    const refused = putBackRefusal(wt, planId, onto, reapply(wt, planId, carry), say)
     if (refused !== undefined) return refused
   }
   if (replayed.length > 0) return replayConflictViolations(planId, replayed, onto)
@@ -574,7 +590,7 @@ export function finishMove(root: string, wt: string, planId: string, say: (line:
   }
   const status = carryGit(wt, 'status', '--porcelain', '--untracked-files=no')
   if (status.code === 0 && status.stdout === '') {
-    const refused = putBackRefusal(wt, planId, branch, reapply(wt, planId, carry))
+    const refused = putBackRefusal(wt, planId, branch, reapply(wt, planId, carry), say)
     return refused === undefined ? ok('finished') : refuse(refused)
   }
   const tree = status.code === 0
@@ -960,7 +976,7 @@ async function shipMarked(
     // actually merge. Reviewing first spends a battery — and a human decision — on a tree
     // without any sibling's merged work, which then lapses (gateSettled's reviewed_sha)
     // the moment the rebase lands.
-    const rebase = rebaseIfMoved(wt, root, shipBranch, { planId, hasPr: plan.meta.pr !== undefined, env: ctx.env })
+    const rebase = rebaseIfMoved(wt, root, shipBranch, { planId, hasPr: plan.meta.pr !== undefined, env: ctx.env, say: (l) => ctx.out(l) })
     if (!rebase.ok) {
       renderRefusal(rebase.violations).forEach((l) => ctx.err(l))
       recordRefusal(root, planId, rebase.violations, shipBranch)

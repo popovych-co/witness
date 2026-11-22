@@ -557,11 +557,12 @@ export function cleanTree(wt: string, planId: string): Result<void> {
   return ok(undefined)
 }
 
-// Step 7's outcomes. `clash`: the carry moved to `kept`, the files unmerged in the tree. `refused`:
-// the carry ref is kept and `out` says why, as `carry-pending`'s `got`. `locked`: a held lock, the
-// carry ref kept.
+// Step 7's outcomes. `clean`: the work is back; `kept` names the ref holding its staged versions when
+// git's "conflicts in index" fallback put it back without them (the caller says so). `clash`: the
+// carry moved to `kept`, the files unmerged in the tree. `refused`: the carry ref is kept and `out`
+// says why, as `carry-pending`'s `got`. `locked`: a held lock, the carry ref kept.
 export type Reapplied =
-  | { kind: 'clean' }
+  | { kind: 'clean'; kept?: string }
   | { kind: 'clash'; kept: string; files: UnmergedPath[] }
   | { kind: 'refused'; out: string }
   | { kind: 'locked'; lock: string }
@@ -611,7 +612,7 @@ export function reapply(wt: string, planId: string, carry: string): Reapplied {
       const index = carryGit(wt, 'diff-tree', '-r', '--name-only', '-z', '--no-renames', `${carry}^1`, `${carry}^2`)
       const files = index.code === 0 ? index.stdout.split('\0').filter((f) => f !== '') : []
       const k = keep(wt, planId, carry, files, 'the plan\'s work went back without its staged versions')
-      return k.kind === 'kept' ? { kind: 'clean' } : k
+      return k.kind === 'kept' ? { kind: 'clean', kept: k.ref } : k
     }
     const plainOut = `${plain.stdout}${plain.stderr}`
     return settleApply(wt, planId, carry, plainOut) ?? unapplied(wt, plainOut)
