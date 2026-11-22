@@ -8,12 +8,19 @@ import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
-import { kv, rows } from '../toon.js'
+import { kv, logSafe, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
-// Row 214: drive's `journal:` lines print an act as `witness log` does.
+// Row 214: drive's `journal:` lines print an act as `witness log` does. Rows 205, 244: a journal line
+// is foreign text — a hand edit, a session's note, a reviewer's words — so every detail, in every
+// branch, is spelled out through logSafe here, the one renderer both readers share: an escape
+// sequence or a bidi override never reaches a terminal raw.
 export function entryDetail(e: Entry): string {
+  return logSafe(detailOf(e))
+}
+
+function detailOf(e: Entry): string {
   switch (e.t) {
     case 'recap': {
       const size = (k: string) => (Array.isArray(e[k]) ? (e[k] as unknown[]).length : 0)
@@ -138,7 +145,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (values.all) {
     const merged = mergedRows(root)
-    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: entryDetail(r.entry) })))
+    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -150,7 +157,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const chain = lineageChain(root, id!)
     ctx.out(`lineage: ${chain.join(' → ')}`)
     const merged = chain.flatMap((sid) => readStream(root, sid).map((entry) => ({ stream: sid, entry })))
-    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: entryDetail(r.entry) })))
+    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -161,7 +168,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   const entries = readStream(root, id!)
-  rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: e.t, detail: entryDetail(e) })))
+  rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: logSafe(String(e.t)), detail: entryDetail(e) })))
     .forEach(ctx.out)
   // Row 191 §4.3. A plan's stream ends with where the plan stands; an effort has no steps.
   const plan = findById(loadCanon(root), id!)

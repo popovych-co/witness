@@ -126,6 +126,33 @@ describe('witness log — a hand-back (row 244)', () => {
     expect(entryDetail({ ...back, manual: true })).toBe('plan: handed back · run r-7f3a9c · manual')
   })
 
+  // Rows 205, 244. A journal line is foreign text (a hand edit, a session's note): every detail, in
+  // every branch, prints through logSafe — an escape sequence or a bidi override is spelled out,
+  // never sent to the terminal raw.
+  it('spells out control and bidi characters in every detail it prints', () => {
+    const esc = '\u001b[2J'
+    const rlo = '\u202e'
+    const handBack = entryDetail({ ...back, gate: `plan${rlo}`, run_id: `r-1${esc}` })
+    expect(handBack).toBe('plan\\u{202e}: handed back · run r-1\\x1b[2J')
+    const decision = entryDetail({ v: 1, t: 'human-decision', gate: 'plan', artifact: 'p', decision: 'revise', note: `fix it${rlo}${esc}` })
+    expect(decision).toBe('plan: revise — fix it\\u{202e}\\x1b[2J')
+    const status = entryDetail({ v: 1, t: 'status', from: 'draft', to: 'approved', cause: `bell\u0007\u2028` })
+    expect(status).toBe('draft → approved (bell\\x07\\u{2028})')
+    for (const s of [handBack, decision, status]) expect(s).not.toMatch(/[\u0000-\u001f\u007f\u2028\u2029\u202a-\u202e\u2066-\u2069]/)
+  })
+
+  it('witness log spells out a hand-edited type and detail, never prints them raw', async () => {
+    const repo = await threeStepPlan()
+    const P = 'auth-refresh-plan-1'
+    appendFileSync(join(repo.root, '.witness/journal', `${P}.jsonl`),
+      `${JSON.stringify({ ...back, artifact: P, run_id: 'r-1\u001b[31m' })}\n${JSON.stringify({ v: 1, t: 'odd\u202e', x: 'y' })}\n`)
+    const res = await repo.cli(['log', P])
+    expect(res.code).toBe(0)
+    expect(res.stdout).not.toMatch(/[\u001b\u202e]/)
+    expect(res.stdout).toContain('plan: handed back · run r-1\\x1b[31m')
+    expect(res.stdout).toContain(',odd\\u{202e},')
+  })
+
   it('prints the hand-back row through witness log', async () => {
     const repo = await threeStepPlan()
     const P = 'auth-refresh-plan-1'

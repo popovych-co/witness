@@ -354,6 +354,15 @@ describe("drive prints a session's journaled acts (row 214)", () => {
     expect(poll()).toEqual(['journal: revise-returned implement: handed back · run r-1 · manual'])
   }, 30000)
 
+  // Rows 205, 244: the journal line's detail is foreign text, spelled out before it reaches a terminal.
+  it('a journal detail carrying an escape sequence or a bidi override is spelled out (rows 205, 244)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'p')
+    appendFileSync(join(repo.root, journalRel('p')),
+      `${entryLine({ t: 'revise-returned', gate: 'implement', artifact: 'p', run_id: 'r-1\u001b[2J\u202e', sha: 'b'.repeat(64) })}\n`)
+    expect(poll()).toEqual(['journal: revise-returned implement: handed back · run r-1\\x1b[2J\\u{202e}'])
+  }, 30000)
+
   it('bookkeeping prints nothing (issue #64)', async () => {
     const repo = await flowRepo()
     const poll = journalWatch(repo.root, 'p')
