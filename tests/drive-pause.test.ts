@@ -345,6 +345,15 @@ describe("drive prints a session's journaled acts (row 214)", () => {
     expect(poll()).toEqual([])
   }, 30000)
 
+  // Row 244 (the final review's M1): a hand-back reads in words, never as cut-off raw JSON.
+  it('a hand-back prints in words (row 244)', async () => {
+    const repo = await flowRepo()
+    const poll = journalWatch(repo.root, 'p')
+    appendFileSync(join(repo.root, journalRel('p')),
+      `${entryLine({ t: 'revise-returned', gate: 'implement', artifact: 'p', run_id: 'r-1', sha: 'b'.repeat(64), manual: true })}\n`)
+    expect(poll()).toEqual(['journal: revise-returned implement: handed back · run r-1 · manual'])
+  }, 30000)
+
   it('bookkeeping prints nothing (issue #64)', async () => {
     const repo = await flowRepo()
     const poll = journalWatch(repo.root, 'p')

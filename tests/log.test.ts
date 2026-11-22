@@ -2,6 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { appendEntry } from '../src/journal.js'
+import { entryDetail } from '../src/verbs/log.js'
 import { SPEC_META, commitEntry, evidenceCycle, seededRepo, startedThreeStepPlan, threeStepPlan, writeSpec } from './helpers.js'
 
 describe('witness log', () => {
@@ -109,6 +110,28 @@ describe('log --all reads each line\'s commit (D189)', () => {
     await writeSpec(repo, 'auth-refresh')
     const write = journalActs(repo.root, 'auth-hardening').find(({ entry }) => entry.t === 'write')!
     expect(write.commit).toBe(repo.git('rev-parse', 'HEAD'))               // the write's own commit
+  })
+})
+
+// Row 244 (the final review's M1). A hand-back (`gate --unchanged`) reads in words, as a decision does,
+// in `witness log` and drive's `journal:` line alike — never as cut-off raw JSON.
+describe('witness log — a hand-back (row 244)', () => {
+  const back = { v: 1 as const, t: 'revise-returned' as const, gate: 'plan', artifact: 'auth-refresh-plan-1', run_id: 'r-7f3a9c', sha: 'a'.repeat(64) }
+
+  it('names the gate and the run handed back', () => {
+    expect(entryDetail(back)).toBe('plan: handed back · run r-7f3a9c')
+  })
+
+  it('says manual when the hand-back was --manual', () => {
+    expect(entryDetail({ ...back, manual: true })).toBe('plan: handed back · run r-7f3a9c · manual')
+  })
+
+  it('prints the hand-back row through witness log', async () => {
+    const repo = await threeStepPlan()
+    const P = 'auth-refresh-plan-1'
+    appendFileSync(join(repo.root, '.witness/journal', `${P}.jsonl`), `${JSON.stringify({ ...back, artifact: P })}\n`)
+    const rows = (await repo.cli(['log', P])).stdout.split('\n').filter((l) => l.includes(',revise-returned,'))
+    expect(rows).toEqual([expect.stringMatching(/,revise-returned,plan: handed back · run r-7f3a9c$/)])
   })
 })
 

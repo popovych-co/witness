@@ -3,7 +3,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { askText } from '../ask.js'
 import { git, primaryRoot } from '../gitio.js'
 import { canonExit } from '../departure.js'
-import { journalActs, readStream, streamExists, streamIds, type Entry } from '../journal.js'
+import { journalActs, readStream, streamExists, streamIds, type Entry, type ReviseReturnedEntry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
@@ -58,6 +58,12 @@ export function entryDetail(e: Entry): string {
     case 'status': {
       const s = e as unknown as { from: string; to: string; cause: string }
       return `${s.from} → ${s.to} (${s.cause})`
+    }
+    case 'revise-returned': {
+      // Row 244: the author's hand-back of a revise (`gate --unchanged`), named as a decision is — the
+      // gate, then what happened — with the run it hands back and whether it was `--manual`.
+      const r = e as unknown as ReviseReturnedEntry
+      return `${String(r.gate)}: handed back · run ${String(r.run_id)}${r.manual === true ? ' · manual' : ''}`
     }
     default: {
       // Row 191 §4.8: `ctx` is about the session that wrote the line, not what the line says.
