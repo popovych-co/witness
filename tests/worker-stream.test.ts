@@ -539,6 +539,47 @@ describe("the turn's end (row 245)", () => {
     expect(s.ended()).toBe(true)
   })
 
+  // Task 15's review: claude may background a task that names no call (no tool_use_id on its
+  // task_started, or a task_updated moving a task the stream never tied to a call). It runs in the
+  // background all the same, so it holds the end by its task id until that task ends; otherwise
+  // drive would stop the session 60 s after its first result while the task still ran.
+  it('claude: a backgrounded task with no call holds the end too, until that task ends', () => {
+    const started = claudeStream(home)
+    for (const rec of [
+      init,
+      r({ type: 'system', subtype: 'task_started', task_id: 'b9', task_type: 'local_bash', is_backgrounded: true }),
+      done({ result: 'Waiting on it.' }),
+    ]) started.line(rec)
+    expect(started.ended()).toBe(false)
+    started.line(r({ type: 'system', subtype: 'task_notification', task_id: 'b9', status: 'completed' }))
+    expect(started.ended()).toBe(false)               // a task's end is no result
+    started.line(done({ result: 'Done.' }))
+    expect(started.ended()).toBe(true)
+
+    // A task_updated moves a task the stream never tied to a call; a task_updated ends it.
+    const moved = claudeStream(home)
+    for (const rec of [init, r({ type: 'system', subtype: 'task_updated', task_id: 'b10', patch: { is_backgrounded: true } }), done()]) moved.line(rec)
+    expect(moved.ended()).toBe(false)
+    moved.line(r({ type: 'system', subtype: 'task_updated', task_id: 'b10', patch: { status: 'completed' } }))
+    expect(moved.ended()).toBe(false)
+    moved.line(done())
+    expect(moved.ended()).toBe(true)
+
+    // A foreground task with no call, moved to the background later; another task's end frees nothing.
+    const later = claudeStream(home)
+    for (const rec of [
+      init,
+      r({ type: 'system', subtype: 'task_started', task_id: 'b11', is_backgrounded: false }),
+      r({ type: 'system', subtype: 'task_updated', task_id: 'b11', patch: { is_backgrounded: true } }),
+      r({ type: 'system', subtype: 'task_notification', task_id: 'other', status: 'completed' }),
+      done(),
+    ]) later.line(rec)
+    expect(later.ended()).toBe(false)
+    later.line(r({ type: 'system', subtype: 'task_notification', task_id: 'b11', status: 'completed' }))
+    later.line(done())
+    expect(later.ended()).toBe(true)
+  })
+
   it('claude: started() turns true at system:init, not before', () => {
     const s = claudeStream(home)
     for (const rec of [

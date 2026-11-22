@@ -337,12 +337,16 @@ function claudeRunStart(e: Json): boolean {
 //
 // Row 245: so a result ends the turn only when it is the session's own — a subagent's names its
 // call in `parent_tool_use_id` — and no backgrounded call is open; while one is, the next top-level
-// result is the one that can end it. The run has started from `system:init`.
+// result is the one that can end it. A backgrounded task that names no call holds the end the same
+// way, by its task id, until that task ends. The run has started from `system:init`.
 export function claudeStream(home: string): WorkerStream {
   const open = new Map<string, string>()       // tool_use id → action line, oldest first
   const calls = new Map<string, string>()      // every tool_use id → its action line
   const background = new Set<string>()         // tool_use ids a task runs past their tool_result
   const tasks = new Map<string, string>()      // a running task's id → its tool_use id
+  // Task ids claude runs in the background with no call to tie them to (no tool_use_id): nothing
+  // to show in flight, but each holds the end like a backgrounded call until its task ends.
+  const loose = new Set<string>()
   const reads = new Set<string>()              // tool_use ids of Read calls, whose result is numbered
   let named: string | undefined                // the session id last emitted
   // The model is awaited from `init` or a tool_result until a record carrying a tool_use, or a
@@ -388,8 +392,11 @@ export function claudeStream(home: string): WorkerStream {
               return [show('compacting context')]
             case 'task_started': {
               const id = str(e.tool_use_id)
-              if (id === undefined) return []
               const task = str(e.task_id)
+              if (id === undefined) {
+                if (task !== undefined && e.is_backgrounded === true) loose.add(task)
+                return []
+              }
               if (task !== undefined) tasks.set(task, id)
               if (e.is_backgrounded === true) toBackground(id)
               return []
@@ -397,18 +404,23 @@ export function claudeStream(home: string): WorkerStream {
             case 'task_notification': {
               const task = str(e.task_id)
               close(str(e.tool_use_id) ?? (task !== undefined ? tasks.get(task) : undefined))
-              if (task !== undefined) tasks.delete(task)
+              if (task !== undefined) { tasks.delete(task); loose.delete(task) }
               return []
             }
             case 'task_updated': {
               const task = str(e.task_id)
               const patch = obj(e.patch)
               if (task === undefined || patch === undefined) return []
-              if (patch.is_backgrounded === true) toBackground(tasks.get(task))
+              if (patch.is_backgrounded === true) {
+                const call = tasks.get(task)
+                if (call !== undefined) toBackground(call)
+                else loose.add(task)
+              }
               const status = str(patch.status)
               if (status !== undefined && TASK_ENDED.has(status)) {
                 close(tasks.get(task))
                 tasks.delete(task)
+                loose.delete(task)
               }
               return []
             }
@@ -458,7 +470,7 @@ export function claudeStream(home: string): WorkerStream {
         case 'result': {
           awaiting = false
           failed = e.is_error === true
-          if ((e.parent_tool_use_id === undefined || e.parent_tool_use_id === null) && background.size === 0) ended = true
+          if ((e.parent_tool_use_id === undefined || e.parent_tool_use_id === null) && background.size === 0 && loose.size === 0) ended = true
           // Its text when it says something not just shown; P8's error subtypes carry no text,
           // only `errors[]`, and an error with neither is named by its subtype.
           const text = str(e.result)
