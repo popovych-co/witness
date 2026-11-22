@@ -1,5 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
@@ -8,17 +7,18 @@ import { loadConfig } from './config.js'
 import { entryLine, appendEntry, journalRel, readStream } from './journal.js'
 import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
-import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { ok, refuse, v, type Result } from './refusal.js'
 import { cliAct } from './act.js'
+import { heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, toHead } from './held.js'
 import { planChangeSet } from './change-set.js'
-import { seeWork, unmergedPaths } from './carry.js'
+import { unmergedPaths } from './carry.js'
 import { clashViolations } from './clash.js'
 import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
-import { git, gitWith, stateCommit, tryGit } from './gitio.js'
+import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
-import { kv, shellLine, shellWord } from './toon.js'
+import { kv } from './toon.js'
 import { crashPoint, withTxn } from './txn.js'
-import { acquireLock, isAlive } from './lock.js'
+import { acquireLock } from './lock.js'
 
 export function isTestPath(rel: string): boolean {
   if (/\.(test|spec)\./.test(rel)) return true
@@ -178,249 +178,6 @@ export function diffBase(runRoot: string, cfg: Config, override?: string): Resul
   return ok(b)
 }
 
-const inCommit = (runRoot: string, ref: string, rel: string): boolean =>
-  tryGit(runRoot, 'cat-file', '-e', `${ref}:${rel}`).ok
-
-// S1-C (row 243, #86; was final review F1). verify-red sets the plan's non-test work aside while the
-// red runs, and nothing of it lands on git's shared stash list: `refs/stash` is ONE list for every
-// worktree of the repo, and witness's repo lock serializes only witness, so a session's own `git
-// stash push` or `pop` between witness's push and drop made witness drop that session's entry or
-// hand one plan's work to another checkout. The work is held instead in a stash-shaped commit built
-// through scratch indexes — the real index and `refs/stash` are never written — and kept at
-// `refs/witness/verify-red/<plan>` until it is back:
-//   - its index commit (second parent) is HEAD with each path as the index holds it, or without it;
-//   - its tree is that with each path the index tracks as the worktree holds it, or without it;
-//   - its third parent, when there is one, holds the untracked paths' bytes.
-// `git stash show -p` and `git stash apply` read it as a stash entry, so a human finds the work there
-// too. Its message records the run (`heldRecord`): its process, and every non-test path it set
-// aside, so a later run that finds the ref left by a crash knows what to put back. Nothing differing
-// from HEAD: no commit.
-function holdWork(runRoot: string, planId: string, paths: readonly string[], untracked: ReadonlySet<string>): string | undefined {
-  const head = git(runRoot, 'rev-parse', '--verify', 'HEAD^{commit}')
-  const headTree = git(runRoot, 'rev-parse', '--verify', `${head}^{tree}`)
-  const want = new Set(paths)
-  // the index's own entries for the paths, read NUL-separated and matched exactly: a name is the
-  // file's, never git's quoting of it nor a directory a pathspec would also match
-  const staged = new Map<string, string>()
-  for (const record of git(runRoot, '--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...paths).split('\0')) {
-    const m = /^(\d+) ([0-9a-f]+) 0\t([^]*)$/.exec(record)
-    if (m !== null && want.has(m[3]!)) staged.set(m[3]!, `${m[1]},${m[2]},${m[3]}`)
-  }
-  const tracked = paths.filter((p) => staged.has(p))
-  const others = paths.filter((p) => !staged.has(p) && untracked.has(p))
-  // git stash names a fallback identity for its commits; so does this one, where none is set
-  const ident: Record<string, string> = tryGit(runRoot, 'var', 'GIT_AUTHOR_IDENT').ok && tryGit(runRoot, 'var', 'GIT_COMMITTER_IDENT').ok ? {}
-    : { GIT_AUTHOR_NAME: 'witness', GIT_AUTHOR_EMAIL: 'witness@verify-red', GIT_COMMITTER_NAME: 'witness', GIT_COMMITTER_EMAIL: 'witness@verify-red' }
-  const commit = (tree: string, parents: string[], message: string): string =>
-    gitWith(runRoot, ident, 'commit-tree', tree, ...parents.flatMap((p) => ['-p', p]), '-m', message)
-  const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
-  try {
-    const scratch = (name: string): Record<string, string> => ({ GIT_INDEX_FILE: join(dir, name) })
-    gitWith(runRoot, scratch('index'), 'read-tree', head)
-    const entries = paths.flatMap((p) => (staged.has(p) ? ['--cacheinfo', staged.get(p)!] : []))
-    if (entries.length) gitWith(runRoot, scratch('index'), 'update-index', '--add', ...entries)
-    const unstaged = paths.filter((p) => !staged.has(p))
-    if (unstaged.length) gitWith(runRoot, scratch('index'), 'update-index', '--force-remove', '--', ...unstaged)
-    const indexTree = gitWith(runRoot, scratch('index'), 'write-tree')
-    gitWith(runRoot, scratch('work'), 'read-tree', indexTree)
-    if (tracked.length) gitWith(runRoot, scratch('work'), 'update-index', '--add', '--remove', '--', ...tracked)
-    const workTree = gitWith(runRoot, scratch('work'), 'write-tree')
-    if (indexTree === headTree && workTree === headTree && others.length === 0) return undefined
-    const on = `verify-red ${planId}: the plan's non-test work, held while the red runs`
-    const parents = [head, commit(indexTree, [head], `index on ${on}`)]
-    if (others.length) {
-      gitWith(runRoot, scratch('others'), 'update-index', '--add', '--', ...others)
-      parents.push(commit(gitWith(runRoot, scratch('others'), 'write-tree'), [], `untracked files on ${on}`))
-    }
-    return commit(workTree, parents,
-      `WIP on ${on}\n\npid: ${process.pid}\ncheckout: ${JSON.stringify(runRoot)}\nfiles: ${JSON.stringify(paths)}`)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-}
-
-// What a held commit's message records, read from the raw commit so no configured encoding
-// re-spells a name: the holding run's process, the checkout it set the work aside in (its
-// `--show-toplevel`, as JSON), and the paths it set aside. A ref that records no paths — written by
-// an older witness's `git stash push`, or by a hand — reads as nothing.
-interface HeldRecord { pid?: number; checkout?: string; files: string[] }
-function heldRecord(runRoot: string, held: string): HeldRecord | undefined {
-  const raw = tryGit(runRoot, 'cat-file', 'commit', held)
-  const start = raw.ok ? raw.out.indexOf('\n\n') : -1
-  if (start < 0) return undefined
-  const lines = raw.out.slice(start + 2).split('\n')
-  const json = (key: string): unknown => {
-    const line = lines.find((l) => l.startsWith(`${key}: `))
-    if (line === undefined) return undefined
-    try { return JSON.parse(line.slice(key.length + 2)) } catch { return undefined }
-  }
-  const files = json('files')
-  if (!Array.isArray(files) || !files.every((f) => typeof f === 'string')) return undefined
-  const pid = json('pid')
-  const checkout = json('checkout')
-  return {
-    files,
-    ...(typeof pid === 'number' && Number.isInteger(pid) ? { pid } : {}),
-    ...(typeof checkout === 'string' ? { checkout } : {}),
-  }
-}
-
-// The listed paths where the tree now holds something a crashed run did not leave. That run wrote
-// only these: the held state itself (before its clear, or part way back), HEAD's version from its
-// clear (the held commit's first parent), the base's from the red's tree, and a path taken away. A
-// worktree file whose bytes, or an index entry whose mode and blob, are none of those is a
-// session's since the crash, and putting the held work back over it would lose it. A directory where
-// a listed file was, an unmerged entry, or anything git cannot read counts too. `undefined`: git
-// could not read the tree at all.
-function touchedSinceHeld(runRoot: string, held: string, files: readonly string[], base: string): string[] | undefined {
-  const want = new Set(files)
-  const untracked = tryGit(runRoot, 'rev-parse', '--verify', '-q', `${held}^3`).ok ? [`${held}^3`] : []
-  const read = (rev: string): Map<string, TreeEntry> | undefined => {
-    try { return treeEntries(runRoot, rev, want) } catch { return undefined }
-  }
-  const sides = (revs: string[]): Array<Map<string, TreeEntry>> | undefined => {
-    const maps = revs.map(read)
-    return maps.every((m) => m !== undefined) ? maps as Array<Map<string, TreeEntry>> : undefined
-  }
-  const indexSides = sides([`${held}^2`, `${held}^1`, base])
-  const workSides = sides([held, ...untracked, `${held}^2`, `${held}^1`, base])
-  if (indexSides === undefined || workSides === undefined) return undefined
-  const listed = tryGit(runRoot, '--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...files)
-  if (!listed.ok) return undefined
-  const index = new Map<string, string>()
-  for (const record of listed.out.split('\0')) {
-    const m = /^(\d+) ([0-9a-f]+) ([0-3])\t([^]*)$/.exec(record)
-    if (m !== null && want.has(m[4]!)) index.set(m[4]!, m[3] === '0' ? `${m[1]} ${m[2]}` : 'unmerged')
-  }
-  const kinds = new Map(files.map((p) => {
-    try {
-      const s = lstatSync(join(runRoot, p))
-      return [p, s.isFile() || s.isSymbolicLink() ? 'file' : 'other'] as const
-    } catch {
-      return [p, 'absent'] as const
-    }
-  }))
-  const present = files.filter((p) => kinds.get(p) === 'file')
-  const hashed = present.length ? tryGit(runRoot, 'hash-object', '--', ...present) : { ok: true, out: '' }
-  if (!hashed.ok) return undefined
-  const blobs = new Map(present.map((p, i) => [p, hashed.out.split('\n')[i]]))
-  return files.filter((p) => {
-    const staged = index.get(p)
-    const stagedKnown = staged === undefined
-      || indexSides.some((side) => { const e = side.get(p); return e !== undefined && `${e.mode} ${e.sha}` === staged })
-    const kind = kinds.get(p)
-    const fileKnown = kind === 'absent' || (kind === 'file' && workSides.some((side) => side.get(p)?.sha === blobs.get(p)))
-    return !stagedKnown || !fileKnown
-  })
-}
-
-// `verify-red-pending` (exit 2; nothing is journaled): a held ref verify-red may neither put back
-// nor overwrite. The row names the ref and how to see and restore it by hand; deleting it is a
-// human's act, said in prose, never a runnable line (D168). `where`: the checkout that set the work
-// aside, when the run is in another — the run there puts it back itself.
-function heldPending(planId: string, held: string, step: string | undefined, why: string, where?: string): Violation {
-  const again = cliAct('verify-red', planId, ...(step !== undefined ? ['--step', step] : [])).line
-  const hand = `${seeWork(held)}. To put it back by hand${where === undefined ? '' : ` in ${shellWord(where)}`}, `
-    + `${shellLine(['git', 'stash', 'apply', held])} brings back its worktree versions, and with --index its staged ones too, on a tree with `
-    + `nothing else staged. Once the work is back, or a human decides it is not wanted, a human deletes ${held} by hand (git update-ref -d); `
-    + 'witness never does'
-  return v(held, 'verify-red-pending', `${held} holds non-test work a verify-red set aside — ${why} — so it was neither put back nor overwritten`,
-    where === undefined ? `${hand}. Then ${again}`
-      : `${again} run in ${shellWord(where)}, the checkout that set it aside, puts it back there itself when nothing there changed since — ${hand}`)
-}
-
-// A held ref verify-red finds at its start is a run's that never put its work back. Witness never
-// overwrites it. It puts the work back itself, through the same path-by-path restore a run ends
-// with, only into the checkout that set it aside (refs are every checkout's: from another one the
-// put-back would write the plan's work into the wrong tree), only when the holding process is gone,
-// and only when that tree holds nothing but what the run left (`touchedSinceHeld`); the ref is then
-// dropped against its own sha. Anything else refuses `verify-red-pending`, the tree and the ref
-// untouched. The paths put back, or the refusal.
-function putBackHeld(runRoot: string, planId: string, held: string, base: string, step: string | undefined): Result<string[]> {
-  const sha = git(runRoot, 'rev-parse', '--verify', held)
-  const record = heldRecord(runRoot, sha)
-  if (record === undefined) {
-    return refuse([heldPending(planId, held, step,
-      'it lists no files (an older witness or a hand wrote it), so witness cannot tell what in the tree is the run\'s')])
-  }
-  if (record.checkout === undefined) {
-    return refuse([heldPending(planId, held, step, 'it does not record the checkout that set it aside, so witness cannot tell where it goes back')])
-  }
-  if (record.pid !== undefined && record.pid !== process.pid && isAlive(record.pid)) {
-    return refuse([heldPending(planId, held, step, `the verify-red that set it aside (pid ${record.pid}) is still running`, record.checkout)])
-  }
-  if (record.checkout !== runRoot) {
-    return refuse([heldPending(planId, held, step,
-      `it was set aside in ${shellWord(record.checkout)}, and this run is in ${shellWord(runRoot)}`, record.checkout)])
-  }
-  const touched = touchedSinceHeld(runRoot, sha, record.files, base)
-  if (touched === undefined) return refuse([heldPending(planId, held, step, 'git could not read the tree against it')])
-  if (touched.length) {
-    return refuse([heldPending(planId, held, step,
-      `the tree changed since that run stopped: ${touched.map((p) => shellWord(p)).join(', ')} hold versions it neither held nor wrote`)])
-  }
-  restoreHeld(runRoot, sha, record.files)
-  git(runRoot, 'update-ref', '-d', held, sha)
-  return ok(record.files)
-}
-
-// The paths as HEAD holds them, in the index and in the worktree — what `git stash push --
-// <paths>` left: HEAD's version checked out, and a path HEAD lacks taken out of the index and off
-// the disk. It clears the work once it is held, and, when nothing was held, the red run's tree.
-function toHead(runRoot: string, paths: readonly string[]): void {
-  const inHead = new Set(paths.filter((p) => inCommit(runRoot, 'HEAD', p)))
-  const absent = paths.filter((p) => !inHead.has(p))
-  if (inHead.size) git(runRoot, '--literal-pathspecs', 'checkout', 'HEAD', '--', ...inHead)
-  if (absent.length) git(runRoot, 'update-index', '--force-remove', '--', ...absent)
-  for (const p of absent) rmSync(join(runRoot, p), { force: true })
-}
-
-// The entries a tree holds at `paths`, matched exactly.
-interface TreeEntry { mode: string; sha: string }
-function treeEntries(runRoot: string, rev: string, paths: ReadonlySet<string>): Map<string, TreeEntry> {
-  const found = new Map<string, TreeEntry>()
-  for (const record of git(runRoot, 'ls-tree', '-r', '-z', '--full-tree', rev).split('\0')) {
-    const m = /^(\d+) \w+ ([0-9a-f]+)\t([^]*)$/.exec(record)
-    if (m !== null && paths.has(m[3]!)) found.set(m[3]!, { mode: m[1]!, sha: m[2]! })
-  }
-  return found
-}
-
-// The held work back exactly, path by path, over whatever the red run left there: each path's
-// worktree bytes from the held tree (an untracked one's from its third parent) written through a
-// scratch index, a path held in neither taken off the disk, and each index entry set as the held
-// index commit has it, or removed. No merge runs, so nothing else the index stages or the worktree
-// holds is touched — `git stash apply --index` resets the whole index to HEAD part way, and refuses
-// whenever another path is staged.
-function restoreHeld(runRoot: string, held: string, paths: readonly string[]): void {
-  const want = new Set(paths)
-  const index = treeEntries(runRoot, `${held}^2`, want)
-  const work = treeEntries(runRoot, held, want)
-  const untracked = tryGit(runRoot, 'rev-parse', '--verify', '-q', `${held}^3`).ok
-    ? treeEntries(runRoot, `${held}^3`, want) : new Map<string, TreeEntry>()
-  const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
-  try {
-    for (const [name, rev, entries] of [['work', held, work], ['untracked', `${held}^3`, untracked]] as const) {
-      if (entries.size === 0) continue
-      const scratch = { GIT_INDEX_FILE: join(dir, name) }
-      gitWith(runRoot, scratch, 'read-tree', rev)
-      gitWith(runRoot, scratch, 'checkout-index', '-f', '--', ...entries.keys())
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-  for (const p of paths) if (!work.has(p) && !untracked.has(p)) rmSync(join(runRoot, p), { force: true })
-  const entries = paths.flatMap((p) => {
-    const e = index.get(p)
-    return e !== undefined ? ['--cacheinfo', `${e.mode},${e.sha},${p}`] : []
-  })
-  if (entries.length) git(runRoot, 'update-index', '--add', ...entries)
-  const unstaged = paths.filter((p) => !index.has(p))
-  if (unstaged.length) git(runRoot, 'update-index', '--force-remove', '--', ...unstaged)
-  // the entries just set carry no stat data: refreshed, plumbing reads them as unchanged
-  tryGit(runRoot, 'update-index', '-q', '--refresh')
-}
-
 export async function verifyRed(
   runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string, base: string, step?: string,
 ): Promise<Result<{ redOk: boolean; greenOk: boolean; vacuous: boolean }>> {
@@ -438,22 +195,22 @@ export async function verifyRed(
   // put back (`restoreHeld`); the ref is what keeps it recoverable after a crash. A ref already
   // standing is a crashed run's, never overwritten: its work goes back first, before the tree is
   // read for this run's diff, or the run refuses (`putBackHeld`). The capture and that put-back run
-  // under the repo lock, as the set-aside always has.
-  const held = `refs/witness/verify-red/${planId}`
-  if (tryGit(runRoot, 'rev-parse', '--verify', '-q', held).ok) {
+  // under the repo lock, as the set-aside always has. Row 247: the machinery lives in held.ts, which
+  // every verb that reads the plan's tree shares.
+  const held = heldRef(planId)
+  const again = cliAct('verify-red', planId, ...(step !== undefined ? ['--step', step] : []))
+  const standing = standingHeld(runRoot, planId)
+  if (standing !== undefined) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
     let back: Result<string[]>
     try {
-      back = putBackHeld(runRoot, planId, held, base, step)
+      back = putBackHeld(runRoot, planId, standing, base, again)
     } finally {
       lock.value()
     }
     if (!back.ok) return back
-    const shown = back.value.slice(0, 12)
-    const more = back.value.length > shown.length ? ` (+${back.value.length - shown.length} more)` : ''
-    ctx.out(kv('held-work', `${held} — the non-test work a crashed verify-red set aside is back in the tree: `
-      + `${shown.join(' · ')}${more} — re-read before editing`))
+    ctx.out(heldWorkLine(held, back.value))
   }
   const files = planChangeSet(runRoot, base)
   if (!files.some(isTestPath)) {
@@ -464,23 +221,22 @@ export async function verifyRed(
   const trackedNonTest = nonTest.filter((f) => !untracked.has(f))
 
   // The ref is made create-only (`''` as its old value), so a run that raced this one to it is never
-  // overwritten either: nothing has left the tree yet, and the run refuses.
+  // overwritten either: nothing has left the tree yet, and the run refuses. Row 247: written whenever
+  // there is non-test work, committed or not, so a crash anywhere below leaves a ref to read.
   let holding: string | undefined
   if (nonTest.length) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
     try {
-      const work = holdWork(runRoot, planId, nonTest, untracked)
-      if (work !== undefined) {
-        const wrote = tryGit(runRoot, 'update-ref', held, work, '')
-        if (!wrote.ok) {
-          if (tryGit(runRoot, 'rev-parse', '--verify', '-q', held).ok) {
-            return refuse([heldPending(planId, held, step, 'another verify-red of this plan set its work aside there meanwhile')])
-          }
-          throw new Error(`git update-ref ${held} failed: ${wrote.out}`)
+      const work = holdWork(runRoot, planId, nonTest, untracked, base)
+      const wrote = tryGit(runRoot, 'update-ref', held, work, '')
+      if (!wrote.ok) {
+        if (tryGit(runRoot, 'rev-parse', '--verify', '-q', held).ok) {
+          return refuse([heldPending(planId, held, 'another verify-red of this plan set its work aside there meanwhile', again)])
         }
-        holding = work
+        throw new Error(`git update-ref ${held} failed: ${wrote.out}`)
       }
+      holding = work
     } finally {
       lock.value()
     }
@@ -499,8 +255,6 @@ export async function verifyRed(
     if (holding !== undefined) {
       restoreHeld(runRoot, holding, nonTest)
       git(runRoot, 'update-ref', '-d', held, holding)
-    } else {
-      toHead(runRoot, nonTest)
     }
   }
   // D148. The set-aside/checkout cycle above rewrote every non-test file on disk — the agent's

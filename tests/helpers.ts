@@ -720,6 +720,66 @@ export function crashVerifyRed(cwd: string, planId: string, args: string[] = [])
   })
 }
 
+// A worktree's index, status and contents at `files` (`(none)` for an absent one): the state a held
+// put-back must return exactly.
+export function worktreeState(repo: TestRepo, wt: string, files: string[]): Record<string, string> {
+  return {
+    index: git(wt, 'ls-files', '-s', '--', ...files),
+    status: git(wt, 'status', '--porcelain=v1', '--untracked-files=all', '--', ...files),
+    ...Object.fromEntries(files.map((f) => [f, existsSync(join(wt, f)) ? readFileSync(join(wt, f), 'utf8') : '(none)'])),
+  }
+}
+
+// Row 247. A plan's worktree with committed work under it, an uncommitted tweak and an untracked file
+// on top, and — unless `crash` is false — a verify-red that died with that work set aside (the crash
+// seam), no red journaled before it. `stepped` is a criteria step (`threeStepPlan` + `seedBase`, the
+// crash on `--step s1`); `scaffolding` routes its evidence by the diff (`scaffoldingPlan`). `before` is
+// the state the put-back must return.
+export async function heldWorktree(
+  shape: 'stepped' | 'scaffolding' = 'stepped',
+  opts: { crash?: boolean; tests?: string; config?: Record<string, unknown> } = {},
+): Promise<{ repo: TestRepo; wt: string; planId: string; ref: string; before: Record<string, string> }> {
+  let repo: TestRepo
+  let wt: string
+  let planId: string
+  if (shape === 'stepped') {
+    repo = await threeStepPlan(opts.config)
+    seedBase(repo)
+    planId = 'auth-refresh-plan-1'
+    const started = await repo.cli(['start', planId])
+    if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+    wt = worktreePath(repo.root, planId)
+  } else {
+    ({ repo, wt, planId } = await scaffoldingPlan(opts.config))
+  }
+  writeFileSync(join(wt, 'tests/token.test.ts'), opts.tests ?? TOKEN_TESTS_TAGGED)
+  writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  git(wt, 'add', 'tests/token.test.ts', 'src/token.ts')
+  git(wt, 'commit', '-m', 'impl + tagged tests')
+  writeFileSync(join(wt, 'src/token.ts'), `${TOKEN_FIXED}// uncommitted tweak\n`)
+  writeFileSync(join(wt, 'src/extra.ts'), 'export const extra = 1\n')
+  const before = worktreeState(repo, wt, ['src/token.ts', 'src/extra.ts'])
+  if (opts.crash !== false) {
+    const code = await crashVerifyRed(wt, planId, shape === 'stepped' ? ['--step', 's1'] : [])
+    if (code !== 9) throw new Error(`crashVerifyRed exited ${code}, not the crash seam's 9`)
+  }
+  return { repo, wt, planId, ref: `refs/witness/verify-red/${planId}`, before }
+}
+
+// The held commit re-recorded through `edit` (its tree and parents kept), the ref moved against its
+// old value: an older witness's record, or a live holder's. The new sha.
+export function replantHeld(repo: TestRepo, planId: string, edit: (message: string) => string): string {
+  const ref = `refs/witness/verify-red/${planId}`
+  const old = git(repo.root, 'rev-parse', '--verify', ref)
+  const raw = execFileSync('git', ['cat-file', 'commit', old], { cwd: repo.root, encoding: 'utf8' })
+  const message = raw.slice(raw.indexOf('\n\n') + 2)
+  const parents = git(repo.root, 'rev-list', '--parents', '-n', '1', old).split(' ').slice(1)
+  const fresh = execFileSync('git', ['commit-tree', `${old}^{tree}`, ...parents.flatMap((p) => ['-p', p]), '-F', '-'],
+    { cwd: repo.root, encoding: 'utf8', input: edit(message) }).trim()
+  git(repo.root, 'update-ref', ref, fresh, old)
+  return fresh
+}
+
 // A Result's value, or a throw naming its violations.
 export function unwrap<T>(r: Result<T>): T {
   if (!r.ok) throw new Error(`refused: ${JSON.stringify(r.violations)}`)

@@ -8,7 +8,7 @@ import type { TestRepo } from './helpers.js'
 import { approve as approveDoc, seededRepo as seeded, writePlan as plan, writeSpec as spec } from './helpers.js'
 import {
   TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
-  copyFixture, fixtureEnv, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
+  copyFixture, fixtureEnv, replantHeld, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
 } from './helpers.js'
 
 // base commit: broken behavior, no tagged tests; branch: tagged tests + fix — the TDD diff
@@ -270,6 +270,13 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
       { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
     c.on('close', (code) => done(code))
   })
+  const crashedWith = (repo: TestRepo, args: string[], cwd = repo.root): Promise<number | null> => new Promise((done) => {
+    const REPO = resolve(import.meta.dirname, '..')
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'),
+      [join(REPO, 'src', 'bin.ts'), 'verify-red', 'auth-refresh-plan-1', '--step', 's1', ...args],
+      { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+    c.on('close', (code) => done(code))
+  })
   // Every update git makes to the held ref, as `<old> <new>` lines.
   const heldLog = (repo: TestRepo): (() => string[]) => {
     const hooks = join(resolve(repo.root, repo.git('rev-parse', '--git-common-dir')), 'hooks')
@@ -391,6 +398,47 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
     expect(readFileSync(join(wt, 'src', 'token.ts'), 'utf8')).toBe(TOKEN_FIXED)
     expect(heldSha(repo)).toBe('')
     expect(phases(repo).map((e) => e.phase)).toEqual(['red', 'green'])
+  }, 60_000)
+
+  // Row 247 (decision 4). The hold is written whenever the run rewrites the tree, so a crash over work
+  // that is all committed still leaves a ref the next run (and every guard) can read.
+  it('a crash over fully committed work leaves a held ref, and the next run puts HEAD\'s versions back', async () => {
+    const repo = await tddRepo()
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED); repo.write('src/token.ts', TOKEN_FIXED)
+    repo.git('add', '-A'); repo.git('commit', '-m', 'all work committed')
+    expect(await crashed(repo)).toBe(9)
+    expect(heldSha(repo)).not.toBe('')                         // 0.30.0 wrote none
+    expect(repo.read('src/token.ts')).toBe(TOKEN_BROKEN)
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.stdout).toMatch(/^held-work: /m)
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+    expect(repo.git('status', '--porcelain=v1', '--untracked-files=all', '--', 'src')).toBe('')
+  }, 60_000)
+
+  // Row 247 (decision 3).
+  it('the held record names the base its run used, so a --base run goes back against that base', async () => {
+    const repo = await tddRepo()                                   // C0: TOKEN_BROKEN, on plan-wt and main
+    const c0 = repo.git('rev-parse', 'HEAD')
+    repo.write('src/token.ts', 'export const half = 1\n')
+    repo.git('add', 'src/token.ts'); repo.git('commit', '-m', 'C1: half built')
+    repo.git('branch', '-f', 'main')                               // diffBase is now C1
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)
+    repo.write('src/token.ts', TOKEN_FIXED)                       // the plan's work, uncommitted
+    expect(await crashedWith(repo, ['--base', c0])).toBe(9)        // the red's tree holds C0's src/token.ts
+    expect(repo.git('cat-file', 'commit', HELD)).toMatch(new RegExp(`^base: "${c0}"$`, 'm'))
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.stdout).toMatch(/^held-work: /m)                   // against C1 alone it refused: C0's blob is no state it knows
+    expect(repo.read('src/token.ts')).toBe(TOKEN_FIXED)
+  }, 60_000)
+
+  it('a 0.30.0 record (no base line) is put back against the base the run resolves', async () => {
+    const { repo, files } = await workRepo()
+    const before = tree(repo, files)
+    expect(await crashed(repo)).toBe(9)
+    replantHeld(repo, 'auth-refresh-plan-1', (m) => m.replace(/^base: .*\n/m, ''))
+    const res = await repo.cli(['verify-red', 'auth-refresh-plan-1', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.code).toBe(0)
+    expect(tree(repo, files)).toEqual(before)
   }, 60_000)
 
   // Fix round 2. The clash guard reads the plan's worktree; verify-red sets aside the checkout it runs
