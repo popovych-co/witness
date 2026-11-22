@@ -33,7 +33,9 @@ export function witnessExcludes(): string[] {
 // quoted, and a quoted name is no path — the edit was invisible to the reviewed identity, the
 // snapshot and the delta view alike.
 function changedFiles(runRoot: string, base: string): string[] {
-  const tracked = git(runRoot, 'diff', '--name-only', '-z', base).split('\0').filter(Boolean)
+  // Row 248. git follows `diff.renames` by default, so a moved file listed only its new path: the
+  // old one fell out of verify-red's red tree, the snapshot and the reviewed identity.
+  const tracked = git(runRoot, 'diff', '--no-renames', '--name-only', '-z', base).split('\0').filter(Boolean)
   const untracked = git(runRoot, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean)
   return [...new Set([...tracked, ...untracked])].sort()
 }

@@ -12,6 +12,17 @@ function stateCommit(repo: TestRepo, rel: string, line: string, subject: string)
 }
 
 describe('stateOnlyAdvance', () => {
+  it('is false for a trailered commit that moves a source file into a state dir (row 248)', async () => {
+    const repo = await seededRepo()
+    repo.write('src/moved.ts', 'export const moved = 1\n')
+    repo.git('add', 'src/moved.ts')
+    repo.git('commit', '-m', 'source')
+    const from = repo.git('rev-parse', 'HEAD')
+    repo.git('mv', 'src/moved.ts', '.witness/journal/moved.jsonl')
+    repo.git('commit', '-m', 'looks like bookkeeping', '-m', 'Witness-State: 1')
+    expect(stateOnlyAdvance(repo.root, repo.root, from, 'HEAD')).toBe(false)
+  })
+
   it('is true for an advance made only of trailered state-path commits', async () => {
     const repo = await seededRepo()
     const from = repo.git('rev-parse', 'HEAD')

@@ -120,7 +120,9 @@ export function stateOnlyAdvance(wt: string, root: string, from: string, to: str
     // Per COMMIT, never the range's union diff: a commit that adds and deletes a source
     // file inside the range cancels out in a union and would read as state-only. An empty
     // name list (a merge commit) is unjudgeable here and therefore not state-only.
-    const touched = tryGit(wt, 'show', '--pretty=format:', '--name-only', sha)
+    // Row 248. git follows `diff.renames` by default, so a moved file listed only its new path: a
+    // trailered commit moving a source file into a state dir read as bookkeeping.
+    const touched = tryGit(wt, 'show', '--no-renames', '--pretty=format:', '--name-only', sha)
     if (!touched.ok) return false
     const paths = touched.out.split('\n').filter(Boolean)
     return paths.length > 0 && paths.every((p) => isStatePath(root, p))
