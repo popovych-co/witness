@@ -162,16 +162,17 @@ export function payloadStale(root: string, harness: Harness): string[] {
     .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
 }
 
-// Row 246. Every payload file installed at the root that a worktree home lacks, as `<home>: <to>`, in
-// `payloadHomes` order. The plan change set leaves witness's payload out of what reviewers see, so a
-// session that deletes a witness hook in its worktree is named here, as an edited one is by
-// `payloadStale`. Separate from `payloadStale`, which `next`'s Pi fallback also reads (row 204): a
-// file missing from a worktree says nothing about the root chat's add-on.
+// Row 246. Every payload file a home lacks while the harness is installed (any of its payload at the
+// root), the root named by its bare path and a worktree as `<home>: <to>`, in `payloadHomes` order. The
+// plan change set leaves witness's payload out of what reviewers see, so a session that deletes a
+// witness hook is named here, as an edited one is by `payloadStale` — in its worktree, and at the root
+// once a plan that deleted one has shipped. Separate from `payloadStale`, which `next`'s Pi fallback
+// also reads (row 204): a missing file says nothing about the root chat's add-on being old.
 export function payloadMissing(root: string, harness: Harness): string[] {
-  const installed = harness.payload.filter((p) => existsSync(join(root, p.to)))
-  return payloadHomes(root).filter((home) => home !== root).flatMap((home) => installed
+  if (!harness.payload.some((p) => existsSync(join(root, p.to)))) return []
+  return payloadHomes(root).flatMap((home) => harness.payload
     .filter((p) => !existsSync(join(home, p.to)))
-    .map((p) => `${home}: ${p.to}`))
+    .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
 }
 
 // Preflight EVERY home before writing ANY. install.ts's standing doctrine is that a

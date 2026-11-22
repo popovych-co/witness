@@ -50,4 +50,16 @@ describe('verify-red and next read the plan change set (row 246, #93)', () => {
     // the home is named by its path under the root, which may be spelled through /private on macOS
     expect(text).toContain('.witness/worktrees/auth-refresh-plan-1: .claude/hooks/guard-state.mjs')
   })
+
+  // Slice 1 review, finding 1: a plan that deleted a hook ships, the root pulls, and the root lacks it
+  // too — the expected set is the harness's whole payload, not what the root still holds.
+  it('check names a witness hook the root itself lacks, by its bare path', async () => {
+    const { repo } = await payloadPlan()
+    repo.git('rm', '-q', '.claude/hooks/guard-state.mjs')
+    repo.git('commit', '-q', '-m', 'a shipped plan deleted a witness hook')
+    const out = await repo.cli(['check'])
+    const text = `${out.stdout}\n${out.stderr}`
+    expect(text).toMatch(/payload-missing,"?\.claude\/hooks\/guard-state\.mjs — /)   // the root, by its bare path
+    expect(text).not.toContain('.witness/worktrees/auth-refresh-plan-1: .claude/hooks/guard-state.mjs')   // the worktree still has it
+  })
 })
