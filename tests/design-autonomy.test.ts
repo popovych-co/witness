@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { cliAct } from '../src/act.js'
 import { readStream } from '../src/journal.js'
 import { DESIGN_HTML, approve, autonomyOn, fakeScenario, gateEnv, nextLine, putVerdict, seededRepo, witnessDesign, writeDesign, writeSpec } from './helpers.js'
 
@@ -64,5 +65,7 @@ describe('design under autonomy (A6, row 194)', () => {
     expect(out).toContain('next: witness design auth-refresh --file <html>')
     expect(out).toContain('stage: design')
     expect(out).toContain('revise owed')
+    // Row 244 (the final review's M3): the look may be handed back unchanged instead of re-authored.
+    expect(out).toContain(`or hand it back unchanged with ${cliAct('gate', 'design', 'auth-refresh', '--unchanged').line}`)
   })
 })

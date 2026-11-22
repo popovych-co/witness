@@ -17,7 +17,7 @@ import { lastGateRun, lastJudgedRun, liveExits, standingHandBack, type DecisionE
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
-import { authoringOwed, gateSettled, openStepRow, reReviewOwed, stepsOpenViolation } from './verbs/next.js'
+import { authoringOwed, gateSettled, handBackAlternative, openStepRow, reReviewOwed, stepsOpenViolation } from './verbs/next.js'
 import { diffReviewedSha } from './reviewed.js'
 import { diffBase } from './evidence.js'
 import { handOverIfDue } from './slice.js'
@@ -968,8 +968,10 @@ async function shipMarked(
     // that has already declined. The owed work is the edit the revise asked for.
     if (!reReview && authoringOwed(entries, 'ship', reviewedSha)) {
       ctx.out(kv('ship', `${planId} — revise owed`))
-      // Row 239. The re-run it names is an act's line.
-      ctx.out(`help: edit the code in ${wt} · then re-run ${cliAct('ship', planId).line}`)
+      // Row 239. The re-run it names is an act's line. Row 244 (the final review's M3): and the
+      // hand-back, where `gate ship --unchanged` would land.
+      const back = handBackAlternative(root, 'ship', planId, entries, reviewedSha, ['ship', planId])
+      ctx.out(`help: edit the code in ${wt} · then re-run ${cliAct('ship', planId).line}${back !== undefined ? ` · ${back}` : ''}`)
       return EXIT.FINDINGS
     }
     // Rebase BEFORE the battery, never after: the reviewers must judge the tree that will

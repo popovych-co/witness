@@ -131,6 +131,22 @@ function retractedLead(gate: string, target: string, entries: Entry[], sha: stri
   return live.state === 'retracted' && lead !== undefined ? { ...runs(lead), target, ...noteOf(live.session) } : undefined
 }
 
+// Row 244 (design §4.2.4; the final review's M3). A revise owed on the content its run read may be
+// handed back instead of acted on, so a revise-owed line names the hand-back beside the edit — only
+// where `gate --unchanged` would not refuse: liveActs reads the gate revised (never at the bound,
+// retracted, or with a hand-back standing) on the content the revise disposed of, and no work the
+// gate's own upstream revise sent upstream is still owed there (design §4.2.9's `upstream-owed`,
+// S3-2). `gate` holds the act's words after `gate`; the line goes through the act renderer (row 239).
+export function handBackAlternative(
+  root: string, gateName: string, target: string, entries: Entry[], sha: string | undefined, gate: readonly string[],
+): string | undefined {
+  const judged = lastJudgedRun(entries, gateName)
+  if (judged === undefined || sha === undefined || sha !== judged.reviewed_sha) return undefined
+  if (liveActs(gateName, target, entries, JOURNAL_FACTS).state !== 'revised') return undefined
+  if (upstreamOwed(root, gateName, target, entries)) return undefined
+  return `or hand it back unchanged with ${cliAct('gate', ...gate, '--unchanged').line}`
+}
+
 // Row 244 (S2-B). A plan's own plan gate owes it work its stamp hides: revised or retracted since its
 // approval, with no reopen (row 95's branch reads that). A park or an owed decision blocks the flow
 // instead (`flowBlocked`).
@@ -486,7 +502,8 @@ function decomposeStep(root: string, canon: Canon, e: { slug: string; entries: E
     ? {
         line: `witness write <spec-id> --effort ${shellWord(e.slug)} --meta m.json --body b.md`,
         stage: 'decompose', target: e.slug,
-        note: 'revise owed — re-author, then the gate has something new to judge',
+        ...noteOf('revise owed — re-author, then the gate has something new to judge',
+          handBackAlternative(root, 'decompose', e.slug, e.entries, sha, ['decompose', '--effort', e.slug])),
       }
     : { ...runs(cliAct('gate', 'decompose', '--effort', e.slug)), target: e.slug, ...noteOf(judgeNote(e.entries, 'decompose', judge)) }
 }
@@ -828,7 +845,8 @@ function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], j
   if (authoringOwed(entries, 'implement', diffSha)) {
     return {
       ...runs(cliAct('test-evidence', id, '--phase', 'green')), stage: 'implement', target: id, ...inWorktree,
-      note: 'revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
+      ...noteOf('revise owed — edit the code in the worktree · re-run the evidence cycle · then re-gate',
+        handBackAlternative(root, 'implement', id, entries, diffSha, ['implement', id])),
       ...inFlight,
     }
   }
@@ -1250,7 +1268,7 @@ function planGateStep(
     return { ...runs(cliAct('gate', 'plan', id)), target: id, ...noteOf(judgeNote(entries, 'plan', judge)) }
   }
   const act = planWriteAction(root, efforts, id, String(plan.meta.parent), id)
-  return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate') }
+  return { ...act, ...noteOf(act.note, 'revise owed — rewrite the plan, then re-gate', handBackAlternative(root, 'plan', id, entries, planSha, ['plan', id])) }
 }
 
 // Rule B's note: the ladder is exhausted. Exported because drive tells a scoped session's
@@ -1440,9 +1458,11 @@ export function computeNext(root: string, ctx: Ctx, canon: Canon, cfg: Config, o
     // retraction owes a re-review of the same look, not a new one.
     const lead = retractedLead('design', id, entries, designCurrentSha(root, cfg.paths, spec))
     if (lead !== undefined) return { ...lead, stage: 'design' }
-    if (authoringOwed(entries, 'design', designCurrentSha(root, cfg.paths, spec))) {
+    const lookSha = designCurrentSha(root, cfg.paths, spec)
+    if (authoringOwed(entries, 'design', lookSha)) {
       return { line: `witness design ${shellWord(id)} --file <html>`, stage: 'design', target: id,
-        note: `revise owed — re-author the look from ${cliAct('decide', 'design', id, '--show').line}` }
+        ...noteOf(`revise owed — re-author the look from ${cliAct('decide', 'design', id, '--show').line}`,
+          handBackAlternative(root, 'design', id, entries, lookSha, ['design', id])) }
     }
     return { ...runs(cliAct('gate', 'design', id)), stage: 'design', target: id, ...noteOf(judgeNote(entries, 'design', judge)) }
   }

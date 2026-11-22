@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { cliAct } from '../src/act.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
@@ -136,7 +137,10 @@ describe('a chore routes the owner\'s decompose as the owner would (#66)', () =>
     expect((await repo.cli(['recap', '--file', 'aa.json'])).code).toBe(0)
     const n = await repo.cli(['next'])
     expect(n.stdout).toContain('next: witness write <spec-id> --effort zz-owner')
-    expect(n.stdout).not.toContain('witness gate decompose')
+    // the gate is named only as the hand-back beside the edit (row 244), never as the line to run
+    const handBack = cliAct('gate', 'decompose', '--effort', 'zz-owner', '--unchanged').line
+    expect(n.stdout).toContain(handBack)
+    expect(n.stdout.replaceAll(handBack, '')).not.toContain('witness gate decompose')
   })
 })
 

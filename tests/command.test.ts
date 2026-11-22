@@ -248,6 +248,8 @@ describe('the router hands a revise back, and reads the hand-back\'s refusals (r
     expect(rows).toHaveLength(1)
     expect(rows[0]).toContain(HAND_BACK)
     expect(rows[0]).toContain('`outcome: revise changed nothing`')
+    // the final review's M3: a revise-owed line names the hand-back too, where it would land
+    expect(rows[0]).toContain('or a `revise owed` `note:` or `help:` line names it')
     expect(rows[0]).toContain('Append `--manual` when this session is `--manual`-armed')
     expect(rows[0]).toContain('A plain re-run hands nothing back')
     expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())

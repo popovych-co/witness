@@ -15,7 +15,7 @@ import { findById, loadCanon, type CanonDoc } from '../src/scan.js'
 import { settleOwed } from '../src/settle.js'
 import { runShip, shipPhase } from '../src/ship.js'
 import { kv } from '../src/toon.js'
-import { authoringOwed, heldPlan, owedDecisions, owedRun } from '../src/verbs/next.js'
+import { authoringOwed, handBackAlternative, heldPlan, owedDecisions, owedRun } from '../src/verbs/next.js'
 import {
   PLAN_BLOCKING, TOKEN_FIXED, addOrigin, autonomyOn, commitEntry, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, shippableRepo,
   writePlan, writeSpec, type CliResult, type TestRepo,
@@ -562,5 +562,92 @@ describe('next in a worktree, next --flow and status flows route an owed decisio
     expect(screen.code, screen.stderr).toBe(0)
     expect(screen.stdout).toContain('state: parked')
     expect(screen.stdout).toContain(`fresh: ${cliAct('gate', 'implement', P, '--fresh').line}`)
+  }, 300_000)
+})
+
+// ---------------------------------------------------------------------------------------------
+// The final review's M3. Every "revise owed" line routed the edit alone, so an author who judged the
+// revise needed no change had no line naming the hand-back. Each now names `gate <gate> <target>
+// --unchanged` beside the edit, through the act renderer, exactly where the hand-back would land: the
+// gate revised on the content the revise asked about, and no upstream work its own revise sent still
+// owed there (design §4.2.9's `upstream-owed`, S3-2) — never a line that offers a refusal.
+const handBackOf = (gate: string, ...words: string[]) => `or hand it back unchanged with ${cliAct('gate', gate, ...words, '--unchanged').line}`
+
+describe('a revise-owed line offers the hand-back where it would land (row 244)', () => {
+  it('next\'s plan rewrite names the hand-back, and the hand-back it names lands', async () => {
+    const f = await revisedPlan()
+    const back = handBackOf('plan', P)
+    expect(handBackAlternative(f.repo.root, 'plan', P, readStream(f.repo.root, P), planSha(f.repo), ['plan', P])).toBe(back)
+    const next = await ok(f.repo, ['next'], f.env)
+    expect(next.stdout).toContain('revise owed — rewrite the plan, then re-gate')
+    expect(next.stdout).toContain(back)
+    await f.handBack()
+    expect(standingHandBack(readStream(f.repo.root, P), 'plan')).toMatchObject({ run_id: f.run.run_id })
+  }, 180_000)
+
+  it('no hand-back is named while the gate\'s own upstream revise is owed: --unchanged would refuse upstream-owed', async () => {
+    const f = await revisedPlan()
+    await ok(f.repo, ['decide', 'plan', P, '--revise', '--upstream', S, '--note', 'the spec leaves rotation open'], f.env)
+    const entries = readStream(f.repo.root, P)
+    expect(authoringOwed(entries, 'plan', planSha(f.repo))).toBe(true)
+    expect(handBackAlternative(f.repo.root, 'plan', P, entries, planSha(f.repo), ['plan', P])).toBeUndefined()
+    const refused = await f.repo.cli(['gate', 'plan', P, '--unchanged'], { env: f.env })
+    expect(refused.code, refused.stdout).toBe(2)
+    expect(refused.stderr).toContain('upstream-owed')
+    expect((await ok(f.repo, ['next'], f.env)).stdout).not.toContain('--unchanged')
+  }, 180_000)
+
+  it('no hand-back is named on moved content, a retraction, or a standing hand-back', async () => {
+    const f = await revisedPlan()
+    const entries = readStream(f.repo.root, P)
+    // moved: the revise's edit landed, and the gate judges it
+    expect(handBackAlternative(f.repo.root, 'plan', P, entries, 'f'.repeat(64), ['plan', P])).toBeUndefined()
+    await f.handBack()
+    expect(handBackAlternative(f.repo.root, 'plan', P, readStream(f.repo.root, P), planSha(f.repo), ['plan', P])).toBeUndefined()
+    // a retraction of an approve asks for a re-review, never a hand-back
+    await ok(f.repo, ['decide', 'plan', P, '--approve', '--override'], f.env)
+    await ok(f.repo, ['decide', 'plan', P, '--revise', '--note', 'the approval no longer stands'], f.env)
+    expect(liveActs('plan', P, readStream(f.repo.root, P), { upstream: S, stale: false, holdLifted: false, owed: false, upstreamOwed: false }).state).toBe('retracted')
+    expect(handBackAlternative(f.repo.root, 'plan', P, readStream(f.repo.root, P), planSha(f.repo), ['plan', P])).toBeUndefined()
+  }, 180_000)
+
+  it('next\'s decompose re-authoring names `gate decompose --effort <slug> --unchanged`', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, S)
+    const scenario = fakeScenario()
+    putVerdict(scenario, {
+      coverage: [{ anchor: `${S} > ## Behavior`, note: 'read' }],
+      findings: [{ blocking: true, anchor: `${S} > ## Behavior`, claim: 'the rotation window is unstated' }],
+    })
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'decompose', E], env, 1)
+    await ok(repo, ['decide', 'decompose', E, '--revise', '--note', 'state the rotation window'], env)
+    const next = await ok(repo, ['next'], env)
+    expect(next.stdout).toContain('revise owed — re-author')
+    expect(next.stdout).toContain(handBackOf('decompose', '--effort', E))
+    const back = await ok(repo, ['gate', 'decompose', '--effort', E, '--unchanged'], env, 1)
+    expect(back.stdout).toContain('outcome: handed back')
+  }, 180_000)
+
+  it('next --flow\'s implement edit and ship\'s help: line name the hand-back', async () => {
+    const f = await stoppedShip()
+    await ok(f.repo, ['decide', 'ship', P, '--revise', '--note', 'bound the rotation'], f.env)
+    const out: string[] = []
+    expect(await f.ship(out)).toBe(1)
+    const help = out.find((l) => l.startsWith('help: edit the code in '))
+    expect(help).toBeDefined()
+    expect(help).toContain(`then re-run ${cliAct('ship', P).line}`)
+    expect(help).toContain(handBackOf('ship', P))
+
+    const { repo, wt } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, BLOCKING)
+    const env = gateEnv(scenario)
+    await ok(repo, ['gate', 'implement', P], env, 1)
+    await ok(repo, ['decide', 'implement', P, '--revise', '--note', 'bound the rotation'], env)
+    const flow = await ok(repo, ['next', '--flow', P], env)
+    expect(flow.stdout).toContain('revise owed — edit the code in the worktree')
+    expect(flow.stdout).toContain(handBackOf('implement', P))
+    expect((await repo.cli(['next'], { env, cwd: wt })).stdout).toContain(handBackOf('implement', P))
   }, 300_000)
 })
