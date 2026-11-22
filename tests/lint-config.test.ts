@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { jsonStyle, parseJsonc, readBiomeConfig } from '../src/lint-config.js'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { jsonStyle, parseJsonc, payloadLinted, readBiomeConfig } from '../src/lint-config.js'
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 function dirWith(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'witness-lint-'))
@@ -30,5 +33,43 @@ describe('jsonStyle (row 250)', () => {
 
   it('reads no config from an unparseable biome.json', () => {
     expect(readBiomeConfig(dirWith({ 'biome.json': '{ broken' }))).toBeUndefined()
+  })
+})
+
+// The probe's truth table (t0b-biome.log, Biome 2.4.9) for one hook under `.witness/hooks/`.
+describe('payloadLinted reads Biome config by the probed truth table (row 250)', () => {
+  const HOOK = '.witness/hooks/guard-state.mjs'
+  const STAR = '{"files":{"includes":["**"]}}'
+  it.each([
+    ['{}', undefined, true],
+    ['{"files":{"includes":["!.witness","!.pi"]}}', undefined, false],
+    ['{"files":{"includes":["**","!.witness"]}}', undefined, false],
+    ['{"files":{"includes":["**","!**/.witness"]}}', undefined, false],
+    ['{"files":{"includes":["**","!.witness/**"]}}', undefined, false],
+    ['{"files":{"includes":["**","!.witness/hooks"]}}', undefined, false],
+    ['{"files":{"includes":["**","!!.witness"]}}', undefined, false],
+    ['{"files":{"includes":["!.witness","**"]}}', undefined, true],
+    ['{"files":{"includes":["src/**"]}}', undefined, false],
+    ['{"extends":["./base.json"],"files":{"includes":["!.witness"]}}', STAR, false],
+    ['{"extends":["./base.json"],"files":{"includes":["src/**"]}}', STAR, true],
+    ['{"extends":["./base.json"],"files":{"includes":["**"]}}', '{"files":{"includes":["!.witness"]}}', true],
+    ['{"overrides":[{"includes":[".witness/**"],"formatter":{"enabled":false},"linter":{"enabled":false}}]}', undefined, true],
+    ['{"overrides":[{"includes":[".witness/**"],"formatter":{"enabled":false},"linter":{"enabled":false},"assist":{"enabled":false}}]}', undefined, false],
+    ['{"formatter":{"enabled":false},"linter":{"enabled":false},"assist":{"enabled":false}}', undefined, false],
+    [readFileSync(join(REPO, 'fixtures/settings/biome-fewhats.json'), 'utf8'), undefined, false],
+  ] as const)('%s → checked: %s', (biome, base, checked) => {
+    const dir = dirWith({ 'biome.json': biome, ...(base === undefined ? {} : { 'base.json': base }) })
+    expect(payloadLinted(dir, [HOOK]) !== undefined).toBe(checked)
+  })
+
+  it('says nothing without a config, or for files Biome does not read', () => {
+    expect(payloadLinted(dirWith({}), [HOOK])).toBeUndefined()
+    expect(payloadLinted(dirWith({ 'biome.json': '{}' }), ['.claude/commands/witness.md', '.witness/hooks/session-dashboard.sh'])).toBeUndefined()
+  })
+
+  it('names each checked path and its top directory', () => {
+    expect(payloadLinted(dirWith({ 'biome.json': '{}' }), ['.pi/extensions/witness.ts', '.witness/hooks/canon-guard.mjs'])).toEqual({
+      config: 'biome.json', paths: ['.pi/extensions/witness.ts', '.witness/hooks/canon-guard.mjs'], dirs: ['.pi', '.witness'],
+    })
   })
 })

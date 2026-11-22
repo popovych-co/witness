@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { witnessPaths } from '../src/change-set.js'
 import { dirtyStatePaths, isStatePath, stateCommit, stateDirs, stateOnlyAdvance } from '../src/gitio.js'
 import { canonPatterns } from '../src/worktree.js'
 import { git, payloadPlan, seededRepo, tmpRepo } from './helpers.js'
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 describe("witness's hooks live in .witness/hooks/ (row 250, #95)", () => {
   it('checks the hooks out in a worktree started after init, and neither start nor check calls them canon', async () => {
@@ -50,6 +53,28 @@ describe("witness's hooks live in .witness/hooks/ (row 250, #95)", () => {
     repo.git('add', '.witness/hooks/guard-state.mjs')
     repo.git('commit', '-m', 'init(claude-code): agent payloads', '-m', 'Witness-State: 1')
     expect(stateOnlyAdvance(repo.root, repo.root, from, 'HEAD')).toBe(false)
+  })
+
+  it('names payload a Biome config would check, in check and at init (row 250)', async () => {
+    const repo = tmpRepo()
+    repo.write('biome.json', '{}\n')
+    repo.git('add', 'biome.json')
+    repo.git('commit', '-m', 'biome')
+    const res = await repo.cli(['init', '--agent', 'claude-code'])
+    const detail = ".witness/hooks/canon-guard.mjs · .witness/hooks/guard-state.mjs — biome.json checks them so the repo's own lint can fail on witness's files; add the pattern !.witness to files.includes in biome.json"
+    expect(res.stdout).toContain(`payload-linted: ${detail}`)
+    const ck = await repo.cli(['check'])
+    expect(ck.stdout).toContain('payload-linted')
+    expect(ck.stdout).toContain(detail)
+  })
+
+  it("stays quiet on fewhats' Biome config", async () => {
+    const repo = tmpRepo()
+    repo.write('biome.json', readFileSync(join(REPO, 'fixtures/settings/biome-fewhats.json'), 'utf8'))
+    repo.git('add', 'biome.json')
+    repo.git('commit', '-m', 'biome')
+    expect((await repo.cli(['init', '--agent', 'claude-code'])).stdout).not.toContain('payload-linted')
+    expect((await repo.cli(['check'])).stdout).not.toContain('payload-linted')
   })
 
   it('keeps both homes witness-owned in the plan change set', () => {

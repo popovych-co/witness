@@ -15,7 +15,7 @@ import {
 } from '../install.js'
 import { probe } from '../probe.js'
 import { acquireLock } from '../lock.js'
-import { jsonStyle } from '../lint-config.js'
+import { jsonStyle, payloadLinted, payloadLintedDetail } from '../lint-config.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 import { defaultValues } from '../settings.js'
@@ -223,6 +223,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (retired.length > 0) {
         ctx.out(kv('payload-retired', `${retired.join(' · ')} — witness's hooks moved to .witness/hooks/; a worktree started earlier keeps its own until ship carries it onto a base without them`))
       }
+      // Row 250 (#95): the repo's own lint would read witness's files
+      const linted = payloadLinted(root, harness.payload.map((p) => p.to).filter((rel) => existsSync(join(root, rel))))
+      if (linted !== undefined) ctx.out(kv('payload-linted', payloadLintedDetail(linted)))
       if (retireHeld && harness.settings !== undefined) {
         ctx.err(`warning: ${harness.settings} could not be read, so witness's old hooks stay in .claude/hooks/ — fix the file, then re-run ${NPX_LATEST} init --agent ${harness.name}`)
       }

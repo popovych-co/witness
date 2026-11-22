@@ -8,6 +8,7 @@ import {
   type HarnessName,
 } from '../harness.js'
 import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadMissing, payloadStale } from '../install.js'
+import { payloadLinted, payloadLintedDetail } from '../lint-config.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
@@ -514,6 +515,11 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (missing.length > 0) {
         findings.push(f('warn', 'harness', `${name}: payload`, 'payload-missing',
           `${missing.join(' · ')} — witness's files are missing there; run ${NPX_LATEST} init --agent ${name}, which writes them in every home`))
+      }
+      // Row 250 (#95): the repo's own lint would read witness's files — said before its CI turns red
+      const linted = payloadLinted(root, installed.map((p) => p.to))
+      if (linted !== undefined) {
+        findings.push(f('warn', 'harness', `${name}: payload`, 'payload-linted', payloadLintedDetail(linted)))
       }
     }
 

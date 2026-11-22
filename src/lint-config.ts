@@ -112,3 +112,100 @@ function hasExtends(doc: Record<string, unknown>): boolean {
   const ext = doc.extends
   return typeof ext === 'string' ? ext !== '' : Array.isArray(ext) && ext.length > 0
 }
+
+// Row 250 (#95). Whether Biome would check witness's payload, read from its config without running it,
+// by the probed truth table (t0b-biome.sh, Biome 2.4.9):
+//  - the local `files.includes` decides by its last matching pattern, and a pattern naming a
+//    directory covers what is under it; with no `includes` at all, everything is checked;
+//  - where no local pattern matches, an `extends` list decides, assumed to include everything
+//    (presets such as ultracite start with `"**"`); with no `extends`, an unmatched path is not
+//    checked — the extended file is never read (Open / deferred);
+//  - a path is checked unless the formatter, the linter and the assist are all off for it, since
+//    `biome check` runs all three.
+// ESLint, Prettier and other tools are not read: their configs are code (Open / deferred).
+const BIOME_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx', '.json', '.jsonc', '.css', '.graphql', '.gql'])
+
+// One Biome glob as an anchored regex: `**/` any directories, a trailing `/**` anything under,
+// `**` alone anything, `*` within one segment, `?` one character, the rest literal.
+function globRegex(glob: string): RegExp {
+  let src = ''
+  let i = 0
+  while (i < glob.length) {
+    if (glob.startsWith('**/', i)) { src += '(?:.*/)?'; i += 3; continue }
+    if (glob.startsWith('/**', i) && i + 3 === glob.length) { src += '(?:/.*)?'; i += 3; continue }
+    if (glob.startsWith('**', i)) { src += '.*'; i += 2; continue }
+    const c = glob[i]!
+    if (c === '*') src += '[^/]*'
+    else if (c === '?') src += '[^/]'
+    else src += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    i++
+  }
+  return new RegExp(`^${src}$`)
+}
+
+interface Pattern { exclude: boolean; re: RegExp }
+
+function patternOf(raw: string): Pattern {
+  let text = raw
+  let exclude = false
+  if (text.startsWith('!!')) { exclude = true; text = text.slice(2) } else if (text.startsWith('!')) { exclude = true; text = text.slice(1) }
+  if (text.startsWith('./')) text = text.slice(2)
+  if (text.startsWith('/')) text = text.slice(1)
+  return { exclude, re: globRegex(text) }
+}
+
+// The path and each of its parent directories: a pattern naming a directory covers what is under it.
+function candidates(rel: string): string[] {
+  const parts = rel.split('/')
+  return parts.map((_, i) => parts.slice(0, i + 1).join('/'))
+}
+
+// The last pattern matching `rel` decides: true kept, false excluded, undefined none matched.
+function lastMatch(patterns: readonly Pattern[], rel: string): boolean | undefined {
+  const forms = candidates(rel)
+  let verdict: boolean | undefined
+  for (const p of patterns) if (forms.some((f) => p.re.test(f))) verdict = !p.exclude
+  return verdict
+}
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+
+function biomeChecks(doc: Record<string, unknown>, rel: string): boolean {
+  const files = isMap(doc.files) ? doc.files : {}
+  const local = Array.isArray(files.includes) ? strings(files.includes) : undefined
+  const ignored = strings(files.ignore).map((g) => `!${g}`)   // Biome 1.x
+  const patterns = (local === undefined ? ['**', ...ignored] : [...local, ...ignored]).map(patternOf)
+  const kept = lastMatch(patterns, rel) ?? hasExtends(doc)
+  if (!kept) return false
+  const on = { formatter: true, linter: true, assist: true }
+  const apply = (from: Record<string, unknown>): void => {
+    for (const tool of ['formatter', 'linter', 'assist'] as const) {
+      const t = from[tool]
+      if (isMap(t) && typeof t.enabled === 'boolean') on[tool] = t.enabled
+    }
+  }
+  apply(doc)
+  for (const o of Array.isArray(doc.overrides) ? doc.overrides : []) {
+    if (!isMap(o)) continue
+    if (lastMatch(strings(o.includes).map(patternOf), rel) === true) apply(o)
+  }
+  return on.formatter || on.linter || on.assist
+}
+
+export function payloadLinted(root: string, paths: readonly string[]): { config: string; paths: string[]; dirs: string[] } | undefined {
+  const cfg = readBiomeConfig(root)
+  if (cfg === undefined) return undefined
+  const checked = paths
+    .filter((rel) => BIOME_EXTENSIONS.has(rel.slice(rel.lastIndexOf('.'))) && biomeChecks(cfg.doc, rel))
+    .sort()
+  if (checked.length === 0) return undefined
+  const dirs = [...new Set(checked.map((rel) => rel.split('/')[0]!))].sort()
+  return { config: cfg.file, paths: checked, dirs }
+}
+
+// The `payload-linted` detail `check` and `init` both print. It holds no `,` and no `"`, so TOON
+// prints it raw (src/toon.ts `esc`).
+export function payloadLintedDetail(found: { config: string; paths: string[]; dirs: string[] }): string {
+  return `${found.paths.join(' · ')} — ${found.config} checks them so the repo's own lint can fail on witness's files; ` +
+    `add the pattern ${found.dirs.map((d) => `!${d}`).join(' and ')} to files.includes in ${found.config}`
+}
