@@ -162,6 +162,18 @@ export function payloadStale(root: string, harness: Harness): string[] {
     .map((p) => (home === root ? p.to : `${home}: ${p.to}`)))
 }
 
+// Row 246. Every payload file installed at the root that a worktree home lacks, as `<home>: <to>`, in
+// `payloadHomes` order. The plan change set leaves witness's payload out of what reviewers see, so a
+// session that deletes a witness hook in its worktree is named here, as an edited one is by
+// `payloadStale`. Separate from `payloadStale`, which `next`'s Pi fallback also reads (row 204): a
+// file missing from a worktree says nothing about the root chat's add-on.
+export function payloadMissing(root: string, harness: Harness): string[] {
+  const installed = harness.payload.filter((p) => existsSync(join(root, p.to)))
+  return payloadHomes(root).filter((home) => home !== root).flatMap((home) => installed
+    .filter((p) => !existsSync(join(home, p.to)))
+    .map((p) => `${home}: ${p.to}`))
+}
+
 // Preflight EVERY home before writing ANY. install.ts's standing doctrine is that a
 // refusal leaves nothing half-installed; across homes that matters more, not less — a
 // half-upgraded set of homes IS the skew row 116 refuses and this row prevents.

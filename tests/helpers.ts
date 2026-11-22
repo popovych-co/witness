@@ -672,6 +672,54 @@ export async function payloadPlan(): Promise<{ repo: TestRepo; wt: string; planI
   return { repo, wt, planId, base }
 }
 
+// Row 247's held-work fixtures. The base: the fixture's package.json, the broken implementation and
+// untagged tests on main before the plan starts (node_modules ignored, so a run's cache is never held).
+export function seedBase(repo: TestRepo): void {
+  repo.write('package.json', readFileSync(join(fixturePath('vitest-single'), 'package.json'), 'utf8'))
+  repo.write('src/token.ts', TOKEN_BROKEN)
+  repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)
+  repo.write('.gitignore', `${repo.read('.gitignore')}node_modules/\n`)
+  repo.git('add', 'package.json', 'src/token.ts', 'tests/token.test.ts', '.gitignore')
+  repo.git('commit', '-m', 'base: broken behavior')
+}
+
+// A plan whose only step is scaffolding, so `next` routes its evidence by the diff: the spec's
+// `-plan-1` done and the spec stamped live, `seedBase` on main, and `auth-refresh-plan-2` approved,
+// started and its step closed. `config` patches the committed runner config.
+export async function scaffoldingPlan(config: Record<string, unknown> = {}): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const repo = await seededRepo()
+  writeFileSync(join(repo.root, 'witness.config.yaml'), configYaml(withValues(singlePatch('filtered'), config)))
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'runner config')
+  trustConfig(repo)
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'auth-refresh-plan-1')
+  repo.flipStatus('auth-refresh-plan-1', 'done')
+  stampLive(repo, 'auth-refresh')
+  seedBase(repo)
+  const planId = 'auth-refresh-plan-2'
+  const w = await writePlan(repo, planId, { steps: [{ id: 's1', title: 'tidy', scaffolding: true }] }, '## Step: s1\nTidy.\n')
+  if (w.code !== 0) throw new Error(`write ${planId}: ${w.stdout}\n${w.stderr}`)
+  repo.flipStatus(planId, 'approved')
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  const closed = await repo.cli(['step-close', planId, '--step', 's1'], { cwd: wt })
+  if (closed.code !== 0) throw new Error(`step-close: ${closed.stdout}\n${closed.stderr}`)
+  return { repo, wt, planId }
+}
+
+// A verify-red in a process of its own that dies once the work is set aside and the red's tree laid
+// out, before the red runs (the crash seam's exit 9): nothing puts the work back.
+export function crashVerifyRed(cwd: string, planId: string, args: string[] = []): Promise<number | null> {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  return new Promise((done) => {
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', planId, ...args],
+      { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+    c.on('close', (code) => done(code))
+  })
+}
+
 // A Result's value, or a throw naming its violations.
 export function unwrap<T>(r: Result<T>): T {
   if (!r.ok) throw new Error(`refused: ${JSON.stringify(r.violations)}`)

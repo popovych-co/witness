@@ -7,7 +7,7 @@ import {
   HARNESSES, judgeLine, loadHarness, resolveDriver, resolveJudge, resolveSkills, skillPins,
   type HarnessName,
 } from '../harness.js'
-import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadStale } from '../install.js'
+import { CONTEXT_INSTALL, packageRoot, payloadHomes, payloadMissing, payloadStale } from '../install.js'
 import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
@@ -490,6 +490,12 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       if (stale.length > 0) {
         findings.push(f('warn', 'harness', `${name}: payload`, 'payload-stale',
           `${stale.join(' · ')} differ from what ${version()} ships — run ${NPX_LATEST} init --agent ${name}`))
+      }
+      // Row 246: reviewers no longer see a witness path change, so a hook deleted in a worktree is named here.
+      const missing = payloadMissing(root, harness)
+      if (missing.length > 0) {
+        findings.push(f('warn', 'harness', `${name}: payload`, 'payload-missing',
+          `${missing.join(' · ')} — witness's files are missing there; run ${NPX_LATEST} init --agent ${name}, which writes them in every home`))
       }
     }
 
