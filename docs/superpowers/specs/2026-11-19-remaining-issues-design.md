@@ -215,7 +215,7 @@ The build of Tasks 1–7 and its slice review settled these. Tags name entries i
 - **An untracked file in the way is refused before anything is written:** at the rebase (step 6's sparse-checkout overwrite) and wherever step 0 or step 7 applies the carry, without regard to case under `core.ignorecase` (Task 3, S1-1, S1-2).
 - **A held lock** is read from git's words and from the lock file itself, at capture, reset, rebase and apply, since Apple's git words it differently. A lock on the carry ref is `index-locked` too (S1-3).
 - **Dropping the carry ref is checked.** A failed drop after a clean apply is a held lock (exit 3) or `carry-pending`, never a leftover that loops `clash-unresolved` (S1-6).
-- **The "conflicts in index" fallback's kept ref** lists the carry's staged files (`git diff <carry>^1 <carry>^2`), so the guard reads them, finds no labels, and the move proceeds (Task 3).
+- **The "conflicts in index" fallback's kept ref** lists the carry's staged files (`git diff <carry>^1 <carry>^2`), so the guard reads them, finds no labels, and the move proceeds (Task 3). The move names it on a `kept:` line with `git diff <ref>^1 <ref>^2`: the staged versions live nowhere else, and the plan's merge deletes the ref (the final review's M2).
 - **The kept ref** is a stash-shaped commit with the carry's tree and parents, whose message lists the files as JSON, made create-only and numbered (the plan, Task 1).
 - **Step 0 aborts witness's own crashed rebase only at git's fresh stop, and keeps the files first** (Task 4, fix round 1). A session partway through resolving that rebase writes no HEAD reflog entry until `git rebase --continue`. So the reflog and orig-head alone read the rebase as witness's own, and the abort wiped the session's staged resolution and its other edits (the intent of P53, D168 and n2 outranks step 0.2's wording).
   - **A fresh stop** is all three:
@@ -225,7 +225,7 @@ The build of Tasks 1–7 and its slice review settled these. Tags name entries i
   - **Touched since it stopped**, the rebase refuses `carry-pending` and is never aborted. `git rebase --continue` and `git rebase --abort` are the human's choice, in prose, beside the restore steps, and the carry ref is kept.
   - **At a fresh stop**, the unmerged files' worktree bytes go first to the plan's next kept ref, so an edit inside a still-unmerged file that was never staged survives the abort.
     - The ref is built through a scratch `GIT_INDEX_FILE` seeded from HEAD, made create-only, and lists the files as JSON; the real index and the stash list are untouched.
-    - Step 0's output names it with `git show <ref>`.
+    - Step 0's output names it with `git show <ref>`, once the abort has landed: an abort that fails leaves no line claiming it (a refusal that is no held lock names the ref instead). A retry at the same stop reuses a kept ref with the same tree, parent and files rather than writing another (the final review's M6).
     - A backup that cannot be written refuses `carry-pending` without aborting.
 - **The PR branch** is named from the plan (`witness/<plan>`), never from HEAD. `pr-branch-gone` is a human's call, recorded `fix` (Tasks 5, 6).
 - **A side's checkout is offered only while the file holds a version git left** (S1-A). `git checkout --theirs`/`--ours` overwrites the worktree, so a file the session resolved or rewrote and has not staged is never offered one.
@@ -402,6 +402,8 @@ In the revised and handed-back states the anchor is the run the revise disposed 
 - **One owed predicate, `decisionOwed`** (the pending run, else the run a standing hand-back names), replaces `pendingDecision` in every reader. Status's gates row reads `handed back`, and ship reads awaiting-decision for a standing hand-back, with or without a PR (Task 13).
 - **The moved hand-back's row carries rule `stale-below-bound`,** so the policy's stale arm takes the free re-gate before the arbiter's `revise-returned` arm. A manual hand-back reaches the human through the settle and the gate's tail (Task 14).
 - **The changed-nothing screen reads liveActs,** so its session line drops the hand-back hint while upstream work is owed, and recommend's revised re-gate row never names `--unchanged` (S3-2).
+- **A revise-owed line names the hand-back** where `--unchanged` would land: `next`'s note for decompose, plan, implement and design, and ship's `help:`, add `or hand it back unchanged with witness gate <gate> <target> --unchanged` while the gate reads revised on the disposed run's content and no upstream work its own revise sent is owed. The router's hand-back row reads such a line as it reads the session line (the final review's M3).
+- **`witness log` and drive's `journal:` line print a hand-back in words,** `<gate>: handed back · run <id>`, with ` · manual` for a `--manual` one; every journal detail, stream name and lineage step they print is spelled out (row 205), and the lineage follows a superseded stream's `by` only as a well-formed id (the final review's M1 and its security review).
 
 ### 4.3 Row 245 — a session ends when its turn ends (#80)
 
@@ -600,18 +602,14 @@ Paths are under `.superpowers/sdd/2026-11-19-issues-86-87/scratch/`. `grill/` ho
 - **A session that ends without handing back** ends stuck, as today (decision 6).
 - **Older witness still running.** An older drive keeps 0.29 behaviour until restarted (c3).
 
-**Found in the first build's reviews and deferred** (minor; the first build's ledger):
-- `--unchanged --fresh` runs a paid round with a false note; the pair should refuse (S3-4).
-- The router's "revise changed nothing" row fires where `--unchanged` refuses (handed back, retracted, upstream owed), and the hand-back line has no `--manual` hint (S3-5).
-- `decide --show` on a handed-back reopen says "reopened — the gate must run again" (S3-6).
-- Status's "handed back" outcome covers plan, implement and ship, not design or decompose (S3-7).
-- Drive's `journal:` line prints `revise-returned` as truncated raw JSON (log.ts's default).
-- `next` and `status`'s parked rows call `reopenActs` without a content sha, so a gate parked at the bound on moved content still lists the approve there; and the endgame set offers `--stop` on a gate already parked at the bound, which lands as a second park (S2-5).
-- An abort during a grace, with a session that ignores SIGTERM, is overwritten to `exited` (S4-4).
-- The reviewer's line splitter hears once per chunk, never hears a final record with no newline, and re-splits the whole buffer per chunk; drive's `lineSink`, moved to `worker-stream.ts`, is the fix (S4-5–S4-7).
+**Found in the first build's reviews and deferred, still open** (minor; the first build's ledger). The rebuild fixed the rest: `--unchanged --fresh` refuses `fresh-unchanged` (S3-4); the router's hand-back row is keyed on the session line, which drops the hint where `--unchanged` refuses, and names `--manual` (S3-5); `decide --show` reads a handed-back reopen as handed back (S3-6); status reads `handed back` on all five gates (S3-7); drive's `journal:` line prints a hand-back in words; parked rows read staleness through `parkedReopen` (S2-5's first half); a stop drive sent is never renamed (`stopSent`, S4-4); the reviewer reads its stream through `lineSink` (S4-5–S4-7); step 0 aborts witness's crashed rebase only at git's fresh stop; `git am` is named as itself.
+- The endgame set offers `--stop` on a gate already parked at the bound, which lands as a second park (S2-5's second half).
 - The turn-end tests leave `sleep 600` orphans: a reviewer's stop reaches only its direct child on POSIX (pre-existing).
-- The `LANG=de` carry test proves nothing with Apple's git, which has no German catalog; the behaviour was verified under Homebrew git (S1-8).
-- Suspected, not reproduced: aborting witness's own crashed rebase while a session edits mid-resolution; `git am` reading as `rebase-apply` (the refusal names the wrong verb); a `rebase.backend=apply` reflog reading `witness-carry:` (fails safe); a duplicate kept ref after a crash between keep and drop; non-UTF-8 names on Linux.
+- The `LANG=de` carry test skips where git has no German catalog (Apple's git), so on such a machine nothing covers it; it passes under Homebrew git (S1-8).
+- Suspected, not reproduced: a `rebase.backend=apply` reflog reading `witness-carry:` (fails safe); a duplicate kept ref after a crash between a clash backup's keep and the carry ref's drop (step 0's stopped-rebase backup is reused, a clash backup is not); non-UTF-8 names on Linux.
+
+**Found in this build and left open:**
+- **test-evidence from the primary root.** Its clash guard reads the plan's worktree (`worktreePath`), not the checkout it tests, so a clash left in the checkout it tests — unmerged entries, or a kept file's label lines — does not refuse a plain red or green there. verify-red refuses unmerged entries in the checkout it runs in (§4.1.5) (Task 2).
 
 **Windows measurements owed** (the human, before the row says MEASURED):
 - W9. The carry on git 2.56.0.windows.1, including a file held open (Git for Windows retries an unlink for about 71 ms).
