@@ -81,6 +81,26 @@ export function canonPatterns(root: string): string[] {
   return ['/*', ...stateDirs(root).map((d) => `!/${d}/`), `/${PAYLOAD_HOME}/`]
 }
 
+// The sparse-checkout file's bytes: `excludeCanon` writes them and `refreshSparse` compares them.
+function sparseText(root: string): string {
+  return `${canonPatterns(root).join('\n')}\n`
+}
+
+// Row 250 (#95). A worktree cut before the hooks moved holds the old patterns, which drop all of
+// .witness/: there `git add` refuses a new .witness/hooks file, and a rebase brings the hooks in
+// skip-worktree, missing on disk (probe t0b-sparse.sh). So a worktree whose patterns differ from
+// today's gets today's and re-reads its tree. Never a refusal: what read-tree declines is residue,
+// and `start` and `check` judge residue. Whether it rewrote anything.
+export function refreshSparse(root: string, wtPath: string): boolean {
+  const gitDir = tryGit(wtPath, 'rev-parse', '--path-format=absolute', '--git-dir')
+  if (!gitDir.ok) return false
+  const file = join(gitDir.out, 'info', 'sparse-checkout')
+  if (!existsSync(file) || readFileSync(file, 'utf8') === sparseText(root)) return false
+  writeFileSync(file, sparseText(root))
+  tryGit(wtPath, 'read-tree', '-mu', 'HEAD')
+  return true
+}
+
 // How a canon path came to be visible inside a worktree. An OBSERVATION, never a severity
 // — `check` decides how bad each one is, because the causes are different events with
 // different remedies, and only `materialized` is one `witness start` clears.
@@ -151,7 +171,7 @@ export function excludeCanon(root: string, wtPath: string): Result<void> {
   }
   const gitDir = git(wtPath, 'rev-parse', '--path-format=absolute', '--git-dir')
   mkdirSync(join(gitDir, 'info'), { recursive: true })
-  writeFileSync(join(gitDir, 'info', 'sparse-checkout'), `${canonPatterns(root).join('\n')}\n`)
+  writeFileSync(join(gitDir, 'info', 'sparse-checkout'), sparseText(root))
   git(root, 'config', 'extensions.worktreeConfig', 'true')
   git(wtPath, 'config', '--worktree', 'core.sparseCheckout', 'true')
   git(wtPath, 'config', '--worktree', 'core.sparseCheckoutCone', 'false')

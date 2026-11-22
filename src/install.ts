@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { version } from './cli.js'
@@ -8,6 +8,7 @@ import { DEFAULT_JSON_STYLE, formatJson, type JsonStyle } from './json-format.js
 import { ok, refuse, v, type Result } from './refusal.js'
 import { SETTINGS } from './settings.js'
 import { NPX_LATEST, compareTriple, pinIn } from './version.js'
+import { refreshSparse } from './worktree.js'
 
 // dist/install.js and src/install.ts both sit one level under the package root, so the
 // same '..' works built and under vitest — the pattern model.ts:14 already uses. This is
@@ -66,7 +67,10 @@ const ENGINE_SOURCE = 'plugin/commands/witness.md'
 //
 // harness.settings is deliberately outside the dirty guard: mergeSettings appends and
 // never clobbers, so a dirty settings file is not at risk.
-export function preflightPayload(root: string, harness: Harness): Result<void> {
+//
+// Row 250 (#95): with `retiring` — the root, where init removes witness's retired files — the dirty
+// guard covers those too, since their removal is a clobber like any overwrite.
+export function preflightPayload(root: string, harness: Harness, opts: { retiring?: boolean } = {}): Result<void> {
   const targets = harness.payload.map((p) => p.to)
   const ignored = [...targets, ...(harness.settings ? [harness.settings] : [])]
     .filter((rel) => tryGit(root, 'check-ignore', '-q', '--', rel).ok)
@@ -79,7 +83,8 @@ export function preflightPayload(root: string, harness: Harness): Result<void> {
   // A failed status call is not evidence of dirt: primaryRoot already proved this is a
   // repo, and inventing a refusal out of a git error would block the upgrade this row
   // exists to deliver.
-  const status = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...targets)
+  const guarded = opts.retiring ? [...targets, ...harness.retired] : targets
+  const status = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...guarded)
   const dirty = status.ok
     ? status.out.split('\n').filter((l) => l !== '').map((l) => l.slice(3).trim())
     : []
@@ -193,7 +198,7 @@ export function installAllHomes(
 ): Result<Array<{ home: string; synced: SyncResult }>> {
   const homes = payloadHomes(root)
   const failures = homes.flatMap((home) => {
-    const pre = preflightPayload(home, harness)
+    const pre = preflightPayload(home, harness, { retiring: home === root })
     // Name the home in the field, or a `payload-dirty` row over `.claude/commands/witness.md`
     // is ambiguous across four checkouts of the same repository.
     return pre.ok ? [] : pre.violations.map((x) => ({ ...x, field: home === root ? x.field : `${home}: ${x.field}` }))
@@ -202,11 +207,26 @@ export function installAllHomes(
 
   const out: Array<{ home: string; synced: SyncResult }> = []
   for (const home of homes) {
+    // Row 250 (#95): a worktree cut before the hooks moved gets today's sparse patterns first, or
+    // its payload commit under .witness/hooks/ refuses
+    if (home !== root) refreshSparse(root, home)
     const synced = installPayload(home, harness)
     if (!synced.ok) return refuse(synced.violations)
     out.push({ home, synced: synced.value })
   }
   return ok(out)
+}
+
+// Row 250 (#95). witness's retired files taken off the root's disk, once its settings no longer wire
+// them — a settings file witness could not rewrite may still run them, so then none goes. A worktree
+// keeps its own: its settings are its branch's, which init never writes (the ship gate drops them,
+// `dropRetired`). No commit here: init adds the removed paths to its root commit. The removed paths,
+// sorted.
+export function retireAtRoot(root: string, harness: Harness, settings: string | undefined): string[] {
+  if (settings !== undefined && namesRetired(settings)) return []
+  const removed = harness.retired.filter((rel) => existsSync(join(root, rel)))
+  for (const rel of removed) rmSync(join(root, rel), { force: true })
+  return [...removed].sort()
 }
 
 function hasCommand(entries: HookEntry[] | undefined, command: string): boolean {

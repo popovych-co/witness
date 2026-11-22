@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { EXIT, version, type Ctx } from '../cli.js'
+import { NPX_LATEST } from '../version.js'
 import { PRINCIPLES_BODY } from '../principles.js'
 import { configPath, loadConfig } from '../config.js'
 import { renderConfig } from '../config-file.js'
@@ -9,7 +10,7 @@ import { writeDoc } from '../fm.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { loadHarness, resolveDriver, type Harness } from '../harness.js'
 import {
-  CONTEXT_INSTALL, installAllHomes, mergeSettings, preflightPayload, readIfExists, recordHarness,
+  CONTEXT_INSTALL, installAllHomes, mergeSettings, namesRetired, preflightPayload, readIfExists, recordHarness, retireAtRoot,
   writeSettings, type SyncResult,
 } from '../install.js'
 import { probe } from '../probe.js'
@@ -87,7 +88,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     if (agent !== 'auto') judge = { name: harness.name, from: 'from --agent' }
     // Revision 6: pre-flight before the lock and before any scaffold write, so a
     // refusal here leaves the repo exactly as it was.
-    const pre = preflightPayload(root, harness)
+    const pre = preflightPayload(root, harness, { retiring: true })
     if (!pre.ok) {
       renderRefusal(pre.violations).forEach(ctx.err)
       return EXIT.REFUSED
@@ -123,6 +124,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
     }
 
     let synced: SyncResult | undefined
+    // Row 250 (#95): witness's retired files removed at the root, or held there because the
+    // settings still wire them
+    let retired: string[] = []
+    let retireHeld = false
     if (harness !== undefined) {
       const payload = installAllHomes(root, harness)
       if (!payload.ok) {
@@ -147,6 +152,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         }
         ctx.out(kv('payload-synced', `${home} — ${touched.join(' · ')}`))
       }
+      let settingsText: string | undefined
       if (harness.settings !== undefined) {
         const current = readIfExists(root, harness.settings)
         // Row 250 (#95): written in the repo's formatter style, so its own lint stays clean
@@ -155,6 +161,7 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
           writeSettings(root, harness.settings, merged.text)
           files.push(harness.settings)
         }
+        settingsText = merged.changed ? merged.text : current
       }
       const recorded = recordHarness(readFileSync(configPath(root), 'utf8'), harness.name)
       if (recorded.changed) {
@@ -167,6 +174,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         // this state from a command that never mentioned judgment at all.
         ctx.err(`warning: this repo declares harness: ${recorded.declared} — ${harness.name}'s payload is installed, but ${recorded.declared} still judges; edit harness: in witness.config.yaml to re-point the judge`)
       }
+      retired = retireAtRoot(root, harness, settingsText)
+      files.push(...retired)
+      retireHeld = settingsText !== undefined && namesRetired(settingsText)
+        && harness.retired.some((rel) => existsSync(join(root, rel)))
     }
 
     // Nothing to COMMIT is the same legal silent success as nothing to write. A
@@ -208,6 +219,12 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       // is the parent commit's, because row 87 commits the payload.
       if (synced && synced.overwritten.length > 0) {
         ctx.out(kv('payload-overwritten', `${synced.overwritten.join(' · ')} — replaced with what ${version()} ships; the previous content is one git revert away`))
+      }
+      if (retired.length > 0) {
+        ctx.out(kv('payload-retired', `${retired.join(' · ')} — witness's hooks moved to .witness/hooks/; a worktree started earlier keeps its own until ship carries it onto a base without them`))
+      }
+      if (retireHeld && harness.settings !== undefined) {
+        ctx.err(`warning: ${harness.settings} could not be read, so witness's old hooks stay in .claude/hooks/ — fix the file, then re-run ${NPX_LATEST} init --agent ${harness.name}`)
       }
       // Row 191 §4.11. The settings now declare the context plugin, but a declaration alone
       // loads nothing headless (P9), and whether this machine installed it is Claude Code's to

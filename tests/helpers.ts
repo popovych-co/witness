@@ -16,6 +16,7 @@ import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
+import { stateDirs } from '../src/gitio.js'
 import type { Clock } from '../src/usage.js'
 import { parseDocument, stringify } from 'yaml'
 import { defaultValues, withValues } from '../src/settings.js'
@@ -718,6 +719,53 @@ export function crashVerifyRed(cwd: string, planId: string, args: string[] = [])
       { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
     c.on('close', (code) => done(code))
   })
+}
+
+// Row 250. A worktree's sparse patterns as 0.30.0 wrote them — every state dir dropped, the hooks'
+// home not yet re-included — and the tree re-read under them.
+export function writeOldSparsePatterns(repo: TestRepo, wt: string): void {
+  const gitDir = git(wt, 'rev-parse', '--path-format=absolute', '--git-dir')
+  writeFileSync(join(gitDir, 'info', 'sparse-checkout'), `${['/*', ...stateDirs(repo.root).map((d) => `!/${d}/`)].join('\n')}\n`)
+  git(wt, 'read-tree', '-mu', 'HEAD')
+}
+
+// Row 250. A 0.30.0 claude-code layout on `threeStepPlan`: fewhats' `.claude/settings.json` and a human
+// hook (`enforce-pnpm.sh`) on main, and witness's old hooks plus its command file in `.claude/`.
+// `base-had` commits those on main before `start`; `branch-added` starts first, then commits them on
+// main and, separately, on the plan branch (fewhats' shape). Either way the worktree ends on the old
+// sparse patterns.
+export async function legacyHooksPlan(shape: 'branch-added' | 'base-had'): Promise<{ repo: TestRepo; wt: string; planId: string }> {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const repo = await threeStepPlan()
+  repo.write('.claude/settings.json', readFileSync(join(REPO, 'fixtures/settings/fewhats-before.json'), 'utf8'))
+  repo.write('.claude/hooks/enforce-pnpm.sh', '#!/bin/sh\nexit 0\n')
+  repo.git('add', '.claude/settings.json', '.claude/hooks/enforce-pnpm.sh')
+  repo.git('commit', '-m', "the human's settings and hook")
+  const old: Array<[string, string]> = [
+    ['plugin/hooks/canon-guard.mjs', '.claude/hooks/canon-guard.mjs'],
+    ['plugin/hooks/guard-state.mjs', '.claude/hooks/guard-state.mjs'],
+    ['plugin/hooks/session-dashboard.sh', '.claude/hooks/session-dashboard.sh'],
+    ['plugin/commands/witness.md', '.claude/commands/witness.md'],
+  ]
+  const commitOld = (cwd: string): void => {
+    for (const [from, to] of old) {
+      mkdirSync(dirname(join(cwd, to)), { recursive: true })
+      writeFileSync(join(cwd, to), readFileSync(join(REPO, from)))
+    }
+    git(cwd, 'add', ...old.map(([, to]) => to))
+    git(cwd, 'commit', '-m', 'init(claude-code): agent payloads')
+  }
+  if (shape === 'base-had') commitOld(repo.root)
+  const planId = 'auth-refresh-plan-1'
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  if (shape === 'branch-added') {
+    commitOld(repo.root)
+    commitOld(wt)
+  }
+  writeOldSparsePatterns(repo, wt)
+  return { repo, wt, planId }
 }
 
 // A worktree's index, status and contents at `files` (`(none)` for an absent one): the state a held
