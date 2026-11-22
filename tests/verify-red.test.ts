@@ -441,6 +441,25 @@ describe('verify-red holds the non-test work off git\'s shared stash list (S1-C)
     expect(tree(repo, files)).toEqual(before)
   }, 60_000)
 
+  // Row 247. The guard puts held work back only where it was set aside: a ref another checkout left
+  // is that checkout's, and a verb reading this one runs untouched.
+  it('a held ref another checkout set aside leaves test-evidence in this checkout alone', async () => {
+    const repo = await tddRepo()
+    const wt = `${repo.root}-wt`
+    repo.git('worktree', 'add', '-q', '-b', 'witness/auth-refresh-plan-1', wt, 'plan-wt')
+    writeFileSync(join(wt, 'tests', 'token.test.ts'), TOKEN_TESTS_TAGGED)
+    writeFileSync(join(wt, 'src', 'token.ts'), TOKEN_FIXED)
+    expect(await crashed(repo, wt)).toBe(9)
+    const left = heldSha(repo)
+    const there = readFileSync(join(wt, 'src', 'token.ts'), 'utf8')
+    repo.write('tests/token.test.ts', TOKEN_TESTS_TAGGED)          // this checkout's own red to record
+    const res = await repo.cli(['test-evidence', 'auth-refresh-plan-1', '--phase', 'red', '--step', 's1'], { env: fixtureEnv() })
+    expect(res.stdout).not.toMatch(/^held-work: /m)
+    expect(heldSha(repo)).toBe(left)
+    expect(readFileSync(join(wt, 'src', 'token.ts'), 'utf8')).toBe(there)
+    expect(phases(repo).map((e) => e.phase)).toEqual(['red'])
+  }, 60_000)
+
   // Fix round 2. The clash guard reads the plan's worktree; verify-red sets aside the checkout it runs
   // in. An unmerged non-test file there is a session's half-done resolution, refused with the guard's
   // own rows before anything is held, never checked out over and deleted.

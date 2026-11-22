@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cliAct, type Act } from './act.js'
 import { seeWork } from './carry.js'
+import { EXIT, type Ctx } from './cli.js'
+import { loadConfig } from './config.js'
+import { checkoutRoot, diffBase } from './evidence.js'
 import { git, gitWith, tryGit } from './gitio.js'
-import { isAlive } from './lock.js'
-import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { acquireLock, isAlive } from './lock.js'
+import { ok, refuse, renderRefusal, v, type Result, type Violation } from './refusal.js'
 import { kv, shellWord, shellLine } from './toon.js'
 
 // Row 247 (#92). verify-red's held work: the ref a run sets its non-test work aside in, what that
@@ -188,7 +191,7 @@ export function heldPending(planId: string, ref: string, why: string, then: Act,
     + `${shellLine(['git', 'stash', 'apply', ref])} brings back its worktree versions, and with --index its staged ones too, on a tree with `
     + `nothing else staged. Once the work is back, or a human decides it is not wanted, a human deletes ${ref} by hand (git update-ref -d); `
     + 'witness never does'
-  return v(ref, 'verify-red-pending', `${ref} holds ${shellWord(planId)}'s non-test work a verify-red set aside — ${why} — so it was neither put back nor overwritten`,
+  return v(ref, 'verify-red-pending', `${ref} holds non-test work a verify-red set aside — ${why} — so it was neither put back nor overwritten`,
     where === undefined ? `${hand}. Then ${then.line}`
       : `${cliAct('recover').line} puts it back into ${shellWord(where)} once nothing there changed since and the run that set it aside has ended — ${hand}`)
 }
@@ -284,4 +287,61 @@ export function restoreHeld(runRoot: string, held: string, paths: readonly strin
   if (unstaged.length) git(runRoot, 'update-index', '--force-remove', '--', ...unstaged)
   // the entries just set carry no stat data: refreshed, plumbing reads them as unchanged
   tryGit(runRoot, 'update-index', '-q', '--refresh')
+}
+
+// Row 247. True when the plan's held ref stands and was set aside in `tree`'s checkout, or when its
+// record names no checkout or no files — witness cannot tell it was set aside anywhere else, so it
+// fails closed. Read-only.
+export function heldIn(root: string, planId: string, tree: string): boolean {
+  const held = standingHeld(root, planId)
+  if (held === undefined) return false
+  const record = held.record
+  if (record === undefined || record.checkout === undefined || record.files.length === 0) return true
+  const here = checkoutRoot(tree)
+  return record.checkout === (here.ok ? here.value : tree)
+}
+
+// Row 247 (#92's residual). Before a verb reads a plan's tree, a crashed verify-red's held work goes
+// back into it, under verify-red's own rules (`putBackHeld`), or the verb refuses `verify-red-pending`
+// and never runs. A ref set aside in another checkout is that checkout's: this tree was never set
+// aside, so the verb runs untouched. The put-back runs under the repo lock, against the base the
+// record names, else the tree's own (its config, else the root's). The paths put back, `undefined`
+// when nothing stood here, or the refusal.
+export function heldGuard(root: string, planId: string, tree: string): Result<string[] | undefined> {
+  if (!heldIn(root, planId, tree)) return ok(undefined)
+  const hereR = checkoutRoot(tree)
+  const here = hereR.ok ? hereR.value : tree
+  const lock = acquireLock(root)
+  if (!lock.ok) return lock
+  try {
+    const held = standingHeld(root, planId)            // re-read under the lock: a run may have finished
+    if (held === undefined) return ok(undefined)
+    return putBackHeld(here, planId, held, treeBase(root, here), cliAct('next'))
+  } finally {
+    lock.value()
+  }
+}
+
+// The base a put-back checks against when the record names none: the tree's own diff base, read from
+// its config, else the root's; undefined when neither resolves.
+function treeBase(root: string, tree: string): string | undefined {
+  for (const at of tree === root ? [root] : [tree, root]) {
+    const cfg = loadConfig(at)
+    if (!cfg.ok) continue
+    const base = diffBase(tree, cfg.value)
+    return base.ok ? base.value : undefined
+  }
+  return undefined
+}
+
+// Row 247. `heldGuard` for a verb: a put-back prints its `held-work:` line and the verb goes on; a
+// refusal is rendered and exits 2 (3 when the repo lock is held). Nothing standing prints nothing.
+export function refuseHeld(ctx: Ctx, root: string, planId: string, tree: string): number | undefined {
+  const r = heldGuard(root, planId, tree)
+  if (!r.ok) {
+    renderRefusal(r.violations).forEach((l) => ctx.err(l))
+    return r.violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
+  }
+  if (r.value !== undefined) ctx.out(heldWorkLine(heldRef(planId), r.value))
+  return undefined
 }

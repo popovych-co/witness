@@ -270,9 +270,9 @@ describe('witness-implement: a step already on the base (row 241)', () => {
       .toContain('unless it closed its step as already present (`step-close: … closed — already present`), which prints the slice lines like any step close; that step\'s green comes next')
   });
   // Row 243. A crashed verify-red's held work: put back first (`held-work:`), or the human's.
-  it('reads held-work as files to re-read, and stops on verify-red-pending, never touching the ref (row 243)', () => {
+  it('reads held-work as files to re-read, and stops on verify-red-pending, never touching the ref (rows 243, 247)', () => {
     const body = readFileSync(skillPath('witness-implement'), 'utf8');
-    expect(body).toContain('A `held-work:` line means an earlier verify-red never finished and its held work was put back first: re-read the files it names');
+    expect(body).toContain('A `held-work:` line — from any witness verb that reads the worktree — means a verify-red never finished and its held work was put back first: re-read the files it names');
     expect(body).toContain('A `verify-red-pending` refusal means that work could not be put back safely: never delete or move the ref it names; render it and **END YOUR TURN**');
   });
 });
