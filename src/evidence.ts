@@ -9,7 +9,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { cliAct } from './act.js'
-import { heldHere, heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, toHead, trapTermination, type StandingHeld } from './held.js'
+import { heldHere, heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, letSignalsLand, toHead, trapTermination, type StandingHeld } from './held.js'
 import { planChangeSet } from './change-set.js'
 import { unmergedPaths } from './carry.js'
 import { clashViolations } from './clash.js'
@@ -145,10 +145,11 @@ export async function recordEvidence(
   const runCtx: Ctx = { ...ctx, env: { ...ctx.env, WITNESS_SCREENS_DIR: dir } }
   const run = await runSpecTests(runRoot, runCtx, parentId, stateRoot)
   if (!run.ok) return run
-  // Row 247. One macrotask before the journal write: a signal that reached witness during the run
-  // (a runner that caught it and exited 1 reads as a plain failure) ends the process here, before any
-  // outcome is recorded — a listener runs only between macrotasks.
-  await new Promise<void>((r) => setImmediate(r))
+  // Row 247. Before the journal write, a signal that reached witness during the run (a runner that
+  // caught it and exited 1 reads as a plain failure — vitest exits 1 on a group SIGINT) reaches
+  // verify-red's trap, which ends the process; if something kept it alive, the run is refused.
+  const caughtSignal = await letSignalsLand()
+  if (caughtSignal !== undefined) return refuse([interrupted(caughtSignal)])
   const vacuous = phase === 'red' && run.value.allOk ? { vacuous: true } : {}
   const captures = collectCaptures(runRoot, planId)
   const capExtra = captures.length ? { captures } : {}
@@ -275,10 +276,14 @@ export async function verifyRed(
     crashPoint(ctx.env, 'verify-red-held')
     red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra)
   } finally {
-    putBack()
-    // a signal that arrived during the run reaches the trap here, with the tree already whole
-    await new Promise<void>((r) => setImmediate(r))
-    trap?.release()
+    try {
+      putBack()
+    } finally {
+      // a signal that arrived during the run reaches the trap here, with the tree already whole; the
+      // listeners go even when the put-back throws (the ref then stays for the guard)
+      await letSignalsLand()
+      trap?.release()
+    }
   }
   // D148. The set-aside/checkout cycle above rewrote every non-test file on disk — the agent's
   // prior reads are stale, and witness is what made them stale. Announced rather than left

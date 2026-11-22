@@ -375,23 +375,39 @@ export function refuseHeld(ctx: Ctx, root: string, planId: string, tree: string)
 
 // Row 247. verify-red's held window under SIGTERM, SIGINT and SIGHUP: on the first one, `cleanup` puts
 // the work back, the three listeners go, and the signal is raised again, so the process ends by it as
-// it would have — with the tree whole. `release()` removes the listeners. A listener runs only between
-// macrotasks: the runner's execSync ends first (the group's signal reaches the suite too), and the
-// window's callers yield one macrotask before they journal or let go (evidence.ts).
+// it would have — with the tree whole. `release()` removes the listeners. A listener runs only in the
+// event loop's poll phase: the runner's execSync ends first (the group's signal reaches the suite too),
+// and the window's callers let it land (`letSignalsLand`) before they journal or let go. The signal
+// caught is kept, so a caller still running after the re-raise (another listener kept the process
+// alive) refuses rather than records.
 // Its limits: SIGKILL, drive's group SIGKILL once the agent exits (src/drive.ts) or 5 s after its
 // SIGTERM, and Windows' tree stop run no handler. The held ref then waits for the guard (`heldGuard`,
 // `recover`, `next`'s routing).
+let caught: NodeJS.Signals | undefined
 export function trapTermination(cleanup: () => void): { release(): void } {
   const signals: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP']
-  const release = (): void => { for (const s of signals) process.removeListener(s, onSignal) }
+  caught = undefined
+  const unlisten = (): void => { for (const s of signals) process.removeListener(s, onSignal) }
   function onSignal(signal: NodeJS.Signals): void {
+    caught = signal
     try {
       cleanup()
     } finally {
-      release()
+      unlisten()
       process.kill(process.pid, signal)
     }
   }
   for (const s of signals) process.on(s, onSignal)
-  return { release }
+  return { release: () => { unlisten(); caught = undefined } }
 }
+
+// Row 247. Lets a signal that reached witness reach the trap before the caller goes on, and reports
+// the one the trap caught, if any. Two macrotasks, never one (slice 3 review): libuv delivers a caught
+// signal in its poll phase, so from a poll-phase continuation (an fs callback, stdin after a trust
+// prompt — and on Node 22 the top level) the first setImmediate fires in that same iteration's check
+// phase, before the listener; the second fires only after the next poll phase has run.
+export async function letSignalsLand(): Promise<NodeJS.Signals | undefined> {
+  await new Promise<void>((r) => setImmediate(() => setImmediate(r)))
+  return caught
+}
+
