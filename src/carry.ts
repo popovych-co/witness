@@ -396,7 +396,9 @@ export function freshStop(wt: string): StopReading {
 // staged survives the abort. The tree is built in a scratch index (`GIT_INDEX_FILE`, seeded from
 // HEAD, the files added from the worktree, a deleted one removed): the real index is untouched and
 // nothing lands on the stash list. The commit's parent is the stop's HEAD, so `git show <ref>` shows
-// the files against it. Any failed step refuses `carry-pending`, and nothing is aborted.
+// the files against it. Any failed step refuses `carry-pending`, and nothing is aborted. A retry at
+// the same stop (its abort met a held lock, or the run was killed after the backup) finds the backup
+// the last try wrote and reuses it, never writing an identical one (the final review's M6).
 export function keepStopped(wt: string, planId: string, files: readonly string[]): Result<string> {
   const pending = (step: string, out: string): Result<string> =>
     refuse([carryPending(planId, `${step} failed, so witness's own stopped rebase was not aborted: ${gitWords(out)}`)])
@@ -410,8 +412,13 @@ export function keepStopped(wt: string, planId: string, files: readonly string[]
     const written = carryGitWith(wt, scratch, 'write-tree')
     const tree = written.stdout.trim()
     if (written.code !== 0 || tree === '') return pending('writing the scratch tree', written.stderr)
+    const stopped = carryGit(wt, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+    const head = stopped.stdout.trim()
+    if (stopped.code !== 0 || head === '') return pending('reading the stop\'s HEAD', stopped.stderr)
+    const same = keptAlike(wt, planId, tree, head, files)
+    if (same !== undefined) return ok(same)
     const note = 'the conflicted files of witness\'s stopped rebase as the worktree held them, kept before step 0 aborted it\n\n'
-    const made = carryGit(wt, 'commit-tree', tree, '-p', 'HEAD', '-m', keptMessage(planId, files, note))
+    const made = carryGit(wt, 'commit-tree', tree, '-p', head, '-m', keptMessage(planId, files, note))
     const sha = made.stdout.trim()
     if (made.code !== 0 || sha === '') return pending('writing the kept commit', made.stderr)
     const kept = nextKept(wt, planId)
@@ -421,6 +428,18 @@ export function keepStopped(wt: string, planId: string, files: readonly string[]
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// M6. A kept ref under the plan's prefix that already holds this backup: the same tree, the stop's
+// HEAD as its one parent, and the same files listed. Anything git cannot answer is no match.
+function keptAlike(wt: string, planId: string, tree: string, parent: string, files: readonly string[]): string | undefined {
+  const listed = JSON.stringify(files)
+  for (const k of keptRefs(wt, planId)) {
+    if (JSON.stringify(k.files) !== listed) continue
+    const r = carryGit(wt, 'rev-parse', `${k.sha}^{tree}`, `${k.sha}^@`)
+    if (r.code === 0 && r.stdout.trim().split('\n').join(' ') === `${tree} ${parent}`) return k.ref
+  }
+  return undefined
 }
 
 // c5. `git merge-tree --write-tree --merge-base` arrived in git 2.40. Read from `git --version`'s

@@ -318,6 +318,62 @@ describe('step 0 finishes an interrupted move at every ship run (row 243, #86)',
     expect(stashList(wt)).toBe('')
   }, 240_000)
 
+  // The final review's M6. Step 0 names its kept ref only once the abort has landed — "kept before it
+  // was aborted" over a rebase still standing is untrue — and a retry at the same fresh stop reuses the
+  // backup it already wrote (same tree, same parent, same files) rather than writing an identical one.
+  it('a fresh stop whose abort meets a held lock names no kept ref; the retry reuses the backup and names it once the abort lands (M6)', async () => {
+    const { repo, wt, planId, stop } = await crashedStop()
+    const lock = resolve(wt, g(wt, 'rev-parse', '--git-path', 'index.lock'))
+    writeFileSync(lock, '')
+    const said: string[] = []
+    const r = finishMove(repo.root, wt, planId, (l) => said.push(l))
+    expect(r.ok).toBe(false)
+    expect(!r.ok ? r.violations.map((x) => x.rule) : []).toEqual(['index-locked'])
+    // the backup is written first, but no line claims an abort that did not land
+    expect(keptRefs(wt, planId).map((k) => k.ref)).toEqual([`${keptPrefix(planId)}1`])
+    expect(said.filter((l) => l.startsWith('kept:'))).toEqual([])
+    expect(operationInProgress(wt)).toBe('rebase-merge')
+    expect(head(wt)).toBe(stop)
+    rmSync(lock)
+    const again: string[] = []
+    expect(finishMove(repo.root, wt, planId, (l) => again.push(l))).toEqual({ ok: true, value: 'finished' })
+    // the same stop's backup, reused: still one kept ref, and named now that the abort landed
+    expect(keptRefs(wt, planId).map((k) => k.ref)).toEqual([`${keptPrefix(planId)}1`])
+    expect(again.filter((l) => l.startsWith('kept:'))).toEqual([
+      expect.stringContaining(shellLine(['git', 'show', `${keptPrefix(planId)}1`])),
+    ])
+    expect(operationInProgress(wt)).toBeUndefined()
+    expect(read(wt, 'h.txt')).toBe('x\ny\nz\nWORK-H\n')
+    expect(hasCarry(wt, planId)).toBe(false)
+    expect(stashList(wt)).toBe('')
+  }, 240_000)
+
+  it('a fresh stop whose abort git refuses (no lock): carry-pending names the kept ref, and no kept: line claims the abort (M6)', async () => {
+    if (process.platform === 'win32') return   // the failing git is a shell script on PATH
+    const { repo, wt, planId, stop } = await crashedStop()
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+    const dir = mkdtempSync(join(tmpdir(), 'witness-noabort-'))
+    writeFileSync(join(dir, 'git'),
+      `#!/bin/sh\nseen=\nfor a in "$@"; do [ "$a" = rebase ] && seen=1; [ -n "$seen" ] && [ "$a" = --abort ] && { echo 'error: the abort was refused' >&2; exit 1; }; done\nexec '${real}' "$@"\n`)
+    chmodSync(join(dir, 'git'), 0o755)
+    try {
+      const env = fakeHarness()
+      const r = shipChild(repo, planId, { ...env, PATH: `${dir}${delimiter}${env.PATH}` })
+      expect(r.status, r.stderr).toBe(2)
+      expect(r.stderr).toMatch(/carry-pending/)
+      expect(r.stderr).toContain('the abort was refused')
+      const kept = `${keptPrefix(planId)}1`
+      expect(keptRefs(wt, planId).map((k) => k.ref)).toEqual([kept])
+      expect(r.stderr).toContain(kept)
+      expect(r.stdout.split('\n').filter((l) => l.startsWith('kept:'))).toEqual([])
+      expect(operationInProgress(wt)).toBe('rebase-merge')
+      expect(head(wt)).toBe(stop)
+      expect(hasCarry(wt, planId)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 240_000)
+
   it('a session continued witness\'s rebase → operation-in-progress; nothing aborted, its commits kept (P53)', async () => {
     const { repo, wt, planId, moveMain } = await movedPlan()
     // two plan commits that both conflict with main, and uncommitted work in h.txt

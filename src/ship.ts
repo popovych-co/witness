@@ -525,7 +525,7 @@ function carryExit(violations: readonly Violation[]): number {
 //   1. the worktree gone refuses carry-pending, the ref shown and kept;
 //   2. an operation in progress: witness's own rebase, proven (`witnessOwnRebase`), is aborted only
 //      at git's fresh stop (`freshStop`; fix round 1), its conflicted files kept first in a kept ref
-//      (`keepStopped`, named through `say`), and the move goes on; touched since it stopped, it
+//      (`keepStopped`, named through `say` once the abort has landed), and the move goes on; touched since it stopped, it
 //      refuses carry-pending and is never aborted. Any other operation refuses operation-in-progress
 //      before anything is compared, applied or moved — a session's is never aborted nor applied into
 //      (P40, P53);
@@ -556,14 +556,18 @@ export function finishMove(root: string, wt: string, planId: string, say: (line:
     const kept = keepStopped(wt, planId, stop.unmerged.map((p) => p.path))
     if (!kept.ok) return refuse(kept.violations)
     const abort = carryGit(wt, 'rebase', '--abort')
-    say(kv('kept', `${kept.value} — the conflicted files of witness's stopped rebase as they stood, kept before it was aborted · `
-      + `see them with ${shellLine(['git', 'show', kept.value])}`))
+    // The final review's M6: the backup is named as kept before an abort only once the abort has
+    // landed. One that did not land names it in the refusal instead (a held lock's row is fixed text;
+    // the next run, at the same stop, reuses the backup and names it then).
     if (operationInProgress(wt) !== undefined) {
       const out = `${abort.stdout}${abort.stderr}`
       const lock = heldLock(wt, out)
       return refuse([lock !== undefined ? lockedRow(planId, lock, true, true)
-        : carryPending(planId, `witness's own rebase from the interrupted move could not be aborted: ${logSafe(out.trim().slice(0, 200)) || 'git printed nothing'}`)])
+        : carryPending(planId, `witness's own rebase from the interrupted move could not be aborted (its conflicted files are kept in ${kept.value}): `
+          + `${logSafe(out.trim().slice(0, 200)) || 'git printed nothing'}`)])
     }
+    say(kv('kept', `${kept.value} — the conflicted files of witness's stopped rebase as they stood, kept before it was aborted · `
+      + `see them with ${shellLine(['git', 'show', kept.value])}`))
   }
   const head = carryGit(wt, 'symbolic-ref', '--quiet', 'HEAD').stdout.trim()
   if (head !== `refs/heads/${branch}`) return refuse([offBranchPending(planId, head)])
