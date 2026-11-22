@@ -14,6 +14,7 @@ import {
 } from '../install.js'
 import { probe } from '../probe.js'
 import { acquireLock } from '../lock.js'
+import { jsonStyle } from '../lint-config.js'
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 import { defaultValues } from '../settings.js'
@@ -147,7 +148,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         ctx.out(kv('payload-synced', `${home} — ${touched.join(' · ')}`))
       }
       if (harness.settings !== undefined) {
-        const merged = mergeSettings(readIfExists(root, harness.settings))
+        const current = readIfExists(root, harness.settings)
+        // Row 250 (#95): written in the repo's formatter style, so its own lint stays clean
+        const merged = mergeSettings(current, jsonStyle(root, current))
         if (merged.changed) {
           writeSettings(root, harness.settings, merged.text)
           files.push(harness.settings)

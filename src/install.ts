@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { version } from './cli.js'
 import { tryGit } from './gitio.js'
 import { type Harness } from './harness.js'
+import { DEFAULT_JSON_STYLE, formatJson, type JsonStyle } from './json-format.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { SETTINGS } from './settings.js'
 import { NPX_LATEST, compareTriple, pinIn } from './version.js'
@@ -22,6 +23,14 @@ export function packageRoot(): string {
 // Row 250 (#95): the hooks moved to .witness/hooks/ (PAYLOAD_HOME).
 const GUARD_CMD = 'node "$CLAUDE_PROJECT_DIR/.witness/hooks/guard-state.mjs"'
 const DASHBOARD_CMD = 'sh "$CLAUDE_PROJECT_DIR/.witness/hooks/session-dashboard.sh"'
+// Row 250 (#95). Every command string witness ever wrote into .claude/settings.json and no longer
+// writes, to its successor — read from all eleven versions of this file, exactly two. Only these
+// exact strings are rewired: a hand-edited variant is the human's.
+const RETIRED_CMDS = new Map([
+  ['node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-state.mjs"', GUARD_CMD],
+  ['sh "$CLAUDE_PROJECT_DIR/.claude/hooks/session-dashboard.sh"', DASHBOARD_CMD],
+])
+const WITNESS_CMDS = new Set([GUARD_CMD, DASHBOARD_CMD])
 
 interface HookEntry { matcher?: string; hooks: Array<{ type: string; command: string }> }
 
@@ -226,10 +235,55 @@ function withEntry(current: unknown, name: string, value: unknown): Record<strin
   return Object.hasOwn(current, name) ? undefined : { ...current, [name]: value }
 }
 
+// Whether `text` still wires one of witness's retired hook commands — matched as a JSON string
+// literal, so a human's command that merely starts the same way is not one.
+export function namesRetired(text: string): boolean {
+  return [...RETIRED_CMDS.keys()].some((cmd) => text.includes(JSON.stringify(cmd)))
+}
+
+// Row 250 (#95). witness's own hook entries rewired in place: each retired command becomes its
+// successor where it stands, and then, per event, an entry holding exactly one witness command goes
+// when an earlier entry has the same matcher and that same command — a file wired from both homes
+// keeps one set. Whether anything changed.
+function rewireHooks(hooks: Record<string, unknown>): boolean {
+  let changed = false
+  for (const list of Object.values(hooks)) {
+    if (!Array.isArray(list)) continue
+    for (const entry of list as unknown[]) {
+      const inner = (entry as { hooks?: unknown } | null)?.hooks
+      if (!Array.isArray(inner)) continue
+      for (const h of inner as Array<{ command?: unknown } | null>) {
+        const next = typeof h?.command === 'string' ? RETIRED_CMDS.get(h.command) : undefined
+        if (next !== undefined) { h!.command = next; changed = true }
+      }
+    }
+    const single = (e: unknown): string | undefined => {
+      const inner = (e as { hooks?: unknown } | null)?.hooks
+      if (!Array.isArray(inner) || inner.length !== 1) return undefined
+      const cmd = (inner[0] as { command?: unknown } | null)?.command
+      return typeof cmd === 'string' && WITNESS_CMDS.has(cmd) ? cmd : undefined
+    }
+    const kept: unknown[] = []
+    for (const entry of list as unknown[]) {
+      const cmd = single(entry)
+      const matcher = (entry as { matcher?: unknown }).matcher
+      if (cmd !== undefined && kept.some((k) => single(k) === cmd && (k as { matcher?: unknown }).matcher === matcher)) {
+        changed = true
+        continue
+      }
+      kept.push(entry)
+    }
+    list.splice(0, list.length, ...kept)
+  }
+  return changed
+}
+
 // Merge, never replace: .claude/settings.json is the human's file and may already carry
-// their own hooks, model pin and permissions. We append only what is missing, matched
-// by command string, and preserve every other key byte for byte.
-export function mergeSettings(existing: string | undefined): { text: string; changed: boolean } {
+// their own hooks, model pin and permissions. witness rewires its own retired hook commands in
+// place (row 250), appends only what is missing, matched by command string, and keeps every
+// other key's value. A changed file is written in `style` (row 250: the formatter's), so the
+// repo's own `biome check` stays clean on it.
+export function mergeSettings(existing: string | undefined, style: JsonStyle = DEFAULT_JSON_STYLE): { text: string; changed: boolean } {
   let doc: Record<string, unknown> = {}
   if (existing !== undefined && existing.trim() !== '') {
     try {
@@ -241,7 +295,7 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
     }
   }
   const hooks = (doc.hooks ?? {}) as Record<string, HookEntry[] | undefined>
-  let changed = false
+  let changed = typeof hooks === 'object' && hooks !== null && !Array.isArray(hooks) ? rewireHooks(hooks) : false
   const pre = [...(hooks.PreToolUse ?? [])]
   for (const matcher of ['Edit|Write|MultiEdit', 'Bash']) {
     if (!pre.some((e) => e.matcher === matcher && hasCommand([e], GUARD_CMD))) {
@@ -281,7 +335,7 @@ export function mergeSettings(existing: string | undefined): { text: string; cha
   doc.permissions = { ...perms, allow }
   if (marketplaces !== undefined) doc.extraKnownMarketplaces = marketplaces
   if (plugins !== undefined) doc.enabledPlugins = plugins
-  return { text: `${JSON.stringify(doc, null, 2)}\n`, changed: true }
+  return { text: formatJson(doc, style), changed: true }
 }
 
 // The config rung of Decision 5's ladder, and rung ONE of Decision 105's judgment ladder.
