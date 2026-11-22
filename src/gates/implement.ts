@@ -12,7 +12,7 @@ import { latestRecap, readStream } from '../journal.js'
 import type { LensDoc } from '../reviewer.js'
 import { findById, type CanonDoc } from '../scan.js'
 import { changedTestSpecs, diffBase, evidenceForDiff, runRegression, screensDir } from '../evidence.js'
-import { planChangeSet } from '../change-set.js'
+import { planChangeSet, witnessExcludes } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
 import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
@@ -23,7 +23,8 @@ import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
-  const diff = git(wt, 'diff', base)
+  // Row 246: the diff text is the plan change set's — witness's payload files never reach a reviewer.
+  const diff = git(wt, 'diff', base, '--', ...witnessExcludes())
   const untracked = files.filter((f) => {
     const abs = join(wt, f)
     if (!existsSync(abs) || !statSync(abs).isFile()) return false
