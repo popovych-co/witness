@@ -9,7 +9,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { cliAct } from './act.js'
-import { heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, toHead } from './held.js'
+import { heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, toHead, trapTermination } from './held.js'
 import { planChangeSet } from './change-set.js'
 import { unmergedPaths } from './carry.js'
 import { clashViolations } from './clash.js'
@@ -145,6 +145,10 @@ export async function recordEvidence(
   const runCtx: Ctx = { ...ctx, env: { ...ctx.env, WITNESS_SCREENS_DIR: dir } }
   const run = await runSpecTests(runRoot, runCtx, parentId, stateRoot)
   if (!run.ok) return run
+  // Row 247. One macrotask before the journal write: a signal that reached witness during the run
+  // (a runner that caught it and exited 1 reads as a plain failure) ends the process here, before any
+  // outcome is recorded — a listener runs only between macrotasks.
+  await new Promise<void>((r) => setImmediate(r))
   const vacuous = phase === 'red' && run.value.allOk ? { vacuous: true } : {}
   const captures = collectCaptures(runRoot, planId)
   const capExtra = captures.length ? { captures } : {}
@@ -226,6 +230,16 @@ export async function verifyRed(
   // overwritten either: nothing has left the tree yet, and the run refuses. Row 247: written whenever
   // there is non-test work, committed or not, so a crash anywhere below leaves a ref to read.
   let holding: string | undefined
+  // Row 247. From the moment the work is held until it is back, SIGTERM, SIGINT and SIGHUP put it back
+  // before the process ends (`trapTermination`); `putBack` runs once, whoever calls it first.
+  let trap: { release(): void } | undefined
+  let back = false
+  const putBack = (): void => {
+    if (holding === undefined || back) return
+    back = true
+    restoreHeld(runRoot, holding, nonTest)
+    git(runRoot, 'update-ref', '-d', held, holding)
+  }
   if (nonTest.length) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
@@ -239,6 +253,7 @@ export async function verifyRed(
         throw new Error(`git update-ref ${held} failed: ${wrote.out}`)
       }
       holding = work
+      trap = trapTermination(putBack)
     } finally {
       lock.value()
     }
@@ -254,10 +269,10 @@ export async function verifyRed(
     crashPoint(ctx.env, 'verify-red-held')
     red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra)
   } finally {
-    if (holding !== undefined) {
-      restoreHeld(runRoot, holding, nonTest)
-      git(runRoot, 'update-ref', '-d', held, holding)
-    }
+    putBack()
+    // a signal that arrived during the run reaches the trap here, with the tree already whole
+    await new Promise<void>((r) => setImmediate(r))
+    trap?.release()
   }
   // D148. The set-aside/checkout cycle above rewrote every non-test file on disk — the agent's
   // prior reads are stale, and witness is what made them stale. Announced rather than left
