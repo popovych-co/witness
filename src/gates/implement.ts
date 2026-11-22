@@ -11,7 +11,8 @@ import { git, stateDirs } from '../gitio.js'
 import { latestRecap, readStream } from '../journal.js'
 import type { LensDoc } from '../reviewer.js'
 import { findById, type CanonDoc } from '../scan.js'
-import { changedFiles, changedTestSpecs, diffBase, evidenceForDiff, runRegression, screensDir } from '../evidence.js'
+import { changedTestSpecs, diffBase, evidenceForDiff, runRegression, screensDir } from '../evidence.js'
+import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
 import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
@@ -104,7 +105,7 @@ registerGate({
     const baseR = diffBase(wt, cfg)
     if (!baseR.ok) return baseR
     const base = baseR.value
-    const files = changedFiles(wt, base)
+    const files = planChangeSet(wt, base)
 
     const pin = plan.meta['design-from']
     const lensOverrides: Record<string, LensOverride> = {}

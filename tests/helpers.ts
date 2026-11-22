@@ -9,6 +9,8 @@ import { configCommands, grantCommands } from '../src/allowlist.js'
 import { scenariosMade } from './scenarios.js'
 import { main, type Ctx } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
+import { diffBase } from '../src/evidence.js'
+import type { Result } from '../src/refusal.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
 import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
@@ -650,6 +652,38 @@ export async function startedThreeStepPlan(
   const wt = worktreePath(repo.root, planId)
   cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
   return { repo, wt, planId }
+}
+
+// Row 246. A started `threeStepPlan` whose main carries both harnesses' payload sets (claude-code's,
+// then pi's — pi's init warns that claude-code still judges), with the vitest-single fixture copied
+// into the worktree. `base` is the plan's diff base.
+export async function payloadPlan(): Promise<{ repo: TestRepo; wt: string; planId: string; base: string }> {
+  const repo = await threeStepPlan()
+  for (const agent of ['claude-code', 'pi']) {
+    const r = await repo.cli(['init', '--agent', agent])
+    if (r.code !== 0) throw new Error(`init --agent ${agent}: ${r.stdout}\n${r.stderr}`)
+  }
+  const planId = 'auth-refresh-plan-1'
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}\n${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  cpSync(fixturePath('vitest-single'), wt, { recursive: true, filter: (s) => !s.includes('node_modules') })
+  const base = unwrap(diffBase(wt, unwrap(loadConfig(repo.root))))
+  return { repo, wt, planId, base }
+}
+
+// A Result's value, or a throw naming its violations.
+export function unwrap<T>(r: Result<T>): T {
+  if (!r.ok) throw new Error(`refused: ${JSON.stringify(r.violations)}`)
+  return r.value
+}
+
+// Every regex metacharacter escaped, for a pattern built from a ref or a path.
+export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+
+// git in `cwd`, its output with the trailing newline trimmed.
+export function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).replace(/\n$/, '')
 }
 
 // `threeStepPlan`, started, where s1's behavior predates the plan: main already holds it under an

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { changedFiles } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { diffReviewedSha, effortReviewedSha, effortSpecs, planPairSha } from '../src/reviewed.js'
 import { loadCanon } from '../src/scan.js'
 import { readStream } from '../src/journal.js'
@@ -36,7 +36,7 @@ describe('diffReviewedSha', () => {
     repo.git('commit', '--allow-empty', '-m', 'an advance that changes no file')
     const moved = repo.git('rev-parse', 'HEAD')
     expect(moved).not.toBe(base)
-    expect(changedFiles(repo.root, moved)).toEqual(changedFiles(repo.root, base))
+    expect(planChangeSet(repo.root, moved)).toEqual(planChangeSet(repo.root, base))
     expect(diffReviewedSha(repo.root, moved)).not.toBe(diffReviewedSha(repo.root, base))
   })
 
@@ -145,7 +145,7 @@ describe('diffReviewedSha', () => {
     repo.git('commit', '-m', 'ship(p): pr #7', '-m', 'Witness-State: 1')
     const stamped = repo.git('rev-parse', 'HEAD')
     repo.write('src/token.ts', 'export const ttl = 2\n')      // the branch's own work: code only
-    expect(changedFiles(repo.root, stamped)).toEqual(['src/token.ts'])
+    expect(planChangeSet(repo.root, stamped)).toEqual(['src/token.ts'])
     expect(diffReviewedSha(repo.root, stamped)).not.toBe(diffReviewedSha(repo.root, forked))
   })
 })

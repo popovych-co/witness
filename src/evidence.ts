@@ -10,6 +10,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { cliAct } from './act.js'
+import { planChangeSet } from './change-set.js'
 import { seeWork, unmergedPaths } from './carry.js'
 import { clashViolations } from './clash.js'
 import { runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
@@ -175,15 +176,6 @@ export function diffBase(runRoot: string, cfg: Config, override?: string): Resul
   if (tryGit(runRoot, 'merge-base', '--is-ancestor', a, b).ok) return ok(b)
   if (tryGit(runRoot, 'merge-base', '--is-ancestor', b, a).ok) return ok(a)
   return ok(b)
-}
-
-// `-z` on both: with core.quotePath on (git's default), a non-ASCII or special path is printed
-// quoted, and a quoted name is no path — the edit was invisible to the reviewed identity, the
-// snapshot and the delta view alike.
-export function changedFiles(runRoot: string, base: string): string[] {
-  const tracked = git(runRoot, 'diff', '--name-only', '-z', base).split('\0').filter(Boolean)
-  const untracked = git(runRoot, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean)
-  return [...new Set([...tracked, ...untracked])].sort()
 }
 
 const inCommit = (runRoot: string, ref: string, rel: string): boolean =>
@@ -463,7 +455,7 @@ export async function verifyRed(
     ctx.out(kv('held-work', `${held} — the non-test work a crashed verify-red set aside is back in the tree: `
       + `${shown.join(' · ')}${more} — re-read before editing`))
   }
-  const files = changedFiles(runRoot, base)
+  const files = planChangeSet(runRoot, base)
   if (!files.some(isTestPath)) {
     return refuse([v('diff', 'no-test-changes', `${files.length} changed files, none are tests`, 'a diff that adds or modifies tagged tests')])
   }
@@ -535,7 +527,7 @@ export async function verifyRed(
 
 export function diffTags(runRoot: string, base: string): string[] {
   const tags = new Set<string>()
-  for (const rel of changedFiles(runRoot, base).filter(isTestPath)) {
+  for (const rel of planChangeSet(runRoot, base).filter(isTestPath)) {
     let added: string
     if (inCommit(runRoot, base, rel)) {
       added = git(runRoot, 'diff', base, '--', rel)
@@ -559,7 +551,7 @@ export function diffTags(runRoot: string, base: string): string[] {
 // from 3 to 24 respondents breaking a `@spec:report-view` e2e) touches no tagged line at all.
 export function changedTestSpecs(runRoot: string, base: string, parentId: string): string[] {
   const tags = new Set<string>()
-  for (const rel of changedFiles(runRoot, base).filter(isTestPath)) {
+  for (const rel of planChangeSet(runRoot, base).filter(isTestPath)) {
     const abs = join(runRoot, rel)
     if (!existsSync(abs)) continue                    // deleted: no content left to owe anything
     for (const tag of extractCanonicalTags(readFileSync(abs, 'utf8'))) tags.add(tag)

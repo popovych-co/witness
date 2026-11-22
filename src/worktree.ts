@@ -57,7 +57,7 @@ export function ensureExcluded(root: string): void {
   const current = existsSync(excludePath) ? readFileSync(excludePath, 'utf8') : ''
   const lines = current.split('\n')
   // screens are witnessed evidence, regenerable, never committed — ignored in every
-  // worktree so they stay out of changedFiles() and the reviewed tree-sha. Drafts (row 199)
+  // worktree so they stay out of planChangeSet() and the reviewed tree-sha. Drafts (row 199)
   // are a conversation's local memory, never committed: a repo whose .gitignore predates
   // them would otherwise show each one to `git status` and to a human's `git add -A`; drive's
   // live folder (row 203) is the same kind

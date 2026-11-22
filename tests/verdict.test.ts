@@ -83,13 +83,13 @@ describe('code anchors', () => {
 })
 
 // The invariant the D162 fix restores, stated against real git output rather than a
-// hand-listed `files`: every path `changedFiles` counts toward the floor must resolve as a
+// hand-listed `files`: every path `planChangeSet` counts toward the floor must resolve as a
 // bare coverage anchor, or the floor is unsatisfiable by construction and the round
 // malforms forever (the reporter re-ran four times, added a file, calibrated, forced
 // --fresh: the shortfall was invariantly one).
 describe('every changed path is coverable (D162)', () => {
   it('a submodule pointer move, a deletion and a symlinked directory all anchor', async () => {
-    const { changedFiles } = await import('../src/evidence.js')
+    const { planChangeSet } = await import('../src/change-set.js')
     const { execFileSync } = await import('node:child_process')
     const { rmSync, symlinkSync } = await import('node:fs')
     const root = mkdtempSync(join(tmpdir(), 'verdict-git-'))
@@ -118,7 +118,7 @@ describe('every changed path is coverable (D162)', () => {
     symlinkSync('src', join(root, 'src-link'))                       // untracked symlink to a directory
     writeFileSync(join(root, 'src/token.ts'), 'export const ttl = 2\n')
 
-    const files = changedFiles(root, base)
+    const files = planChangeSet(root, base)
     expect(files).toEqual(['src-link', 'src/gone.ts', 'src/token.ts', 'vendor'])
     const reviewed: Reviewed = { kind: 'tree', root, files }
     for (const f of files) expect(resolveAnchor(f, reviewed), f).toBeUndefined()

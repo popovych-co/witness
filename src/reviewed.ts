@@ -2,14 +2,15 @@ import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { canonicalJson, canonicalSha, planContentSha } from './sha.js'
-import { changedFiles } from './evidence.js'
+import { planChangeSet } from './change-set.js'
 import { git, tryGit } from './gitio.js'
 import { effortAbandoned, effortStreams, latestRecap, readStream } from './journal.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { findById } from './scan.js'
 
 // Row 96a. The reviewed identity is the DIFF the battery read: the base commit plus the
-// content of every path `changedFiles` reports — exactly what `codePromptBody` renders as
+// content of every path `planChangeSet` reports (row 246: witness's own payload files are no plan
+// change, so they never move it) — exactly what `codePromptBody` renders as
 // `### Changed files`, `### Diff vs base <sha>` and the untracked blocks. `worktreeTreeSha`
 // hashed the WHOLE worktree via `add -A`, so witness's own journal entries and stamps —
 // pulled in by ship's pre-battery rebase — moved the identity the verdict was keyed to, and
@@ -52,7 +53,7 @@ function blobOf(runRoot: string, rel: string): string {
 }
 
 export function diffReviewedSha(runRoot: string, base: string): string {
-  const pairs = changedFiles(runRoot, base).map((rel) => `${rel}\0${blobOf(runRoot, rel)}`)
+  const pairs = planChangeSet(runRoot, base).map((rel) => `${rel}\0${blobOf(runRoot, rel)}`)
   return sha256([base, '\n', pairs.sort().join('\n')])
 }
 

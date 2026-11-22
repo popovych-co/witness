@@ -2,7 +2,8 @@ import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
-import { changedFiles, diffBase } from '../src/evidence.js'
+import { diffBase } from '../src/evidence.js'
+import { planChangeSet } from '../src/change-set.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
@@ -20,7 +21,7 @@ async function implementTwice(second: string, beforeRound2: (scenario: string) =
   const { repo, wt, planId } = await shippableRepo()
   if (opts.dirty) appendFileSync(join(wt, 'src/token.ts'), '// round 1 is uncommitted\n')
   const cfg = loadConfig(repo.root)
-  const files = () => { const b = diffBase(wt, cfg.ok ? cfg.value : (undefined as never)); return changedFiles(wt, b.ok ? b.value : '') }
+  const files = () => { const b = diffBase(wt, cfg.ok ? cfg.value : (undefined as never)); return planChangeSet(wt, b.ok ? b.value : '') }
   const at = (anchor: string) => ({ coverage: files().slice(0, 5).map((f) => ({ anchor: f, note: 'read' })), findings: [{ blocking: true, anchor, claim: 'x' }] })
   const scenario = fakeScenario()
   const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
@@ -111,7 +112,7 @@ describe('delta review at the code gates (C3)', () => {
     writeFileSync(join(wt, 'src/extra.ts'), 'export const extra = 1\n')
     const cfg = loadConfig(repo.root)
     const b = diffBase(wt, cfg.ok ? cfg.value : (undefined as never))
-    const files = changedFiles(wt, b.ok ? b.value : '')
+    const files = planChangeSet(wt, b.ok ? b.value : '')
     const scenario = fakeScenario()
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     putVerdict(scenario, { coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })),

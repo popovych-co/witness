@@ -15,7 +15,8 @@ import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } f
 import { diffReviewedSha, effortCanon, effortOf, effortReviewedSha, effortWrites, implementReviewedSha, planPairSha, principlesOwner, runJudgedPlan } from '../reviewed.js'
 import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
-import { changedFiles, diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
+import { diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
+import { planChangeSet } from '../change-set.js'
 import {
   greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, presentGreenOwed, redCycleClosed, redInFlight, stepProgress, stepsLine,
   type StepState,
@@ -800,7 +801,7 @@ function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], j
   }
   if (plan.meta.pr !== undefined) return { ...runs(cliAct('ship', id)), stage: 'ship', target: id, ...atRoot }
   const baseR = diffBase(wt, cfg)
-  const files = baseR.ok ? changedFiles(wt, baseR.value) : []
+  const files = baseR.ok ? planChangeSet(wt, baseR.value) : []
   // Rows 95 + 96: the identity is the diff plus the plan's content, never the worktree, and
   // it comes from the SAME derivation the implement gate keys on — deriving it here a second
   // way is what made every settled gate read as lapsed. undefined means the base cannot be

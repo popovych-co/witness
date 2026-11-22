@@ -7,7 +7,8 @@ import { contextDigest } from '../delta.js'
 import { snapshotTree } from '../snapshot.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
 import { findById } from '../scan.js'
-import { changedFiles, diffBase } from '../evidence.js'
+import { diffBase } from '../evidence.js'
+import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
 import { execCommand } from '../runner.js'
 import { ensureTrusted } from '../allowlist.js'
@@ -55,7 +56,7 @@ registerGate({
     const baseR = diffBase(wt, cfg)
     if (!baseR.ok) return baseR
     const base = baseR.value
-    const files = changedFiles(wt, base)
+    const files = planChangeSet(wt, base)
     const checks: GateCheck[] = []
 
     const entries = readStream(root, planId)
