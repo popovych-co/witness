@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse, stringify } from 'yaml'
+import { cliAct } from '../src/act.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
@@ -142,22 +143,53 @@ describe('every ship outcome is classified and recorded (row 242)', () => {
     expect(s.calls().match(/pr checks 1 --json name,bucket/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
   }, 180_000)
 
+  // The watch fetches before the merge does: the routing's base check, and pushApproved's lease (rows
+  // 242, 243). The ssh stand-in serves those from the bare repo, and refuses the login only once CI is
+  // being watched (the checks hook arms it), so the deny lands on the merge's own base fetch.
   it('a refused git login at the merge\'s base fetch → fix, never transient', async () => {
     const s = await readyToShip()
     gh(s.scenario, 'pr-1-checks', 'none')
     await runShip(s.ctx, s.planId)                                       // opens PR #1, a merge stop
     gh(s.scenario, 'pr-1-checks', 'pass')
+    const armed = join(s.scenario, 'ssh-deny-armed')
+    const trail = join(s.scenario, 'ssh-trail')
+    const bare = `${s.repo.root}-origin.git`
+    gh(s.scenario, 'gh-checks-hook', `: > '${armed}'\n`)
     const ssh = join(s.scenario, 'ssh-deny')
-    writeFileSync(ssh, '#!/bin/sh\necho "git@github.com: Permission denied (publickey)." >&2\nexit 255\n', { mode: 0o755 })
+    writeFileSync(ssh, [
+      '#!/bin/sh',
+      `if [ -e '${armed}' ]; then`,
+      `  echo deny >> '${trail}'`,
+      '  echo "git@github.com: Permission denied (publickey)." >&2',
+      '  exit 255',
+      'fi',
+      `echo pass >> '${trail}'`,
+      'case "$*" in',
+      `  *git-receive-pack*) exec git receive-pack '${bare}' ;;`,
+      `  *) exec git upload-pack '${bare}' ;;`,
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 })
     s.repo.git('remote', 'set-url', 'origin', 'ssh://git@github.invalid/o/r.git')
-    const before = process.env.GIT_SSH_COMMAND
+    const before = { cmd: process.env.GIT_SSH_COMMAND, variant: process.env.GIT_SSH_VARIANT }
     process.env.GIT_SSH_COMMAND = ssh
+    // `simple`: git passes the host and the command alone, and never probes the stand-in with `-G`
+    process.env.GIT_SSH_VARIANT = 'simple'
+    let code: number
     try {
-      await runShip(s.ctx, s.planId)
+      code = await runShip(s.ctx, s.planId)
     } finally {
-      if (before === undefined) delete process.env.GIT_SSH_COMMAND; else process.env.GIT_SSH_COMMAND = before
+      if (before.cmd === undefined) delete process.env.GIT_SSH_COMMAND; else process.env.GIT_SSH_COMMAND = before.cmd
+      if (before.variant === undefined) delete process.env.GIT_SSH_VARIANT; else process.env.GIT_SSH_VARIANT = before.variant
     }
-    expect(records(s.repo, s.planId).at(-1)).toMatchObject({ outcome: 'fix', pr: 1 })
+    // the routing's fetch and the lease's went through; the one denied is the merge's base fetch
+    const calls = readFileSync(trail, 'utf8').trim().split('\n')
+    expect(calls.filter((c) => c === 'pass').length).toBeGreaterThanOrEqual(2)
+    expect(calls.filter((c) => c === 'deny')).toEqual(['deny'])
+    expect(code, s.err()).toBe(1)
+    expect(s.out()).toContain(`merge: held — git refused the login — sign in to the remote again · then ${cliAct('ship', s.planId).line}`)
+    expect(records(s.repo, s.planId).at(-1)).toMatchObject({ outcome: 'fix', reason: 'git refused the login — sign in to the remote again', pr: 1 })
+    expect(s.calls()).not.toContain('pr merge')
   }, 180_000)
 
   it('a merge → merged', async () => {

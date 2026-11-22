@@ -64,6 +64,8 @@ const NOT_COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ['src/ship.ts', 'witness ship is running on it (pid ${marker.holder.pid}, since ${hhmm(marker.holder.since)})'],
   // adopt's usage line: `<…>` is argument syntax naming the configured dirs, not a command.
   ['src/verbs/adopt.ts', 'witness adopt <${paths.specs}/... | ${paths.plans}/...>.md'],
+  // Row 243: a kept ref's commit message, which git stores and no surface offers to be pasted.
+  ['src/carry.ts', 'witness kept ${planId}'],
 ]
 
 describe('no witness command in src/ or plugin/hooks/ prints a bare value (row 239)', () => {

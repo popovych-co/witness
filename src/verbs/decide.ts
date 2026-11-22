@@ -1,11 +1,11 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
 import { unsafeLeft, untrustedCmdsFor } from '../allowlist.js'
-import { loadConfig } from '../config.js'
+import { loadConfig, type Config } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
-import { gateSpec, liveExits, renderGateRun } from '../gate.js'
+import { gateSpec, renderGateRun } from '../gate.js'
 import { decideView, decideViewLines, type DecideView } from '../decide-view.js'
 import { newDeferralId, type DeferralKind } from '../deferral.js'
 import { recommend, renderDecision } from '../recommend.js'
@@ -16,18 +16,18 @@ import { appendEntry, entryLine, journalRel, policyPins, readStream, streamExist
 import { primaryRoot, stateCommit } from '../gitio.js'
 import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
-import { criteriaOwner, findById, loadCanon } from '../scan.js'
-import { gateParked, openStepRow } from './next.js'
+import { criteriaOwner, findById, loadCanon, type Canon } from '../scan.js'
+import { actFacts, openStepRow } from './next.js'
 import { driveChild } from '../drive-presence.js'
 import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
-import { cliAct } from '../act.js'
+import { cliAct, exitsLine, type Act } from '../act.js'
 import {
-  ROUND_BOUND, anchorRecurrence, boundReached, lastGateRun, notePrefill, pendingDecision, repairGranted,
-  isUnpark, roundsSinceApprove, settledToken, type DecisionEntry, type GateRunEntry,
+  REVISE_HUMAN, ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
+  repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LiveActs,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
@@ -44,9 +44,6 @@ function trustFor(ctx: Ctx, target: string): string[] {
 
 const asEntry = (e: DecisionEntry) => e as unknown as { t: 'human-decision'; [k: string]: unknown }
 
-// The flags whose next word is their value.
-const VALUED = new Set(['--note', '--upstream', '--pin', '--via'])
-
 // Row 239. argv read left to right, the one way `decide` reads it: each word is a flag, the value
 // of the valued flag before it, or a positional. A flag is read only where a flag stands, so a
 // value is never one, whatever it spells: a note a human or the arbiter wrote may read
@@ -59,7 +56,7 @@ function decideWords(argv: readonly string[]): DecideWords {
     if (!w.startsWith('--')) { out.positional.push(w); continue }
     out.flags.add(w)
     const value = argv[i + 1]
-    if (VALUED.has(w) && value !== undefined) {
+    if (VALUED_FLAGS.has(w) && value !== undefined) {
       out.values.set(w, [...(out.values.get(w) ?? []), value])
       i++
     }
@@ -75,9 +72,10 @@ function decideWords(argv: readonly string[]): DecideWords {
 // handed a violations table instructing them to self-repair. This prints `--show`'s
 // surface instead: state, then the exits that actually work. The exit code is unchanged;
 // the decision the human asked for still did not happen.
+// Row 244: `acts` are the endgame's live acts (`liveActs`), the exits line when no block ranks them.
 function renderBound(
   ctx: Ctx, gate: string, target: string, entries: Entry[], stale: boolean,
-  upstream: string | undefined, note?: string,
+  upstream: string | undefined, acts: readonly Act[], note?: string,
 ): number {
   ctx.err(kv('gate', gate))
   ctx.err(kv('target', target))
@@ -87,14 +85,35 @@ function renderBound(
   // remaining act carries a cost, and which cost is worth paying is the whole question.
   const d = recommend({ gate, target, entries, upstream, stale, untrustedCmds: trustFor(ctx, target) })
   if (d) renderDecision(d).forEach((l) => ctx.err(l))
-  else ctx.err(cmd('exits', liveExits(gate, target, entries, stale, upstream)))
+  else ctx.err(cmd('exits', exitsLine(acts)))
   return EXIT.REFUSED
 }
 
 // Row 240 (R2). The settler lost the stop: a decision landed after the read its act was built on.
 function settledSince(ctx: Ctx, gate: string, target: string): number {
-  renderRefusal([v('gate', 'settled-since', `${gate} ${target} — decided since it was read`,
-    `the stop as it stands — ${cliAct('decide', gate, target, '--show').line}`)]).forEach((l) => ctx.err(l))
+  renderRefusal([settledSinceViolation(gate, target)]).forEach((l) => ctx.err(l))
+  return EXIT.REFUSED
+}
+
+// Design §4.2.9. The states where an approve the screens withhold still anchors, so the blocker that
+// withholds it is named. In the settled, parked and none states nothing is pending a verdict.
+const WITHHOLDS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'handed-back-moved', 'retracted', 'at-bound'])
+
+// Row 244 (design §4.2.1). An act the gate's state does not offer: the refusal names what is live. Row
+// 241 (R9): while a plan step is open no implement review runs, so the refusal names the step's
+// command, never `gate implement`. With no run at all the gate is the act; an abandoned effort has none.
+function nothingPending(
+  ctx: Ctx, root: string, cfg: Config, canon: Canon, gate: string, target: string, live: LiveActs, ran: boolean,
+): number {
+  const plan = gate === 'implement' ? findById(canon, target) : undefined
+  const open = plan !== undefined && plan.meta.type === 'plan' ? openStepRow(root, cfg, plan) : undefined
+  // Row 239. The command a want names is an act's line, so the target the human typed prints quoted.
+  renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
+    open !== undefined ? `${open.row.line} — ${open.step} is not built yet, and no implement review runs while it is open`
+    : live.acts.length > 0 ? exitsLine(live.acts)
+    : !ran ? `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`
+    : 'no act — the effort is abandoned')])
+    .forEach((l) => ctx.err(l))
   return EXIT.REFUSED
 }
 
@@ -319,21 +338,62 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
 
   // Row 240 (R2). Before the repair, bound and anchor checks: a settler whose read predates a
   // decision that landed meanwhile has lost the stop, and any rule below would only refuse it
-  // for the wrong reason (`repair-not-at-bound`) — or, through D94's revised anchor or the
+  // for the wrong reason (`repair-not-at-bound`) — or, through the revised state's anchor or the
   // bound's endgame anchor, let its act land on a disposition it never read.
   if (act.token !== undefined && settledToken(entries, gate, act.runId ?? '') !== act.token) {
     return settledSince(ctx, gate, target)
   }
 
+  // Row 244 (#87, design §4.2.1). `decide` accepts exactly the acts that are live now, from the one
+  // derivation every screen reads (`liveActs`): an act a screen offers lands, and no other does. The
+  // act is keyed the way the screens' acts are (`actKey`): its verb plus `--override`, `--repair` and
+  // `--upstream`; a note, a pin, `--via` and `--trust-cmds` never make another act.
+  //
+  // `undefined` means the sha CANNOT be computed (no worktree, missing parent) and must never read as
+  // "moved" — the same doctrine the approve-time staleness check states below.
+  const nowSha = last !== undefined ? spec.currentSha?.(root, canon, cfgR.value, target) : undefined
+  const factsOf = (es: Entry[]) => actFacts(root, cfgR.value, canon, gate, target, es, { sha: nowSha, upstream: upstreamId })
+  const liveOf = (es: Entry[]): LiveActs => liveActs(gate, target, es, factsOf(es))
+  const facts = factsOf(entries)
+  const live = liveActs(gate, target, entries, facts)
+  const key = actKey(['decide', gate, target, `--${decision}`, ...(override ? ['--override'] : []),
+    ...(repair ? ['--repair'] : []), ...(upstream !== undefined ? ['--upstream', upstream] : [])])
+  // A revise that neither sends the work upstream nor buys a round: the un-park, the revise again,
+  // the retraction, or the pending stop's revise.
+  const plainRevise = decision === 'revise' && upstream === undefined && !repair
+  const notHuman = act.selected === 'policy' || act.selected === 'arbiter' || driveChild(ctx.env) !== undefined
+
   // Row 241 (R11; the user's decision Q3). Below the bound a human's plain revise on a parked gate
   // sends it back to work: the park is lifted without running the gate. A human's act only — not
   // inside a session drive started (rows 205, 207, 225), and never the policy's or the arbiter's,
   // since a settler that parked a gate must not be the one to un-park it.
-  const unparking = decision === 'revise' && upstream === undefined && !repair && !atBound && gateParked(entries, gate)
-  if (unparking && (act.selected === 'policy' || act.selected === 'arbiter' || driveChild(ctx.env) !== undefined)) {
+  const unparking = plainRevise && live.state === 'parked' && !atBound
+  if (unparking && notHuman) {
     renderRefusal([v('decide', 'unpark-human',
       act.selected === 'policy' || act.selected === 'arbiter' ? `${act.selected} revise on a parked gate` : 'a session drive started',
-      `the human, in their own chat or terminal — witness decide ${shellWord(gate)} ${shellWord(target)} --revise --note "<why>" sends a parked gate back to work`)])
+      `the human, in their own chat or terminal — ${cliAct('decide', gate, target, '--revise', '--note', '<why>').line} sends a parked gate back to work`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+
+  // Row 244 (design §4.2.7, the user's decision 9). Revising a revised gate again, handed back or
+  // not, and retracting a settled one are a human's acts, as the un-park is: refused for the policy
+  // and the arbiter and inside a session drive started, on the pattern of rows 205, 207 and 225 —
+  // before the anchor rule, since no state makes them a settler's. Each carries the human's words: a
+  // revise again says what to change, and a retraction why (D99), so a bare revise refuses where the
+  // noted one would land.
+  const again = plainRevise && REVISE_HUMAN.has(live.state)
+  const retraction = live.state === 'settled'
+  if (again && notHuman) {
+    renderRefusal([v('decide', 'revise-human',
+      `${act.selected === 'policy' || act.selected === 'arbiter' ? act.selected : 'a session drive started'} — ${retraction ? 'a retraction' : 'a revise again'}`,
+      `the human, in their own chat or terminal — ${cliAct('decide', gate, target, '--revise', '--note', '<why>').line} ${retraction ? 'retracts the settlement, saying why' : 'sends the work back, saying what to change'}`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
+  if (again && (act.note === undefined || act.note.trim() === '') && actLive(live, key)) {
+    renderRefusal([v('--note', 'note-required', act.note === undefined ? 'absent' : '(empty)',
+      `${retraction ? 'why the settlement is retracted' : 'what to change'}, in the human's words — ${cliAct('decide', gate, target, '--revise', '--note', '<why>').line}`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -359,74 +419,43 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   }
   if (repair && repairGranted(entries, gate)) {
     renderRefusal([v('repair', 'repair-spent', 'one repair round was already granted in this budget window',
-      liveExits(gate, target, entries, false, upstreamId))]).forEach((l) => ctx.err(l))
+      exitsLine(live.acts))]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
 
-  // D94: a revise is the author's INPUT, not a disposition — it leaves the run
-  // undisposed, and with the content unchanged `gate` answers `changed-nothing` and
-  // appends nothing, so a pending decision can never reappear. Every exit the human is
-  // shown then refuses, and the only escape found in the field was an edit they did not
-  // need. The verdict still describes current content, so approving it is a true
-  // statement about bytes a battery read.
-  //
-  // `undefined` means the sha CANNOT be computed (no worktree, missing parent) and must
-  // never read as "moved" — the same doctrine the approve-time staleness check states
-  // below. That check still runs and still refuses a genuinely stale approve.
-  const nowSha = last !== undefined ? spec.currentSha?.(root, canon, cfgR.value, target) : undefined
-  // The run this decision disposes of, and how many decisions already sit after it. A
-  // function of the stream so the lock can ask it again (row 173): read twice, answered
-  // by one derivation.
-  const anchorOf = (es: Entry[]): { anchor: GateRunEntry | undefined; after: number; unpark: boolean } => {
-    const lastRun = lastGateRun(es, gate)
-    const afterLast = lastRun
-      ? es.slice(es.lastIndexOf(lastRun as unknown as Entry) + 1)
-          .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate)
-          .map((e) => e as unknown as DecisionEntry)
-      : []
-    // Row 241 (R11): D94's revised anchor reads from the last un-park — the park before it is lifted —
-    // so approve and stop stay reachable on unchanged content after a human sent the gate back.
-    const fromUnpark = afterLast.slice(Math.max(0, afterLast.map((d) => isUnpark(d as unknown as Entry)).lastIndexOf(true)))
-    const onlyRevises = fromUnpark.length > 0 &&
-      fromUnpark.every((d) => d.decision === 'revise' || d.decision === 'revise-upstream')
-    const unchanged = lastRun !== undefined && (nowSha === undefined || nowSha === lastRun.reviewed_sha)
-    const revisedAnchor = onlyRevises && unchanged && (decision === 'approve' || decision === 'stop')
-    // at the bound the gate refuses to run again, so no fresh pending decision can
-    // ever exist — the endgame decisions must stay reachable anchored to the last
-    // run, or the target livelocks (incident c2692b93)
-    const endgame = boundReached(es, gate) && (decision === 'stop' || (decision === 'approve' && override) ||
-      (decision === 'revise' && (upstream !== undefined || repair)))
-    // Row 183: a cap park disposes of the flow, not of bytes — `gateParked` has no sha term
-    const parked = act.park === true && decision === 'stop'
-    // Row 241 (R11): a human's revise on a parked run below the bound anchors on it — the un-park.
-    const unpark = unparking && pendingDecision(es, gate) === undefined && !boundReached(es, gate) && gateParked(es, gate)
-    return {
-      anchor: pendingDecision(es, gate) ?? ((endgame || revisedAnchor || parked || unpark) ? lastRun : undefined),
-      after: afterLast.length,
-      unpark,
-    }
+  // The run this decision disposes of, and how many decisions already sit after it. A function of
+  // the stream so the lock can ask it again (row 173): read twice, answered by one derivation. A
+  // live act anchors where `liveActs` does — in the revised and handed-back states the run the
+  // revise disposed of, malformed runs skipped (design §4.2.2). Row 183: a cap park, the policy's
+  // alone, disposes of the flow, not of bytes — `gateParked` has no sha term — so it keeps its own
+  // anchor, the pending run or else the gate's last run, whatever is live (the author kept editing
+  // after the last revise); drive names that run (`caps.ts`).
+  const capPark = act.park === true && decision === 'stop'
+  const anchorOf = (es: Entry[], l: LiveActs): { anchor: GateRunEntry | undefined; after: number } => {
+    const anchor = capPark ? (pendingDecision(es, gate) ?? lastGateRun(es, gate)) : actLive(l, key) ? l.anchor : undefined
+    const at = anchor === undefined ? -1 : es.lastIndexOf(anchor as unknown as Entry)
+    const after = at < 0 ? 0 : es.slice(at + 1)
+      .filter((e) => e.t === 'human-decision' && (e as unknown as DecisionEntry).gate === gate).length
+    return { anchor, after }
   }
-  const first = anchorOf(entries)
-  const anchor = first.anchor
+  const first = anchorOf(entries, live)
+  let anchor = first.anchor
+  // Settled while building (design §4.2.9): an approve the screens withhold still anchors where a
+  // blocker names why — moved content (`stale-verdict`), a lifted hold (`hold-lifted`), the bound
+  // without `--override` (`override-required`) — so the refusal below is the true one.
+  const withheld = anchor === undefined && decision === 'approve' && live.anchor !== undefined && WITHHOLDS.has(live.state)
+  if (withheld) anchor = live.anchor
   if (!anchor) {
-    if (atBound && last) {
-      // liveExits, not a hardcoded triple: it drops --approve --override when content
-      // moved, which is the same set the stale-verdict refusal below names. A human
-      // cannot honestly stamp bytes no battery read, at the bound or anywhere else.
-      return renderBound(ctx, gate, target, entries, nowSha !== undefined && nowSha !== last.reviewed_sha, upstreamId)
+    if (atBound && live.anchor !== undefined) {
+      // Row 108: at the bound nothing malfunctioned, so the refusal is the terminus and its live
+      // exits, never a self-repair table. A plain revise is told what it can be instead.
+      const up = live.acts.some((a) => actKey(a) === actKey(['decide', gate, target, '--revise', '--upstream', '_']))
+      const fix = live.acts.some((a) => actKey(a) === actKey(['decide', gate, target, '--revise', '--repair']))
+      const instead = [...(up ? ['upstream reopens the parent and resets the budget'] : []), ...(fix ? ['--repair buys one more round here'] : [])]
+      return renderBound(ctx, gate, target, entries, facts.stale || facts.holdLifted, upstreamId,
+        live.acts, plainRevise && instead.length > 0 ? instead.join('; ') : undefined)
     }
-    // Row 239. The command a want names is an act's line, so the target the human typed prints
-    // quoted: here, and in every want and help line of this verb below.
-    // Row 241 (R9): while a plan step is open no implement review runs, so the refusal names the
-    // step's command, never `gate implement`.
-    const plan = gate === 'implement' ? findById(canon, target) : undefined
-    const open = plan !== undefined && plan.meta.type === 'plan' ? openStepRow(root, cfgR.value, plan) : undefined
-    renderRefusal([v('gate', 'nothing-pending', `${gate} ${target}`,
-      open !== undefined
-        ? `${open.row.line} — ${open.step} is not built yet, and no implement review runs while it is open`
-        : `a stopped gate-run awaiting a decision — run: ${cliAct('gate', gate, target).line}`)])
-      .forEach((l) => ctx.err(l))
-    return EXIT.REFUSED
+    return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
   }
   // Row 173. A settler judged ONE run. If the run it would dispose of is no longer that one
   // — a newer round landed while it was judging — the decision is about a verdict nobody
@@ -438,12 +467,6 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   }
   const blockedCode = guardTxn(ctx, root)
   if (blockedCode !== undefined) return blockedCode
-
-  if (decision === 'revise' && atBound && upstream === undefined && !repair) {
-    return renderBound(ctx, gate, target, entries,
-      last !== undefined && nowSha !== undefined && nowSha !== last.reviewed_sha, upstreamId,
-      'upstream reopens the parent and resets the budget; --repair buys one more round here')
-  }
 
   // Row 111. Every reason an approve cannot happen, in ONE refusal. These used to fire
   // sequentially: `--approve` reported `override-required`, and only the re-run carrying
@@ -476,16 +499,16 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // `currentSha` is undefined when it cannot be computed (no worktree, missing parent):
     // approve then proceeds, and the entry still honestly records what it judged — this
     // check must never convert an unrelated condition into a misleading refusal.
-    const now = spec.currentSha?.(root, canon, cfgR.value, target)
+    const now = nowSha
     if (now !== undefined && now !== anchor.reviewed_sha) {
       // At the bound the gate will not re-run (gate.ts:176), so "go re-gate" would be
-      // the lie D67 was written about. `liveExits` names the ones that actually work —
+      // the lie D67 was written about. The live acts name the ones that actually work —
       // including the repair grant while it is unspent, which is the exit an operator who
       // just fixed the finding is looking for.
       blockers.push(v('gate', 'stale-verdict',
         `verdict @${short(anchor.reviewed_sha)}, content @${short(now)}`,
         atBound
-          ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
+          ? `${exitsLine(live.acts)} (bound reached — the gate will not re-run as it stands)`
           : `a verdict describing current content — run: ${cliAct('gate', gate, target).line}`))
     }
     // Final review F1: a criterion the run held is no longer held, so the verdict never ran
@@ -495,7 +518,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       blockers.push(v('gate', 'hold-lifted',
         `${lifted.join(' · ')} held at round ${anchor.round} · its need is met now`,
         atBound
-          ? `${liveExits(gate, target, entries, true, upstreamId)} (bound reached — the gate will not re-run as it stands)`
+          ? `${exitsLine(live.acts)} (bound reached — the gate will not re-run as it stands)`
           : `a verdict that ran it — run: ${cliAct('gate', gate, target).line}`))
     }
     if (blockers.length > 0) {
@@ -503,6 +526,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       return EXIT.REFUSED
     }
   }
+  // A withheld approve no blocker named is still not live.
+  if (withheld) return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
 
   // D121. Recorded, never consumed: divergence between what the block recommended and what
   // the human chose is the only feedback loop the recommender has, and without the record it
@@ -530,7 +555,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
     ...(act.selected !== undefined ? { selected: act.selected } : {}),
     ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
-    ...(first.unpark ? { unpark: true as const } : {}),
+    ...(unparking ? { unpark: true as const } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per
@@ -665,7 +690,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     if (act.token !== undefined && settledToken(lockedEntries, gate, act.runId ?? '') !== act.token) {
       return settledSince(ctx, gate, target)
     }
-    const now = anchorOf(lockedEntries)
+    const now = anchorOf(lockedEntries, liveOf(lockedEntries))
     if (now.anchor === undefined || (now.anchor.run_id === anchor.run_id && now.after !== first.after)) {
       renderRefusal([v('gate', 'nothing-pending', `${gate} ${target} — decided since it was read`,
         `a stopped gate-run awaiting a decision — run: ${cliAct('decide', gate, target, '--show').line}`)])

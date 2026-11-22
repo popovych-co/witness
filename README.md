@@ -306,7 +306,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `retry <target>` | ask drive to try a set-aside target again, after a fix that leaves no record of its own (code, a tool, an account); refused inside a session |
 | `wait [--since <token>]` | under autonomy, block until something new needs you, drive stops with work left, a merge lands on GitHub, or a newer chat takes over — the `/witness` chat runs it; journals nothing |
 | `log <id>` | render a journal stream |
-| `gate <decompose\|plan\|implement\|ship\|design> <id>` | run the reviewer gate; journals the round, stamps on pass |
+| `gate <decompose\|plan\|implement\|ship\|design> <id> [--fresh] [--manual] [--unchanged]` | run the reviewer gate; journals the round, stamps on pass · `--unchanged` hands a revise back when the author judges it needs no change: where the gate would answer changed-nothing it journals the hand-back and the revise is decided again, and anywhere else it runs as the plain gate and says why nothing was handed back |
 | `decide <gate> <id> --approve\|--revise [--pin <policy>]` | record the human decision on a stopped gate; `--pin` adds a standing content policy |
 | `design <spec-id> --file <html>\|--open\|--reconfirm\|--preview <html>` | register/show a `ui` spec's approved look; `--preview` opens a page and records nothing |
 | `review design <spec-id> [--file <html>]` | the design gate's reviewers on a look — the registered one, or a page not yet registered — asking the gate's full-review question; journals nothing, decides nothing, and replays the gate's answer when the gate already judged the same bytes in full |

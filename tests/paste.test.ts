@@ -67,7 +67,7 @@ function exitLines(p: string): Pasteable[] {
 // <target>` it shares — the way the skill reads the line.
 function atBoundPark(p: string): Pasteable[] {
   const target = `p1${p}`
-  const reopen = reopenActs('plan', target, parked(p, 3), `up${p}`)
+  const reopen = reopenActs('plan', target, parked(p, 3), false, `up${p}`, false)
   const rows = needYouRows({ kind: 'parked', target, key: 'parked', gate: 'plan', round: 3, why: 'parked at p1 > ## Notes', reopen })
   expect(rows.slice(1)).toEqual([`  exits: ${exitsLine(reopen)}`])
   const shared = `${cliAct('decide', 'plan', target).line} `
@@ -102,7 +102,7 @@ function inboxLines(p: string): Pasteable[] {
   const look = cliAct('decide', 'design', target, '--show')
   const satisfy = cliAct('satisfy', target, '--need', `n${p}`)
   const retry = cliAct('retry', target)
-  const reopen = reopenActs('plan', target, parked(p), `up${p}`, false)
+  const reopen = reopenActs('plan', target, parked(p), false, `up${p}`, false)
   const items: Array<[NeedYou, Act[]]> = [
     [{ kind: 'decision', target, key: 'decision', gate: 'plan', show }, [show]],
     [{ kind: 'design-look', target, key: 'design-look', open, show: look }, [open, look]],
@@ -141,7 +141,7 @@ function unmetNeedLines(p: string): Pasteable[] {
 // under it.
 function waitingLines(p: string): Pasteable[] {
   const why = `parked at p1 > ## Notes · run: witness gate plan p1 ${p}`
-  const reopen = reopenActs('plan', 'p1', parked(p), 'auth-refresh', false)
+  const reopen = reopenActs('plan', 'p1', parked(p), false, 'auth-refresh', false)
   const [head, ...rows] = waitingRows({ kind: 'parked', target: 'p1', key: 'parked', gate: 'plan', round: 1, why, reopen })
   expect(head).toBe(`waiting: parked: p1 · plan round 1 — ${spelled(why)}`)
   // Row 241: the ways back, each on a labelled row of its own
@@ -305,7 +305,7 @@ const ROWS: Row[] = [
   ["K1 the decision block, a reviewer's anchor", decisionLines],
   ['K1 the decision block, a hostile target and upstream', (p) => decisionLines(p, `p1${p}`, `up${p}`)],
   ['K2 exits below and at the bound', exitLines],
-  ['K2 a reopen', (p) => reopenActs('plan', `p1${p}`, parked(p), `up${p}`).map(pasteable)],
+  ['K2 a reopen', (p) => reopenActs('plan', `p1${p}`, parked(p), false, `up${p}`, false).map(pasteable)],
   ['K2 an at-bound park', atBoundPark],
   ['K3 a forged effort stream is never offered', forgedNext],
   ['K6 an inbox row', inboxLines],

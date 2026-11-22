@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { cliAct } from '../src/act.js'
-import { classifyAction, driveLoop, lineSink, spawnSession } from '../src/drive.js'
+import { classifyAction, driveLoop, resolveDecision, spawnSession } from '../src/drive.js'
 import { option, renderDecision, type Decision } from '../src/recommend.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
@@ -19,10 +19,10 @@ import { appendEntry, readStream } from '../src/journal.js'
 import { effortReviewedSha } from '../src/reviewed.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
-import { ROUND_BOUND } from '../src/rounds.js'
+import { ROUND_BOUND, lastGateRun } from '../src/rounds.js'
 import { containmentLine, jobHost } from '../src/contain.js'
 import {
-  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, closedStep, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
+  DESIGN_HTML, PLAN_BODY, PLAN_META, SPEC_BODY, SPEC_META, addOrigin, closedStep, commitEntry, approve, autonomyOn, awaitGone, behaviorOnMain, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, hermeticEnv, measuredEnv, noopOpener, PLAN_BLOCKING, plannedRepo, putVerdict,
   seededRepo, witnessDesign, writeDesign, writeLocalConfig, writePlan, writeSpec, type TestRepo, patchConfig} from './helpers.js'
 
 const cfgOf = (repo: TestRepo): Config => {
@@ -94,9 +94,12 @@ const awaitFlag = (flag: string): string =>
   `i=0; while [ ! -f "${flag}" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; [ -f "${flag}" ] || exit 3`
 const MERGE = 'ship: "merge PR #7 on GitHub when ready — the lazy stamp flips plan → done, spec → live"'   // E2's real shape
 // Virtual awake time for a real child: each armed check fires on the next macrotask, `ms` later here.
-const fastTicker = (): Ticker => {
+// With `from`, time stands still until it says the session is under way: five virtual minutes pass
+// in about 300 ms real, less than a fresh fake can take to start, and a pi that has shown no run by
+// then is ended as one that never started (row 245).
+const fastTicker = (from?: () => boolean): Ticker => {
   let now = 0
-  return { now: () => now, after: (ms, fn) => { const t = setTimeout(() => { now += ms; fn() }, 0); return () => clearTimeout(t) } }
+  return { now: () => now, after: (ms, fn) => { const t = setTimeout(() => { if (from?.() ?? true) now += ms; fn() }, 0); return () => clearTimeout(t) } }
 }
 
 describe('witness drive skeleton (D145)', () => {
@@ -367,7 +370,7 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     const repo = await seededRepo()
     const lines: string[] = []
     const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(`echo '{"type":"x"}'`) }, out: (l) => lines.push(l) })
-    const stream = { line: (): never => { throw new Error('boom') }, inFlight: () => undefined, failed: () => false }
+    const stream = { line: (): never => { throw new Error('boom') }, inFlight: () => undefined, failed: () => false, ended: () => false, started: () => true }
     const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1, { stream })
     expect(end.outcome).toBe('exited')
     expect(lines).toContain('[1 implement/p1] {"type":"x"}')
@@ -385,6 +388,19 @@ describe('drive says how a session goes (row 214)', () => {
     expect(lines[1]).toBe('[1 implement/p1] hi')
     expect(lines.at(-1)).toMatch(/^\[1 implement\/p1\] ended \d\d:\d\d:\d\d · exit 0 · \d+s$/)
     expect(end.tail).toEqual(['hi'])
+    expect(end.ending).toBeUndefined()
+    // Row 245: a pi that exits on its own right after its turn's end (P4: 22 ms after
+    // agent_settled) is never stopped, so its line still says how it exited. A session drive
+    // stopped after its turn says so instead (tests/drive-turn-end.test.ts).
+    patchConfig(repo, { harness: 'pi' })
+    const pi: string[] = []
+    const settled = [{ type: 'agent_start' }, { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }], stopReason: 'stop' } },
+      { type: 'agent_end', messages: [] }, { type: 'agent_settled' }].map(say).join('\n')
+    const piCtx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent(`${settled}\nexit 0`) }, out: (l) => pi.push(l) })
+    const piEnd = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), piCtx, 1)
+    expect(pi.at(-1)).toMatch(/^\[1 implement\/p1\] ended \d\d:\d\d:\d\d · exit 0 · \d+s$/)
+    expect(piEnd).toMatchObject({ outcome: 'exited', code: 0, tail: ['Done.'] })
+    expect(piEnd.ending).toBeUndefined()
   }, 20000)
 
   it('ended names the outcome (issue #64)', async () => {
@@ -409,34 +425,48 @@ describe('drive says how a session goes (row 214)', () => {
     const flag = join(fakeScenario(), 'seen')
     const bin = fakeAgent(`${say({ type: 'tool_execution_start', toolCallId: 'c1', toolName: 'bash', args: { command: 'cargo test discovery' } })}\n${awaitFlag(flag)}`)
     let quiet: string | undefined
+    let running = false
     const ctx = fakeCtx(repo.root, {
       env: { WITNESS_DRIVE_AGENT_BIN: bin },
       out: (l) => {
+        if (l === '[1 implement/p1] $ cargo test discovery') running = true
         if (quiet === undefined && l.includes('] still running · ') && l.endsWith('in: $ cargo test discovery')) { quiet = l; writeFileSync(flag, '') }
       },
     })
     const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 7_200_000 } }
-    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker() })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker(() => running) })
     expect(quiet).toMatch(/^\[1 implement\/p1\] still running · \d+m(\d+s)? of 2h · quiet 5m · in: \$ cargo test discovery$/)
     expect(end.code).toBe(0)
   }, 20000)
 
   // Review Focus 1: a harness whose event shapes changed renders nothing, and drive still says so.
-  it('a session that renders nothing still says it runs (issue #64)', async () => {
+  // For pi a record of a type witness does not know is also a run that started, so the 5 min
+  // never-started window does not stop the session at this same mark (rows 214, 245; S4-C). Its
+  // fake writes the header and that record in one write, and its time stands still until drive has
+  // shown the header, so the record is read before the window could fall due.
+  it.each(['claude-code', 'pi'] as const)('a session that renders nothing still says it runs (issue #64) · %s', async (harness) => {
     const repo = await seededRepo()
-    patchConfig(repo, { harness: 'pi' })
+    if (harness === 'pi') patchConfig(repo, { harness: 'pi' })
     const flag = join(fakeScenario(), 'seen')
-    const bin = fakeAgent(`${say({ type: 'brand_new' })}\n${awaitFlag(flag)}`)
+    const header = harness === 'pi' ? `'${JSON.stringify({ type: 'session', version: 3, id: 'S-1' })}' ` : ''
+    const bin = fakeAgent(`printf '%s\\n' ${header}'${JSON.stringify({ type: 'brand_new' })}'\n${awaitFlag(flag)}`)
     const lines: string[] = []
     let quiet: string | undefined
+    let shown = harness !== 'pi'
     const ctx = fakeCtx(repo.root, {
       env: { WITNESS_DRIVE_AGENT_BIN: bin },
-      out: (l) => { lines.push(l); if (quiet === undefined && l.includes('] still running · ')) { quiet = l; writeFileSync(flag, '') } },
+      out: (l) => {
+        lines.push(l)
+        if (l.startsWith('[1 implement/p1] session ')) shown = true
+        if (quiet === undefined && l.includes('] still running · ')) { quiet = l; writeFileSync(flag, '') }
+      },
     })
     const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 7_200_000 } }
-    await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker() })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1, { ticker: fastTicker(() => shown) })
     expect(quiet).toMatch(/still running · \d+m(\d+s)? of 2h · quiet 5m$/)
     expect(lines.some((l) => l.includes('brand_new'))).toBe(false)
+    expect(end).toMatchObject({ outcome: 'exited', code: 0 })
+    expect(end.ending).toBeUndefined()
   }, 20000)
 
   // Review Focus 4: drive's own lines carry text a child controls (its session id): one emitter
@@ -465,19 +495,6 @@ describe('journal lines (row 214)', () => {
     expect(lines).toContain('[1 implement/p1] journal: human-decision implement: approve — ok\\x1b]52;c;x\\x07')
     expect(lines.some((l) => l.includes('\x1b'))).toBe(false)
   }, 20000)
-})
-
-describe('lineSink (row 214)', () => {
-  // Review Focus 3: pi's agent_end carries the whole conversation in one record.
-  it('lineSink takes one long record in linear time (issue #64)', () => {
-    const recs: string[] = []
-    const sink = lineSink((r) => recs.push(r))
-    const t0 = performance.now()
-    for (let i = 0; i < 128; i++) sink.push('x'.repeat(65_536))
-    sink.push('\r\nnext\n')
-    expect(performance.now() - t0).toBeLessThan(1000)
-    expect(recs.map((r) => r.length)).toEqual([8_388_608, 4])
-  })
 })
 
 // The fixture every loop case needs: an approved plan, so computeNext's first answer is
@@ -770,6 +787,26 @@ describe('judgment stops in the driver terminal (D145, D143)', () => {
     expect(out).toContain('drive: running — witness recover --complete')
     expect(out.some((l) => l.startsWith('recovered: completed as '))).toBe(true)
     expect(existsSync(join(repo.root, '.witness', 'txn.json'))).toBe(false)
+  }, 30000)
+
+  // Row 244 (review finding S2-E). A handed-back gate's decision row (Slice 3's, autonomy off) is
+  // `decide --show`'s handed-back view, whose block numbers its options as the actionable view's
+  // does: `decide>` takes them, never "no option 1 in this block".
+  it('decide> takes the options of a handed-back view (row 244)', async () => {
+    const repo = await gatedEffort()
+    expect((await repo.cli(['decide', 'decompose', repo.effort, '--revise', '--note', 'state the window'])).code).toBe(0)
+    const run = lastGateRun(readStream(repo.root, repo.effort), 'decompose')!
+    commitEntry(repo, repo.effort, { v: 1, t: 'revise-returned', gate: 'decompose', artifact: repo.effort, run_id: run.run_id, sha: run.reviewed_sha })
+    const shown = (await repo.cli(['decide', 'decompose', repo.effort, '--show'])).stdout
+    expect(shown).toContain('state: handed-back')
+    const out: string[] = []
+    const show = cliAct('decide', 'decompose', repo.effort, '--show')
+    const r = await resolveDecision({ kind: 'decision', gate: 'decompose', target: repo.effort },
+      { ...{ line: show.line, act: show }, target: repo.effort }, askCtx(repo, ['1'], out))
+    expect(out.join('\n')).not.toContain('no option 1 in this block')
+    expect(out).toContain(`drive: running — witness decide decompose ${repo.effort} --stop`)
+    expect(r).toBe('executed')
+    expect(lastDecision(repo)).toMatchObject({ decision: 'stop' })
   }, 30000)
 
   // D143: the block a human reads at `decide>` is the one they would read in a chat session.

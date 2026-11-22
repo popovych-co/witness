@@ -3,17 +3,25 @@ import { EXIT, type Ctx } from '../cli.js'
 import { askText } from '../ask.js'
 import { git, primaryRoot } from '../gitio.js'
 import { canonExit } from '../departure.js'
-import { journalActs, readStream, streamExists, streamIds, type Entry } from '../journal.js'
+import { isId } from '../dsl.js'
+import { journalActs, readStream, streamExists, streamIds, type Entry, type ReviseReturnedEntry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
-import { kv, rows } from '../toon.js'
+import { kv, logSafe, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
-// Row 214: drive's `journal:` lines print an act as `witness log` does.
+// Row 214: drive's `journal:` lines print an act as `witness log` does. Rows 205, 244: a journal line
+// is foreign text — a hand edit, a session's note, a reviewer's words — so every detail, in every
+// branch, is spelled out through logSafe here, the one renderer both readers share: an escape
+// sequence or a bidi override never reaches a terminal raw.
 export function entryDetail(e: Entry): string {
+  return logSafe(detailOf(e))
+}
+
+function detailOf(e: Entry): string {
   switch (e.t) {
     case 'recap': {
       const size = (k: string) => (Array.isArray(e[k]) ? (e[k] as unknown[]).length : 0)
@@ -59,6 +67,12 @@ export function entryDetail(e: Entry): string {
       const s = e as unknown as { from: string; to: string; cause: string }
       return `${s.from} → ${s.to} (${s.cause})`
     }
+    case 'revise-returned': {
+      // Row 244: the author's hand-back of a revise (`gate --unchanged`), named as a decision is — the
+      // gate, then what happened — with the run it hands back and whether it was `--manual`.
+      const r = e as unknown as ReviseReturnedEntry
+      return `${String(r.gate)}: handed back · run ${String(r.run_id)}${r.manual === true ? ' · manual' : ''}`
+    }
     default: {
       // Row 191 §4.8: `ctx` is about the session that wrote the line, not what the line says.
       const { v: _v, t: _t, ctx: _ctx, ...rest } = e
@@ -68,14 +82,16 @@ export function entryDetail(e: Entry): string {
 }
 
 // D166. Read through `canonExit`, the one reading of a departure: a re-slice that was taken
-// back is no longer a lineage step.
+// back is no longer a lineage step. Rows 205, 239 (B15): `by` is parsed journal text, so the chain
+// follows it only as a well-formed id — an ill-formed one (a path, a control character) ends the
+// chain and is never read as a stream. A predecessor is a stream named as an id too.
 function successorOf(root: string, id: string): string | undefined {
   const exit = canonExit(readStream(root, id))
-  return exit?.to === 'superseded' ? exit.by : undefined
+  return exit?.to === 'superseded' && isId(exit.by) ? exit.by : undefined
 }
 
 function predecessorsOf(root: string, id: string): string[] {
-  return streamIds(root).filter((s) => successorOf(root, s) === id)
+  return streamIds(root).filter((s) => isId(s) && successorOf(root, s) === id)
 }
 
 export function lineageChain(root: string, id: string): string[] {
@@ -132,7 +148,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (values.all) {
     const merged = mergedRows(root)
-    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: entryDetail(r.entry) })))
+    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: logSafe(r.stream), t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -142,9 +158,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // activity of its own yet — walk the chain by journal existence on the *other*
     // streams rather than requiring id's own stream to exist.
     const chain = lineageChain(root, id!)
-    ctx.out(`lineage: ${chain.join(' → ')}`)
+    // A stream's id is its file's name, which a commit can make anything: spelled out (row 205).
+    ctx.out(`lineage: ${chain.map(logSafe).join(' → ')}`)
     const merged = chain.flatMap((sid) => readStream(root, sid).map((entry) => ({ stream: sid, entry })))
-    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: r.entry.t, detail: entryDetail(r.entry) })))
+    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: logSafe(r.stream), t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -155,7 +172,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 
   const entries = readStream(root, id!)
-  rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: e.t, detail: entryDetail(e) })))
+  rows('entries', ['n', 't', 'detail'], entries.map((e, i) => ({ n: i + 1, t: logSafe(String(e.t)), detail: entryDetail(e) })))
     .forEach(ctx.out)
   // Row 191 §4.3. A plan's stream ends with where the plan stands; an effort has no steps.
   const plan = findById(loadCanon(root), id!)

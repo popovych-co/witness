@@ -11,10 +11,12 @@ import { cmd, kv } from './toon.js'
 
 // Plan's call 8 (row 191 §4.8). An act is the session's own stage work. What the CLI writes on a
 // session's behalf is bookkeeping (`status`, the lazy merge stamp, among it), so a session cannot
-// hand over before it has done anything.
+// hand over before it has done anything. Row 244: a hand-back (`gate --unchanged`) is the author's own
+// judgment on a revise, journaled where the gate run would have answered changed-nothing, so it is
+// stage work as a gate run is.
 export const ACT_KINDS: ReadonlySet<string> = new Set<EntryType>([
   'recap', 'write', 'design-write', 'design-reconfirm', 'gate-run', 'human-decision',
-  'test-evidence', 'step-close', 'dispatch', 'drift-check', 'adopt',
+  'test-evidence', 'step-close', 'dispatch', 'drift-check', 'adopt', 'revise-returned',
 ])
 
 // The stamp a line carries (§4.8). Lines written before row 191, or outside a harness session,

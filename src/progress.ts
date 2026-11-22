@@ -16,6 +16,9 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   ask: 'act', 'ask-withdrawn': 'act', 'need-satisfied': 'act', 'step-close': 'act', retry: 'act',
   // Row 242: what ship ended on moves the flow — a re-check is told from a session that did nothing.
   'ship-outcome': 'act',
+  // Row 244: a revise handed back asks for the revise to be decided again — a session that hands
+  // back has acted.
+  'revise-returned': 'act',
   // A refused write is the CLI saying no (F5). A sync is the merge stamp's or `start`'s
   // automatic act on the human's behalf (D138). A dispatch report is telemetry (row 81). A
   // drift check reads; a policy pin records the rule a decision ran under.

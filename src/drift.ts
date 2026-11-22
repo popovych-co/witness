@@ -11,7 +11,7 @@ import type { TestOutcome } from './junit.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { refuse, renderRefusal, v, type Result, ok } from './refusal.js'
 import { resolveJudge } from './harness.js'
-import { invokeReviewer, parseVerdictText, resolvePrompt } from './reviewer.js'
+import { invokeReviewerAsync, parseVerdictText, resolvePrompt } from './reviewer.js'
 import { runFullSuite, runnerConfig } from './runner.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from './scan.js'
 import { canonicalSha } from './sha.js'
@@ -141,9 +141,11 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
   const localR = loadLocalConfig(root)
   if (!localR.ok) { renderRefusal(localR.violations).forEach(ctx.err); return EXIT.REFUSED }
   const prompt = `${lensR.value.contents}\n\n## Reviewed content\n\n### Spec: ${specId}\n${serializeDoc({ meta: doc.meta, body: doc.body })}\n\n(Deterministic lane: ${lane.ok ? lane.value.criteria.map((c) => `${c.id}:${criterionMark(c)}`).join(' · ') : 'unrunnable'})\n`
-  const invoked = invokeReviewer(ctx, hxR.value.harness, {
+  // Row 182: drift's lane never waits a usage limit out, inside drive or not (`noWait`). Row 245: on
+  // the one reviewer invoker, a reviewer whose turn ended is stopped after the grace.
+  const invoked = await invokeReviewerAsync(ctx, hxR.value.harness, {
     // Row 217: no source file is inline here, so the reviewer finds and reads the code itself.
-    cwd: root, prompt, tools: 'read',
+    cwd: root, prompt, tools: 'read', noWait: true,
     timeoutMs: cfgR.ok ? cfgR.value.gates.reviewerTimeoutMs : undefined,
     extensions: localR.value.reviewerExtensions,
   })

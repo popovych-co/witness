@@ -190,3 +190,102 @@ describe('the chat waits (row 204)', () => {
     expect(rows.find((l) => l.startsWith('| `wait: needs you`'))).toContain('Tell the human the rows it printed')
   })
 })
+
+// Row 243 (design §4.1.3, §4.5). Each refusal a moved base can leave has a row of its own, matched
+// before the generic exit-2 row, with its way on: what a session may do itself, and where the work
+// is the human's — never a reset, and never a deleted carry ref.
+describe('the router reads the carry\'s refusals (row 243)', () => {
+  const rowFor = (rule: string): string => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| ') && l.includes(`\`${rule}\` refusal`))
+    expect(rows, rule).toHaveLength(1)
+    return rows[0]!
+  }
+  const generic = () => body().split('\n').findIndex((l) => l.startsWith('| any other `next:` line'))
+  it.each([
+    ['clash-unresolved', ['A row that leads with `witness ship <plan>` means a move was interrupted: run that line', 'resolve no file by hand before it has run',
+      'the `witness-ship` skill\'s **A clash** steps', '`$WITNESS turn`']],
+    ['carry-pending', ['never reset the worktree, and never delete or move that ref', '`git switch witness/<plan>`', '**END YOUR TURN**', 'the human\'s call']],
+    ['verify-red-pending', ['`refs/witness/verify-red/<plan>`', 'neither put it back nor overwrote it', 'Never delete or move that ref',
+      '**END YOUR TURN**', 'the human\'s call']],
+    ['carry-refused', ['nothing moved', 'intent-to-add', '`git add -- <file>`', '**END YOUR TURN**']],
+    ['operation-in-progress', ['never ends one it did not start', 'If this session started it', '`--continue`', '`--abort`', '**END YOUR TURN**']],
+    ['rebase-refused', ['not a conflict', 'an untracked file this session made', '`git add -- <file>`', 'in git\'s own words', '**END YOUR TURN**']],
+    ['index-locked', ['nothing was lost', 'the next `witness ship` carries on once the lock is released', 'removing the lock file is the human\'s call', '**END YOUR TURN**']],
+    ['pr-branch-gone', ['the PR branch is gone from the remote — recreate or reopen it, or abandon the plan', 'never push the branch yourself',
+      'running `witness ship` again returns the same stop', '**END YOUR TURN**']],
+  ])('a %s refusal has a row of its own, before the generic row', (rule, parts) => {
+    const row = rowFor(rule)
+    for (const p of parts) expect(row, p).toContain(p)
+    expect(body().split('\n').indexOf(row)).toBeLessThan(generic())
+    expect(row).not.toMatch(/git reset|update-ref -d|git stash (drop|pop|clear)/)
+  })
+})
+
+// Row 244 (design §4.2.7). Revising a gate again, or retracting a settled one, takes the human's words
+// and the human: a session asks for the note and never writes it, and a refused actor stops.
+describe('the router reads decide\'s revise-again refusals (row 244)', () => {
+  const generic = () => body().split('\n').findIndex((l) => l.startsWith('| any other `next:` line'))
+  it.each([
+    ['note-required', ['retracting a settled one', 'the human\'s own words', 'what to change', 'Ask the human for them and **END YOUR TURN**',
+      'run the same revise with `--note "<their words>"`', 'Never write the note yourself']],
+    ['revise-human', ['retracting a settled one', 'the human\'s act in their own chat or terminal', 'or that of a session a drive started', '**END YOUR TURN**']],
+  ])('a %s refusal has a row of its own, before the generic row', (rule, parts) => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| ') && l.includes(`\`${rule}\` refusal`))
+    expect(rows, rule).toHaveLength(1)
+    for (const p of parts) expect(rows[0], p).toContain(p)
+    expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())
+  })
+})
+
+// Row 244 (design §4.2.4, §4.5). The hand-back is the author's act: the router offers it where the
+// changed-nothing screen's session line does — the revised state, no upstream work owed — appends
+// `--manual` when armed, and never decides. Its refusals spend nothing, and `next` routes what is owed.
+describe('the router hands a revise back, and reads the hand-back\'s refusals (row 244)', () => {
+  const generic = () => body().split('\n').findIndex((l) => l.startsWith('| any other `next:` line'))
+  const HAND_BACK = 'when you judge there is nothing to change, hand the revise back with `$WITNESS gate <gate> <target> --unchanged`, and never `decide`'
+  it('a session: line offering --unchanged has a row of its own, before the generic row', () => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| a `session:` line offers `--unchanged`'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain(HAND_BACK)
+    expect(rows[0]).toContain('`outcome: revise changed nothing`')
+    // the final review's M3: a revise-owed line names the hand-back too, where it would land
+    expect(rows[0]).toContain('or a `revise owed` `note:` or `help:` line names it')
+    expect(rows[0]).toContain('Append `--manual` when this session is `--manual`-armed')
+    expect(rows[0]).toContain('A plain re-run hands nothing back')
+    expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())
+  })
+  it('the hand-back\'s refusals have one row, before the generic row', () => {
+    const rows = body().split('\n').filter((l) => l.startsWith('| a refusal of `--unchanged`'))
+    expect(rows).toHaveLength(1)
+    for (const rule of ['nothing-to-hand-back', 'upstream-owed', 'retraction-owed', 'hand-back-standing', 'hand-back-at-bound', 'fresh-unchanged', 'settled-since']) {
+      expect(rows[0], rule).toContain(`\`${rule}\``)
+    }
+    expect(rows[0]).toContain('Nothing was handed back and nothing was spent')
+    expect(rows[0]).toContain('never `decide`')
+    expect(body().split('\n').indexOf(rows[0]!)).toBeLessThan(generic())
+  })
+})
+
+// Row 243 (design §4.1.3: replay step 1, "a session's fix commits are normal"). The ship session is
+// spawned through /witness, so the router's never-commit rule must leave room for exactly the ship
+// skill's own commits in the plan's worktree — a CI-red fix, and a replay conflict's step 1, without
+// which `git rebase` refuses a dirty tree or autostashes it onto the shared stash list (#86) — and
+// for nothing broader. Ship's own commit is the first code commit, no longer the sole one.
+describe('the router allows the ship skill\'s own fix commits and nothing broader (row 243)', () => {
+  const NARROW = 'with two exceptions, both the `witness-ship` skill\'s own and both in the plan\'s worktree: a CI-red fix, and step 1 of a replay conflict (the uncommitted work committed before the rebase).'
+  it('names the two cases, keeps never-commit for everything else, and calls ship\'s commit the first', () => {
+    const lines = body().split('\n').filter((l) => l.includes('git commit'))
+    expect(lines).toHaveLength(1)
+    const rule = lines[0]!
+    expect(rule).toContain('**never `git commit` yourself, anywhere, at any stage**')
+    expect(rule).toContain(NARROW)
+    expect(rule.match(/exception/g)).toHaveLength(1)
+    expect(rule).toContain('the ship phase makes the first code commit')
+    expect(rule).not.toContain('sole code commit')
+  })
+  it('the ship skill calls its own commit the first code commit, never the sole one', () => {
+    const ship = readFileSync(join(__dirname, '..', 'plugin', 'skills', 'witness-ship', 'SKILL.md'), 'utf8')
+    expect(ship).toContain('it commits the worktree (the first code commit')
+    expect(ship).not.toContain('sole code commit')
+  })
+})

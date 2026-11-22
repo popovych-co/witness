@@ -6,13 +6,13 @@ import { loadLocalConfig, type Config } from './config.js'
 import { openDeferrals } from './deferral.js'
 import { serializeDoc } from './fm.js'
 import { resolveJudge } from './harness.js'
-import { latestRecap, policyPins, type Entry } from './journal.js'
+import { latestRecap, policyPins, type Entry, type ReviseReturnedEntry } from './journal.js'
 import { SESSION_DEFAULT, stageModel, unansweredPin } from './model.js'
 import type { Decision, Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
 import { effortCanon, effortOf } from './reviewed.js'
-import { anchorRecurrence, gateRuns, roundBudget, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { REVISE_HUMAN, anchorRecurrence, gateRuns, roundBudget, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { canonicalJson } from './sha.js'
 
@@ -120,22 +120,35 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
 // Row 239. Read off each option's act, never its printed line: an option the CLI built from no
 // act is not offered, a word is a flag only where the act holds it as one, and the one input the
 // arbiter may fill is the `<why>` slot (settle fills it through argv).
+// Row 244 (design §4.2.6, §4.2.7; P38). The arbiter never revises a gate a revise already stands on:
+// in the states where a plain revise is the human's alone (`REVISE_HUMAN`) every plain revise goes,
+// the noted one included, while the send-upstream stays. A handed-back revise (`revise-returned`) is
+// the one such state a settle brings to the arbiter, and there it matters twice over: hand-backs spend
+// no rounds, so the bound would never stop a revise → hand-back loop.
 export function menuFor(block: Decision, run: GateRunEntry): Array<Option & { act: Act }> {
   const failed = run.checks.filter((c) => !c.ok)
   const approveBarred = run.gate === 'design' || (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))
+  const reviseBarred = block.state !== undefined && REVISE_HUMAN.has(block.state)
+  const plainRevise = (argv: readonly string[]) => argv.includes('--revise') && !argv.includes('--upstream') && !argv.includes('--repair')
   return block.options.filter((o): o is Option & { act: Act } =>
     o.act?.argv[0] === 'decide' &&
     !o.act.argv.includes('--trust-cmds') &&
     o.act.inputs.every((i) => i.name === 'why') &&
-    !(approveBarred && o.act.argv.includes('--approve')))
+    !(approveBarred && o.act.argv.includes('--approve')) &&
+    !(reviseBarred && plainRevise(o.act.argv)))
 }
+
+// Row 244 (design §4.2.6). A hand-back as the arbiter hears it: a journal fact in this fixed sentence,
+// never a word the author wrote (anti-goal 1) — the entry carries none, and no field of it is read.
+export const HANDED_BACK_FACT = 'the author handed this revise back with the content unchanged'
 
 const anchorText = (a: string | { scope: string }) => (typeof a === 'string' ? a : `omission:${a.scope}`)
 const HISTORY_RUNS = 10
 
 // The evidence the arbiter reads, composed by the CLI from the journal and canon. It never
 // carries a session transcript: none exists to carry, and the author's narration is
-// exactly what the arbiter must not hear (anti-goal 1).
+// exactly what the arbiter must not hear (anti-goal 1). A hand-back reaches it as a fact the CLI
+// states (`HANDED_BACK_FACT`), never as the author's account of why.
 export function decisionEvidence(
   root: string, canon: Canon,
   stop: { gate: string; target: string; entries: Entry[]; run: GateRunEntry; block: Decision },
@@ -174,6 +187,11 @@ export function decisionEvidence(
     const at = entries.indexOf(r as unknown as Entry)
     for (const e of entries.slice(at + 1)) {
       if (e.t === 'gate-run' && (e as unknown as GateRunEntry).gate === gate) break
+      // Row 244 (design §4.2.6). The hand-back in its place among the gate's decisions, after the revise it answers.
+      if (e.t === 'revise-returned' && (e as unknown as ReviseReturnedEntry).gate === gate) {
+        history.push(`  - handed back · ${HANDED_BACK_FACT}`)
+        continue
+      }
       if (e.t !== 'human-decision' || (e as unknown as DecisionEntry).gate !== gate) continue
       const d = e as unknown as DecisionEntry
       history.push(`  - ${d.decision} · ${decidedBy(d)}${d.rule ? ` · ${d.rule}` : ''}${d.note ? ` · ${d.note}` : ''}`)

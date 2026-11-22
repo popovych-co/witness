@@ -7,14 +7,14 @@ import { EXIT, type Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { liftedHolds } from './needs.js'
 import { gateSpec } from './gate.js'
-import { readStream } from './journal.js'
+import { readStream, type Entry } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal, type Result } from './refusal.js'
-import { lastGateRun, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { actKey, liveActs, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
 import { criteriaOwner, findById, loadCanon } from './scan.js'
 import { cmd, kv } from './toon.js'
 import { applyDecision, decisionAct, printReviseContext, type DecisionAct } from './verbs/decide.js'
-import { openStepRow, owedDecisions, owedRun, type NextAction } from './verbs/next.js'
+import { openStepRow, owedDecisions, owedRun, settlerOwed, type NextAction } from './verbs/next.js'
 import { pendingTxn } from './txn.js'
 
 // Row 173. Under `autonomy: on` a stop is settled where it is produced — the end of
@@ -36,7 +36,9 @@ export type Settled =
   // A re-run the CLI names and never executes. Row 239 (the plan's B9): with its act, which
   // `next` and drive route by, never by the line read back.
   // Row 241 (R12): `row`, the flow's whole step row when the re-run is a plan step's.
-  | { kind: 'routed'; act: Act; line: string; row?: NextAction }
+  // Row 244 (design §4.2.2, review finding S3-C): `note`, the state's session line when the re-run is a
+  // moved hand-back's re-gate — the session is told to change nothing more.
+  | { kind: 'routed'; act: Act; line: string; row?: NextAction; note?: string }
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
   // limit: the usage limit that refused the arbiter. act: the refused act (row 240), which drive
@@ -85,6 +87,17 @@ export async function settleStop(
   }
 }
 
+// Row 244 (design §4.2.2, review finding S3-C). The session's line for a hand-back whose content or a
+// hold moved since — change nothing more; the re-gate judges what moved — on the re-gate the policy
+// routes for it. The changed-nothing screen, which prints the other states' lines, is never reached
+// there: the gate runs a round instead, so the routed re-gate is where the line reaches the session.
+// Read from `liveActs`, as every screen reads its session line; `stale` is this settle's own read.
+function movedHandBackLine(gate: string, target: string, entries: Entry[], stale: boolean, act: Act): string | undefined {
+  if (actKey(act) !== actKey(cliAct('gate', gate, target))) return undefined
+  const live = liveActs(gate, target, entries, { upstream: undefined, stale, holdLifted: false, owed: false, upstreamOwed: false })
+  return live.state === 'handed-back-moved' ? live.session : undefined
+}
+
 // Local wall-clock HH:MM, for the lines that name when a holder started.
 export const hhmm = (ms: number): string => {
   const d = new Date(ms)
@@ -108,10 +121,11 @@ async function judgeStop(
   const spec = gateSpec(gate)
   if (!spec) return { kind: 'none' }
   const entries = readStream(root, target)
-  const owed = owedRun(entries, gate)
   // `--manual` keeps that run's stop for a human "for that run regardless" — including when
-  // `next` meets it turns later (Review Focus 4).
-  if (owed === undefined || owed.manual) return { kind: 'none' }
+  // `next` meets it turns later (Review Focus 4) — and a hand-back journaled `--manual` likewise, in
+  // every settle that reads it (row 244, design §4.2.4).
+  const owed = settlerOwed(entries, gate)
+  if (owed === undefined) return { kind: 'none' }
   // Row 240 (R2). What this settler read of its stop, taken before any model call; every act
   // below carries it, so none can land on a disposition this read did not see.
   const token = settledToken(entries, gate, owed.run_id)
@@ -155,8 +169,11 @@ async function judgeStop(
         return { kind: 'superseded', by, decision: winner.decision }
       }
     }
-    const latest = lastGateRun(fresh, gate)
-    if (latest !== undefined && latest.run_id !== owed.run_id) return { kind: 'moved' }
+    // A newer run owed, or none: that run's own settle decides (a passing one, nothing). Compared on
+    // the run owed, not the gate's last run (row 244): a malformed round judged nothing, so the stop it
+    // leaves owed — a hand-back's, after a malformed round on other content — is still this settle's,
+    // and a refused arbiter choice on it parks (F4) rather than being asked again at every `next`.
+    if (owedRun(fresh, gate)?.run_id !== owed.run_id) return { kind: 'moved' }
     if (rule === 'stale-verdict' || rule === 'hold-lifted') {
       if (!again) return judgeStop(ctx, root, cfg, gate, target, true)
       // Moved again while it was judged again: a park here would rest on a ruling about content
@@ -242,7 +259,8 @@ async function judgeStop(
       // Not a decision: a re-run the CLI names and never executes — the stage owns it.
       const line = cmd('autonomy', `re-run owed — ${act.line}`)
       ctx.out(line)
-      return { kind: 'routed', act, line }
+      const note = movedHandBackLine(gate, target, entries, stale, act)
+      return { kind: 'routed', act, line, ...(note !== undefined ? { note } : {}) }
     }
     const actR = parsed(act.argv)
     if (!actR.ok) {

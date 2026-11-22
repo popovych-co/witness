@@ -76,6 +76,6 @@ describe('rebaseIfMoved', () => {
     stateCommit(repo, '.witness/journal/auth-hardening.jsonl', '{"v":1,"t":"write"}\n', 'write(auth-refresh)')
     repo.git('push', 'origin', 'main')
     repo.git('reset', '--hard', 'HEAD~1')      // now behind origin/main by one state commit
-    expect(rebaseIfMoved(repo.root, repo.root, 'main')).toMatchObject({ ok: true, value: 'clean' })
+    expect(rebaseIfMoved(repo.root, repo.root, 'main', { planId: 'auth-refresh-plan-1', hasPr: false, env: {} })).toMatchObject({ ok: true, value: 'clean' })
   })
 })

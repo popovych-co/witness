@@ -4,7 +4,7 @@ import { loadConfig, loadLocalConfig, type Config, type DocKey } from './config.
 import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, pendingTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
-import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry } from './journal.js'
+import { appendEntry, entryLine, journalRel, policyPins, readStream, type Entry, type ReviseReturnedEntry } from './journal.js'
 import { untrustedCmdsFor } from './allowlist.js'
 import { primaryRoot, stateCommit } from './gitio.js'
 import { criteriaOwner, loadCanon, findById, type Canon } from './scan.js'
@@ -12,26 +12,27 @@ import { deferralsBlock, openDeferrals, type DeferralEntry } from './deferral.js
 import { newRunId } from './drift.js'
 import { resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
-import { cliAct, runRow } from './act.js'
-import { cmd, kv, shellWord } from './toon.js'
+import { cliAct, exitsLine, reopenRows } from './act.js'
+import { cmd, kv } from './toon.js'
 import { stageModel, unansweredPin } from './model.js'
 import {
   docKeysFor, docsBlock, loadLensDocs, pinsBlock, promptsSha, resolvePrompt,
   type ContentKind, type Lens, type LensDoc,
 } from './reviewer.js'
 import { runBattery, type BatteryLens } from './battery.js'
+import { refuseClash } from './clash.js'
 import { gateRunLines, gateRunView } from './gate-run-view.js'
 import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
 import {
   basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
 } from './delta.js'
 import {
-  appendKind, boundReached, lastGateRun, liveExits,
-  roundsSinceApprove, runsSinceReset,
-  type GateCheck, type GateKey, type GateRunEntry, type ReviewerVerdict,
+  actKey, appendKind, boundReached, disposedRun, fellBack, keyOf, lastGateRun, liveActs,
+  roundsSinceApprove, runsSinceReset, sameKey, settledSinceViolation, settledToken, standingHandBack,
+  type ActFacts, type AppendKind, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
-import { gateParked, gateSettled, openStepRow, owedRun, stepsOpenViolation } from './verbs/next.js'
+import { actFacts, openStepRow, settlerOwed, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
 import { autonomyLines } from './autonomy.js'
@@ -243,40 +244,69 @@ export function batteryFor(cfg: Config, gate: GateName, cls: ChangeClass): Resul
 // prints the run's view itself — `gateRunLines` — and never reaches this tail).
 // Rows 139/203. The run's lines come from its view (src/gate-run-view.ts); only the help tail,
 // which loads canon and the trust list, stays here.
+// `sha`: the content's sha now, where the caller holds it (the gate that just resolved it); without
+// it the choices compute it, as `decide` does.
 export function renderGateRun(
   ctx: Ctx, entry: GateRunEntry, mode: 'ran' | 'resume',
-  opts: { entries?: Entry[]; help?: boolean; upstream?: string } = {},
+  opts: { entries?: Entry[]; help?: boolean; upstream?: string; sha?: string } = {},
 ): void {
   gateRunLines(gateRunView(entry, mode, opts.entries)).forEach((l) => ctx.out(l))
   // Without `entries` this stays a pure formatter over the entry it was handed, and the
   // off-bound triple is the right answer; with them it tells the truth at the bound too.
   if (entry.outcome !== 'passed' && opts.help !== false) {
-    renderChoices(ctx, entry.gate, entry.artifact, opts.entries ?? [], opts.upstream)
+    renderChoices(ctx, entry.gate, entry.artifact, opts.entries ?? [], opts.upstream, { sha: opts.sha })
   }
+}
+
+// Row 244 (#87, design §4.2.1, §4.2.9). The facts `decide` reads beside the journal (`actFacts`):
+// staleness and lifted holds against the last run that judged something, the upstream, and owed
+// work. `sha` is the content's sha now when the caller holds it; otherwise the gate computes it.
+function factsHere(
+  root: string, cfg: Config | undefined, canon: Canon, gate: string, target: string, entries: Entry[],
+  upstream: string | undefined, sha?: string,
+): ActFacts {
+  const now = sha ?? (cfg !== undefined ? gateSpec(gate)?.currentSha?.(root, canon, cfg, target) : undefined)
+  return actFacts(root, cfg, canon, gate, target, entries, { sha: now, upstream })
+}
+
+// The gate's state and its live acts, as `decide` would read them now.
+function liveHere(root: string, gate: string, target: string, entries: Entry[]): LiveActs {
+  const cfgR = loadConfig(root)
+  const cfg = cfgR.ok ? cfgR.value : undefined
+  const canon = loadCanon(root)
+  const upstream = gateSpec(gate)?.upstreamOf?.(root, canon, target)
+  return liveActs(gate, target, entries, factsHere(root, cfg, canon, gate, target, entries, upstream))
 }
 
 // D121: the exits line stated which commands would not refuse and never which to take, so
 // --approve read as the default at stops with a live blocking finding. The block ranks them.
 // One renderer for all four decision surfaces in this file — a per-site copy is how D119's
 // nine hand-copied exits sets happened, and three of these four sites were among them.
-// `undefined` from `recommend` means no anchor resolves at this state — stale with no
-// decision pending (reopened, or already revised), where every decide verb refuses with
-// nothing-pending and the exits line's single re-gate act is the whole live set (D131).
+// Row 244 (#87): both read the gate's live acts, through the facts `decide` reads (S2-1), so a
+// screen offers exactly what `decide` accepts. `undefined` from `recommend` is a state with no
+// block — the revised state on moved content, where the re-gate is the one act (D131), a settled
+// gate's retraction, a park's way back — and the exits line names its live acts. `session` prints
+// the session's line (design §4.2.2) above them, on the changed-nothing screen.
 function renderChoices(
   ctx: Ctx, gate: string, target: string, entries: Entry[], upstream: string | undefined,
-  stale = false,
+  opts: { sha?: string; session?: boolean } = {},
 ): void {
   // D154. Resolved here rather than threaded through four call sites, on this file's own
   // precedent (`printSliceShape` loads canon itself so the entry-renderers stay
-  // pure formatters). Best-effort: a root that will not resolve costs the trust variants,
-  // never the block.
+  // pure formatters). Best-effort: a root that will not resolve costs the trust variants and the
+  // facts beside the journal, never the block.
   const rootR = primaryRoot(ctx.cwd)
-  const untrustedCmds = rootR.ok
-    ? untrustedCmdsFor(rootR.value, criteriaOwner(loadCanon(rootR.value), target))
-    : []
-  const d = recommend({ gate, target, entries, upstream, stale, untrustedCmds })
+  const canon = rootR.ok ? loadCanon(rootR.value) : undefined
+  const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
+  const untrustedCmds = rootR.ok && canon !== undefined ? untrustedCmdsFor(rootR.value, criteriaOwner(canon, target)) : []
+  const facts: ActFacts = rootR.ok && canon !== undefined
+    ? factsHere(rootR.value, cfgR?.ok ? cfgR.value : undefined, canon, gate, target, entries, upstream, opts.sha)
+    : { upstream, stale: false, holdLifted: false, owed: false, upstreamOwed: false }
+  const live = liveActs(gate, target, entries, facts)
+  if (opts.session === true && live.session !== undefined) ctx.out(kv('session', live.session))
+  const d = recommend({ gate, target, entries, upstream, stale: facts.stale || facts.holdLifted, untrustedCmds })
   if (d) renderDecision(d).forEach((l) => ctx.out(l))
-  else ctx.out(cmd('help', liveExits(gate, target, entries, stale, upstream)))
+  else if (live.acts.length > 0) ctx.out(cmd('help', exitsLine(live.acts)))
 }
 
 // Row 79: the human approving a plan sees the run's shape before it starts. Row 191 §4.10:
@@ -296,29 +326,48 @@ export function printSliceShape(ctx: Ctx, root: string, gateName: string, target
 // the stop it produced or re-showed, in the same invocation, so a chat session and drive
 // meet one rule. Below that line nothing changes: with autonomy off this is `judge` alone.
 export async function runGate(
-  ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean; handover?: boolean },
+  ctx: Ctx, gateName: string, target: string,
+  flags: { fresh: boolean; manual: boolean; handover?: boolean; unchanged?: boolean },
 ): Promise<number> {
+  // Row 244 (design §4.2.4; the first build's review S3-4). `--fresh` re-judges the same content and
+  // spends a round; `--unchanged` hands the revise back unjudged. Together they ask for both, so the
+  // gate refuses before anything is read or run.
+  if (flags.fresh && flags.unchanged) {
+    renderRefusal([v('--unchanged', 'fresh-unchanged', '--fresh with --unchanged',
+      'one of them — `--unchanged` hands the revise back unjudged; `--fresh` re-judges the same content and spends a round')])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   // Row 241 (R11). A `--fresh` refused on a parked gate is a human's call: the way back that can
-  // succeed is the revise that sends the gate back to work, named on a row of its own.
-  const parkedFresh = flags.fresh && parkedHere(ctx, gateName, target)
+  // succeed is the revise that sends the gate back to work, named on a row of its own. Row 244: the
+  // park's live acts but the `--fresh` just refused — the revise below the bound, the endgame at it.
+  const parked = flags.fresh ? parkedHere(ctx, gateName, target) : undefined
   const refusedFresh = (code: number): number => {
-    if (parkedFresh && code === EXIT.REFUSED) {
+    if (parked !== undefined && code === EXIT.REFUSED) {
+      const fresh = actKey(cliAct('gate', gateName, target, '--fresh'))
       ctx.err(`help: ${gateName} ${target} is parked — sending it back to work is a human's call`)
-      ctx.err(runRow(cliAct('decide', gateName, target, '--revise', '--note', '<why>'), 'revise'))
+      reopenRows(parked.acts.filter((a) => actKey(a) !== fresh)).forEach((l) => ctx.err(l))
     }
     return code
   }
-  // Row 241 (R9; the user's decisions 6 and 9). No implement review starts while a plan step is
-  // open, whoever starts it: refused before the battery, journaling nothing, naming the step's
-  // command. To skip a step, amend the plan and drop it.
-  if (gateName === 'implement') {
+  if (gateName === 'implement' || gateName === 'ship') {
     const rootR = primaryRoot(ctx.cwd)
-    const cfgR = rootR.ok ? loadConfig(rootR.value) : undefined
-    const plan = rootR.ok && cfgR?.ok ? findById(loadCanon(rootR.value), target) : undefined
-    const open = rootR.ok && cfgR?.ok && plan?.meta.type === 'plan' ? openStepRow(rootR.value, cfgR.value, plan) : undefined
-    if (open !== undefined) {
-      renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
-      return refusedFresh(EXIT.REFUSED)
+    const plan = rootR.ok ? findById(loadCanon(rootR.value), target) : undefined
+    if (rootR.ok && plan?.meta.type === 'plan') {
+      // Row 243 (design §4.1.2). No review starts on a plan's worktree while a clash is unresolved:
+      // refused first, before the battery and whatever the config says, journaling nothing, each
+      // file on a row with its remedy.
+      const clashed = refuseClash(ctx, rootR.value, target)
+      if (clashed !== undefined) return clashed
+      // Row 241 (R9; the user's decisions 6 and 9). No implement review starts while a plan step is
+      // open, whoever starts it: refused before the battery, journaling nothing, naming the step's
+      // command. To skip a step, amend the plan and drop it.
+      const cfgR = gateName === 'implement' ? loadConfig(rootR.value) : undefined
+      const open = cfgR?.ok ? openStepRow(rootR.value, cfgR.value, plan) : undefined
+      if (open !== undefined) {
+        renderRefusal([stepsOpenViolation(open)]).forEach((l) => ctx.err(l))
+        return refusedFresh(EXIT.REFUSED)
+      }
     }
   }
   const code = await judge(ctx, gateName, target, flags)
@@ -344,13 +393,111 @@ export async function runGate(
   return settledCode(code, settled)
 }
 
-function parkedHere(ctx: Ctx, gateName: string, target: string): boolean {
+// Row 244 (#87, design §4.2.4). What `--unchanged` read before anything ran: the run the revise
+// disposed of, row 240's token over the decisions after it, and the gate's last run.
+interface HandBackRead { run: GateRunEntry; token: string; lastRun: string }
+
+// Design §4.2.9. `--unchanged`'s refusals come from liveActs' state, as `decide` reads it: at the bound
+// the endgame decides; a hand-back already stands; a retraction asks for a re-review; the gate's own
+// upstream revise is still owed there (P48); anything but a revise has nothing to hand back. Only the
+// revised state is read on, and it names the run its revise disposed of.
+function handBackRead(root: string, cfg: Config, canon: Canon, spec: GateSpec, target: string): Result<HandBackRead> {
+  const gate = spec.gate
+  const entries = readStream(root, target)
+  const facts = factsHere(root, cfg, canon, gate, target, entries, spec.upstreamOf?.(root, canon, target))
+  const live = liveActs(gate, target, entries, facts)
+  const at = `${gate} ${target}`
+  const no = (rule: string, got: string, want: string) => refuse<HandBackRead>([v('--unchanged', rule, got, want)])
+  const show = cliAct('decide', gate, target, '--show').line
+  const next = cliAct('next').line
+  const disposed = disposedRun(entries, gate)
+  if (live.state === 'at-bound') return no('hand-back-at-bound', `${at} — the round bound is spent`, `the endgame, which decides the gate at the bound — ${show}`)
+  if (live.state === 'handed-back' || live.state === 'handed-back-moved') {
+    return no('hand-back-standing', `${at} — round ${disposed?.run.round ?? '?'} is handed back already`, `its decision, owed again — ${show}`)
+  }
+  if (live.state === 'retracted') {
+    return no('retraction-owed', `${at} — the revise retracted a settled verdict`, `a re-review, not a hand-back — ${live.acts[0]!.line}`)
+  }
+  if (live.state !== 'revised' || disposed === undefined) {
+    return no('nothing-to-hand-back', live.state === 'none' ? `${at} has no live act` : `${at} is ${live.state}`,
+      `a revise standing on the gate's last round — ${next} routes what is owed`)
+  }
+  if (facts.upstreamOwed) {
+    return no('upstream-owed', `${at} — the revise sent the work upstream, and it is owed there still`, `that work landed first — ${next} routes it`)
+  }
+  return ok({ run: disposed.run, token: settledToken(entries, gate, disposed.run.run_id), lastRun: lastGateRun(entries, gate)!.run_id })
+}
+
+// S3-1. The read still stands: the same disposed run, the same token, no run since, no hand-back.
+function handBackHolds(entries: Entry[], gate: string, read: HandBackRead): boolean {
+  return disposedRun(entries, gate)?.run.run_id === read.run.run_id &&
+    settledToken(entries, gate, read.run.run_id) === read.token &&
+    lastGateRun(entries, gate)?.run_id === read.lastRun &&
+    standingHandBack(entries, gate) === undefined
+}
+
+// Why `--unchanged` handed nothing back, from what the gate does instead (design §4.2.4, P11). Worded
+// without a comma, so the `note:` line prints unquoted, and never as `witness <word>` before a value,
+// which would read as a witness command printing a bare value (row 239's prose-quote lint).
+function notHandedBack(kind: AppendKind, key: GateKey, disposed: GateRunEntry): string {
+  const n = `round ${disposed.round}`
+  if (kind.kind === 'cached' && kind.from.run_id === disposed.run_id) return `a check changed since ${n} — the gate replays its verdicts with the checks as they stand`
+  if (kind.kind === 'repair') return 'the last round was malformed on this content — the gate repairs it'
+  if (fellBack(disposed)) return `${n} fell back from its pin — its verdict answers nothing`
+  if (key.reviewed_sha !== disposed.reviewed_sha) return `the content moved since ${n}`
+  if (key.witness !== disposed.witness) return `witness's version moved from ${disposed.witness} to ${key.witness} since ${n} — its verdict no longer answers the content`
+  if (!sameKey(keyOf(disposed), key)) return `the reviewer setup (prompts or pin or harness) moved since ${n}`
+  return `the gate does not pair this content with ${n}`
+}
+
+// Design §4.2.4. The hand-back: journaled under the lock once the read is checked again (S3-1), then
+// the screen — `outcome: handed back` and, with autonomy off or a stop left to the human, the decision
+// block. It exits 1; under autonomy the gate's tail settles it.
+function handBackRound(
+  ctx: Ctx, root: string, gate: string, target: string, read: HandBackRead,
+  opts: { sha: string; manual: boolean; upstream: string | undefined; leftToTail: (es: Entry[]) => boolean },
+): number {
+  const lockR = acquireLock(root)
+  if (!lockR.ok) { renderRefusal(lockR.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
+  const release = lockR.value
+  try {
+    const entriesNow = readStream(root, target)
+    if (!handBackHolds(entriesNow, gate, read)) {
+      renderRefusal([settledSinceViolation(gate, target)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    const entry: ReviseReturnedEntry = {
+      v: 1, t: 'revise-returned', gate, artifact: target, run_id: read.run.run_id, sha: opts.sha,
+      ...(opts.manual ? { manual: true as const } : {}),
+    }
+    const line = entry as unknown as { t: 'revise-returned'; [k: string]: unknown }
+    const files = [journalRel(target)]
+    const txn = withTxn(root, { op: `gate-${gate}`, files, journal: { stream: target, line: entryLine(line) } }, () => {
+      appendEntry(root, target, line)
+      crashPoint(ctx.env, 'gate-journal')
+      return stateCommit(root, files, `gate(${gate}): ${target} round ${read.run.round} handed back`)
+    })
+    if (!txn.ok) { renderRefusal(txn.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    const after = [...entriesNow, line as unknown as Entry]
+    ctx.out(kv('gate', gate))
+    ctx.out(kv('outcome', `handed back — the content is as round ${read.run.round} read it; the revise is decided again`))
+    if (!opts.leftToTail(after)) renderChoices(ctx, gate, target, after, opts.upstream, { sha: opts.sha })
+    return EXIT.FINDINGS
+  } finally {
+    release()
+  }
+}
+
+// The park's live acts, when the gate is parked.
+function parkedHere(ctx: Ctx, gateName: string, target: string): LiveActs | undefined {
   const rootR = primaryRoot(ctx.cwd)
-  return rootR.ok && gateParked(readStream(rootR.value, target), gateName)
+  if (!rootR.ok) return undefined
+  const live = liveHere(rootR.value, gateName, target, readStream(rootR.value, target))
+  return live.state === 'parked' ? live : undefined
 }
 
 async function judge(
-  ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean },
+  ctx: Ctx, gateName: string, target: string, flags: { fresh: boolean; manual: boolean; unchanged?: boolean },
 ): Promise<number> {
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) { renderRefusal(rootR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
@@ -370,14 +517,20 @@ async function judge(
   if (!flags.manual) autonomyLines(cfgR.value).forEach((l) => ctx.out(l))
   // Row 173. Under autonomy the tail settles the stop, so the block is ITS to print — the
   // human's when the stop is kept, nobody's when the CLI decides. Left in place for a stop
-  // the tail will not touch: a `--manual` run's, a parked or settled one, a malformed round.
+  // the tail will not touch: a `--manual` run's or a `--manual` hand-back's (row 244), a parked or
+  // settled one, a malformed round — the settle's own reading (`settlerOwed`).
   const autonomous = cfgR.value.autonomy && !flags.manual
-  const leftToTail = (es: Entry[]): boolean => {
-    if (!autonomous) return false
-    const owed = owedRun(es, gateName)
-    return owed !== undefined && !owed.manual
-  }
+  const leftToTail = (es: Entry[]): boolean => autonomous && settlerOwed(es, gateName) !== undefined
   const canon = loadCanon(root)
+  // Row 244 (#87, design §4.2.4, §4.2.9). `--unchanged` is read from the journal before `resolve`, so a
+  // refusal spends no lane and no battery and journals nothing. The read keeps the run the revise
+  // disposed of and row 240's token over the decisions after it, checked again below (S3-1).
+  let handBack: HandBackRead | undefined
+  if (flags.unchanged === true) {
+    const readR = handBackRead(root, cfgR.value, canon, spec, target)
+    if (!readR.ok) { renderRefusal(readR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    handBack = readR.value
+  }
   const inputR = await spec.resolve(root, ctx, canon, cfgR.value, target)
   if (!inputR.ok) { renderRefusal(inputR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const input = inputR.value
@@ -392,6 +545,12 @@ async function judge(
   const active = batteryR.value.filter((n) => !skip.has(n))
   const dropped = batteryR.value.filter((n) => skip.has(n)).map((n) => `${n} — ${skip.get(n)!}`)
   const entries = readStream(root, target)
+  // S3-1. A decision, a run or a hand-back that landed while the gate resolved (ship's and implement's
+  // lanes run there) is one the author never read: no hand-back stands on it, and nothing runs for it.
+  if (handBack !== undefined && !handBackHolds(entries, spec.gate, handBack)) {
+    renderRefusal([settledSinceViolation(spec.gate, target)]).forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   const lensesR = gateLenses(root, cfgR.value, spec.gate, active, input.lensOverrides)
   if (!lensesR.ok) { renderRefusal(lensesR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
   const lenses = lensesR.value
@@ -431,16 +590,27 @@ async function judge(
   // this setup resumes, meets changed-nothing or replays, whether it was a full or a delta round.
   // Only a fresh key plans a delta, further down.
   const key: GateKey = fullKey
-  // D99: `gateSettled` reads only the last run, so any new run un-settles the gate.
-  // Content moving is a legitimate, self-explaining reason. A flag is not — `--fresh`
-  // discarded a human decision with nothing printed and nothing journaled about it, and
-  // row 94 removed its other job (escaping the changed-nothing deadlock), so it can
-  // refuse and send the human through the verb that states a retraction and its reason.
-  const settledBefore = gateSettled(entries, spec.gate)
-  if (flags.fresh && settledBefore) {
-    // Row 239. A shape: the target is quoted, and the slot is the human's to fill.
+  // D99: a new run that judges something un-settles the gate. Content moving is a legitimate,
+  // self-explaining reason. A flag is not — `--fresh` discarded a human decision with nothing
+  // printed and nothing journaled about it, and row 94 removed its other job (escaping the
+  // changed-nothing deadlock), so it can refuse and send the human through the verb that states a
+  // retraction and its reason.
+  // Row 244 (P8, S2-3). Settled for the content the settlement judged, as `liveActs` reads it: on
+  // moved content the approval lapsed (D75) and `--fresh` runs; after a retraction or a stop the
+  // gate is no longer settled (design §4.2.3). One reading for the refusal and for the setup-change
+  // warning below, so neither speaks of a settlement the other does not see. Read once, and only
+  // where one of them asks: the facts can cost a flow read.
+  let settledRead: { live: LiveActs; settled: boolean } | undefined
+  const settledBefore = (): { live: LiveActs; settled: boolean } => settledRead ??= (() => {
+    const facts = factsHere(root, cfgR.value, canon, spec.gate, target, entries, upstreamId, input.reviewedSha)
+    const live = liveActs(spec.gate, target, entries, facts)
+    return { live, settled: live.state === 'settled' && !facts.stale && !facts.holdLifted }
+  })()
+  // The want names the settled state's live act, the retraction, then the `--fresh` that re-judges
+  // after it (design §4.2.3).
+  if (flags.fresh && settledBefore().settled) {
     renderRefusal([v('gate', 'settled-approve', `${spec.gate} ${target} is settled`,
-      `witness decide ${shellWord(spec.gate)} ${shellWord(target)} --revise --note "<why>" — retract the approval, then re-gate`)])
+      `${exitsLine(settledBefore().live.acts)} — retract the settlement, then ${cliAct('gate', spec.gate, target, '--fresh').line} re-judges it`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
@@ -470,16 +640,27 @@ async function judge(
       kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {
     kind = { kind: 'cached' as const, from: kind.entry }
   }
+  // Row 244 (design §4.2.4). Where the gate would answer changed-nothing about the run the revise
+  // disposed of — content, setup and checks as that run read them — `--unchanged` journals the author's
+  // hand-back instead. Anywhere else (a check flipped, the content or the key moved, an upgrade
+  // included, a malformed round to repair) it runs as the plain gate and says why nothing was handed back.
+  if (handBack !== undefined) {
+    if (kind.kind === 'changed-nothing' && kind.entry.run_id === handBack.run.run_id) {
+      return handBackRound(ctx, root, spec.gate, target, handBack, {
+        sha: input.reviewedSha, manual: flags.manual, upstream: upstreamId, leftToTail,
+      })
+    }
+    ctx.out(kv('note', `nothing was handed back — ${notHandedBack(kind, key, handBack.run)}`))
+  }
   // A key that moved for a NON-content reason — edited prompt, re-pinned model, new
   // witness version — un-settles just as quietly as --fresh did. Content moving explains
-  // itself; this does not.
-  const lastRun = lastGateRun(entries, spec.gate)
-  if (settledBefore && kind.kind === 'fresh' && lastRun && lastRun.reviewed_sha === input.reviewedSha) {
+  // itself; this does not. `settledBefore` is already for the content as it stands (row 244).
+  if (kind.kind === 'fresh' && settledBefore().settled) {
     ctx.err(`warning: reviewer setup changed — this run discards the settled approve on ${spec.gate} ${target}`)
   }
   if (kind.kind === 'resume') {
     renderGateRun(ctx, kind.entry, 'resume', {
-      entries, upstream: upstreamId,
+      entries, upstream: upstreamId, sha: input.reviewedSha,
       ...(kind.entry.outcome === 'stopped' && leftToTail(entries) ? { help: false } : {}),
     })
     printSliceShape(ctx, root, spec.gate, target)
@@ -490,13 +671,16 @@ async function judge(
     ctx.out(kv('outcome', 'revise changed nothing — reviewed content is identical to the last round'))
     // The owed work is an EDIT, so the exits are the decisions that remain legal without
     // one — the same set every other screen shows, rather than prose naming two of four.
-    renderChoices(ctx, spec.gate, target, entries, upstreamId)
+    // Row 244: the state's live acts, under the session's line (design §4.2.2). A standing hand-back
+    // is a decision owed, not an edit: under autonomy its block is the tail's, which settles it (row
+    // 173, design §4.2.2), and a `--manual` one's stays here for the human.
+    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha, session: true })
     return EXIT.FINDINGS
   }
   if (boundReached(entries, spec.gate)) {
     ctx.out(kv('gate', spec.gate))
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
-    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId)
+    if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha })
     return EXIT.BLOCKED
   }
   if (!flags.fresh) {
@@ -617,7 +801,7 @@ async function judge(
     if (boundReached(entriesNow, spec.gate)) {
       ctx.out(kv('gate', spec.gate))
       ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
-      if (!leftToTail(entriesNow)) renderChoices(ctx, spec.gate, target, entriesNow, upstreamId)
+      if (!leftToTail(entriesNow)) renderChoices(ctx, spec.gate, target, entriesNow, upstreamId, { sha: input.reviewedSha })
       return EXIT.BLOCKED
     }
 
@@ -705,7 +889,7 @@ async function judge(
 
     const after = [...entriesNow, entry as unknown as Entry]
     renderGateRun(ctx, entry, 'ran', {
-      entries: after, upstream: upstreamId,
+      entries: after, upstream: upstreamId, sha: input.reviewedSha,
       ...(entry.outcome === 'stopped' && leftToTail(after) ? { help: false } : {}),
     })
     printSliceShape(ctx, root, spec.gate, target)

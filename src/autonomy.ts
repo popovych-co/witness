@@ -107,6 +107,12 @@ export function policyFor(facts: StopFacts): Policy {
   if (failed.some((c) => (c.untrusted?.length ?? 0) > 0) && !boundReached(entries, gate)) {
     return { kind: 'take', act: cliAct('gate', gate, target) }
   }
+  // Row 244 (design §4.2.6; the user's decision 2). A revise its author handed back unchanged is decided
+  // again, by the arbiter: neither the author nor a reviewer found a fix, so no rule has the right
+  // answer. It comes after the arms that belong elsewhere — the human's trust grant, the free re-runs
+  // (stale or malformed, fallen back, trust granted since) and the human's design look — and stays out
+  // of TAKEN, whose revise the author would only hand back again.
+  if (block.rule === 'revise-returned') return { kind: 'arbiter' }
   if (block.rule === 'checks-failed') {
     // amendment-ack is the one check an approve clears, so approving is a judgment about the
     // amendment against the ask — the arbiter's, never the rule's (§11 call 10).
@@ -114,6 +120,7 @@ export function policyFor(facts: StopFacts): Policy {
   }
   if (TAKEN.has(block.rule) || block.rule.startsWith('anchor-recurrence-')) return first()
   // bound · bound-stale · ladder-spent · pin-contradiction · reserved-stop-clean · manual-stop
+  // (revise-returned has its own arm above)
   return { kind: 'arbiter' }
 }
 

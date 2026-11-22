@@ -102,7 +102,7 @@ describe('witness ship', () => {
   })
 
   it('rebases onto the fetched remote tip, not the stale local ref', async () => {
-    const { repo, wt } = await shippableRepo()
+    const { repo, wt, planId } = await shippableRepo()
     addOrigin(repo)
     execFileSync('git', ['push', '-u', 'origin', 'HEAD'], { cwd: wt })   // addOrigin pushes only main
 
@@ -115,7 +115,7 @@ describe('witness ship', () => {
     execFileSync('git', ['push', 'origin', 'main'], { cwd: other })
 
     const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()
-    const res = rebaseIfMoved(wt, repo.root, 'main')
+    const res = rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })
 
     expect(res.ok).toBe(true)
     expect(res.ok && res.value).toBe('rebased')

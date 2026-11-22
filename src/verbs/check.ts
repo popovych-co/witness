@@ -18,20 +18,21 @@ import { designPending } from '../design.js'
 import { ASK_STREAM, reservedId } from '../ask.js'
 import { ID_RE, isId } from '../dsl.js'
 import { runDrift } from '../drift.js'
-import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit } from '../gitio.js'
+import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit, tryGitC } from '../gitio.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
 import { contentAtSha } from '../history.js'
 import { effortStreams, readStream } from '../journal.js'
 import { sourceTags } from '../matcher.js'
 import { evaluateNeeds } from '../needs.js'
 import { renderRefusal } from '../refusal.js'
-import { pendingDecision } from '../rounds.js'
+import { decisionOwed } from '../rounds.js'
 import { criteriaExcludes } from '../runner.js'
-import { findById, findCycle, loadCanon, planFinished } from '../scan.js'
+import { findById, findCycle, loadCanon, planFinished, type Canon } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
-import { kv, rows, shellWord, visible } from '../toon.js'
+import { kv, rows, shellLine, shellWord, visible } from '../toon.js'
 import { pendingTxn } from '../txn.js'
 import { cliAct } from '../act.js'
+import { seeWork } from '../carry.js'
 import { listWorktrees, materializedCanon, RESIDUE_GOT, worktreePath } from '../worktree.js'
 
 interface Finding {
@@ -82,6 +83,52 @@ function adapterLine(env: Ctx['env'], declared: string | undefined): string {
     case 'malformed': return `${harness.name} — reading not trusted in this session (malformed)`
     case 'no reading yet': return `${harness.name} — no reading yet in this session`
   }
+}
+
+// Row 243 (design §4.1.4). What ship's autostash (0.29.0 and earlier), an ended plan's backups and
+// an unfinished move leave behind: each a `warn`, so check's exit is unchanged (row 139), named by
+// its sha or its ref. Check only reads the stash list and the refs; every drop is prose for the
+// human, never a runnable row (D168: the CLI never discards work).
+function leftovers(root: string, canon: Canon): Finding[] {
+  const out: Finding[] = []
+  // An entry `git rebase --autostash` stored when its re-apply clashed: its commit's subject names
+  // the branch ("On witness/<plan>: autostash"; the reflog says only "autostash"). It may hold the
+  // only clean copy of the plan's work. `git stash drop` takes no sha, so the human finds the entry's
+  // `stash@{N}` by it. The human's own entries (`On main: autostash`) are not witness's.
+  const stash = tryGitC(root, 'stash', 'list', '--format=%H %s')
+  for (const line of stash.ok ? stash.out.split('\n') : []) {
+    const m = /^([0-9a-f]+) On witness\/(.+): autostash$/.exec(line)
+    if (m === null) continue
+    const sha = m[1]!
+    const plan = m[2]!
+    out.push(f('warn', 'git', sha, 'autostash-left',
+      `an autostash entry ship left for ${shellWord(plan)} (0.29.0 and earlier) — it may hold the only clean copy of that plan's work; ${seeWork(sha)}. `
+        + `It is never dropped for you: to drop it once you no longer need it, find its stash@{N} with `
+        + `${shellLine(['git', 'stash', 'list', '--format=%gd %H'])} and drop that one — git stash drop refuses a sha`))
+  }
+  // Every ref under a plan's `refs/witness/kept/<plan>/`, alike, once no reader is left for it: the
+  // plan abandoned (D168 keeps them), done (the merge's stamp deletes them, but a crash or a held lock
+  // can leave one) or no longer a plan. And a carry ref while its plan is not in progress, so no ship
+  // run finishes the move. A clash's backup is stash-shaped; a stopped rebase's has one parent and is
+  // no stash, so each is shown the way git reads it, and no `<ref>^2` is assumed.
+  const refs = tryGitC(root, 'for-each-ref', '--format=%(refname) %(parent)', 'refs/witness/kept/', 'refs/witness/carry/')
+  for (const line of refs.ok ? refs.out.split('\n') : []) {
+    const [ref = '', ...parents] = line.split(' ').filter((w) => w !== '')
+    const kept = /^refs\/witness\/kept\/([^/]+)\/./.exec(ref)
+    const carry = /^refs\/witness\/carry\/([^/]+)$/.exec(ref)
+    const planId = kept?.[1] ?? carry?.[1]
+    if (planId === undefined) continue
+    const doc = findById(canon, planId)
+    const plan = doc?.meta.type === 'plan' ? doc : undefined
+    if (kept ? plan !== undefined && !planFinished(plan) : plan !== undefined && String(plan.meta.status) === 'in-progress') continue
+    const which = plan === undefined ? 'no longer a plan' : visible(String(plan.meta.status))
+    const see = parents.length >= 2 ? seeWork(ref) : `see it with ${shellLine(['git', 'show', ref])}`
+    const drop = `it is never deleted for you — once you no longer need it: ${shellLine(['git', 'update-ref', '-d', ref])}`
+    out.push(f('warn', 'git', visible(ref), 'witness-ref-left', kept
+      ? `${shellWord(planId)} is ${which}, and this backup of its work stays — ${see}; ${drop}`
+      : `${shellWord(planId)} is ${which}, and this ref holds its uncommitted work from a move that never finished — it may be the only copy; ${see}; ${drop}`))
+  }
+  return out
 }
 
 export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
@@ -200,26 +247,29 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         findings.push(f('warn', 'motion', id, 'missing-worktree', `${cliAct('start', id).line} recreates it`))
       }
     }
+    // Row 244 (design §4.2.5): a decision owed is `decisionOwed`'s — a pending run, or a standing
+    // hand-back — so check names every decision `next` routes.
     for (const gate of ['plan', 'implement', 'ship']) {
-      if (pendingDecision(readStream(root, id), gate)) {
+      if (decisionOwed(readStream(root, id), gate)) {
         findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', cliAct('decide', gate, id, '--show').line))
       }
     }
   }
   for (const slug of effortStreams(root)) {
-    if (pendingDecision(readStream(root, slug), 'decompose')) {
+    if (decisionOwed(readStream(root, slug), 'decompose')) {
       findings.push(f('warn', 'motion', slug, 'gate-awaiting-decision', cliAct('decide', 'decompose', slug, '--show').line))
     }
   }
   for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
     const id = String(spec.meta.id)
-    if (pendingDecision(readStream(root, id), 'design')) {
+    if (decisionOwed(readStream(root, id), 'design')) {
       findings.push(f('warn', 'motion', id, 'gate-awaiting-decision', cliAct('decide', 'design', id, '--show').line))
     }
     if (designPending(root, spec) && String(spec.meta.status) === 'approved') {
       findings.push(f('warn', 'motion', id, 'design-pending', `ui spec owes a design — witness design ${shellWord(id)} --file <html>`))
     }
   }
+  findings.push(...leftovers(root, canon))
   for (const planId of listWorktrees(root)) {
     const doc = findById(canon, planId)
     if (!doc || planFinished(doc)) {

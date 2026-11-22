@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { actOn } from '../src/act.js'
-import { option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
+import { AFTER_EDIT, option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
 import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
@@ -151,6 +151,98 @@ describe('the re-ask suffix promises only what the re-gate will do', () => {
   it('says nothing of a re-ask once a revise follows it — the re-gate is changed-nothing', () => {
     const entries = [run(1, 'a', 'S'), { ...malformed(), round: 2, run_id: 'r-2' } as Entry, decision('revise')]
     expect(recommend(ctxFor(entries))!.options[0]!.why ?? '').not.toContain('re-asks')
+  })
+})
+
+// Row 244 (design §4.2.3). The revised-state rules, `revise-returned` included, match before
+// `malformed-rerun` when a revise follows the malformed run; a malformed round after the revise keeps
+// its free re-run first, and that re-run repairs it (P50).
+describe('a malformed round around a revise (design §4.2.3)', () => {
+  const malformed = (round: number, sha: string) =>
+    run(round, sha, 'S', { run_id: `r-${round}`, outcome: 'malformed', verdicts: [], malformed: [{ reviewer: 'code-reviewer', violations: [] }] })
+
+  it('a revise after a malformed round: the revised-state rule matches first (P45)', () => {
+    const entries = [run(1, 'a', 'S'), malformed(2, 'a'), decision('revise')]
+    const d = recommend(ctxFor(entries))!
+    expect(d.rule).toBe('revised')
+    expect(d.anchor).toBe('S')
+    expect(d.options[0]).toMatchObject({ command: 'witness gate plan p1', when: AFTER_EDIT })
+    // handed back after that revise: the hand-back's rule, never the re-run that would change nothing
+    const back = { v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: 'r-1', sha: 'a' } as unknown as Entry
+    const handed = recommend(ctxFor([...entries, back]))!
+    expect(handed.rule).toBe('revise-returned')
+    expect(handed.options.map((o) => o.command)).not.toContain('witness gate plan p1')
+  })
+
+  it('a malformed round after the revise leads with its re-run, which promises the repair (P50)', () => {
+    const d = recommend(ctxFor([run(1, 'a', 'S'), decision('revise'), malformed(2, 'a')]))!
+    expect(d.rule).toBe('malformed-rerun')
+    expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
+  })
+
+  // S3-3. One on other content leaves the pairing with the disposed run: with the content back on that
+  // run's the re-gate answers changed-nothing, so the block is the state's own and its re-gate is the
+  // conditional one, never the re-run's promise of a repair.
+  it('a malformed round after the revise on other content: the state\'s own block, no re-run (S3-3)', () => {
+    const entries = [run(1, 'a', 'S'), decision('revise', { note: 'x' }), malformed(2, 'b')]
+    const d = recommend(ctxFor(entries))!
+    expect(d.rule).toBe('revised')
+    expect(d.options[0]).toMatchObject({ command: 'witness gate plan p1', when: AFTER_EDIT })
+    expect(d.options.map((o) => o.why ?? '').join(' ')).not.toContain('re-asks')
+    const back = { v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: 'r-1', sha: 'a' } as unknown as Entry
+    const handed = recommend(ctxFor([run(1, 'a', 'S'), decision('revise', { note: 'x' }), back, malformed(2, 'b')]))!
+    expect(handed.rule).toBe('revise-returned')
+    expect(handed.options.map((o) => o.command)).not.toContain('witness gate plan p1')
+    const retracted = recommend(ctxFor([run(1, 'a', 'S', { outcome: 'passed', verdicts: [] }), decision('revise', { note: 'x' }), malformed(2, 'b')]))!
+    expect(retracted.rule).toBe('retracted')
+    expect(retracted.options[0]!.command).toBe('witness gate plan p1 --fresh')
+    // moved content pairs with nothing: the re-run leads again
+    expect(recommend(ctxFor(entries, { stale: true }))!.rule).toBe('malformed-rerun')
+  })
+
+  it('a revise after a malformed-only round: the re-gate repairs it, and the block says so (S2-4)', () => {
+    const d = recommend(ctxFor([malformed(1, 'a'), decision('revise')]))!
+    expect(d.rule).toBe('malformed-rerun')
+    expect(d.options.map((o) => o.command)).toEqual(['witness gate plan p1'])
+    expect(d.options[0]!.why).toContain('re-asks only code-reviewer')
+  })
+})
+
+// Design §4.2.2's handed-back row (review finding S2-D): recommend sending upstream when the blocking
+// finding's anchor is in the parent — the author found nothing to change because the fault is above —
+// else park. The parent test is the rule table's own (`blocking-parent`), and D123's ladder holds: once
+// spent for the anchor, the upstream is not offered and the park leads.
+describe('a handed-back revise (design §4.2.2, S2-D)', () => {
+  const back = (runId: string) => ({ v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p1', run_id: runId, sha: 'a' } as unknown as Entry)
+  const IN_PARENT = 'auth-refresh > ## Behavior'
+  const lead = (entries: Entry[]) => recommend(ctxFor(entries))!
+
+  it('the anchor is in the parent: send upstream is recommended, the park after it', () => {
+    const d = lead([run(1, 'a', IN_PARENT), decision('revise', { note: 'x' }), back('r-1')])
+    expect(d.rule).toBe('revise-returned')
+    expect(d.anchor).toBe(IN_PARENT)
+    expect(d.options[0]!.act?.argv).toEqual(['decide', 'plan', 'p1', '--revise', '--upstream', 'auth-refresh'])
+    expect(d.options[0]!.why).toContain('auth-refresh')
+    expect(renderDecision(d).at(-1)).toBe('run: witness decide plan p1 --revise --upstream auth-refresh')
+    expect(d.options.map((o) => o.act?.argv.at(-1))).toContain('--stop')
+  })
+
+  it('the anchor is in this artifact: the park is recommended', () => {
+    const d = lead([run(1, 'a', 'p1 > ## Step: s1'), decision('revise', { note: 'x' }), back('r-1')])
+    expect(d.rule).toBe('revise-returned')
+    expect(d.options[0]!.act?.argv).toEqual(['decide', 'plan', 'p1', '--stop'])
+    expect(d.options[0]!.why).toContain('neither the author nor a reviewer found a fix')
+  })
+
+  it('the anchor is in the parent but its ladder is spent: no upstream, the park is recommended (D123)', () => {
+    const spent = [
+      run(1, 'a', IN_PARENT), decision('revise-upstream', { anchor: IN_PARENT, upstream: { artifact: 'auth-refresh', gate: 'design' } }),
+      run(2, 'a', IN_PARENT), decision('revise', { note: 'x' }), back('r-2'),
+    ]
+    const d = lead(spent)
+    expect(d.rule).toBe('revise-returned')
+    expect(d.options[0]!.act?.argv).toEqual(['decide', 'plan', 'p1', '--stop'])
+    expect(d.options.some((o) => o.act?.argv.includes('--upstream'))).toBe(false)
   })
 })
 

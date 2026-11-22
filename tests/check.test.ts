@@ -9,7 +9,10 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { RECAP, SPEC_META, approve, commitEntry, decidedRepo, turnDecision, fakeScenario, gateEnv, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig } from './helpers.js'
+import { RECAP, SPEC_META, approve, commitEntry, decidedRepo, turnDecision, fakeScenario, gateEnv, ghState, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig, type TestRepo } from './helpers.js'
+import { captureCarry, keepCarry, keepStopped } from '../src/carry.js'
+import { findById, loadCanon } from '../src/scan.js'
+import { shellLine } from '../src/toon.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -716,3 +719,195 @@ describe('witness check — carried decisions (row 198)', () => {
   })
 })
 
+
+// Row 243 (design §4.1.4, §4.1.1 step 10). What older versions and ended plans leave behind: check
+// warns for each, naming it by its sha or its ref, gives every drop as prose and never as a runnable
+// row, deletes nothing, and leaves its exit alone (row 139). The lazy stamp deletes a merged plan's
+// kept refs; an abandon keeps them (D168).
+describe('witness check — the carry\'s leftovers (row 243)', () => {
+  // An entry as `git rebase --autostash` leaves one when its re-apply clashes: `git stash create
+  // autostash` on the branch, so the stash commit's subject is "On <branch>: autostash", then `git
+  // stash store -m autostash`, the reflog's message. Made in the test's own tmp repo, on its own list.
+  const autostash = (repo: TestRepo, branch: string, body: string): string => {
+    const back = repo.git('symbolic-ref', '--short', 'HEAD')
+    if (branch !== back) repo.git('switch', '-q', '-c', branch)
+    repo.write('notes.txt', body)
+    const sha = repo.git('stash', 'create', 'autostash')
+    repo.git('checkout', '-q', '--', 'notes.txt')
+    if (branch !== back) repo.git('switch', '-q', back)
+    repo.git('stash', 'store', '-m', 'autostash', sha)
+    return sha
+  }
+  const findingRows = (stdout: string, rule: string): string[] => stdout.split('\n').filter((l) => l.startsWith('  warn,git,') && l.includes(`,${rule},`))
+  const fieldOf = (row: string): string => row.split(',')[2]!
+  const noRunRow = (stdout: string): void => expect(stdout.split('\n').filter((l) => /^\s*run:/.test(l))).toEqual([])
+  const refsUnder = (repo: TestRepo, prefix: string): string[] =>
+    repo.git('for-each-ref', '--format=%(refname)', prefix).split('\n').filter((r) => r !== '')
+  const gitIn = (wt: string, ...args: string[]): string => execFileSync('git', args, { cwd: wt, encoding: 'utf8' }).trim()
+
+  // Two plans, each started (a worktree each): auth-refresh-plan-1 under auth-refresh and
+  // auth-other-plan-1 under a second spec, so the second can be abandoned with the first standing.
+  async function twoPlans(): Promise<TestRepo> {
+    const repo = await seededRepo()
+    expect((await writeSpec(repo, 'auth-refresh')).code).toBe(0)
+    approve(repo, 'auth-refresh')
+    expect((await writePlan(repo, 'auth-refresh-plan-1')).code).toBe(0)
+    repo.flipStatus('auth-refresh-plan-1', 'approved')
+    expect((await repo.cli(['start', 'auth-refresh-plan-1'])).code).toBe(0)
+    expect((await writeSpec(repo, 'auth-other', { criteria: [{ id: 'ac-rotate', test: '@spec:auth-other' }] })).code).toBe(0)
+    approve(repo, 'auth-other')
+    expect((await writePlan(repo, 'auth-other-plan-1', { parent: 'auth-other' })).code).toBe(0)
+    repo.flipStatus('auth-other-plan-1', 'approved')
+    expect((await repo.cli(['start', 'auth-other-plan-1'])).code).toBe(0)
+    return repo
+  }
+  // The plan's uncommitted work captured into its carry ref, as ship's step 4 does.
+  const carryOf = (wt: string, planId: string, file: string): string => {
+    writeFileSync(join(wt, file), `${planId}'s uncommitted work\n`)
+    gitIn(wt, 'add', '--', file)
+    const carry = captureCarry(wt, planId)
+    if (!carry.ok || carry.value === undefined) throw new Error(`capture: ${JSON.stringify(carry)}`)
+    return carry.value
+  }
+  // A clash's backup as step 7 writes it (stash-shaped, two parents), and a stopped rebase's as
+  // step 0 writes it (one parent): the plan's next kept ref each.
+  const keptFromCarry = (wt: string, planId: string, file: string): string => {
+    const kept = keepCarry(wt, planId, carryOf(wt, planId, file), [file])
+    if (!kept.ok) throw new Error(`keepCarry: ${JSON.stringify(kept.violations)}`)
+    return kept.value
+  }
+  const keptFromStop = (wt: string, planId: string, file: string): string => {
+    writeFileSync(join(wt, file), 'the conflicted file as the worktree held it\n')
+    const kept = keepStopped(wt, planId, [file])
+    if (!kept.ok) throw new Error(`keepStopped: ${JSON.stringify(kept.violations)}`)
+    return kept.value
+  }
+  const cleanTree = (wt: string): void => { gitIn(wt, 'reset', '-q', '--hard'); gitIn(wt, 'clean', '-q', '-fd') }
+
+  it('warns per witness autostash entry by sha with the drop as prose; skips On main: autostash; exit unchanged', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    repo.write('notes.txt', 'base\n')
+    repo.git('add', 'notes.txt')
+    repo.git('commit', '-q', '-m', 'notes')
+    const clean = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(clean.code).toBe(0)
+    expect(clean.stdout).not.toContain('autostash-left')
+
+    const p1 = autostash(repo, 'witness/p1', 'p1 work\n')
+    const human = autostash(repo, 'main', 'my own work\n')
+    const p2 = autostash(repo, 'witness/p2', 'p2 work\n')
+    // git's own shape: the subject names the branch, the reflog's message is just "autostash"
+    expect(repo.git('show', '-s', '--format=%s', p1)).toBe('On witness/p1: autostash')
+    expect(repo.git('show', '-s', '--format=%s', human)).toBe('On main: autostash')
+    expect(repo.git('stash', 'list', '--format=%gs').split('\n')).toEqual(['autostash', 'autostash', 'autostash'])
+    const listed = repo.git('stash', 'list', '--format=%gd %H')
+
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.code).toBe(clean.code)
+    const rows = findingRows(res.stdout, 'autostash-left')
+    expect(rows.map(fieldOf).sort()).toEqual([p1, p2].sort())
+    for (const [sha, plan] of [[p1, 'p1'], [p2, 'p2']] as const) {
+      const row = rows.find((l) => fieldOf(l) === sha)!
+      expect(row).toContain(`an autostash entry ship left for ${plan} (0.29.0 and earlier)`)
+      expect(row).toContain('the only clean copy of that plan\'s work')
+      expect(row).toContain(shellLine(['git', 'stash', 'show', '-p', sha]))
+      expect(row).toContain(shellLine(['git', 'diff', `${sha}^1`, `${sha}^2`]))
+      expect(row).toContain(`find its stash@{N} with ${shellLine(['git', 'stash', 'list', '--format=%gd %H'])}`)
+      expect(row).toContain('git stash drop refuses a sha')
+    }
+    expect(res.stdout).not.toContain(human)
+    noRunRow(res.stdout)
+    expect(repo.git('stash', 'list', '--format=%gd %H')).toBe(listed)   // read, never changed
+  }, 120_000)
+
+  it('warns for an abandoned plan\'s kept ref and for a carry ref of a plan not in progress', async () => {
+    const repo = await twoPlans()
+    await writePlan(repo, 'auth-refresh-plan-2')
+    repo.flipStatus('auth-refresh-plan-2', 'approved')                          // a plan, not in progress
+    const baseline = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(baseline.stdout).not.toContain('witness-ref-left')
+
+    // auth-other-plan-1 clashed twice before the human abandoned it, and a move of it never finished
+    const wt = worktreePath(repo.root, 'auth-other-plan-1')
+    const stashShaped = keptFromCarry(wt, 'auth-other-plan-1', 'clash.txt')
+    const oneParent = keptFromStop(wt, 'auth-other-plan-1', 'stop.txt')
+    carryOf(wt, 'auth-other-plan-1', 'carried.txt')
+    cleanTree(wt)
+    expect(gitIn(wt, 'rev-list', '--parents', '-n', '1', stashShaped).split(' ')).toHaveLength(3)
+    expect(gitIn(wt, 'rev-list', '--parents', '-n', '1', oneParent).split(' ')).toHaveLength(2)
+    expect((await repo.cli(['abandon', 'auth-other-plan-1'])).code).toBe(0)
+    expect(refsUnder(repo, 'refs/witness/kept/auth-other-plan-1/')).toEqual([stashShaped, oneParent])   // D168: kept
+
+    const head = repo.git('rev-parse', 'HEAD')
+    for (const ref of [
+      'refs/witness/kept/auth-refresh-plan-1/1', 'refs/witness/carry/auth-refresh-plan-1',   // in progress: its own
+      'refs/witness/kept/auth-refresh-plan-2/1', 'refs/witness/carry/auth-refresh-plan-2',   // approved: the carry warns
+      'refs/witness/kept/gone-plan/1', 'refs/witness/carry/gone-plan',                         // no such plan
+    ]) repo.git('update-ref', ref, head)
+    const before = refsUnder(repo, 'refs/witness/')
+
+    const res = await repo.cli(['check'], { env: { WITNESS_TRUST_CMDS: '1' } })
+    expect(res.code).toBe(baseline.code)
+    const rows = findingRows(res.stdout, 'witness-ref-left')
+    expect(rows.map(fieldOf).sort()).toEqual([
+      stashShaped, oneParent, 'refs/witness/carry/auth-other-plan-1',
+      'refs/witness/carry/auth-refresh-plan-2', 'refs/witness/kept/gone-plan/1', 'refs/witness/carry/gone-plan',
+    ].sort())
+    const row = (ref: string): string => rows.find((l) => fieldOf(l) === ref)!
+    expect(row(stashShaped)).toContain('auth-other-plan-1 is abandoned, and this backup of its work stays')
+    expect(row(stashShaped)).toContain(shellLine(['git', 'stash', 'show', '-p', stashShaped]))
+    expect(row(stashShaped)).toContain(shellLine(['git', 'diff', `${stashShaped}^1`, `${stashShaped}^2`]))
+    // a stopped rebase's backup has one parent: read with git show, never as a stash
+    expect(row(oneParent)).toContain(shellLine(['git', 'show', oneParent]))
+    expect(row(oneParent)).not.toContain('git stash show')
+    expect(row(oneParent)).not.toContain('^2')
+    expect(row('refs/witness/carry/auth-other-plan-1')).toContain('auth-other-plan-1 is abandoned, and this ref holds its uncommitted work from a move that never finished — it may be the only copy')
+    expect(row('refs/witness/carry/auth-refresh-plan-2')).toContain('auth-refresh-plan-2 is approved, and this ref holds its uncommitted work')
+    expect(row('refs/witness/kept/gone-plan/1')).toContain('gone-plan is no longer a plan, and this backup of its work stays')
+    for (const ref of rows.map(fieldOf)) {
+      expect(row(ref)).toContain('never deleted for you')
+      expect(row(ref)).toContain(`once you no longer need it: ${shellLine(['git', 'update-ref', '-d', ref])}`)
+    }
+    noRunRow(res.stdout)
+    expect(refsUnder(repo, 'refs/witness/')).toEqual(before)                     // check deletes nothing
+  }, 180_000)
+
+  it('a merged plan\'s kept refs are deleted by the stamp; an abandoned plan\'s stay, and check warns', async () => {
+    const repo = await twoPlans()
+    const wt1 = worktreePath(repo.root, 'auth-refresh-plan-1')
+    const fromStop = repo.git('rev-parse', keptFromStop(wt1, 'auth-refresh-plan-1', 'stop.txt'))
+    keptFromCarry(wt1, 'auth-refresh-plan-1', 'clash.txt')
+    repo.git('update-ref', 'refs/witness/kept/auth-refresh-plan-1/mine', fromStop)   // renamed inside the prefix: still the plan's
+    carryOf(wt1, 'auth-refresh-plan-1', 'carried.txt')                                 // a move that never finished
+    cleanTree(wt1)
+    repo.git('update-ref', 'refs/witness/kept/auth-refresh-plan-10/1', fromStop)        // another plan's prefix
+    expect(refsUnder(repo, 'refs/witness/kept/auth-refresh-plan-1/')).toHaveLength(3)
+
+    const wt2 = worktreePath(repo.root, 'auth-other-plan-1')
+    const abandoned = keptFromStop(wt2, 'auth-other-plan-1', 'stop.txt')
+    cleanTree(wt2)
+    expect((await repo.cli(['abandon', 'auth-other-plan-1'])).code).toBe(0)
+
+    repo.setMeta('auth-refresh-plan-1', { pr: 1 })
+    const scenario = fakeScenario()
+    ghState(scenario, 1, 'MERGED')
+    const res = await repo.cli(['check'], { env: gateEnv(scenario) })
+    expect(findById(loadCanon(repo.root), 'auth-refresh-plan-1')!.meta.status).toBe('done')
+    expect(refsUnder(repo, 'refs/witness/kept/auth-refresh-plan-1/')).toEqual([])             // every ref under the prefix, alike
+    expect(refsUnder(repo, 'refs/witness/kept/auth-refresh-plan-10/')).toEqual(['refs/witness/kept/auth-refresh-plan-10/1'])
+    expect(refsUnder(repo, 'refs/witness/kept/auth-other-plan-1/')).toEqual([abandoned])
+    expect(refsUnder(repo, 'refs/witness/carry/')).toEqual(['refs/witness/carry/auth-refresh-plan-1'])   // carried work is never dropped
+    const rows = findingRows(res.stdout, 'witness-ref-left')
+    expect(rows.map(fieldOf).sort()).toEqual([abandoned, 'refs/witness/carry/auth-refresh-plan-1', 'refs/witness/kept/auth-refresh-plan-10/1'].sort())
+    expect(rows.find((l) => fieldOf(l) === abandoned)).toContain('auth-other-plan-1 is abandoned, and this backup')
+    expect(rows.find((l) => fieldOf(l) === 'refs/witness/carry/auth-refresh-plan-1')).toContain('auth-refresh-plan-1 is done, and this ref holds its uncommitted work')
+
+    // a done plan's kept ref the stamp did not delete (a crash after its commit, say) is warned too
+    repo.git('update-ref', 'refs/witness/kept/auth-refresh-plan-1/3', fromStop)
+    const again = await repo.cli(['check'], { env: gateEnv(scenario) })
+    expect(findingRows(again.stdout, 'witness-ref-left').find((l) => fieldOf(l) === 'refs/witness/kept/auth-refresh-plan-1/3'))
+      .toContain('auth-refresh-plan-1 is done, and this backup of its work stays')
+    expect(again.code).toBe(res.code)
+  }, 180_000)
+})

@@ -200,12 +200,16 @@ describe('the exits line renders the live acts (rows 139/203)', () => {
   // beside a fresh run otherwise — and at the bound the endgame acts stay.
   it('reopens with a revise (and a fresh run when nothing is owed) below the bound and with the endgame acts at it', () => {
     const revise = cliAct('decide', 'plan', 'p1', '--revise', '--note', '<why>')
-    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh', false))
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], false, 'auth-refresh', false))
       .toEqual([revise, cliAct('gate', 'plan', 'p1', '--fresh')])
-    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], 'auth-refresh', true)).toEqual([revise])
-    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], 'auth-refresh', false)
+    expect(reopenActs('plan', 'p1', [judged(1, 'a'), decided('stop')], false, 'auth-refresh', true)).toEqual([revise])
+    const atBound = reopenActs('plan', 'p1', [...BOUND, decided('stop')], false, 'auth-refresh', false)
     expect(atBound).toEqual(exitActs('plan', 'p1', [...BOUND, decided('stop')], false, 'auth-refresh'))
     expect(atBound.at(-1)).toEqual(cliAct('abandon', 'p1'))
+    // Row 244 (S2-5): staleness is required — on moved content the endgame holds no approve.
+    const moved = reopenActs('plan', 'p1', [...BOUND, decided('stop')], true, 'auth-refresh', false)
+    expect(moved).toEqual(atBound.filter((a) => !a.argv.includes('--approve')))
+    expect(moved).toHaveLength(atBound.length - 1)
   })
 })
 
@@ -291,6 +295,9 @@ const walk = (dir: string): string[] =>
   })
 
 describe('no source builds its own exits set', () => {
+  // Row 244 (#87, design §4.2.1): a set is the gate's live acts, and those hold gate acts too — the
+  // re-gate, `--fresh`, `--unchanged` — so a set joining them by hand is caught as one joining
+  // decisions is, and a refusal's want that names acts reads them off `liveActs`.
   it('only rounds.ts composes decision verbs into a set', () => {
     const offenders: string[] = []
     for (const file of walk(SRC)) {
@@ -304,8 +311,8 @@ describe('no source builds its own exits set', () => {
         // --stop`) rather than an exits set — it fires on a usage error, before any
         // anchoring run is known, so it must not be routed through `liveExits`, which
         // would answer with upstream and repair options that are meaningless there.
-        const flags = (line.match(/--(approve|revise|stop|override|repair)/g) ?? []).length
-        if (flags >= 2 && line.includes(' | ') && line.includes('witness decide')) {
+        const flags = (line.match(/--(approve|revise|stop|override|repair|fresh|unchanged)\b/g) ?? []).length
+        if (flags >= 2 && line.includes(' | ') && (line.includes('witness decide') || line.includes('witness gate'))) {
           offenders.push(`${file}:${i + 1}`)
         }
       }

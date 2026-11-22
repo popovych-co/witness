@@ -8,12 +8,12 @@ import { designArtifactCurrent, designPending } from '../design.js'
 import { reconcileRows } from '../drift.js'
 import { divergence, primaryRoot } from '../gitio.js'
 import { judgeLine, resolveJudge } from '../harness.js'
-import { effortAbandoned, effortStreams, latestRecap, readStream } from '../journal.js'
+import { effortAbandoned, effortStreams, latestRecap, readStream, type Entry } from '../journal.js'
 import { unmetNeeds } from '../needs.js'
 import { computeNext, flowAction, parkedGates } from './next.js'
 import { renderRefusal } from '../refusal.js'
 import { openDeferrals } from '../deferral.js'
-import { lastGateRun, pendingDecision, type DecisionEntry, type GateRunEntry } from '../rounds.js'
+import { decisionOwed, lastGateRun, standingHandBack, type DecisionEntry, type GateRunEntry } from '../rounds.js'
 import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
@@ -366,22 +366,23 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   for (const path of lazy.kept) {
     ctx.out(kv('note', `worktree ${path} kept — this session stands in it; leave the directory and re-run`))
   }
+  // Row 244 (design §4.2.5): every decision owed, `decisionOwed`'s — a pending run, or a standing
+  // hand-back, whose row reads `handed back` on every gate: the run's own outcome is the stop the
+  // revise already answered.
   const pendingGates: Array<{ gate: string; target: string; round: number; outcome: string }> = []
+  const owedRow = (entries: Entry[], gate: string, target: string): void => {
+    const p = decisionOwed(entries, gate)
+    if (p) pendingGates.push({ gate, target, round: p.round, outcome: standingHandBack(entries, gate) !== undefined ? 'handed back' : p.outcome })
+  }
   for (const plan of canon.docs.filter((d) => d.meta.type === 'plan')) {
     const id = String(plan.meta.id)
-    for (const gate of ['plan', 'implement', 'ship']) {
-      const p = pendingDecision(readStream(root, id), gate)
-      if (p) pendingGates.push({ gate, target: id, round: p.round, outcome: p.outcome })
-    }
+    const entries = readStream(root, id)
+    for (const gate of ['plan', 'implement', 'ship']) owedRow(entries, gate, id)
   }
   for (const spec of canon.docs.filter((d) => d.meta.type === 'spec')) {
-    const p = pendingDecision(readStream(root, String(spec.meta.id)), 'design')
-    if (p) pendingGates.push({ gate: 'design', target: String(spec.meta.id), round: p.round, outcome: p.outcome })
+    owedRow(readStream(root, String(spec.meta.id)), 'design', String(spec.meta.id))
   }
-  for (const slug of efforts) {
-    const p = pendingDecision(readStream(root, slug), 'decompose')
-    if (p) pendingGates.push({ gate: 'decompose', target: slug, round: p.round, outcome: p.outcome })
-  }
+  for (const slug of efforts) owedRow(readStream(root, slug), 'decompose', slug)
   if (pendingGates.length) {
     rows('gates', ['gate', 'target', 'round', 'outcome'], pendingGates as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
   }

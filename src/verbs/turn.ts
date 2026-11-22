@@ -1,9 +1,12 @@
 import { EXIT, type Ctx } from '../cli.js'
+import { refuseClash } from '../clash.js'
 import { contained, JOB_HOST_ENV, jobHost } from '../contain.js'
+import { primaryRoot } from '../gitio.js'
 import { renderRefusal } from '../refusal.js'
 import { sayNoJob } from '../runner.js'
 import { withRunnerTurn } from '../runner-lock.js'
 import { resolveSpawn, spawnSync } from '../spawn.js'
+import { worktreeFlow, worktreePath } from '../worktree.js'
 
 // Row 218. The repo's test turn, for a test a session runs itself. Witness's own runs take turns
 // in `execCommand` (row 181), but a session also runs its inner TDD loop, a probe test or a ship
@@ -23,6 +26,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (file === undefined) {
     ctx.err('usage: witness turn -- <command> [args…]')
     return EXIT.REFUSED
+  }
+  // Row 243 (design §4.1.2). In a plan's worktree a turn is the session's test of that plan's tree,
+  // so it is refused while a clash there is unresolved — before the turn is taken; the command never
+  // runs. At the primary root, or anywhere outside a plan's worktree, no plan's kept refs apply.
+  const rootR = primaryRoot(ctx.cwd)
+  const planId = rootR.ok ? worktreeFlow(ctx.cwd, rootR.value) : undefined
+  if (rootR.ok && planId !== undefined) {
+    const clashed = refuseClash(ctx, rootR.value, planId, worktreePath(rootR.value, planId))
+    if (clashed !== undefined) return clashed
   }
   return withRunnerTurn(ctx.cwd, ctx, cmd.join(' '), (turnEnv) => {
     const host = jobHost(turnEnv)

@@ -20,8 +20,74 @@ describe('stage skills — shared contract', () => {
       expect(body).toContain(SKILL_PIN_PREFIX);
       for (const rule of SKILL_GROUND_RULES) expect(body, rule).toContain(rule);
     });
+    // S1-C (row 243). verify-red sets the non-test work aside in a ref of its own, and nothing
+    // lands on git's shared stash list, so no skill says it stashes.
+    it(`${name} says verify-red sets the work aside, never that it stashes (row 243)`, () => {
+      const body = readFileSync(skillPath(name), 'utf8');
+      expect(body).toContain('`verify-red`\'s set-aside cycle');
+      expect(body).not.toMatch(/stash cycle|stashes (?:non-test|every)/);
+    });
   }
 });
+
+// Row 244 (#87, design §4.2.2). A settled gate's `decide --show` now prints an `exits:` line: the
+// human's retraction. `revise-human` does not refuse a chat session drive did not start, so the stage
+// skills say outright that a session never runs it, and follow `help: witness next`.
+export const SETTLED_EXITS = 'A `settled` state\'s `exits:` line is the human\'s retraction, never run by a session: follow `help: witness next`.'
+describe('a settled exits line is the human\'s (row 244)', () => {
+  for (const name of ['witness-decompose', 'witness-design', 'witness-implement', 'witness-plan', 'witness-ship']) {
+    it(`${name} keeps the reopened guidance and says a settled exits line is never a session's`, () => {
+      const body = readFileSync(skillPath(name), 'utf8');
+      expect(body).toContain('a `reopened` state means the verdict above it is history, so act on the `exits:` line, not on remembered findings.');
+      expect(body).toContain(SETTLED_EXITS);
+      expect(body).not.toContain('a `reopened` or `settled` state means');
+    });
+  }
+});
+
+// Row 244 (S2-B). A retracted look keeps its `design:` stamp, and `next` routes its re-review with
+// `stage: design`: the skill runs the `--fresh` it names rather than re-authoring the look.
+export const RETRACTED_LOOK = 'A `retracted` state (the human took the look\'s approval back) asks for a re-review of the same look, not a new one: when `witness next` names `witness gate design <spec-id> --fresh`, run it as named, as the gate above.'
+describe('a retracted look is re-reviewed, not re-authored (row 244)', () => {
+  it('witness-design runs the --fresh next names for a retracted look', () => {
+    expect(readFileSync(skillPath('witness-design'), 'utf8')).toContain(RETRACTED_LOOK)
+  })
+})
+
+// Fix round 2. A retracted implement approval routes its re-review (`gate implement --fresh`), and a
+// retracted ship approval is re-reviewed by `witness ship` itself: neither skill asks for an edit.
+export const RETRACTED_IMPLEMENT = 'A `retracted` state (the human took the approval back) asks for a re-review of the same diff, not an edit: when `witness next` names `witness gate implement <plan-id> --fresh`, run it as named, as the gate above.'
+export const RETRACTED_SHIP = 'A `retracted` state (the human took the approval back) asks for a re-review, not an edit: re-run `$WITNESS ship <plan-id>`, which re-judges the same tree itself (the ship gate\'s `--fresh`, after its rebase).'
+describe('a retracted implement or ship approval is re-reviewed, not edited (row 244)', () => {
+  it('witness-implement runs the --fresh next names; witness-ship re-runs ship, which re-reviews', () => {
+    expect(readFileSync(skillPath('witness-implement'), 'utf8')).toContain(RETRACTED_IMPLEMENT)
+    expect(readFileSync(skillPath('witness-ship'), 'utf8')).toContain(RETRACTED_SHIP)
+  })
+})
+
+// Row 244 (design §4.2.4 "The skills"). Every stage skill with a gate names its own hand-back in the
+// place a revise re-enters it: the author's act when the revise needs no change, never `decide`. The
+// grill has no gate, and a revise never re-enters it.
+export const HAND_BACK = (cmd: string) =>
+  `When you judge there is nothing to change, hand the revise back with \`${cmd}\`, and never \`decide\` — a plain re-gate hands nothing back.`
+describe('the hand-back line (row 244)', () => {
+  for (const [name, cmd] of [
+    ['witness-decompose', '$WITNESS gate decompose --effort <effort> --unchanged'],
+    ['witness-design', '$WITNESS gate design <spec-id> --unchanged'],
+    ['witness-plan', '$WITNESS gate plan <plan-id> --unchanged'],
+    ['witness-implement', '$WITNESS gate implement <plan-id> --unchanged'],
+    ['witness-ship', '$WITNESS gate ship <plan-id> --unchanged'],
+  ] as const) {
+    it(`${name} hands a revise back with its own gate, where a revise re-enters it`, () => {
+      const lines = readFileSync(skillPath(name), 'utf8').split('\n').filter((l) => l.includes(HAND_BACK(cmd)))
+      expect(lines, name).toHaveLength(1)
+      expect(lines[0]).toMatch(/Re-entered after `--revise`|`decide ship <plan-id> --revise` re-enters here/)
+    })
+  }
+  it('witness-brainstorm has no gate to hand back', () => {
+    expect(readFileSync(skillPath('witness-brainstorm'), 'utf8')).not.toContain('--unchanged')
+  })
+})
 
 describe('witness-brainstorm', () => {
   const body = () => readFileSync(skillPath('witness-brainstorm'), 'utf8');
@@ -203,6 +269,12 @@ describe('witness-implement: a step already on the base (row 241)', () => {
     expect(readFileSync(skillPath('witness-implement'), 'utf8'))
       .toContain('unless it closed its step as already present (`step-close: … closed — already present`), which prints the slice lines like any step close; that step\'s green comes next')
   });
+  // Row 243. A crashed verify-red's held work: put back first (`held-work:`), or the human's.
+  it('reads held-work as files to re-read, and stops on verify-red-pending, never touching the ref (row 243)', () => {
+    const body = readFileSync(skillPath('witness-implement'), 'utf8');
+    expect(body).toContain('A `held-work:` line means an earlier verify-red never finished and its held work was put back first: re-read the files it names');
+    expect(body).toContain('A `verify-red-pending` refusal means that work could not be put back safely: never delete or move the ref it names; render it and **END YOUR TURN**');
+  });
 });
 
 describe('witness-ship', () => {
@@ -212,10 +284,70 @@ describe('witness-ship', () => {
     expect(body()).toContain('always stops');
     expect(body()).toContain('decide ship');
   });
-  it('owns semantic-conflict resolution and never merges', () => {
-    expect(body()).toContain('semantic-conflict');
-    expect(body()).toContain('--force-with-lease');
-    expect(body()).toContain('Never merge');
+  // Row 243 (design §4.1.3). The moved base's two refusals are named; the old aborted-rebase
+  // refusal and the hand force-push it asked for are gone (ship pushes under its own lease).
+  it('the ship skill names textual-conflict and clash-unresolved, never semantic-conflict, and no hand --force-with-lease', () => {
+    const s = body();
+    expect(s).toMatch(/textual-conflict/); expect(s).toMatch(/clash-unresolved/);
+    expect(s).not.toMatch(/semantic-conflict|--force-with-lease/);
+    expect(s).toContain('Never merge');
+  });
+  // A heading's section: from the heading to the next heading of any level.
+  const section = (heading: string): string => {
+    const s = body();
+    const start = s.indexOf(`\n${heading}\n`);
+    expect(start, heading).toBeGreaterThan(-1);
+    const rest = s.slice(start + heading.length + 2);
+    const end = rest.search(/^#{2,3} /m);
+    return end < 0 ? rest : rest.slice(0, end);
+  };
+  const inOrder = (text: string, parts: string[]): void => {
+    let at = -1;
+    for (const p of parts) {
+      const next = text.indexOf(p, at + 1);
+      expect(next, `${p} after ${at}`).toBeGreaterThan(at);
+      at = next;
+    }
+  };
+  it('carries the clash steps: each file\'s remedy from its row, a test through the turn, then ship, which re-gates (row 243)', () => {
+    const clash = section('### A clash');
+    inOrder(clash, [
+      '**content**', 'resolve the conflict markers keeping both intents', '`git add -- <file>`',
+      'a file with one marker left is still content',
+      '**binary, or both changed with no markers**', 'offered only while the file still holds a version git left',
+      '`git checkout --theirs -- <file>` keeps the plan\'s version', '`git checkout --ours -- <file>` keeps main\'s',
+      '**no markers left**', 'the row\'s `git add -- <file>` records it', '`git checkout -m -- <file>` puts the markers back',
+      'Never check out a side over it',
+      '**binary, neither side\'s version**', 'the row\'s checkouts would replace it with a side',
+      '**modify/delete**', 'which side `git rm -- <file>` keeps and which side `git add -- <file>` keeps',
+      'Test through `$WITNESS turn -- <test command>`',
+      'Re-run `$WITNESS ship <plan-id>`, which re-gates',
+    ]);
+    expect(clash).not.toMatch(/git push|git rebase/);
+  });
+  it('carries the replay steps: commit first, rebase the remote tip and continue, test through the turn, re-run ship with no hand push (row 243)', () => {
+    const replay = section('### A replay conflict');
+    inOrder(replay, [
+      'Commit the uncommitted work first',
+      'git rebase origin/<ship-branch>', 'git add -- <file>', 'git rebase --continue',
+      'Test through `$WITNESS turn -- <test command>`',
+      'Re-run `$WITNESS ship <plan-id>`: it pushes under witness\'s own lease, so there is no hand push',
+    ]);
+    expect(replay).not.toMatch(/git push/);
+    expect(replay).not.toContain('git add -A');
+  });
+  it('its CI-red bullet is commit, then re-run witness ship (row 243)', () => {
+    const bullet = body().split('\n').find((l) => l.startsWith('- **CI red**'));
+    expect(bullet).toContain('commit, then re-run `$WITNESS ship <plan-id>`');
+    expect(bullet).not.toMatch(/push/i);
+  });
+  it('says ship re-gates by itself when a move changed the tree the battery judged (row 243)', () => {
+    const bullet = body().split('\n').find((l) => l.startsWith('- **After the human approves**'));
+    expect(bullet).toContain('ship carries the plan\'s work across and re-gates by itself: a move changed the tree the battery judged');
+  });
+  it('names a gone PR branch the human\'s and a held git lock drive\'s (rows 242, 243)', () => {
+    expect(body()).toContain('a `merge-refused`, `push-diverged` or `pr-branch-gone` refusal — is the human\'s');
+    expect(body()).toContain('a git lock another process held (`index-locked`)');
   });
   it('reads a decision another decider landed first as that decision (row 240)', () => {
     expect(body()).toContain('A `decided: ship … → revise (decided first)` line is a revise like any other')
@@ -233,7 +365,7 @@ describe('witness-ship', () => {
     expect(cmd).toContain('| `busy:` is printed | Another witness run is acting on that target now. Do nothing for it')
   });
   it('checks a resolution through witness turn (row 218)', () => {
-    expect(body()).toContain("<run the repo's tests locally through $WITNESS turn -- <test command> — the resolution must be green before it travels>");
+    expect(body()).toContain('Test through `$WITNESS turn -- <test command>`; the resolution must be green before it travels.');
   });
 });
 

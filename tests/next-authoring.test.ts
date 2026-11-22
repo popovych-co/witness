@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { cliAct } from '../src/act.js'
 import { appendEntry } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
@@ -94,7 +95,10 @@ describe('next — authoring owed, never the gate', () => {
     const r = await repo.cli(['next'])
     expect(r.code).toBe(0)
     expect(r.stdout).toContain('witness write')
-    expect(r.stdout).not.toContain('gate decompose')
+    // the gate is named only as the hand-back beside the edit (row 244), never as the line to run
+    const handBack = cliAct('gate', 'decompose', '--effort', repo.effort, '--unchanged').line
+    expect(r.stdout).toContain(handBack)
+    expect(r.stdout.replaceAll(handBack, '')).not.toContain('gate decompose')
   })
 
   it('an undischarged reopen routes to write, not the gate', async () => {
@@ -265,7 +269,10 @@ describe('a revised implement gate owes authoring', () => {
   it('routes to the worktree, not back to the gate', async () => {
     const { repo, wt, planId } = await revisedImplement()
     const out = await nextLine(repo)
-    expect(out).not.toContain(`witness gate implement ${planId}`)
+    // the gate is named only as the hand-back beside the edit (row 244), never as the line to run
+    const handBack = cliAct('gate', 'implement', planId, '--unchanged').line
+    expect(out).toContain(handBack)
+    expect(out.replaceAll(handBack, '')).not.toContain(`witness gate implement ${planId}`)
     expect(out).toContain('stage: implement')
     expect(out).toContain('revise owed')
     expect(out).toContain(`home: ${wt}`)

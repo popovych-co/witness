@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Entry } from '../src/journal.js'
 import {
-  ROUND_BOUND, answersKey, appendKind, boundReached, deltaBase, fellBack, keyOf, pendingDecision, repairGranted, roundBudget,
-  roundsSinceApprove,
+  ROUND_BOUND, answersKey, appendKind, boundReached, deltaBase, fellBack, keyOf, pendingDecision, repairGranted, repairsOnRegate,
+  roundBudget, roundsSinceApprove,
   runsSinceReset, sameKey, type GateRunEntry,
 } from '../src/rounds.js'
 
@@ -69,9 +69,82 @@ describe('appendKind', () => {
   it('a malformed last round under the same key is a repair, not a resume (row 209)', () => {
     const m = run('a', 'malformed', 1, { malformed: [{ reviewer: 'plan-critic', violations: [] }] })
     expect(appendKind([m], 'plan', key('a'))).toEqual({ kind: 'repair', from: m })
-    expect(appendKind([m, revise(1)], 'plan', key('a')).kind).toBe('changed-nothing')
+    // S2-4: a revise after a malformed-only round (a journal older than 0.30) disposed of no run, so
+    // nothing pairs it with a verdict: the re-gate repairs the round, as the one live act (`gate`) says.
+    expect(appendKind([m, revise(1)], 'plan', key('a'))).toEqual({ kind: 'repair', from: m })
     expect(appendKind([m], 'plan', key('b')).kind).toBe('fresh')
     expect(appendKind([run('a', 'stopped', 1)], 'plan', key('a')).kind).toBe('resume')
+  })
+
+  // Design §4.2.3: changed-nothing needs the gate's LAST disposition to be a revise. An approve that
+  // answered the revise disposed of the run, so the re-gate re-shows it (P9's cache half).
+  it('appendKind after a revise then an approve under the same key → resume, not changed-nothing', () => {
+    const r1 = run('a', 'stopped', 1)
+    expect(appendKind([r1, revise(1), approve(1)], 'plan', key('a'))).toEqual({ kind: 'resume', entry: r1 })
+    // and a stop after the revise parks it: nothing is owed to the author either
+    expect(appendKind([r1, revise(1), decide('stop')], 'plan', key('a'))).toEqual({ kind: 'resume', entry: r1 })
+    // a revise after the approve (the retraction) is the last disposition again
+    expect(appendKind([r1, approve(1), revise(1)], 'plan', key('a'))).toEqual({ kind: 'changed-nothing', entry: r1 })
+  })
+
+  // Design §4.2.3, "one pairing": changed-nothing pairs a revise with the run it disposed of (malformed
+  // runs skipped), never with a malformed run after it.
+  describe('one pairing: a malformed round around a revise (P45, P50, S3-3)', () => {
+    const r1 = run('a', 'stopped', 1)
+    const malformed = (sha: string): GateRunEntry =>
+      run(sha, 'malformed', 2, { run_id: 'r-m', verdicts: [], malformed: [{ reviewer: 'plan-critic', violations: [] }] })
+
+    it('a revise after a malformed round on the disposed run\'s content: changed-nothing about that run (P45)', () => {
+      const m = malformed('a')
+      expect(appendKind([r1, m, revise(1)], 'plan', key('a'))).toEqual({ kind: 'changed-nothing', entry: r1 })
+      expect(repairsOnRegate([r1, m, revise(1)], 'plan')).toBe(false)
+    })
+
+    it('content edited between a stopped run and a malformed one: the re-gate repairs, never changed-nothing (P50)', () => {
+      const m = malformed('b')
+      expect(appendKind([r1, m, revise(1)], 'plan', key('b'))).toEqual({ kind: 'repair', from: m })
+      expect(repairsOnRegate([r1, m, revise(1)], 'plan')).toBe(true)
+      // back on the content the revise disposed of, it changed nothing
+      expect(appendKind([r1, m, revise(1)], 'plan', key('a'))).toEqual({ kind: 'changed-nothing', entry: r1 })
+    })
+
+    it('a malformed round after the revise, on the content the revise asked about, is repaired (P50)', () => {
+      const m = malformed('a')
+      expect(appendKind([r1, revise(1), m], 'plan', key('a'))).toEqual({ kind: 'repair', from: m })
+      expect(repairsOnRegate([r1, revise(1), m], 'plan')).toBe(true)
+    })
+
+    it('a malformed round after the revise on other content leaves the pairing with the disposed run (S3-3)', () => {
+      const m = malformed('b')
+      expect(appendKind([r1, revise(1), m], 'plan', key('a'))).toEqual({ kind: 'changed-nothing', entry: r1 })
+      expect(appendKind([r1, revise(1), m], 'plan', key('b'))).toEqual({ kind: 'repair', from: m })
+      expect(repairsOnRegate([r1, revise(1), m], 'plan')).toBe(true)
+    })
+
+    // Fix round 2: P50's exception reads the CONTENT. A malformed round after the revise on the content
+    // the revise asked about ends the pairing whatever its setup, so every reader agrees in every setup:
+    // the setup reverted replays the disposed run (a journaled round, no battery), the setup kept
+    // repairs the malformed round, and a third setup runs fresh. None answers changed-nothing.
+    it('a malformed round after the revise on that content ends the pairing under any setup (one rule for every reader)', () => {
+      const m = { ...malformed('a'), prompts_sha: 'p2' }
+      const entries = [r1, revise(1), m]
+      expect(appendKind(entries, 'plan', key('a'))).toEqual({ kind: 'cached', from: r1 })
+      expect(appendKind(entries, 'plan', { ...key('a'), prompts_sha: 'p2' })).toEqual({ kind: 'repair', from: m })
+      expect(appendKind(entries, 'plan', { ...key('a'), prompts_sha: 'p3' })).toEqual({ kind: 'fresh' })
+      expect(repairsOnRegate(entries, 'plan')).toBe(true)
+    })
+
+    it('a run that judged something after the revise answered it: no pairing', () => {
+      const r2 = run('b', 'stopped', 2, { run_id: 'r-2' })
+      expect(appendKind([r1, revise(1), r2], 'plan', key('b'))).toEqual({ kind: 'resume', entry: r2 })
+      expect(appendKind([r1, revise(1), r2], 'plan', key('a'))).toEqual({ kind: 'cached', from: r1 })
+    })
+
+    it('a fallen-back disposed run pairs with nothing (row 106)', () => {
+      const fell = run('a', 'stopped', 1, { pin: 'm1', model: 'm2' })
+      expect(appendKind([fell, malformed('a'), revise(1)], 'plan', key('a')).kind).toBe('repair')
+      expect(appendKind([fell, revise(1)], 'plan', key('a')).kind).toBe('fresh')
+    })
   })
 
   it('same sha, no intervening revise → resume', () => {

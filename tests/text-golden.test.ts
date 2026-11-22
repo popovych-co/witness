@@ -36,6 +36,9 @@ const stoppedRun = (round: number): GateRunEntry => ({
 })
 
 describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
+  // Row 244 (#87, S2-5), re-recorded by hand: plan-3 is parked at the bound on content that moved
+  // since its rounds (`sha-N`), so its endgame row no longer offers the approve `decide` refuses
+  // `stale-verdict`; the parked rows read the content's sha as `decide` does.
   it('what needs you: every kind, its key and its rows', async () => {
     const { repo, asides } = await needsYouRepo()
     const items = needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root), asides)
@@ -92,7 +95,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
 
       parked:auth-refresh-plan-3:plan
       parked: auth-refresh-plan-3 · plan round 3 — parked by a human at auth-refresh-plan-3 > ## Steps
-        exits: witness decide plan auth-refresh-plan-3 --approve --override | --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
+        exits: witness decide plan auth-refresh-plan-3 --revise --upstream auth-refresh | --revise --repair | --stop | witness abandon auth-refresh-plan-3
 
       stuck:x-plan-1
       stuck: x-plan-1 — no progress on witness ship x-plan-1
@@ -172,6 +175,8 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
     `)
   })
 
+  // Row 244 (#87, design §4.2.2), re-recorded by hand: a settled gate is no longer terminal on this
+  // screen — its one live act is the retraction, after which `gate --fresh` re-judges.
   it('decide --show: settled-arbiter', async () => {
     expect(await shown('settled-arbiter')).toMatchInlineSnapshot(`
       "gate: decompose
@@ -180,11 +185,15 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       decided-by: arbiter · test-model-1
       reason: the slice covers g1
       last-run: round 1 @<sha> — stopped · witness log auth-hardening
+      exits: witness decide decompose auth-hardening --revise --note "<why>"
       help: witness next
       --- exit 0"
     `)
   })
 
+  // Row 244 (#87, design §4.2.2), re-recorded by hand: this golden WAS #87 — it recommended a bare
+  // `--revise`, which `decide` refuses in the revised state. The block now offers the revised state's
+  // live acts, under the re-gate recommended "after you change the work".
   it('decide --show: implement-revised', async () => {
     expect(await shown('implement-revised')).toMatchInlineSnapshot(`
       "gate: implement
@@ -203,23 +212,33 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       decision: revise
       decided-by: human
       note: fix the expiry
-      decide: 4 options · 1 is recommended
+      decide: 6 options · 1 is recommended
       1 · recommended · root
-         witness decide implement auth-refresh-plan-1 --revise
-         why: 1 blocking finding anchored inside this artifact (src/token.ts); round 1 of 3
-      2 · root
-         witness decide implement auth-refresh-plan-1 --revise --upstream auth-refresh-plan-1
-         when: the finding is only true because the parent asks for something unbuildable here
-         tradeoff: reopens the parent stage and resets this budget; a wrong upstream spends a whole stage cycle
-      3 · deferral
+         witness gate implement auth-refresh-plan-1
+         why: the revise sent the work back to its author — once the work changes, the re-gate judges it
+         when: after you change the work
+         tradeoff: spends round 2 of 3
+      2 · deferral
          witness decide implement auth-refresh-plan-1 --approve --override
          when: you have read the finding and judge it wrong
          tradeoff: stamps the artifact over a live blocking finding; mints an obligation that stays open in status until a later battery no longer reports it (the discharge)
-      4 · terminal
+      3 · terminal
          witness decide implement auth-refresh-plan-1 --stop
          when: this work should not continue as scoped
          tradeoff: parks the flow — next stops offering it and reopening is an explicit act
-      run: witness decide implement auth-refresh-plan-1 --revise
+      4 · root
+         witness decide implement auth-refresh-plan-1 --revise --upstream auth-refresh-plan-1
+         when: the parent artifact is what is wrong
+         tradeoff: reopens the parent stage and resets this budget
+      5 · root
+         witness gate implement auth-refresh-plan-1 --fresh
+         when: you want the same content judged again without an edit
+         tradeoff: spends round 2 of 3 on unchanged content
+      6 · root · not runnable
+         witness decide implement auth-refresh-plan-1 --revise --note "<why>"
+         when: the author needs another instruction than the revise gave
+         tradeoff: sends the work back with your words; the round is spent by the re-gate that follows it
+      run: witness gate implement auth-refresh-plan-1
       --- exit 0"
     `)
   })

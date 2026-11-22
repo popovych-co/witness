@@ -7,11 +7,14 @@ import { validatePin, type Harness } from './harness.js'
 import type { PolicyPin } from './journal.js'
 import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
-import { resolveSpawn, spawn, spawnSync } from './spawn.js'
+import { resolveSpawn, spawn } from './spawn.js'
 import { contained, jobHost } from './contain.js'
 import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
+import { monotonicTicker, type Ticker } from './session-clock.js'
+import { END_GRACE_MS, endingStatus, endWatch, failedNow } from './session-end.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
 import type { Reviewed } from './verdict.js'
+import { lineSink } from './worker-stream.js'
 
 // Rows 216/217. The kind of content a lens is handed: what a gate declares its lenses read, what
 // a debt's raising lens read, and what decides a reviewer's tools.
@@ -127,13 +130,18 @@ export interface InvokeExtras {
 // `pinField` is the setting `model` came from, so a pin this harness cannot run is refused under
 // the key the reader edits (row 212), never the retired `gates.model`.
 // `tools` (row 217): what the reviewer may use — none unless its content names files to read.
+// `noWait` (rows 182, 245): a usage limit refuses at once, as outside drive, even inside a drive
+// session — drift's lane, which never waits. `ticker` is the clock the end watch's grace runs on, a
+// test seam on spawnSession's precedent.
 export interface InvokeOpts extends InvokeExtras {
   cwd: string; prompt: string; model?: string; pinField?: string; lens?: string; clock?: Clock; tools?: ToolPolicy
+  noWait?: true
+  ticker?: Ticker
 }
 
 // Row 182. Inside a drive session a usage-limited reviewer call waits for the reset and
 // retries, at most this long in all per invocation. Outside drive it refuses at once: an
-// attended gate must never block silently for hours.
+// attended gate must never block silently for hours. So does a call made with `noWait`.
 export const REVIEWER_WAIT_MAX_MS = SINGLE_WAIT_MAX_MS
 const OUTSIDE_DRIVE_WANT = 'wait for the reset — witness drive waits it out on its own'
 // How long before its session's deadline a reviewer stops waiting: room to journal and exit.
@@ -147,7 +155,7 @@ const TIMEOUT_RETRIES = 2
 const MAX_OUTPUT = 64 * 1024 * 1024
 const TERM_GRACE_MS = 5_000
 // setTimeout clamps a delay above 2^31-1 ms to 1 ms, which would turn a "never time out"
-// config into an instant timeout on every call. spawnSync has no such ceiling.
+// config into an instant timeout on every call.
 const MAX_TIMER_MS = 2 ** 31 - 1
 const EXIT_GRACE_MS = 2_000
 
@@ -160,16 +168,25 @@ interface Prepared {
   timeout: number
 }
 
+// What one spawn did. `stoppedAfterTurn` (row 245): the end watch stopped it after its turn ended
+// (its grace ran out, or its timeout fell inside the grace), so `status` is the stop's own and says
+// nothing about the answer; then `failed` is the stream's error flag and `stdout` what it had
+// written, both read when the stop was sent. `epipe`: it closed its stdin before reading the whole
+// prompt.
 interface Attempt {
   timedOut: boolean
+  stoppedAfterTurn: boolean
+  failed: boolean
+  epipe: boolean
   error?: Error
   status: number | null
   stdout: string
   stderr: string
 }
 
-// The two invokers share everything but the spawn itself, so they cannot drift apart:
-// the pin check, the spawn resolution, and below, the mapping from what happened to a row.
+// Every reviewer lane — the battery, the arbiter and drift — runs on one invoker, so none can drift
+// from the others: the pin check, the spawn resolution, and below, the mapping from what happened
+// to a row.
 function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<Prepared> {
   let pin: ParsedPin | undefined
   if (opts.model !== undefined) {
@@ -188,10 +205,9 @@ function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result
     ...ctx.env, ...env, WITNESS_REVIEWER: '1', ...(opts.lens !== undefined ? { WITNESS_LENS: opts.lens } : {}),
   })
   if (!run.ok) return refuse(run.violations.map((x) => ({ ...x, rule: 'reviewer-invocation' })))
-  // Row 218. On Windows a stop — spawnSync's timeout, the async invoker's kill — ends one process,
-  // which was the `cmd.exe` shim: the agent under it kept running, and spending, and the piped
-  // spawnSync returned only when it exited on its own. Started in a job, the stop is the host's,
-  // and the job takes the agent and whatever it started with it.
+  // Row 218. On Windows a stop — the timeout's kill, and row 245's after a turn — ends one process,
+  // which was the `cmd.exe` shim: the agent under it kept running, and spending. Started in a job,
+  // the stop is the host's, and the job takes the agent and whatever it started with it.
   const spawned = contained(run.value, jobHost(ctx.env))
   return ok({
     cmd, file: spawned.file, args: spawned.args, env: spawned.env as NodeJS.ProcessEnv,
@@ -209,51 +225,38 @@ function classifyAttempt(harness: Harness, p: Prepared, attempt: number, r: Atte
       `no response in ${p.timeout}ms after ${attempt + 1} attempts`,
       'a reviewer that answers within the timeout — raise gates.reviewerTimeoutMs in witness.config.yaml if the model is simply slow')])
   }
-  if (r.error) {
-    return refuse([v(p.cmd, 'reviewer-invocation', String(r.error.message),
+  // Stopped after its turn, it is read by the status its harness gives that ending, by drive's rule
+  // (endingStatus), never by the stop's own, which would read as reviewer-invocation.
+  const status = r.stoppedAfterTurn ? endingStatus(harness.name, 'turn-ended', r.failed) : r.status
+  // Exit 0 after closing its stdin early means the reviewer answered without reading the whole
+  // prompt — a verdict on content it never saw, so it fails closed; and so does a clean ending
+  // after a stop (S4-2). A nonzero status is the answer.
+  const error = r.error ?? (r.epipe && status === 0
+    ? new Error(`${r.stoppedAfterTurn ? 'ended its turn' : 'exited 0'} before reading the whole prompt (EPIPE)`)
+    : undefined)
+  if (error) {
+    return refuse([v(p.cmd, 'reviewer-invocation', String(error.message),
       `a runnable ${p.cmd} binary on PATH — gates invoke reviewers headlessly; witness check probes this`)])
   }
-  if (r.status !== 0) {
+  if (status !== 0) {
     // Final review F12: claude exits 1 on an is_error envelope, so a provider failure (a usage
     // limit included) sits on stdout under a non-zero exit. The envelope's own refusal names
     // it; anything else is the bare exit it always was.
     const envelope = harness.reviewer.parseEnvelope(r.stdout)
     if (!envelope.ok && envelope.violations[0]?.rule === 'reviewer-invocation') return envelope
     return refuse([v(p.cmd, 'reviewer-invocation',
-      `exit ${String(r.status)}: ${r.stderr.slice(0, 200)}`, `${p.cmd} print mode exiting 0`)])
+      `exit ${String(status)}: ${r.stderr.slice(0, 200)}`, `${p.cmd} print mode exiting 0`)])
   }
   return harness.reviewer.parseEnvelope(r.stdout)
 }
 
-export function invokeReviewer(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result<{ text: string }> {
-  const pR = prepareInvocation(ctx, harness, opts)
-  if (!pR.ok) return pR
-  const p = pR.value
-  for (let attempt = 0; ; attempt += 1) {
-    const r = spawnSync(p.file, p.args, {
-      cwd: opts.cwd,
-      env: p.env,
-      input: opts.prompt,
-      encoding: 'utf8',
-      timeout: p.timeout,
-      maxBuffer: MAX_OUTPUT,
-      windowsVerbatimArguments: p.windowsVerbatimArguments,
-    })
-    const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
-    const c = classifyAttempt(harness, p, attempt, {
-      timedOut, error: timedOut ? undefined : r.error, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
-    })
-    if (c === 'retry') continue
-    // The sync lane (drift's) never waits: it refuses a limit as an attended gate does.
-    const limit = usageLimitOf(c, Date.now())
-    return limit ? refuse([v(p.cmd, 'usage-limit', limit.text, OUTSIDE_DRIVE_WANT)]) : c
-  }
-}
-
-// The battery's invoker: lenses run at once, so a reviewer call cannot block the process.
-// Settles on `close`, bounded by `exit` plus a grace, for D145's reason: a reviewer CLI
+// The reviewer invoker: the battery's lenses run at once, so a reviewer call cannot block the
+// process. Settles on `close`, bounded by `exit` plus a grace, for D145's reason: a reviewer CLI
 // spawns its own children, they inherit stdout, and a killed parent whose grandchild
 // survives would otherwise hold the pipe — and this call — open with no timeout above it.
+//
+// Row 182: drift's lane passes `noWait` and never waits; the battery and the arbiter wait a limit
+// out inside drive.
 export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: InvokeOpts): Promise<Result<{ text: string }>> {
   const pR = prepareInvocation(ctx, harness, opts)
   if (!pR.ok) return pR
@@ -263,20 +266,22 @@ export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: Invo
   let waited = 0
   let streak = 0
   for (let attempt = 0; ; ) {
-    const r = await spawnAttempt(p, opts)
+    const r = await spawnAttempt(harness, p, opts)
     const c = classifyAttempt(harness, p, attempt, r)
     if (c === 'retry') { attempt += 1; continue }
     const limit = usageLimitOf(c, clock.now())
     if (!limit) return c
+    // Outside drive, and on a lane that never waits, the limit refuses at once, saying to wait for
+    // the reset: drift's lane says so inside drive too.
+    if (!inDrive || opts.noWait === true) return refuse([v(p.cmd, 'usage-limit', limit.text, OUTSIDE_DRIVE_WANT)])
     // A wait spends no timeout retry: the same model is asked again after the reset.
     const wait = waitFor(limit, streak, clock.now())
     // Inside a drive session the wait must also end before drive kills the session (F14).
     const deadline = Number(ctx.env[DRIVE_DEADLINE_ENV])
     const outlives = Number.isFinite(deadline) && clock.now() + wait + SESSION_MARGIN_MS > deadline
-    if (!inDrive || waited + wait > REVIEWER_WAIT_MAX_MS || outlives) {
-      return refuse([v(p.cmd, 'usage-limit', limit.text, inDrive
-        ? 'a reset inside the 6h reviewer wait and this session\'s time — re-run the gate after it'
-        : OUTSIDE_DRIVE_WANT)])
+    if (waited + wait > REVIEWER_WAIT_MAX_MS || outlives) {
+      return refuse([v(p.cmd, 'usage-limit', limit.text,
+        'a reset inside the 6h reviewer wait and this session\'s time — re-run the gate after it')])
     }
     ctx.err(`reviewer: usage limit — waiting ${duration(wait)} · ${limit.text}`)
     await clock.sleep(wait)
@@ -293,7 +298,23 @@ function usageLimitOf(r: Result<{ text: string }>, now: number): Limit | undefin
   return row ? limitIn(row.got, now) : undefined
 }
 
-function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
+// Row 245 (issue #80). An attempt ends when the reviewer's turn ends, not when its process exits:
+// a pi whose extension leaks a handle lives on after `agent_settled` (P5), and the call waited for
+// the timeout and read the stop as a failure. The harness's stream (pi's events, claude's json
+// envelope) is watched record by record. Once its end signal stands, the same END_GRACE_MS grace as
+// drive's runs on `opts.ticker`; only a record that starts a run cancels it, and the next settle
+// arms it again. Then the timeout's stop is sent. The timeout keeps running throughout, and a
+// timeout that falls inside the grace ends the attempt as its turn's end, never as a stall.
+//
+// The watch has no never-started window: a reviewer that never starts stays on the timeout and
+// retry path. Each record is heard once, as its LF arrives (lineSink): pi's records are NDJSON, and
+// claude ends its json envelope with an LF (2.1.330). Nothing reads the stream once the process is
+// gone, so the sink is never flushed.
+//
+// The stream's error flag and the stdout are read when the stop is sent, so what a harness does on
+// SIGTERM (an aborted answer, a second envelope) is no part of the turn it ended. A process that
+// already exited on its own is never stopped: its own exit code stands.
+function spawnAttempt(harness: Harness, p: Prepared, opts: InvokeOpts): Promise<Attempt> {
   return new Promise<Attempt>((resolve) => {
     const child = spawn(p.file, p.args, {
       cwd: opts.cwd, env: p.env, stdio: ['pipe', 'pipe', 'pipe'],
@@ -307,27 +328,70 @@ function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
     let error: Error | undefined
     let status: number | null = null
     let settled = false
+    let exited = false
+    let stopSent = false
     let killTimer: NodeJS.Timeout | undefined
     let grace: NodeJS.Timeout | undefined
+    const ticker = opts.ticker ?? monotonicTicker
+    const stream = harness.reviewer.stream(opts.cwd)
+    const watch = endWatch(stream, {})
+    let cancelGrace: (() => void) | undefined
+    // The turn the end watch stopped it after, as it stood when the stop was sent.
+    let ending: { failed: boolean; stdout: string } | undefined
     const settle = () => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       clearTimeout(killTimer)
       clearTimeout(grace)
+      cancelGrace?.()
       child.stdout.destroy()
       child.stderr.destroy()
-      // Exit 0 after closing its stdin early means the reviewer answered without reading the
-      // whole prompt — a verdict on content it never saw, so it fails closed, as sync does.
-      if (epipe && status === 0 && !timedOut && error === undefined) {
-        error = new Error('exited 0 before reading the whole prompt (EPIPE)')
-      }
-      resolve({ timedOut, error, status, stdout: out.join(''), stderr: err.join('') })
+      resolve({
+        timedOut, stoppedAfterTurn: ending !== undefined, failed: ending?.failed ?? false, epipe, error, status,
+        stdout: ending?.stdout ?? out.join(''), stderr: err.join(''),
+      })
     }
-    const timer = setTimeout(() => {
-      timedOut = true
+    // One stop per attempt: SIGTERM, then SIGKILL TERM_GRACE_MS later.
+    const stop = () => {
+      stopSent = true
       child.kill('SIGTERM')
       killTimer = setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS)
+    }
+    const endStop = () => {
+      if (stopSent || exited || settled) return
+      ending = { failed: failedNow(stream), stdout: out.join('') }
+      stop()
+    }
+    // The grace's timer: armed when the watch starts a grace, cancelled when a run start cancels it.
+    // One that fires before the ticker reads the grace as over (a timer and a clock that round
+    // apart) waits out the rest.
+    const graceCheck = (from: number) => () => {
+      cancelGrace = undefined
+      const now = ticker.now()
+      if (watch.due(now) === 'turn-ended') endStop()
+      else if (watch.graceRunning() && !stopSent && !exited) {
+        cancelGrace = ticker.after(Math.max(1, END_GRACE_MS - (now - from)), graceCheck(from))
+      }
+    }
+    const sink = lineSink((record) => {
+      try {
+        stream.line(record)
+      } catch { /* a stream never throws (row 214); one that did leaves the timeout in charge */ }
+      const now = ticker.now()
+      watch.heard(now)
+      if (!watch.graceRunning()) {
+        cancelGrace?.()
+        cancelGrace = undefined
+      } else if (cancelGrace === undefined && !stopSent && !exited && !settled) {
+        cancelGrace = ticker.after(END_GRACE_MS, graceCheck(now))
+      }
+    })
+    const timer = setTimeout(() => {
+      if (stopSent || exited) return
+      if (watch.graceRunning()) { endStop(); return }
+      timedOut = true
+      stop()
     }, Math.min(p.timeout, MAX_TIMER_MS))
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -339,10 +403,11 @@ function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
         return
       }
       out.push(c)
+      sink.push(c)
     })
     child.stderr.on('data', (c: string) => { err.push(c) })
     // A reviewer that exits before reading its whole prompt closes the pipe under us: a
-    // nonzero exit is the answer, and exit 0 is refused at settle.
+    // nonzero exit is the answer, and a clean one is refused (classifyAttempt).
     child.stdin.on('error', (e: NodeJS.ErrnoException) => {
       if (e.code === 'EPIPE') epipe = true
       else if (error === undefined) error = e
@@ -350,8 +415,11 @@ function spawnAttempt(p: Prepared, opts: InvokeOpts): Promise<Attempt> {
     child.stdin.end(opts.prompt)
     child.on('error', (e) => { error = e; settle() })
     child.on('exit', (code) => {
+      exited = true
       status = code
       clearTimeout(killTimer)
+      cancelGrace?.()
+      cancelGrace = undefined
       grace = setTimeout(settle, EXIT_GRACE_MS)
     })
     child.on('close', (code) => { status = code; settle() })

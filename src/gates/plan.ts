@@ -9,6 +9,7 @@ import { findById, plannableParent, type CanonDoc } from '../scan.js'
 import { effortOf, planPairSha } from '../reviewed.js'
 import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput } from '../gate.js'
+import { contentSha } from '../content-sha.js'
 import { designPending, designStamp } from '../design.js'
 import { basisMoved, planBasis, planDecisionsTerm, specBasis } from '../basis.js'
 import { decisionDelta, decisionLines, recapLines } from '../decisions.js'
@@ -130,10 +131,8 @@ registerGate({
     })
   },
 
-  currentSha(root, canon, _cfg, planId) {
-    const plan = findById(canon, planId)
-    const parent = plan ? findById(canon, String(plan.meta.parent)) : undefined
-    return plan && parent ? planPairSha(plan, parent, planDecisionsTerm(root, plan, parent)) : undefined
+  currentSha(root, canon, cfg, planId) {
+    return contentSha(root, canon, cfg, 'plan', planId)
   },
 
   // Row 239 (the plan's B15). The upstream is printed into `--revise --upstream <id>`: a parent
