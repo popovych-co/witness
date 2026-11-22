@@ -9,7 +9,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { extractCanonicalTags, matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { cliAct } from './act.js'
-import { heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, toHead, trapTermination } from './held.js'
+import { heldHere, heldPending, heldRef, heldWorkLine, holdWork, inCommit, putBackHeld, restoreHeld, standingHeld, toHead, trapTermination, type StandingHeld } from './held.js'
 import { planChangeSet } from './change-set.js'
 import { unmergedPaths } from './carry.js'
 import { clashViolations } from './clash.js'
@@ -205,18 +205,24 @@ export async function verifyRed(
   // every verb that reads the plan's tree shares.
   const held = heldRef(planId)
   const again = cliAct('verify-red', planId, ...(step !== undefined ? ['--step', step] : []))
-  if (standingHeld(runRoot, planId) !== undefined) {
+  // Its own ref wherever it was recorded (another checkout's refuses, as 0.30.0's did), and every other
+  // plan's whose record names this checkout (slice 2 review I2), re-read under the lock (I1).
+  const standingNow = (): StandingHeld[] => [
+    ...[standingHeld(runRoot, planId)].filter((h): h is StandingHeld => h !== undefined),
+    ...heldHere(stateRoot, planId, runRoot).filter((h) => h.planId !== planId),
+  ]
+  if (standingNow().length > 0) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
-    let back: Result<string[]> | undefined
     try {
-      const standing = standingHeld(runRoot, planId)          // re-read under the lock (slice 2 review I1)
-      if (standing !== undefined) back = putBackHeld(runRoot, planId, standing, base, again)
+      for (const standing of standingNow()) {
+        const back = putBackHeld(runRoot, standing.planId, standing, base, again)
+        if (!back.ok) return back
+        ctx.out(heldWorkLine(standing.ref, back.value))
+      }
     } finally {
       lock.value()
     }
-    if (back !== undefined && !back.ok) return back
-    if (back !== undefined) ctx.out(heldWorkLine(held, back.value))
   }
   const files = planChangeSet(runRoot, base)
   if (!files.some(isTestPath)) {

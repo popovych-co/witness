@@ -8,13 +8,13 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { cliAct } from '../src/act.js'
 import { checkoutRoot, diffBase } from '../src/evidence.js'
-import { putBackHeld, standingHeld } from '../src/held.js'
+import { heldRef, putBackHeld, standingHeld } from '../src/held.js'
 import { readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import type { TestRepo } from './helpers.js'
 import {
-  TOKEN_FIXED, callCount, crashVerifyRed, escapeRe, fakeCtx, fakeScenario, fixtureEnv, gateEnv, heldWorktree, putVerdict,
+  TOKEN_FIXED, callCount, crashVerifyRed, escapeRe, fakeCtx, fakeScenario, fixtureEnv, gateEnv, heldWorktree, nextLine, putVerdict,
   replantHeld, shippableRepo, unwrap, worktreeState,
 } from './helpers.js'
 
@@ -147,5 +147,30 @@ describe('the held-work guard (row 247, #92)', () => {
     expect(JSON.stringify(r)).toContain('verify-red-pending')
     expect(worktreeState(repo, wt, ['src/token.ts', 'src/extra.ts'])).toEqual(laidOut)
     expect(standingHeld(repo.root, planId)!.sha).toBe(moved)
+  })
+
+  // Slice 2 review I2: "here" is the tree, not the plan. Another plan's verify-red run inside this
+  // worktree held this tree's work under that plan's ref; this plan's verbs must see it.
+  it('a held ref another plan\'s verify-red left in this worktree is put back by this plan\'s guard, and next routes recover', async () => {
+    const { repo, wt, planId, before } = await heldWorktree('scaffolding', { crash: false })
+    const other = 'auth-refresh-plan-1'
+    expect(await crashVerifyRed(wt, other, ['--step', 's1'])).toBe(9)              // plan-1's run, in plan-2's worktree
+    expect(standingHeld(repo.root, other)).toBeDefined()
+    const cfg = unwrap(loadConfig(repo.root))
+    expect(contentSha(repo.root, loadCanon(repo.root), cfg, 'implement', planId)).toBeUndefined()
+    expect(await nextLine(repo, { cwd: wt })).toMatch(/^next: witness recover$/m)
+    const res = await repo.cli(['test-evidence', planId, '--phase', 'red'], { cwd: wt, env: fixtureEnv() })
+    expect(res.stdout).toMatch(new RegExp(`^held-work: ${escapeRe(heldRef(other))} — `, 'm'))
+    expect(worktreeState(repo, wt, ['src/token.ts', 'src/extra.ts'])).toEqual(before)
+    expect(standingHeld(repo.root, other)).toBeUndefined()
+  })
+
+  it('verify-red puts back another plan\'s held ref set aside in its checkout before it reads the diff', async () => {
+    const { repo, wt, planId } = await heldWorktree('scaffolding', { crash: false })
+    const other = 'auth-refresh-plan-1'
+    expect(await crashVerifyRed(wt, other, ['--step', 's1'])).toBe(9)
+    const res = await repo.cli(['verify-red', planId], { cwd: wt, env: fixtureEnv() })
+    expect(res.stdout).toMatch(new RegExp(`^held-work: ${escapeRe(heldRef(other))} — `, 'm'))
+    expect(standingHeld(repo.root, other)).toBeUndefined()
   })
 })

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { heldGuard, heldRef, heldWorkLine, refuseHeld } from './held.js'
+import { heldGuard, heldWorkLine, refuseHeld } from './held.js'
 import { cliAct } from './act.js'
 import { EXIT, type Ctx } from './cli.js'
 import { autonomyAt, loadConfig, type Config } from './config.js'
@@ -771,7 +771,8 @@ function commitApproved(ctx: Ctx, root: string, cfg: Config, planId: string, sum
   // Row 247: nor over a crashed verify-red's set-aside state, which `git add -A` would commit as the plan.
   const held = heldGuard(root, planId, wt)
   if (!held.ok) return held
-  if (held.value !== undefined) ctx.out(heldWorkLine(heldRef(planId), held.value))
+  for (const { ref, paths } of held.value.back) ctx.out(heldWorkLine(ref, paths))
+  if (held.value.refused.length > 0) return refuse(held.value.refused)
   if (tryGit(wt, 'status', '--porcelain').out !== '') {
     tryGit(wt, 'add', '-A')
     const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)

@@ -17,7 +17,7 @@ import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { planChangeSet } from '../change-set.js'
-import { standingHeld } from '../held.js'
+import { heldHere, standingHeld } from '../held.js'
 import { isAlive } from '../lock.js'
 import {
   greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, presentGreenOwed, redCycleClosed, redInFlight, stepProgress, stepsLine,
@@ -782,8 +782,9 @@ function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], j
   // Row 247 (#92). A crashed verify-red left this plan's non-test work set aside: the tree holds base
   // versions, so every row below would read the plan's code as missing (a red on the base, a step
   // owed again). `recover` puts it back; this row only routes it — next never writes a worktree. The
-  // ref is the repo's, so a held ref recorded in any checkout stands here.
-  const setAside = standingHeld(wt, id)
+  // ref is the repo's, so the plan's own held ref stands here whichever checkout recorded it — and so
+  // does another plan's whose record names this worktree (slice 2 review I2).
+  const setAside = standingHeld(wt, id) ?? heldHere(root, id, wt)[0]
   if (setAside !== undefined) {
     const pid = setAside.record?.pid
     const note = pid !== undefined && pid !== process.pid && isAlive(pid)

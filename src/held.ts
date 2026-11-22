@@ -15,20 +15,28 @@ import { kv, shellWord, shellLine } from './toon.js'
 // ref records, and how it goes back. Moved out of evidence.ts so every verb that reads a plan's tree
 // can put a crashed run's work back first (or refuse) through the same rules verify-red uses.
 
+const HELD_PREFIX = 'refs/witness/verify-red/'
 export function heldRef(planId: string): string {
-  return `refs/witness/verify-red/${planId}`
+  return `${HELD_PREFIX}${planId}`
 }
 
 // A held ref standing for the plan, read from any checkout of the repo (refs are shared). `record`
 // is undefined when its message records no files (an older witness's, or a hand's).
-export interface StandingHeld { ref: string; sha: string; record?: HeldRecord }
+export interface StandingHeld { planId: string; ref: string; sha: string; record?: HeldRecord }
 export function standingHeld(cwd: string, planId: string): StandingHeld | undefined {
   const ref = heldRef(planId)
   const r = tryGit(cwd, 'rev-parse', '--verify', '-q', ref)
   if (!r.ok) return undefined
   const sha = r.out.trim()
   const record = heldRecord(cwd, sha)
-  return { ref, sha, ...(record !== undefined ? { record } : {}) }
+  return { planId, ref, sha, ...(record !== undefined ? { record } : {}) }
+}
+
+// Every held ref standing in the repo, in name order.
+export function standingHelds(cwd: string): StandingHeld[] {
+  const listed = tryGit(cwd, 'for-each-ref', '--format=%(refname)', HELD_PREFIX)
+  const ids = listed.ok ? listed.out.split('\n').filter((r) => r.startsWith(HELD_PREFIX)).map((r) => r.slice(HELD_PREFIX.length)).sort() : []
+  return ids.flatMap((id) => { const held = standingHeld(cwd, id); return held !== undefined ? [held] : [] })
 }
 
 // The `held-work:` line a put-back prints: the ref and the paths back (at most 12, then `(+N more)`),
@@ -296,34 +304,44 @@ export function restoreHeld(runRoot: string, held: string, paths: readonly strin
   tryGit(runRoot, 'update-index', '-q', '--refresh')
 }
 
-// Row 247. True when the plan's held ref stands and was set aside in `tree`'s checkout, or when its
-// record names no checkout or no files — witness cannot tell it was set aside anywhere else, so it
-// fails closed. Read-only.
+// Row 247. The held refs set aside in `tree`'s checkout: every one whose record names it, whichever
+// plan's verify-red ran there (slice 2 review I2 — "here" is the tree, not the plan), and the plan's
+// own ref when its record names no checkout or no files, since witness cannot tell it was set aside
+// anywhere else (fail closed). Read-only.
+export function heldHere(root: string, planId: string, tree: string): StandingHeld[] {
+  const top = checkoutRoot(tree)
+  const here = top.ok ? top.value : tree
+  return standingHelds(root).filter((held) => {
+    const record = held.record
+    if (record === undefined || record.checkout === undefined || record.files.length === 0) return held.planId === planId
+    return record.checkout === here
+  })
+}
 export function heldIn(root: string, planId: string, tree: string): boolean {
-  const held = standingHeld(root, planId)
-  if (held === undefined) return false
-  const record = held.record
-  if (record === undefined || record.checkout === undefined || record.files.length === 0) return true
-  const here = checkoutRoot(tree)
-  return record.checkout === (here.ok ? here.value : tree)
+  return heldHere(root, planId, tree).length > 0
 }
 
-// Row 247 (#92's residual). Before a verb reads a plan's tree, a crashed verify-red's held work goes
-// back into it, under verify-red's own rules (`putBackHeld`), or the verb refuses `verify-red-pending`
-// and never runs. A ref set aside in another checkout is that checkout's: this tree was never set
-// aside, so the verb runs untouched. The put-back runs under the repo lock, against the base the
-// record names, else the tree's own (its config, else the root's). The paths put back, `undefined`
-// when nothing stood here, or the refusal.
-export function heldGuard(root: string, planId: string, tree: string): Result<string[] | undefined> {
-  if (!heldIn(root, planId, tree)) return ok(undefined)
+// Row 247 (#92's residual). Before a verb reads a plan's tree, every crashed verify-red's held work set
+// aside there goes back into it, under verify-red's own rules (`putBackHeld`), or the verb refuses
+// `verify-red-pending` and never runs. A ref set aside in another checkout is that checkout's: this tree
+// was never set aside, so the verb runs untouched. The put-backs run under the repo lock, against the
+// base each record names, else the tree's own (its config, else the root's). `back`: each ref put back
+// with its paths; `refused`: the refs that could not go back. A held lock is the Result's refusal.
+export interface HeldGuardOutcome { back: Array<{ ref: string; paths: string[] }>; refused: Violation[] }
+export function heldGuard(root: string, planId: string, tree: string): Result<HeldGuardOutcome> {
+  const outcome: HeldGuardOutcome = { back: [], refused: [] }
+  if (!heldIn(root, planId, tree)) return ok(outcome)
   const hereR = checkoutRoot(tree)
   const here = hereR.ok ? hereR.value : tree
   const lock = acquireLock(root)
   if (!lock.ok) return lock
   try {
-    const held = standingHeld(root, planId)            // re-read under the lock: a run may have finished
-    if (held === undefined) return ok(undefined)
-    return putBackHeld(here, planId, held, treeBase(root, here), cliAct('next'))
+    for (const held of heldHere(root, planId, tree)) {   // re-read under the lock: a run may have finished
+      const r = putBackHeld(here, held.planId, held, treeBase(root, here), cliAct('next'))
+      if (r.ok) outcome.back.push({ ref: held.ref, paths: r.value })
+      else outcome.refused.push(...r.violations)
+    }
+    return ok(outcome)
   } finally {
     lock.value()
   }
@@ -341,16 +359,18 @@ export function treeBase(root: string, tree: string): string | undefined {
   return undefined
 }
 
-// Row 247. `heldGuard` for a verb: a put-back prints its `held-work:` line and the verb goes on; a
-// refusal is rendered and exits 2 (3 when the repo lock is held). Nothing standing prints nothing.
+// Row 247. `heldGuard` for a verb: each put-back prints its `held-work:` line; any refusal is rendered
+// and exits 2 (3 when the repo lock is held), and the verb never runs. Nothing standing prints nothing.
 export function refuseHeld(ctx: Ctx, root: string, planId: string, tree: string): number | undefined {
   const r = heldGuard(root, planId, tree)
   if (!r.ok) {
     renderRefusal(r.violations).forEach((l) => ctx.err(l))
     return r.violations.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
   }
-  if (r.value !== undefined) ctx.out(heldWorkLine(heldRef(planId), r.value))
-  return undefined
+  for (const { ref, paths } of r.value.back) ctx.out(heldWorkLine(ref, paths))
+  if (r.value.refused.length === 0) return undefined
+  renderRefusal(r.value.refused).forEach((l) => ctx.err(l))
+  return EXIT.REFUSED
 }
 
 // Row 247. verify-red's held window under SIGTERM, SIGINT and SIGHUP: on the first one, `cleanup` puts
