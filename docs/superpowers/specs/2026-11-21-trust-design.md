@@ -98,16 +98,17 @@ Each primitive is built inside the first item that needs it (§4 lists where).
 
 ### 3.1 Plan change set (PC) — T0
 
-**Definition.** The plan's diff against its base, minus witness-owned paths (the payload list `install.ts` already
-knows).
+**Definition.** The plan's diff against its base, minus every harness's payload targets (`.claude/settings.json` is
+shared and stays in).
 
-**Readers.** Reviewer prompts and coverage, red→green evidence, verify-red, `diffReviewedSha`, machine checks,
-mutation scope, attribution and proof. Today `changedFiles` (`src/evidence.ts:180`) excludes nothing, so reviewers
+**Readers.** Reviewer prompts and coverage, the snapshot and the delta, red→green evidence, verify-red,
+`diffReviewedSha`, machine checks, mutation scope, attribution and proof. Today `changedFiles` (`src/evidence.ts:180`) excludes nothing, so reviewers
 judged witness's hooks (2 findings and 2 coverage anchors in fewhats; 2 and 5 in wot).
 
 **Acceptance.**
 - `init --agent` into a worktree leaves implement's reviewed sha unchanged.
 - A payload-only change produces no plan file in any reader.
+- A witness hook deleted in a worktree is named by `check`.
 
 ### 3.2 Check registry and the checks-only round (CR) — T2
 
@@ -351,12 +352,20 @@ text or finding prose written by the agent.
 ### PRE — `remaining-issues-2` merges first
 
 The branch reworks verify-red (the held commit with a record), gate/ship/decide/next, `liveActs` and `clash.ts`
-(rows 243–245). This design's rows are 246–254, assigned in build order.
+(rows 243–245). This design's rows run from 246, one per issue or behavior, in build order (246 #93, 247 #92).
 
 ### T0 — Patch (#92, #93, #94, #95)
 
-- **#92.** Builds on row 243. The remaining work is readers in recover, next and start that put held work back or
-  refuse, plus a SIGTERM handler for verify-red. A second verify-red refuses while one is held.
+- **#92.** Builds on row 243 (as built, row 247; the map's correction C2):
+  - every verb that reads a plan's worktree — `test-evidence`, the implement and ship gates, `ship` at its top and
+    before each commit, `witness turn` — puts held work set aside in that tree back first, or refuses
+    `verify-red-pending`; `recover` puts held work back into the checkout its record names; `next` stays read-only
+    and routes `witness recover`; `start` names the ref and `check` warns `verify-red-held`;
+  - no implement or ship sha reads while work is held;
+  - the held record names its base, and committed work is held too;
+  - a run ended by a signal is `run-interrupted`, and verify-red's SIGTERM/SIGINT/SIGHUP trap puts the work back
+    before the process ends — best effort: SIGKILL and Windows' tree stop run no handler.
+  A second verify-red refuses while one is held.
 - **#93.** PC (§3.1).
 - **#94.** `--body-file -` for every gh text.
 - **#95.** The payload hooks move under `.witness/hooks/`; both consumers already exclude `.witness` from lint, and
@@ -364,8 +373,12 @@ The branch reworks verify-red (the held commit with a record), gate/ship/decide/
   statically about payload paths a repo's lint config covers.
 
 **Acceptance.**
-- A SIGTERM during the red run, then `next`, restores the work.
-- `init --agent` leaves the reviewed sha unchanged.
+- A SIGTERM during the red run restores the work before the process exits.
+- After a SIGKILL there, on a plan with no criteria step and on a step with no vacuous red, `next` routes
+  `witness recover` (which puts the work back or refuses) and never routes `test-evidence`.
+- `check` warns about a standing verify-red ref.
+- `init --agent` into a worktree leaves implement's reviewed sha unchanged.
+- A payload-only change produces no plan file in any reader.
 - A 40,000-character body passes on Windows.
 - fewhats' `biome check` is green on payload files.
 
@@ -685,7 +698,7 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
 
 ## 9. Sequencing and overlap
 
-- Merge `remaining-issues-2` first, then rows 246–254 in build order.
+- Merge `remaining-issues-2` first, then rows from 246, one per issue or behavior, in build order (246 #93, 247 #92).
 - Code shared with the branch: `gate.ts`, `rounds.ts`, `ship.ts`, `decide.ts`, `next.ts`, `liveActs`, `clash.ts`.
 - UI roadmap:
   - 1a.5: the run registry includes jobs and the explorer.
@@ -734,3 +747,11 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   - ESLint and Biome suppression behavior;
   - wot's CI removal and e2e harness.
 - **Issues filed:** #92, #93, #94, #95.
+
+### Corrections folded while building
+
+- **C2 (T0a, rows 246–247).** #92's residual was wider than §4 T0 said: after a verify-red killed mid-run, `next`
+  routed `test-evidence` on the reverted tree and a red was recorded there, and `start`, `recover` and `check` said
+  nothing. Built as a held-ref guard in every verb that reads the plan's worktree, `recover` as the put-back `next`
+  routes, and a best-effort signal trap (§4 T0 above).
+
