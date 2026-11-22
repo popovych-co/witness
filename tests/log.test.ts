@@ -153,6 +153,47 @@ describe('witness log — a hand-back (row 244)', () => {
     expect(res.stdout).toContain(',odd\\u{202e},')
   })
 
+  // Rows 205, 239 (B15). A stream's id is its file's name, which a commit can make anything: the
+  // stream cell and the lineage line are spelled out, never printed raw.
+  it('witness log --all and --lineage spell out a stream name carrying a bidi override', async () => {
+    const repo = await threeStepPlan()
+    const odd = 'odd\u202e'
+    appendFileSync(join(repo.root, '.witness/journal', `${odd}.jsonl`), `${JSON.stringify({ v: 1, t: 'step-close', step: 's1' })}\n`)
+    const all = await repo.cli(['log', '--all'])
+    expect(all.code).toBe(0)
+    expect(all.stdout).not.toMatch(/[\u202e]/)
+    expect(all.stdout).toContain(',odd\\u{202e},step-close,step=s1')
+    const lineage = await repo.cli(['log', odd, '--lineage'])
+    expect(lineage.code).toBe(0)
+    expect(lineage.stdout).not.toMatch(/[\u202e]/)
+    expect(lineage.stdout.split('\n')[0]).toBe('lineage: odd\\u{202e}')
+    expect(lineage.stdout).toContain(',odd\\u{202e},step-close,step=s1')
+  })
+
+  // A superseded stream's `by` is parsed journal text: the chain follows it only as a well-formed id,
+  // so an ill-formed one — a path, a control character — ends the chain and is never read as a stream.
+  it('an ill-formed by ends the lineage chain and is never read as a stream', async () => {
+    const repo = await threeStepPlan()
+    const journal = join(repo.root, '.witness/journal')
+    const superseded = (by: string) => `${JSON.stringify({ v: 1, t: 'status', from: 'approved', to: 'superseded', cause: 'reslice', by })}\n`
+    appendFileSync(join(journal, 'old-a.jsonl'), superseded('../outside'))
+    // what the path would reach, were it read: a stream outside the journal, superseded onward
+    appendFileSync(join(repo.root, '.witness', 'outside.jsonl'), `${JSON.stringify({ v: 1, t: 'step-close', step: 'leaked' })}\n`)
+    appendFileSync(join(journal, 'old-b.jsonl'), superseded('next-b\u001b[2J'))
+    appendFileSync(join(journal, 'old-c.jsonl'), superseded('new-c'))
+    appendFileSync(join(journal, 'new-c.jsonl'), `${JSON.stringify({ v: 1, t: 'step-close', step: 's1' })}\n`)
+
+    const a = await repo.cli(['log', 'old-a', '--lineage'])
+    expect(a.code).toBe(0)
+    expect(a.stdout.split('\n')[0]).toBe('lineage: old-a')
+    expect(a.stdout).not.toContain('leaked')
+    const b = await repo.cli(['log', 'old-b', '--lineage'])
+    expect(b.stdout.split('\n')[0]).toBe('lineage: old-b')
+    expect(b.stdout).not.toMatch(/[\u001b]/)
+    // a well-formed by is followed, as before
+    expect((await repo.cli(['log', 'old-c', '--lineage'])).stdout.split('\n')[0]).toBe('lineage: old-c → new-c')
+  })
+
   it('prints the hand-back row through witness log', async () => {
     const repo = await threeStepPlan()
     const P = 'auth-refresh-plan-1'

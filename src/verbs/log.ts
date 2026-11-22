@@ -3,6 +3,7 @@ import { EXIT, type Ctx } from '../cli.js'
 import { askText } from '../ask.js'
 import { git, primaryRoot } from '../gitio.js'
 import { canonExit } from '../departure.js'
+import { isId } from '../dsl.js'
 import { journalActs, readStream, streamExists, streamIds, type Entry, type ReviseReturnedEntry } from '../journal.js'
 import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
@@ -81,14 +82,16 @@ function detailOf(e: Entry): string {
 }
 
 // D166. Read through `canonExit`, the one reading of a departure: a re-slice that was taken
-// back is no longer a lineage step.
+// back is no longer a lineage step. Rows 205, 239 (B15): `by` is parsed journal text, so the chain
+// follows it only as a well-formed id — an ill-formed one (a path, a control character) ends the
+// chain and is never read as a stream. A predecessor is a stream named as an id too.
 function successorOf(root: string, id: string): string | undefined {
   const exit = canonExit(readStream(root, id))
-  return exit?.to === 'superseded' ? exit.by : undefined
+  return exit?.to === 'superseded' && isId(exit.by) ? exit.by : undefined
 }
 
 function predecessorsOf(root: string, id: string): string[] {
-  return streamIds(root).filter((s) => successorOf(root, s) === id)
+  return streamIds(root).filter((s) => isId(s) && successorOf(root, s) === id)
 }
 
 export function lineageChain(root: string, id: string): string[] {
@@ -145,7 +148,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   if (values.all) {
     const merged = mergedRows(root)
-    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
+    rows('all', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: logSafe(r.stream), t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
@@ -155,9 +158,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // activity of its own yet — walk the chain by journal existence on the *other*
     // streams rather than requiring id's own stream to exist.
     const chain = lineageChain(root, id!)
-    ctx.out(`lineage: ${chain.join(' → ')}`)
+    // A stream's id is its file's name, which a commit can make anything: spelled out (row 205).
+    ctx.out(`lineage: ${chain.map(logSafe).join(' → ')}`)
     const merged = chain.flatMap((sid) => readStream(root, sid).map((entry) => ({ stream: sid, entry })))
-    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: r.stream, t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
+    rows('lineage', ['n', 'stream', 't', 'detail'], merged.map((r, i) => ({ n: i + 1, stream: logSafe(r.stream), t: logSafe(String(r.entry.t)), detail: entryDetail(r.entry) })))
       .forEach(ctx.out)
     return EXIT.OK
   }
