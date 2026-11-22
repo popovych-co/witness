@@ -1,4 +1,5 @@
 import { lstatSync, rmSync, type Stats } from 'node:fs'
+import { join } from 'node:path'
 import { git } from './gitio.js'
 import { HARNESSES, loadHarness } from './harness.js'
 
@@ -61,9 +62,31 @@ export function lstatListed(abs: string): Stats | undefined {
   }
 }
 
+// Row 250 (security review). Whether every parent of `rel` under `root` is a real directory, or
+// absent: none is a symlink. A branch can commit `.claude/hooks` as a link to anywhere, and a removal
+// through it would delete a file outside the tree.
+export function parentsInTree(root: string, rel: string): boolean {
+  let at = root
+  for (const part of rel.split('/').slice(0, -1)) {
+    at = join(at, part)
+    const st = lstatListed(at)
+    if (st === undefined || !st.isDirectory()) return st === undefined || !st.isSymbolicLink()
+  }
+  return true
+}
+
+// Whether `rel` is on disk inside the tree: an entry of its own (a link counts as itself), reached
+// through no linked parent.
+export function presentInTree(root: string, rel: string): boolean {
+  return parentsInTree(root, rel) && lstatListed(join(root, rel)) !== undefined
+}
+
 // A listed path taken off the disk. One under what is now a file is already gone, and one that is
-// now a directory holds the other path of the same rename: neither is a file to remove.
-export function removeListed(abs: string): void {
+// now a directory holds the other path of the same rename: neither is a file to remove. One reached
+// through a linked parent is outside the tree, and stays.
+export function removeListed(root: string, rel: string): void {
+  if (!parentsInTree(root, rel)) return
+  const abs = join(root, rel)
   const st = lstatListed(abs)
   if (st !== undefined && !st.isDirectory()) rmSync(abs, { force: true })
 }

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { namesRetired } from '../src/install.js'
-import { git, legacyHooksPlan } from './helpers.js'
+import { loadHarness } from '../src/harness.js'
+import { dropRetired, namesRetired, retireAtRoot } from '../src/install.js'
+import { git, legacyHooksPlan, tmpRepo, unwrap } from './helpers.js'
 
 const OLD = ['.claude/hooks/canon-guard.mjs', '.claude/hooks/guard-state.mjs', '.claude/hooks/session-dashboard.sh']
 const NEW = ['.witness/hooks/canon-guard.mjs', '.witness/hooks/guard-state.mjs', '.witness/hooks/session-dashboard.sh']
@@ -48,5 +50,35 @@ describe('upgrading moves the hooks at the root and leaves started worktrees on 
     expect(res.code).toBe(0)
     for (const p of OLD) expect(existsSync(join(repo.root, p))).toBe(true)
     expect(res.stderr).toContain("warning: .claude/settings.json could not be read, so witness's old hooks stay in .claude/hooks/")
+  })
+})
+
+// Security review of 4b978bf/9ab21dc: a plan branch can commit `.claude/hooks` as a link to anywhere,
+// and a removal through it would delete a file outside the tree.
+describe("witness's retired-file removals never follow a symlinked parent out of the tree (row 250)", () => {
+  function linkedHooks(root: string): string {
+    const outside = mkdtempSync(join(tmpdir(), 'witness-outside-'))
+    writeFileSync(join(outside, 'guard-state.mjs'), '// not witness\'s\n')
+    mkdirSync(join(root, '.claude'), { recursive: true })
+    symlinkSync(outside, join(root, '.claude/hooks'))
+    return outside
+  }
+
+  it('retireAtRoot leaves a file reached through a linked .claude/hooks', () => {
+    const repo = tmpRepo()
+    const outside = linkedHooks(repo.root)
+    expect(retireAtRoot(repo.root, unwrap(loadHarness('claude-code')), undefined)).toEqual([])
+    expect(readFileSync(join(outside, 'guard-state.mjs'), 'utf8')).toBe('// not witness\'s\n')
+  })
+
+  it('dropRetired leaves a file reached through a linked .claude/hooks', () => {
+    const repo = tmpRepo()
+    repo.write('a.txt', 'a\n')
+    repo.git('add', 'a.txt')
+    repo.git('commit', '-m', 'base')
+    const base = repo.git('rev-parse', 'HEAD')
+    const outside = linkedHooks(repo.root)
+    expect(dropRetired(repo.root, base, 'p')).toEqual([])
+    expect(readFileSync(join(outside, 'guard-state.mjs'), 'utf8')).toBe('// not witness\'s\n')
   })
 })

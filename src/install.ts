@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { version } from './cli.js'
 import { commitWithTrailer, git, tryGit } from './gitio.js'
 import { HARNESSES, loadHarness, type Harness } from './harness.js'
+import { presentInTree, removeListed } from './change-set.js'
 import { DEFAULT_JSON_STYLE, formatJson, type JsonStyle } from './json-format.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { SETTINGS } from './settings.js'
@@ -224,8 +225,9 @@ export function installAllHomes(
 // sorted.
 export function retireAtRoot(root: string, harness: Harness, settings: string | undefined): string[] {
   if (settings !== undefined && namesRetired(settings)) return []
-  const removed = harness.retired.filter((rel) => existsSync(join(root, rel)))
-  for (const rel of removed) rmSync(join(root, rel), { force: true })
+  // presentInTree / removeListed: never through a linked `.claude/hooks` (security review)
+  const removed = harness.retired.filter((rel) => presentInTree(root, rel))
+  for (const rel of removed) removeListed(root, rel)
   return [...removed].sort()
 }
 
@@ -244,13 +246,14 @@ export function dropRetired(wt: string, base: string, planId: string): string[] 
   const tracked: string[] = []
   for (const rel of [...retired].sort()) {
     const inIndex = tryGit(wt, '--literal-pathspecs', 'ls-files', '--error-unmatch', '--', rel).ok
-    if (!inIndex && !existsSync(join(wt, rel))) continue
+    // presentInTree / removeListed: never through a linked `.claude/hooks` (security review)
+    if (!inIndex && !presentInTree(wt, rel)) continue
     if (tryGit(wt, 'cat-file', '-e', `${base}:${rel}`).ok) continue
     if (inIndex) {
       git(wt, '--literal-pathspecs', 'rm', '-q', '--cached', '--', rel)
       tracked.push(rel)
     }
-    rmSync(join(wt, rel), { force: true })
+    removeListed(wt, rel)
     dropped.push(rel)
   }
   if (tracked.length > 0) {

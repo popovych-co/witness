@@ -257,7 +257,7 @@ export function toHead(runRoot: string, paths: readonly string[]): void {
   if (inHead.size) git(runRoot, '--literal-pathspecs', 'checkout', 'HEAD', '--', ...inHead)
   if (absent.length) git(runRoot, 'update-index', '--force-remove', '--', ...absent)
   // Row 248: a rename between a file and a directory of one name lists both — `removeListed`
-  for (const p of absent) removeListed(join(runRoot, p))
+  for (const p of absent) removeListed(runRoot, p)
 }
 
 // The entries a tree holds at `paths`, matched exactly.
@@ -294,7 +294,7 @@ export function restoreHeld(runRoot: string, held: string, paths: readonly strin
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
-  for (const p of paths) if (!work.has(p) && !untracked.has(p)) removeListed(join(runRoot, p))
+  for (const p of paths) if (!work.has(p) && !untracked.has(p)) removeListed(runRoot, p)
   // Removals first (row 248): a rename between a file and a directory of one name lists both, and
   // the index refuses `src/x` while it still holds `src/x/index.ts`.
   const unstaged = paths.filter((p) => !index.has(p))
