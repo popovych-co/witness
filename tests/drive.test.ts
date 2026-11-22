@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { cliAct } from '../src/act.js'
-import { classifyAction, driveLoop, lineSink, resolveDecision, spawnSession } from '../src/drive.js'
+import { classifyAction, driveLoop, resolveDecision, spawnSession } from '../src/drive.js'
 import { option, renderDecision, type Decision } from '../src/recommend.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
@@ -484,19 +484,6 @@ describe('journal lines (row 214)', () => {
     expect(lines).toContain('[1 implement/p1] journal: human-decision implement: approve — ok\\x1b]52;c;x\\x07')
     expect(lines.some((l) => l.includes('\x1b'))).toBe(false)
   }, 20000)
-})
-
-describe('lineSink (row 214)', () => {
-  // Review Focus 3: pi's agent_end carries the whole conversation in one record.
-  it('lineSink takes one long record in linear time (issue #64)', () => {
-    const recs: string[] = []
-    const sink = lineSink((r) => recs.push(r))
-    const t0 = performance.now()
-    for (let i = 0; i < 128; i++) sink.push('x'.repeat(65_536))
-    sink.push('\r\nnext\n')
-    expect(performance.now() - t0).toBeLessThan(1000)
-    expect(recs.map((r) => r.length)).toEqual([8_388_608, 4])
-  })
 })
 
 // The fixture every loop case needs: an approved plan, so computeNext's first answer is

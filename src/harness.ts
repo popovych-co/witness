@@ -7,7 +7,7 @@ import type { ToolPolicy } from './reviewer.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { quotedWord, shellLine, type Platform } from './toon.js'
 import { pinIn } from './version.js'
-import { claudeStream, piStream, type WorkerStream } from './worker-stream.js'
+import { claudeStream, envelopeStream, piStream, type WorkerStream } from './worker-stream.js'
 
 export const HARNESSES = ['claude-code', 'pi'] as const
 export type HarnessName = (typeof HARNESSES)[number]
@@ -54,6 +54,10 @@ export interface Harness {
     // Row 217: `tools` is what the reviewer may use — none, or read-only file tools.
     spawn(pin: ParsedPin | undefined, extensions?: readonly string[], tools?: ToolPolicy): ReviewerSpawn
     parseEnvelope(stdout: string): Result<{ text: string }>
+    // Row 245: how the reviewer's own stdout says its turn has ended, which the async invoker
+    // watches for (pi's event stream; claude's json envelope, written once, at the end). One per
+    // attempt: a stream keeps state.
+    stream(home: string): WorkerStream
   }
   // The doing lane: how THIS harness runs a headless WORKER — an agent that edits a
   // worktree rather than emitting a verdict. Used by `drive` (D145): one home for "how do
@@ -175,6 +179,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
         return { cmd: 'claude', args, env }
       },
       parseEnvelope: parseClaudeEnvelope,
+      stream: (): WorkerStream => envelopeStream(),
     },
     worker: {
       // claude gates every tool behind an approval prompt, which no headless run can
@@ -237,6 +242,7 @@ const REGISTRY: Record<HarnessName, Harness> = {
         return { cmd: 'pi', args, env: {} }
       },
       parseEnvelope: parsePiEnvelope,
+      stream: (home: string): WorkerStream => piStream(home),
     },
     worker: {
       // No bypass flag exists or is needed: pi's built-in tools are not approval-gated

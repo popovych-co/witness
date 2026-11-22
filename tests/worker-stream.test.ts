@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { lineSink } from '../src/drive.js'
 import { logSafe } from '../src/toon.js'
-import { ACTION_MAX, actionLine, claudeStream, envelopeStream, piStream, shellCommand } from '../src/worker-stream.js'
+import { ACTION_MAX, actionLine, claudeStream, envelopeStream, lineSink, piStream, shellCommand } from '../src/worker-stream.js'
 
 // One stdout record, as each harness writes it in its streaming mode (P1, P3, P8, P12).
 const r = (event: object): string => JSON.stringify(event)
@@ -9,6 +8,19 @@ const r = (event: object): string => JSON.stringify(event)
 describe('logSafe (row 214)', () => {
   it('logSafe spells out control, format and separator characters (issue #64)', () => {
     expect(logSafe('a\x1b[2Jb\tc\u202ed\u2028e · → é')).toBe('a\\x1b[2Jb\\tc\\u{202e}d\\u{2028}e · → é')
+  })
+})
+
+describe('lineSink (row 214)', () => {
+  // Review Focus 3: pi's agent_end carries the whole conversation in one record.
+  it('lineSink takes one long record in linear time (issue #64)', () => {
+    const recs: string[] = []
+    const sink = lineSink((r) => recs.push(r))
+    const t0 = performance.now()
+    for (let i = 0; i < 128; i++) sink.push('x'.repeat(65_536))
+    sink.push('\r\nnext\n')
+    expect(performance.now() - t0).toBeLessThan(1000)
+    expect(recs.map((r) => r.length)).toEqual([8_388_608, 4])
   })
 })
 
@@ -645,8 +657,8 @@ describe("the turn's end (row 245)", () => {
     expect([s.ended(), s.failed()]).toEqual([true, true])
   })
 
-  // Review Focus: a Windows pipe writes CRLF and splits wherever it likes. drive's own sink feeds
-  // the stream, so it is what this reads through.
+  // Review Focus: a Windows pipe writes CRLF and splits wherever it likes. The sink drive and the
+  // reviewer feed the stream through is what this reads through.
   it('an agent_settled record split across two chunks, with CRLF, ends the turn (Review Focus)', () => {
     const s = piStream(home); const sink = lineSink((rec) => s.line(rec))
     sink.push('{"type":"agent_start"}\r\n{"type":"agent_se')

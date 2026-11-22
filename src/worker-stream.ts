@@ -40,6 +40,35 @@ export interface WorkerStream {
   started(): boolean                     // a run-starting record has been seen (row 245)
 }
 
+// Line-buffered because a pipe's chunks split wherever the kernel felt like it: printing
+// chunks would interleave two streams mid-word and prefix half a line. Every complete
+// record is forwarded as it arrives — drive is a terminal a human is watching (addendum §4).
+//
+// Row 214: one record per LF, a trailing CR dropped — the harnesses' JSON records end at LF alone,
+// and a CRLF would leave a CR on every line. A chunk with no LF is only appended: one record can
+// be megabytes (pi's agent_end carries the whole conversation), and splitting the whole buffer
+// again on every 64 KiB chunk was quadratic in it.
+//
+// Row 245: drive's sessions and the reviewer's attempts both read their stream through it, so each
+// record is heard once, as it completes, and a run start and a settle in one chunk are two records
+// (S4-5, S4-7).
+export function lineSink(emit: (record: string) => void): { push(chunk: string): void; flush(): void } {
+  let buf = ''
+  const record = (r: string) => emit(r.endsWith('\r') ? r.slice(0, -1) : r)
+  return {
+    push(chunk: string) {
+      const at = chunk.lastIndexOf('\n')
+      if (at === -1) { buf += chunk; return }
+      const records = (buf + chunk.slice(0, at)).split('\n')
+      buf = chunk.slice(at + 1)
+      records.forEach(record)
+    },
+    flush() {
+      if (buf !== '') { record(buf); buf = '' }
+    },
+  }
+}
+
 // One action line is one terminal line: a heredoc or a 40 KB `Write` must not flood the log.
 export const ACTION_MAX = 160
 // A record that is no event — a warning a harness printed, half a record — is shown as written,

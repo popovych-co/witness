@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadHarness } from '../src/harness.js'
-import { invokeReviewer, invokeReviewerAsync, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
+import { invokeReviewerAsync, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
 import { fakeClock, fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
 
 describe('prompt resolution', () => {
@@ -28,32 +28,6 @@ describe('prompt resolution', () => {
 
 const claudeHarness = (() => { const r = loadHarness('claude-code'); if (!r.ok) throw new Error('registry'); return r.value })()
 
-describe('invokeReviewer via claude-code', () => {
-  it('pipes the prompt over stdin, passes the model flag, returns the result text', async () => {
-    const repo = await tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [], findings: [] })
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'LENS\n\n## Reviewed content\nBODY', model: 'test-model-1' })
-    expect(r.ok).toBe(true)
-    if (r.ok) expect(JSON.parse(r.value.text)).toEqual({ coverage: [], findings: [] })
-    expect(readFileSync(join(scenario, 'claude-calls/call-1/argv'), 'utf8'))
-      .toContain('--model\ntest-model-1')
-    expect(readFileSync(join(scenario, 'claude-calls/call-1/stdin'), 'utf8')).toContain('BODY')
-  })
-
-  it('reports invocation failure as a structured refusal', async () => {
-    const repo = await tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [], findings: [] })
-    writeFileSync(join(scenario, 'claude-fail'), '1')
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'x' })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.violations[0].rule).toBe('reviewer-invocation')
-  })
-})
-
 describe('parseVerdictText', () => {
   it('parses bare JSON and fenced JSON, refuses prose', () => {
     expect(parseVerdictText('{"coverage":[],"findings":[]}').ok).toBe(true)
@@ -64,121 +38,24 @@ describe('parseVerdictText', () => {
   })
 })
 
-describe('transient invocation failure', () => {
-  it('retries a timed-out reviewer instead of failing the whole run', () => {
-    const repo = tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [{ anchor: 'a.md > ## B', note: 'read' }], findings: [] })
-    // hang the FIRST call past the timeout, answer normally after: a stalled call is
-    // transient, and treating it as fatal loses every sample a battery already paid for.
-    writeFileSync(join(scenario, 'claude-hang'), '1')
-
-    // row 90: the timeout is an InvokeOpts field the verb boundary resolves from
-    // gates.reviewerTimeoutMs, not an env knob a test can smuggle in through ctx
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this', timeoutMs: 400 })
-
-    expect(r.ok).toBe(true)
-    expect(readFileSync(join(scenario, 'claude-calls', 'call-2', 'argv'), 'utf8')).toContain('-p')
-  })
-
-  it('does not retry a missing binary — that is not transient', () => {
-    const repo = tmpRepo()
-    const ctx = fakeCtx(repo.root, { env: { PATH: '/nonexistent' } })
-    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'review this' })
-
-    expect(r.ok).toBe(false)
-    expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
-  })
-})
-
 const piHarness = (() => { const r = loadHarness('pi'); if (!r.ok) throw new Error('registry'); return r.value })()
-
-describe('invokeReviewer via pi', () => {
-  it('spawns hermetic pi print mode and parses the agent_end envelope', async () => {
-    const repo = await tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [], findings: [] })
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'LENS\nBODY', model: 'google/gemini-3.6-pro:low' })
-    expect(r.ok).toBe(true)
-    if (r.ok) expect(JSON.parse(r.value.text)).toEqual({ coverage: [], findings: [] })
-    const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
-    expect(argv).toContain('--no-session')
-    expect(argv).toContain('--no-extensions')
-    expect(argv).toContain('--thinking\nlow')
-    expect(argv).toContain('--model\ngoogle/gemini-3.6-pro')
-    expect(readFileSync(join(scenario, 'pi-calls/call-1/stdin'), 'utf8')).toContain('BODY')
-  })
-
-  it('threads declared extensions into the pi argv', async () => {
-    const repo = await tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [], findings: [] })
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, piHarness, {
-      cwd: repo.root, prompt: 'LENS\nBODY', model: 'google/gemini-3.6-pro:low',
-      extensions: ['/opt/pi/oauth-adapter'],
-    })
-    expect(r.ok).toBe(true)
-    const argv = readFileSync(join(scenario, 'pi-calls/call-1/argv'), 'utf8')
-    expect(argv).toContain('-e\n/opt/pi/oauth-adapter')
-    expect(argv).toContain('--no-extensions')
-  })
-
-  it('surfaces the in-stream provider error as a refusal', async () => {
-    const repo = await tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [], findings: [] })
-    writeFileSync(join(scenario, 'pi-error'), '400 third-party billing blocked')
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'x' })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.violations[0]!.rule).toBe('reviewer-invocation')
-  })
-
-  it('refuses a provider-qualified pin on claude-code before spawning anything', async () => {
-    const repo = await tmpRepo()
-    const scenario = fakeScenario()
-    const claudeH = loadHarness('claude-code')
-    if (!claudeH.ok) throw new Error('registry')
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, claudeH.value, { cwd: repo.root, prompt: 'x', model: 'google/gemini-3.6-pro' })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.violations[0]!.rule).toBe('provider-unrunnable')
-    expect(existsSync(join(scenario, 'claude-calls'))).toBe(false)
-  })
-})
-
-describe('invokeReviewer exports the lens', () => {
-  it('a lens in the options reaches the reviewer as WITNESS_LENS', () => {
-    const repo = tmpRepo()
-    const scenario = fakeScenario()
-    putVerdict(scenario, { coverage: [], findings: [] })
-    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-    const r = invokeReviewer(ctx, claudeHarness, { cwd: repo.root, prompt: 'x', lens: 'x' })
-    expect(r.ok).toBe(true)
-    expect(readFileSync(join(scenario, 'claude-calls/call-1/lens'), 'utf8').trim()).toBe('x')
-  })
-})
 
 // Row 191 §4.6. A reviewer is a harness session of its own, and on Claude Code the context
 // adapter loads in it like in any other; the mark is what keeps the adapter's warning out.
-describe('invokeReviewer marks its spawn as a reviewer', () => {
+describe('invokeReviewerAsync marks its spawn as a reviewer', () => {
   for (const [harness, calls] of [[claudeHarness, 'claude-calls'], [piHarness, 'pi-calls']] as const) {
-    it(`a ${harness.name} reviewer runs with WITNESS_REVIEWER=1`, () => {
+    it(`a ${harness.name} reviewer runs with WITNESS_REVIEWER=1`, async () => {
       const repo = tmpRepo()
       const scenario = fakeScenario()
       putVerdict(scenario, { coverage: [], findings: [] })
       const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
-      expect(invokeReviewer(ctx, harness, { cwd: repo.root, prompt: 'x' }).ok).toBe(true)
+      expect((await invokeReviewerAsync(ctx, harness, { cwd: repo.root, prompt: 'x' })).ok).toBe(true)
       expect(readFileSync(join(scenario, calls, 'call-1', 'reviewer'), 'utf8')).toBe('1\n')
     })
   }
 })
 
-// The async twin the battery fans out on. Same cases, same rows: the two invokers share
-// their preparation and their result mapping, so a drift between them is a bug.
+// The one reviewer invoker: the battery's lenses, the arbiter and drift all run on it (row 245).
 describe('invokeReviewerAsync', () => {
   it('pipes the prompt over stdin, passes the model flag, returns the result text', async () => {
     const repo = await tmpRepo()
@@ -266,6 +143,9 @@ describe('invokeReviewerAsync', () => {
     expect(readFileSync(join(scenario, 'claude-calls/call-1/lens'), 'utf8').trim()).toBe('code-reviewer')
   })
 
+  // A stalled call is transient: treating it as fatal loses every sample a battery already paid for.
+  // Row 90: the timeout is an InvokeOpts field the verb boundary resolves from gates.reviewerTimeoutMs,
+  // not an env knob a test can smuggle in through ctx.
   it('retries a hung call and settles without waiting on the hung call\'s grandchild', async () => {
     const repo = tmpRepo()
     const scenario = fakeScenario()
@@ -288,6 +168,18 @@ describe('invokeReviewerAsync', () => {
     const r = await invokeReviewerAsync(ctx, claudeHarness, { cwd: repo.root, prompt: 'x' })
     expect(!r.ok && r.violations[0]!.rule).toBe('reviewer-invocation')
     expect(!r.ok && r.violations[0]!.got).toContain('exit 1')
+  })
+
+  it('refuses a provider-qualified pin on claude-code before spawning anything', async () => {
+    const repo = await tmpRepo()
+    const scenario = fakeScenario()
+    const claudeH = loadHarness('claude-code')
+    if (!claudeH.ok) throw new Error('registry')
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
+    const r = await invokeReviewerAsync(ctx, claudeH.value, { cwd: repo.root, prompt: 'x', model: 'google/gemini-3.6-pro' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.violations[0]!.rule).toBe('provider-unrunnable')
+    expect(existsSync(join(scenario, 'claude-calls'))).toBe(false)
   })
 })
 
@@ -355,10 +247,12 @@ describe('usage limits at the reviewer (B4)', () => {
     expect(clock.slept).toEqual([])
   })
 
-  it('the sync invoker (drift\'s lane) never waits · it refuses as outside drive', async () => {
-    const { repo, scenario, ctx } = await setup(LIMIT, { WITNESS_DRIVE: 'p1' })
-    const r = invokeReviewer(ctx, piHarness, { cwd: repo.root, prompt: 'x' })
-    expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got]).toEqual(['usage-limit', LIMIT])
+  it('noWait (drift\'s lane) never waits · it refuses as outside drive, inside drive too', async () => {
+    const { repo, scenario, ctx, clock } = await setup(LIMIT, { WITNESS_DRIVE: 'p1' })
+    const r = await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock, noWait: true })
+    expect(!r.ok && [r.violations[0]!.rule, r.violations[0]!.got, r.violations[0]!.want])
+      .toEqual(['usage-limit', LIMIT, 'wait for the reset — witness drive waits it out on its own'])
+    expect(clock.slept).toEqual([])
     expect(existsSync(join(scenario, 'pi-calls/call-2'))).toBe(false)
   })
 

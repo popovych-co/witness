@@ -34,7 +34,7 @@ import { sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import { logSafe, shellWords } from './toon.js'
-import { passthrough, type WorkerLine, type WorkerStream } from './worker-stream.js'
+import { lineSink, passthrough, type WorkerLine, type WorkerStream } from './worker-stream.js'
 import { endedHow, endWatch, type EndCause } from './session-end.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
@@ -147,31 +147,6 @@ const clockTime = (): string => new Date().toTimeString().slice(0, 8)
 // knows its bin is stating a fact drive has no better answer for.
 function localBin(ctx: Ctx): string {
   return ctx.env.WITNESS_BIN ?? `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}`
-}
-
-// Line-buffered because a pipe's chunks split wherever the kernel felt like it: printing
-// chunks would interleave two streams mid-word and prefix half a line. Every complete
-// record is forwarded as it arrives — drive is a terminal a human is watching (addendum §4).
-//
-// Row 214: one record per LF, a trailing CR dropped — the harnesses' JSON records end at LF alone,
-// and a CRLF would leave a CR on every line. A chunk with no LF is only appended: one record can
-// be megabytes (pi's agent_end carries the whole conversation), and splitting the whole buffer
-// again on every 64 KiB chunk was quadratic in it.
-export function lineSink(emit: (record: string) => void): { push(chunk: string): void; flush(): void } {
-  let buf = ''
-  const record = (r: string) => emit(r.endsWith('\r') ? r.slice(0, -1) : r)
-  return {
-    push(chunk: string) {
-      const at = chunk.lastIndexOf('\n')
-      if (at === -1) { buf += chunk; return }
-      const records = (buf + chunk.slice(0, at)).split('\n')
-      buf = chunk.slice(at + 1)
-      records.forEach(record)
-    },
-    flush() {
-      if (buf !== '') { record(buf); buf = '' }
-    },
-  }
 }
 
 // How drive stops a session it started: its process group (F11), or on Windows, which has no

@@ -10,7 +10,7 @@ import { contained, jobHost } from '../src/contain.js'
 import { CLAUDE_THINKING_BUDGET } from '../src/pin.js'
 import { probe } from '../src/probe.js'
 import type { Result } from '../src/refusal.js'
-import { invokeReviewer } from '../src/reviewer.js'
+import { invokeReviewerAsync } from '../src/reviewer.js'
 import { resolveSpawn, system32, treeStop } from '../src/spawn.js'
 import { awaitGone, fakeCtx, orphansIn, seededRepo, writeOrphanStarter } from './helpers.js'
 
@@ -279,10 +279,10 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     expect(probe('fakecli', ['--version'], envWith(dir))).toBe(true)
   })
 
-  it('a gate reviewer reaches pi.cmd with the hermetic flags, prompt on stdin', () => {
+  it('a gate reviewer reaches pi.cmd with the hermetic flags, prompt on stdin', async () => {
     const dir = shimmed('pi', PI_ECHO)
     const prompt = 'LENS\n\n## Reviewed content\nsay "hi" & 100% ^ !x! (ok)\n'
-    const r = invokeReviewer(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), piHarness(), { cwd: dir, prompt })
+    const r = await invokeReviewerAsync(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), piHarness(), { cwd: dir, prompt })
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(JSON.parse(r.value.text)).toEqual({
@@ -292,10 +292,10 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     }
   })
 
-  it('a reviewer prompt larger than a pipe buffer crosses the job host intact (row 218)', () => {
+  it('a reviewer prompt larger than a pipe buffer crosses the job host intact (row 218)', async () => {
     const dir = shimmed('pi', PI_ECHO)
     const prompt = 'LENS say "hi" & 100% ^ !x! é 中文\n'.repeat(5000)
-    const r = invokeReviewer(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), piHarness(), { cwd: dir, prompt })
+    const r = await invokeReviewerAsync(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), piHarness(), { cwd: dir, prompt })
     expect(r.ok).toBe(true)
     if (r.ok) expect((JSON.parse(r.value.text) as { stdin: string }).stdin).toBe(prompt)
   })
@@ -306,7 +306,7 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     const pidFile = join(scratch, 'pids')
     // A reviewer that never answers, with a tool of its own still running: it records itself,
     // starts the starter (which starts the app and stays), and exits on its own after 8 s — the
-    // bound on a red run, where the piped spawnSync returns only when the CLI exits.
+    // bound on a red run, where a stop that missed the agent leaves it running until then.
     const dir = shimmed('pi', [
       `require('node:fs').appendFileSync(process.env.REVIEWER_PIDS, 'agent ' + process.pid + '\\n')`,
       `require('node:child_process').spawn(process.execPath, [${JSON.stringify(starter)}, process.env.REVIEWER_PIDS, 'stay'], { stdio: 'ignore' })`,
@@ -314,7 +314,7 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     ].join('\n'))
     const env = { ...envWith(dir), REVIEWER_PIDS: pidFile } as Record<string, string>
     try {
-      const r = invokeReviewer(fakeCtx(dir, { env }), piHarness(), { cwd: dir, prompt: 'x', timeoutMs: 4000 })
+      const r = await invokeReviewerAsync(fakeCtx(dir, { env }), piHarness(), { cwd: dir, prompt: 'x', timeoutMs: 4000 })
       expect(!r.ok && r.violations[0]?.rule).toBe('reviewer-timeout')
       const pids = orphansIn(pidFile)
       expect(pids.length).toBeGreaterThanOrEqual(3)
@@ -326,7 +326,7 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     }
   })
 
-  it('a node.cmd planted in the reviewed repo is not the judge, even where cmd.exe searches the cwd', () => {
+  it('a node.cmd planted in the reviewed repo is not the judge, even where cmd.exe searches the cwd', async () => {
     // With no node.exe beside it (every standard install), the shim runs a bare `node`, and
     // cmd.exe looks for that name in the current directory first — the reviewed repo.
     const dir = shimmed('pi', PI_ECHO)
@@ -336,12 +336,12 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     // The opt-out may be set in this machine's own shell; the planted judge must lose without it.
     const env = Object.fromEntries(Object.entries(envWith(dir))
       .filter(([k]) => k.toUpperCase() !== 'NODEFAULTCURRENTDIRECTORYINEXEPATH'))
-    const r = invokeReviewer(fakeCtx(repo, { env: env as Record<string, string> }), piHarness(), { cwd: repo, prompt: 'x' })
+    const r = await invokeReviewerAsync(fakeCtx(repo, { env: env as Record<string, string> }), piHarness(), { cwd: repo, prompt: 'x' })
     expect(r.ok && r.value.text).not.toBe('PLANTED')
     expect(r.ok && (JSON.parse(r.value.text) as { stdin: string }).stdin).toBe('x')
   })
 
-  it('a gate reviewer reaches claude.cmd with its pin, thinking budget in the env, prompt on stdin', () => {
+  it('a gate reviewer reaches claude.cmd with its pin, thinking budget in the env, prompt on stdin', async () => {
     // claude's --output-format json envelope: one object whose `result` is the text.
     const dir = shimmed('claude', `let s = ''
 process.stdin.setEncoding('utf8')
@@ -353,7 +353,7 @@ process.stdin.on('end', () => {
     const harness = loadHarness('claude-code')
     if (!harness.ok) throw new Error('registry')
     const prompt = 'LENS\n\nquote " caret ^ amp & pct %PATH%'
-    const r = invokeReviewer(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), harness.value,
+    const r = await invokeReviewerAsync(fakeCtx(dir, { env: envWith(dir) as Record<string, string> }), harness.value,
       { cwd: dir, prompt, model: 'claude-opus-4-6:high' })
     expect(r.ok).toBe(true)
     if (r.ok) {
