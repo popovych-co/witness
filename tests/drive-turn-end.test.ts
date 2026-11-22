@@ -38,6 +38,9 @@ const scaledTicker = (scale: number): Ticker => {
 const say = (event: object): string => `printf '%s\\n' '${JSON.stringify(event).replaceAll("'", "'\\''")}'`
 // The linger: the process stays after its turn, and the sleep's pid is kept for the orphan check.
 const LINGER = 'sleep 600 & echo "sleep $!" >> "$FAKE_PIDS"; wait'
+// A fake that answers drive's stop: it writes its `reaction` (on stderr with fd 2) and exits 1. Set
+// before the fake says anything; the shell runs it once LINGER's `wait` is interrupted.
+const REACT = (fd: 1 | 2 = 1): string => `trap 'cat "$(dirname "$0")/reaction"${fd === 2 ? ' >&2' : ''}; exit 1' TERM`
 
 // pi `--mode json` (P4): the header, one turn that answers `text`, and the settle.
 const header = say({ type: 'session', version: 3, id: 'S-1', timestamp: '2026-11-19T10:00:00.000Z', cwd: '/r' })
@@ -51,6 +54,18 @@ const piTurn = (text: string, stopReason = 'stop', errorMessage?: string): strin
   say({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: '/witness' }] } }),
   say({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: '/witness' }] } }),
   ...answer(text, stopReason, errorMessage),
+  say({ type: 'turn_end' }),
+  say({ type: 'agent_end', messages: [] }),
+  say({ type: 'agent_settled' }),
+]
+// A pi turn whose first answer met "Connection error." and whose retry answered `text`: the error's
+// line stays in the tail, where row 182 reads it as a transient limit on a session that failed.
+const retriedTurn = (text: string): string[] => [
+  say({ type: 'agent_start' }),
+  say({ type: 'turn_start' }),
+  ...answer('', 'error', 'Connection error.'),
+  say({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: 'Connection error.' }),
+  ...answer(text),
   say({ type: 'turn_end' }),
   say({ type: 'agent_end', messages: [] }),
   say({ type: 'agent_settled' }),
@@ -84,13 +99,15 @@ afterEach(() => {
 
 // The fake, written and run once before its session: macOS checks a new executable at its first
 // exec (measured here: 130-590 ms before a fresh script's first line, 4 ms on its next run), which
-// would otherwise be timed as the session's own start.
+// would otherwise be timed as the session's own start. `reaction`, if given, is the file `reaction`
+// beside it, which a body that starts with REACT writes when drive stops it.
 interface Fake { bin: string; pids: string }
-function fake(body: string[]): Fake {
+function fake(body: string[], reaction?: string): Fake {
   const dir = fakeScenario()
   const pids = join(dir, 'pids')
   pidFiles.push(pids)
   const bin = join(dir, 'agent')
+  if (reaction !== undefined) writeFileSync(join(dir, 'reaction'), `${reaction}\n`)
   writeFileSync(bin, `#!/bin/sh\n[ "$1" = --warm ] && exit 0\n${body.join('\n')}\n`, { mode: 0o755 })
   spawnSync(bin, ['--warm'], { stdio: 'ignore' })
   return { bin, pids }
@@ -277,6 +294,57 @@ describe('a drive session ends when its turn ends (row 245, #80)', () => {
     expect(end.tail).toEqual(['Working.', limit])
     expect(lines).toContain(`${PREFIX}after the turn`)
     expect(sessionLimit(end, Date.parse('2026-10-19T12:00:00Z'))).toMatchObject({ kind: 'usage', resetAt: 1792440000_000 })
+  }, 30_000)
+
+  // S4-A: a session drive stopped is recorded by the state it was in when the stop was sent (§4.3
+  // "The status"). What it writes in reaction to SIGTERM is shown, but moves neither its error flag,
+  // nor its code, nor the tail row 182 reads, nor the end watch. Had the pi's aborted answer counted,
+  // the "Connection error." its retry got past would read as a transient limit, and drive would
+  // pause after a clean session. Side by side: the never-started session waits out its 3 s window.
+  it('what a session writes in reaction to the stop is shown, and changes neither its status nor its tail (S4-A)', async () => {
+    const rec = (e: object): string => JSON.stringify(e)
+    const retried = ['Connection error.', 'retrying · attempt 1/3 · Connection error.', 'Done.']
+    const shapes: Array<{
+      name: string; body: string[]; reaction: string; fd?: 2; harness?: 'claude-code'
+      want: Partial<SessionEnd>; how: string; shown: string
+    }> = [{
+      name: 'a pi that writes an aborted answer',
+      body: [REACT(), header, ...retriedTurn('Done.')],
+      reaction: rec({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'aborted' } }),
+      want: { code: 0, ending: 'turn-ended', tail: retried }, how: GRACE, shown: 'Request aborted',
+    }, {
+      // A record that starts a run would cancel the grace, and its lines would enter the tail.
+      name: 'a pi whose aborted answer opens with message_start',
+      body: [REACT(), header, ...retriedTurn('Done.')],
+      reaction: [
+        rec({ type: 'message_start', message: { role: 'assistant', content: [] } }),
+        rec({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'aborted', errorMessage: 'Request timed out.' } }),
+      ].join('\n'),
+      want: { code: 0, ending: 'turn-ended', tail: retried }, how: GRACE, shown: 'Request timed out.',
+    }, {
+      // claude's code after its turn is 1 only when that turn's result was an error.
+      name: 'a claude session that writes an error result', harness: 'claude-code',
+      body: [REACT(), ...claudeTurn('Done.', { is_error: false, result: 'Done.' })],
+      reaction: rec({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: Request was aborted.' }),
+      want: { code: 0, ending: 'turn-ended', tail: ['Done.'] }, how: GRACE, shown: 'API Error: Request was aborted.',
+    }, {
+      // No grace runs here, so before S4-A its stderr went straight into the tail.
+      name: 'a pi that never started and answers on stderr', fd: 2,
+      body: [REACT(2), header, 'echo "No API key found for anthropic." >&2'],
+      reaction: 'Request timed out.',
+      want: { code: 1, ending: 'never-started', tail: ['No API key found for anthropic.'] },
+      how: `never started · stopped after ${duration(SESSION_QUIET_MS)}`, shown: 'Request timed out.',
+    }]
+    const fakes = shapes.map((s) => fake([...s.body, LINGER], s.reaction))
+    const runs = await Promise.all(shapes.map((s, i) => session(fakes[i]!, { harness: s.harness })))
+    shapes.forEach((s, i) => {
+      const { end, lines } = runs[i]!
+      expect(end, s.name).toMatchObject({ outcome: 'exited', failed: false, ...s.want })
+      expect(lines.at(-1), s.name).toMatch(ENDED(s.how))
+      // Shown in the log as it came, after the stop and before how the session ended.
+      expect(lines.at(-2), s.name).toBe(`${PREFIX}${s.shown}`)
+      expect(sessionLimit(end, Date.now()), s.name).toBeUndefined()
+    })
   }, 30_000)
 
   // P28: pi 0.85.1 restarts a turn for a follow-up sent from an agent_settled handler, then cuts it

@@ -35,7 +35,7 @@ import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import { logSafe, shellWords } from './toon.js'
 import { lineSink, passthrough, type WorkerLine, type WorkerStream } from './worker-stream.js'
-import { endedHow, endWatch, type EndCause } from './session-end.js'
+import { endedHow, endingStatus, endWatch, failedNow, type EndCause } from './session-end.js'
 import {
   duration, limitIn, realClock, sessionLimit, SINGLE_WAIT_MAX_MS, TOTAL_WAIT_MAX_MS, waitFor, type Clock, type Limit,
 } from './usage.js'
@@ -114,7 +114,8 @@ export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
 // killed; `ms` runs from spawn to settle, less the time the host slept (row 210). `failed`: its
 // stream says its last answer was an error, which pi's JSON mode reports at exit 0 (row 214).
 // `ending`: drive stopped it after its turn ended, or as a run that never started (row 245); it is
-// then `exited` with the code its harness gives that ending, never the stop's own status.
+// then `exited` with the code its harness gives that ending, never the stop's own status, and its
+// `failed` and `tail` are what they were when the stop was sent (S4-A).
 export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean; ending?: EndCause }
 const TAIL_LINES = 3
 
@@ -239,6 +240,9 @@ export async function spawnSession(
   // startup handle with nothing but its header (P31, P49), the never-started window. The window is
   // drive's alone: a claude session names its run at `system:init`.
   const watch = endWatch(stream, { neverStartedMs: harness.name === 'pi' ? SESSION_QUIET_MS : undefined })
+  // How the end watch ended the session, once drive sent that stop, with the stream's error flag as
+  // it stood then (S4-A).
+  let ending: { cause: EndCause; atDeadline: boolean; failed: boolean } | undefined
   // Awake time on the session's clock once the child runs: what the quiet line measures in (row
   // 210). `started` prints before the clock exists, at 0.
   let awakeNow = (): number => 0
@@ -270,6 +274,10 @@ export async function spawnSession(
   // chatter never hides the limit the turn ended on. That is decided per record: its lines stay out
   // only when a grace ran before it and still runs after it, so the record that starts a grace (a
   // claude error result carrying a limit) and the one that cancels it keep theirs (S4-1).
+  //
+  // Once the watch's stop is sent, what the session writes is its reaction to SIGTERM: shown, but
+  // never heard by the watch and never in the tail, so a pi's aborted answer neither cancels the
+  // grace nor lands its lines where row 182 reads a limit (S4-A).
   const out = lineSink((record) => {
     const before = watch.graceRunning()
     let said: WorkerLine[]
@@ -278,8 +286,8 @@ export async function spawnSession(
     } catch {
       said = [{ kind: 'show', text: passthrough(record) }]
     }
-    watch.heard(awakeNow())
-    const tailed = !(before && watch.graceRunning())
+    if (ending === undefined) watch.heard(awakeNow())
+    const tailed = ending === undefined && !(before && watch.graceRunning())
     for (const w of said) {
       if (w.kind === 'show') show(w.text, tailed)
       else if (w.kind === 'heard') opts.hear?.(w.text)
@@ -289,8 +297,9 @@ export async function spawnSession(
       }
     }
   })
-  // stderr never moves the grace: its lines stay out of the tail while one runs.
-  const err = lineSink((record) => show(passthrough(record), !watch.graceRunning()))
+  // stderr never moves the grace: its lines stay out of the tail while one runs, and after the
+  // watch's stop.
+  const err = lineSink((record) => show(passthrough(record), ending === undefined && !watch.graceRunning()))
   // D8. A session that printed nothing for SESSION_QUIET_MS of awake time says it still runs, how
   // long of its limit, and what it waits on — its oldest open call, else the model — then again
   // after each further SESSION_QUIET_MS. `quiet` names the stretch it crossed, never the measured
@@ -333,8 +342,6 @@ export async function spawnSession(
     let killTimer: NodeJS.Timeout | undefined
     let grace: NodeJS.Timeout | undefined
     let stopSent = false
-    // Row 245: how the end watch ended it, once drive sent that stop.
-    let ending: { cause: EndCause; atDeadline: boolean } | undefined
     // One stop per session: SIGTERM, then SIGKILL TERM_GRACE_MS later. A later stop only renames how
     // it ended, and only a lost lease's does (`stopped`, which the loop reports once, at the end).
     const stop = (o: SpawnOutcome) => {
@@ -349,10 +356,10 @@ export async function spawnSession(
     // Row 245. The end watch's stop is the timeout's (the process group, or on Windows the job
     // host's tree), and the session is `exited`. Once drive has sent a stop, neither the watch nor
     // the deadline renames it: a grace that falls due while a session ignores a lost lease's
-    // SIGTERM leaves it `stopped` (S4-4).
+    // SIGTERM leaves it `stopped` (S4-4). The stream's error flag is read as the stop is sent.
     const endStop = (cause: EndCause, atDeadline: boolean) => {
       if (stopSent) return
-      ending = { cause, atDeadline }
+      ending = { cause, atDeadline, failed: failedNow(stream) }
       stop('exited')
     }
     const settle = (o: SpawnOutcome) => {
@@ -368,12 +375,11 @@ export async function spawnSession(
       child.stdout.destroy()
       child.stderr.destroy()
       const ms = Math.max(1, clock.awakeMs())
-      // Row 245. Stopped after its end signal, it is classified with the status its harness gives
-      // that ending, never the stop's own (null, SIGTERM, or exit 1 from a Windows job kill; P46):
-      // 1 for a run that never started, 1 for a claude session whose last result was an error, else
-      // 0 — pi's JSON mode exits 0 on an error answer, which the stream's flag carries (row 214).
+      // Row 245. Stopped by the end watch, it is classified with the status its harness gives that
+      // ending, never the stop's own (P46), and its error flag is the one read at the stop (S4-A).
       const ended = o === 'exited' && ending !== undefined ? ending : undefined
-      if (ended !== undefined) code = ended.cause === 'never-started' || (harness.name !== 'pi' && stream.failed()) ? 1 : 0
+      if (ended !== undefined) code = endingStatus(harness.name, ended.cause, ended.failed)
+      const failed = ending?.failed ?? stream.failed()
       // How it ended, in awake time. A spawn that failed never started, and said so already.
       // `(error)`: the stream says its last answer was an error, which pi's JSON mode reports at
       // exit 0 (D5).
@@ -382,12 +388,12 @@ export async function spawnSession(
         try {
           for (const l of opts.progress?.(session) ?? []) emit(l)
         } catch { /* what it journaled is in its stream; `ended` still says how it went */ }
-        const how = ended !== undefined ? endedHow(ended.cause, ended.atDeadline, stream.failed())
+        const how = ended !== undefined ? endedHow(ended.cause, ended.atDeadline, failed)
           : o === 'timeout' ? 'timed out' : o === 'stopped' ? 'stopped'
-          : code === null ? 'killed' : `exit ${code}${stream.failed() ? ' (error)' : ''}`
+          : code === null ? 'killed' : `exit ${code}${failed ? ' (error)' : ''}`
         emit(`ended ${clockTime()} · ${how} · ${duration(ms)}`)
       }
-      resolve({ outcome: o, code, tail: [...tail], ms, failed: stream.failed(), ...(ended !== undefined ? { ending: ended.cause } : {}) })
+      resolve({ outcome: o, code, tail: [...tail], ms, failed, ...(ended !== undefined ? { ending: ended.cause } : {}) })
     }
     // Row 245: the end signal never stops the timeout. A deadline that falls inside a grace ends the
     // session clean, as its turn's end; one after a stop drive already sent changes nothing.

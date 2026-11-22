@@ -11,7 +11,7 @@ import { resolveSpawn, spawn } from './spawn.js'
 import { contained, jobHost } from './contain.js'
 import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
 import { monotonicTicker, type Ticker } from './session-clock.js'
-import { END_GRACE_MS, endWatch } from './session-end.js'
+import { END_GRACE_MS, endingStatus, endWatch, failedNow } from './session-end.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
 import type { Reviewed } from './verdict.js'
 import { lineSink } from './worker-stream.js'
@@ -216,13 +216,6 @@ function prepareInvocation(ctx: Ctx, harness: Harness, opts: InvokeOpts): Result
   })
 }
 
-// Row 245 (P46). The status a harness gives a turn that ended, for an attempt stopped after it: pi's
-// JSON mode exits 0 on an error answer too (its envelope carries the error), and claude's json mode
-// exits 1 on an error envelope. Drive records a session stopped after its turn by the same rule.
-function endingStatus(harness: Harness, failed: boolean): number {
-  return harness.name !== 'pi' && failed ? 1 : 0
-}
-
 function classifyAttempt(harness: Harness, p: Prepared, attempt: number, r: Attempt): 'retry' | Result<{ text: string }> {
   // A stall is NOT the missing-binary case. Reporting it as one sent the last
   // reader hunting a PATH problem on a machine where the reviewer answered in 6s.
@@ -232,10 +225,9 @@ function classifyAttempt(harness: Harness, p: Prepared, attempt: number, r: Atte
       `no response in ${p.timeout}ms after ${attempt + 1} attempts`,
       'a reviewer that answers within the timeout — raise gates.reviewerTimeoutMs in witness.config.yaml if the model is simply slow')])
   }
-  // Stopped after its turn, it is read by the status its harness gives that ending, never by the
-  // stop's own (null, SIGTERM's 143, or exit 1 from a Windows job kill), which would read as
-  // reviewer-invocation.
-  const status = r.stoppedAfterTurn ? endingStatus(harness, r.failed) : r.status
+  // Stopped after its turn, it is read by the status its harness gives that ending, by drive's rule
+  // (endingStatus), never by the stop's own, which would read as reviewer-invocation.
+  const status = r.stoppedAfterTurn ? endingStatus(harness.name, 'turn-ended', r.failed) : r.status
   // Exit 0 after closing its stdin early means the reviewer answered without reading the whole
   // prompt — a verdict on content it never saw, so it fails closed; and so does a clean ending
   // after a stop (S4-2). A nonzero status is the answer.
@@ -368,11 +360,7 @@ function spawnAttempt(harness: Harness, p: Prepared, opts: InvokeOpts): Promise<
     }
     const endStop = () => {
       if (stopSent || exited || settled) return
-      let failed = false
-      try {
-        failed = stream.failed() === true
-      } catch { /* a stream never throws (row 214); one that did reads as no error */ }
-      ending = { failed, stdout: out.join('') }
+      ending = { failed: failedNow(stream), stdout: out.join('') }
       stop()
     }
     // The grace's timer: armed when the watch starts a grace, cancelled when a run start cancels it.

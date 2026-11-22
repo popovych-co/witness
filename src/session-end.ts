@@ -61,6 +61,28 @@ export function endWatch(stream: WorkerStream, o: { neverStartedMs?: number }): 
   }
 }
 
+// The stream's error flag as it stands now. Drive and the reviewer read it when they send the
+// watch's stop and keep it, so what a harness writes in reaction to SIGTERM (an aborted answer, an
+// error result, a second envelope) is no part of the turn it ended (S4-A). Read from the clock's
+// timer, so it never throws either: a stream that cannot answer reads as no error.
+export function failedNow(stream: WorkerStream): boolean {
+  try {
+    return stream.failed() === true
+  } catch {
+    return false
+  }
+}
+
+// Row 245 (P46). The status a harness gives the ending of a session or a reviewer's attempt the
+// watch stopped, never the stop's own (null, SIGTERM's 143, or exit 1 from a Windows job kill): 1
+// for a run that never started; 1 when the harness is not pi and the turn's last answer was an
+// error, as claude exits 1 after an error result or envelope; else 0, since pi's JSON mode exits
+// 0 on an error answer too, which the error flag carries (row 214). `failed` is failedNow's, read
+// at the stop.
+export function endingStatus(harness: string, cause: EndCause, failed: boolean): number {
+  return cause === 'never-started' || (harness !== 'pi' && failed) ? 1 : 0
+}
+
 // How a session the watch ended went, for the drive log's `ended` line (row 214's, amended): the
 // grace's stop, or the deadline's when it fell inside the grace, keeping row 214's ` (error)`.
 // The never-started window is drive's SESSION_QUIET_MS (5 min); tests/drive-turn-end.test.ts
