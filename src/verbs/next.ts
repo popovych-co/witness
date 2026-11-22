@@ -17,6 +17,8 @@ import { baseForSpec } from '../history.js'
 import { basisMoved, planDecisionsTerm, specBasis } from '../basis.js'
 import { diffBase, evidenceForDiff, isTestPath, type EvidenceReport } from '../evidence.js'
 import { planChangeSet } from '../change-set.js'
+import { standingHeld } from '../held.js'
+import { isAlive } from '../lock.js'
 import {
   greenOwedOn, greenOwedStep, hasCriteriaStep, implementGated, lastRedVacuous, presentGreenOwed, redCycleClosed, redInFlight, stepProgress, stepsLine,
   type StepState,
@@ -776,6 +778,18 @@ function flowWork(root: string, cfg: Config, plan: CanonDoc, entries: Entry[], j
   if (planReworkOwed(entries, id)) {
     const canon = loadCanon(root)
     return planGateStep(root, liveEfforts(root), plan, entries, planShaOf(root, canon, plan), judge)
+  }
+  // Row 247 (#92). A crashed verify-red left this plan's non-test work set aside: the tree holds base
+  // versions, so every row below would read the plan's code as missing (a red on the base, a step
+  // owed again). `recover` puts it back; this row only routes it — next never writes a worktree. The
+  // ref is the repo's, so a held ref recorded in any checkout stands here.
+  const setAside = standingHeld(wt, id)
+  if (setAside !== undefined) {
+    const pid = setAside.record?.pid
+    const note = pid !== undefined && pid !== process.pid && isAlive(pid)
+      ? `a verify-red of this plan is running (pid ${pid}) with its non-test work set aside — recover puts it back if that run ends without doing so`
+      : `a verify-red stopped before putting this plan's non-test work back — it is held in ${setAside.ref}; recover puts it back`
+    return { ...runs(cliAct('recover')), target: id, ...noteOf(note) }
   }
   // Row 241 (R7; reverses row 191's Plan's call 5). A plan's unbuilt steps are its next work before
   // and after an implement gate, and above its PR: an amendment that adds a step after either is

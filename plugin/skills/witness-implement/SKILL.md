@@ -44,7 +44,7 @@ Prints the worktree path (`.witness/worktrees/<plan-id>`, branch `witness/<plan-
 A fresh session is the execution model: **this session is the implementer**, working inside the worktree `start` printed. Work the plan as a **relay of session slices**, cut by how full this session's context is: the CLI reads the fill from the harness and decides where each slice ends, and you act on what it prints. `start` prints:
 
 - `slices: by context — relay at 20% (step budget 3 if unmeasured)` — the rule: a slice ends once the fill reaches the limit, or the next step would take it past; where the fill cannot be read, after the step budget.
-- `steps: 0/3 done · next s1` — where the plan stands. **Work step by step from `steps:`**, never from conversation memory: the step it names next is yours. `$WITNESS log <plan-id>` ends with the same line, and `$WITNESS next` routes the command that step owes — its red, its green once the red is witnessed, `verify-red` after a vacuous red, or `step-close`.
+- `steps: 0/3 done · next s1` — where the plan stands. **Work step by step from `steps:`**, never from conversation memory: the step it names next is yours. `$WITNESS log <plan-id>` ends with the same line, and `$WITNESS next` routes the command that step owes — its red, its green once the red is witnessed, `verify-red` after a vacuous red, `step-close`, or `witness recover` while a crashed verify-red's work is held — run it, then `$WITNESS next` again.
 - `context:` — the fill this session opens at, or `unmeasured (<reason>)` and the step budget it falls back to.
 - `warn: this session opens at …` when it opens already over the limit: work one step anyway. Every slice closes at least one step, and the CLI ends this one at that close.
 

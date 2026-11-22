@@ -324,7 +324,7 @@ export function heldGuard(root: string, planId: string, tree: string): Result<st
 
 // The base a put-back checks against when the record names none: the tree's own diff base, read from
 // its config, else the root's; undefined when neither resolves.
-function treeBase(root: string, tree: string): string | undefined {
+export function treeBase(root: string, tree: string): string | undefined {
   for (const at of tree === root ? [root] : [tree, root]) {
     const cfg = loadConfig(at)
     if (!cfg.ok) continue
