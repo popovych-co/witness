@@ -20,7 +20,7 @@ import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
 import { contentSha } from '../content-sha.js'
 import { gateSettled, openStepRow } from '../verbs/next.js'
-import { lastGateRun, type GateCheck } from '../rounds.js'
+import { lastGateRun, timedCheck, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
 
 async function commandLane(
@@ -67,39 +67,42 @@ registerGate({
     const files = planChangeSet(wt, base)
     const checks: GateCheck[] = []
 
-    const entries = readStream(root, planId)
-    const lastImplement = lastGateRun(entries, 'implement')
-    // One settle predicate, not two. This block used to inline its own copy of
-    // gateSettled, which meant `ship` and `next` could answer "is implement settled?"
-    // differently for the same journal — the split-brain that reads as a deadlock when
-    // two sessions compare notes.
-    //
-    // The missing sha argument is still DELIBERATE, but row 96 killed one of its two
-    // reasons and the surviving one is now the whole reason. It used to rest on
-    // `worktreeTreeSha` hashing the entire worktree, so ship's own `pr #N` stamp — pulled
-    // in by the watch-phase rebase — moved the tree and lapsed the very gate ship was
-    // checking: approve → pr → lapse → gate, the D75/D77 livelock. Under the diff identity
-    // that reason is DEAD: the worktree never edits `plans/<id>.md`, so the stamp is always
-    // equal to base and can never enter the reviewed set. What remains: `next` re-arms on
-    // movement because authoring is what it routes to, while ship asks only whether
-    // implement was EVER settled. Passing a sha here re-opens the livelock — do not add one.
-    const implementSettled = gateSettled(entries, 'implement')
-    // Row 241 (R9): a settled implement gate does not carry a plan with a step still open — unless a
-    // human approved it past its steps on the plan as it stands (row 93; `openStepRow` reads that).
-    const open = openStepRow(root, cfg, plan)
-    checks.push({ name: 'implement-gate', ok: implementSettled && open === undefined,
-      detail: open !== undefined
-        ? `${open.step} is open — ${open.row.line}`
-        : lastImplement
-          ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
-          : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` })
+    // Row 251. Each check is timed with the inputs only it reads; shared inputs stay outside.
+    checks.push(await timedCheck(() => {
+      const entries = readStream(root, planId)
+      const lastImplement = lastGateRun(entries, 'implement')
+      // One settle predicate, not two. This block used to inline its own copy of
+      // gateSettled, which meant `ship` and `next` could answer "is implement settled?"
+      // differently for the same journal — the split-brain that reads as a deadlock when
+      // two sessions compare notes.
+      //
+      // The missing sha argument is still DELIBERATE, but row 96 killed one of its two
+      // reasons and the surviving one is now the whole reason. It used to rest on
+      // `worktreeTreeSha` hashing the entire worktree, so ship's own `pr #N` stamp — pulled
+      // in by the watch-phase rebase — moved the tree and lapsed the very gate ship was
+      // checking: approve → pr → lapse → gate, the D75/D77 livelock. Under the diff identity
+      // that reason is DEAD: the worktree never edits `plans/<id>.md`, so the stamp is always
+      // equal to base and can never enter the reviewed set. What remains: `next` re-arms on
+      // movement because authoring is what it routes to, while ship asks only whether
+      // implement was EVER settled. Passing a sha here re-opens the livelock — do not add one.
+      const implementSettled = gateSettled(entries, 'implement')
+      // Row 241 (R9): a settled implement gate does not carry a plan with a step still open — unless a
+      // human approved it past its steps on the plan as it stands (row 93; `openStepRow` reads that).
+      const open = openStepRow(root, cfg, plan)
+      return { name: 'implement-gate', ok: implementSettled && open === undefined,
+        detail: open !== undefined
+          ? `${open.step} is open — ${open.row.line}`
+          : lastImplement
+            ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
+            : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` }
+    }))
 
-    checks.push(await commandLane(wt, root, ctx, 'tests', cfg.ship.test))
-    checks.push(await commandLane(wt, root, ctx, 'lint', cfg.ship.lint))
+    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'tests', cfg.ship.test)))
+    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'lint', cfg.ship.lint)))
 
-    // deterministic drift lane: spec content from MAIN, execution in the worktree
-    const lane = await runCriteria(wt, ctx, parent, { trustRoot: root })
-    checks.push(laneCheck(lane))
+    // deterministic drift lane: spec content from MAIN, execution in the worktree; `repin` reads it below
+    let lane!: Awaited<ReturnType<typeof runCriteria>>
+    checks.push(await timedCheck(async () => laneCheck(lane = await runCriteria(wt, ctx, parent, { trustRoot: root }))))
 
     const pin = String(plan.meta['derives-from'])
     const repin = lane.ok && lane.value.ok && pin !== lane.value.sha

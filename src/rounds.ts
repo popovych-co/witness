@@ -9,7 +9,19 @@ import type { CoverageItem, Finding } from './verdict.js'
 // trust stop is read from the run's own record rather than inferred from a detail string.
 // Present only when non-empty.
 // held (row 179): the criteria an unmet need kept the drift lane from running.
-export interface GateCheck { name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[] }
+// duration_ms (row 251): how long the check took, in whole milliseconds — journaled for a later
+// reader (T2d's median per check name). Never part of an identity: `checkOk` (src/gate.ts) compares
+// name, ok, untrusted and held only, and no renderer prints it. Absent on every check before 251.
+export interface GateCheck {
+  name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[]; duration_ms?: number
+}
+
+// Row 251. One check, timed over its whole run — the inputs only it reads belong inside `run`.
+export async function timedCheck(run: () => GateCheck | Promise<GateCheck>): Promise<GateCheck> {
+  const start = performance.now()
+  const check = await run()
+  return { ...check, duration_ms: Math.round(performance.now() - start) }
+}
 export interface ReviewerVerdict { reviewer: string; coverage: CoverageItem[]; findings: Finding[] }
 
 export interface GateRunEntry {

@@ -15,7 +15,7 @@ import { basisMoved, planBasis, planDecisionsTerm, specBasis } from '../basis.js
 import { decisionDelta, decisionLines, recapLines } from '../decisions.js'
 import { isId } from '../dsl.js'
 import { rows } from '../toon.js'
-import type { GateCheck } from '../rounds.js'
+import { timedCheck, type GateCheck } from '../rounds.js'
 import { cliAct } from '../act.js'
 
 // D167. One derivation for the gate's stamp and `decide`'s: a pass approves a draft and nothing
@@ -45,14 +45,15 @@ registerGate({
       return refuse([v('parent', 'unknown-parent', String(plan.meta.parent), 'an existing canon doc', 'witness index')])
     }
 
+    // Row 251. Each check is timed with the inputs only it reads; shared inputs stay outside.
     const checks: GateCheck[] = []
-    const schemaProblems = validateDoc(plan.meta, plan.body).map((x) => `${x.field}:${x.rule}`)
-    checks.push({ name: 'schema', ok: schemaProblems.length === 0, detail: schemaProblems.slice(0, 5).join(' · ') })
+    checks.push(await timedCheck(() => {
+      const schemaProblems = validateDoc(plan.meta, plan.body).map((x) => `${x.field}:${x.rule}`)
+      return { name: 'schema', ok: schemaProblems.length === 0, detail: schemaProblems.slice(0, 5).join(' · ') }
+    }))
 
-    const parentStatus = String(parent.meta.status)
-    const parentOk = plannableParent(parent)
-    checks.push({ name: 'parent-approved', ok: parentOk,
-      detail: `${String(parent.meta.id)} is ${parentStatus}` })
+    checks.push(await timedCheck(() => ({ name: 'parent-approved', ok: plannableParent(parent),
+      detail: `${String(parent.meta.id)} is ${String(parent.meta.status)}` })))
 
     // Row 198. Fresh iff neither pin moved: the parent's content, nor the decisions it carries.
     const pinned = planBasis(plan)
@@ -64,20 +65,22 @@ registerGate({
       spec: `derives-from ${short(pinned.spec)} but parent is at ${short(current.spec)} — rewrite the plan (witness write re-stamps the pin)`,
       decisions: `decisions-from ${pin7(pinned.decisions)} but ${String(parent.meta.id)} carries decisions at ${pin7(current.decisions)} — rewrite the plan (witness write re-stamps the pins)`,
     }
-    checks.push({ name: 'pin-fresh', ok: moved.length === 0,
+    checks.push(await timedCheck(() => ({ name: 'pin-fresh', ok: moved.length === 0,
       detail: moved.length === 0
         ? `pin ${short(parentSha)}${current.decisions !== undefined ? ` · decisions ${short(current.decisions)}` : ''}`
-        : moved.map((m) => clause[m]).join(' · ') })
+        : moved.map((m) => clause[m]).join(' · ') })))
 
     if (parent.meta.ui === true) {
-      const stamp = designStamp(parent)
-      const planPin = plan.meta['design-from']
-      const okPin = stamp !== undefined && !designPending(root, parent) && planPin === stamp.sha
-      checks.push({ name: 'design-pin', ok: okPin,
-        detail: okPin ? `design ${short(stamp!.sha)}`
-          : !stamp ? `${String(parent.meta.id)} has no approved design — gate design first`
-          : designPending(root, parent) ? `${String(parent.meta.id)} design is stale — re-approve or reconfirm`
-          : `design-from ${short(String(planPin ?? 'absent'))} ≠ current design ${short(stamp.sha)}` })
+      checks.push(await timedCheck(() => {
+        const stamp = designStamp(parent)
+        const planPin = plan.meta['design-from']
+        const okPin = stamp !== undefined && !designPending(root, parent) && planPin === stamp.sha
+        return { name: 'design-pin', ok: okPin,
+          detail: okPin ? `design ${short(stamp!.sha)}`
+            : !stamp ? `${String(parent.meta.id)} has no approved design — gate design first`
+            : designPending(root, parent) ? `${String(parent.meta.id)} design is stale — re-approve or reconfirm`
+            : `design-from ${short(String(planPin ?? 'absent'))} ≠ current design ${short(stamp.sha)}` }
+      }))
     }
 
     const parentId = String(parent.meta.id)
