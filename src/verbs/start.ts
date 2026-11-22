@@ -19,6 +19,7 @@ import { prepareStamp, writeStamp } from '../stamp.js'
 import { SESSION_DEFAULT, stagePin } from '../model.js'
 import { branchName, createWorktree, worktreePath } from '../worktree.js'
 import { existsSync } from 'node:fs'
+import { standingHeld } from '../held.js'
 import type { Need } from '../dsl.js'
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
@@ -74,6 +75,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (!wt.ok) { renderRefusal(wt.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
     ctx.out(kv('start', `${planId} already in-progress — worktree ${had ? 'present' : 'recreated'}`))
     ctx.out(kv('worktree', wt.value.path))
+    heldLine(ctx, root, planId)
     // D148. Re-attach re-applies the canon exclusion and checks the tree back out, so a
     // session that already read files in here is holding stale copies — and witness is
     // what moved them. Only on re-attach: a fresh cut has nothing to invalidate.
@@ -150,6 +152,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   ctx.out(kv('start', `${planId} approved → in-progress`))
   ctx.out(kv('worktree', wt.value.path))
+  heldLine(ctx, root, planId)
   ctx.out(kv('branch', branchName(planId)))
   ctx.out(kv('agent-model', agentModel))
   ctx.out(kv('slices', slices))
@@ -159,4 +162,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Row 239. A shape: the plan is quoted, and the phase and the step are the session's to name.
   ctx.out(`help: implement inside the worktree; witness test-evidence ${shellWord(planId)} --phase red|green --step <id> as you go`)
   return EXIT.OK
+}
+
+// Row 247 (#92). A crashed verify-red's held work, named where a session opens on its plan: the tree
+// holds base versions until `recover` puts it back. Read only — start writes nothing for it.
+function heldLine(ctx: Ctx, root: string, planId: string): void {
+  const held = standingHeld(root, planId)
+  if (held === undefined) return
+  ctx.out(kv('held', `${held.ref} — a verify-red stopped before putting this plan's non-test work back; ${cliAct('recover').line} puts it back`))
 }

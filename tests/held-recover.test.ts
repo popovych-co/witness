@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { standingHeld } from '../src/held.js'
-import { heldWorktree, nextLine, worktreeState } from './helpers.js'
+import { escapeRe, heldWorktree, nextLine, replantHeld, worktreeState } from './helpers.js'
 
 describe('recover and next (row 247, #92)', () => {
   it.each(['stepped', 'scaffolding'] as const)('after a crash on a %s plan, next routes witness recover — never test-evidence', async (shape) => {
@@ -52,5 +52,33 @@ describe('recover and next (row 247, #92)', () => {
     expect(rec.stderr).toContain('is gone')
     expect(standingHeld(repo.root, planId)!.sha).toBe(sha)
     expect(repo.git('status', '--porcelain=v1', '--untracked-files=all')).toBe(status)
+  })
+
+  it('start on an in-progress plan names a standing held ref and the recover that puts it back', async () => {
+    const { repo, planId, ref } = await heldWorktree('stepped')
+    const st = await repo.cli(['start', planId])
+    expect(st.code).toBe(0)
+    expect(st.stdout).toMatch(new RegExp(`^held: ${escapeRe(ref)} — .*witness recover puts it back$`, 'm'))
+  })
+
+  it('check warns verify-red-held for a held ref whose run is gone, and is quiet while it runs', async () => {
+    const { repo, planId, ref } = await heldWorktree('stepped')
+    const ck = await repo.cli(['check'])
+    const text = `${ck.stdout}\n${ck.stderr}`
+    expect(text).toContain('verify-red-held')
+    expect(text).toContain(ref)
+    expect(text).toContain('witness recover')
+    replantHeld(repo, planId, (m) => m.replace(/^pid: \d+$/m, `pid: ${process.ppid}`))
+    const live = await repo.cli(['check'])
+    expect(`${live.stdout}\n${live.stderr}`).not.toContain('verify-red-held')
+  })
+
+  it('check still warns about a held ref whose checkout is gone', async () => {
+    const { repo, wt, ref } = await heldWorktree('stepped')
+    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: repo.root })
+    const ck = await repo.cli(['check'])
+    const text = `${ck.stdout}\n${ck.stderr}`
+    expect(text).toContain('verify-red-held')
+    expect(text).toContain(ref)
   })
 })
