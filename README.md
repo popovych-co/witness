@@ -149,6 +149,13 @@ with `cli-behind-state` rather than answering from rules the repository has move
 release, say — lower it first with `witness floor --set <version> --note <why>`; the
 decision is journaled, and `floor` is the one verb that still runs under a bound it fails.
 
+From **0.30.1** witness's Claude Code hooks live in `.witness/hooks/`, which a repo's lint
+usually skips. `init --agent claude-code` moves them from `.claude/hooks/` at the root,
+rewires `.claude/settings.json` and writes it in your formatter's default style; your own
+hooks in `.claude/hooks/` stay where they are. A worktree started earlier keeps its old
+hooks until `witness ship` carries it onto the moved base. `witness check` warns
+`payload-linted` when your Biome config would still check witness's files.
+
 ### Support tiers
 
 | Tier | Agents | What they get |

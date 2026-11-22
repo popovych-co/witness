@@ -98,8 +98,9 @@ Each primitive is built inside the first item that needs it (§4 lists where).
 
 ### 3.1 Plan change set (PC) — T0
 
-**Definition.** The plan's diff against its base, minus every harness's payload targets (`.claude/settings.json` is
-shared and stays in).
+**Definition.** The plan's diff against its base, minus every harness's payload targets, current and retired
+(`.claude/settings.json` is shared and stays in); a rename counts as both of its paths (as built, rows 246, 248 and
+250).
 
 **Readers.** Reviewer prompts and coverage, the snapshot and the delta, red→green evidence, verify-red,
 `diffReviewedSha`, machine checks, mutation scope, attribution and proof. Today `changedFiles` (`src/evidence.ts:180`) excludes nothing, so reviewers
@@ -109,6 +110,7 @@ judged witness's hooks (2 findings and 2 coverage anchors in fewhats; 2 and 5 in
 - `init --agent` into a worktree leaves implement's reviewed sha unchanged.
 - A payload-only change produces no plan file in any reader.
 - A witness hook deleted in a worktree is named by `check`.
+- A committed rename shows both paths in every reader, and verify-red's red tree keeps the old path.
 
 ### 3.2 Check registry and the checks-only round (CR) — T2
 
@@ -367,10 +369,16 @@ The branch reworks verify-red (the held commit with a record), gate/ship/decide/
     before the process ends — best effort: SIGKILL and Windows' tree stop run no handler.
   A second verify-red refuses while one is held.
 - **#93.** PC (§3.1).
-- **#94.** `--body-file -` for every gh text.
-- **#95.** The payload hooks move under `.witness/hooks/`; both consumers already exclude `.witness` from lint, and
-  `.claude/settings.json` points at the new path. witness formats its `settings.json` writes, and `check` warns
-  statically about payload paths a repo's lint config covers.
+- **#94.** `gh pr create` reads the body from stdin (`--body-file -`, through `ghBody`); the title stays an argument
+  (as built, row 249).
+- **#95.** As built (row 250; the map's correction C6): the hooks move to `.witness/hooks/` (`PAYLOAD_HOME`), which
+  both consumers already exclude from lint, carved out of the `.witness` state dir — not state, not canon, and
+  re-included in every worktree's sparse patterns. The old `.claude/hooks/*` targets retire (`Harness.retired`, still
+  witness-owned in PC): `init` rewires `.claude/settings.json`'s two witness commands in place, writes the file in the
+  formatter's default style and removes the old files at the root; the ship gate drops them from a plan whose base and
+  own settings no longer carry them. `check` and `init` warn `payload-linted` when the root Biome config would check
+  witness's files.
+- **Renames.** A rename is both of its paths in PC and in a state-only advance (row 248).
 
 **Acceptance.**
 - A SIGTERM during the red run restores the work before the process exits.
@@ -381,6 +389,9 @@ The branch reworks verify-red (the held commit with a record), gate/ship/decide/
 - A payload-only change produces no plan file in any reader.
 - A 40,000-character body passes on Windows.
 - fewhats' `biome check` is green on payload files.
+- A committed rename shows both paths in every PC reader, and verify-red's red tree keeps the old path.
+- A worktree created after `init --agent` has the hooks, and neither `start` nor `check` raises `canon-in-worktree`.
+- Re-running `init --agent` leaves one set of witness hook entries in `.claude/settings.json`.
 
 ### T1 — Track record
 
@@ -754,4 +765,10 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   routed `test-evidence` on the reverted tree and a red was recorded there, and `start`, `recover` and `check` said
   nothing. Built as a held-ref guard in every verb that reads the plan's worktree, `recover` as the put-back `next`
   routes, and a best-effort signal trap (§4 T0 above).
+- **C6 (T0b, row 250).** The `.witness/hooks/` home this design named was invisible in worktrees: `.witness` is a state
+  dir, and every worktree's sparse checkout drops it, so a committed hook there was absent and writing it made `start`
+  refuse `canon-in-worktree`. Built as a carve-out (`PAYLOAD_HOME`) re-included in every worktree's patterns, with the
+  old home retired at the root by `init` and from plans by the ship gate (§4 T0 above).
+- **Renames (T0b, row 248).** PC followed git's rename detection, so a committed rename listed only its new path;
+  `--no-renames` lists both (the user's call of 2026-11-22, from T0a's final review).
 
