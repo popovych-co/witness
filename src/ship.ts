@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { heldGuard, heldRef, heldWorkLine, refuseHeld } from './held.js'
 import { cliAct } from './act.js'
 import { EXIT, type Ctx } from './cli.js'
 import { autonomyAt, loadConfig, type Config } from './config.js'
@@ -767,6 +768,10 @@ function commitApproved(ctx: Ctx, root: string, cfg: Config, planId: string, sum
   const clash = clashGuard(root, planId, cfg.ship.branch)
   if (clash !== undefined) return refuse(clash)
   const wt = worktreePath(root, planId)
+  // Row 247: nor over a crashed verify-red's set-aside state, which `git add -A` would commit as the plan.
+  const held = heldGuard(root, planId, wt)
+  if (!held.ok) return held
+  if (held.value !== undefined) ctx.out(heldWorkLine(heldRef(planId), held.value))
   if (tryGit(wt, 'status', '--porcelain').out !== '') {
     tryGit(wt, 'add', '-A')
     const committed = tryGit(wt, 'commit', '-m', `${planId}: ${summary}`)
@@ -910,6 +915,10 @@ async function shipMarked(
   // since a gate phase's rebase runs between.
   const clashed = refuseClash(ctx, root, planId, cfgR.value)
   if (clashed !== undefined) return clashed
+  // Row 247. Ship reads, rebases and commits the plan's tree: a crashed verify-red's held work goes
+  // back first, or ship refuses verify-red-pending, recording nothing. Asked again before each commit.
+  const held = refuseHeld(ctx, root, planId, worktreePath(root, planId))
+  if (held !== undefined) return held
   // Row 241 (R9). Whoever runs it — a drive session included — ship runs no review and carries no
   // plan on while a step is open: refused before anything journals, naming the step's command.
   const open = openStepRow(root, cfgR.value, plan)

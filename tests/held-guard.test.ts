@@ -1,10 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { planChangeSet } from '../src/change-set.js'
+import { loadConfig } from '../src/config.js'
+import { contentSha } from '../src/content-sha.js'
+import { diffBase } from '../src/evidence.js'
+import { runGate } from '../src/gate.js'
+import '../src/gates/index.js'
 import { standingHeld } from '../src/held.js'
 import { readStream } from '../src/journal.js'
+import type { GateRunEntry } from '../src/rounds.js'
+import { loadCanon } from '../src/scan.js'
 import type { TestRepo } from './helpers.js'
-import { escapeRe, fixtureEnv, heldWorktree, replantHeld, worktreeState } from './helpers.js'
+import {
+  TOKEN_FIXED, callCount, crashVerifyRed, escapeRe, fakeCtx, fakeScenario, fixtureEnv, gateEnv, heldWorktree, putVerdict,
+  replantHeld, shippableRepo, unwrap, worktreeState,
+} from './helpers.js'
+
+function treeClean(files: string[]) {
+  return {
+    coverage: files.slice(0, 5).map((f) => ({ anchor: f, note: 'read' })),
+    findings: [],
+  }
+}
 
 describe('the held-work guard (row 247, #92)', () => {
   it('test-evidence puts the held work back before its run, so no red is recorded against the base', async () => {
@@ -52,5 +70,66 @@ describe('the held-work guard (row 247, #92)', () => {
     expect(res.stderr).toContain('verify-red-pending')
     expect(res.stderr).toContain(says)
     expect(existsSync(join(wt, 'seen.txt'))).toBe(false)
+  })
+
+  // shippableRepo's plan, its work tweaked uncommitted, then a verify-red that dies with it set aside.
+  // `files` and `judged` are read before the crash: afterwards the tree holds base versions.
+  async function crashedShippable() {
+    const { repo, wt, planId } = await shippableRepo()
+    const tweaked = `${TOKEN_FIXED}// uncommitted tweak\n`
+    writeFileSync(join(wt, 'src/token.ts'), tweaked)
+    const cfg = unwrap(loadConfig(repo.root))
+    const judged = contentSha(repo.root, loadCanon(repo.root), cfg, 'implement', planId)
+    const files = planChangeSet(wt, unwrap(diffBase(wt, cfg)))
+    expect(await crashVerifyRed(wt, planId, ['--step', 's1'])).toBe(9)
+    return { repo, wt, planId, cfg, judged, files, tweaked }
+  }
+  const gateRuns = (repo: TestRepo, planId: string) =>
+    readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
+
+  it('gate implement puts the held work back before it judges, and judges the plan\'s own tree', async () => {
+    const { repo, planId, cfg, judged, files } = await crashedShippable()
+    expect(contentSha(repo.root, loadCanon(repo.root), cfg, 'implement', planId)).toBeUndefined()
+    const scenario = fakeScenario()
+    putVerdict(scenario, treeClean(files))
+    const out: string[] = []
+    const ctx = fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => out.push(l) })
+    expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(0)
+    expect(out.join('\n')).toMatch(/^held-work: /m)
+    expect(gateRuns(repo, planId).at(-1)!.reviewed_sha).toBe(judged)
+  })
+
+  it('gate implement refuses verify-red-pending when the work cannot go back: no battery, no run journaled', async () => {
+    const { repo, wt, planId } = await crashedShippable()
+    writeFileSync(join(wt, 'src/token.ts'), 'a session edit\n')
+    const runsBefore = gateRuns(repo, planId).length
+    const scenario = fakeScenario()
+    const err: string[] = []
+    expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), err: (l) => err.push(l) }), 'implement', planId,
+      { fresh: false, manual: false })).toBe(2)
+    expect(err.join('\n')).toContain('verify-red-pending')
+    expect(callCount(scenario)).toBe(0)
+    expect(gateRuns(repo, planId)).toHaveLength(runsBefore)
+  })
+
+  it('ship refuses verify-red-pending at its top and records nothing', async () => {
+    const { repo, wt, planId } = await crashedShippable()
+    writeFileSync(join(wt, 'src/token.ts'), 'a session edit\n')
+    const sha = standingHeld(repo.root, planId)!.sha
+    const res = await repo.cli(['ship', planId], { env: fixtureEnv() })
+    expect(res.code).toBe(2)
+    expect(res.stderr).toContain('verify-red-pending')
+    expect(readStream(repo.root, planId).filter((e) => e.t === 'ship-outcome')).toEqual([])
+    expect(standingHeld(repo.root, planId)!.sha).toBe(sha)
+  })
+
+  it('ship puts held work back at its top before anything else reads the tree', async () => {
+    const { repo, wt, planId, tweaked } = await crashedShippable()
+    const scenario = fakeScenario()
+    putVerdict(scenario, treeClean(['src/token.ts']))
+    const res = await repo.cli(['ship', planId, '--manual'], { env: gateEnv(scenario) })
+    expect(res.stdout).toMatch(/^held-work: /m)                 // ship's own exit depends on the phase it reaches; not asserted
+    expect(standingHeld(repo.root, planId)).toBeUndefined()
+    expect(readFileSync(join(wt, 'src/token.ts'), 'utf8')).toBe(tweaked)
   })
 })
