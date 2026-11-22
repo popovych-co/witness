@@ -206,7 +206,8 @@ describe('a reviewer ends with its turn (row 245)', () => {
 
   // The second shape answers the stop with a success envelope and exit 143: the status and the
   // stdout are what the turn ended on, read when the stop was sent. The third also read only part of
-  // its prompt: its error envelope's status (1, read at the stop) is the answer, not the broken pipe.
+  // its prompt and kept its stdin open, so its pipe breaks at the stop: its error envelope's status
+  // (1, read at the stop) is the answer, not the broken pipe.
   const ERROR_ENVELOPE = say([envelope('Invalid API key · Please run /login', true)])
   it.each([
     ['dies by SIGTERM', `cat > /dev/null\n${ERROR_ENVELOPE}\nexec sleep 60`, undefined, 'x'],
@@ -219,7 +220,6 @@ describe('a reviewer ends with its turn (row 245)', () => {
     const t = manualTicker()
     const r = track(ask(claude, f.env, { ticker: t.ticker, prompt }))
     await until('the grace', () => t.graces().length === 1)
-    await pause(300)                                   // a broken pipe is reported
     t.advance(END_GRACE_MS)
     const res = await r.p
     expect(!res.ok && res.violations.map((x) => [x.rule, x.got, x.want])).toEqual([[
@@ -302,13 +302,14 @@ describe('a reviewer ends with its turn (row 245)', () => {
   }, 20_000)
 
   // S4-2: a reviewer that answered without reading its whole prompt fails closed whether it exits 0
-  // or is stopped after its turn.
+  // or is stopped after its turn. This one closes its stdin once it has read 64 KiB, so the pipe
+  // breaks before its turn ends, not at the stop.
   it('a reviewer whose stdin closed early, and which then settles and lingers, fails closed (S4-2)', async () => {
-    const f = fake('pi', `head -c 65536 > /dev/null\n${say(piTurn(rec(VERDICT)))}\nexec sleep 60`)
+    const f = fake('pi', `head -c 65536 > /dev/null\nexec 0<&-\n${say(piTurn(rec(VERDICT)))}\nexec sleep 60`)
     const t = manualTicker()
     const r = track(ask(pi, f.env, { ticker: t.ticker, prompt: `${'x'.repeat(4 * 1024 * 1024)}\nTAIL-THE-REVIEWER-NEVER-SAW\n` }))
     await until('the grace', () => t.graces().length === 1)
-    await pause(300)                                   // the broken pipe is reported
+    await pause(300)                                   // the broken pipe is reported, before the stop
     t.advance(END_GRACE_MS)
     const res = await r.p
     expect(!res.ok && res.violations[0]!.rule).toBe('reviewer-invocation')
@@ -342,6 +343,7 @@ describe('a reviewer ends with its turn (row 245)', () => {
 
   // The interface's "pi: 0": a pi stopped after its turn reads exactly as the same pi exiting 0 by
   // itself — here an error answer to a prompt it read only part of, which fails closed either way.
+  // Both keep their stdin open: the pipe breaks at the exit, or at the stop.
   it.each([
     ['exits 0 by itself', 'exit 0', false],
     ['settles and lingers until it is stopped', 'exec sleep 60', true],
@@ -351,7 +353,6 @@ describe('a reviewer ends with its turn (row 245)', () => {
     const r = track(ask(pi, f.env, { ticker: t.ticker, prompt: 'x'.repeat(4 * 1024 * 1024) }))
     if (lingers) {
       await until('the grace', () => t.graces().length === 1)
-      await pause(300)                                 // the broken pipe is reported
       t.advance(END_GRACE_MS)
     }
     const res = await r.p
