@@ -398,4 +398,34 @@ describe('a drive session ends when its turn ends (row 245, #80)', () => {
     expect(never.end).toMatchObject({ outcome: 'exited', code: 1, ending: 'never-started' })
     expect(never.lines.at(-1)).toMatch(ENDED(`never started · stopped after ${duration(SESSION_QUIET_MS)}`))
   }, 40_000)
+
+  // S4-B, ported from the reviewer's "keeps its own exit code" (tests/reviewer-turn-end.test.ts): a
+  // session whose process exited by itself is never stopped, so its own exit code stands. After an
+  // exit drive waits up to 2 s (real) for its pipes to close, and here a child the agent left holds
+  // them past that: `setsid` puts it outside the process group drive kills at the exit. Meanwhile
+  // the grace, the deadline or the never-started window falls due. Each shape's exit comes at least
+  // 0.5 s (real) before what falls due, so a fake's start never decides it. Side by side.
+  it.skipIf(process.platform === 'win32')('a session that exits by itself keeps its own exit code while a child it left holds its pipes (S4-B)', async () => {
+    const HOLD = `perl -MPOSIX -e 'setsid(); exec "sleep", "5"' & echo "holder $!" >> "$(dirname "$0")/holder"`
+    const shapes: Array<[string, string[], { scale?: number; timeoutMs?: number }]> = [
+      // Settled; it exits 30 s awake later, and the grace falls due 30 s after that.
+      ['the grace falls due', [header, ...piTurn('Done.'), HOLD, 'sleep 0.3', 'exit 3'], {}],
+      // × 50 (1 s real is 50 s awake): settled, it exits 15 s awake later, and its deadline (50 s)
+      // falls inside the grace (60 s).
+      ['its deadline falls inside the grace', [header, ...piTurn('Done.'), HOLD, 'sleep 0.3', 'exit 3'], { scale: 50, timeoutMs: 50_000 }],
+      // No turn: it exits 15 s awake in, and its deadline falls 35 s later (before row 245, `timeout`).
+      ['its deadline falls', [header, HOLD, 'sleep 0.3', 'exit 3'], { scale: 50, timeoutMs: 50_000 }],
+      // Its header alone: it exits 3m20s awake in, and the 5 min never-started window falls due.
+      ['the never-started window falls due', [header, HOLD, 'sleep 2', 'exit 3'], {}],
+    ]
+    const fakes = shapes.map(([, body]) => fake(body))
+    for (const f of fakes) pidFiles.push(join(f.bin, '..', 'holder'))
+    const runs = await Promise.all(shapes.map(([, , o], i) => session(fakes[i]!, o)))
+    shapes.forEach(([name], i) => {
+      const { end, lines } = runs[i]!
+      expect(end, name).toMatchObject({ outcome: 'exited', code: 3, failed: false })
+      expect(end.ending, name).toBeUndefined()
+      expect(lines.at(-1), name).toMatch(/\] ended \d\d:\d\d:\d\d · exit 3 · \S+$/)
+    })
+  }, 30_000)
 })

@@ -340,8 +340,10 @@ export async function spawnSession(
     let code: number | null = null
     let settled = false
     let killTimer: NodeJS.Timeout | undefined
-    let grace: NodeJS.Timeout | undefined
+    let exitGrace: NodeJS.Timeout | undefined
     let stopSent = false
+    // The process is gone (`exit`), and drive waits at most EXIT_GRACE_MS for its pipes to close.
+    let exited = false
     // One stop per session: SIGTERM, then SIGKILL TERM_GRACE_MS later. A later stop only renames how
     // it ended, and only a lost lease's does (`stopped`, which the loop reports once, at the end).
     const stop = (o: SpawnOutcome) => {
@@ -356,9 +358,11 @@ export async function spawnSession(
     // Row 245. The end watch's stop is the timeout's (the process group, or on Windows the job
     // host's tree), and the session is `exited`. Once drive has sent a stop, neither the watch nor
     // the deadline renames it: a grace that falls due while a session ignores a lost lease's
-    // SIGTERM leaves it `stopped` (S4-4). The stream's error flag is read as the stop is sent.
+    // SIGTERM leaves it `stopped` (S4-4). The stream's error flag is read as the stop is sent. A
+    // process that already exited on its own is never stopped: its own exit code stands, though a
+    // child it left holds its pipes while the grace or the never-started window falls due (S4-B).
     const endStop = (cause: EndCause, atDeadline: boolean) => {
-      if (stopSent) return
+      if (stopSent || exited) return
       ending = { cause, atDeadline, failed: failedNow(stream) }
       stop('exited')
     }
@@ -368,7 +372,7 @@ export async function spawnSession(
       if (child.pid !== undefined) LIVE_GROUPS.delete(child.pid)
       clock.stop()
       clearTimeout(killTimer)
-      clearTimeout(grace)
+      clearTimeout(exitGrace)
       opts.signal?.removeEventListener('abort', onAbort)
       out.flush()
       err.flush()
@@ -396,10 +400,11 @@ export async function spawnSession(
       resolve({ outcome: o, code, tail: [...tail], ms, failed, ...(ended !== undefined ? { ending: ended.cause } : {}) })
     }
     // Row 245: the end signal never stops the timeout. A deadline that falls inside a grace ends the
-    // session clean, as its turn's end; one after a stop drive already sent changes nothing.
+    // session clean, as its turn's end; one after a stop drive already sent changes nothing, and
+    // neither does one after the process exited by itself: it is no timeout (S4-B).
     const clock = sessionClock(cfg.drive.sessionTimeoutMs, opts.ticker ?? monotonicTicker, {
       expire: () => {
-        if (stopSent) return
+        if (stopSent || exited) return
         if (watch.graceRunning()) endStop('turn-ended', true)
         else stop('timeout')
       },
@@ -428,6 +433,7 @@ export async function spawnSession(
     // therefore a hang with no timeout above it, which is the one failure a timeout must
     // not have. Measured here: SIGTERM to a shell whose `sleep` survived it.
     child.on('exit', (c) => {
+      exited = true
       code = c
       // What a session started goes with it, however it ended (row 218): a stopped session's
       // group dies even if the agent exited on SIGTERM before its children did, and so does the
@@ -435,7 +441,7 @@ export async function spawnSession(
       // with the host, and signalSession sends nothing to a child that has exited.
       signal('SIGKILL')
       clearTimeout(killTimer)
-      grace = setTimeout(() => settle(outcome), EXIT_GRACE_MS)
+      exitGrace = setTimeout(() => settle(outcome), EXIT_GRACE_MS)
     })
     child.on('close', () => settle(outcome))
   })
