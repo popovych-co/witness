@@ -205,6 +205,13 @@ export function heldPending(planId: string, ref: string, why: string, then: Act,
 // untouched. It never takes the repo lock: its callers hold it. The paths put back, or the refusal.
 export function putBackHeld(runRoot: string, planId: string, held: StandingHeld, base: string | undefined, then: Act): Result<string[]> {
   const { ref, sha, record } = held
+  // Slice 2 review I1: the ref must still name what the caller read. A run that waited on the lock may
+  // have read it before another put it back and set its own work aside there — writing the stale
+  // hold over that run's red tree would lose its work.
+  const now = tryGit(runRoot, 'rev-parse', '--verify', '-q', ref)
+  if (!now.ok || now.out.trim() !== sha) {
+    return refuse([heldPending(planId, ref, 'it moved while witness waited for the repo lock — another run put it back or set work aside there meanwhile', then)])
+  }
   if (record === undefined) {
     return refuse([heldPending(planId, ref,
       'it lists no files (an older witness or a hand wrote it), so witness cannot tell what in the tree is the run\'s', then)])

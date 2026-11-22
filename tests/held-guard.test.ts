@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { planChangeSet } from '../src/change-set.js'
 import { loadConfig } from '../src/config.js'
 import { contentSha } from '../src/content-sha.js'
-import { diffBase } from '../src/evidence.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { standingHeld } from '../src/held.js'
+import { cliAct } from '../src/act.js'
+import { checkoutRoot, diffBase } from '../src/evidence.js'
+import { putBackHeld, standingHeld } from '../src/held.js'
 import { readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
@@ -131,5 +132,20 @@ describe('the held-work guard (row 247, #92)', () => {
     expect(res.stdout).toMatch(/^held-work: /m)                 // ship's own exit depends on the phase it reaches; not asserted
     expect(standingHeld(repo.root, planId)).toBeUndefined()
     expect(readFileSync(join(wt, 'src/token.ts'), 'utf8')).toBe(tweaked)
+  })
+
+  // Slice 2 review I1: a put-back reads the held ref, then waits on the repo lock; meanwhile another run
+  // put it back and set its own work aside under the same ref. The stale read must write nothing.
+  it('a put-back whose held ref moved since it was read writes nothing and refuses', async () => {
+    const { repo, wt, planId } = await heldWorktree('stepped')
+    const stale = standingHeld(repo.root, planId)!
+    const moved = replantHeld(repo, planId, (m) => `${m}note: another run's hold\n`)
+    expect(moved).not.toBe(stale.sha)
+    const laidOut = worktreeState(repo, wt, ['src/token.ts', 'src/extra.ts'])      // the red's tree, as the crash left it
+    const r = putBackHeld(unwrap(checkoutRoot(wt)), planId, stale, undefined, cliAct('next'))
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).toContain('verify-red-pending')
+    expect(worktreeState(repo, wt, ['src/token.ts', 'src/extra.ts'])).toEqual(laidOut)
+    expect(standingHeld(repo.root, planId)!.sha).toBe(moved)
   })
 })

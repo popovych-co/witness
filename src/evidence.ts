@@ -205,18 +205,18 @@ export async function verifyRed(
   // every verb that reads the plan's tree shares.
   const held = heldRef(planId)
   const again = cliAct('verify-red', planId, ...(step !== undefined ? ['--step', step] : []))
-  const standing = standingHeld(runRoot, planId)
-  if (standing !== undefined) {
+  if (standingHeld(runRoot, planId) !== undefined) {
     const lock = acquireLock(stateRoot)
     if (!lock.ok) return lock
-    let back: Result<string[]>
+    let back: Result<string[]> | undefined
     try {
-      back = putBackHeld(runRoot, planId, standing, base, again)
+      const standing = standingHeld(runRoot, planId)          // re-read under the lock (slice 2 review I1)
+      if (standing !== undefined) back = putBackHeld(runRoot, planId, standing, base, again)
     } finally {
       lock.value()
     }
-    if (!back.ok) return back
-    ctx.out(heldWorkLine(held, back.value))
+    if (back !== undefined && !back.ok) return back
+    if (back !== undefined) ctx.out(heldWorkLine(held, back.value))
   }
   const files = planChangeSet(runRoot, base)
   if (!files.some(isTestPath)) {
