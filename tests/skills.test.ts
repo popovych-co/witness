@@ -573,3 +573,12 @@ describe('a capture names the test that took it (row 251)', () => {
     expect(text).toContain('expect.getState().currentTestName')
   })
 })
+
+describe("the grill asks a fix's cause (row 253)", () => {
+  it("asks a fix's cause in plain words and carries it in the recap", () => {
+    const text = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    expect(text).toContain('slip past something that should have caught it')
+    expect(text).toContain('"cause": "escape"')
+    expect(text).toContain('recap --effort <slug> --cause')
+  })
+})

@@ -62,6 +62,7 @@ DIR=$(mktemp -d)
 - **The floor.** The recap's fields are **the floor, not the count**: keep asking while any open branch would change what gets built. A recap that would surprise its reviewer is under-asked.
 - **The order, by dependency:** the problem and who has it → scope edges → behavior, including edge cases and failures → data and approach → rollout and compatibility. Skip branches the repo already answers.
 - **Class** — `feature | fix | chore` — is inferred: `fix` restores promised behavior; `chore` is motion with no state change (deps, tooling); everything else is `feature`. It shows in the playback, and you ask only when it is unclear.
+- **A fix's cause** — `escape | decision` — goes beside its class. Ask it in plain words, opening with what happened: "Did this slip past something that should have caught it, or did you decide it should work differently?" — `escape` for the first, `decision` for the second, your pick first with its reason. Only a fix carries one: witness refuses a fix recap without it and a feature or chore recap with it. The track record counts escapes per shipped plan; it never feeds a gate.
 - **No short forms.** A fix's or a chore's tree is small, so its grill ends fast; it is still walked whole.
 - **Out of bounds:** the look (that is the design session) and the order of steps (that is the plan).
 
@@ -94,7 +95,7 @@ The CLI checks the draft's shape, never its completeness. A `draft-moved` refusa
 ## The end
 
 1. Once no open branch would change what gets built, run **one critique pass** over the whole set from the human's seat — what goes stale, what they meet on upgrade, which outside readers break — and probe every finding.
-2. Then the **playback** table: class · goals · non-goals · constraints · decisions · slices.
+2. Then the **playback** table: class (and a fix's cause) · goals · non-goals · constraints · decisions · slices.
 3. Then an explicit yes. Adjust and re-render until confirmed: the recap is decompose's input contract, and a fuzzy recap poisons every stage after it.
 
 ## Persist
@@ -115,7 +116,9 @@ $WITNESS recap --file "$DIR/recap.json" --ask <id>
 ```
 
 - `--ask <id>` names the ask the recap answers, and `next` stops offering it.
-- **An amendment** runs `$WITNESS recap --amend --file "$DIR/recap.json"`, the recap naming its effort. It re-arms the decompose gate's feature-class stop: scope changed, scope gets re-approved.
+- A fix adds `"cause": "escape"` or `"cause": "decision"` beside `"class": "fix"`.
+- **An amendment** runs `$WITNESS recap --amend --file "$DIR/recap.json"`, the recap naming its effort, and keeps the fix's cause unless the file names another. It re-arms the decompose gate's feature-class stop: scope changed, scope gets re-approved.
+- A fix that predates causes is listed by `witness status` under `cause-owed`; the human classifies it in their own chat or terminal: `$WITNESS recap --effort <slug> --cause escape|decision`.
 - **A confirmed recap deletes the draft.** Nothing is left to resume.
 - Effort slug: kebab-case `[a-z0-9][a-z0-9-]*`, minted from the scope title. A `slug-reuse` refusal means that history exists — mint a different slug; histories never merge, and `--amend` is never the dodge.
 - The refusal repair loop applies (3 attempts, then stop with the violation list).
