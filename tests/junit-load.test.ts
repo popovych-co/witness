@@ -47,3 +47,25 @@ describe('junit load failures (row 258)', () => {
     expect(loadFailures(parseJUnit('<testsuite><testcase classname="a" name="ok"/></testsuite>'))).toEqual([])
   })
 })
+
+describe('junit load failures — other producers (row 258, slice 1 review)', () => {
+  // jest-junit 16's defaults: classname and name are both '{classname} {title}', the suite is named
+  // after the top describe (`{title}`) — every testcase's name equals its classname.
+  it('a jest-junit red is a red, never a load failure', () => {
+    const xml = `<testsuites name="jest tests"><testsuite name="math" tests="2" failures="1">
+      <testcase classname="math adds" name="math adds" time="0.002"><failure>Error: expect(received).toBe(expected)</failure></testcase>
+      <testcase classname="math subtracts" name="math subtracts" time="0.001"></testcase>
+    </testsuite></testsuites>`
+    expect(parseJUnit(xml)).toEqual([
+      { name: 'math adds', classname: 'math adds', status: 'failed' },
+      { name: 'math subtracts', classname: 'math subtracts', status: 'passed' },
+    ])
+    expect(loadFailures(parseJUnit(xml))).toEqual([])
+  })
+
+  it('vitest\'s file-level case is one named after its file inside the suite named after that file', () => {
+    const xml = '<testsuites><testsuite name="other.test.ts"><testcase classname="x.test.ts" name="x.test.ts"><failure/></testcase></testsuite>'
+      + '<testsuite name="y.test.ts"><testcase classname="y.test.ts" name="y.test.ts"><failure/></testcase></testsuite></testsuites>'
+    expect(loadFailures(parseJUnit(xml))).toEqual(['y.test.ts'])
+  })
+})

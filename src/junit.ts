@@ -32,13 +32,24 @@ function attrs(tag: string): Record<string, string> {
 }
 
 // Row 258, the load rule. A load failure is a testcase holding an <error> element, or a failed one
-// whose name equals its classname. The second rule is vitest's: 4.1.10 (both consumers' runner)
-// never writes <error> — a missing import, a syntax error, a module that throws at import and a
-// beforeAll that throws each write <failure> on a synthetic testcase named after its file
-// (probe t2b-junit-vitest-4.1.10.xml beside the impl map), while a failed test is named for itself.
+// whose name equals its classname and the name of the suite it sits in. The second rule is vitest's:
+// 4.1.10 (both consumers' runner) never writes <error> — a missing import, a syntax error, a module
+// that throws at import and a beforeAll that throws each write <failure> on a synthetic testcase
+// named after its file, in the suite named after that file (probe t2b-junit-vitest-4.1.10.xml
+// beside the impl map), while a failed test is named for itself. The suite's name is what keeps
+// jest-junit out (slice 1 review): its defaults name every case '{classname} {title}' twice over,
+// inside a suite named after the top describe.
 export function parseJUnit(xml: string): TestOutcome[] {
   const clean = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '').replace(/<!--[\s\S]*?-->/g, '')
   const out: TestOutcome[] = []
+  // Each <testsuite> opening (never <testsuites>), in document order: a case's suite is the last
+  // one opened before it.
+  const suites = [...clean.matchAll(/<testsuite\b([^>]*?)\/?>/g)].map((s) => ({ at: s.index, name: attrs(s[1] ?? '').name }))
+  let si = -1
+  const suiteOf = (at: number): string | undefined => {    // called with `at` rising: one pass
+    while (si + 1 < suites.length && suites[si + 1]!.at < at) si++
+    return si >= 0 ? suites[si]!.name : undefined
+  }
   const re = /<testcase\b([^>]*?)(\/)?>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(clean)) !== null) {
@@ -54,7 +65,7 @@ export function parseJUnit(xml: string): TestOutcome[] {
       const failure = /<failure\b/.test(inner)
       if (error || failure) {
         status = 'failed'
-        load = error || name === classname
+        load = error || (name === classname && suiteOf(m.index) === classname)
       } else if (/<skipped\b/.test(inner)) status = 'skipped'
       if (end !== -1) re.lastIndex = end + '</testcase>'.length
     }

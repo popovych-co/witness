@@ -23,8 +23,12 @@ export const scratchPath = (root: string): string => join(root, SCRATCH_DIR)
 const REMOVE = 'remove .witness/scratch — witness makes it again'
 const unusable = (got: string) => refuse<never>([v(SCRATCH_DIR, 'scratch-unusable', got, REMOVE)])
 
-const lastLine = (text: string): string =>
-  visible(text.split('\n').map((l) => l.trim()).filter((l) => l !== '').at(-1) ?? 'git failed').slice(0, 200)
+// git's reason: its last `fatal:` or `error:` line, else its last line — a trailing hint ("remove
+// the file manually to continue.") never names what failed (slice 1 review).
+const lastLine = (text: string): string => {
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+  return visible(lines.filter((l) => /^(fatal|error):/.test(l)).at(-1) ?? lines.at(-1) ?? 'git failed').slice(0, 200)
+}
 
 const real = (p: string): string | undefined => {
   try { return realpathSync(p) } catch { return undefined }
@@ -42,23 +46,30 @@ function isOurWorktree(root: string, path: string): boolean {
 }
 
 // The scratch's path, made when missing. A link or anything but its own worktree in its place
-// refuses with the remedy, so witness never runs in a folder that is not the scratch.
+// refuses with the remedy, so witness never runs in a folder that is not the scratch. Both arms set
+// the scratch up (row 132's "applied and verified on both arms"): an existing scratch may have been
+// made half-way (a run killed after `worktree add`), left registered by a refusal, or made before
+// the canon patterns changed (slice 1 review).
 export function openScratch(root: string): Result<string> {
   const path = scratchPath(root)
+  let exists = true
   try {
     const st = lstatSync(path)
     if (st.isSymbolicLink()) return unusable('a link')
     if (!st.isDirectory()) return unusable('not a folder')
-    return isOurWorktree(root, path) ? ok(path) : unusable("a folder that is not witness's scratch worktree")
+    if (!isOurWorktree(root, path)) return unusable("a folder that is not witness's scratch worktree")
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return unusable((e as NodeJS.ErrnoException).code ?? String(e))
+    exists = false
   }
   ensureExcluded(root)
-  // A scratch removed by hand leaves its registration behind, which `worktree add` refuses.
-  tryGit(root, 'worktree', 'prune')
-  mkdirSync(dirname(path), { recursive: true })
-  const add = tryGit(root, 'worktree', 'add', '--no-checkout', '--detach', path, 'HEAD')
-  if (!add.ok) return refuse([v(SCRATCH_DIR, 'scratch-create-failed', lastLine(add.out), 'git worktree add to succeed')])
+  if (!exists) {
+    // A scratch removed by hand leaves its registration behind, which `worktree add` refuses.
+    tryGit(root, 'worktree', 'prune')
+    mkdirSync(dirname(path), { recursive: true })
+    const add = tryGit(root, 'worktree', 'add', '--no-checkout', '--detach', path, 'HEAD')
+    if (!add.ok) return refuse([v(SCRATCH_DIR, 'scratch-create-failed', lastLine(add.out), 'git worktree add to succeed')])
+  }
   const ex = excludeCanon(root, path)
   if (!ex.ok) return refuse(ex.violations)
   // excludeCanon turned extensions.worktreeConfig on, so this setting is the scratch's alone.
@@ -71,7 +82,15 @@ export function openScratch(root: string): Result<string> {
 
 // The scratch at `commit`, clean: everything untracked or ignored goes but `node_modules` and
 // `target` at any depth (the prepared install and cargo's build cache survive a reset).
+//
+// A reset killed mid-checkout (drive stopping a job at its box) leaves the scratch's index.lock, and
+// git refuses every later checkout until it goes. Under the scratch lock no other witness process
+// runs git here, so a leftover is removed first; one that cannot be removed refuses with its path.
 export function resetScratch(dir: string, commit: string): Result<void> {
+  const gitDir = tryGit(dir, 'rev-parse', '--path-format=absolute', '--git-dir')
+  if (gitDir.ok) {
+    try { rmSync(join(gitDir.out, 'index.lock'), { force: true }) } catch { /* git names it below */ }
+  }
   const co = tryGit(dir, 'checkout', '--quiet', '--force', '--detach', commit)
   if (!co.ok) return refuse([v(SCRATCH_DIR, 'scratch-reset', lastLine(co.out), `a clean checkout of ${visible(commit)}`)])
   const cl = tryGit(dir, 'clean', '-ffdxq', '-e', 'node_modules', '-e', 'target')

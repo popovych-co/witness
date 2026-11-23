@@ -105,3 +105,49 @@ describe('the scratch (row 258)', () => {
     expect((await repo.cli(['check'])).stdout).not.toMatch(/stray-worktree|canon-in-worktree|hand-edit-in-progress/)
   })
 })
+
+describe('the scratch — slice 1 review (row 258)', () => {
+  it('an existing scratch is set up again each time it is opened: canon hidden, its reflog off (I1)', async () => {
+    const repo = await seededRepo()
+    const dir = value(openScratch(repo.root))
+    // a scratch made half-way, or before the patterns changed: no sparse checkout, its reflog on
+    git(dir, 'config', '--worktree', '--unset', 'core.logAllRefUpdates')
+    git(dir, 'config', '--worktree', 'core.sparseCheckout', 'false')
+    value(resetScratch(dir, repo.git('rev-parse', 'HEAD')))
+    expect(existsSync(join(dir, 'specs'))).toBe(true)
+    expect(value(openScratch(repo.root))).toBe(dir)
+    value(resetScratch(dir, repo.git('rev-parse', 'HEAD')))
+    expect(existsSync(join(dir, 'specs'))).toBe(false)
+    expect(git(dir, 'config', '--worktree', 'core.logAllRefUpdates').stdout.trim()).toBe('false')
+  })
+
+  it('a reset killed mid-checkout leaves no index.lock behind it; one that cannot be cleared names its path (I4)', async () => {
+    const repo = await seededRepo()
+    const dir = value(openScratch(repo.root))
+    const head = repo.git('rev-parse', 'HEAD')
+    value(resetScratch(dir, head))
+    const lock = join(git(dir, 'rev-parse', '--path-format=absolute', '--git-dir').stdout.trim(), 'index.lock')
+    writeFileSync(lock, '')
+    expect(rule(resetScratch(dir, head))).toBe('ok')
+    mkdirSync(join(lock, 'held'), { recursive: true })
+    const r = resetScratch(dir, head)
+    expect(rule(r)).toBe('scratch-reset')
+    expect(r.ok ? '' : r.violations[0]!.got).toMatch(/^fatal: .*index\.lock/)
+    rmSync(lock, { recursive: true })
+  })
+
+  it('a leftover lock naming this process is no hold it took: taken with a fresh lease, and no lock-order throw (I2)', () => {
+    const repo = tmpRepo()
+    const ctx = fakeCtx(repo.root)
+    const leaseOf = () => (JSON.parse(readFileSync(join(repo.root, SCRATCH_LOCK), 'utf8')) as { since: number; until: number })
+    for (const until of [Date.now() - 1_000, Date.now() + 60_000]) {
+      lockAt(repo.root, { pid: process.pid, since: Date.now() - 5_000, until })
+      expect(withRunnerTurn(repo.root, ctx, 'x', () => 1)).toBe(1)
+      const t0 = Date.now()
+      const lease = value(withScratch(repo.root, ctx, 60_000, () => ok(leaseOf())))
+      expect(lease.since).toBeGreaterThanOrEqual(t0)
+      expect(lease.until).toBe(lease.since + 60_000)
+      expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
+    }
+  })
+})
