@@ -73,7 +73,7 @@ export interface Retired { path: string; until: number; shape: Shape; instead: s
 // Row 262. The tools whose report witness reads per diagnostic, and the report each reader prints.
 export const READER_TOOLS = ['biome', 'eslint', 'clippy', 'tsc'] as const
 export type ReaderTool = (typeof READER_TOOLS)[number]
-const READER_FORMATS: Readonly<Record<ReaderTool, string>> = {
+export const READER_FORMATS: Readonly<Record<ReaderTool, string>> = {
   biome: "biome's SARIF report (--reporter=sarif)",
   eslint: "ESLint's JSON report (-f json)",
   clippy: "cargo's JSON messages (--message-format=json)",
