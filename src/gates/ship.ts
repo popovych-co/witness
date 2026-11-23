@@ -10,7 +10,8 @@ import { findById } from '../scan.js'
 import { diffBase } from '../evidence.js'
 import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
-import { execCommand } from '../runner.js'
+import { execCommand, runnerConfig, runSuite } from '../runner.js'
+import { junitSummary, type JunitSummary, type TestOutcome } from '../junit.js'
 import { ensureTrusted } from '../allowlist.js'
 import { diffReviewedSha, effortOf } from '../reviewed.js'
 import { refreshSparse, worktreePath } from '../worktree.js'
@@ -97,12 +98,34 @@ registerGate({
             : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` }
     }))
 
-    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'tests', cfg.ship.test)))
+    // Row 252. In full-suite mode the tests lane IS the suite run the criteria lane reads, so the
+    // suite runs once. Filtered mode keeps the plain command lane.
+    const rcR = runnerConfig(cfg)
+    const rc = rcR.ok && rcR.value.mode === 'full-suite' ? rcR.value : undefined
+    let suite: TestOutcome[] | undefined
+    checks.push(await timedCheck(async () => {
+      if (rc === undefined) return commandLane(wt, root, ctx, 'tests', cfg.ship.test)
+      const cmd = rc.suiteCmd
+      const r = await runSuite(wt, ctx, rc, root)
+      if (!r.ok) {
+        // the trust stop reads `untrusted` (row 205); an interrupted run says so (row 247)
+        const trust = r.violations.find((x) => x.rule.startsWith('untrusted-'))
+        return trust !== undefined
+          ? { name: 'tests', ok: false, detail: `${cmd}: ${trust.rule.slice('untrusted-'.length)}`, untrusted: [cmd] }
+          : { name: 'tests', ok: false, detail: r.violations.map((x) => `${x.rule}: ${x.got}`).join(' · ') }
+      }
+      if (r.value.tests.ok) suite = r.value.tests.value
+      const { run } = r.value
+      return { name: 'tests', ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
+    }))
     checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'lint', cfg.ship.lint)))
 
-    // deterministic drift lane: spec content from MAIN, execution in the worktree; `repin` reads it below
+    // deterministic drift lane: spec content from MAIN, execution in the worktree; `repin` reads it below.
+    // Handed the tests lane's parsed report (row 252); with none — the suite was untrusted, ended by a
+    // signal, or left no report — the lane runs as before, and re-running reports the same reason.
     let lane!: Awaited<ReturnType<typeof runCriteria>>
-    checks.push(await timedCheck(async () => laneCheck(lane = await runCriteria(wt, ctx, parent, { trustRoot: root }))))
+    checks.push(await timedCheck(async () => laneCheck(lane = await runCriteria(wt, ctx, parent,
+      { trustRoot: root, ...(suite !== undefined ? { suite } : {}) }))))
 
     const pin = String(plan.meta['derives-from'])
     const repin = lane.ok && lane.value.ok && pin !== lane.value.sha
@@ -113,6 +136,9 @@ registerGate({
     const recap = effort ? latestRecap(root, effort) : undefined
     const tree = snapshotTree(wt, base, files)
     const context = contextDigest(base, canonicalSha(parent.meta, parent.body), planContentSha(plan.meta, plan.body))
+    // Row 251. That one run's counts, on the tree this gate reviewed (T3 reads it).
+    const junit: JunitSummary | undefined = suite === undefined ? undefined
+      : junitSummary(suite, canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)), tree)
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
@@ -124,6 +150,7 @@ registerGate({
       promptBody: codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
       checks,
+      ...(junit !== undefined ? { junit } : {}),
       // Row 174: under autonomy the stop still stands — the arbiter is who answers it.
       standingStop: cfg.autonomy
         ? 'ship always stops — the arbiter judges every PR against the recap'

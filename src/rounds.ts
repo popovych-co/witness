@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
+import type { JunitSummary } from './junit.js'
 import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
@@ -86,6 +87,8 @@ export interface GateRunEntry {
   // asked the same question about the same bytes.
   carried?: { run: string; lenses: string[] }
   checks: GateCheck[]
+  // Row 251. Ship's suite run in full-suite mode, counted whole and per spec, with the reviewed tree.
+  junit?: JunitSummary
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
   outcome: 'passed' | 'stopped' | 'malformed'

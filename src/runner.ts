@@ -135,9 +135,13 @@ export async function runFiltered(
   return ok(execCommand(runRoot, ctx, template.replaceAll('{id}', specId)))
 }
 
-export async function runFullSuite(
+// Row 252. One suite run and its report's parse, held apart: ship's tests lane reads the run and
+// hands the parse to the criteria lane, so a full-suite ship runs its suite once. Refuses before
+// running when the command is untrusted, and after it when a signal ended it (row 247); a report
+// that does not parse is the `tests` refusal inside, beside the run that left it.
+export async function runSuite(
   runRoot: string, ctx: Ctx, rc: Extract<RunnerConfig, { mode: 'full-suite' }>, trustRoot = runRoot,
-): Promise<Result<{ run: RunOutcome; tests: TestOutcome[] }>> {
+): Promise<Result<{ run: RunOutcome; tests: Result<TestOutcome[]> }>> {
   const trust = await ensureTrusted(trustRoot, ctx, rc.suiteCmd)
   if (trust !== 'trusted') {
     return refuse([v('ship.test', `untrusted-${trust}`, rc.suiteCmd,
@@ -147,7 +151,14 @@ export async function runFullSuite(
   const run = execCommand(runRoot, ctx, rc.suiteCmd)
   // Row 247: a killed suite's report is never read — whatever it holds is a run cut short.
   if (run.signal !== undefined) return refuse([interrupted(run.signal)])
-  const merged = mergeReports(runRoot, rc.reportGlob)
-  if (!merged.ok) return merged
-  return ok({ run, tests: merged.value })
+  return ok({ run, tests: mergeReports(runRoot, rc.reportGlob) })
+}
+
+export async function runFullSuite(
+  runRoot: string, ctx: Ctx, rc: Extract<RunnerConfig, { mode: 'full-suite' }>, trustRoot = runRoot,
+): Promise<Result<{ run: RunOutcome; tests: TestOutcome[] }>> {
+  const r = await runSuite(runRoot, ctx, rc, trustRoot)
+  if (!r.ok) return r
+  if (!r.value.tests.ok) return r.value.tests
+  return ok({ run: r.value.run, tests: r.value.tests.value })
 }
