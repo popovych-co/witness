@@ -166,6 +166,24 @@ describe('the escapes fold (row 254)', () => {
     expect(fold(repo).fixes).toEqual([{ effort: 'turned-fix', cause: 'escape', uncharged: 'nothing-shipped-before' }])
   })
 
+  // Slice 3 review M1. An escape whose writes name no spec in canon — recapped but not yet decomposed,
+  // or its spec renamed since — has nothing to charge against, which is not "nothing shipped before".
+  it('an escape that names no spec in canon is uncharged as having no amended spec', async () => {
+    const repo = await base()
+    await shipPlan(repo, 'auth-refresh-plan-1', 'auth-refresh')
+    await recapFix(repo, 'not-yet-decomposed', 'escape')
+    expect(fold(repo).fixes).toEqual([{ effort: 'not-yet-decomposed', cause: 'escape', uncharged: 'no-amended-spec' }])
+  })
+
+  it('an escape whose spec was renamed since is uncharged as having no amended spec', async () => {
+    const repo = await base()
+    await shipPlan(repo, 'auth-refresh-plan-1', 'auth-refresh')
+    await recapFix(repo, 'rotation-race', 'escape')
+    await amend(repo, 'rotation-race', 'auth-refresh')
+    must(await repo.cli(['rename', 'auth-refresh', 'auth-session']))
+    expect(fold(repo).fixes).toEqual([{ effort: 'rotation-race', cause: 'escape', uncharged: 'no-amended-spec' }])
+  })
+
   it("fewhats' shape: three fixes split escape and decision", async () => {
     const repo = await base(['signin-email-code', 'laptop-pairing', 'instagram-channel'])
     await shipPlan(repo, 'signin-email-code-plan-1', 'signin-email-code', { version: '0.14.4' })

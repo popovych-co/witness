@@ -6,7 +6,7 @@ import { driveReport, runStart } from '../src/drive-report.js'
 import { stateCommit } from '../src/gitio.js'
 import { appendEntry, journalRel, type FixCause } from '../src/journal.js'
 import * as models from '../src/models.js'
-import { record } from '../src/record.js'
+import { record, recordTables, type TrackRecord } from '../src/record.js'
 import { loadCanon } from '../src/scan.js'
 import { PLAN_BODY, RECAP, SPEC_BODY, approve, fakeCtx, seededRepo, writePlan, writeSpec, type CliResult, type TestRepo } from './helpers.js'
 
@@ -108,6 +108,14 @@ describe('the record on status and in drive (row 254)', () => {
     expect(r.stdout).toContain('record: escapes 1 of 0 shipped plans (approximate) · decisions 0 · 2 fixes need a cause · live specs failing 1 · could not verify 0 of 1')
     expect(r.stdout).toContain('  early-fix,escape,none (nothing shipped before),—,—')
     expect(r.stdout).toContain('cause-owed: old-a · old-b')
+  })
+
+  it('an escape with no amended spec reads so in its charged cell', () => {
+    const r: TrackRecord = {
+      escapes: { measured: true, fixes: [{ effort: 'x-fix', cause: 'escape', uncharged: 'no-amended-spec' }], escapes: 1, decisions: 0, plans: 0, byVersion: [] },
+      live: { measured: false, specs: 0, failing: [], couldNotVerify: [], unconfirmed: [] }, checks: { measured: false }, repairs: { measured: false },
+    }
+    expect(recordTables(r)).toContain('  x-fix,escape,none (no amended spec),—,—')
   })
 
   it("drive's report carries the record line after the decisions line", async () => {

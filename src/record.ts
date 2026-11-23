@@ -11,11 +11,13 @@ import { kv, rows } from './toon.js'
 
 // One live fix effort. An escape the clock could charge carries `charged`; one it could not, the
 // reason; a decision or a fix with no cause carries neither (decisions are never charged).
+// `no-amended-spec`: its writes name no spec in canon — recapped but not yet decomposed, or its spec
+// renamed since — so there is nothing to charge against (slice 3 review M1).
 export interface FixRow {
   effort: string
   cause?: FixCause
   charged?: { plan: string; version: string; age: number }
-  uncharged?: 'nothing-shipped-before' | 'order-unknown'
+  uncharged?: 'nothing-shipped-before' | 'order-unknown' | 'no-amended-spec'
 }
 export interface VersionRow { version: string; escapes: number; plans: number }
 export interface EscapesFold {
@@ -59,8 +61,10 @@ function shippedPlans(root: string, canon: Canon, efforts: readonly Effort[]): S
 // Approximate by design: the last non-chore plan of a spec the fix amended that shipped before the fix
 // was born. Charged only when the clock places every candidate — one it cannot place may have shipped
 // after the plan that would be charged (review focus 1: never charged to a wrong plan).
-function charge(fix: Effort, plans: readonly ShippedPlan[], clock: MergeClock | undefined): Pick<FixRow, 'charged' | 'uncharged'> {
-  const amended = new Set(fix.entries.filter((x) => x.t === 'write').map((x) => String(x.artifact)))
+function charge(fix: Effort, plans: readonly ShippedPlan[], specs: ReadonlySet<string>,
+  clock: MergeClock | undefined): Pick<FixRow, 'charged' | 'uncharged'> {
+  const amended = new Set(fix.entries.filter((x) => x.t === 'write').map((x) => String(x.artifact)).filter((id) => specs.has(id)))
+  if (amended.size === 0) return { uncharged: 'no-amended-spec' }
   const candidates = plans.filter((p) => amended.has(p.parent))
   const birth = clock?.born.get(fix.slug)
   if (clock === undefined || birth === undefined || candidates.some((p) => !clock.merged.has(p.id))) {
@@ -88,6 +92,7 @@ export function escapesFold(root: string, canon: Canon): EscapesFold {
     return { slug, entries, cls: entries.filter((e): e is RecapEntry => e.t === 'recap').at(-1)?.class, abandoned: effortAbandoned(entries) }
   })
   const plans = shippedPlans(root, canon, efforts)
+  const specs = new Set(canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)))
   const live = efforts.filter((e) => e.cls === 'fix' && !e.abandoned).sort((a, b) => a.slug.localeCompare(b.slug))
   // The clock is one `git log`, read only when an escape needs it.
   let clock: MergeClock | undefined
@@ -96,7 +101,7 @@ export function escapesFold(root: string, canon: Canon): EscapesFold {
     const cause = effortCause(e.entries)
     if (cause !== 'escape') return { effort: e.slug, ...(cause !== undefined ? { cause } : {}) }
     if (!clockRead) { clock = mergeClock(root); clockRead = true }
-    return { effort: e.slug, cause, ...charge(e, plans, clock) }
+    return { effort: e.slug, cause, ...charge(e, plans, specs, clock) }
   })
   const versions = new Map<string, VersionRow>()
   const row = (version: string) => versions.get(version) ?? versions.set(version, { version, escapes: 0, plans: 0 }).get(version)!
@@ -197,6 +202,7 @@ const chargedCell = (f: FixRow) =>
   f.charged ? f.charged.plan
   : f.uncharged === 'nothing-shipped-before' ? 'none (nothing shipped before)'
   : f.uncharged === 'order-unknown' ? 'none (order unknown)'
+  : f.uncharged === 'no-amended-spec' ? 'none (no amended spec)'
   : '—'
 const ageCell = (f: FixRow) => (f.charged ? (f.charged.age === 1 ? '1 merge' : `${f.charged.age} merges`) : '—')
 
