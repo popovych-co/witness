@@ -9,14 +9,16 @@ import { driveLoop } from '../src/drive.js'
 import { startJob } from '../src/drive-jobs.js'
 import { JOB_STREAM, jobReading, journalShard, type JobShardEntry } from '../src/jobs.js'
 import { appendEntry, readStream } from '../src/journal.js'
+import { grantCommands } from '../src/allowlist.js'
 import { TURN_DIR, runnerLockPath } from '../src/runner-lock.js'
 import { SCRATCH_LOCK } from '../src/scratch-lock.js'
 import { loadCanon } from '../src/scan.js'
 import type { Ticker } from '../src/session-clock.js'
 import {
-  approve, autonomyOn, fakeCtx, fakeScenario, fixtureEnv, noopOpener, patchConfig, seededRepo, writeLocalConfig,
+  approve, autonomyOn, fakeCtx, fakeLint, fakeScenario, fixtureEnv, noopOpener, patchConfig, seededRepo, writeLocalConfig,
   writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
+import { baseLintKey } from '../src/base-lint.js'
 
 // Row 257 (spec §3.5). Drive runs jobs one shard at a time beside its sessions, boxes each from the
 // child's own "running" line, and journals what the shard ended on.
@@ -293,4 +295,27 @@ describe('job trust — final review (row 260)', () => {
     await run()
     expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done'])
   }, 120_000)
+})
+
+describe('the base lint in drive (row 263)', () => {
+  it('drive runs the base lint a gate left pending, with the config as it stands at the job (row 263)', async () => {
+    const repo = await startedFlows(['a'])
+    const stale = cfgOf(repo.root)
+    const cmd = fakeLint(repo)
+    patchConfig(repo, { ship: { lint: { biome: cmd.check } }, readers: { biome: cmd.sarif } })
+    repo.write('src/old.ts', 'BAD\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part and its reader')
+    const fresh = cfgOf(repo.root)
+    const key = baseLintKey(fresh.ship.lint![0]!, cmd.sarif, repo.git('rev-parse', 'HEAD'))
+    // a whole ship round, as tests/drive-busy.test.ts writes one: settle reads its fields
+    appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'ship', artifact: 'a-plan-1', round: 1, run_id: 'rs1',
+      reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped',
+      checks: [{ name: 'lint', ok: false, parts: [{ part: 'biome', state: 'pending', key }] }] })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'the ship round')   // a journal entry is committed state
+    grantCommands(repo.root, [cmd.check, cmd.sarif])
+    const out: string[] = []
+    await driveLoop(repo.root, stale, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out), { maxSpawns: 1 })
+    expect(shards(repo.root).filter((s) => s.kind === 'base-lint')).toEqual([expect.objectContaining({ key, outcome: 'done', result: expect.objectContaining({ exit: 1 }) })])
+    expect(out.some((l) => l.startsWith('drive: jobs wait for a trust grant'))).toBe(false)
+  }, 180_000)
 })

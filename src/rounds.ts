@@ -15,6 +15,22 @@ import type { CoverageItem, Finding } from './verdict.js'
 // name, ok, untrusted and held only, and no renderer prints it. Absent on every check before 251.
 export interface GateCheck {
   name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[]; duration_ms?: number
+  // Row 263. The lint check's verdict per part; never in an identity (`checkOk` reads name, ok,
+  // blocked and held).
+  parts?: PartVerdict[]
+}
+
+// Row 263 (§3.2 base-red). A lint part's verdict: `green` (exit 0) · `untrusted` (its command, or its
+// reader when needed) · `red` (the base is green: the plan's red) · `pending` (drive lints the base)
+// · `not-measured` (the base's result is missing and nothing will run it, or it is malformed) ·
+// `not-judged` (red on the base too, with no reader, or a report either side could not read) ·
+// `new` (red on the base too; diagnostics the base lacks) · `base-only` (red on the base too;
+// nothing new). Only `green` and `base-only` pass.
+export type PartState = 'green' | 'untrusted' | 'red' | 'pending' | 'not-measured' | 'not-judged' | 'new' | 'base-only'
+// `key` on every state that read the base's result; `new`, `base` and `rules` (once each, sorted, at
+// most 20) on `new`; `base` on `base-only`; `why` (witness's own words) on not-measured and not-judged.
+export interface PartVerdict {
+  part: string; state: PartState; key?: string; new?: number; base?: number; rules?: string[]; why?: string
 }
 
 // Row 251. One check, timed over its whole run — the inputs only it reads belong inside `run`.

@@ -1340,12 +1340,17 @@ export async function driveLoop(
   const beginJob = () => {
     if (job !== undefined || stop || signalled || jobsOff !== undefined) return
     const kinds = jobKinds(ctx.env)
+    // Row 263 (settled point 11). Gates read the config file fresh, so a job reads it as it stands
+    // now: a part edited mid-run is keyed and trusted as the gate that asked keyed it. The run's
+    // config stays for everything else.
+    const now = loadConfig(root)
+    const jobCfg = now.ok ? now.value : cfg
     // Only a kind that owes a shard can wait on the human (slice 3 review): one whose work is all
     // done needs no grant, and drive must not pause on it.
-    const owed = jobTrustOwed(root, ctx.env, cfg, kinds.filter((k) => nextShard(root, cfg, canonNow, [k]) !== undefined))
+    const owed = jobTrustOwed(root, ctx.env, jobCfg, kinds.filter((k) => nextShard(root, jobCfg, canonNow, [k]) !== undefined))
     jobsWait(owed.commands)
     // Nothing owed is nothing to say: a repo with no kind never hears that jobs are off (F4).
-    if (nextShard(root, cfg, canonNow, kinds, owed.blocked) === undefined) return
+    if (nextShard(root, jobCfg, canonNow, kinds, owed.blocked) === undefined) return
     const blocked = jobsBlocked(root)
     if (blocked !== undefined) { jobsOffNow(blocked); return }
     // A crashed transaction refuses every write until recovery: no shard starts meanwhile, and none
@@ -1354,7 +1359,7 @@ export async function driveLoop(
     const ctl = new AbortController()
     const relay = () => ctl.abort()
     abort.signal.addEventListener('abort', relay, { once: true })
-    const run = startJob(root, cfg, ctx, canonNow, { signal: ctl.signal, skip: owed.blocked })
+    const run = startJob(root, jobCfg, ctx, canonNow, { signal: ctl.signal, skip: owed.blocked })
     if (run === undefined) { abort.signal.removeEventListener('abort', relay); return }
     const j: DriveJob = { run, stop: ctl }
     void run.end.then((e) => { j.over = e; abort.signal.removeEventListener('abort', relay) })

@@ -106,12 +106,22 @@ describe('job reading and the next shard (row 257)', () => {
     expect(next()).toEqual(['idle', 'i1', 1])
   })
 
-  it('production registers no kind; the test-only fixture registers from its env', () => {
-    expect(jobKinds({})).toEqual([])
+  it('production registers base-lint; the test-only fixture registers from its env, first (row 263)', () => {
+    expect(jobKinds({}).map((k) => k.kind)).toEqual(['base-lint'])
     const env = { WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'k1', shards: 2, turn: true, gated: false, boxMs: 1_000, cmd: 'true' }) }
-    expect(jobKinds(env).map((k) => [k.kind, k.turn, k.gated, k.boxMs({} as Config)])).toEqual([['fixture', true, false, 1_000]])
-    expect(jobKinds({ WITNESS_FIXTURE_JOB: '{' })).toEqual([])
-    expect(jobKinds({ WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'K!', shards: 2 }) })).toEqual([])
+    expect(jobKinds(env).map((k) => k.kind)).toEqual(['fixture', 'base-lint'])
+    expect(jobKinds(env).slice(0, 1).map((k) => [k.kind, k.turn, k.gated, k.boxMs({} as Config)])).toEqual([['fixture', true, false, 1_000]])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: '{' }).map((k) => k.kind)).toEqual(['base-lint'])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'K!', shards: 2 }) }).map((k) => k.kind)).toEqual(['base-lint'])
+  })
+
+  it('base-lint is registered in production: no turn, gated, in the scratch, its commands the lint parts and readers (row 263)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: { biome: 'b' } }, readers: { biome: 'b-sarif' } })
+    const kind = jobKinds({}).find((k) => k.kind === 'base-lint')!
+    expect(kind).toMatchObject({ turn: false, gated: true, scratch: true })
+    expect(kind.boxMs(cfgOf(repo.root))).toBe(1_800_000)
+    expect(kind.commands(cfgOf(repo.root))).toEqual([{ cmd: 'b', source: 'ship.lint.biome' }, { cmd: 'b-sarif', source: 'readers.biome' }])
   })
 })
 
@@ -122,7 +132,7 @@ describe('jobs in the scratch (row 258)', () => {
     expect(kind).toMatchObject({ kind: 'fixture', scratch: true })
     expect(kind!.commands(cfgOf(repo.root))).toEqual([])
     expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture() })[0]).toMatchObject({ scratch: false })
-    expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: 'yes' }) })).toEqual([])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: 'yes' }) }).map((k) => k.kind)).toEqual(['base-lint'])
   })
 })
 
@@ -130,12 +140,12 @@ describe('job trust (row 260)', () => {
   it('a scratch kind whose setup command is untrusted is blocked, and nextShard skips it (row 260)', async () => {
     const repo = await seededRepo()
     patchConfig(repo, { scratch: { prepare: 'sh prepare.sh' } })
-    const kinds = jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: true }) })
+    const kinds = jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: true }) }).filter((k) => k.kind === 'fixture')
     const owed = jobTrustOwed(repo.root, {}, cfgOf(repo.root), kinds)
     expect(owed).toEqual({ blocked: new Set(['fixture']), commands: [{ cmd: 'sh prepare.sh', source: 'scratch.prepare' }] })
     expect(nextShard(repo.root, cfgOf(repo.root), loadCanon(repo.root), kinds, owed.blocked)).toBeUndefined()
     grantCommands(repo.root, ['sh prepare.sh'])
     expect(jobTrustOwed(repo.root, {}, cfgOf(repo.root), kinds)).toEqual({ blocked: new Set(), commands: [] })
-    expect(jobTrustOwed(repo.root, {}, cfgOf(repo.root), jobKinds({ WITNESS_FIXTURE_JOB: fixture() })).blocked.size).toBe(0)
+    expect(jobTrustOwed(repo.root, {}, cfgOf(repo.root), jobKinds({ WITNESS_FIXTURE_JOB: fixture() }).filter((k) => k.kind === 'fixture')).blocked.size).toBe(0)
   })
 })

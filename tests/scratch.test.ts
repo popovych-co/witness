@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ok, type Result } from '../src/refusal.js'
@@ -175,5 +175,16 @@ describe('the scratch — final review (row 258)', () => {
     expect(value(openScratch(repo.root))).toBe(dir)
     value(resetScratch(dir, head))
     expect(existsSync(join(dir, 'specs'))).toBe(false)
+  })
+})
+
+describe('the scratch in production (row 263)', () => {
+  it('a found scratch writes no git config it already holds (T2b slice 2 M2, row 263)', async () => {
+    const repo = await seededRepo()
+    value(openScratch(repo.root))
+    const config = join(repo.root, '.git', 'config')
+    const before = statSync(config).ino
+    value(openScratch(repo.root))
+    expect(statSync(config).ino).toBe(before)
   })
 })

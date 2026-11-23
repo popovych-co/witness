@@ -11,6 +11,7 @@ import { tryGit } from './gitio.js'
 import { ok, type Result as Res } from './refusal.js'
 import { execCommand } from './runner.js'
 import { inScratch } from './scratch.js'
+import { baseLintKind } from './base-lint.js'
 import type { Canon } from './scan.js'
 import { logSafe, visible } from './toon.js'
 import { JOB_STREAM } from './streams.js'
@@ -256,8 +257,9 @@ function fixtureKind(raw: string | undefined): JobKind | undefined {
   }
 }
 
-// The registered kinds. None in production until T2c.
+// The registered kinds: the test-only fixture first when its env is set, then base-lint (row 263),
+// the first production kind.
 export function jobKinds(env: Record<string, string | undefined>): JobKind[] {
   const fixture = fixtureKind(env[FIXTURE_JOB_ENV])
-  return fixture !== undefined ? [fixture] : []
+  return [...(fixture !== undefined ? [fixture] : []), baseLintKind]
 }
