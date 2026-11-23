@@ -16,7 +16,8 @@ import { clashViolations } from './clash.js'
 import { interrupted, runFiltered, runFullSuite, runnerConfig, untrustedOf } from './runner.js'
 import { git, stateCommit, tryGit } from './gitio.js'
 import type { CanonDoc } from './scan.js'
-import { kv } from './toon.js'
+import { kv, logSafe } from './toon.js'
+import { snapshotTree } from './snapshot.js'
 import { crashPoint, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
 
@@ -29,15 +30,49 @@ export function screensDir(runRoot: string, planId: string): string {
   return join(runRoot, '.witness', 'screens', planId)
 }
 
-export interface Capture { name: string; sha: string }
+// Row 251. `test`: the full name of the test that took the capture, as the junit report prints it,
+// read from the sidecar `<name>.png.json` = {"test": "<full test name>"} the consumer's harness
+// writes beside the PNG. Absent when there is no sidecar or it is not that shape. T6 reads it.
+export interface Capture { name: string; sha: string; test?: string }
 
-export function collectCaptures(runRoot: string, planId: string): Capture[] {
+const TEST_NAME_MAX = 1000
+// Far above the largest accepted sidecar (1,000 characters, each at most a 12-byte JSON escape pair);
+// anything larger is refused unread.
+const SIDECAR_BYTES_MAX = 16 * 1024
+const LINE_BREAK = /[\n\r\u2028\u2029]/
+
+// The sidecar's test name, or undefined with `bad` when one exists but is not the accepted shape.
+function producingTest(dir: string, name: string): { test?: string; bad: boolean } {
+  const side = join(dir, `${name}.json`)
+  if (!existsSync(side)) return { bad: false }
+  try {
+    const st = statSync(side)
+    if (!st.isFile() || st.size > SIDECAR_BYTES_MAX) return { bad: true }
+    const parsed: unknown = JSON.parse(readFileSync(side, 'utf8'))
+    const test = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).test : undefined
+    if (typeof test !== 'string') return { bad: true }
+    const length = [...test].length
+    return length >= 1 && length <= TEST_NAME_MAX && !LINE_BREAK.test(test) ? { test, bad: false } : { bad: true }
+  } catch {
+    return { bad: true }
+  }
+}
+
+export function collectCaptures(runRoot: string, planId: string, warn: (line: string) => void = () => {}): Capture[] {
   const dir = screensDir(runRoot, planId)
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((n) => n.endsWith('.png') && statSync(join(dir, n)).isFile())
     .sort()
-    .map((name) => ({ name, sha: createHash('sha256').update(readFileSync(join(dir, name))).digest('hex') }))
+    .map((name) => {
+      const sha = createHash('sha256').update(readFileSync(join(dir, name))).digest('hex')
+      const side = producingTest(dir, name)
+      if (side.bad) {
+        warn(`warn: capture ${logSafe(name)} — its .json is not {"test": "<one line, at most 1,000 characters>"}; journaled without its producing test`)
+      }
+      return { name, sha, ...(side.test !== undefined ? { test: side.test } : {}) }
+    })
 }
 
 export function checkoutRoot(cwd: string): Result<string> {
@@ -109,7 +144,7 @@ export async function runSpecTests(
 // step's (a fix round after a gate).
 export function journalEvidence(
   stateRoot: string, planId: string, phase: 'red' | 'green', run: SpecTestRun,
-  extra: { reconstructed?: boolean; vacuous?: boolean; captures?: Capture[]; step?: string } = {},
+  extra: { reconstructed?: boolean; vacuous?: boolean; captures?: Capture[]; step?: string; tree?: string } = {},
 ): Result<{ sha: string }> {
   const entry = { t: 'test-evidence' as const, artifact: planId, phase, runner: run.runner, tests: run.tests, ...extra }
   const marker = {
@@ -132,9 +167,11 @@ export function journalEvidence(
   }
 }
 
+// Row 251. With `base`, the entry names the tree the run read — the plan's change set over the base
+// as a git tree object (src/snapshot.ts), taken before the run, as a gate journals `reviewed_tree`.
 export async function recordEvidence(
   runRoot: string, stateRoot: string, ctx: Ctx, planId: string, parentId: string,
-  phase: 'red' | 'green', extra: { reconstructed?: boolean; step?: string } = {},
+  phase: 'red' | 'green', extra: { reconstructed?: boolean; step?: string } = {}, base?: string,
 ): Promise<Result<SpecTestRun>> {
   // latest-cycle by construction: a fresh empty dir per cycle means captures can
   // only be this run's. Browser tests screenshot iff WITNESS_SCREENS_DIR is set,
@@ -142,6 +179,7 @@ export async function recordEvidence(
   const dir = screensDir(runRoot, planId)
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
+  const tree = base !== undefined ? snapshotTree(runRoot, base, planChangeSet(runRoot, base)) : undefined
   const runCtx: Ctx = { ...ctx, env: { ...ctx.env, WITNESS_SCREENS_DIR: dir } }
   const run = await runSpecTests(runRoot, runCtx, parentId, stateRoot)
   if (!run.ok) return run
@@ -151,9 +189,10 @@ export async function recordEvidence(
   const caughtSignal = await letSignalsLand()
   if (caughtSignal !== undefined) return refuse([interrupted(caughtSignal)])
   const vacuous = phase === 'red' && run.value.allOk ? { vacuous: true } : {}
-  const captures = collectCaptures(runRoot, planId)
+  const captures = collectCaptures(runRoot, planId, (l) => ctx.err(l))
   const capExtra = captures.length ? { captures } : {}
-  const committed = journalEvidence(stateRoot, planId, phase, run.value, { ...extra, ...vacuous, ...capExtra })
+  const treeExtra = tree !== undefined ? { tree } : {}
+  const committed = journalEvidence(stateRoot, planId, phase, run.value, { ...extra, ...vacuous, ...capExtra, ...treeExtra })
   if (!committed.ok) return committed
   return run
 }
@@ -274,7 +313,7 @@ export async function verifyRed(
     }
     // Test-only crash point, on txn.ts's seam: the red's tree laid out, the work held and not back.
     crashPoint(ctx.env, 'verify-red-held')
-    red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra)
+    red = await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'red', extra, base)
   } finally {
     try {
       putBack()
@@ -302,7 +341,7 @@ export async function verifyRed(
   // closed by the green `next` routes for that open red, never by this reconstruction.
   const green = red.value.allOk
     ? await runSpecTests(runRoot, ctx, parentId, stateRoot)
-    : await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', extra)
+    : await recordEvidence(runRoot, stateRoot, ctx, planId, parentId, 'green', extra, base)
   if (!green.ok) return green
   return ok({ redOk: !red.value.allOk, greenOk: green.value.allOk, vacuous: red.value.allOk })
 }

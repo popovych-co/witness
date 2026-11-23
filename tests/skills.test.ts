@@ -565,3 +565,11 @@ describe('witness-decompose needs (A10)', () => {
     expect(body).toContain('blocks `witness start`')
   })
 })
+
+describe('a capture names the test that took it (row 251)', () => {
+  it('witness-implement asks each capture to name the test that took it', () => {
+    const text = readFileSync(skillPath('witness-implement'), 'utf8')
+    expect(text).toContain('<name>.png.json')
+    expect(text).toContain('expect.getState().currentTestName')
+  })
+})
