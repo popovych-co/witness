@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEADLINE_DIR, deadlineFile, driveDeadline, sweepDeadlines, writeDeadline } from '../src/deadline.js'
+import { DEADLINE_DIR, deadlineFile, driveDeadline, liveIo, sweepDeadlines, writeDeadline } from '../src/deadline.js'
 import { tmpRepo } from './helpers.js'
 
 const deadPid = (): number => spawnSync(process.execPath, ['-e', '']).pid!
@@ -40,5 +40,19 @@ describe('the deadline file (row 256)', () => {
     writeDeadline(repo.root, `${process.pid}-3`, 1)
     expect(sweepDeadlines(repo.root, new Set([`${process.pid}-3`]))).toBe(2)
     expect(readdirSync(join(repo.root, DEADLINE_DIR)).filter((n) => n.endsWith('.json'))).toEqual([`${process.pid}-3.json`])
+  })
+
+  it('a write a Windows scanner blocks is best effort: it never throws (slice 2 review I1)', () => {
+    const repo = tmpRepo()
+    const io = { ...liveIo }
+    const busy = () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) }
+    liveIo.rename = busy
+    liveIo.rm = busy
+    try {
+      expect(() => writeDeadline(repo.root, '77-3', 5000)).not.toThrow()
+    } finally {
+      Object.assign(liveIo, io)
+    }
+    expect(driveDeadline({ WITNESS_DRIVE_DEADLINE_FILE: deadlineFile(repo.root, '77-3') })).toBeUndefined()
   })
 })

@@ -38,6 +38,13 @@ export function sessionToken(env: Record<string, string | undefined>): string | 
   return TOKEN.test(token) ? token : undefined
 }
 
+// The one seam for the renames and removals under `.witness/live` (the turn queue's and the
+// deadline files'), so a test can stand in for a Windows scanner (busy.ts's `busyIo`).
+export const liveIo = {
+  rename(from: string, to: string): void { renameSync(from, to) },
+  rm(p: string): void { rmSync(p, { force: true }) },
+}
+
 // A folder under `.witness/live`, or undefined when it cannot be used. A link anywhere on the way
 // is refused, never followed (busy.ts's `busyDir`): a repo can commit files inside a real
 // `.witness/live/`, and a linked folder would aim witness's writes anywhere.
@@ -76,11 +83,22 @@ export function writeDeadline(root: string, token: string, deadline: number): vo
     writeSync(fd, JSON.stringify({ deadline }))
     closeSync(fd)
     fd = undefined
-    renameSync(tmp, join(dir, `${token}.json`))
+    liveIo.rename(tmp, join(dir, `${token}.json`))
   } catch {
     if (fd !== undefined) try { closeSync(fd) } catch { /* closed */ }
-    rmSync(tmp, { force: true })
+    // A temp a scanner still holds fails its removal as it failed the rename: left to the sweep.
+    try { liveIo.rm(tmp) } catch { /* sweepDeadlines removes it */ }
   }
+}
+
+// Drive's removal when a session settles. The folder is resolved as a write resolves it, so a
+// linked one is refused, and nothing in the way — a directory a session put there, a scanner's hold
+// — is ever thrown: this runs in a child's listener, where a throw takes drive down (P16).
+export function removeDeadline(root: string, token: string): void {
+  if (!TOKEN.test(token)) return
+  const dir = deadlineFolder(root, false)
+  if (dir === undefined) return
+  try { unlinkSync(join(dir, `${token}.json`)) } catch { /* gone, or left to the sweep */ }
 }
 
 const spawnDeadline = (raw: string | undefined): number | undefined => {

@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFile
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { DRIVE_DEADLINE_FILE_ENV, sessionToken } from '../src/deadline.js'
+import { DRIVE_DEADLINE_FILE_ENV, liveIo, sessionToken } from '../src/deadline.js'
 import {
-  TURN_DIR, behindJob, headTicket, runnerLockPath, sweepTurnQueue, turnHolder, turnIo, withRunnerTurn, type TurnTicket,
+  TURN_DIR, behindJob, headTicket, runnerLockPath, sweepTurnQueue, turnHolder, withRunnerTurn, type TurnTicket,
 } from '../src/runner-lock.js'
 import { fakeCtx, fakeScenario, fixtureEnv, patchConfig, seededRepo, tmpRepo } from './helpers.js'
 
@@ -149,14 +149,14 @@ describe('the queued turn (row 255)', () => {
     // An orphan holder that outlives one renewal (10 s), then dies, so the in-process wait is bounded.
     const holder = Number(spawnSync('sh', ['-c', 'sleep 11 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim())
     putLock(repo.root, { pid: holder })
-    const io = { ...turnIo }
+    const io = { ...liveIo }
     const busy = () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) }
-    turnIo.rename = busy
-    turnIo.rm = busy
+    liveIo.rename = busy
+    liveIo.rm = busy
     try {
       expect(withRunnerTurn(repo.root, fakeCtx(repo.root), 'x', () => 42)).toBe(42)
     } finally {
-      Object.assign(turnIo, io)
+      Object.assign(liveIo, io)
     }
     expect(tickets(repo.root)).toEqual([])
   }, 30_000)

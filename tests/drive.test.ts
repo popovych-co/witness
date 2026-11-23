@@ -258,6 +258,14 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect(lines.some((l) => l.includes(' behind job '))).toBe(false)
   }, 20_000)
 
+  it('a session that puts a directory where its deadline file goes still ends, and drive goes on (slice 2 review I1)', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('mkdir -p "$WITNESS_DRIVE_DEADLINE_FILE"') } })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1,
+      { root: repo.root, deadline: { root: repo.root, token: `${process.pid}-4`, behind: () => undefined } })
+    expect(end.outcome).toBe('exited')
+  }, 20_000)
+
   it("chargedMs leaves the time held out of the target's wall clock (row 256)", () => {
     const end = { outcome: 'exited' as const, code: 0, tail: [], ms: 9_000, failed: false }
     expect(chargedMs({ ...end, heldMs: 7_000 })).toBe(2_000)

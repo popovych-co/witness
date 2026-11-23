@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { cliAct, type Act } from './act.js'
 import { EXIT, main, type Ctx } from './cli.js'
@@ -18,7 +18,7 @@ import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
 import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
-import { DRIVE_DEADLINE_FILE_ENV, deadlineFile, sweepDeadlines, writeDeadline } from './deadline.js'
+import { DRIVE_DEADLINE_FILE_ENV, deadlineFile, removeDeadline, sweepDeadlines, writeDeadline } from './deadline.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
@@ -398,7 +398,7 @@ export async function spawnSession(
       // Row 256: a stretch the session ended inside says so, and the moved deadline goes with it.
       if (heldMs > heldWritten) stretch ??= { job: heldJob ?? 'unknown', from: heldWritten }
       if (o !== 'spawn-failed') waitedLine()
-      if (opts.deadline !== undefined) rmSync(deadlineFile(opts.deadline.root, opts.deadline.token), { force: true })
+      if (opts.deadline !== undefined) removeDeadline(opts.deadline.root, opts.deadline.token)
       // Row 245. Stopped by the end watch, it is classified with the status its harness gives that
       // ending, never the stop's own (P46), and its error flag is the one read at the stop (S4-A).
       const ended = o === 'exited' && ending !== undefined ? ending : undefined

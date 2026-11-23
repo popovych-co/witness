@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto'
 import {
-  closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync,
+  closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, unlinkSync,
   writeFileSync, writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
-import { liveFolder, sessionToken } from './deadline.js'
+import { liveFolder, liveIo, sessionToken } from './deadline.js'
 import { isId } from './dsl.js'
 import { primaryRoot } from './gitio.js'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
@@ -61,13 +61,6 @@ const SLACK_MS = 60_000
 const CREATE_RETRY_MS = 1_000
 const RETRY_PAUSE_MS = 50
 const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES'])
-
-// The one seam for the queue's renames and removals, so a test can stand in for a Windows scanner
-// (busy.ts's `busyIo`).
-export const turnIo = {
-  rename(from: string, to: string): void { renameSync(from, to) },
-  rm(p: string): void { rmSync(p, { force: true }) },
-}
 
 // A symlink is never a holder: `wx` refuses it while a read follows it, so a dangling one
 // would read `absent` forever (the repo lock's fix, src/lock.ts).
@@ -251,7 +244,7 @@ function openTicket(root: string, ctx: Ctx, who: TurnWho | undefined): OwnTicket
     const tmp = join(dir, `.${since}-${pid}.${randomBytes(8).toString('hex')}.tmp`)
     if (writeExclusive(tmp, body(now + TURN_LEASE_MS)) !== 'written') return
     // A temp a scanner still holds fails its removal the way it failed the rename: left to the sweep.
-    try { turnIo.rename(tmp, p); renewed = now } catch { try { turnIo.rm(tmp) } catch { /* the sweep removes it */ } }
+    try { liveIo.rename(tmp, p); renewed = now } catch { try { liveIo.rm(tmp) } catch { /* the sweep removes it */ } }
   }
   return {
     since,
