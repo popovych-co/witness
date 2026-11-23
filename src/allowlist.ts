@@ -4,6 +4,7 @@ import { actOn, runRow, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { lintCommands } from './lint-parts.js'
+import { READER_TOOLS } from './settings.js'
 import { heldCriteria } from './needs.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { criteriaOwner, findById, type Canon, type CanonDoc } from './scan.js'
@@ -106,8 +107,11 @@ export function grantRowsOf(grant: Act | undefined, list: Act): string[] {
   return grant.withheld === undefined ? [runRow(grant)] : [`  note: ${grant.withheld}`, runRow(list)]
 }
 
-// The filtered runner template, `ship.test`, every `ship.lint` part (row 261), `scratch.prepare`, each when
-// set. Full-suite mode's runner IS `ship.test`, and a command listed twice is listed once, under its first source.
+// The filtered runner template, `ship.test`, every `ship.lint` part and its bound reader (rows 261–262),
+// every other set reader, `scratch.prepare`, each when set. Full-suite mode's runner IS `ship.test`,
+// and a command listed twice is listed once, under its first source. A reader no part bears the name
+// of is declared all the same (slice 1 review I1): migrate proposes and grants it, so the targetless
+// grant takes it, but nothing owes it until a part bears its name (`trustOwed`).
 export function configCommands(cfg: Config): RunCommand[] {
   const out: RunCommand[] = []
   const add = (cmd: string | undefined, source: string) => {
@@ -116,6 +120,7 @@ export function configCommands(cfg: Config): RunCommand[] {
   if (cfg.criteria.runner !== 'full-suite') add(cfg.criteria.runner, 'criteria.runner')
   add(cfg.ship.test, 'ship.test')
   for (const c of lintCommands(cfg)) add(c.cmd, c.source)
+  for (const tool of READER_TOOLS) add(cfg.readers[tool], `readers.${tool}`)
   // Row 259. The scratch's setup command, when there is one to run.
   if (cfg.scratch.prepare !== 'none') add(cfg.scratch.prepare, 'scratch.prepare')
   return out
@@ -230,9 +235,6 @@ function listingOf(
 // own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
 // headless gate, so trust is never the toll, and a gate whose check failed on one reaches the
 // settle pass's trust-grant stop instead.
-// Rows 261–262. Ship runs its suite, every lint part and every bound reader.
-const shipOwes = (source: string): boolean =>
-  source === 'ship.test' || source === 'ship.lint' || source.startsWith('ship.lint.') || source.startsWith('readers.')
 
 export function trustOwed(
   root: string, env: Record<string, string | undefined>, cfg: Config, canon: Pick<Canon, 'docs'>,
@@ -241,10 +243,13 @@ export function trustOwed(
   if (env.WITNESS_TRUST_CMDS === '1') return []
   const config = configCommands(cfg)
   const runner = config.filter((c) => c.source === (cfg.criteria.runner === 'full-suite' ? 'ship.test' : 'criteria.runner'))
+  // Rows 261–262. Ship runs its suite, every lint part and every bound reader — never a reader no
+  // part bears the name of (slice 1 review I1).
+  const shipRuns = new Set([cfg.ship.test, ...lintCommands(cfg).map((c) => c.cmd)])
   const line = `${action.line} `
   const run: RunCommand[] =
     /^witness (test-evidence|verify-red|gate implement|check --drift) /.test(line) ? runner
-      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => shipOwes(c.source))]
+      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => shipRuns.has(c.cmd))]
         : /^witness start /.test(line) && action.target !== undefined
           ? (() => { const doc = canon.docs.find((d) => d.meta.id === action.target); return doc ? cmdNeeds(doc) : [] })()
           : []

@@ -146,6 +146,13 @@ describe('lint parts owe trust at ship (row 261)', () => {
     ])
   })
 
+  it('a reader no part bears the name of is owed nowhere (row 262, slice 1 review I1)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: 'pnpm lint' }, readers: { biome: 'b-sarif' } })
+    const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness gate ship p1' })
+    expect(owed.map((c) => c.cmd)).not.toContain('b-sarif')
+  })
+
   it('ship owes trust for a bound reader too (row 262)', async () => {
     const repo = await seededRepo()
     patchConfig(repo, { ship: { lint: { biome: 'b' } }, readers: { biome: 'b-sarif' } })

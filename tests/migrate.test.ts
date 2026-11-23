@@ -347,3 +347,19 @@ describe('migrate proposes lint parts and readers (rows 261–262)', () => {
     expect(kept.read('witness.config.yaml')).toMatch(/^ {2}lint: pnpm lint && pnpm typecheck +# /m)
   })
 })
+
+describe('migrate offers only grants the trust verb takes — slice 1 review (row 262)', () => {
+  it("every run: grant a migrate away from a terminal prints is one witness trust takes, an unbound reader's too (I1)", async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.write('biome.json', '{}\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'tools')
+    const r = await repo.cli(['migrate'])
+    expect(r.code).toBe(0)
+    const grants = r.stdout.split('\n').filter((l) => l.trim().startsWith('run: witness trust --cmd '))
+      .map((l) => /--cmd '([^']*)'/.exec(l)![1]!)
+    expect(grants).toContain('pnpm exec biome check --reporter=sarif .')
+    for (const cmd of grants) expect((await repo.cli(['trust', '--cmd', cmd])).code).toBe(0)
+    expect(trustedCommands(repo.root)).toContain('pnpm exec biome check --reporter=sarif .')
+  })
+})
