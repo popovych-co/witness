@@ -9,7 +9,8 @@ import type { ParsedPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { resolveSpawn, spawn } from './spawn.js'
 import { contained, jobHost } from './contain.js'
-import { DRIVE_DEADLINE_ENV, driveChild } from './drive-presence.js'
+import { driveDeadline } from './deadline.js'
+import { driveChild } from './drive-presence.js'
 import { monotonicTicker, type Ticker } from './session-clock.js'
 import { END_GRACE_MS, endingStatus, endWatch, failedNow } from './session-end.js'
 import { duration, limitIn, realClock, SINGLE_WAIT_MAX_MS, waitFor, type Clock, type Limit } from './usage.js'
@@ -276,9 +277,10 @@ export async function invokeReviewerAsync(ctx: Ctx, harness: Harness, opts: Invo
     if (!inDrive || opts.noWait === true) return refuse([v(p.cmd, 'usage-limit', limit.text, OUTSIDE_DRIVE_WANT)])
     // A wait spends no timeout retry: the same model is asked again after the reset.
     const wait = waitFor(limit, streak, clock.now())
-    // Inside a drive session the wait must also end before drive kills the session (F14).
-    const deadline = Number(ctx.env[DRIVE_DEADLINE_ENV])
-    const outlives = Number.isFinite(deadline) && clock.now() + wait + SESSION_MARGIN_MS > deadline
+    // Inside a drive session the wait must also end before drive kills the session (F14) — at the
+    // later of its spawn deadline and the one drive moved while it waited behind a job (row 256).
+    const deadline = driveDeadline(ctx.env)
+    const outlives = deadline !== undefined && clock.now() + wait + SESSION_MARGIN_MS > deadline
     if (waited + wait > REVIEWER_WAIT_MAX_MS || outlives) {
       return refuse([v(p.cmd, 'usage-limit', limit.text,
         'a reset inside the 6h reviewer wait and this session\'s time — re-run the gate after it')])

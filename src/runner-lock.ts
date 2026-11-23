@@ -6,7 +6,7 @@ import {
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import { loadConfig } from './config.js'
-import { sessionToken } from './deadline.js'
+import { liveFolder, sessionToken } from './deadline.js'
 import { isId } from './dsl.js'
 import { primaryRoot } from './gitio.js'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
@@ -99,21 +99,8 @@ export function turnHolder(root: string): TurnHolder | undefined {
   return holder
 }
 
-// The queue's folder, or undefined when it cannot be used. A link anywhere on the way is refused,
-// never followed (busy.ts's `busyDir`).
-function turnDir(root: string, create: boolean): string | undefined {
-  const live = join(root, '.witness', 'live')
-  const dir = join(root, TURN_DIR)
-  for (const p of [live, dir]) {
-    try {
-      if (!lstatSync(p).isDirectory()) return undefined
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || !create) return undefined
-      try { mkdirSync(p, { recursive: true }) } catch { return undefined }
-    }
-  }
-  return dir
-}
+// The queue's folder, or undefined when it cannot be used (a link on the way is refused).
+const turnDir = (root: string, create: boolean) => liveFolder(root, 'turn', create)
 
 function parseTicket(text: string): TurnTicket | 'unreadable' | 'malformed' {
   let raw: unknown

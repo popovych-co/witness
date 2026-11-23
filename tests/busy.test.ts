@@ -7,6 +7,8 @@ import {
   BUSY_DIR, BUSY_MAX_MS, busyHolder, busyIo, settleUntil, shipUntil, sweepDeadBusy, takeBusy,
 } from '../src/busy.js'
 import type { Config } from '../src/config.js'
+import { deadlineFile, writeDeadline } from '../src/deadline.js'
+import { tmpRepo } from './helpers.js'
 
 // Row 240 (design §4.1.2). Lean busy locks: machine-local files nobody waits for, created
 // exclusively without following a link, live while the pid lives and `until` has not passed.
@@ -185,6 +187,14 @@ describe('the bound a taker writes (row 240)', () => {
     // P20 inverted: a reviewer timeout above 240 minutes no longer makes the lock stale at birth
     expect(settleUntil(cfg(15_000_000), {}, 0)).toBe(BUSY_MAX_MS)
     expect(settleUntil(cfg(600_000), { WITNESS_DRIVE_DEADLINE: String(9e9) }, 0)).toBe(BUSY_MAX_MS)
+  })
+
+  it('a deadline drive moved later is the bound (row 256)', () => {
+    const repo = tmpRepo()
+    writeDeadline(repo.root, '77-3', 9e6)
+    expect(settleUntil(cfg(600_000), {
+      WITNESS_DRIVE_DEADLINE: String(1e6), WITNESS_DRIVE_DEADLINE_FILE: deadlineFile(repo.root, '77-3'),
+    }, 0)).toBe(9e6)
   })
 
   it('shipUntil: 3·T + ciSettleMs + 30 min + 2·the settle estimate + 10 min, by the same rule', () => {
