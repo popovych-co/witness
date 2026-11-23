@@ -171,3 +171,28 @@ describe('the lint lane in a ship gate (row 263)', () => {
     }
   }, 240_000)
 })
+
+describe('the lint lane in a ship gate — slice 3 review (row 263)', () => {
+  it('a re-run gate on unchanged content journals the judged verdict, never resumes the pending round (I1)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    patchConfig(repo, { ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part')
+    writeFileSync(join(wt, 'src', 'bad.ts'), 'LINTBAD\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...CLEAN, coverage: [...CLEAN.coverage, { anchor: 'src/bad.ts', note: 'read' }] })
+    const lint = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'lint')!.parts![0]!
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: true, manual: false })
+      const pending = lint()
+      expect(pending).toMatchObject({ state: 'pending' })
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), { kind: BASE_LINT, key: pending.key!, shards: 1 }, 1)
+      journalShard(repo.root, { kind: BASE_LINT, key: pending.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: (r as { result: unknown }).result })
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: false, manual: false })
+      expect(runs(repo, planId)).toHaveLength(2)
+      expect(lint()).toEqual({ part: 'ui', state: 'red', key: pending.key })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 240_000)
+})

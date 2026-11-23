@@ -61,9 +61,11 @@ async function judge(root: string, wt: string, ctx: Ctx, cfg: Config, base: stri
     const first = here.violations[0]!
     return notJudged(`red on the base too — this tree's diagnostics could not be read: ${first.rule}: ${first.got}`)
   }
-  // Slice 2 review M8: a red part whose reader finds nothing here is no evidence of "nothing new".
-  if (here.value.length === 0) return notJudged("red on the base too — this tree's reader reported no error while the part is red")
-  const fresh = newDiagnostics(here.value, new Map(Object.entries(res.read.keys)))
+  // Slice 2 review M8: a red part whose reader reports nothing here is no evidence of "nothing new".
+  // Errors it reported on witness's own paths only are evidence (slice 3 review): they are dropped
+  // on both trees, and the part reads base-only.
+  if (here.value.reported === 0) return notJudged("red on the base too — this tree's reader reported no error while the part is red")
+  const fresh = newDiagnostics(here.value.diagnostics, new Map(Object.entries(res.read.keys)))
   if (fresh.length === 0) return { verdict: { part, state: 'base-only', key, base: res.read.total } }
   const rules = [...new Set(fresh.map((d) => d.rule))].sort().slice(0, MAX_RULES)
   return { verdict: { part, state: 'new', key, new: fresh.length, base: res.read.total, rules }, newOnes: fresh }

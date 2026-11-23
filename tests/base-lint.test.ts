@@ -33,13 +33,32 @@ describe('the base-lint job (row 263)', () => {
     approve(repo, 'auth-refresh')
     await writePlan(repo, 'p1')                     // PLAN_META's parent is auth-refresh
     repo.flipStatus('p1', 'in-progress')
-    const k1 = `biome@${'a'.repeat(40)}.${'b'.repeat(12)}`
-    const k2 = `types@${'c'.repeat(40)}.${'d'.repeat(12)}`
+    patchConfig(repo, { ship: { lint: { biome: 'b', types: 't' } } })
+    const cfg = cfgOf(repo.root)
+    // keys the config as it stands gives (slice 3 review I3: one it no longer gives is never owed)
+    const k1 = baseLintKey(cfg.ship.lint![0]!, undefined, 'a'.repeat(40))
+    const k2 = baseLintKey(cfg.ship.lint![1]!, undefined, 'c'.repeat(40))
     appendEntry(repo.root, 'p1', gateRun('ship', [{ part: 'biome', state: 'pending', key: k2 }]))
     appendEntry(repo.root, 'p1', gateRun('ship', [{ part: 'biome', state: 'pending', key: k1 }, { part: 'ui', state: 'red', key: k2 }]))
     appendEntry(repo.root, 'p1', gateRun('implement', [{ part: 'biome', state: 'pending', key: k1 }, { part: 'x', state: 'pending', key: 'not a key' }]))
     expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([{ kind: BASE_LINT, key: k1, shards: 1 }])
     repo.flipStatus('p1', 'done')
+    expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([])
+  })
+
+  it('a pending key the config no longer gives is never owed, so it is never struck (slice 3 review I3)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'p1')
+    repo.flipStatus('p1', 'in-progress')
+    patchConfig(repo, { ship: { lint: { biome: 'b' } } })
+    const old = baseLintKey(cfgOf(repo.root).ship.lint![0]!, undefined, 'a'.repeat(40))
+    appendEntry(repo.root, 'p1', gateRun('ship', [{ part: 'biome', state: 'pending', key: old }]))
+    expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([{ kind: BASE_LINT, key: old, shards: 1 }])
+    patchConfig(repo, { ship: { lint: { biome: 'b2' } } })
+    expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([])
+    patchConfig(repo, { ship: { lint: { other: 'b' } } })
     expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([])
   })
 

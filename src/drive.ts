@@ -1343,8 +1343,11 @@ export async function driveLoop(
     // Row 263 (settled point 11). Gates read the config file fresh, so a job reads it as it stands
     // now: a part edited mid-run is keyed and trusted as the gate that asked keyed it. The run's
     // config stays for everything else.
+    // Slice 3 review: a file that does not load (mid-edit) starts no job — the child loads the
+    // file itself and would refuse, a strike — and the next loop tries again.
     const now = loadConfig(root)
-    const jobCfg = now.ok ? now.value : cfg
+    if (!now.ok) return
+    const jobCfg = now.value
     // Only a kind that owes a shard can wait on the human (slice 3 review): one whose work is all
     // done needs no grant, and drive must not pause on it.
     const owed = jobTrustOwed(root, ctx.env, jobCfg, kinds.filter((k) => nextShard(root, jobCfg, canonNow, [k]) !== undefined))

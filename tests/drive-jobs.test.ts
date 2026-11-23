@@ -319,3 +319,26 @@ describe('the base lint in drive (row 263)', () => {
     expect(out.some((l) => l.startsWith('drive: jobs wait for a trust grant'))).toBe(false)
   }, 180_000)
 })
+
+describe('the base lint in drive — slice 3 review (row 263)', () => {
+  it('drive starts no base-lint shard while the config file cannot be read, so none is struck (I3)', async () => {
+    const repo = await startedFlows(['a'])
+    const cmd = fakeLint(repo)
+    // autonomy off: drive's own re-read of it (F9) never stops the run on the unreadable file
+    patchConfig(repo, { autonomy: 'off', ship: { lint: { biome: cmd.check } }, readers: { biome: cmd.sarif } })
+    repo.write('src/old.ts', 'BAD\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part and its reader')
+    const cfg = cfgOf(repo.root)
+    const key = baseLintKey(cfg.ship.lint![0]!, cmd.sarif, repo.git('rev-parse', 'HEAD'))
+    appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'ship', artifact: 'a-plan-1', round: 1, run_id: 'rs1',
+      reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped',
+      checks: [{ name: 'lint', ok: false, parts: [{ part: 'biome', state: 'pending', key }] }] })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'the ship round')
+    grantCommands(repo.root, [cmd.check, cmd.sarif])
+    // mid-edit: the file on disk does not load (its first line unparseable YAML)
+    repo.write('witness.config.yaml', `ship: [\n${repo.read('witness.config.yaml')}`)
+    const out: string[] = []
+    await driveLoop(repo.root, cfg, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out), { maxSpawns: 1 })
+    expect(shards(repo.root).filter((s) => s.kind === 'base-lint')).toEqual([])
+  }, 180_000)
+})

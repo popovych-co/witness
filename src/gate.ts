@@ -641,9 +641,15 @@ async function judge(
   // this term the gate resumed the blocked round forever while the policy re-ran it (F3).
   // A hold that lifts or lands is a new judgment too (row 179): the lane may stay green while
   // the set of criteria it did not run changes, and a resumed round would re-render a stale `held:`.
+  // Row 263 (slice 3 review): so is a lint part's verdict. A part `pending` its base result reads
+  // `red` (or `new`, `not-judged`) once drive has linted the base, with the same `ok: false`; a
+  // resumed round would keep the pending one, and the judged verdict — what T2d and T2e read, and
+  // a key drive must see journaled — would never be written. States are deterministic for one tree
+  // and one base result, so this term never churns.
   const checkOk = (cs: GateCheck[]) =>
     cs.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}:${
-      (c.held ?? []).map((h) => h.criterion).sort().join('+')}`).sort().join('|')
+      (c.held ?? []).map((h) => h.criterion).sort().join('+')}${
+      c.parts !== undefined ? `:${c.parts.map((p) => `${p.part}=${p.state}`).join(',')}` : ''}`).sort().join('|')
   if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') &&
       checkOk(kind.entry.checks) !== checkOk(input.checks) &&
       kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {

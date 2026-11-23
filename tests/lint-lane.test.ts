@@ -150,3 +150,15 @@ describe('a part red on the base too is judged per diagnostic (row 263)', () => 
     expect(c.detail).toMatch(/^biome: red — the base is not measured: no drive runs jobs in this repo — /)
   }, 60_000)
 })
+
+describe('a part red on the base too — slice 3 review (row 263)', () => {
+  it("a part red only from witness's own paths reads base-only, never not-judged (I2)", async () => {
+    const { repo, lintBase, check } = await baseRed()
+    lintBase('biome')
+    // this tree: the part red, its reader's only error on witness's own payload
+    repo.write('fake-lint.mjs', "const r = { ruleId: 'lint/x', level: 'error', locations: [{ physicalLocation: { artifactLocation: { uri: process.cwd() + '/.witness/hooks/canon-guard.mjs' }, region: { startLine: 1 } } }] }\n"
+      + "if (process.argv[2] === 'sarif') process.stdout.write(JSON.stringify({ runs: [{ results: [r] }] }))\nprocess.exitCode = 1\n")
+    const c = await check()
+    expect(c.parts![0]).toMatchObject({ part: 'biome', state: 'base-only', base: 1 })
+  }, 60_000)
+})

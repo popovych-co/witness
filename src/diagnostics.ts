@@ -105,15 +105,19 @@ export function toDiagnostics(tool: ReaderTool, raw: readonly RawDiagnostic[], d
   return out
 }
 
+// A reader's reading: its diagnostics, and how many errors it reported before witness's own paths
+// were dropped (slice 3 review: a part red only on witness's payload reported errors all the same).
+export interface PartReading { diagnostics: Diagnostic[]; reported: number }
+
 // The reader run in `dir`, its whole stdout parsed; a signal saw no report (row 247).
-export function readPart(dir: string, ctx: Ctx, tool: ReaderTool, cmd: string): Result<Diagnostic[]> {
+export function readPart(dir: string, ctx: Ctx, tool: ReaderTool, cmd: string): Result<PartReading> {
   const c = captureCommand(dir, ctx, cmd)
   if (c.signal !== undefined) {
     return refuse([v(`readers.${tool}`, 'run-interrupted', `the reader was ended by ${c.signal} before it finished`,
       're-run it where nothing stops it before it ends — no report was read')])
   }
   const parsed = parseReport(tool, c.stdout, c.status)
-  return parsed.ok ? ok(toDiagnostics(tool, parsed.value, dir)) : parsed
+  return parsed.ok ? ok({ diagnostics: toDiagnostics(tool, parsed.value, dir), reported: parsed.value.length }) : parsed
 }
 
 export function diagnosticKey(d: Diagnostic): string {

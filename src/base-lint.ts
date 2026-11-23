@@ -72,6 +72,15 @@ export function baseLintResult(x: unknown): BaseLintResult | undefined {
   return out
 }
 
+// Whether the config as it stands gives `key`: its part still exists with the same command and bound
+// reader (slice 3 review). A key it no longer gives is never owed — run would refuse it, and the
+// refusal would strike it — and the next gate asks for the current one.
+function current(cfg: Config, key: string): boolean {
+  const parsed = parseBaseKey(key)
+  const part = parsed !== undefined ? cfg.ship.lint?.find((p) => p.name === parsed.part) : undefined
+  return parsed !== undefined && part !== undefined && baseLintKey(part, boundReader(cfg, part)?.cmd, parsed.commit) === key
+}
+
 // The pending keys a plan's last implement and last ship gate-runs left on their `lint` check.
 function pendingKeys(root: string, plan: string): string[] {
   const entries = readStream(root, plan)
@@ -88,13 +97,13 @@ function pendingKeys(root: string, plan: string): string[] {
   return out
 }
 
-function owed(root: string, _cfg: Config, canon: Canon): JobUnit[] {
+function owed(root: string, cfg: Config, canon: Canon): JobUnit[] {
   const seen = new Set<string>()
   const out: JobUnit[] = []
   for (const doc of canon.docs) {
     if (doc.meta.type !== 'plan' || doc.meta.status !== 'in-progress' || typeof doc.meta.id !== 'string') continue
     for (const key of pendingKeys(root, doc.meta.id)) {
-      if (seen.has(key)) continue
+      if (seen.has(key) || !current(cfg, key)) continue
       seen.add(key)
       out.push({ kind: BASE_LINT, key, shards: 1 })
     }
@@ -120,7 +129,7 @@ Result<CfStep<Step>> {
     return ok({ value: { exit: 1, unread: cut(`${first.rule}: ${first.got}`) }, load: [] })
   }
   const keys: Record<string, number> = {}
-  for (const d of read.value) {
+  for (const d of read.value.diagnostics) {
     const k = diagnosticKey(d)
     keys[k] = (keys[k] ?? 0) + 1
   }
@@ -128,7 +137,7 @@ Result<CfStep<Step>> {
   if (distinct > MAX_BASE_KEYS) {
     return ok({ value: { exit: 1, unread: `${distinct} distinct diagnostics on the base — more than one result holds` }, load: [] })
   }
-  return ok({ value: { exit: 1, read: { total: read.value.length, keys } }, load: [] })
+  return ok({ value: { exit: 1, read: { total: read.value.diagnostics.length, keys } }, load: [] })
 }
 
 function run(root: string, ctx: Ctx, cfg: Config, unit: JobUnit): JobResult {
