@@ -184,10 +184,13 @@ export function recordLine(r: TrackRecord): string {
 }
 
 // The open work: fixes still owing a cause, a list that shrinks to nothing as the human names them.
+// Bare `witness` runs on every SessionStart, so the `help:` line reaches an agent's context: it names the
+// act as the human's (Settled 1; the house wording of decide's human-only acts — slice 3 review I1).
 export function owedRows(r: TrackRecord): string[] {
   const slugs = owing(r)
   if (slugs.length === 0) return []
-  return [kv('cause-owed', slugs.join(' · ')), "help: name each fix's cause — witness recap --effort <slug> --cause escape|decision"]
+  return [kv('cause-owed', slugs.join(' · ')),
+    "help: the human names each fix's cause, in their own chat or terminal — witness recap --effort <slug> --cause escape|decision"]
 }
 
 const chargedCell = (f: FixRow) =>

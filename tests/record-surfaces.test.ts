@@ -58,7 +58,7 @@ describe('the record on status and in drive (row 254)', () => {
     const r = await repo.cli(['status'], CI)
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).toContain('record: escapes 1 of 2 shipped plans (approximate) · decisions 1 · 1 fix needs a cause · live specs failing not measured · checks added not measured · repairs not measured')
-    expect(r.stdout).toContain('cause-owed: old-fix\nhelp: name each fix\'s cause — witness recap --effort <slug> --cause escape|decision')
+    expect(r.stdout).toContain('cause-owed: old-fix\nhelp: the human names each fix\'s cause, in their own chat or terminal — witness recap --effort <slug> --cause escape|decision')
     expect(r.stdout).not.toContain('fixes[')
   })
 
@@ -76,7 +76,7 @@ describe('the record on status and in drive (row 254)', () => {
       'escapes-by-version[1]{version,escapes,plans}:',
       '  0.29.0,1,2',
       'cause-owed: old-fix',
-      'help: name each fix\'s cause — witness recap --effort <slug> --cause escape|decision',
+      'help: the human names each fix\'s cause, in their own chat or terminal — witness recap --effort <slug> --cause escape|decision',
     ])
   })
 
