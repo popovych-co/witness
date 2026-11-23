@@ -100,7 +100,7 @@ export function grantRowsOf(grant: Act | undefined, list: Act): string[] {
   return grant.withheld === undefined ? [runRow(grant)] : [`  note: ${grant.withheld}`, runRow(list)]
 }
 
-// The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
+// The filtered runner template, `ship.test`, `ship.lint`, `scratch.prepare`, each when set. Full-suite mode's
 // runner IS `ship.test`, and a command listed twice is listed once, under its first source.
 export function configCommands(cfg: Config): RunCommand[] {
   const out: RunCommand[] = []
@@ -110,6 +110,8 @@ export function configCommands(cfg: Config): RunCommand[] {
   if (cfg.criteria.runner !== 'full-suite') add(cfg.criteria.runner, 'criteria.runner')
   add(cfg.ship.test, 'ship.test')
   add(cfg.ship.lint, 'ship.lint')
+  // Row 259. The scratch's setup command, when there is one to run.
+  if (cfg.scratch.prepare !== 'none') add(cfg.scratch.prepare, 'scratch.prepare')
   return out
 }
 
@@ -240,6 +242,12 @@ export function trustOwed(
   const out: RunCommand[] = []
   for (const c of run) if (!trusted.has(c.cmd) && !out.some((o) => o.cmd === c.cmd)) out.push(c)
   return out
+}
+
+// Row 259. Trusted right now, by the human's list or the automation switch. Never prompts: the
+// headless paths (a scratch prepare, a job's commands) ask nothing, they wait for the human's grant.
+export function trustedNow(root: string, env: Record<string, string | undefined>, cmd: string): boolean {
+  return env.WITNESS_TRUST_CMDS === '1' || load(root).includes(cmd)
 }
 
 export async function ensureTrusted(root: string, ctx: Ctx, cmd: string): Promise<'trusted' | 'declined' | 'blocked'> {
