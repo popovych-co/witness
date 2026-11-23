@@ -7,7 +7,13 @@ import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { TOKEN_BROKEN, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, writeSpec } from './helpers.js'
+import { TOKEN_BROKEN, fakeCtx, fakeScenario, fixtureEnv, gateEnv, patchConfig, putVerdict, shippableRepo, writeSpec } from './helpers.js'
+import { BASE_LINT, baseLintKind } from '../src/base-lint.js'
+import { loadConfig, type Config } from '../src/config.js'
+import { acquireDriveLock } from '../src/drive-presence.js'
+import { journalShard } from '../src/jobs.js'
+
+const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
 
 // vitest-single fixture lands 4 files in the worktree diff (.gitignore, package.json,
 // src/token.ts, tests/token.test.ts) — coverage-minimum needs an anchor per each.
@@ -137,4 +143,31 @@ describe('a check names the commands trust blocked (A1)', () => {
     expect(lane.untrusted![0]).toContain('run -t "@spec:{id}"')
     expect(lane.detail).toBe('ac-rotate:fail')
   })
+})
+
+describe('the lint lane in a ship gate (row 263)', () => {
+  it('a ship gate journals a pending base key, the job answers it, and the next round reads it (row 263)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    patchConfig(repo, { ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part')
+    writeFileSync(join(wt, 'src', 'bad.ts'), 'LINTBAD\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...CLEAN, coverage: [...CLEAN.coverage, { anchor: 'src/bad.ts', note: 'read' }] })
+    const lint = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'lint')!.parts![0]!
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: true, manual: false })
+      const pending = lint()
+      expect(pending).toMatchObject({ part: 'ui', state: 'pending', key: expect.stringMatching(/^ui@[0-9a-f]{40}\.[0-9a-f]{12}$/) })
+      const owed = baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))
+      expect(owed).toEqual([{ kind: BASE_LINT, key: pending.key, shards: 1 }])
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), owed[0]!, 1)
+      expect(r).toMatchObject({ outcome: 'done', result: { exit: 0 } })
+      journalShard(repo.root, { kind: BASE_LINT, key: pending.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: (r as { result: unknown }).result })
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: true, manual: false })
+      expect(lint()).toEqual({ part: 'ui', state: 'red', key: pending.key })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 240_000)
 })
