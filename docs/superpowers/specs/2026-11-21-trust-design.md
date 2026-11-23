@@ -174,7 +174,9 @@ scratch — owes exactly those keys and returns the base's diagnostics as hashed
 "not judged". In chat mode the base reads "not measured". Diagnostics compare on every file the reader reports, minus
 witness's own paths (correction C12), not on PC files. A part passes when green, or red on the base too with nothing
 new; an opaque part red on the base, a report either side could not read, or a red part whose reader finds nothing on
-the plan's tree reads "not judged". Drive reads the config at each job's start.
+the plan's tree reads "not judged". A part's state joins the gate's resume signature, so the judged verdict is
+journaled once the base result lands. Drive reads the config at each job's start, and owes no key the config no longer
+gives.
 
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
