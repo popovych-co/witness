@@ -3,7 +3,7 @@ import { reservedId } from '../src/ask.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { acquireDriveLock } from '../src/drive-presence.js'
 import {
-  JOB_STREAM, jobKinds, jobReading, jobState, journalShard, nextShard, type JobKind, type JobShardEntry, type JobUnit,
+  JOB_STREAM, jobKinds, jobReading, jobState, jobsBlocked, journalShard, nextShard, type JobKind, type JobShardEntry, type JobUnit,
 } from '../src/jobs.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { ENTRY_PROGRESS, movesFlow } from '../src/progress.js'
@@ -57,6 +57,14 @@ describe('the jobs stream (row 257)', () => {
     const r = journalShard(repo.root, { kind: 'fixture', key: 'k1', shard: 1, of: 1, outcome: 'done', ms: 1 })
     expect(!r.ok && r.violations[0]!.rule).toBe('stream-taken')
     expect((await repo.cli(['check'])).stdout).toMatch(/reserved-stream-taken/)
+  })
+
+  it('a taken stream is named with its foreign kind spelled out, never raw (security review)', async () => {
+    const repo = await seededRepo()
+    appendEntry(repo.root, JOB_STREAM, { t: 'x\u001b[2Jy' as 'retry' })
+    const why = jobsBlocked(repo.root)!
+    expect(why).toContain('the jobs stream starts with')
+    expect(why).not.toMatch(/\u001b/)
   })
 
   it('witness log jobs shows each shard', async () => {

@@ -7,6 +7,7 @@ import { acquireLock } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
 import { execCommand } from './runner.js'
 import type { Canon } from './scan.js'
+import { logSafe } from './toon.js'
 import { pendingTxn, withTxn } from './txn.js'
 
 // Row 257 (spec §3.5, DJ). Jobs are machine work no session does — a base tree's lint, a
@@ -125,7 +126,8 @@ export function nextShard(
 // stream holds another history (witness check names it).
 export function jobsBlocked(root: string): string | undefined {
   const first = readStream(root, JOB_STREAM)[0]
-  return first !== undefined && first.t !== 'job-shard' ? `the ${JOB_STREAM} stream starts with ${first.t} — witness check names it` : undefined
+  // `t` is another writer's text: spelled out before it reaches drive's log or report (logSafe).
+  return first !== undefined && first.t !== 'job-shard' ? `the ${JOB_STREAM} stream starts with ${logSafe(String(first.t))} — witness check names it` : undefined
 }
 
 const streamTaken = (first: Entry) => v(JOB_STREAM, 'stream-taken', `the stream starts with ${first.t}`,

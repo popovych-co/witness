@@ -1295,8 +1295,8 @@ export async function driveLoop(
   let jobsOff: string | undefined
   const jobsOffNow = (why: string) => {
     if (jobsOff !== undefined) return
-    jobsOff = why
-    ctx.out(`drive: jobs off for this run — ${why}`)
+    jobsOff = logSafe(why)                                  // every source spelled out once more: it is printed twice
+    ctx.out(`drive: jobs off for this run — ${jobsOff}`)
   }
   const beginJob = () => {
     if (job !== undefined || stop || signalled || jobsOff !== undefined) return
