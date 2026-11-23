@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { decideView } from '../src/decide-view.js'
-import { readStream } from '../src/journal.js'
+import { journalRel, readStream } from '../src/journal.js'
 import { timedCheck, type GateRunEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { cfgOf } from './model-fixtures.js'
@@ -64,8 +64,18 @@ describe('check durations (row 251)', () => {
     expect(timed(ship)).toBe(true)
   }, 180_000)
 
-  it('a re-run that differs only in durations resumes and appends no round', async () => {
+  // The journaled round's durations are rewritten before the re-run (a fixture's checks all take
+  // 0 ms, so a fresh run alone would never differ), and deleted for a round written before row 251.
+  it.each([
+    ['durations that differ', (c: Record<string, unknown>) => { c.duration_ms = 99_999 }],
+    ['no durations at all (a pre-251 round)', (c: Record<string, unknown>) => { delete c.duration_ms }],
+  ] as const)('a re-run against %s resumes and appends no round', async (_case, edit) => {
     const { repo, ctx } = await decomposed()
+    const rel = journalRel('auth-hardening')
+    const lines = repo.read(rel).split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>)
+    for (const e of lines) if (e.t === 'gate-run') (e.checks as Array<Record<string, unknown>>).forEach(edit)
+    repo.write(rel, lines.map((e) => JSON.stringify(e)).join('\n') + '\n')
+    repo.git('add', rel); repo.git('commit', '-m', 'rewrite the round\'s durations')
     expect(runs(repo.root, 'auth-hardening')).toHaveLength(1)
     await runGate(ctx, 'decompose', 'auth-hardening', { fresh: false, manual: false })
     expect(runs(repo.root, 'auth-hardening')).toHaveLength(1)
