@@ -11,6 +11,7 @@ import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
 import { kv, logSafe, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
+import { duration } from '../usage.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
 // Row 214: drive's `journal:` lines print an act as `witness log` does. Rows 205, 244: a journal line
@@ -68,6 +69,7 @@ function detailOf(e: Entry): string {
       return `${s.from} → ${s.to} (${s.cause})`
     }
     case 'cause': return `cause=${String(e.cause)}`   // row 253
+    case 'job-shard': return `${String(e.kind)} ${String(e.key)} ${String(e.shard)}/${String(e.of)} ${String(e.outcome)} ${duration(Number(e.ms))}`   // row 257
     case 'revise-returned': {
       // Row 244: the author's hand-back of a revise (`gate --unchanged`), named as a decision is — the
       // gate, then what happened — with the run it hands back and whether it was `--manual`.

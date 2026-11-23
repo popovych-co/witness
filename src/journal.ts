@@ -16,6 +16,8 @@ export type EntryType =
   // D154. A trust grant is a human act with consequences at headless gates, so it is
   // recorded like every other one: which commands, and through which surface.
   | 'trust'
+  // Row 257. One shard of a drive job: how it ended, on witness's own `jobs` stream.
+  | 'job-shard'
   // D122. An obligation's whole lifecycle, append-only: minted by a deferral, moved when
   // its flow ends, retyped when the pattern turns out to be a lens problem, and closed by
   // evidence (discharged) or by an explicit human cause (dismissed).

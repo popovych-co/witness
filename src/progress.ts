@@ -26,6 +26,8 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   'drift-check': 'bookkeeping', 'policy-pin': 'bookkeeping',
   // Row 253. A fix's cause is an input to the track record; classifying one moves no flow.
   cause: 'bookkeeping',
+  // Row 257. A job's shard is machine work drive runs beside the sessions, never a flow's motion.
+  'job-shard': 'bookkeeping',
 }
 
 // A vacuous red moves nothing either (row 191, final review I3). A kind this CLI does not
