@@ -6,7 +6,7 @@ import { stateFloor } from './floor.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { acquireLock } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
-import { trustedNow, type RunCommand } from './allowlist.js'
+import { configCommands, trustedNow, type RunCommand } from './allowlist.js'
 import { tryGit } from './gitio.js'
 import { ok, type Result as Res } from './refusal.js'
 import { execCommand } from './runner.js'
@@ -161,6 +161,19 @@ export function jobTrustOwed(
   return { blocked, commands }
 }
 
+// Row 260 (final review). Every command witness runs headless on the repo's behalf: the config
+// commands and each registered kind's own, once each. The targetless grant takes exactly these, so
+// a jobs wait's offered grant always works, whatever a kind declares.
+export function headlessCommands(cfg: Config, env: Record<string, string | undefined>): RunCommand[] {
+  const out = [...configCommands(cfg)]
+  for (const kind of jobKinds(env)) {
+    let own: RunCommand[]
+    try { own = kind.commands(cfg) } catch { continue }
+    for (const c of own) if (!out.some((o) => o.cmd === c.cmd)) out.push(c)
+  }
+  return out
+}
+
 // Why no shard can be journaled in this repo now, before drive spends a box on one: the `jobs`
 // stream holds another history (witness check names it).
 export function jobsBlocked(root: string): string | undefined {
@@ -204,7 +217,7 @@ export function journalShard(root: string, entry: Omit<JobShardEntry, 'v' | 't'>
 }
 
 // The test-only fixture (WITNESS_FIXTURE_JOB, JSON `{ key, shards, turn, gated, boxMs, cmd, fail?,
-// scratch? }`), a seam on WITNESS_DRIVE_AGENT_BIN's precedent and never documented: anything
+// scratch?, commands? }` — `commands` the repo commands it declares, as `job: fixture`), a seam on WITNESS_DRIVE_AGENT_BIN's precedent and never documented: anything
 // malformed registers nothing. Its `cmd` is the suite's own, with `{shard}` and `{of}` filled in; it
 // runs without a turn of its own — inside the verb's when the kind takes one. With `scratch` it runs
 // in the scratch at the root's HEAD (row 258), and its result names the tree and commit it ran.
@@ -218,15 +231,17 @@ function fixtureKind(raw: string | undefined): JobKind | undefined {
   } catch {
     return undefined
   }
-  const { key, shards, turn, gated, boxMs, cmd, fail, scratch } = o
+  const { key, shards, turn, gated, boxMs, cmd, fail, scratch, commands } = o
   if (typeof key !== 'string' || !isJobKey(key) || !isCount(shards) || typeof turn !== 'boolean' || typeof gated !== 'boolean') return undefined
   if (typeof boxMs !== 'number' || !Number.isInteger(boxMs) || boxMs < 1 || typeof cmd !== 'string') return undefined
   if (fail !== undefined && typeof fail !== 'string') return undefined
   if (scratch !== undefined && typeof scratch !== 'boolean') return undefined
+  if (commands !== undefined && !(Array.isArray(commands) && commands.every((c) => typeof c === 'string'))) return undefined
+  const declared = ((commands ?? []) as string[]).map((c) => ({ cmd: c, source: 'job: fixture' }))
   return {
     kind: 'fixture', turn, gated, scratch: scratch === true,
     boxMs: () => boxMs,
-    commands: () => [],
+    commands: () => declared,
     owed: () => [{ kind: 'fixture', key, shards }],
     run: (root, ctx, cfg, unit, shard) => {
       if (fail !== undefined) return { outcome: 'failed', why: fail }

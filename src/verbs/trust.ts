@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { commandsRun, configCommands, grantCommands, pendingCmds, pendingRows, trustedCommands, trustListing, unsafeLeft } from '../allowlist.js'
+import { commandsRun, grantCommands, pendingCmds, pendingRows, trustedCommands, trustListing, unsafeLeft } from '../allowlist.js'
 import type { Config } from '../config.js'
 import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
@@ -11,6 +11,7 @@ import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../re
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
 import { hasControl, kv, rows, shellWord, visible } from '../toon.js'
+import { headlessCommands } from '../jobs.js'
 import { TRUST_STREAM } from '../streams.js'
 import { crashPoint, guardTxn, pendingTxn, withTxn } from '../txn.js'
 
@@ -197,7 +198,9 @@ function grantRepo(ctx: Ctx, root: string, cfg: Config, named: string[]): number
     return refused(ctx, [v('--cmd', 'control-characters', visible(unsafe),
       'a command of printable ASCII — any other character can hide what it runs')])
   }
-  const cmds = [...new Set(configCommands(cfg).map((c) => c.cmd))]
+  // Final review: every command witness runs headless — a drive job's own included, so the grant
+  // its wait offers is one this verb takes.
+  const cmds = [...new Set(headlessCommands(cfg, ctx.env).map((c) => c.cmd))]
   const unknown = named.filter((c) => !cmds.includes(c))
   if (unknown.length > 0) {
     return refused(ctx, [v('--cmd', 'unknown-command', visible(unknown[0]!),

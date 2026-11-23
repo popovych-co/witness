@@ -162,3 +162,18 @@ describe('the scratch — slice 2 review (row 258)', () => {
     expect(rule(resetScratch(dir, head))).toBe('ok')
   })
 })
+
+describe('the scratch — final review (row 258)', () => {
+  it('a found scratch with a stale index.lock and canon showing is set up, not refused (M-a)', async () => {
+    const repo = await seededRepo()
+    const dir = value(openScratch(repo.root))
+    const head = repo.git('rev-parse', 'HEAD')
+    git(dir, 'config', '--worktree', 'core.sparseCheckout', 'false')
+    value(resetScratch(dir, head))
+    expect(existsSync(join(dir, 'specs'))).toBe(true)
+    writeFileSync(join(git(dir, 'rev-parse', '--path-format=absolute', '--git-dir').stdout.trim(), 'index.lock'), '')
+    expect(value(openScratch(repo.root))).toBe(dir)
+    value(resetScratch(dir, head))
+    expect(existsSync(join(dir, 'specs'))).toBe(false)
+  })
+})

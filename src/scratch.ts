@@ -68,6 +68,9 @@ export function openScratch(root: string): Result<string> {
   // patterns are applied and verified, or the residue check would refuse every run until a human
   // removed the scratch (plan worktrees' remedy, "adopt or revert", means nothing here).
   if (exists) {
+    // A kill's leftover lock first (final review): with it, excludeCanon's reapply fails silently
+    // and its residue check would refuse every run before the reset that clears it.
+    dropStaleLocks(path)
     for (const r of materializedCanon(root, path)) rmSync(join(path, r.rel), { recursive: true, force: true })
   }
   if (!exists) {
@@ -87,6 +90,17 @@ export function openScratch(root: string): Result<string> {
   return ok(path)
 }
 
+// A killed git's leftover locks in the scratch's own git dir: index.lock, and HEAD.lock (a reset
+// killed in its last moment, slice 2 review). Under the scratch lock no other witness process runs
+// git here. One that cannot be removed is named by git's refusal.
+function dropStaleLocks(dir: string): void {
+  const gitDir = tryGit(dir, 'rev-parse', '--path-format=absolute', '--git-dir')
+  if (!gitDir.ok) return
+  for (const lock of ['index.lock', 'HEAD.lock']) {
+    try { rmSync(join(gitDir.out, lock), { force: true }) } catch { /* git names it */ }
+  }
+}
+
 // The scratch at `commit`, clean: everything untracked or ignored goes but `node_modules` and
 // `target` at any depth (the prepared install and cargo's build cache survive a reset).
 //
@@ -94,13 +108,7 @@ export function openScratch(root: string): Result<string> {
 // in its last moment, HEAD.lock), and git refuses every later checkout until it goes. Under the scratch lock no other witness process
 // runs git here, so a leftover is removed first; one that cannot be removed refuses with its path.
 export function resetScratch(dir: string, commit: string): Result<void> {
-  const gitDir = tryGit(dir, 'rev-parse', '--path-format=absolute', '--git-dir')
-  if (gitDir.ok) {
-    // HEAD.lock too: a reset killed in its last moment (slice 2 review).
-    for (const lock of ['index.lock', 'HEAD.lock']) {
-      try { rmSync(join(gitDir.out, lock), { force: true }) } catch { /* git names it below */ }
-    }
-  }
+  dropStaleLocks(dir)
   const co = tryGit(dir, 'checkout', '--quiet', '--force', '--detach', commit)
   if (!co.ok) return refuse([v(SCRATCH_DIR, 'scratch-reset', lastLine(co.out), `a clean checkout of ${visible(commit)}`)])
   const cl = tryGit(dir, 'clean', '-ffdxq', '-e', 'node_modules', '-e', 'target')

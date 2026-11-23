@@ -278,3 +278,19 @@ describe('job trust in drive — slice 3 review (row 260)', () => {
     expect(out.some((l) => /wait: trust grant · jobs/.test(l))).toBe(false)
   }, 120_000)
 })
+
+describe('job trust — final review (row 260)', () => {
+  it('a kind\'s own command is granted by the line its wait offers (I1)', async () => {
+    const job = fixture({ turn: false, commands: ['echo lint'] })
+    const { repo, out, run } = await jobsOnly(job, { WITNESS_TRUST_CMDS: '0' })
+    await run()
+    expect(out).toContain('drive: jobs wait for a trust grant — echo lint (job: fixture)')
+    expect(out.some((l) => /run: witness trust --cmd 'echo lint'$/.test(l))).toBe(true)
+    expect(shards(repo.root)).toEqual([])
+    const granted = await repo.cli(['trust', '--cmd', 'echo lint'], { env: { WITNESS_FIXTURE_JOB: job } })
+    expect(granted.code, granted.stderr).toBe(0)
+    out.length = 0
+    await run()
+    expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done'])
+  }, 120_000)
+})

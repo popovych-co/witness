@@ -41,12 +41,13 @@ function templateStamp(root: string): PreparedStamp | undefined {
 
 const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineValue(val))
 
-// Row 259. The settings whose value is a command witness runs: a `filled` one is a proposal the
-// human may grant in the same act. T2c's lint parts and reader commands join this list.
+// Row 259. The settings whose value is a command witness runs: a `filled` or `added` one is a
+// proposal the human may grant in the same act. T2c's lint parts and reader commands join this list.
 export const COMMAND_SETTINGS: readonly string[] = ['scratch.prepare']
 
-const proposalsOf = (changes: readonly Change[]): RunCommand[] =>
-  changes.filter((c) => c.kind === 'filled' && COMMAND_SETTINGS.includes(c.path) && typeof c.to === 'string' && c.to !== 'none')
+// A command setting migrate fills (ambient) or adds (final review: T2c's may not be ambient).
+export const proposalsOf = (changes: readonly Change[]): RunCommand[] =>
+  changes.filter((c) => (c.kind === 'filled' || c.kind === 'added') && COMMAND_SETTINGS.includes(c.path) && typeof c.to === 'string' && c.to !== 'none')
     .map((c) => ({ cmd: c.to as string, source: c.path }))
 
 // What stays for the human: each untrusted proposal, and its grant to run (none for a command the

@@ -10,7 +10,7 @@ import { loadConfig, resolveSettings, type Resolved } from '../src/config.js'
 import { readStream } from '../src/journal.js'
 import { migrateValues } from '../src/migration.js'
 import { SETTINGS, defaultValues, getIn, withValues } from '../src/settings.js'
-import { guardMigration } from '../src/verbs/migrate.js'
+import { guardMigration, proposalsOf } from '../src/verbs/migrate.js'
 import { patchConfig, tmpRepo, type TestRepo } from './helpers.js'
 
 // Row 193 §4.6. `witness migrate` brings witness.config.yaml to the current schema, complete,
@@ -309,5 +309,15 @@ describe('migrate grants what it proposes (row 259)', () => {
     expect(r.code).toBe(0)
     expect(trustedCommands(repo.root)).not.toContain(PNPM)
     expect(r.stdout).toContain(`run: witness trust --cmd '${PNPM}'`)
+  })
+})
+
+describe('migrate proposals — final review (row 259)', () => {
+  it('a command setting migrate adds is proposed as one it fills is', () => {
+    expect(proposalsOf([
+      { kind: 'added', path: 'scratch.prepare', to: 'make setup' },
+      { kind: 'filled', path: 'scratch.prepare', to: 'none' },
+      { kind: 'added', path: 'ship.branch', to: 'main' },
+    ])).toEqual([{ cmd: 'make setup', source: 'scratch.prepare' }])
   })
 })
