@@ -56,7 +56,10 @@ export function interrupted(signal: NodeJS.Signals): Violation {
     're-run it where nothing stops it before the suite ends — no outcome was recorded')
 }
 
-export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
+// Row 255: `turn: false` runs at once, outside the test turn, and hands the command no
+// WITNESS_RUNNER_TURN — ship's lint lane, and a job's command inside a turn its verb already holds.
+export function execCommand(runRoot: string, ctx: Ctx, cmd: string, opts: { turn?: boolean } = {}): RunOutcome {
+  if (opts.turn === false) return runCommand(runRoot, ctx, cmd)
   return withRunnerTurn(runRoot, ctx, cmd, (env) => runCommand(runRoot, { ...ctx, env }, cmd))
 }
 

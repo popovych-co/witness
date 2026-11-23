@@ -18,6 +18,11 @@ import { ensureExcluded } from './worktree.js'
 // a port or a profile, and each collision costs a round. With a filtered runner a turn costs
 // seconds. `drive.parallelSuites: true` relaxes it.
 //
+// Row 255: lint is the exception and takes no turn (ship's lint lane, `execCommand`'s `turn:
+// false`). It boots no server or browser, so it cannot collide on a port or a profile, and cargo's
+// own build-directory lock already serializes clippy with a test build. A lint run waiting behind a
+// suite would only spend the session's time.
+//
 // A turn waits while its holder lives and never refuses: the holder is a live process running
 // one command, and its session's `drive.sessionTimeoutMs` bounds it. Refusing would have to
 // fake a run outcome, and a fake failed run journals a false red.

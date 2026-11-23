@@ -24,13 +24,14 @@ import { gateSettled, openStepRow } from '../verbs/next.js'
 import { lastGateRun, timedCheck, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
 
+// `turn` says whether the lane's command takes the test turn: lint takes none (row 255).
 async function commandLane(
-  wt: string, root: string, ctx: Parameters<typeof ensureTrusted>[1], name: string, cmd: string | undefined,
+  wt: string, root: string, ctx: Parameters<typeof ensureTrusted>[1], name: string, cmd: string | undefined, turn: boolean,
 ): Promise<GateCheck> {
   if (!cmd) return { name, ok: false, detail: `ship.${name === 'tests' ? 'test' : 'lint'} not configured` }
   const trust = await ensureTrusted(root, ctx, cmd)
   if (trust !== 'trusted') return { name, ok: false, detail: `${cmd}: ${trust}`, untrusted: [cmd] }
-  const run = execCommand(wt, ctx, cmd)
+  const run = execCommand(wt, ctx, cmd, { turn })
   return { name, ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
 }
 
@@ -104,7 +105,7 @@ registerGate({
     const rc = rcR.ok && rcR.value.mode === 'full-suite' ? rcR.value : undefined
     let suite: TestOutcome[] | undefined
     checks.push(await timedCheck(async () => {
-      if (rc === undefined) return commandLane(wt, root, ctx, 'tests', cfg.ship.test)
+      if (rc === undefined) return commandLane(wt, root, ctx, 'tests', cfg.ship.test, true)
       const cmd = rc.suiteCmd
       const r = await runSuite(wt, ctx, rc, root)
       if (!r.ok) {
@@ -118,7 +119,7 @@ registerGate({
       const { run } = r.value
       return { name: 'tests', ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
     }))
-    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'lint', cfg.ship.lint)))
+    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'lint', cfg.ship.lint, false)))
 
     // deterministic drift lane: spec content from MAIN, execution in the worktree; `repin` reads it below.
     // Handed the tests lane's parsed report (row 252); with none — the suite was untrusted, ended by a
