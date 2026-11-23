@@ -8,6 +8,9 @@ export interface TestOutcome {
   name: string
   classname: string
   status: 'passed' | 'failed' | 'skipped'
+  // Row 258. The case failed outside any test: its file never loaded (a missing import, a syntax
+  // error, a module or a hook that threw). Its status stays 'failed', so no existing reader moves.
+  load?: true
 }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
@@ -28,6 +31,11 @@ function attrs(tag: string): Record<string, string> {
   return out
 }
 
+// Row 258, the load rule. A load failure is a testcase holding an <error> element, or a failed one
+// whose name equals its classname. The second rule is vitest's: 4.1.10 (both consumers' runner)
+// never writes <error> — a missing import, a syntax error, a module that throws at import and a
+// beforeAll that throws each write <failure> on a synthetic testcase named after its file
+// (probe t2b-junit-vitest-4.1.10.xml beside the impl map), while a failed test is named for itself.
 export function parseJUnit(xml: string): TestOutcome[] {
   const clean = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '').replace(/<!--[\s\S]*?-->/g, '')
   const out: TestOutcome[] = []
@@ -35,17 +43,29 @@ export function parseJUnit(xml: string): TestOutcome[] {
   let m: RegExpExecArray | null
   while ((m = re.exec(clean)) !== null) {
     const a = attrs(m[1] ?? '')
+    const name = a.name ?? ''
+    const classname = a.classname ?? ''
     let status: TestOutcome['status'] = 'passed'
+    let load = false
     if (m[2] !== '/') {
       const end = clean.indexOf('</testcase>', re.lastIndex)
       const inner = clean.slice(re.lastIndex, end === -1 ? undefined : end)
-      if (/<(?:failure|error)\b/.test(inner)) status = 'failed'
-      else if (/<skipped\b/.test(inner)) status = 'skipped'
+      const error = /<error\b/.test(inner)
+      const failure = /<failure\b/.test(inner)
+      if (error || failure) {
+        status = 'failed'
+        load = error || name === classname
+      } else if (/<skipped\b/.test(inner)) status = 'skipped'
       if (end !== -1) re.lastIndex = end + '</testcase>'.length
     }
-    out.push({ name: a.name ?? '', classname: a.classname ?? '', status })
+    out.push({ name, classname, status, ...(load ? { load: true as const } : {}) })
   }
   return out
+}
+
+// Row 258. The files that failed to load, once each, sorted.
+export function loadFailures(tests: readonly TestOutcome[]): string[] {
+  return [...new Set(tests.filter((t) => t.load).map((t) => t.classname))].sort()
 }
 
 export function reportFiles(root: string, glob: string): string[] {
