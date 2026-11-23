@@ -177,11 +177,14 @@ export const SETTINGS: readonly Setting[] = [
     want: 'an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges',
   },
   // Row 262. A reader per tool, bound to the ship.lint part of its name. Not ambient: an older file
-  // reads `none`, no reader.
+  // reads `none`, no reader. Slice 2 review: the base and the plan compare whole, so a reader that
+  // stops at its first failure (cargo without --keep-going, pnpm -r without --no-bail, runs joined
+  // by &&) would hide a plan's new error behind the base's old one; witness cannot see that.
   ...READER_TOOLS.map((tool): Setting => ({
     path: `readers.${tool}`, shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, group: 'setup',
-    comment: `how witness reads the part named ${tool} per diagnostic · a command printing ${READER_FORMATS[tool]}, or none`,
-    want: `a shell command, or none — run from the repo root, it prints only ${READER_FORMATS[tool]} for what the part named ${tool} checks`,
+    comment: `reads the ship.lint part named ${tool} per diagnostic · a command printing ${READER_FORMATS[tool]} with every error, or none`,
+    want: `a shell command, or none — run from the repo root, it prints only ${READER_FORMATS[tool]} for what the part named ${tool}`
+      + ' checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs)',
   })),
   {
     // Row 259. Ambient: an older file never declared it, and absent means scratch runs are off

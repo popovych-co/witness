@@ -35,10 +35,10 @@ ship:
   merge: merge                 # how ship merges its own PR under autonomy · merge | squash | rebase
   ciSettleMs: 60000            # ms green CI must hold still before an autonomous merge · 0–1800000
 readers:
-  biome: none                  # how witness reads the part named biome per diagnostic · a command printing biome's SARIF report (--reporter=sarif), or none
-  eslint: none                 # how witness reads the part named eslint per diagnostic · a command printing ESLint's JSON report (-f json), or none
-  clippy: none                 # how witness reads the part named clippy per diagnostic · a command printing cargo's JSON messages (--message-format=json), or none
-  tsc: none                    # how witness reads the part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false), or none
+  biome: none                  # reads the ship.lint part named biome per diagnostic · a command printing biome's SARIF report (--reporter=sarif) with every error, or none
+  eslint: none                 # reads the ship.lint part named eslint per diagnostic · a command printing ESLint's JSON report (-f json) with every error, or none
+  clippy: none                 # reads the ship.lint part named clippy per diagnostic · a command printing cargo's JSON messages (--message-format=json) with every error, or none
+  tsc: none                    # reads the ship.lint part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false) with every error, or none
 scratch:
   prepare: none                # what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none
 

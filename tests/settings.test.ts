@@ -102,4 +102,12 @@ describe('readers (row 262)', () => {
     expect(defaultValues({ schema: 2 })).not.toHaveProperty('readers')
     expect(SECTION_ORDER.indexOf('readers')).toBe(SECTION_ORDER.indexOf('ship') + 1)
   })
+
+  it('a reader is told to report every error, never stopping at the first failure (slice 2 review I1)', () => {
+    for (const t of READER_TOOLS) {
+      const s = settingAt(`readers.${t}`)!
+      expect(s.comment).toContain('every error')
+      expect(s.want).toContain('never stopping at the first failure')
+    }
+  })
 })
