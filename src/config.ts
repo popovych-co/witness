@@ -7,7 +7,7 @@ import { checkPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import {
   CHANGE_CLASSES, GATE_NAMES, RETIRED, SETTINGS, defaultAt, getIn, knownAt, settingAt,
-  type Battery, type GateName, type Setting,
+  READER_TOOLS, type Battery, type GateName, type ReaderTool, type Setting,
 } from './settings.js'
 import { execFileSync } from './spawn.js'
 
@@ -119,6 +119,8 @@ export interface Config {
   docs: DocsRegistry
   criteria: CriteriaConfig
   ship: ShipConfig
+  // Row 262. The reader per tool; a tool set to `none`, or an older file's, is absent.
+  readers: Partial<Record<ReaderTool, string>>
   scratch: ScratchConfig
   harness?: string
   // Rows 171-175. Whether the CLI settles its own stops is a REPO fact — committed, read by
@@ -341,6 +343,11 @@ export function resolveSettings(raw: Raw, mode: 'strict' | 'lenient'): Result<Re
     const list = at<string[]>(`docs.${key}`)
     if (list.length) docs[key] = list
   }
+  const readers: Partial<Record<ReaderTool, string>> = {}
+  for (const tool of READER_TOOLS) {
+    const cmd = at<string | undefined>(`readers.${tool}`)
+    if (cmd !== undefined && cmd !== 'none') readers[tool] = cmd
+  }
   const gates = { reviewerTimeoutMs: at<number>('gates.reviewerTimeoutMs') } as GatesConfig
   for (const g of GATE_NAMES) gates[g] = { model: at<string | undefined>(`gates.${g}.model`), reviewers: at<Battery>(`gates.${g}.reviewers`) }
   return ok({
@@ -351,6 +358,7 @@ export function resolveSettings(raw: Raw, mode: 'strict' | 'lenient'): Result<Re
       test: at('ship.test'), lint: at('ship.lint'), branch: at('ship.branch'),
       merge: at('ship.merge'), ciSettleMs: at('ship.ciSettleMs'),
     },
+    readers,
     scratch: { prepare: at('scratch.prepare') },
     harness: at('harness'),
     autonomy: at<string>('autonomy') === 'on',

@@ -226,12 +226,13 @@ function listingOf(
 // not trust yet, checked before any work: found only inside the session, a refusal journaled
 // nothing, `next` routed the same line again and drive respawned it to the cap. Only the
 // commands with no "no" path — the runner (the template, or ship.test in full-suite) for the
-// evidence verbs and the implement gate; that plus ship.test and every ship.lint part for ship; a start's
+// evidence verbs and the implement gate; that plus ship.test, every ship.lint part and bound reader for ship; a start's
 // own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
 // headless gate, so trust is never the toll, and a gate whose check failed on one reaches the
 // settle pass's trust-grant stop instead.
-// Row 261. Ship runs its suite and every lint part.
-const shipOwes = (source: string): boolean => source === 'ship.test' || source === 'ship.lint' || source.startsWith('ship.lint.')
+// Rows 261–262. Ship runs its suite, every lint part and every bound reader.
+const shipOwes = (source: string): boolean =>
+  source === 'ship.test' || source === 'ship.lint' || source.startsWith('ship.lint.') || source.startsWith('readers.')
 
 export function trustOwed(
   root: string, env: Record<string, string | undefined>, cfg: Config, canon: Pick<Canon, 'docs'>,

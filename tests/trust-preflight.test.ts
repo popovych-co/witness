@@ -145,4 +145,11 @@ describe('lint parts owe trust at ship (row 261)', () => {
       { cmd: 'pnpm exec biome check .', source: 'ship.lint.biome' }, { cmd: 'pnpm typecheck', source: 'ship.lint.types' },
     ])
   })
+
+  it('ship owes trust for a bound reader too (row 262)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: { biome: 'b' } }, readers: { biome: 'b-sarif' } })
+    const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness gate ship p1' })
+    expect(owed.filter((c) => c.source === 'readers.biome')).toEqual([{ cmd: 'b-sarif', source: 'readers.biome' }])
+  })
 })

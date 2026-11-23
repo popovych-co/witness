@@ -929,3 +929,17 @@ describe('witness check — scratch runs (row 259)', () => {
     expect((await repo.cli(['check'])).stdout).not.toContain('feature-off')
   })
 })
+
+describe('reader-unused (row 262)', () => {
+  it('names a reader no part bears the name of, once each (row 262)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { readers: { biome: 'pnpm exec biome check --reporter=sarif .' } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'reader')
+    const out = (await repo.cli(['check'])).stdout
+    expect(out.split('\n').filter((l) => l.includes('reader-unused'))).toHaveLength(1)
+    expect(out).toContain('readers.biome is set, but no ship.lint part is named biome')
+    patchConfig(repo, { ship: { lint: { biome: 'pnpm exec biome check .' } }, readers: { biome: 'pnpm exec biome check --reporter=sarif .' } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'part')
+    expect((await repo.cli(['check'])).stdout).not.toContain('reader-unused')
+  })
+})

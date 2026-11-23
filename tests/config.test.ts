@@ -439,3 +439,15 @@ describe('ship.lint parts (row 261)', () => {
     expect(r.ok && r.value.ship.lint).toEqual([{ name: 'lint', cmd: 'pnpm lint && pnpm typecheck', source: 'ship.lint' }])
   })
 })
+
+describe('readers (row 262)', () => {
+  it("a reader set to none, or an older file's, is no reader (row 262)", () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', configYaml({ readers: { biome: 'pnpm exec biome check --reporter=sarif .' } }))
+    const r = loadConfig(repo.root)
+    expect(r.ok && r.value.readers).toEqual({ biome: 'pnpm exec biome check --reporter=sarif .' })
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.readers).toEqual({})
+  })
+})

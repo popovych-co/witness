@@ -4,16 +4,16 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import {
   FIRST_LINE, GROUP_HEADINGS, RETIRED, SCHEMA_COMMENT, SCHEMA_FINGERPRINTS, SECTION_ORDER, SETTINGS,
-  defaultAt, defaultValues, fingerprint, knownAt, settingAt, shapeAt, withValues,
+  READER_TOOLS, defaultAt, defaultValues, fingerprint, knownAt, settingAt, shapeAt, withValues,
 } from '../src/settings.js'
 import { SCHEMA_VERSION } from '../src/config.js'
 
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
 
 describe('the settings list (row 193)', () => {
-  it('holds 37 settings, each path once, each section in SECTION_ORDER', () => {
-    expect(SETTINGS).toHaveLength(37)
-    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(37)
+  it('holds 41 settings, each path once, each section in SECTION_ORDER', () => {
+    expect(SETTINGS).toHaveLength(41)
+    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(41)
     for (const s of SETTINGS) expect(SECTION_ORDER, s.path).toContain(s.path.split('.')[0])
     // the list is the file's order: sections appear in SECTION_ORDER, never interleaved
     const sections = SETTINGS.map((s) => s.path.split('.')[0]!).filter((x, i, a) => a[i - 1] !== x)
@@ -89,5 +89,17 @@ describe('ship.lint parts (row 261)', () => {
     expect(s).toMatchObject({ shape: { kind: 'parts' }, older: { until: 2, shape: { kind: 'text' } }, since: 1, defaults: { 1: 'npm run lint' } })
     expect(shapeAt(s, 2)).toEqual({ kind: 'text' })
     expect(shapeAt(s, 3)).toEqual({ kind: 'parts' })
+  })
+})
+
+describe('readers (row 262)', () => {
+  it('schema 3 adds a reader per tool, none by default, right after ship (row 262)', () => {
+    for (const t of READER_TOOLS) {
+      expect(settingAt(`readers.${t}`)).toMatchObject({ shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, group: 'setup' })
+      expect(settingAt(`readers.${t}`)!.ambient).toBeUndefined()
+    }
+    expect(defaultValues({}).readers).toEqual({ biome: 'none', eslint: 'none', clippy: 'none', tsc: 'none' })
+    expect(defaultValues({ schema: 2 })).not.toHaveProperty('readers')
+    expect(SECTION_ORDER.indexOf('readers')).toBe(SECTION_ORDER.indexOf('ship') + 1)
   })
 })

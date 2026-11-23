@@ -70,6 +70,16 @@ export const BRANCH_RE = /^(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*\.lock$)[A-Za-z0-9
 // refusal in a newer file says what replaced it.
 export interface Retired { path: string; until: number; shape: Shape; instead: string }
 
+// Row 262. The tools whose report witness reads per diagnostic, and the report each reader prints.
+export const READER_TOOLS = ['biome', 'eslint', 'clippy', 'tsc'] as const
+export type ReaderTool = (typeof READER_TOOLS)[number]
+const READER_FORMATS: Readonly<Record<ReaderTool, string>> = {
+  biome: "biome's SARIF report (--reporter=sarif)",
+  eslint: "ESLint's JSON report (-f json)",
+  clippy: "cargo's JSON messages (--message-format=json)",
+  tsc: "tsc's diagnostic lines (--pretty false)",
+}
+
 const INT1 = { kind: 'int', min: 1 } as const
 const PIN = { kind: 'pin' } as const
 const PIN_WANT = '[provider/]model[:thinking]'
@@ -166,6 +176,13 @@ export const SETTINGS: readonly Setting[] = [
     comment: 'ms green CI must hold still before an autonomous merge · 0–1800000',
     want: 'an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges',
   },
+  // Row 262. A reader per tool, bound to the ship.lint part of its name. Not ambient: an older file
+  // reads `none`, no reader.
+  ...READER_TOOLS.map((tool): Setting => ({
+    path: `readers.${tool}`, shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, group: 'setup',
+    comment: `how witness reads the part named ${tool} per diagnostic · a command printing ${READER_FORMATS[tool]}, or none`,
+    want: `a shell command, or none — run from the repo root, it prints only ${READER_FORMATS[tool]} for what the part named ${tool} checks`,
+  })),
   {
     // Row 259. Ambient: an older file never declared it, and absent means scratch runs are off
     // (check says so, once); `none` means the scratch needs nothing installed.
@@ -240,7 +257,7 @@ export const RETIRED: readonly Retired[] = [
 ]
 
 export const SECTION_ORDER: readonly string[] = [
-  'harness', 'paths', 'docs', 'criteria', 'ship', 'scratch', 'autonomy', 'arbiter', 'session', 'implement', 'gates', 'drive',
+  'harness', 'paths', 'docs', 'criteria', 'ship', 'readers', 'scratch', 'autonomy', 'arbiter', 'session', 'implement', 'gates', 'drive',
 ]
 
 export const FIRST_LINE = '# witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.'
@@ -337,7 +354,7 @@ export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS)
 export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
-  3: '9a68d22041c2560738eb774d6532d18db86324913025b47b1babbfc9fc34d6d4',
+  3: '51284227f73adb71cf04db675bbcb12ca91ce9c90d74256cff4b5142d1a452e3',
 }
 
 // A value as one line of the file. Quoted only where YAML needs it, except that a one-line

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { parse as parseYaml } from 'yaml'
 import { EXIT, type Ctx } from '../cli.js'
-import { SCHEMA_VERSION, configPath, keyViolations, resolveSettings, type Resolved } from '../config.js'
+import { SCHEMA_VERSION, configPath, keyViolations, partsOf, resolveSettings, type Resolved } from '../config.js'
 import { inlineValue, readComments, renderConfig, type HumanComments } from '../config-file.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { resolveDriver } from '../harness.js'
@@ -20,6 +20,7 @@ import { prepareStamp, writeStamp, type PreparedStamp } from '../stamp.js'
 import { crashPoint, withTxn } from '../txn.js'
 import { templateDraft } from '../principles.js'
 import { detectPrepare } from '../prepare.js'
+import { detectReaders } from '../lint-parts.js'
 import { runRow } from '../act.js'
 import { grantCommands, repoGrantAct, shownCmd, trustedNow, UNGRANTABLE, type RunCommand } from '../allowlist.js'
 import { sessionMarker } from '../drive-presence.js'
@@ -42,13 +43,19 @@ function templateStamp(root: string): PreparedStamp | undefined {
 const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineValue(val))
 
 // Row 259. The settings whose value is a command witness runs: a `filled` or `added` one is a
-// proposal the human may grant in the same act. T2c's lint parts and reader commands join this list.
-export const COMMAND_SETTINGS: readonly string[] = ['scratch.prepare']
+// proposal the human may grant in the same act. Rows 261–262: the lint parts and the readers.
+export const COMMAND_SETTINGS: readonly string[] = [
+  'ship.lint', 'readers.biome', 'readers.eslint', 'readers.clippy', 'readers.tsc', 'scratch.prepare',
+]
 
-// A command setting migrate fills (ambient) or adds (final review: T2c's may not be ambient).
+// A command setting migrate fills (ambient) or adds (not ambient: the readers). A `ship.lint` is
+// one proposal per part, each under its own source (row 261); `none` is never one.
 export const proposalsOf = (changes: readonly Change[]): RunCommand[] =>
-  changes.filter((c) => (c.kind === 'filled' || c.kind === 'added') && COMMAND_SETTINGS.includes(c.path) && typeof c.to === 'string' && c.to !== 'none')
-    .map((c) => ({ cmd: c.to as string, source: c.path }))
+  changes.filter((c) => (c.kind === 'filled' || c.kind === 'added') && COMMAND_SETTINGS.includes(c.path))
+    .flatMap((c): RunCommand[] => {
+      if (c.path === 'ship.lint') return (partsOf('ship.lint', c.to) ?? []).map((p) => ({ cmd: p.cmd, source: p.source }))
+      return typeof c.to === 'string' && c.to !== 'none' ? [{ cmd: c.to, source: c.path }] : []
+    })
 
 // What stays for the human: each untrusted proposal, and its grant to run (none for a command the
 // verb would not take).
@@ -110,7 +117,9 @@ const humanLines = (h: HumanComments): string[] => [...h.top, ...[...h.above.val
 export function guardMigration(input: {
   before: Resolved; after: Resolved; changes: readonly Change[]; human: HumanComments; newText: string
 }): Violation[] {
-  const named = new Set(input.changes.filter((c) => c.kind === 'filled' || c.kind === 'moved').map((c) => c.path))
+  // Row 262. An `added` change is named too: a reader is not ambient, so the in-memory read fills
+  // `none` while the write takes what was detected, and the `added:` line names that value.
+  const named = new Set(input.changes.filter((c) => c.kind === 'filled' || c.kind === 'moved' || c.kind === 'added').map((c) => c.path))
   const out: Violation[] = []
   for (const s of SETTINGS) {
     const was = getIn(input.before as unknown as Record<string, unknown>, s.path)
@@ -185,7 +194,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const driver = resolveDriver(ctx.env, undefined)
   const written = migrateValues(raw, schema, {
     mode: 'write', harness: driver.ok ? driver.value.harness.name : undefined,
-    detected: { 'scratch.prepare': detectPrepare(root) },
+    detected: { 'scratch.prepare': detectPrepare(root), ...detectReaders(root) },
   })
   if (!written.ok) return refused(written.violations)
   const { changes } = written.value

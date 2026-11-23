@@ -321,3 +321,29 @@ describe('migrate proposals — final review (row 259)', () => {
     ])).toEqual([{ cmd: 'make setup', source: 'scratch.prepare' }])
   })
 })
+
+describe('migrate proposes lint parts and readers (rows 261–262)', () => {
+  it('adds the detected readers and asks to grant them with the setup command (row 262)', async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.write('biome.json', '{}\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'tools')
+    const r = await repo.cli(['migrate'], { tty: true, answers: ['y', 'y'] })
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('added: readers.biome pnpm exec biome check --reporter=sarif .')
+    expect(loaded(repo).readers).toEqual({ biome: 'pnpm exec biome check --reporter=sarif .' })
+    expect(trustedCommands(repo.root)).toContain('pnpm exec biome check --reporter=sarif .')
+  })
+
+  it('a ship.lint it fills proposes each part; a string it finds stays a string (row 261)', async () => {
+    const raw = defaultValues({ harness: 'claude-code', schema: 2 }) as { ship: Record<string, unknown> }
+    delete raw.ship.lint
+    const repo = committed(stringify(raw))
+    const r = await repo.cli(['migrate'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain("run: witness trust --cmd 'npm run lint'")
+    const kept = committed(stringify(withValues(defaultValues({ harness: 'claude-code', schema: 2 }), { ship: { lint: 'pnpm lint && pnpm typecheck' } })))
+    expect((await kept.cli(['migrate'])).code).toBe(0)
+    expect(kept.read('witness.config.yaml')).toMatch(/^ {2}lint: pnpm lint && pnpm typecheck +# /m)
+  })
+})
