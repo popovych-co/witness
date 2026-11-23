@@ -261,6 +261,17 @@ gate, and `next` routes the owed work, steps first; `witness status` and `decide
 `revise:` row, beside a `fresh:` row (a re-review of the work as it stands) when no work is owed. It
 also restarts drive's caps for that target.
 
+**The scratch (`scratch.prepare`).** Machine work on a tree other than a plan's — the first is the
+base tree's lint, which a later release brings — runs in one scratch checkout per repo,
+`.witness/scratch`: a detached worktree witness resets before every run, which `git status` never
+shows. `scratch.prepare` is the command that makes it runnable, run again only when a lockfile or a
+package manager's config changes; `init` and `migrate` write the one your root lockfile names
+(`pnpm install --frozen-lockfile --config.confirm-modules-purge=false` for pnpm), and `none`
+installs nothing. A repo command — the runner, `ship.test`, `ship.lint`, `scratch.prepare` — is
+granted once with `witness trust --cmd '<cmd>'`, or when `witness migrate` proposes it at a
+terminal; until then a job that runs it waits for you (`wait: trust grant · jobs`) and never fails
+for it.
+
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
 pinned to the approved commit (`gh pr merge N --<ship.merge> --match-head-commit <sha>`), or

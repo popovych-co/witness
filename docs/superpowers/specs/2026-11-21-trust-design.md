@@ -239,6 +239,22 @@ failure: re-prepare once, then fail the job. It is never a red, and never feeds 
 - A killed prepare re-runs next time.
 - A load error never becomes a red.
 
+**As built (T2b, row 258; it landed in T2, the map's correction C1).** The scratch is `.witness/scratch`, a detached
+worktree with a plan worktree's sparse patterns and its reflog off, set up on every open (a found one first loses
+whatever a run left in a canon folder), excluded from the root's `git status` and exempt from the state-path audit.
+Its lock is `.witness/live/scratch/lock.json`, leased once at the take, waited for while its holder lives, taken over
+once dead or lapsed, released by drive's sweep; what a process holds is kept in memory, never read back from the
+file's pid. Lock order is test turn → scratch → repo lock, and `takeTurn` throws inside the scratch. A commit runs as
+itself; a bare tree is wrapped deterministically (`commit-tree --no-gpg-sign`, a fixed identity and date) and pinned at
+`refs/witness/cf/<plan>/<tree>` — per (plan, tree), not per round — and the merge stamp drops the plan's refs. Reset
+removes a killed reset's `index.lock`/`HEAD.lock` first. The run is `inScratch(root, ctx, cfg, at, step)`: synchronous,
+headless, with a step rather than a command; it journals nothing and keeps no cache (each caller's journal is its
+cache, correction C10), and returns a record of every sha. `expect` and the "green on current" reuse land with T4a's
+guards. The junit rule is correction C8: `<error>`, or vitest's file-level case (a failed case named after its file
+in the suite named after that file; under `test.projects`, a name that ends its classname after a `/`); a run with
+load failures is reset, prepared again once and re-run, and a second is `load-failure`, never a red. A job kind may
+run in the scratch, whose lock its verb takes after the turn and before its box starts.
+
 ### 3.5 Drive jobs and the queued test turn (DJ) — T2
 
 **What a job is.** Base runs, mutation and explore are jobs that drive schedules, never work inside a session's gate
@@ -327,6 +343,18 @@ package.json scripts, Cargo `[lints]`, `.gitignore`, test-runner config, mutatio
   (from the last junit) and witness-owned report paths.
 - Tokens go as separate argv with no shell, or through a file witness writes. Agent text is never appended.
 - A job whose command is untrusted raises a trust needs-you item.
+
+**As built (T2b, rows 259–260).** `scratch.prepare` is declared once (schema 3) and granted once. Prepare pins nothing
+(correction C9): a pin earns its stop only where a command runs with access the agents lack — explore's login reads
+real secrets — while prepare runs as every session runs, and pinning manifests and lockfiles would ask again after 11
+of fewhats' 22 merges and 14 of wot's 16. Pins land in T8 with the explore host and login, with the acceptance "a
+changed blob-pinned file raises the trust item again". Typed tokens land with the first command that appends one (T2c's
+readers or T4a's guards, correction C10); nothing in T2b appends a token. A repo command — the runner, `ship.test`,
+`ship.lint`, `scratch.prepare` — is granted with no target, `witness trust --cmd '<exact>'`, journaled on witness's
+reserved `trust` stream, since a job or a scratch prepare serves no artifact; a doc's command still takes its target.
+`migrate` at a terminal asks once per command it proposes and grants each yes in the config's own commit. A job kind
+declares its commands; one whose commands (with `scratch.prepare` for a scratch kind) are untrusted is skipped, never
+struck, and drive sets aside one `jobs` trust wait naming the targetless grant.
 
 ### 3.8 Proof and record models (PM) — record in T1, proof in T6
 
@@ -689,8 +717,8 @@ Human-only waivers (lint bookings) arrive as decisions in needs-you.
 
 | Train | Settings |
 |---|---|
-| A (T0–T2) | ship.lint named parts |
-| B (T3–T6) | switch-off extra patterns; reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; scratch.prepare; check-definition paths |
+| A (T0–T2) | ship.lint named parts; scratch.prepare (as built, T2b: schema 3, which T2c extends; the map's C5) |
+| B (T3–T6) | switch-off extra patterns; reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
 **migrate** detects and proposes values:
@@ -830,4 +858,23 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   plan, since one it cannot place may have shipped later; a fix whose writes name no spec in canon reads `no amended
   spec`. Transaction ops equal their commit subjects, so a merge stamp or birth that `recover` completes keeps its
   place.
-
+- **C8 (T2b, row 258).** §3.4 said a junit `<error>` is a load failure; vitest 4.1.10, both consumers' runner, never
+  writes one: a missing import, a syntax error, a module that throws at import and a throwing `beforeAll` each write
+  `<failure>` on a synthetic case named after its file (probe `t2b-junit-vitest-4.1.10.xml`). A load failure is a case
+  holding `<error>`, or that file-level case — in the suite named after its file, so jest-junit's
+  `'{classname} {title}'` names stay reds (slice 1 review), with a `/`-suffix name under `test.projects` (slice 2 review).
+- **C9 (T2b, row 259).** §3.7 had prepare, the explore host and login pin their files' blob shas; prepare pins nothing,
+  and pins land in T8 with the host and login (the user's call of 2026-11-23, "what is not a band aid").
+- **C10 (T2b, rows 258–259).** §3.4's `run(tree, overlay, command, expect)` was cached and reused the round's junit, and
+  §3.7 appended typed tokens; CF keeps no cache — each caller's journal is its cache, since a job child never journals
+  (row 257) — and takes a step, not a command; `expect`, the reuse and the tokens land with their first users (T4a's
+  guards, T2c's readers) — the user's call of 2026-11-23.
+- **C11 (T2b, row 259).** §3.4's prepare ran "when the lockfile or manifests differ"; its inputs are a built-in list of
+  lockfiles and package-manager configs at any depth, never a setting, with `package.json` left out (a dependency edit
+  moves the lockfile; a scripts-only edit needs no reinstall); an input the list misses is caught by the load rule.
+- **Refs per (plan, tree) (T2b, row 258).** §3.4's per-(plan, round) refs: nothing finds, keeps or drops one by its
+  round, so a ref names its plan and tree only.
+- **The detected pnpm prepare (T2b, row 259).** §6's `pnpm install --frozen-lockfile` gains
+  `--config.confirm-modules-purge=false`: run headless, pnpm aborts whenever the scratch's kept `node_modules` must be
+  purged (a pnpm upgrade, a hoisting setting that differs between trees), and prepare would fail for good (slice 2
+  review).

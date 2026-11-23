@@ -493,7 +493,7 @@ export function copyFixture(repo: TestRepo, name: 'vitest-single' | 'workspace')
   repo.git('commit', '-m', `fixture: ${name}`)
 }
 
-// Row 193. A complete schema-2 file — every setting at the list's default, `patch` over it — with
+// Row 193. A complete newest-schema file — every setting at the list's default, `patch` over it — with
 // no comments. The one way a test writes a whole config; `patchConfig` changes one in place.
 export function configYaml(patch: Record<string, unknown> = {}): string {
   return stringify(withValues(defaultValues({ harness: 'claude-code' }), patch))
