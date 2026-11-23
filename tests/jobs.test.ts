@@ -3,12 +3,13 @@ import { reservedId } from '../src/ask.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { acquireDriveLock } from '../src/drive-presence.js'
 import {
-  JOB_STREAM, jobKinds, jobReading, jobState, jobsBlocked, journalShard, nextShard, type JobKind, type JobShardEntry, type JobUnit,
+  JOB_STREAM, jobKinds, jobReading, jobState, jobTrustOwed, jobsBlocked, journalShard, nextShard, type JobKind, type JobShardEntry, type JobUnit,
 } from '../src/jobs.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { ENTRY_PROGRESS, movesFlow } from '../src/progress.js'
 import { loadCanon } from '../src/scan.js'
-import { seededRepo, tmpRepo } from './helpers.js'
+import { grantCommands } from '../src/allowlist.js'
+import { patchConfig, seededRepo, tmpRepo } from './helpers.js'
 
 const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
 const fixture = (o: Record<string, unknown> = {}) =>
@@ -122,5 +123,19 @@ describe('jobs in the scratch (row 258)', () => {
     expect(kind!.commands(cfgOf(repo.root))).toEqual([])
     expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture() })[0]).toMatchObject({ scratch: false })
     expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: 'yes' }) })).toEqual([])
+  })
+})
+
+describe('job trust (row 260)', () => {
+  it('a scratch kind whose setup command is untrusted is blocked, and nextShard skips it (row 260)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { scratch: { prepare: 'sh prepare.sh' } })
+    const kinds = jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: true }) })
+    const owed = jobTrustOwed(repo.root, {}, cfgOf(repo.root), kinds)
+    expect(owed).toEqual({ blocked: new Set(['fixture']), commands: [{ cmd: 'sh prepare.sh', source: 'scratch.prepare' }] })
+    expect(nextShard(repo.root, cfgOf(repo.root), loadCanon(repo.root), kinds, owed.blocked)).toBeUndefined()
+    grantCommands(repo.root, ['sh prepare.sh'])
+    expect(jobTrustOwed(repo.root, {}, cfgOf(repo.root), kinds)).toEqual({ blocked: new Set(), commands: [] })
+    expect(jobTrustOwed(repo.root, {}, cfgOf(repo.root), jobKinds({ WITNESS_FIXTURE_JOB: fixture() })).blocked.size).toBe(0)
   })
 })

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, reopenRows, runRow, type Act } from './act.js'
-import { grantAct, grantRowsOf } from './allowlist.js'
+import { grantAct, grantRowsOf, repoGrantAct } from './allowlist.js'
+import { JOB_STREAM } from './streams.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
@@ -114,11 +115,14 @@ export function needsYou(
       add({ kind: 'design-look', target: t, key: `design-look:${t}`,
         open: cliAct('design', t, '--open'), show: cliAct('decide', 'design', t, '--show') })
     } else {
+      // Row 260: drive's jobs serve no artifact, so their wait offers the targetless repo grant.
+      const repo = t === JOB_STREAM
       const commands = (a.trust ?? []).map((c): TrustGrant => {
-        const grant = grantAct(t, c)
+        const grant = repo ? repoGrantAct(c) : grantAct(t, c)
         return { cmd: visible(c.cmd), source: visible(c.source), ...(grant !== undefined ? { grant } : {}) }
       })
-      add({ kind: 'trust-grant', target: t, key: `trust-grant:${t}`, ...(commands.length > 0 ? { commands } : {}), list: cliAct('trust', t) })
+      add({ kind: 'trust-grant', target: t, key: `trust-grant:${t}`, ...(commands.length > 0 ? { commands } : {}),
+        list: repo ? cliAct('trust') : cliAct('trust', t) })
     }
   }
   for (const u of unmetNeeds(canon)) {

@@ -6,7 +6,7 @@ import { stateFloor } from './floor.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { acquireLock } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
-import type { RunCommand } from './allowlist.js'
+import { trustedNow, type RunCommand } from './allowlist.js'
 import { tryGit } from './gitio.js'
 import { ok, type Result as Res } from './refusal.js'
 import { execCommand } from './runner.js'
@@ -119,11 +119,13 @@ export function jobReading(root: string, unit: JobUnit): JobReading {
 // its units in `owed()` order; the first unit with a shard still to run. The stream is read once. A
 // unit with a key outside isJobKey or a shard count outside 1…1000 is skipped, and a kind whose
 // `owed` throws owes nothing this time.
+// Row 260: a kind in `skip` (its commands untrusted) owes nothing this round.
 export function nextShard(
-  root: string, cfg: Config, canon: Canon, kinds: readonly JobKind[],
+  root: string, cfg: Config, canon: Canon, kinds: readonly JobKind[], skip?: ReadonlySet<string>,
 ): { kind: JobKind; unit: JobUnit; shard: number } | undefined {
   const entries = readStream(root, JOB_STREAM)
   for (const kind of [...kinds.filter((k) => k.gated), ...kinds.filter((k) => !k.gated)]) {
+    if (skip?.has(kind.kind)) continue
     let units: JobUnit[]
     try { units = kind.owed(root, cfg, canon) } catch { continue }
     for (const unit of units) {
@@ -133,6 +135,30 @@ export function nextShard(
     }
   }
   return undefined
+}
+
+// Row 260. The kinds a shard of which must not start now, and the commands that would free them: a
+// kind is blocked while any command it runs — its own, and a scratch kind's `scratch.prepare` — is
+// not trusted right now, and a scratch kind is blocked with no command while scratch runs are off
+// (`check` names that). A blocked kind is skipped, never struck: the human's grant frees it. The
+// commands are the untrusted ones, once each, in kind order.
+export function jobTrustOwed(
+  root: string, env: Record<string, string | undefined>, cfg: Config, kinds: readonly JobKind[],
+): { blocked: Set<string>; commands: RunCommand[] } {
+  const blocked = new Set<string>()
+  const commands: RunCommand[] = []
+  for (const kind of kinds) {
+    if (kind.scratch && cfg.scratch.prepare === undefined) { blocked.add(kind.kind); continue }
+    let own: RunCommand[]
+    try { own = kind.commands(cfg) } catch { blocked.add(kind.kind); continue }
+    const runs = kind.scratch && cfg.scratch.prepare !== 'none'
+      ? [...own, { cmd: cfg.scratch.prepare as string, source: 'scratch.prepare' }] : own
+    const untrusted = runs.filter((c) => !trustedNow(root, env, c.cmd))
+    if (untrusted.length === 0) continue
+    blocked.add(kind.kind)
+    for (const c of untrusted) if (!commands.some((o) => o.cmd === c.cmd)) commands.push(c)
+  }
+  return { blocked, commands }
 }
 
 // Why no shard can be journaled in this repo now, before drive spends a box on one: the `jobs`

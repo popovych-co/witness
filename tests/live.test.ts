@@ -139,3 +139,11 @@ describe('.witness/live/ (D203)', () => {
     }
   })
 })
+
+describe('live: the jobs trust wait (row 260)', () => {
+  it('keeps a jobs trust wait, a target no doc can take (row 260)', async () => {
+    const repo = await seededRepo()
+    writeLive(repo.root, { pid: process.pid, asides: [{ target: 'jobs', kind: 'kept', stop: 'trust-grant' }] })
+    expect(readLive(repo.root, loadCanon(repo.root))?.asides).toEqual([{ target: 'jobs', kind: 'kept', stop: 'trust-grant' }])
+  })
+})

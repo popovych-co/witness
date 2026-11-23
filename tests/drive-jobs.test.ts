@@ -248,3 +248,21 @@ describe('drive runs jobs in the scratch (row 258)', () => {
     expect(shards(repo.root)[0]!.result).toEqual({ exit: 0, tree: repo.git('rev-parse', `${ran}^{tree}`), commit: ran })
   }, 90_000)
 })
+
+describe('job trust in drive (row 260)', () => {
+  it('a job whose setup command is untrusted waits for the human\'s grant and strikes nothing (row 260)', async () => {
+    const { repo, out, run } = await jobsOnly(fixture({ turn: false, scratch: true }), { WITNESS_TRUST_CMDS: '0' })
+    patchConfig(repo, { scratch: { prepare: 'true' } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'prepare')
+    await run()
+    expect(out).toContain('drive: jobs wait for a trust grant — true (scratch.prepare)')
+    expect(out.some((l) => /wait: trust grant · jobs · true \(scratch\.prepare\)/.test(l))).toBe(true)
+    expect(out.some((l) => /run: witness trust --cmd true$/.test(l))).toBe(true)
+    expect(out.some((l) => l.startsWith('job: fixture'))).toBe(false)
+    expect(shards(repo.root)).toEqual([])
+    expect((await repo.cli(['trust', '--cmd', 'true'])).code).toBe(0)
+    out.length = 0
+    await run()
+    expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done'])
+  }, 120_000)
+})

@@ -60,10 +60,11 @@ const isRunningLine = (line: string): boolean => {
 
 // Starts the next owed shard, or returns undefined when nothing is owed.
 export function startJob(
-  root: string, cfg: Config, ctx: Ctx, canon: Canon, opts: { signal: AbortSignal; ticker?: Ticker },
+  root: string, cfg: Config, ctx: Ctx, canon: Canon, opts: { signal: AbortSignal; ticker?: Ticker; skip?: ReadonlySet<string> },
 ): RunningJob | undefined {
   if (opts.signal.aborted) return undefined
-  const next = nextShard(root, cfg, canon, jobKinds(ctx.env))
+  // Row 260: `skip` is the kinds whose commands are untrusted (`jobTrustOwed`).
+  const next = nextShard(root, cfg, canon, jobKinds(ctx.env), opts.skip)
   if (next === undefined) return undefined
   const { kind, unit, shard } = next
   const of = unit.shards

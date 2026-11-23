@@ -8,6 +8,7 @@ import { effortStreams } from './journal.js'
 import type { Canon } from './scan.js'
 import { GATE_NAMES } from './settings.js'
 import { ensureExcluded } from './worktree.js'
+import { JOB_STREAM } from './streams.js'
 
 // Row 203. Drive's set-asides — stuck and capped above all — live only in its memory (D145),
 // and a chat waiting beside it must know them. So drive publishes what needs the human here,
@@ -99,7 +100,8 @@ export function readLive(root: string, canon: Canon): LiveState | undefined {
   for (const a of Array.isArray(raw.asides) ? raw.asides as Array<Record<string, unknown>> : []) {
     if (a === null || typeof a !== 'object') continue
     const { target, kind, gate, stop } = a
-    if (typeof target !== 'string' || (target !== TARGETLESS && !ids.has(target))) continue
+    // Row 260: drive's `jobs` trust wait names witness's reserved stream, which no doc can take.
+    if (typeof target !== 'string' || (target !== TARGETLESS && target !== JOB_STREAM && !ids.has(target))) continue
     if (!ASIDE_KINDS.includes(kind as AsideKind)) continue
     if (gate !== undefined && !(GATE_NAMES as readonly unknown[]).includes(gate)) continue
     if (stop !== undefined && !stops.includes(stop as string)) continue

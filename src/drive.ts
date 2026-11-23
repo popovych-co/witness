@@ -14,7 +14,7 @@ import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
 import { behindJob, releaseDeadTurn, sweepTurnQueue, turnTickets } from './runner-lock.js'
 import { releaseDeadScratch } from './scratch-lock.js'
 import { startJob, type JobEnd, type RunningJob } from './drive-jobs.js'
-import { jobKinds, jobsBlocked, nextShard } from './jobs.js'
+import { JOB_STREAM, jobKinds, jobsBlocked, jobTrustOwed, nextShard } from './jobs.js'
 import { computeNext, conversationStage, heldPlan, type NextAction } from './verbs/next.js'
 import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
@@ -34,7 +34,7 @@ import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, journalActs, journalRel, readStream, type Entry } from './journal.js'
 import { movesFlow } from './progress.js'
-import { sourced, type RunCommand } from './allowlist.js'
+import { shownCmd, sourced, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import { logSafe, shellWords } from './toon.js'
@@ -1308,10 +1308,30 @@ export async function driveLoop(
     jobsOff = logSafe(why)                                  // every source spelled out once more: it is printed twice
     ctx.out(`drive: jobs off for this run — ${jobsOff}`)
   }
+  // Row 260. A job kind whose commands this machine does not trust yet is skipped, never struck, and
+  // drive sets aside one `jobs` trust wait — published, listed and notified like a target's — naming
+  // the targetless grant (witness's reserved stream id is its target: no doc can take it, and it has
+  // no key0, so take-back never touches it). Said once per set of commands; gone once they are trusted.
+  let jobsWaitSaid = ''
+  const jobsWait = (cmds: readonly RunCommand[]) => {
+    const said = cmds.map(shownCmd).join(' · ')
+    if (cmds.length === 0) aside.delete(JOB_STREAM)
+    else {
+      aside.set(JOB_STREAM, {
+        target: JOB_STREAM, kind: 'kept', stop: 'trust-grant', line: cliAct('trust').line,
+        why: KEPT_STOP_NAMES['trust-grant'], trust: [...cmds],
+      })
+      if (said !== jobsWaitSaid) ctx.out(`drive: jobs wait for a trust grant — ${said}`)
+    }
+    jobsWaitSaid = said
+  }
   const beginJob = () => {
     if (job !== undefined || stop || signalled || jobsOff !== undefined) return
+    const kinds = jobKinds(ctx.env)
+    const owed = jobTrustOwed(root, ctx.env, cfg, kinds)
+    jobsWait(owed.commands)
     // Nothing owed is nothing to say: a repo with no kind never hears that jobs are off (F4).
-    if (nextShard(root, cfg, canonNow, jobKinds(ctx.env)) === undefined) return
+    if (nextShard(root, cfg, canonNow, kinds, owed.blocked) === undefined) return
     const blocked = jobsBlocked(root)
     if (blocked !== undefined) { jobsOffNow(blocked); return }
     // A crashed transaction refuses every write until recovery: no shard starts meanwhile, and none
@@ -1320,7 +1340,7 @@ export async function driveLoop(
     const ctl = new AbortController()
     const relay = () => ctl.abort()
     abort.signal.addEventListener('abort', relay, { once: true })
-    const run = startJob(root, cfg, ctx, canonNow, { signal: ctl.signal })
+    const run = startJob(root, cfg, ctx, canonNow, { signal: ctl.signal, skip: owed.blocked })
     if (run === undefined) { abort.signal.removeEventListener('abort', relay); return }
     const j: DriveJob = { run, stop: ctl }
     void run.end.then((e) => { j.over = e; abort.signal.removeEventListener('abort', relay) })
