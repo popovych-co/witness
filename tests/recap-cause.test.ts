@@ -109,6 +109,16 @@ describe('a fix carries its cause (row 253)', () => {
       return { repo, argv: ['--effort', 'quick-fix', '--cause', 'decision'] }
     }],
     ['an unknown effort', 'unknown-effort', async () => ({ repo: await seededRepo(), argv: ['--effort', 'nope', '--cause', 'escape'] })],
+    // Slice 2 review C1. A case alias of a live fix (case-insensitive file systems) and a slug that
+    // climbs out of the journal are refused before any path is built from them.
+    ['an effort id with a capital (a case alias)', 'id-charset', async () => ({
+      repo: await seededRepo({ class: 'fix', slug: 'quick-fix', cause: 'escape' }), argv: ['--effort', 'Quick-Fix', '--cause', 'decision'] })],
+    ['an effort id that climbs out of the journal', 'id-charset', async () => {
+      const repo = await seededRepo()
+      repo.write('outside/evil.jsonl', JSON.stringify({ v: 1, t: 'recap', effort: 'evil', class: 'fix', goals: [], non_goals: [], constraints: [], slices: [] }) + '\n')
+      repo.git('add', 'outside/evil.jsonl'); repo.git('commit', '-m', 'a file outside the journal')
+      return { repo, argv: ['--effort', '../../outside/evil', '--cause', 'escape'] }
+    }],
     ['a reserved effort id', 'id-taken', async () => ({ repo: await seededRepo(), argv: ['--effort', 'asks', '--cause', 'escape'] })],
     ['a bad cause', 'enum', async () => {
       const repo = await seededRepo()
@@ -135,6 +145,7 @@ describe('a fix carries its cause (row 253)', () => {
     expect(r.code, r.stdout).toBe(2)
     expect(r.stderr).toContain(rule)
     expect(head(repo)).toBe(at)
+    expect(repo.git('status', '--porcelain', '--', '.witness', 'outside').trim()).toBe('')
   })
 
   it('an amend keeps the recorded cause, needs one for a causeless fix, and journals a different one', async () => {

@@ -243,6 +243,9 @@ async function classify(ctx: Ctx, values: { file?: string; amend?: boolean; ask?
     }
   }
   if (values.effort === undefined) return refused(v('--effort', 'required', 'absent', 'the fix effort to classify — witness status lists the fixes owing a cause'))
+  // Slice 2 review C1. Checked before any path is built from it: a case alias of a live fix would
+  // append through the alias on a case-insensitive file system, and `..` would climb out of the journal.
+  if (!ID_RE.test(values.effort)) return refused(v('--effort', 'id-charset', values.effort, '[a-z0-9][a-z0-9-]*'))
   if (!isFixCause(values.cause)) return refused(causeEnum(values.cause))
   const inSession = causeInSession(ctx.env)
   if (inSession) return refused({ ...inSession, field: '--cause' })
