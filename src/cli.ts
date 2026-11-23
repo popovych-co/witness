@@ -47,6 +47,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   'test-evidence': () => import('./verbs/evidence.js'),
   // Row 218. A session's own test run, in the repo's test turn and, on Windows, a job.
   turn: () => import('./verbs/turn.js'),
+  // Row 257. One shard of a drive job, run as drive's child and reported on stdout for it.
+  job: () => import('./verbs/job.js'),
   'verify-red': () => import('./verbs/evidence.js').then((m) => ({ run: m.runVerifyRed })),
   'dispatch-report': () => import('./verbs/dispatch.js'),
   // Row 191 §4.3. The close of a scaffolding step, the one plan step with no evidence to witness.
@@ -98,6 +100,7 @@ const VERB_USAGE: Record<string, string> = {
   index: 'witness index',
   init: 'witness init [--agent claude-code|pi|auto]',
   migrate: 'witness migrate [--dry-run]',
+  job: 'witness job <kind> <key> <shard>/<of>',
   log: 'witness log <stream> [--all] [--lineage]',
   next: 'witness next',
   read: 'witness read <id> [--design] [--outline] [--lines <a>-<b>] [--decisions]',
