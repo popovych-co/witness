@@ -2,12 +2,15 @@ import { basename } from 'node:path'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
+import { isId } from './dsl.js'
+import { JOB_STREAM, isShardEntry } from './jobs.js'
 import { readStream, streamIds, type Entry } from './journal.js'
 import { needsYou, needYouRows, WAIT_KINDS } from './needs-you.js'
 import type { DecisionEntry } from './rounds.js'
 import { record, recordLine } from './record.js'
 import { loadCanon } from './scan.js'
 import { kv } from './toon.js'
+import { duration } from './usage.js'
 
 // Row 184. What the run did and what waits, read from the journal written since the run
 // began plus the state at its end (design B6). Drive journals nothing of its own (D145), so
@@ -55,6 +58,19 @@ export function driveReport(
     counts[d.selected ?? 'named'] += 1
   }
 
+  // Row 257. Machine time per job kind, from the shards journaled since the run began.
+  const jobs = new Map<string, { ms: number; n: number; timeout: number; failed: number }>()
+  for (const { stream, entry } of since) {
+    if (stream !== JOB_STREAM || !isShardEntry(entry) || !isId(entry.kind)) continue
+    const j = jobs.get(entry.kind) ?? { ms: 0, n: 0, timeout: 0, failed: 0 }
+    jobs.set(entry.kind, {
+      ms: j.ms + entry.ms, n: j.n + 1,
+      timeout: j.timeout + (entry.outcome === 'timeout' ? 1 : 0), failed: j.failed + (entry.outcome === 'failed' ? 1 : 0),
+    })
+  }
+  const jobLines = [...jobs].map(([kind, j]) =>
+    `jobs: ${kind} ${duration(j.ms)} — ${j.n} shard(s)${j.timeout > 0 ? ` · ${j.timeout} timed out` : ''}${j.failed > 0 ? ` · ${j.failed} failed` : ''}`)
+
   const m = merged.length
   // A crash is one wait whatever it names; a notice waits on nobody.
   const w = new Set(waiting.filter((i) => i.notice !== true).map((i) => i.kind === 'pending-txn' ? '-txn' : i.target)).size
@@ -65,6 +81,7 @@ export function driveReport(
     `drive: ${run.stopped !== undefined ? 'stopped' : 'done'} — ${tally}`,
     ...merged, ...waits, ...parked, ...stuck, ...obligations,
     `decisions: policy ${counts.policy} · arbiter ${counts.arbiter} · affirmation ${counts.affirmation} · named ${counts.named}`,
+    ...jobLines,
     kv('record', recordLine(record(root, canon))),                     // row 254
     ...(w > 0 ? ['help: answer the waits above · then /witness or witness drive picks up where this run stopped'] : []),
   ]

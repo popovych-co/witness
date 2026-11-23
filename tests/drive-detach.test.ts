@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { detachArgv } from '../src/drive.js'
+import { selfArgv } from '../src/self.js'
 
 // Real files, as tests/spawn.test.ts resolves them: on win32 resolution IS a filesystem walk.
 // `platform` is passed in, so the Windows branch runs on any host.
@@ -64,5 +65,13 @@ describe('detachArgv', () => {
     expect(r.file).toBe(process.execPath)
     expect(r.args.slice(1)).toEqual(['drive', '--detach'])
     expect(r.args[0]).toMatch(/bin\.js$/)
+  })
+})
+
+describe('selfArgv (row 257)', () => {
+  it('selfArgv runs any verb of this CLI the way detachArgv runs drive', () => {
+    expect(value(selfArgv('node /w/bin.js', ['job', 'fixture', 'k1', '1/1'], {}, 'darwin'))).toMatchObject({
+      file: '/bin/sh', args: ['-c', 'exec node /w/bin.js "$@"', 'witness', 'job', 'fixture', 'k1', '1/1'],
+    })
   })
 })

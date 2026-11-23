@@ -55,7 +55,7 @@ const OUTCOMES: readonly JobOutcome[] = ['done', 'timeout', 'failed']
 const isCount = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= MAX_SHARDS
 
 // A shard entry as witness writes it; a hand-edited line of another shape is no shard.
-function isShardEntry(e: Entry): e is Entry & JobShardEntry {
+export function isShardEntry(e: Entry): e is Entry & JobShardEntry {
   return e.t === 'job-shard' && typeof e.kind === 'string' && typeof e.key === 'string' && isCount(e.of) &&
     isCount(e.shard) && (e.shard as number) <= (e.of as number) && OUTCOMES.includes(e.outcome as JobOutcome) &&
     typeof e.ms === 'number' && Number.isFinite(e.ms)

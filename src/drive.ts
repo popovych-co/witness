@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { cliAct, type Act } from './act.js'
 import { EXIT, main, type Ctx } from './cli.js'
 import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
@@ -9,15 +8,17 @@ import { sessionHash, withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon, type Canon } from './scan.js'
-import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop, type ResolvedSpawn } from './spawn.js'
+import { NO_CONSOLE_ENV, resolveSpawn, spawn, type ResolvedSpawn } from './spawn.js'
+import { LIVE_GROUPS, TERM_GRACE_MS, localBin, selfArgv, signalSession } from './self.js'
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
-import { releaseDeadTurn } from './runner-lock.js'
+import { behindJob, releaseDeadTurn, sweepTurnQueue } from './runner-lock.js'
+import { startJob, type RunningJob } from './drive-jobs.js'
 import { computeNext, conversationStage, heldPlan, type NextAction } from './verbs/next.js'
 import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
 import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
-import { DRIVE_DEADLINE_FILE_ENV, deadlineFile, writeDeadline } from './deadline.js'
+import { DRIVE_DEADLINE_FILE_ENV, deadlineFile, sweepDeadlines, writeDeadline } from './deadline.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
@@ -138,13 +139,9 @@ const SESSION_PROMPT = '/witness'
 // A `--manual` run's sessions arm the engine the same way: every gate they run stops.
 const MANUAL_PROMPT = '/witness --manual'
 
-// How long a SIGTERMed session gets before SIGKILL, and how long a dead session's pipes
-// get to drain before drive stops waiting on the grandchildren that inherited them.
-const TERM_GRACE_MS = 5_000
-// The process groups of the sessions now running (F11): a second signal to drive kills them
-// before drive itself goes, so nothing a session started outlives the run.
-const LIVE_GROUPS = new Set<number>()
-const EXIT_GRACE_MS = 2_000
+// How long a dead session's pipes get to drain before drive stops waiting on the grandchildren
+// that inherited them. TERM_GRACE_MS and LIVE_GROUPS live in self.ts (row 257: jobs share them).
+export const EXIT_GRACE_MS = 2_000
 // Row 214. How long a session may print nothing before drive says it still runs, and what on —
 // then again after each further stretch as long. Awake time, on the session's own clock (row
 // 210). A constant, not a setting, on row 202's precedent: no `migrate` for an upgrade.
@@ -152,31 +149,8 @@ export const SESSION_QUIET_MS = 300_000
 // Local wall-clock time, `HH:MM:SS`: what a human at the terminal reads `started` and `ended` by.
 const clockTime = (): string => new Date().toTimeString().slice(0, 8)
 
-// This CLI, for the child. A spawned session shells out to `witness` through
-// ${WITNESS_BIN:-npx …} in every stage skill, and an unset value means the child resolves
-// the PUBLISHED version while its parent runs an unpublished one — which the state floor
-// then refuses (cli-behind-state). An explicitly set value wins: a session that already
-// knows its bin is stating a fact drive has no better answer for.
-function localBin(ctx: Ctx): string {
-  return ctx.env.WITNESS_BIN ?? `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}`
-}
-
-// How drive stops a session it started: its process group (F11), or on Windows, which has no
-// groups to signal, its process tree (row 201).
-export function signalSession(
-  child: ReturnType<typeof spawn>, grouped: boolean, env: Record<string, string | undefined>, sig: NodeJS.Signals,
-): void {
-  try {
-    if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
-    else if (child.pid === undefined) child.kill(sig)
-    else if (child.exitCode === null && child.signalCode === null) {
-      // Only while it runs: Node closes the handle before it reports the exit, and from then on
-      // the pid may name another process, which a tree kill would take down with its own.
-      const stop = treeStop(child.pid, env)
-      spawn(stop.file, stop.args, { stdio: 'ignore' }).on('error', () => {})
-    }
-  } catch { /* already gone */ }
-}
+// Moved to self.ts with the job runner (row 257); re-exported for the console tests.
+export { signalSession }
 
 // One headless session, in the action's home, streamed to the driver's terminal.
 //
@@ -735,7 +709,8 @@ export function journalWatch(root: string, target: string): (session?: string) =
 }
 
 // `streamAt`: the target's stream length when the lane started — what it journaled is after it.
-interface Lane { action: NextAction; end: Promise<SessionEnd>; streamAt: number }
+// `token`: the session's `<drive pid>-<spawn n>`, its deadline file's name (row 256).
+interface Lane { action: NextAction; end: Promise<SessionEnd>; streamAt: number; token: string }
 
 const lastRunGate = (entries: ReturnType<typeof readStream>): string | undefined => {
   const run = [...entries].reverse().find((e) => e.t === 'gate-run') as { gate?: unknown } | undefined
@@ -974,16 +949,19 @@ export async function driveLoop(
 
   // `next` is the line the session takes (D13): the action's, or the re-run a settle routed.
   const launch = (step: SpawnStep, action: NextAction, n: number, next: string): Lane => {
+    const token = `${process.pid}-${n}`
     const lane: Lane = {
       action, end: Promise.resolve(undefined as unknown as SessionEnd),
-      streamAt: action.target !== undefined ? readStream(root, action.target).length : 0,
+      streamAt: action.target !== undefined ? readStream(root, action.target).length : 0, token,
     }
     // Row 242: a merge or fix left to the human is read from the record ship journals, so drive no
     // longer listens for ship's words (the merge sniff of rows 180 and 214 retired).
     // Row 214: what the session journals for its flow. Target-less work has no stream of its own
     // to watch (row 181 keys it on counts).
     const progress = action.target !== undefined ? journalWatch(root, action.target) : undefined
-    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, root, next, progress })
+    // Row 256: the session's deadline file, and whether it waits behind a job for the test turn.
+    const deadline = { root, token, behind: () => behindJob(root, token) }
+    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, root, next, progress, deadline })
     return lane
   }
 
@@ -1286,9 +1264,20 @@ export async function driveLoop(
   publish()
   // Row 218. A runner turn whose holder died — a session drive stopped mid-run — is released
   // now and after every session, before Windows hands its pid to another process. Row 240: so are
-  // the busy locks of dead holders, and this drive's own leftovers.
-  releaseDeadTurn(root)
-  sweepDeadBusy(root, { pid: process.pid })
+  // the busy locks of dead holders, and this drive's own leftovers. Row 257: and after every job,
+  // with the turn's stale tickets and the deadline files no running lane holds.
+  const sweep = () => {
+    releaseDeadTurn(root)
+    sweepTurnQueue(root)
+    sweepDeadBusy(root, { pid: process.pid })
+    sweepDeadlines(root, new Set([...lanes.values()].map((l) => l.token)))
+  }
+  sweep()
+  // Row 257. One job runs at a time, beside the lanes, in every drive: started after each round's
+  // fill while the run is not stopping, and awaited with the lanes. Drive journals each shard's
+  // outcome itself (drive-jobs.ts): a child stopped at its box dies at once and must never die
+  // mid-write, the one exception to row 145's "children journal their own acts".
+  let job: RunningJob | undefined
   try {
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
@@ -1367,9 +1356,18 @@ export async function driveLoop(
         pauseSince = undefined
         lanes.set(key, launch(step, action, spawns, next))
       }
+      if (job === undefined && !stop && !signalled) job = startJob(root, cfg, ctx, canonNow, { signal: abort.signal })
       if (autonomous) {
         publish()
         notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target)))
+      }
+      // A job and no lane: its end is the next thing that happens. A stop ends it through its signal,
+      // and its `end` resolves once the child is gone.
+      if (lanes.size === 0 && job !== undefined) {
+        await job.end
+        job = undefined
+        sweep()
+        continue
       }
       if (lanes.size === 0) {
         if (!stop && !signalled && pausedUntil > clock.now()) {
@@ -1393,11 +1391,19 @@ export async function driveLoop(
         }
         break
       }
-      const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
+      const ended = await Promise.race([
+        ...[...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))),
+        ...(job !== undefined ? [job.end.then(() => undefined)] : []),
+      ])
+      if (ended === undefined) {                            // the job's shard ended
+        job = undefined
+        sweep()
+        continue
+      }
+      const { key, end } = ended
       settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
       lanes.delete(key)
-      releaseDeadTurn(root)
-      sweepDeadBusy(root, { pid: process.pid })
+      sweep()
     }
 
     if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)
@@ -1436,17 +1442,7 @@ export function detachArgv(
   bin: string | undefined, args: readonly string[], env: Record<string, string | undefined>,
   platform: NodeJS.Platform = process.platform,
 ): Result<ResolvedSpawn> {
-  if (bin === undefined) {
-    return ok({ file: process.execPath, args: [join(dirname(fileURLToPath(import.meta.url)), 'bin.js'), 'drive', ...args], env, windowsVerbatimArguments: false })
-  }
-  if (platform !== 'win32') {
-    return ok({ file: '/bin/sh', args: ['-c', `exec ${bin} "$@"`, 'witness', 'drive', ...args], env, windowsVerbatimArguments: false })
-  }
-  const [first, ...rest] = splitArgv(bin)
-  if (first === undefined) {
-    return refuse([v('WITNESS_BIN', 'bin-empty', JSON.stringify(bin), 'the command that runs witness, e.g. node C:\\path\\to\\bin.js — or unset it')])
-  }
-  return resolveSpawn(first, [...rest, 'drive', ...args], env, 'win32')
+  return selfArgv(bin, ['drive', ...args], env, platform)
 }
 
 // Row 180. `--detach`: this CLI again, as `witness drive <args>`, in the background at the
@@ -1564,28 +1560,6 @@ function selectOption(answer: string, options: Selectable[]): Pick {
     return { refuse: `${answer} matches options ${matches.map((o) => o.n).join(', ')} — name the number` }
   }
   return { refuse: `not an option: ${answer} — answer with a number, an option verb, or the command itself` }
-}
-
-// Split a WITNESS_BIN command line into argv, honoring double quotes: on Windows `detachArgv`
-// starts the bin it names with no shell, and a first word quoted for its spaces (an install
-// under Program Files) is one word. Row 239: its one use. A printed decision is never read back
-// through it, and a typed answer at `decide>` reads by `shellWords`.
-export function splitArgv(command: string): string[] {
-  const argv: string[] = []
-  let cur = ''
-  let quoted = false
-  let started = false
-  for (const ch of command) {
-    if (ch === '"') { quoted = !quoted; started = true; continue }
-    if (ch === ' ' && !quoted) {
-      if (started) { argv.push(cur); cur = ''; started = false }
-      continue
-    }
-    cur += ch
-    started = true
-  }
-  if (started) argv.push(cur)
-  return argv
 }
 
 // How many times drive re-asks before leaving the stop standing. A human who cannot name
