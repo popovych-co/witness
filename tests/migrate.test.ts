@@ -4,8 +4,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { contextLimitOf } from '../plugin/hooks/context-core.mjs'
+import { trustedCommands } from '../src/allowlist.js'
 import { readComments } from '../src/config-file.js'
 import { loadConfig, resolveSettings, type Resolved } from '../src/config.js'
+import { readStream } from '../src/journal.js'
 import { migrateValues } from '../src/migration.js'
 import { SETTINGS, defaultValues, getIn, withValues } from '../src/settings.js'
 import { guardMigration } from '../src/verbs/migrate.js'
@@ -266,5 +268,46 @@ describe('scratch.prepare at migrate (row 259)', () => {
     expect(r.stdout).toContain('filled: scratch.prepare pnpm install --frozen-lockfile — was unset · scratch runs were off')
     expect(r.stdout).toContain('config: schema 2 → 3')
     expect(loaded(repo).scratch).toEqual({ prepare: 'pnpm install --frozen-lockfile' })
+  })
+})
+
+describe('migrate grants what it proposes (row 259)', () => {
+  const schema2Locked = () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'lock')
+    return repo
+  }
+  const PNPM = 'pnpm install --frozen-lockfile'
+
+  it('at a terminal, grants the setup command it proposes, in the config\'s own commit (§6, row 259)', async () => {
+    const repo = schema2Locked()
+    const r = await repo.cli(['migrate'], { tty: true, answers: ['y'] })
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain(`trusted: ${PNPM}`)
+    expect(trustedCommands(repo.root)).toContain(PNPM)
+    expect(repo.git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort())
+      .toEqual(['.witness/journal/trust.jsonl', 'witness.config.yaml'])
+    expect(readStream(repo.root, 'trust')).toEqual([expect.objectContaining({ cmds: [PNPM], via: 'migrate' })])
+  })
+
+  it('declined, away from a terminal, or inside a session, writes the proposal and grants nothing (row 259)', async () => {
+    for (const opts of [{ tty: true, answers: ['n'] }, {}, { tty: true, answers: ['y'], env: { WITNESS_DRIVE: 'p1' } }]) {
+      const repo = schema2Locked()
+      const r = await repo.cli(['migrate'], opts)
+      expect(r.code).toBe(0)
+      expect(loaded(repo).scratch).toEqual({ prepare: PNPM })
+      expect(trustedCommands(repo.root)).not.toContain(PNPM)
+      expect(r.stdout).toContain(`run: witness trust --cmd '${PNPM}'`)
+      expect(readStream(repo.root, 'trust')).toEqual([])
+    }
+  })
+
+  it('--dry-run asks nothing and grants nothing (row 259)', async () => {
+    const repo = schema2Locked()
+    const r = await repo.cli(['migrate', '--dry-run'], { tty: true, answers: ['y'] })
+    expect(r.code).toBe(0)
+    expect(trustedCommands(repo.root)).not.toContain(PNPM)
+    expect(r.stdout).toContain(`run: witness trust --cmd '${PNPM}'`)
   })
 })
