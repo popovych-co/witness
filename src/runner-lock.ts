@@ -10,6 +10,7 @@ import { liveFolder, liveIo, sessionToken } from './deadline.js'
 import { isId } from './dsl.js'
 import { primaryRoot } from './gitio.js'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
+import { scratchHeldBy } from './scratch-lock.js'
 import { ensureExcluded } from './worktree.js'
 
 // Row 181 (Task 3b). Every command witness runs takes turns across the worktrees of one
@@ -292,6 +293,11 @@ function takeTurn(root: string, ctx: Ctx, label: string, who: TurnWho | undefine
   const first = holderOf(p)
   if (first === pid) return undefined
   if (typeof first === 'number' && ctx.env[RUNNER_TURN_ENV] === String(first)) return undefined
+  // Row 258. Lock order is test turn → scratch → repo lock: a turn taken while this process holds
+  // the scratch could deadlock against a session that holds the turn and waits for the scratch.
+  if (scratchHeldBy(root) === pid) {
+    throw new Error('lock order: this process holds the scratch — take the test turn before the scratch (row 258)')
+  }
   sweepTurnQueue(root)
   // A queue folder that cannot be used leaves the turn as it was before row 255: unqueued.
   const ticket = openTicket(root, ctx, who)

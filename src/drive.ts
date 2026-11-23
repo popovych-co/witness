@@ -12,6 +12,7 @@ import { NO_CONSOLE_ENV, resolveSpawn, spawn, type ResolvedSpawn } from './spawn
 import { LIVE_GROUPS, TERM_GRACE_MS, localBin, selfArgv, signalSession } from './self.js'
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
 import { behindJob, releaseDeadTurn, sweepTurnQueue, turnTickets } from './runner-lock.js'
+import { releaseDeadScratch } from './scratch-lock.js'
 import { startJob, type JobEnd, type RunningJob } from './drive-jobs.js'
 import { jobKinds, jobsBlocked, nextShard } from './jobs.js'
 import { computeNext, conversationStage, heldPlan, type NextAction } from './verbs/next.js'
@@ -1277,11 +1278,13 @@ export async function driveLoop(
   process.on('SIGTERM', onSignal)
   publish()
   // Row 218. A runner turn whose holder died — a session drive stopped mid-run — is released
-  // now and after every session, before Windows hands its pid to another process. Row 240: so are
-  // the busy locks of dead holders, and this drive's own leftovers. Row 257: and after every job,
-  // with the turn's stale tickets and the deadline files no running lane holds.
+  // now and after every session, before Windows hands its pid to another process; row 258: so is a
+  // dead or lapsed scratch lock. Row 240: so are the busy locks of dead holders, and this drive's
+  // own leftovers. Row 257: and after every job, with the turn's stale tickets and the deadline
+  // files no running lane holds.
   const sweep = () => {
     releaseDeadTurn(root)
+    releaseDeadScratch(root)
     sweepTurnQueue(root)
     sweepDeadBusy(root, { pid: process.pid })
     sweepDeadlines(root, new Set([...lanes.values()].map((l) => l.token)))

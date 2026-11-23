@@ -170,7 +170,8 @@ const LOCAL_STATE_FILES = new Set([
 // when scaffolding, so on every repo older than the row a draft is untracked-but-visible under a
 // state dir, and an unrelated-dirty refusal there would block the very recap the grill lands.
 // Row 203: drive's live folder (what needs the human, the waiting chat's lock) is the same tier.
-const LOCAL_STATE_DIRS = ['.witness/drafts/', '.witness/live/']
+// Row 258: so is the scratch checkout, a worktree witness resets before every run.
+const LOCAL_STATE_DIRS = ['.witness/drafts/', '.witness/live/', '.witness/scratch/']
 
 export function dirtyStatePaths(root: string): string[] {
   const res = tryGit(root, 'status', '--porcelain', '--untracked-files=all', '--', ...stateDirs(root))
