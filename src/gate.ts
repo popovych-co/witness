@@ -41,6 +41,7 @@ import { autonomyLines } from './autonomy.js'
 import { reportHandover, slicesLine } from './slice.js'
 
 import type { ChangeClass, GateName } from './settings.js'
+import type { JunitSummary } from './junit.js'
 export type { ChangeClass, GateName } from './settings.js'
 
 export interface Stamp { artifact: string; to: string }
@@ -74,6 +75,8 @@ export interface GateInput {
   // Row 186. The artifact as a git tree, and a digest of everything else the prompt carries.
   // Undefined when the tree could not be written; that run is then never a delta base.
   snapshot?: { tree: string; context: string }
+  // Row 251. Ship's one suite run, counted (full-suite mode only), journaled on the gate-run.
+  junit?: JunitSummary
 }
 
 export interface GateSpec {
@@ -832,6 +835,7 @@ async function judge(
       ...(delta ? { setup_sha: setupSha } : {}),
       ...(deltaMark ? { delta: deltaMark } : {}),
       checks: input.checks,
+      ...(input.junit ? { junit: input.junit } : {}),
       ...(verdicts.length ? { verdicts } : {}),
       ...(malformed.length ? { malformed } : {}),
       outcome,

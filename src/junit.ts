@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { globToRegExp, walkFiles } from './glob.js'
+import { matchesTag } from './matcher.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 
 export interface TestOutcome {
@@ -58,4 +59,25 @@ export function mergeReports(root: string, glob: string): Result<TestOutcome[]> 
     return refuse([v('criteria.report', 'no-reports', `junit:${glob} matched no files`, 'at least one report — did the suite run?')])
   }
   return ok(files.flatMap((f) => parseJUnit(readFileSync(join(root, f), 'utf8'))))
+}
+
+// Row 251. One suite run's counts, whole and per spec — ship journals it on its gate-run in
+// full-suite mode, with the tree the gate reviewed (T3 reads it as the base summary).
+export interface JunitCounts { passed: number; failed: number; skipped: number }
+export interface JunitSummary extends JunitCounts { tree?: string; specs: Record<string, JunitCounts> }
+
+const countsOf = (tests: readonly TestOutcome[]): JunitCounts => ({
+  passed: tests.filter((t) => t.status === 'passed').length,
+  failed: tests.filter((t) => t.status === 'failed').length,
+  skipped: tests.filter((t) => t.status === 'skipped').length,
+})
+
+// `specs` keys only the ids with at least one tagged case, inserted in sorted id order.
+export function junitSummary(tests: readonly TestOutcome[], specIds: readonly string[], tree?: string): JunitSummary {
+  const specs: Record<string, JunitCounts> = {}
+  for (const id of [...new Set(specIds)].sort()) {
+    const mine = tests.filter((t) => matchesTag(t.name, id))
+    if (mine.length > 0) specs[id] = countsOf(mine)
+  }
+  return { ...countsOf(tests), ...(tree !== undefined ? { tree } : {}), specs }
 }

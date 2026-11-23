@@ -37,6 +37,10 @@ export type EntryType =
   // Row 244 (#87). The author's word that a revise needs no change: `gate --unchanged` journals it
   // where the gate would answer changed-nothing, and it asks the revise to be decided again.
   | 'revise-returned'
+  // Row 253. A fix effort's cause — escaped, or decided — beside its recap, never inside it: the
+  // recap is hashed into the decompose identity and read by the arbiter, and a cause must reach
+  // neither (decision 8). Read only by the track record.
+  | 'cause'
 
 export interface Entry {
   v: 1
@@ -55,6 +59,22 @@ export interface RecapEntry extends Entry {
   decisions?: Array<{ id: string; text: string }>
   slices: string[]
   ask?: string   // row 176: the ask this recap answers
+}
+
+// Row 253. Whether a fix slipped past what should have caught it, or was a choice to change how
+// something works. Only a fix carries one; the latest `cause` line of its stream wins.
+export type FixCause = 'escape' | 'decision'
+export const FIX_CAUSES: readonly FixCause[] = ['escape', 'decision']
+export const isFixCause = (x: unknown): x is FixCause => typeof x === 'string' && (FIX_CAUSES as readonly string[]).includes(x)
+export interface CauseEntry { v: 1; t: 'cause'; effort: string; cause: FixCause }
+
+// The value of the stream's last `cause` line that holds a cause; a hand-edited odd value is skipped.
+export function effortCause(entries: readonly Entry[]): FixCause | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!
+    if (e.t === 'cause' && isFixCause(e.cause)) return e.cause
+  }
+  return undefined
 }
 
 // 'template' (row 221): `migrate` stamping the untouched principles template an older init wrote draft.

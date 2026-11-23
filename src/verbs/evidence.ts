@@ -91,7 +91,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (stepRefused.length) { renderRefusal(stepRefused).forEach(ctx.err); return EXIT.REFUSED }
   const parentId = String(plan.meta.parent)
 
-  const probe = await recordEvidence(runRootRes.value, stateRoot, ctx, planId, parentId, phase, step !== undefined ? { step } : {})
+  // Row 251. The tree the run reads is evidence about the run, not a precondition: a base that does
+  // not resolve journals no tree and refuses nothing.
+  const cfgR = loadConfig(runRootRes.value)
+  const baseR = cfgR.ok ? diffBase(runRootRes.value, cfgR.value) : undefined
+  const probe = await recordEvidence(runRootRes.value, stateRoot, ctx, planId, parentId, phase,
+    step !== undefined ? { step } : {}, baseR?.ok ? baseR.value : undefined)
   if (!probe.ok) { renderRefusal(probe.violations).forEach(ctx.err); return exitOf(probe.violations) }
   const { allOk, tests } = probe.value
   ctx.out(kv('test-evidence', `${planId} · ${phase} · ${tests.length} outcome(s) · ${allOk ? 'all green' : 'red present'}`))

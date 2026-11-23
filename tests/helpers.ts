@@ -205,6 +205,8 @@ export const SPEC_BODY = '## Motivation\nTokens leak.\n\n## Behavior\nRotate bef
 
 export interface SeedOpts {
   class?: 'feature' | 'fix' | 'chore'
+  // Row 253. A fix's cause; a fix is seeded as an escape unless told. Ignored for other classes.
+  cause?: 'escape' | 'decision'
   slug?: string
   goals?: Array<{ id: string; text: string }>
   preexisting?: string[]
@@ -239,6 +241,7 @@ export async function seededRepo(opts: SeedOpts = {}): Promise<TestRepo> {
   const recap = {
     effort: slug, class: opts.class ?? 'feature',
     goals: opts.goals ?? RECAP.goals, non_goals: [], constraints: [], slices: [],
+    ...(opts.class === 'fix' ? { cause: opts.cause ?? 'escape' } : {}),
   }
   repo.write('recap.json', JSON.stringify(recap))
   const res = await repo.cli(['recap', '--file', 'recap.json'])

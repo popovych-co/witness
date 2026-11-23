@@ -16,7 +16,7 @@ const tsconfig = JSON.parse(readFileSync(new URL('../tsconfig.json', import.meta
 
 it('exports the read surface and nothing that writes', () => {
   expect(Object.keys(models).sort()).toEqual(['HELD_KINDS', 'WAIT_KINDS', 'WAIT_LABEL', 'decideView', 'liveDrive',
-    'loadCanon', 'loadConfig', 'needsYou', 'needsYouToken', 'trustListing'])
+    'loadCanon', 'loadConfig', 'needsYou', 'needsYouToken', 'record', 'trustListing'])
 })
 
 it('package.json exports ./models alone, built with its declarations', () => {
@@ -59,7 +59,7 @@ it('loads by package name in a fresh process, registers the gates decideView rea
   expect(res).toEqual({
     code: 0,
     stdout: [
-      'HELD_KINDS WAIT_KINDS WAIT_LABEL decideView liveDrive loadCanon loadConfig needsYou needsYouToken trustListing',
+      'HELD_KINDS WAIT_KINDS WAIT_LABEL decideView liveDrive loadCanon loadConfig needsYou needsYouToken record trustListing',
       'decompose no-runs', 'plan no-runs', 'implement no-runs', 'ship no-runs', 'design no-runs', '',
     ].join('\n'),
     stderr: '',

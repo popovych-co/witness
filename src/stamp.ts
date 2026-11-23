@@ -114,8 +114,11 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
     const lockR = acquireLock(root)
     if (!lockR.ok) { result.stale.push({ plan: planId, why: 'lock held' }); continue }
     try {
+      // Row 254. The op is the commit's subject, so a stamp `recover` completes keeps its plan and PR
+      // in the merge clock (`merge(<plan>): pr #N (recovered)`).
+      const subject = `merge(${planId}): pr #${pr}`
       const txn = withTxn(root, {
-        op: 'merge-stamp', files,
+        op: subject, files,
         journalMulti: [
           { stream: planStamp.stream, line: planStamp.line },
           ...(specStamp ? [{ stream: specStamp.stream, line: specStamp.line }] : []),
@@ -126,7 +129,7 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
         if (specStamp) writeStamp(root, specStamp)
         for (const m of moves) appendEntry(root, m.stream, m.entry)
         crashPoint(ctx.env, 'merge-stamp')
-        return stateCommit(root, [...new Set(files)], `merge(${planId}): pr #${pr}`)
+        return stateCommit(root, [...new Set(files)], subject)
       })
       if (txn.ok) {
         // D141. `next`/`check`/`dashboard` all reach here, including the SessionStart

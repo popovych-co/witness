@@ -33,7 +33,7 @@ describe('held criteria at the gates (A10)', () => {
   it('the implement gate passes a held criterion and names it on every surface', async () => {
     const { repo, planId, ctx, outs } = await heldFlow()
     expect(await runGate(ctx, 'implement', planId, { fresh: false, manual: false })).toBe(0)
-    expect(laneOf(runs(repo, planId).at(-1)!)).toEqual({ name: 'drift-lane', ok: true, detail: 'ac-rotate:ok · ac-prod:held by prod', held: [ROW] })
+    expect(laneOf(runs(repo, planId).at(-1)!)).toEqual({ name: 'drift-lane', ok: true, detail: 'ac-rotate:ok · ac-prod:held by prod', held: [ROW], duration_ms: expect.any(Number) })
     expect(outs.join('\n')).toContain('held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod')
   })
   it('after the need is satisfied the criterion runs and its failure stops the gate', async () => {

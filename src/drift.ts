@@ -30,6 +30,8 @@ export function driftEntry(run: CriteriaResult, runId: string): { t: 'drift-chec
     ok: run.ok,
     tags: run.tagCount,
     criteria: run.criteria.map(criterionRecord),
+    // Row 251. Full-suite runs only: the spec's testcase outcomes, read by the track record.
+    ...(run.outcomes ? { outcomes: run.outcomes } : {}),
   }
 }
 
@@ -160,6 +162,7 @@ export async function deepDrift(root: string, ctx: Ctx, canon: Canon, specId: st
     artifact_sha: lane.ok ? lane.value.sha : canonicalSha(doc.meta, doc.body),
     ok: lane.ok && lane.value.ok, tags: lane.ok ? lane.value.tagCount : 0,
     criteria: lane.ok ? lane.value.criteria.map(criterionRecord) : [],
+    ...(lane.ok && lane.value.outcomes ? { outcomes: lane.value.outcomes } : {}),   // row 251
     deep: true,
     ...(violations.length === 0 && parsed.ok ? { verdict: parsed.value } : { malformed: violations }),
   }

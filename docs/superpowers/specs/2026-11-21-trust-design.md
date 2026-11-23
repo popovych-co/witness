@@ -325,6 +325,13 @@ UI 1a.1): PR body, drive report, status, `decide --show`, UI 3.2/3.3.
 
 With `report: none` no test names exist, and the proof says so.
 
+**As built (T1, rows 251 and 254).** `record(repo)` lives in `src/record.ts` and `src/models.ts` exports it; status,
+`status --record` and drive's report render it. The journal gains are additive and never part of an identity:
+`GateCheck.duration_ms` (wall time with waits, every check of every gate, `timedCheck`); a test-evidence `tree` (the
+snapshot tree before the run) and `captures[].test` from a `<name>.png.json` sidecar holding the junit testcase name,
+read once through its descriptor; drift `outcomes` (full-suite runs only: counts and at most 50 failing names); and
+ship's `junit` summary of its one suite run (full-suite mode only, with the reviewed tree).
+
 ### 3.9 Locks, leases, sessions, re-entrancy — every item
 
 **Lock order.** Test turn, then scratch, then repo lock. Explore uses its own worktree and declares exclusive
@@ -415,6 +422,19 @@ drive's report. Never feeds a gate or autonomy.
 - fewhats prints its 3 fixes split escape/decision.
 - wot prints "not measured" where it has no data.
 - A chore is never charged.
+
+**As built (rows 251–254).** Escapes read not measured until one live fix carries a cause. A fix's cause is its own
+`cause` journal entry beside the recap, never a recap field; the recap file carries it, a fix birth or an amend naming
+another cause journals it, and `witness recap --effort <slug> --cause escape|decision` classifies a fix that predates
+causes — the human's act, refused in any witness-spawned session. An escape is charged to the last non-chore plan of a
+spec it amended that shipped before its birth, and only when the merge clock places every candidate; otherwise it
+reads `order unknown`, `nothing shipped before` or `no amended spec`. The merge clock is one `git log` over witness's
+trailered `merge(<plan>): pr #N` and `recap(<slug>): <class>` subjects (each optionally ` (recovered)`), ages count
+the merges between, and versions come from the charged plan's ship gate-run `w`. Live specs failing is the current
+state per live spec: a named red is failing only in the names it shares with the run before it, a red naming no
+failing testcase could not verify, and runs without outcomes are not measured. Checks added and repairs read not
+measured until T4a and T8b. Plain `status` prints the `record:` line and the fixes owing a cause; `status --record`
+prints the record in full.
 
 ### T2 — Machine checks before reviewers
 
@@ -771,4 +791,17 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   old home retired at the root by `init` and from plans by the ship gate (§4 T0 above).
 - **Renames (T0b, row 248).** PC followed git's rename detection, so a committed rename listed only its new path;
   `--no-renames` lists both (the user's call of 2026-11-22, from T0a's final review).
+- **C3 (T1, rows 251–254).** All four journal gains landed in T1, their readers later (`duration_ms` → T2d, ship's
+  junit summary → T3, the producing test and the evidence tree → T6). A capture names its test through a sidecar,
+  `<name>.png.json` = `{"test": "<full test name>"}`, which both consumers' vitest harnesses can write; T6 owns the
+  fallback without one.
+- **A cause is an entry (T1, row 253).** §4 T1's `cause` is its own journal entry, never a recap field:
+  `effortReviewedSha` hashes the whole recap, the arbiter reads it, and an amendment re-arms decompose, so a cause set
+  later would move a finished effort's identity and reach a reviewer.
+- **Ship runs its suite once (T1, row 252).** Full-suite ship ran the suite twice, in the tests lane and again in the
+  criteria lane; the criteria lane now reads the tests lane's run, so "ship's junit summary" names one run.
+- **Charging is conservative (T1, row 254).** An escape is charged only when the merge clock places every candidate
+  plan, since one it cannot place may have shipped later; a fix whose writes name no spec in canon reads `no amended
+  spec`. Transaction ops equal their commit subjects, so a merge stamp or birth that `recover` completes keeps its
+  place.
 

@@ -65,7 +65,7 @@ describe('what a doc carries (row 198)', () => {
     repo.write('rz.json', JSON.stringify({ ...RECAP, effort: 'zeta', decisions: [{ id: 'd1', text: 'zeta says A' }] }))
     expect((await repo.cli(['recap', '--file', 'rz.json'])).code).toBe(0)
     expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1'] }, SPEC_BODY, 'zeta')).code).toBe(0)
-    repo.write('ra.json', JSON.stringify({ ...RECAP, effort: 'alpha', class: 'fix', decisions: [{ id: 'd1', text: 'alpha says B' }] }))
+    repo.write('ra.json', JSON.stringify({ ...RECAP, effort: 'alpha', class: 'fix', cause: 'decision', decisions: [{ id: 'd1', text: 'alpha says B' }] }))
     expect((await repo.cli(['recap', '--file', 'ra.json'])).code).toBe(0)
     expect((await writeSpec(repo, 'auth-refresh', { carries: ['d1'] }, SPEC_BODY, 'alpha')).code).toBe(0)   // the same content
     expect(carriedDecisions(repo.root, doc(repo, 'auth-refresh'))?.effort).toBe('alpha')                      // the later act, while it stands

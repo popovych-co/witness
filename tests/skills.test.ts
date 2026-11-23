@@ -565,3 +565,28 @@ describe('witness-decompose needs (A10)', () => {
     expect(body).toContain('blocks `witness start`')
   })
 })
+
+describe('a capture names the test that took it (row 251)', () => {
+  it('witness-implement asks each capture to name the test that took it', () => {
+    const text = readFileSync(skillPath('witness-implement'), 'utf8')
+    expect(text).toContain('<name>.png.json')
+    expect(text).toContain('expect.getState().currentTestName')
+  })
+})
+
+describe("the grill asks a fix's cause (row 253)", () => {
+  it("asks a fix's cause in plain words and carries it in the recap", () => {
+    const text = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    expect(text).toContain('slip past something that should have caught it')
+    expect(text).toContain('"cause": "escape"')
+    expect(text).toContain('recap --effort <slug> --cause')
+  })
+})
+
+describe("an old fix's cause is the human's, at an amend too (row 253, slice 2 review)", () => {
+  it('the grill asks the human the cause of an old fix it amends, never picks it', () => {
+    const text = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    expect(text).toContain('A fix with no recorded cause')
+    expect(text).toContain('never pick it yourself')
+  })
+})

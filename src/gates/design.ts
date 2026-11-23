@@ -7,7 +7,7 @@ import { contentSha } from '../content-sha.js'
 import { latestRecap } from '../journal.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
-import type { GateCheck } from '../rounds.js'
+import { timedCheck, type GateCheck } from '../rounds.js'
 import { findById } from '../scan.js'
 import { canonicalSha, short } from '../sha.js'
 import { contextDigest } from '../delta.js'
@@ -47,13 +47,16 @@ registerGate({
         `a human shown this artifact — run: ${cliAct('design', specId, '--open').line}`)])
     }
 
+    // Row 251. Each check is timed with the inputs only it reads; shared inputs stay outside.
     const checks: GateCheck[] = []
-    checks.push({ name: 'ui-flag', ok: spec.meta.ui === true, detail: spec.meta.ui === true ? 'ui: true' : 'spec is not ui-flagged' })
-    checks.push({ name: 'feature-class', ok: recap?.class === 'feature', detail: `effort class: ${recap?.class ?? 'none'}` })
-    checks.push({ name: 'artifact', ok: html !== undefined, detail: html !== undefined ? rel : `${rel} missing — run: witness design ${shellWord(specId)} --file <html>` })
-    const template = html !== undefined ? validateDesignArtifact(html) : []
-    checks.push({ name: 'template', ok: html !== undefined && template.length === 0,
-      detail: template.length ? template.map((x) => x.rule).join(' · ') : 'self-contained, id-attributed' })
+    checks.push(await timedCheck(() => ({ name: 'ui-flag', ok: spec.meta.ui === true, detail: spec.meta.ui === true ? 'ui: true' : 'spec is not ui-flagged' })))
+    checks.push(await timedCheck(() => ({ name: 'feature-class', ok: recap?.class === 'feature', detail: `effort class: ${recap?.class ?? 'none'}` })))
+    checks.push(await timedCheck(() => ({ name: 'artifact', ok: html !== undefined, detail: html !== undefined ? rel : `${rel} missing — run: witness design ${shellWord(specId)} --file <html>` })))
+    checks.push(await timedCheck(() => {
+      const template = html !== undefined ? validateDesignArtifact(html) : []
+      return { name: 'template', ok: html !== undefined && template.length === 0,
+        detail: template.length ? template.map((x) => x.rule).join(' · ') : 'self-contained, id-attributed' }
+    }))
 
     // With no artifact, reviewer input is empty ids + the spec — the checks already
     // fail-stop; still produce a well-formed GateInput so the gate stops cleanly. Row 215: the

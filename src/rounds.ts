@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
+import type { JunitSummary } from './junit.js'
 import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
@@ -9,7 +10,19 @@ import type { CoverageItem, Finding } from './verdict.js'
 // trust stop is read from the run's own record rather than inferred from a detail string.
 // Present only when non-empty.
 // held (row 179): the criteria an unmet need kept the drift lane from running.
-export interface GateCheck { name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[] }
+// duration_ms (row 251): how long the check took, in whole milliseconds — journaled for a later
+// reader (T2d's median per check name). Never part of an identity: `checkOk` (src/gate.ts) compares
+// name, ok, untrusted and held only, and no renderer prints it. Absent on every check before 251.
+export interface GateCheck {
+  name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[]; duration_ms?: number
+}
+
+// Row 251. One check, timed over its whole run — the inputs only it reads belong inside `run`.
+export async function timedCheck(run: () => GateCheck | Promise<GateCheck>): Promise<GateCheck> {
+  const start = performance.now()
+  const check = await run()
+  return { ...check, duration_ms: Math.round(performance.now() - start) }
+}
 export interface ReviewerVerdict { reviewer: string; coverage: CoverageItem[]; findings: Finding[] }
 
 export interface GateRunEntry {
@@ -74,6 +87,8 @@ export interface GateRunEntry {
   // asked the same question about the same bytes.
   carried?: { run: string; lenses: string[] }
   checks: GateCheck[]
+  // Row 251. Ship's suite run in full-suite mode, counted whole and per spec, with the reviewed tree.
+  junit?: JunitSummary
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
   outcome: 'passed' | 'stopped' | 'malformed'

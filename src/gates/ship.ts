@@ -10,7 +10,8 @@ import { findById } from '../scan.js'
 import { diffBase } from '../evidence.js'
 import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
-import { execCommand } from '../runner.js'
+import { execCommand, runnerConfig, runSuite } from '../runner.js'
+import { junitSummary, type JunitSummary, type TestOutcome } from '../junit.js'
 import { ensureTrusted } from '../allowlist.js'
 import { diffReviewedSha, effortOf } from '../reviewed.js'
 import { refreshSparse, worktreePath } from '../worktree.js'
@@ -20,7 +21,7 @@ import { codePromptBody } from './implement.js'
 import { registerGate, type GateInput } from '../gate.js'
 import { contentSha } from '../content-sha.js'
 import { gateSettled, openStepRow } from '../verbs/next.js'
-import { lastGateRun, type GateCheck } from '../rounds.js'
+import { lastGateRun, timedCheck, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
 
 async function commandLane(
@@ -67,39 +68,64 @@ registerGate({
     const files = planChangeSet(wt, base)
     const checks: GateCheck[] = []
 
-    const entries = readStream(root, planId)
-    const lastImplement = lastGateRun(entries, 'implement')
-    // One settle predicate, not two. This block used to inline its own copy of
-    // gateSettled, which meant `ship` and `next` could answer "is implement settled?"
-    // differently for the same journal — the split-brain that reads as a deadlock when
-    // two sessions compare notes.
-    //
-    // The missing sha argument is still DELIBERATE, but row 96 killed one of its two
-    // reasons and the surviving one is now the whole reason. It used to rest on
-    // `worktreeTreeSha` hashing the entire worktree, so ship's own `pr #N` stamp — pulled
-    // in by the watch-phase rebase — moved the tree and lapsed the very gate ship was
-    // checking: approve → pr → lapse → gate, the D75/D77 livelock. Under the diff identity
-    // that reason is DEAD: the worktree never edits `plans/<id>.md`, so the stamp is always
-    // equal to base and can never enter the reviewed set. What remains: `next` re-arms on
-    // movement because authoring is what it routes to, while ship asks only whether
-    // implement was EVER settled. Passing a sha here re-opens the livelock — do not add one.
-    const implementSettled = gateSettled(entries, 'implement')
-    // Row 241 (R9): a settled implement gate does not carry a plan with a step still open — unless a
-    // human approved it past its steps on the plan as it stands (row 93; `openStepRow` reads that).
-    const open = openStepRow(root, cfg, plan)
-    checks.push({ name: 'implement-gate', ok: implementSettled && open === undefined,
-      detail: open !== undefined
-        ? `${open.step} is open — ${open.row.line}`
-        : lastImplement
-          ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
-          : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` })
+    // Row 251. Each check is timed with the inputs only it reads; shared inputs stay outside.
+    checks.push(await timedCheck(() => {
+      const entries = readStream(root, planId)
+      const lastImplement = lastGateRun(entries, 'implement')
+      // One settle predicate, not two. This block used to inline its own copy of
+      // gateSettled, which meant `ship` and `next` could answer "is implement settled?"
+      // differently for the same journal — the split-brain that reads as a deadlock when
+      // two sessions compare notes.
+      //
+      // The missing sha argument is still DELIBERATE, but row 96 killed one of its two
+      // reasons and the surviving one is now the whole reason. It used to rest on
+      // `worktreeTreeSha` hashing the entire worktree, so ship's own `pr #N` stamp — pulled
+      // in by the watch-phase rebase — moved the tree and lapsed the very gate ship was
+      // checking: approve → pr → lapse → gate, the D75/D77 livelock. Under the diff identity
+      // that reason is DEAD: the worktree never edits `plans/<id>.md`, so the stamp is always
+      // equal to base and can never enter the reviewed set. What remains: `next` re-arms on
+      // movement because authoring is what it routes to, while ship asks only whether
+      // implement was EVER settled. Passing a sha here re-opens the livelock — do not add one.
+      const implementSettled = gateSettled(entries, 'implement')
+      // Row 241 (R9): a settled implement gate does not carry a plan with a step still open — unless a
+      // human approved it past its steps on the plan as it stands (row 93; `openStepRow` reads that).
+      const open = openStepRow(root, cfg, plan)
+      return { name: 'implement-gate', ok: implementSettled && open === undefined,
+        detail: open !== undefined
+          ? `${open.step} is open — ${open.row.line}`
+          : lastImplement
+            ? `last implement round ${lastImplement.round}: ${lastImplement.outcome}`
+            : `implement gate never ran — ${cliAct('gate', 'implement', planId).line}` }
+    }))
 
-    checks.push(await commandLane(wt, root, ctx, 'tests', cfg.ship.test))
-    checks.push(await commandLane(wt, root, ctx, 'lint', cfg.ship.lint))
+    // Row 252. In full-suite mode the tests lane IS the suite run the criteria lane reads, so the
+    // suite runs once. Filtered mode keeps the plain command lane.
+    const rcR = runnerConfig(cfg)
+    const rc = rcR.ok && rcR.value.mode === 'full-suite' ? rcR.value : undefined
+    let suite: TestOutcome[] | undefined
+    checks.push(await timedCheck(async () => {
+      if (rc === undefined) return commandLane(wt, root, ctx, 'tests', cfg.ship.test)
+      const cmd = rc.suiteCmd
+      const r = await runSuite(wt, ctx, rc, root)
+      if (!r.ok) {
+        // the trust stop reads `untrusted` (row 205)
+        const trust = r.violations.find((x) => x.rule.startsWith('untrusted-'))
+        return trust !== undefined
+          ? { name: 'tests', ok: false, detail: `${cmd}: ${trust.rule.slice('untrusted-'.length)}`, untrusted: [cmd] }
+          : { name: 'tests', ok: false, detail: r.violations.map((x) => `${x.rule}: ${x.got}`).join(' · ') }
+      }
+      if (r.value.tests.ok) suite = r.value.tests.value
+      const { run } = r.value
+      return { name: 'tests', ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
+    }))
+    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'lint', cfg.ship.lint)))
 
-    // deterministic drift lane: spec content from MAIN, execution in the worktree
-    const lane = await runCriteria(wt, ctx, parent, { trustRoot: root })
-    checks.push(laneCheck(lane))
+    // deterministic drift lane: spec content from MAIN, execution in the worktree; `repin` reads it below.
+    // Handed the tests lane's parsed report (row 252); with none — the suite was untrusted, ended by a
+    // signal, or left no report — the lane runs as before, and re-running reports the same reason.
+    let lane!: Awaited<ReturnType<typeof runCriteria>>
+    checks.push(await timedCheck(async () => laneCheck(lane = await runCriteria(wt, ctx, parent,
+      { trustRoot: root, ...(suite !== undefined ? { suite } : {}) }))))
 
     const pin = String(plan.meta['derives-from'])
     const repin = lane.ok && lane.value.ok && pin !== lane.value.sha
@@ -110,6 +136,9 @@ registerGate({
     const recap = effort ? latestRecap(root, effort) : undefined
     const tree = snapshotTree(wt, base, files)
     const context = contextDigest(base, canonicalSha(parent.meta, parent.body), planContentSha(plan.meta, plan.body))
+    // Row 251. That one run's counts, on the tree this gate reviewed (T3 reads it).
+    const junit: JunitSummary | undefined = suite === undefined ? undefined
+      : junitSummary(suite, canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)), tree)
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
@@ -121,6 +150,7 @@ registerGate({
       promptBody: codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}`),
       checks,
+      ...(junit !== undefined ? { junit } : {}),
       // Row 174: under autonomy the stop still stands — the arbiter is who answers it.
       standingStop: cfg.autonomy
         ? 'ship always stops — the arbiter judges every PR against the recap'

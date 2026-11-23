@@ -10,7 +10,7 @@ import { validateDoc } from '../schemas.js'
 import { registerGate, type GateInput, type Stamp } from '../gate.js'
 import { contentSha } from '../content-sha.js'
 import { basisMoved, planBasis, specBasis } from '../basis.js'
-import type { GateCheck } from '../rounds.js'
+import { timedCheck, type GateCheck } from '../rounds.js'
 import { shellWord } from '../toon.js'
 
 // Row 221 (final review). The critic's lenses are written for slices; principles are not one.
@@ -55,13 +55,18 @@ registerGate({
         `written specs or principles — run: witness write <id> --effort ${shellWord(effort)} --meta m.json --body b.md`)])
     }
 
+    // Row 251. Each check is timed with the inputs only it reads; shared inputs stay outside.
     const checks: GateCheck[] = []
-    const schemaProblems = docs.flatMap((d) =>
-      validateDoc(d.meta, d.body).map((x) => `${String(d.meta.id)} ${x.field}:${x.rule}`))
-    checks.push({ name: 'schema', ok: schemaProblems.length === 0, detail: schemaProblems.slice(0, 5).join(' · ') })
+    checks.push(await timedCheck(() => {
+      const schemaProblems = docs.flatMap((d) =>
+        validateDoc(d.meta, d.body).map((x) => `${String(d.meta.id)} ${x.field}:${x.rule}`))
+      return { name: 'schema', ok: schemaProblems.length === 0, detail: schemaProblems.slice(0, 5).join(' · ') }
+    }))
 
-    const cycle = findCycle(canon)
-    checks.push({ name: 'graph', ok: cycle === undefined, detail: cycle?.join(' → ') ?? '' })
+    checks.push(await timedCheck(() => {
+      const cycle = findCycle(canon)
+      return { name: 'graph', ok: cycle === undefined, detail: cycle?.join(' → ') ?? '' }
+    }))
 
     const goals = (recap.goals ?? []).map((g: { id: string }) => g.id)
     const covered = new Set<string>()
@@ -72,31 +77,37 @@ registerGate({
       // Row 221. Principles count toward the goals they cover; only a spec must cover one.
       if (covers.length === 0 && d.meta.type === 'spec') orphans.push(String(d.meta.id))
     }
-    const missing = goals.filter((g: string) => !covered.has(g))
-    checks.push({ name: 'goal-coverage', ok: missing.length === 0,
-      detail: missing.length ? `uncovered goals: ${missing.join(' ')}` : `${goals.length} goals covered` })
-    checks.push({ name: 'spec-coverage', ok: orphans.length === 0,
-      detail: orphans.length ? `specs covering no goal: ${orphans.join(' ')}` : 'every spec covers ≥ 1 goal' })
+    checks.push(await timedCheck(() => {
+      const missing = goals.filter((g: string) => !covered.has(g))
+      return { name: 'goal-coverage', ok: missing.length === 0,
+        detail: missing.length ? `uncovered goals: ${missing.join(' ')}` : `${goals.length} goals covered` }
+    }))
+    checks.push(await timedCheck(() => ({ name: 'spec-coverage', ok: orphans.length === 0,
+      detail: orphans.length ? `specs covering no goal: ${orphans.join(' ')}` : 'every spec covers ≥ 1 goal' })))
     // Row 198. Every recap decision lands in ≥ 1 spec. No reverse rule: a spec may carry none.
     const decisions = (recap.decisions ?? []).map((d) => d.id)
-    const carried = new Set(docs.flatMap((d) => writes.get(String(d.meta.id))?.carries ?? []))
-    const uncarried = decisions.filter((d) => !carried.has(d))
-    checks.push({ name: 'decision-coverage', ok: uncarried.length === 0,
-      detail: decisions.length === 0 ? 'the recap carries no decisions'
-        : uncarried.length ? `uncarried decisions: ${uncarried.join(' ')}` : `${decisions.length} decisions carried` })
+    checks.push(await timedCheck(() => {
+      const carried = new Set(docs.flatMap((d) => writes.get(String(d.meta.id))?.carries ?? []))
+      const uncarried = decisions.filter((d) => !carried.has(d))
+      return { name: 'decision-coverage', ok: uncarried.length === 0,
+        detail: decisions.length === 0 ? 'the recap carries no decisions'
+          : uncarried.length ? `uncarried decisions: ${uncarried.join(' ')}` : `${decisions.length} decisions carried` }
+    }))
 
-    const staleChildren = canon.docs
-      .filter((p) => p.meta.type === 'plan' && String(p.meta.status) === 'in-progress')
-      .filter((p) => docs.some((d) => String(d.meta.id) === String(p.meta.parent)))
-      .filter((p) => {
-        const parent = findById(canon, String(p.meta.parent))!
-        return basisMoved(planBasis(p), specBasis(root, parent)).length > 0
-      })
-      .map((p) => String(p.meta.id))
-    checks.push({ name: 'amendment-ack', ok: staleChildren.length === 0,
-      detail: staleChildren.length
-        ? `amended under in-progress plans (approve = explicit ack): ${staleChildren.join(' ')}`
-        : '' })
+    checks.push(await timedCheck(() => {
+      const staleChildren = canon.docs
+        .filter((p) => p.meta.type === 'plan' && String(p.meta.status) === 'in-progress')
+        .filter((p) => docs.some((d) => String(d.meta.id) === String(p.meta.parent)))
+        .filter((p) => {
+          const parent = findById(canon, String(p.meta.parent))!
+          return basisMoved(planBasis(p), specBasis(root, parent)).length > 0
+        })
+        .map((p) => String(p.meta.id))
+      return { name: 'amendment-ack', ok: staleChildren.length === 0,
+        detail: staleChildren.length
+          ? `amended under in-progress plans (approve = explicit ack): ${staleChildren.join(' ')}`
+          : '' }
+    }))
 
     // D189. A spec the effort created — a plan it created is no misroute.
     const created = docs.some((d) => writes.get(String(d.meta.id))?.created === true)

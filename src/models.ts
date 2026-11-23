@@ -11,3 +11,5 @@ export { type FindingView, type GateRunView } from './gate-run-view.js'
 export { trustListing, type TrustListing, type TrustRow, type TrustStatus } from './allowlist.js'
 export { type Act, type ActInput, type ActInputName } from './act.js'
 export { type Decision, type Option } from './recommend.js'
+// Row 254. The track record, for UI 3.2/3.3 and the PR proof (T6).
+export { record, type EscapesFold, type FixRow, type LiveFold, type TrackRecord, type VersionRow } from './record.js'

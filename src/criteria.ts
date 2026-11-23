@@ -34,6 +34,25 @@ export interface CriteriaResult {
   mode: 'filtered' | 'full-suite'
   tagCount: number
   criteria: CriterionOutcome[]
+  // Row 251. Full-suite mode only: the spec's tagged cases in the run (all zeros when it did not run).
+  outcomes?: TestcaseOutcomes
+}
+
+// Row 251. A spec's tagged testcases in one full-suite run: the counts, and the failing names —
+// unique, sorted, at most FAILING_CAP, while `failed` counts every failed case. A drift run
+// journals it; the track record (row 254) tells a named failure from a run that could not verify.
+export interface TestcaseOutcomes { passed: number; skipped: number; failed: number; failing: string[] }
+export const FAILING_CAP = 50
+
+export function outcomesOf(tests: readonly TestOutcome[], specId: string): TestcaseOutcomes {
+  const mine = tests.filter((t) => matchesTag(t.name, specId))
+  const failed = mine.filter((t) => t.status === 'failed').map((t) => t.name)
+  return {
+    passed: mine.filter((t) => t.status === 'passed').length,
+    skipped: mine.filter((t) => t.status === 'skipped').length,
+    failed: failed.length,
+    failing: [...new Set(failed)].sort().slice(0, FAILING_CAP),
+  }
 }
 
 export async function runCriteria(
@@ -140,6 +159,8 @@ export async function runCriteria(
     mode: rc.mode,
     tagCount,
     criteria,
+    // every test criterion matches the spec's own tag, so one fold per spec
+    ...(rc.mode === 'full-suite' ? { outcomes: outcomesOf(suite ?? [], id) } : {}),
   })
 }
 
