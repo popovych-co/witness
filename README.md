@@ -249,9 +249,9 @@ plain-words question per turn with up to three ranked answers, the repo explored
 draft after every settled answer, so a dead session resumes. Design shows up to three rendered,
 checked directions on one page before it asks which.
 
-**`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns — witness's
-own and every `witness turn`, which is how a session runs its tests — because suites that boot
-servers or browsers collide. On Windows each session, test run and gate reviewer runs in a job
+**`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns, in the
+order they asked — witness's own and every `witness turn`, which is how a session runs its tests —
+because suites that boot servers or browsers collide; lint takes no turn. On Windows each session, test run and gate reviewer runs in a job
 object, so whatever it starts — detached, or orphaned by an installer that exited — ends with it;
 elsewhere a session's process group does. A target that reaches any `drive.caps.*` bound is
 parked. Below the round bound a parked gate goes back to work with your own

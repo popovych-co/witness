@@ -263,6 +263,20 @@ Jobs register in the UI run registry (roadmap 1a.5).
 - A stuck session beside a running job is set aside after one spawn.
 - A session waiting on a job's turn is not killed by its own deadline.
 
+**As built (T2a, rows 255–257).** Waiters hold leased tickets in `.witness/live/turn/` (60 s, renewed every 10 s, put
+back with their place), and only the head may take a free turn; an ungated job yields to plan work. The lock names a
+job holder's kind, and a ticket names the session it waits for, so drive sees a session waiting behind a job. Ship's
+lint lane takes no turn. A session waiting behind a job is held: its clock leaves that time out of
+`drive.sessionTimeoutMs` (sleep stays sleep), drive moves its deadline through `WITNESS_DRIVE_DEADLINE_FILE`
+(`.witness/live/deadline/<drive pid>-<spawn n>.json`; the busy bound and the reviewer's wait read the later of it and
+`WITNESS_DRIVE_DEADLINE`), and the target's wall-clock cap is charged `ms − heldMs`. A job kind declares `turn`,
+`gated`, its box, its owed units (`{kind, key, shards}`) and `run`; there is no setting. `witness job <kind> <key>
+<k>/<n>` runs one shard as drive's child and reports on stdout (`running`, then `result`, at most 48 KiB). Drive runs
+one shard at a time beside the lanes, in every drive; the box starts at `running`, on the awake clock; a timeout or a
+failure is a strike, two read not measured, and a stop journals nothing. Drive journals each shard on the reserved
+`jobs` stream (bookkeeping), and its report names machine time per kind. A missing result reads pending while a drive
+holds the repo, otherwise not measured. No production kind exists until T2c.
+
 ### 3.6 Machine births (MB) and realization-repair plans (RP) — MB in T4, RP in T8
 
 **Birth.** A ledger item that owes work is born through a non-conversation act, `witness recap --from <item>`.
@@ -800,6 +814,16 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   later would move a finished effort's identity and reach a reviewer.
 - **Ship runs its suite once (T1, row 252).** Full-suite ship ran the suite twice, in the tests lane and again in the
   criteria lane; the criteria lane now reads the tests lane's run, so "ship's junit summary" names one run.
+- **Drive journals its jobs' shards (T2a, row 257).** §3.5 left who journals a shard open; row 145 says children
+  journal their own acts. A job child stopped at its box dies at once, even blocked in `execSync` (probe
+  `t2a-group-kill`), so it prints its result and drive journals it: row 145 is amended for jobs only.
+- **A failure is a strike (T2a, row 257).** §3.5 names timeouts only; a shard that fails counts too, so a crashing
+  job cannot loop drive.
+- **Boxes and shard counts belong to each kind (T2a, row 257).** §6's Train A list gains nothing from T2a.
+- **The box starts at `running` (T2a, row 257).** Time a shard spends queued for the turn is never boxed.
+- **Results live on the reserved `jobs` stream (T2a, row 257)**, one state commit per shard; `jobs` is a reserved id.
+- **`turn: false` passes the env unchanged (T2a, row 255).** A job's command inside its verb's turn keeps
+  `WITNESS_RUNNER_TURN`, so a witness it invokes re-enters rather than waiting on its own parent.
 - **Charging is conservative (T1, row 254).** An escape is charged only when the merge clock places every candidate
   plan, since one it cannot place may have shipped later; a fix whose writes name no spec in canon reads `no amended
   spec`. Transaction ops equal their commit subjects, so a merge stamp or birth that `recover` completes keeps its
