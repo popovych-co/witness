@@ -215,6 +215,21 @@ describe('a fix carries its cause (row 253)', () => {
     expect(good.code, good.stderr).toBe(0)
   })
 
+  // Slice 2 review I1. Only a fix carries a cause, so the seed of an effort amended away from fix
+  // carries none, and lands unchanged.
+  it('the amend seed of an effort that is no longer a fix carries no cause, and lands unchanged', async () => {
+    const repo = await seededRepo({ class: 'fix', slug: 'quick-fix', cause: 'escape' })
+    expect((await recapFile(repo, { effort: 'quick-fix', class: 'feature' }, ['--amend'])).code).toBe(0)
+    const seed = await repo.cli(['draft', 'amend-quick-fix'])
+    expect(seed.code, seed.stderr).toBe(0)
+    const json = JSON.parse(seed.stdout.split('\n').slice(1).join('\n')) as Record<string, unknown>
+    expect(json.class).toBe('feature')
+    expect('cause' in json).toBe(false)
+    repo.write('seed.json', JSON.stringify(json))
+    const landed = await repo.cli(['recap', '--amend', '--file', 'seed.json'])
+    expect(landed.code, landed.stderr).toBe(0)
+  })
+
   it('witness log prints a cause line', async () => {
     const repo = await seededRepo({ class: 'fix', slug: 'quick-fix', cause: 'decision' })
     const r = await repo.cli(['log', 'quick-fix'])

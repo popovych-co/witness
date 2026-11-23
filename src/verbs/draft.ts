@@ -42,7 +42,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       // decision's text is part of the pin of every plan that carries it.
       const r = latestRecap(root, k.effort)!
       // Row 253. A fix's recorded cause rides the seed, so the amend keeps it unless the human changes it.
-      const cause = effortCause(readStream(root, k.effort))
+      // Only a fix carries one: an effort amended away from fix seeds none (slice 2 review I1).
+      const cause = r.class === 'fix' ? effortCause(readStream(root, k.effort)) : undefined
       ctx.out(kv('draft', `${keyName(k)} · seeded from the latest recap`))
       const seed = {
         effort: r.effort, class: r.class, ...(cause !== undefined ? { cause } : {}),
