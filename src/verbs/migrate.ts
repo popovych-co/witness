@@ -19,6 +19,7 @@ import { findById, loadCanon } from '../scan.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from '../stamp.js'
 import { crashPoint, withTxn } from '../txn.js'
 import { templateDraft } from '../principles.js'
+import { detectPrepare } from '../prepare.js'
 
 // Row 193 §4.6, the verb row 23 reserved: bring witness.config.yaml to this CLI's schema and
 // make it complete — every setting with its comment, every value that is a choice kept, every
@@ -39,6 +40,7 @@ function filledWhy(path: string): string {
   if (path === 'harness') return "was undeclared · the open session's harness judged"
   if (path.endsWith('.model')) return 'was unpinned · the harness default model answered'
   if (path === 'criteria.runner') return 'was unset · criteria could not run'
+  if (path === 'scratch.prepare') return 'was unset · scratch runs were off'
   return `was unset · ship reported ${path === 'ship.test' ? 'tests' : 'lint'} not configured`
 }
 
@@ -159,6 +161,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const driver = resolveDriver(ctx.env, undefined)
   const written = migrateValues(raw, schema, {
     mode: 'write', harness: driver.ok ? driver.value.harness.name : undefined,
+    detected: { 'scratch.prepare': detectPrepare(root) },
   })
   if (!written.ok) return refused(written.violations)
   const { changes } = written.value

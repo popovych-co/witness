@@ -6,13 +6,14 @@ import {
   FIRST_LINE, GROUP_HEADINGS, RETIRED, SCHEMA_COMMENT, SCHEMA_FINGERPRINTS, SECTION_ORDER, SETTINGS,
   defaultAt, defaultValues, fingerprint, knownAt, settingAt, withValues,
 } from '../src/settings.js'
+import { SCHEMA_VERSION } from '../src/config.js'
 
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
 
 describe('the settings list (row 193)', () => {
-  it('holds 36 settings, each path once, each section in SECTION_ORDER', () => {
-    expect(SETTINGS).toHaveLength(36)
-    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(36)
+  it('holds 37 settings, each path once, each section in SECTION_ORDER', () => {
+    expect(SETTINGS).toHaveLength(37)
+    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(37)
     for (const s of SETTINGS) expect(SECTION_ORDER, s.path).toContain(s.path.split('.')[0])
     // the list is the file's order: sections appear in SECTION_ORDER, never interleaved
     const sections = SETTINGS.map((s) => s.path.split('.')[0]!).filter((x, i, a) => a[i - 1] !== x)
@@ -61,7 +62,7 @@ describe('the settings list (row 193)', () => {
         + 'schema step — add the default under the next schema number, raise SCHEMA_VERSION and pin its fingerprint')
         .toBe(want)
     }
-    expect(Object.keys(SCHEMA_FINGERPRINTS).map(Number).sort()).toEqual([1, 2])
+    expect(Object.keys(SCHEMA_FINGERPRINTS).map(Number).sort()).toEqual([1, 2, 3])
   })
 
   it('a comment-only change raises no schema step', () => {
@@ -69,5 +70,15 @@ describe('the settings list (row 193)', () => {
     expect(fingerprint(2, edited)).toBe(fingerprint(2))
     const moved = SETTINGS.map((s) => (s.path === 'session.contextLimit' ? { ...s, defaults: { 1: 25 } } : s))
     expect(fingerprint(2, moved)).not.toBe(fingerprint(2))
+  })
+})
+
+describe('scratch.prepare (row 259)', () => {
+  it('schema 3 adds scratch.prepare: setup, ambient, a shell command or none (row 259)', () => {
+    expect(settingAt('scratch.prepare')).toMatchObject({ shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, ambient: true, group: 'setup' })
+    expect(SCHEMA_VERSION).toBe(3)
+    expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 3, scratch: { prepare: 'none' } })
+    expect(defaultValues({ detected: { 'scratch.prepare': 'npm ci' } }).scratch).toEqual({ prepare: 'npm ci' })
+    expect(defaultValues({ schema: 2 })).not.toHaveProperty('scratch')
   })
 })

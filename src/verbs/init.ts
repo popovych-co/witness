@@ -19,6 +19,7 @@ import { jsonStyle, payloadLinted, payloadLintedDetail } from '../lint-config.js
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 import { defaultValues } from '../settings.js'
+import { detectPrepare } from '../prepare.js'
 
 const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/lock
@@ -103,7 +104,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   try {
     const files: string[] = []
     if (!scaffolded) {
-      writeFileSync(configPath(root), renderConfig(defaultValues({ harness: judge?.name })))
+      writeFileSync(configPath(root), renderConfig(defaultValues({
+        harness: judge?.name, detected: { 'scratch.prepare': detectPrepare(root) },
+      })))
       mkdirSync(join(root, 'plans'), { recursive: true })
       mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
       writeFileSync(join(root, 'plans', '.gitkeep'), '')

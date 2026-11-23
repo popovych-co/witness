@@ -1,5 +1,5 @@
 # witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.
-schema: 2                      # format version · witness migrate raises it; never edit by hand
+schema: 3                      # format version · witness migrate raises it; never edit by hand
 
 # ── Setup: what this repo is ─────────────────────────────────────────────────
 harness: claude-code           # the judge: the agent CLI that runs this repo's gate reviewers and arbiter · claude-code | pi
@@ -20,6 +20,8 @@ ship:
   branch: main                 # the branch witness ships into
   merge: merge                 # how ship merges its own PR under autonomy · merge | squash | rebase
   ciSettleMs: 60000            # ms green CI must hold still before an autonomous merge · 0–1800000
+scratch:
+  prepare: none                # what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none
 
 # ── Behavior: how witness works here ─────────────────────────────────────────
 autonomy: off                  # on = the CLI settles its own stops and merges green PRs · on | off · counts once committed

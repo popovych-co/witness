@@ -72,6 +72,7 @@ export const RELEASED_COMMENTS: ReadonlySet<string> = new Set([
   "the lint command ship runs",
   "the suite command ship runs · full-suite criteria run it too",
   "upstream resets one target may take, then it is parked · ≥ 1",
+  "what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none",
   "witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.",
   "── Behavior: how witness works here ─────────────────────────────────────────",
   "── Setup: what this repo is ─────────────────────────────────────────────────",

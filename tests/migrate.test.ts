@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { stringify } from 'yaml'
 import { contextLimitOf } from '../plugin/hooks/context-core.mjs'
 import { readComments } from '../src/config-file.js'
 import { loadConfig, resolveSettings, type Resolved } from '../src/config.js'
@@ -49,13 +50,15 @@ describe('witness migrate (row 193 §4.6)', () => {
     await expect(after).toMatchFileSnapshot(`../fixtures/configs/consumer-${x}.migrated.yaml`)
     const now = loaded(repo)
     expect(now.warning).toBeUndefined()
-    expect(now.schema).toBe(2)
-    expect(values(now)).toEqual(values(was))       // the consumers declare everything ambient: nothing filled
-    expect(r.stdout).not.toContain('filled:')
+    expect(now.schema).toBe(3)
+    // the consumers declare everything ambient schema 2 knew; schema 3's setup command is filled
+    // with what the root's (absent) lockfile names (row 259)
+    expect(values(now)).toEqual({ ...values(was), scratch: { prepare: 'none' } })
+    expect(r.stdout.match(/^filled:.*$/gm)).toEqual(['filled: scratch.prepare none — was unset · scratch runs were off'])
     for (const line of humanLines(before)) expect(after).toContain(line.trim())
     expect(r.stdout).toContain(`dropped ${x === 'a' ? 0 : 2} old template lines`)
-    expect(r.stdout).toContain('config: schema 1 → 2')
-    expect(repo.git('log', '-1', '--format=%s')).toBe('migrate: config schema 1 → 2')
+    expect(r.stdout).toContain('config: schema 1 → 3')
+    expect(repo.git('log', '-1', '--format=%s')).toBe('migrate: config schema 1 → 3')
     expect(repo.git('log', '-1', '--format=%b')).toContain('Witness-State: 1')
     expect(repo.git('status', '--porcelain', '--', 'witness.config.yaml')).toBe('')
   })
@@ -75,7 +78,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     const text = repo.read('witness.config.yaml')
     const again = await repo.cli(['migrate'])
     expect(again.code).toBe(0)
-    expect(again.stdout).toContain('config: schema 2 · up to date')
+    expect(again.stdout).toContain('config: schema 3 · up to date')
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
     expect(repo.read('witness.config.yaml')).toBe(text)
   })
@@ -89,7 +92,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     const r = await repo.cli(['migrate'])
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).toContain('added: drive.caps.spawns 24 —')
-    expect(r.stdout).toContain('config: schema 2 → 2')
+    expect(r.stdout).toContain('config: schema 3 → 3')
     expect(loaded(repo).drive.caps.spawns).toBe(24)
   })
 
@@ -113,7 +116,7 @@ describe('witness migrate (row 193 §4.6)', () => {
   })
 
   it('refuses a newer schema', async () => {
-    const r = await committed('schema: 3\n').cli(['migrate'])
+    const r = await committed('schema: 4\n').cli(['migrate'])
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('newer-than-cli')
   })
@@ -153,7 +156,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).toContain('expanded: gates.model claude-opus-5 →')
     expect(r.stdout).toContain('diff:')
-    expect(r.stdout).toContain('+schema: 2')
+    expect(r.stdout).toContain('+schema: 3')
     expect(r.stdout).toContain('-schema: 1')
     expect(repo.read('witness.config.yaml')).toBe(text)
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
@@ -236,7 +239,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     const head = repo.git('rev-parse', 'HEAD')
     const again = await repo.cli(['migrate'])
     expect(again.code, again.stderr).toBe(0)
-    expect(again.stdout).toContain('config: schema 2 · up to date')
+    expect(again.stdout).toContain('config: schema 3 · up to date')
     expect(repo.read('witness.config.yaml')).toContain('\r\n')
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
@@ -249,5 +252,19 @@ describe('witness migrate (row 193 §4.6)', () => {
     expect(r.code, r.stderr).toBe(0)
     expect(repo.read('witness.config.yaml')).toBe(fixture('consumer-b.migrated.yaml'))
     expect(readFileSync(join(wt, 'witness.config.yaml'), 'utf8')).toBe(fixture('consumer-b.yaml'))
+  })
+})
+
+describe('scratch.prepare at migrate (row 259)', () => {
+  it('fills scratch.prepare from the root lockfile and says so (row 259)', async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'lock')
+    const r = await repo.cli(['migrate'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('filled: scratch.prepare pnpm install --frozen-lockfile — was unset · scratch runs were off')
+    expect(r.stdout).toContain('config: schema 2 → 3')
+    expect(loaded(repo).scratch).toEqual({ prepare: 'pnpm install --frozen-lockfile' })
   })
 })

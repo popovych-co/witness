@@ -194,6 +194,7 @@ the list the CLI reads (`src/settings.ts`).
 | `ship.branch` | the branch witness ships into — accepts: a branch name: letters, digits and . _ / + -, as git allows them — it is printed into git commands | `main` |
 | `ship.merge` | how ship merges its own PR under autonomy · merge \| squash \| rebase — accepts: merge \| squash \| rebase | `merge` |
 | `ship.ciSettleMs` | ms green CI must hold still before an autonomous merge · 0–1800000 — accepts: an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges | `60000` |
+| `scratch.prepare` | what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none — accepts: a shell command, or none — what witness runs in its scratch checkout when a lockfile or a package manager's config changes | `none` |
 | `autonomy` | on = the CLI settles its own stops and merges green PRs · on \| off · counts once committed — accepts: on \| off | `off` |
 | `arbiter.model` | model for the arbiter that settles stops under autonomy · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
 | `session.contextLimit` | % of the context window at which a session hands over to a fresh one · 1–100 — accepts: an integer from 1 to 100 — % of the session's context window at which witness hands over to a fresh session | `20` |

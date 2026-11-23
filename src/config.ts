@@ -12,7 +12,7 @@ import {
 import { execFileSync } from './spawn.js'
 
 // Row 193 §4.2: every setting present, nothing unknown. Always the list's newest schema.
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface CanonPaths {
   specs: string
@@ -80,6 +80,9 @@ export type MergeStyle = 'merge' | 'squash' | 'rebase'
 // watch ends the moment nothing is pending, so a check that registers a few seconds late —
 // Actions behind an instant CLA status — would otherwise merge before it ever ran.
 export interface ShipConfig { test?: string; lint?: string; branch: string; merge: MergeStyle; ciSettleMs: number }
+// Row 259. `prepare` is undefined only for an older file read in memory: scratch runs are off.
+// 'none' means the scratch needs nothing installed.
+export interface ScratchConfig { prepare?: string }
 export const DEFAULT_CI_SETTLE_MS: number = listDefault('ship.ciSettleMs')
 // Bounded by the watch window (30 minutes): a longer settle can never be met, and past
 // 2^31-1 ms a Node timer fires at once — the window would silently become zero.
@@ -94,6 +97,7 @@ export interface Config {
   docs: DocsRegistry
   criteria: CriteriaConfig
   ship: ShipConfig
+  scratch: ScratchConfig
   harness?: string
   // Rows 171-175. Whether the CLI settles its own stops is a REPO fact — committed, read by
   // every teammate's CLI alike — so it lives here and never in config.local.yaml. Spelled as
@@ -321,6 +325,7 @@ export function resolveSettings(raw: Raw, mode: 'strict' | 'lenient'): Result<Re
       test: at('ship.test'), lint: at('ship.lint'), branch: at('ship.branch'),
       merge: at('ship.merge'), ciSettleMs: at('ship.ciSettleMs'),
     },
+    scratch: { prepare: at('scratch.prepare') },
     harness: at('harness'),
     autonomy: at<string>('autonomy') === 'on',
     arbiter: { model: at('arbiter.model') },

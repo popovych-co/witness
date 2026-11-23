@@ -173,7 +173,14 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const cfg = loadConfig(root)
   // The want rides along: a config refusal says how to fix it (row 193), check's included.
   if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, `${x.got} — ${x.want}`)))
-  else if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
+  else {
+    if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
+    // Row 259. A feature off for lack of a setting is named once, here, never at each use.
+    if (cfg.value.scratch.prepare === undefined) {
+      findings.push(f('warn', 'config', 'scratch.prepare', 'feature-off',
+        'scratch runs are off — scratch.prepare is not set · witness migrate proposes one'))
+    }
+  }
 
   // Machine config is read here as FINDINGS, never a refusal — same doctrine that
   // keeps harness resolution out of loadConfig (row 87): check must be able to

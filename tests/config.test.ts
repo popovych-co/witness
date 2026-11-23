@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { parse } from 'yaml'
+import { parse, stringify } from 'yaml'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
-import { fingerprint, SCHEMA_FINGERPRINTS } from '../src/settings.js'
-import { seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
+import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS } from '../src/settings.js'
+import { configYaml, seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
 
 describe('loadConfig', () => {
   it('refuses when the config is missing', () => {
@@ -25,12 +25,12 @@ describe('loadConfig', () => {
     expect(res.value.schema).toBe(1)
     expect(res.value).not.toHaveProperty('raw')
     expect(res.value.ship.test).toBe('npm test')
-    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(2\) — witness migrate adds/)
+    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(3\) — witness migrate adds/)
   })
 
   it('refuses a newer schema and warns on an older one', () => {
     const repo = tmpRepo()
-    repo.write('witness.config.yaml', 'schema: 3\n')
+    repo.write('witness.config.yaml', 'schema: 4\n')
     const newer = loadConfig(repo.root)
     expect(!newer.ok && newer.violations[0]?.rule).toBe('newer-than-cli')
     expect(!newer.ok && newer.violations[0]?.want).toContain('upgrade witness')
@@ -403,5 +403,17 @@ describe('machine-local notify (B6)', () => {
     repo.write('.witness/config.local.yaml', "notify: ''\n")
     const bad = loadLocalConfig(repo.root)
     expect(!bad.ok && [bad.violations[0]!.field, bad.violations[0]!.rule]).toEqual(['notify', 'invalid'])
+  })
+})
+
+describe('scratch.prepare (row 259)', () => {
+  it('an older file reads scratch.prepare as absent, so scratch runs are off (row 259)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.scratch.prepare).toBeUndefined()
+    expect(old.ok && old.value.warning).toMatch(/schema 2 is older than this witness \(3\)/)
+    repo.write('witness.config.yaml', configYaml({ scratch: { prepare: 'pnpm install --frozen-lockfile' } }))
+    expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { scratch: { prepare: 'pnpm install --frozen-lockfile' } } })
   })
 })

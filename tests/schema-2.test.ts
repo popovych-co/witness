@@ -24,10 +24,10 @@ describe('schema 2 (row 193)', () => {
     const cfg = loadConfig(repo.root)
     expect(cfg.ok).toBe(true)
     if (!cfg.ok) return
-    expect(cfg.value.schema).toBe(2)
+    expect(cfg.value.schema).toBe(3)
     expect(cfg.value.warning).toBeUndefined()
     const want = resolveSettings(defaultValues({ harness: 'claude-code' }), 'strict')
-    expect(want.ok && { schema: 2, ...want.value }).toEqual(cfg.value)
+    expect(want.ok && { schema: 3, ...want.value }).toEqual(cfg.value)
 
     const pi = await initRepo({ PI_CODING_AGENT: '1' })
     expect(pi.repo.read('witness.config.yaml')).toBe(fixture('default.yaml').replace('harness: claude-code   ', 'harness: pi            '))
@@ -77,11 +77,11 @@ describe('schema 2 (row 193)', () => {
     repo.git('add', '-A')
     repo.git('commit', '-m', 'consumer config')
     const r = loadConfig(repo.root)
-    expect(r.ok && r.value.warning).toBe('schema 1 is older than this witness (2) — witness migrate adds 12 settings '
+    expect(r.ok && r.value.warning).toBe('schema 1 is older than this witness (3) — witness migrate adds 12 settings '
       + '(ship.merge · ship.ciSettleMs · session.contextLimit · …) · expands gates.model · refreshes comments')
     const check = await repo.cli(['check'])
     expect(check.stdout).toContain('older-schema')
-    expect(check.stdout).toContain('schema 1 is older than this witness (2)')
+    expect(check.stdout).toContain('schema 1 is older than this witness (3)')
   })
 
   it('the CLI schema is the list\'s newest', () => {
@@ -95,6 +95,6 @@ describe('schema 2 (row 193)', () => {
     repo.git('commit', '-m', 'old config')
     const r = await repo.cli(['init', '--agent', 'claude-code'])
     expect(r.code, r.stderr).toBe(0)
-    expect(r.stderr).toContain('warn: schema 1 is older than this witness (2)')
+    expect(r.stderr).toContain('warn: schema 1 is older than this witness (3)')
   })
 })
