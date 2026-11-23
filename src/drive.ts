@@ -11,8 +11,9 @@ import { findById, loadCanon, type Canon } from './scan.js'
 import { NO_CONSOLE_ENV, resolveSpawn, spawn, type ResolvedSpawn } from './spawn.js'
 import { LIVE_GROUPS, TERM_GRACE_MS, localBin, selfArgv, signalSession } from './self.js'
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
-import { behindJob, releaseDeadTurn, sweepTurnQueue } from './runner-lock.js'
-import { startJob, type RunningJob } from './drive-jobs.js'
+import { behindJob, releaseDeadTurn, sweepTurnQueue, turnTickets } from './runner-lock.js'
+import { startJob, type JobEnd, type RunningJob } from './drive-jobs.js'
+import { jobsBlocked } from './jobs.js'
 import { computeNext, conversationStage, heldPlan, type NextAction } from './verbs/next.js'
 import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
@@ -497,6 +498,10 @@ export const AUTONOMY_MAX_SPAWNS = 200
 // through the Clock seam, and a CLI-level test bounds the idle limit through an undocumented
 // seam on WITNESS_KEEP_AWAKE_BIN's precedent.
 export const PAUSE_POLL_MS = 5_000
+// Row 257: how often drive looks at a job child still starting (before its box or its ticket), and
+// how long a start may take before drive reads the child as waiting.
+const JOB_START_POLL_MS = 250
+const JOB_START_MS = 30_000
 const DETACH_LOCK_WAIT_MS = 10_000
 export const PAUSE_IDLE_MAX_MS = 43_200_000
 const idleMaxOf = (env: Record<string, string | undefined>): number => {
@@ -709,6 +714,8 @@ export function journalWatch(root: string, target: string): (session?: string) =
 }
 
 // `streamAt`: the target's stream length when the lane started — what it journaled is after it.
+// Row 257: the one job a drive runs, how to stop it alone, and how it ended once it has.
+interface DriveJob { run: RunningJob; stop: AbortController; over?: JobEnd }
 // `token`: the session's `<drive pid>-<spawn n>`, its deadline file's name (row 256).
 interface Lane { action: NextAction; end: Promise<SessionEnd>; streamAt: number; token: string }
 
@@ -1277,7 +1284,44 @@ export async function driveLoop(
   // fill while the run is not stopping, and awaited with the lanes. Drive journals each shard's
   // outcome itself (drive-jobs.ts): a child stopped at its box dies at once and must never die
   // mid-write, the one exception to row 145's "children journal their own acts".
-  let job: RunningJob | undefined
+  //
+  // Slice 3 review. A journal write refused or thrown turns jobs off for the rest of the run, said
+  // once and on the report: the shard would read missing and run again at once, forever. A `jobs`
+  // stream another history holds is found before any box is spent. With no lane running, drive never
+  // waits on a job alone: a boxed job is awaited on the pause cadence, so take-back, the settle pass
+  // and the fill still run, and a job still queued for the test turn — behind a holder that is not
+  // drive's — is stopped when the run would end, journaling nothing; the next drive runs it.
+  let job: DriveJob | undefined
+  let jobsOff: string | undefined
+  const jobsOffNow = (why: string) => {
+    if (jobsOff !== undefined) return
+    jobsOff = why
+    ctx.out(`drive: jobs off for this run — ${why}`)
+  }
+  const beginJob = () => {
+    if (job !== undefined || stop || signalled || jobsOff !== undefined) return
+    const blocked = jobsBlocked(root)
+    if (blocked !== undefined) { jobsOffNow(blocked); return }
+    const ctl = new AbortController()
+    const relay = () => ctl.abort()
+    abort.signal.addEventListener('abort', relay, { once: true })
+    const run = startJob(root, cfg, ctx, canonNow, { signal: ctl.signal })
+    if (run === undefined) { abort.signal.removeEventListener('abort', relay); return }
+    const j: DriveJob = { run, stop: ctl }
+    void run.end.then((e) => { j.over = e; abort.signal.removeEventListener('abort', relay) })
+    job = j
+  }
+  // A job whose end has come is cleared, its refusal read, and the leftovers swept.
+  const reapJob = (): boolean => {
+    if (job?.over === undefined) return false
+    if (job.over.refused !== undefined) jobsOffNow(job.over.refused)
+    job = undefined
+    sweep()
+    return true
+  }
+  // Queued for the test turn, or never got as far as saying where it is.
+  const jobWaiting = (j: DriveJob): boolean =>
+    !j.run.running() && (turnTickets(root).some((t) => t.job === j.run.kind) || Date.now() - j.run.startedAt >= JOB_START_MS)
   try {
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
@@ -1356,28 +1400,29 @@ export async function driveLoop(
         pauseSince = undefined
         lanes.set(key, launch(step, action, spawns, next))
       }
-      if (job === undefined && !stop && !signalled) job = startJob(root, cfg, ctx, canonNow, { signal: abort.signal })
+      reapJob()
+      beginJob()
       if (autonomous) {
         publish()
         notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target)))
       }
-      // A job and no lane: its end is the next thing that happens. A stop ends it through its signal,
-      // and its `end` resolves once the child is gone.
-      if (lanes.size === 0 && job !== undefined) {
-        await job.end
-        job = undefined
-        sweep()
-        continue
-      }
       if (lanes.size === 0) {
+        // Every wait here also wakes when a job ends (slice 3 review).
+        const jobEnd = job !== undefined ? [job.run.end] : []
         if (!stop && !signalled && pausedUntil > clock.now()) {
-          await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted])
+          await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted, ...jobEnd])
           continue
         }
         // Row 240. A target another process holds is work in flight, not the human's: drive polls on
         // its pause cadence — no pause, no notification — until a take or a release frees it.
         if (!stop && !signalled && busySeen.size > 0) {
-          await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
+          await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted, ...jobEnd])
+          continue
+        }
+        // Row 257. A job in its box, or still starting, is drive's own work: awaited on the pause cadence
+        // (a start on a short one), so the round still runs meanwhile. One queued for the turn is not.
+        if (job !== undefined && job.over === undefined && !signalled && !jobWaiting(job)) {
+          await Promise.race([job.run.end, clock.sleep(job.run.running() ? PAUSE_POLL_MS : JOB_START_POLL_MS), aborted])
           continue
         }
         // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
@@ -1386,26 +1431,29 @@ export async function driveLoop(
         // Row 240. Only drive's own timers wait: it sleeps until the earliest is due.
         const due = nextDue()
         if (autonomous && !stop && !signalled && !forHuman && due !== undefined) {
-          await Promise.race([clock.sleep(Math.max(0, due - clock.now())), aborted])
+          await Promise.race([clock.sleep(Math.max(0, due - clock.now())), aborted, ...jobEnd])
           continue
         }
         break
       }
       const ended = await Promise.race([
         ...[...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))),
-        ...(job !== undefined ? [job.end.then(() => undefined)] : []),
+        ...(job !== undefined ? [job.run.end.then(() => undefined)] : []),
       ])
-      if (ended === undefined) {                            // the job's shard ended
-        job = undefined
-        sweep()
-        continue
-      }
+      if (ended === undefined) continue                     // the job's shard ended: reaped at the top
       const { key, end } = ended
       settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
       lanes.delete(key)
       sweep()
     }
 
+    // The run ends: a job still queued for the turn (or one a signal already stopped) is stopped
+    // and its child awaited; it journals nothing.
+    if (job !== undefined && job.over === undefined) {
+      job.stop.abort()
+      await job.run.end
+    }
+    reapJob()
     if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)
     else if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
     // Row 184. One report when nothing else can move, and for an autonomous run one
@@ -1413,7 +1461,9 @@ export async function driveLoop(
     // The idle limit is no failure: the run waited on the human as long as it could.
     const stopped = signalled !== undefined ? `signal ${signalled}` : stop === 'idle-limit' ? undefined : stop
     refreshAside()
-    const report = driveReport(root, ctx, cfg, start, humanAsides(), { autonomous, ...(stopped ? { stopped } : {}) })
+    const report = driveReport(root, ctx, cfg, start, humanAsides(), {
+      autonomous, ...(stopped ? { stopped } : {}), ...(jobsOff !== undefined ? { jobsOff } : {}),
+    })
     report.lines.forEach((l) => ctx.out(l))
     if (autonomous) {
       const local = loadLocalConfig(root)

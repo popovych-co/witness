@@ -121,6 +121,13 @@ export function nextShard(
   return undefined
 }
 
+// Why no shard can be journaled in this repo now, before drive spends a box on one: the `jobs`
+// stream holds another history (witness check names it).
+export function jobsBlocked(root: string): string | undefined {
+  const first = readStream(root, JOB_STREAM)[0]
+  return first !== undefined && first.t !== 'job-shard' ? `the ${JOB_STREAM} stream starts with ${first.t} — witness check names it` : undefined
+}
+
 const streamTaken = (first: Entry) => v(JOB_STREAM, 'stream-taken', `the stream starts with ${first.t}`,
   'a stream for job results alone — witness check names the artifact that holds it')
 

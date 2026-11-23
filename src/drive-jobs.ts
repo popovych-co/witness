@@ -23,7 +23,13 @@ import { lineSink } from './worker-stream.js'
 // this is the one exception to row 145's "children journal their own acts". A stop — drive's signal
 // or a lost lease — journals nothing: the shard just runs again on the next drive.
 
-export interface RunningJob { kind: string; key: string; shard: number; of: number; end: Promise<void> }
+// `end` resolves once the outcome is journaled, or once the child is gone after a stop; `refused`
+// says why a journal write was refused or threw (drive then runs no more jobs this run). `running`:
+// the shard has begun its box; `startedAt`: when it was spawned (epoch ms).
+export interface JobEnd { refused?: string }
+export interface RunningJob {
+  kind: string; key: string; shard: number; of: number; end: Promise<JobEnd>; running(): boolean; startedAt: number
+}
 
 const WHY_MAX = 200
 // How long a dead child's pipes get to drain before drive stops waiting (drive.ts's rule).
@@ -52,8 +58,7 @@ const isRunningLine = (line: string): boolean => {
   try { return (JSON.parse(line) as { job?: unknown } | null)?.job === 'running' } catch { return false }
 }
 
-// Starts the next owed shard, or returns undefined when nothing is owed. `end` resolves once the
-// outcome is journaled, or once the child is gone after a stop.
+// Starts the next owed shard, or returns undefined when nothing is owed.
 export function startJob(
   root: string, cfg: Config, ctx: Ctx, canon: Canon, opts: { signal: AbortSignal; ticker?: Ticker },
 ): RunningJob | undefined {
@@ -79,14 +84,15 @@ export function startJob(
   const grouped = process.platform !== 'win32'
   const boxMs = kind.boxMs(cfg)
 
-  const end = new Promise<void>((resolve) => {
+  const startedAt = Date.now()
+  let box: SessionClock | undefined
+  const end = new Promise<JobEnd>((resolve) => {
     const child = spawn(spawned.file, spawned.args, {
       cwd: root, env: spawned.env, stdio: ['ignore', 'pipe', 'pipe'],
       windowsVerbatimArguments: spawned.windowsVerbatimArguments, detached: grouped,
     })
     if (grouped && child.pid !== undefined) LIVE_GROUPS.add(child.pid)
     ctx.out(`job: ${label} — started`)
-    let box: SessionClock | undefined
     let said: Said | undefined
     let stopped = false
     let timedOut = false
@@ -133,7 +139,7 @@ export function startJob(
       const ms = box !== undefined ? Math.max(0, Math.round(box.awakeMs())) : 0
       if (stopped) {
         ctx.out(`job: ${label} — stopped`)
-        resolve()
+        resolve({})
         return
       }
       let entry: { outcome: JobOutcome; why?: string; result?: unknown }
@@ -154,15 +160,20 @@ export function startJob(
         line = `failed · ${why}`
       }
       ctx.out(`job: ${label} — ${line}`)
-      // A refusal is printed and the shard runs again later. This runs in a child's listener, where a
-      // throw would take drive down with every session unwatched (P16): it is caught and said.
+      // A refusal is printed, and drive runs no more jobs this run: the shard would read missing and run
+      // again at once, forever (slice 3 review). This runs in a child's listener, where a throw would
+      // take drive down with every session unwatched (P16): it is caught and said the same way.
+      let refused: string | undefined
       try {
         const j = journalShard(root, { kind: kind.kind, key: unit.key, shard, of, ...entry, ms })
-        if (!j.ok) renderRefusal(j.violations).forEach((l) => ctx.err(l))
+        if (!j.ok) {
+          renderRefusal(j.violations).forEach((l) => ctx.err(l))
+          refused = `${j.violations[0]!.rule}: ${logSafe(j.violations[0]!.got)}`
+        }
       } catch (e) {
-        ctx.err(`job: ${label} — not journaled: ${logSafe(e instanceof Error ? e.message : String(e))}`)
+        refused = `not journaled: ${logSafe(e instanceof Error ? e.message : String(e))}`
       }
-      resolve()
+      resolve(refused !== undefined ? { refused } : {})
     }
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -180,5 +191,5 @@ export function startJob(
     })
     child.on('close', settle)
   })
-  return { kind: kind.kind, key: unit.key, shard, of, end }
+  return { kind: kind.kind, key: unit.key, shard, of, end, running: () => box !== undefined, startedAt }
 }

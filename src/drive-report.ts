@@ -31,7 +31,8 @@ export interface Report { lines: string[]; summary: string; merged: number; wait
 
 // Every `run:` and `then:` line is raw: a command is never kv-escaped (D120).
 export function driveReport(
-  root: string, ctx: Ctx, cfg: Config, start: RunStart, aside: readonly Aside[], run: { autonomous: boolean; stopped?: string },
+  root: string, ctx: Ctx, cfg: Config, start: RunStart, aside: readonly Aside[],
+  run: { autonomous: boolean; stopped?: string; jobsOff?: string },
 ): Report {
   const canon = loadCanon(root)
   const since = entriesSince(root, start)
@@ -82,6 +83,7 @@ export function driveReport(
     ...merged, ...waits, ...parked, ...stuck, ...obligations,
     `decisions: policy ${counts.policy} · arbiter ${counts.arbiter} · affirmation ${counts.affirmation} · named ${counts.named}`,
     ...jobLines,
+    ...(run.jobsOff !== undefined ? [`jobs: off for this run — ${run.jobsOff}`] : []),
     kv('record', recordLine(record(root, canon))),                     // row 254
     ...(w > 0 ? ['help: answer the waits above · then /witness or witness drive picks up where this run stopped'] : []),
   ]

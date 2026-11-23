@@ -146,4 +146,37 @@ describe('drive runs jobs (row 257)', () => {
     expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done'])
     expect(out.some((l) => /^\[job fixture\] host slept \S+ — not counted against its box$/.test(l))).toBe(true)
   }, 60_000)
+
+  it('a refused journal write turns jobs off for the run, said once; a taken stream never costs a box (slice 3 review I1)', async () => {
+    // The shard's own command writes a foreign first entry, so drive's journal write is refused.
+    const foreign = `printf '{"v":1,"t":"retry","artifact":"x"}\\n' >> .witness/journal/${JOB_STREAM}.jsonl`
+    const { repo, out, run } = await jobsOnly(fixture({ shards: 2, cmd: `mkdir -p .witness/journal && ${foreign}` }))
+    await run()
+    expect(out.filter((l) => l.endsWith(' — started'))).toEqual(['job: fixture k1 1/2 — started'])
+    expect(out.filter((l) => l.startsWith('drive: jobs off for this run — '))).toHaveLength(1)
+    expect(out.some((l) => l.startsWith('jobs: off for this run — '))).toBe(true)
+    // A second drive meets the taken stream before it spawns anything.
+    const again: string[] = []
+    const env = fixtureEnv({ WITNESS_BIN: witnessCli(), WITNESS_KEEP_AWAKE_BIN: noopOpener(), WITNESS_FIXTURE_JOB: fixture({ shards: 2, cmd: 'true' }) })
+    await driveLoop(repo.root, cfgOf(repo.root), fakeCtx(repo.root, { tty: true, env, out: (l) => again.push(l) }), {})
+    expect(again.filter((l) => l.endsWith(' — started'))).toEqual([])
+    expect(again.filter((l) => l.startsWith('drive: jobs off for this run — '))).toHaveLength(1)
+  }, 90_000)
+
+  it('a job queued behind a turn holder that is not drive\'s never keeps the run: it is stopped and journals nothing (slice 3 review I2)', async () => {
+    const holder = Number(spawnSync('sh', ['-c', 'sleep 30 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim())
+    const { repo, out, run } = await jobsOnly(fixture({ turn: true, boxMs: 1_000, cmd: 'true' }))
+    mkdirSync(join(repo.root, '.witness'), { recursive: true })
+    writeFileSync(runnerLockPath(repo.root), JSON.stringify({ pid: holder }))
+    const t0 = Date.now()
+    try {
+      await run()
+    } finally {
+      try { process.kill(holder) } catch { /* gone */ }
+    }
+    expect(Date.now() - t0).toBeLessThan(15_000)
+    expect(out).toContain('job: fixture k1 1/1 — stopped')
+    expect(shards(repo.root)).toEqual([])
+  }, 60_000)
 })
+
