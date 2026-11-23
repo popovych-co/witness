@@ -404,7 +404,8 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       // A reserved stream another history holds: the writer that owns it refuses until it moves.
       const owner = RESERVED_STREAMS.get(id)
       if (owner !== undefined && entries[0] !== undefined && entries[0].t !== owner.first) {
-        findings.push(f('error', 'journal', file, 'reserved-stream-taken', `${owner.what} is held by a ${entries[0].t} history — ${owner.refuses}`))
+        // The kind is another writer's text: spelled out before it reaches the terminal (slice 3 review).
+        findings.push(f('error', 'journal', file, 'reserved-stream-taken', `${owner.what} is held by a ${visible(String(entries[0].t))} history — ${owner.refuses}`))
         continue
       }
       if (entries[0]?.t === 'recap' || reservedId(id) !== undefined) continue

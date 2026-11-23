@@ -7,12 +7,15 @@ import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { sessionHash } from '../src/context.js'
 import { driveLoop, journalWatch, PAUSE_IDLE_MAX_MS, PAUSE_POLL_MS, watchSignature } from '../src/drive.js'
+import { runGate } from '../src/gate.js'
+import '../src/gates/index.js'
 import { appendEntry, entryLine, journalRel, withJournalCtx } from '../src/journal.js'
 import { readLive, writeLive } from '../src/live.js'
 import { loadCanon } from '../src/scan.js'
 import { worktreePath } from '../src/worktree.js'
 import {
-  type TestRepo, approve, autonomyOn, closedStep, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, ghState, noopOpener, patchConfig, seededRepo,
+  type TestRepo, approve, autonomyOn, closedStep, fakeClock, fakeCtx, fakeScenario, fixtureEnv, gateEnv, ghState, noopOpener, patchConfig, putVerdict, seededRepo,
+  shippableRepo,
   writeLocalConfig, writePlan, writeSpec, SCAFFOLDING_FIRST, startedThreeStepPlan,
 } from './helpers.js'
 
@@ -439,4 +442,35 @@ describe("drive prints a session's journaled acts (row 214)", () => {
     appendEntry(repo.root, 'p', { t: 'step-close', step: 's9' })
     expect(poll()).toEqual(['journal: step-close step=s9'])
   }, 30000)
+})
+
+// Slice 3 review I1 (row 259). A gate's trust stop is set aside with its commands; a grant that
+// lands on no target's stream — the targetless one, or allow.json alone — moves no progress key, so
+// take-back must read the commands themselves.
+describe('a gate trust stop is taken back once its commands are trusted (row 259)', () => {
+  const CLEAN = {
+    coverage: [
+      { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+      { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
+    ],
+    findings: [],
+  }
+  it('a targetless grant of the lint command frees the ship gate\'s stop', async () => {
+    const { repo, planId } = await shippableRepo()
+    const scenario = fakeScenario()
+    putVerdict(scenario, CLEAN)
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, { fresh: false, manual: false })
+    patchConfig(repo, { ship: { lint: 'false' } })
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'lint')
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '0' }) }), 'ship', planId, { fresh: false, manual: false })
+    autonomyOn(repo)
+    writeLocalConfig(repo.root, { notify: noopOpener() })
+    const out: string[] = []
+    const clock = scripted({ 2: async () => { expect((await repo.cli(['trust', '--cmd', 'false'])).code).toBe(0) } })
+    await driveLoop(repo.root, cfgOf(repo), autoCtx(repo, {
+      ...gateEnv(scenario), ...NO_TRUST, WITNESS_DRIVE_IDLE_MAX_MS: '30000', WITNESS_DRIVE_AGENT_BIN: script('echo tick'),
+    }, out), { maxSpawns: 1 }, clock)
+    expect(out).toContain(`drive: waits on you — ${planId} · trust grant`)
+    expect(out.some((l) => l.startsWith(`drive: taken back — ${planId}`))).toBe(true)
+  }, 240_000)
 })

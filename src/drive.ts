@@ -34,7 +34,7 @@ import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, journalActs, journalRel, readStream, type Entry } from './journal.js'
 import { movesFlow } from './progress.js'
-import { shownCmd, sourced, type RunCommand } from './allowlist.js'
+import { shownCmd, sourced, trustedNow, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import { logSafe, shellWords } from './toon.js'
@@ -877,7 +877,19 @@ export async function driveLoop(
         continue
       }
       const now = ownNext(key)
-      if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
+      if (!ownAnswer(key, now)) continue
+      if (keyOf(now) === a.key0) {
+        // Slice 3 review (row 259). A trust stop set aside with its commands is the human's only
+        // while one of them is untrusted: a grant that lands on no target's stream (the targetless
+        // one, or allow.json alone) moves no progress key — a gate's stop keeps its line — so the
+        // commands themselves are read.
+        if (a.kind === 'kept' && a.stop === 'trust-grant' && a.trust !== undefined && a.trust.length > 0
+          && a.trust.every((c) => trustedNow(root, ctx.env, c.cmd))) {
+          release(key)
+          ctx.out(`drive: taken back — ${key} · trusted`)
+        }
+        continue
+      }
       release(key)
       ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
     }
@@ -1328,7 +1340,9 @@ export async function driveLoop(
   const beginJob = () => {
     if (job !== undefined || stop || signalled || jobsOff !== undefined) return
     const kinds = jobKinds(ctx.env)
-    const owed = jobTrustOwed(root, ctx.env, cfg, kinds)
+    // Only a kind that owes a shard can wait on the human (slice 3 review): one whose work is all
+    // done needs no grant, and drive must not pause on it.
+    const owed = jobTrustOwed(root, ctx.env, cfg, kinds.filter((k) => nextShard(root, cfg, canonNow, [k]) !== undefined))
     jobsWait(owed.commands)
     // Nothing owed is nothing to say: a repo with no kind never hears that jobs are off (F4).
     if (nextShard(root, cfg, canonNow, kinds, owed.blocked) === undefined) return

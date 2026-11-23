@@ -8,6 +8,7 @@ import { stateCommit } from './gitio.js'
 import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { visible } from './toon.js'
 import { crashPoint, pendingTxn, withTxn } from './txn.js'
 
 // Row 176. The human's ask is journaled state, on a stream witness owns the way it owns
@@ -90,7 +91,7 @@ export function queueAsk(ctx: Ctx, root: string, text: string): Result<{ id: str
     // history, and asks appended to it would be read as part of that artifact.
     const first = readStream(root, ASK_STREAM)[0]
     if (first !== undefined && first.t !== 'ask') {
-      return refuse([v(ASK_STREAM, 'stream-taken', `the stream starts with ${first.t}`, 'a stream for asks alone — witness check names the artifact that holds it')])
+      return refuse([v(ASK_STREAM, 'stream-taken', `the stream starts with ${visible(String(first.t))}`, 'a stream for asks alone — witness check names the artifact that holds it')])
     }
     // Final review F10: the same words while that ask is still open are the same ask — a
     // crashed `/witness <words>` run again must not queue, and build, the work twice.

@@ -29,9 +29,12 @@ export function isReviewer(env: Record<string, string | undefined>): boolean {
 
 // Rows 173 and 207. A session acts for the human only through the chat it answers to: one
 // drive spawned, or a reviewer, never grants trust or un-sticks a target. Names the marker.
-export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | undefined {
+// Row 260 (slice 3 review): neither does a command a drive job runs — `WITNESS_JOB`, the mark
+// drive puts on its job child (`JOB_ENV`, spelled here: jobs.ts imports this module's neighbours).
+export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | 'WITNESS_JOB' | undefined {
   if (driveChild(env) !== undefined) return DRIVE_ENV
   if (env.WITNESS_REVIEWER !== undefined && env.WITNESS_REVIEWER !== '') return 'WITNESS_REVIEWER'
+  if (env.WITNESS_JOB !== undefined && env.WITNESS_JOB !== '') return 'WITNESS_JOB'
   return undefined
 }
 

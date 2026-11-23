@@ -7,7 +7,7 @@ import { loadConfig, type Config } from '../src/config.js'
 import { DEADLINE_DIR, writeDeadline } from '../src/deadline.js'
 import { driveLoop } from '../src/drive.js'
 import { startJob } from '../src/drive-jobs.js'
-import { JOB_STREAM, jobReading, type JobShardEntry } from '../src/jobs.js'
+import { JOB_STREAM, jobReading, journalShard, type JobShardEntry } from '../src/jobs.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { TURN_DIR, runnerLockPath } from '../src/runner-lock.js'
 import { SCRATCH_LOCK } from '../src/scratch-lock.js'
@@ -264,5 +264,17 @@ describe('job trust in drive (row 260)', () => {
     out.length = 0
     await run()
     expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done'])
+  }, 120_000)
+})
+
+describe('job trust in drive — slice 3 review (row 260)', () => {
+  it('a blocked kind that owes no shard raises no jobs wait (I2)', async () => {
+    const { repo, out, run } = await jobsOnly(fixture({ turn: false, scratch: true }), { WITNESS_TRUST_CMDS: '0' })
+    patchConfig(repo, { scratch: { prepare: 'true' } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'prepare')
+    expect(journalShard(repo.root, { kind: 'fixture', key: 'k1', shard: 1, of: 1, outcome: 'done', ms: 1 }).ok).toBe(true)
+    await run()
+    expect(out.join('\n')).not.toContain('jobs wait for a trust grant')
+    expect(out.some((l) => /wait: trust grant · jobs/.test(l))).toBe(false)
   }, 120_000)
 })

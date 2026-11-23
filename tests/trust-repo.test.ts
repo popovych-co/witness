@@ -53,3 +53,22 @@ describe('repo commands are granted with no target (row 259)', () => {
     expect(trustedCommands(repo.root)).not.toContain('sh prepare.sh')
   })
 })
+
+describe('repo commands — slice 3 review (row 259)', () => {
+  it('a job\'s command never grants trust (M5)', async () => {
+    const repo = await repoWith('sh prepare.sh')
+    const r = await repo.cli(['trust', '--cmd', 'sh prepare.sh'], { env: { WITNESS_JOB: '4242' } })
+    expect(r.stderr).toMatch(/trust-in-session/)
+    expect(trustedCommands(repo.root)).not.toContain('sh prepare.sh')
+  })
+
+  it('check spells out the foreign kind that holds a reserved stream (M4)', async () => {
+    const repo = await repoWith('sh prepare.sh')
+    mkdirSync(join(repo.root, '.witness', 'journal'), { recursive: true })
+    writeFileSync(join(repo.root, '.witness', 'journal', 'trust.jsonl'), `${JSON.stringify({ v: 1, t: '\u001b[2Jx' })}\n`)
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a foreign stream', '-m', 'Witness-State: 1')
+    const out = (await repo.cli(['check'])).stdout
+    expect(out).toMatch(/reserved-stream-taken/)
+    expect(out).not.toContain('\u001b')
+  })
+})

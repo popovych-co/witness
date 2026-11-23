@@ -337,7 +337,7 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
         pnpm lint,ship.lint,-,untrusted
         echo first,cmd: ac-a,ingest,untrusted
         test -d .git,need: 1,ingest,untrusted
-      trust: 4 untrusted — grant each from the target that runs it: witness trust <id> --cmd '<cmd>'
+      trust: 4 untrusted — a repo command (doc -): witness trust --cmd '<cmd>' · a doc's: witness trust <id> --cmd '<cmd>'
       --- exit 1"
     `)
   })

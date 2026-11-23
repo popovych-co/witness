@@ -12,7 +12,7 @@ import { ok, type Result as Res } from './refusal.js'
 import { execCommand } from './runner.js'
 import { inScratch } from './scratch.js'
 import type { Canon } from './scan.js'
-import { logSafe } from './toon.js'
+import { logSafe, visible } from './toon.js'
 import { JOB_STREAM } from './streams.js'
 import { pendingTxn, withTxn } from './txn.js'
 import { compareTriple, version } from './version.js'
@@ -169,7 +169,7 @@ export function jobsBlocked(root: string): string | undefined {
   return first !== undefined && first.t !== 'job-shard' ? `the ${JOB_STREAM} stream starts with ${logSafe(String(first.t))} — witness check names it` : undefined
 }
 
-const streamTaken = (first: Entry) => v(JOB_STREAM, 'stream-taken', `the stream starts with ${first.t}`,
+const streamTaken = (first: Entry) => v(JOB_STREAM, 'stream-taken', `the stream starts with ${visible(String(first.t))}`,
   'a stream for job results alone — witness check names the artifact that holds it')
 
 // Journals one shard's outcome and commits it under its own subject. Drive calls it in-process: a
