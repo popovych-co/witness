@@ -274,7 +274,8 @@ lint lane takes no turn. A session waiting behind a job is held: its clock leave
 <k>/<n>` runs one shard as drive's child and reports on stdout (`running`, then `result`, at most 48 KiB). Drive runs
 one shard at a time beside the lanes, in every drive; the box starts at `running`, on the awake clock; a timeout or a
 failure is a strike, two read not measured, and a stop journals nothing. A refused journal write turns jobs off for
-the run, and a job still queued for the turn is stopped when the run would end. Drive journals each shard on the reserved
+the run (a crash marker's excepted: no shard starts while one waits), drive journals nothing once a newer CLI has, the
+human pause is said while a job runs, and a job still queued for the turn is stopped when the run would end. Drive journals each shard on the reserved
 `jobs` stream (bookkeeping), and its report names machine time per kind. A missing result reads pending while a drive
 holds the repo, otherwise not measured. No production kind exists until T2c.
 

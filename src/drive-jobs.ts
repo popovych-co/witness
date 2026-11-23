@@ -26,7 +26,7 @@ import { lineSink } from './worker-stream.js'
 // `end` resolves once the outcome is journaled, or once the child is gone after a stop; `refused`
 // says why a journal write was refused or threw (drive then runs no more jobs this run). `running`:
 // the shard has begun its box; `startedAt`: when it was spawned (epoch ms).
-export interface JobEnd { refused?: string }
+export interface JobEnd { refused?: string; rule?: string }
 export interface RunningJob {
   kind: string; key: string; shard: number; of: number; end: Promise<JobEnd>; running(): boolean; startedAt: number
 }
@@ -163,17 +163,18 @@ export function startJob(
       // A refusal is printed, and drive runs no more jobs this run: the shard would read missing and run
       // again at once, forever (slice 3 review). This runs in a child's listener, where a throw would
       // take drive down with every session unwatched (P16): it is caught and said the same way.
-      let refused: string | undefined
+      let end: JobEnd = {}
       try {
         const j = journalShard(root, { kind: kind.kind, key: unit.key, shard, of, ...entry, ms })
         if (!j.ok) {
           renderRefusal(j.violations).forEach((l) => ctx.err(l))
-          refused = `${j.violations[0]!.rule}: ${logSafe(j.violations[0]!.got)}`
+          const first = j.violations[0]!
+          end = { refused: `${first.rule}: ${logSafe(first.got)}`, rule: first.rule }
         }
       } catch (e) {
-        refused = `not journaled: ${logSafe(e instanceof Error ? e.message : String(e))}`
+        end = { refused: `not journaled: ${logSafe(e instanceof Error ? e.message : String(e))}` }
       }
-      resolve(refused !== undefined ? { refused } : {})
+      resolve(end)
     }
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')

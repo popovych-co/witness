@@ -86,7 +86,10 @@ describe('the queued turn (row 255)', () => {
     const repo = tmpRepo()
     const now = Date.now()
     putTicket(repo.root, { pid: deadPid(), since: now - 10_000, until: now + 50_000 })
-    putTicket(repo.root, { pid: OTHER, since: now - 9_000, until: now - 1 })
+    // The lapsed ticket's pid is an orphan that dies in 3 s, so a regression that kept a lapsed lease live
+    // ends this in-process wait in seconds and fails the bound below, never hangs the worker (row 213).
+    const lapsed = Number(spawnSync('sh', ['-c', 'sleep 3 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim())
+    putTicket(repo.root, { pid: lapsed, since: now - 9_000, until: now - 1 })
     const t0 = Date.now()
     expect(withRunnerTurn(repo.root, fakeCtx(repo.root), 'x', () => 42)).toBe(42)
     expect(Date.now() - t0).toBeLessThan(2_000)

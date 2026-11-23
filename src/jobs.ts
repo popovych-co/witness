@@ -2,6 +2,7 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { driveHolder } from './drive-presence.js'
 import { stateCommit } from './gitio.js'
+import { stateFloor } from './floor.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { acquireLock } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
@@ -9,6 +10,7 @@ import { execCommand } from './runner.js'
 import type { Canon } from './scan.js'
 import { logSafe } from './toon.js'
 import { pendingTxn, withTxn } from './txn.js'
+import { compareTriple, version } from './version.js'
 
 // Row 257 (spec §3.5, DJ). Jobs are machine work no session does — a base tree's lint, a
 // mutation run, an explore — that drive runs beside its sessions. A kind names what it owes as
@@ -141,6 +143,13 @@ export function journalShard(root: string, entry: Omit<JobShardEntry, 'v' | 't'>
   try {
     const pending = pendingTxn(root)
     if (pending) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
+    // Drive journals in-process, past the floor dispatch enforces (`cli.ts`): a newer CLI that has
+    // journaled owns the state, and this one writes nothing past it (final review F2).
+    const floor = stateFloor(root)
+    if (floor !== undefined && (compareTriple(floor.pin, version()) ?? 0) > 0) {
+      return refuse([v('witness', 'cli-behind-state', `this CLI is ${version()}, this repository's state was written by ${floor.pin}`,
+        'nothing — a newer witness CLI runs this repo now, and this drive journals no job past it')])
+    }
     // F7's rule for reserved streams: one an older witness wrote under this name is another
     // artifact's history, and shards appended to it would be read as part of that artifact.
     const first = readStream(root, JOB_STREAM)[0]

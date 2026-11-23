@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Ctx } from '../src/cli.js'
@@ -8,7 +8,7 @@ import { DEADLINE_DIR, writeDeadline } from '../src/deadline.js'
 import { driveLoop } from '../src/drive.js'
 import { startJob } from '../src/drive-jobs.js'
 import { JOB_STREAM, jobReading, type JobShardEntry } from '../src/jobs.js'
-import { readStream } from '../src/journal.js'
+import { appendEntry, readStream } from '../src/journal.js'
 import { TURN_DIR, runnerLockPath } from '../src/runner-lock.js'
 import { loadCanon } from '../src/scan.js'
 import type { Ticker } from '../src/session-clock.js'
@@ -92,7 +92,9 @@ describe('drive runs jobs (row 257)', () => {
 
   it("a session waiting behind a job is not stopped by its own deadline (§3.5 acceptance, row 256)", async () => {
     const repo = await startedFlows(['a'])
-    patchConfig(repo, { drive: { sessionTimeoutMs: 10_000 } })
+    // Two CLI start-ups count against the limit (the job child's, then the agent's turn): 20 s leaves a slow
+    // runner room, and the 30 s job still outlasts it, so the session lives only because it was held.
+    patchConfig(repo, { drive: { sessionTimeoutMs: 20_000 } })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'a short session')
     const through = join(fakeScenario(), 'through')
     const agent = script([
@@ -102,7 +104,7 @@ describe('drive runs jobs (row 257)', () => {
     const out: string[] = []
     await driveLoop(repo.root, cfgOf(repo.root), autoCtx(repo, {
       WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: agent,
-      WITNESS_FIXTURE_JOB: fixture({ turn: true, boxMs: 120_000, cmd: 'sleep 20' }),
+      WITNESS_FIXTURE_JOB: fixture({ turn: true, boxMs: 120_000, cmd: 'sleep 30' }),
     }, out), { maxSpawns: 1 })
     expect(existsSync(through)).toBe(true)
     expect(out.some((l) => /\] ended .* · timed out · /.test(l))).toBe(false)
@@ -178,5 +180,52 @@ describe('drive runs jobs (row 257)', () => {
     expect(out).toContain('job: fixture k1 1/1 — stopped')
     expect(shards(repo.root)).toEqual([])
   }, 60_000)
+
+  it('a repo with no job kind never says jobs are off, even when its jobs stream is taken (final review F4)', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    appendEntry(repo.root, JOB_STREAM, { t: 'retry', artifact: 'x' })
+    const out: string[] = []
+    const env = fixtureEnv({ WITNESS_BIN: witnessCli(), WITNESS_KEEP_AWAKE_BIN: noopOpener() })
+    await driveLoop(repo.root, cfgOf(repo.root), fakeCtx(repo.root, { tty: true, env, out: (l) => out.push(l) }), {})
+    expect(out.filter((l) => l.includes('jobs off'))).toEqual([])
+  }, 60_000)
+
+  it('no shard starts while a crashed transaction waits, and jobs stay on for the run (final review F3)', async () => {
+    const { repo, out, run } = await jobsOnly(fixture({ cmd: 'true' }), { WITNESS_DRIVE_AGENT_BIN: script('true') })
+    writeFileSync(join(repo.root, '.witness', 'txn.json'), JSON.stringify({ op: 'x', files: [], pid: deadPid() }))
+    await run()
+    expect(out.filter((l) => l.endsWith(' — started') && l.startsWith('job: '))).toEqual([])
+    expect(out.filter((l) => l.includes('jobs off'))).toEqual([])
+  }, 60_000)
+
+  it('a superseded drive stops its job and journals nothing (final review F2)', async () => {
+    const began = join(fakeScenario(), 'began')
+    const { repo, out, run } = await jobsOnly(fixture({ boxMs: 60_000, cmd: `touch "${began}" && sleep 20` }))
+    const done = run()
+    for (let i = 0; i < 600 && !existsSync(began); i++) await new Promise((r) => setTimeout(r, 50))
+    // A newer CLI journals and commits: the floor moves past this one while the shard runs.
+    appendFileSync(join(repo.root, '.witness', 'journal', 'newer.jsonl'), `${JSON.stringify({ v: 1, w: '99.0.0', t: 'retry', artifact: 'x' })}\n`)
+    repo.git('add', '.witness/journal/newer.jsonl'); repo.git('commit', '-m', 'a newer CLI journals')
+    const t0 = Date.now()
+    await done
+    expect(Date.now() - t0).toBeLessThan(15_000)
+    expect(out).toContain('drive: superseded — a newer witness CLI took over')
+    expect(out).toContain('job: fixture k1 1/1 — stopped')
+    expect(shards(repo.root)).toEqual([])
+  }, 60_000)
+
+  it('the human pause is said while jobs still run, and a running job keeps the idle limit off (final review F1)', async () => {
+    const repo = await startedFlows(['a'])
+    const out: string[] = []
+    await driveLoop(repo.root, cfgOf(repo.root), autoCtx(repo, {
+      WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'),
+      WITNESS_FIXTURE_JOB: fixture({ shards: 2, cmd: 'sleep 2' }),
+    }, out), { maxSpawns: 5 })
+    const waiting = out.findIndex((l) => l.startsWith('drive: waiting on you'))
+    const second = out.indexOf('job: fixture k1 2/2 — started')
+    expect(waiting).toBeGreaterThanOrEqual(0)
+    expect(second).toBeGreaterThan(waiting)
+    expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done', 'done'])
+  }, 90_000)
 })
 

@@ -13,7 +13,7 @@ import { LIVE_GROUPS, TERM_GRACE_MS, localBin, selfArgv, signalSession } from '.
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
 import { behindJob, releaseDeadTurn, sweepTurnQueue, turnTickets } from './runner-lock.js'
 import { startJob, type JobEnd, type RunningJob } from './drive-jobs.js'
-import { jobsBlocked } from './jobs.js'
+import { jobKinds, jobsBlocked, nextShard } from './jobs.js'
 import { computeNext, conversationStage, heldPlan, type NextAction } from './verbs/next.js'
 import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
@@ -1235,22 +1235,29 @@ export async function driveLoop(
       pausePrinted = token
     }
     notifyNew(items)
-    releaseAwake()
+    // Row 257 (final review F1): a job keeps running through the pause — drive's own work, like its
+    // timers — so the machine stays awake for it, the idle limit waits, and its end wakes the pause
+    // so the next shard starts.
+    if (job === undefined) releaseAwake()
     publish()
     pauseSince ??= clock.now()
     const signature = roundSignature
     for (;;) {
       if (watchSignature(root) !== signature) return true
+      if (job?.over !== undefined) return true
       // Row 240: drive's own timers wake it at their due times (the repo lock is outside the signature).
       const due = nextDue()
       if (due !== undefined && clock.now() >= due) return true
       // Row 242: drive's own timers are its own work — the idle limit does not run while one waits.
-      if (due === undefined && clock.now() - pauseSince >= idleMax) {
+      if (due === undefined && job === undefined && clock.now() - pauseSince >= idleMax) {
         ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
         stop = 'idle-limit'
         return false
       }
-      await Promise.race([clock.sleep(due !== undefined ? Math.max(0, Math.min(PAUSE_POLL_MS, due - clock.now())) : PAUSE_POLL_MS), aborted])
+      await Promise.race([
+        clock.sleep(due !== undefined ? Math.max(0, Math.min(PAUSE_POLL_MS, due - clock.now())) : PAUSE_POLL_MS), aborted,
+        ...(job !== undefined ? [job.run.end] : []),
+      ])
       if (signalled !== undefined) return false
     }
   }
@@ -1300,8 +1307,13 @@ export async function driveLoop(
   }
   const beginJob = () => {
     if (job !== undefined || stop || signalled || jobsOff !== undefined) return
+    // Nothing owed is nothing to say: a repo with no kind never hears that jobs are off (F4).
+    if (nextShard(root, cfg, canonNow, jobKinds(ctx.env)) === undefined) return
     const blocked = jobsBlocked(root)
     if (blocked !== undefined) { jobsOffNow(blocked); return }
+    // A crashed transaction refuses every write until recovery: no shard starts meanwhile, and none
+    // is spent on a refusal (F3).
+    if (pendingTxn(root) !== undefined) return
     const ctl = new AbortController()
     const relay = () => ctl.abort()
     abort.signal.addEventListener('abort', relay, { once: true })
@@ -1314,7 +1326,9 @@ export async function driveLoop(
   // A job whose end has come is cleared, its refusal read, and the leftovers swept.
   const reapJob = (): boolean => {
     if (job?.over === undefined) return false
-    if (job.over.refused !== undefined) jobsOffNow(job.over.refused)
+    // A refusal turns jobs off for the run, except a crash marker's: recovery clears it, and no shard
+    // starts until it has (F3).
+    if (job.over.refused !== undefined && job.over.rule !== 'pending-txn') jobsOffNow(job.over.refused)
     job = undefined
     sweep()
     return true
@@ -1333,6 +1347,7 @@ export async function driveLoop(
       if (stop === undefined && floor !== undefined && (compareTriple(floor.pin, version()) ?? 0) > 0) {
         ctx.out('drive: superseded — a newer witness CLI took over')
         stop = 'superseded'
+        job?.stop.abort()                                   // its shard journals nothing past the newer CLI (F2)
       }
       canonNow = loadCanon(root)
       // A run that is stopping fills nothing more, so a target released now would be set aside
@@ -1419,15 +1434,15 @@ export async function driveLoop(
           await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted, ...jobEnd])
           continue
         }
+        // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
+        const forHuman = humanAsides().some((a) => !notice(a))
+        if (autonomous && !stop && !signalled && forHuman && await pauseForHuman()) continue
         // Row 257. A job in its box, or still starting, is drive's own work: awaited on the pause cadence
         // (a start on a short one), so the round still runs meanwhile. One queued for the turn is not.
         if (job !== undefined && job.over === undefined && !signalled && !jobWaiting(job)) {
           await Promise.race([job.run.end, clock.sleep(job.run.running() ? PAUSE_POLL_MS : JOB_START_POLL_MS), aborted])
           continue
         }
-        // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
-        const forHuman = humanAsides().some((a) => !notice(a))
-        if (autonomous && !stop && !signalled && forHuman && await pauseForHuman()) continue
         // Row 240. Only drive's own timers wait: it sleeps until the earliest is due.
         const due = nextDue()
         if (autonomous && !stop && !signalled && !forHuman && due !== undefined) {
