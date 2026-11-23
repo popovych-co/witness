@@ -151,3 +151,14 @@ describe('the scratch — slice 1 review (row 258)', () => {
     }
   })
 })
+
+describe('the scratch — slice 2 review (row 258)', () => {
+  it('a reset killed in its last moment leaves no HEAD.lock behind it (I4\'s class)', async () => {
+    const repo = await seededRepo()
+    const dir = value(openScratch(repo.root))
+    const head = repo.git('rev-parse', 'HEAD')
+    value(resetScratch(dir, head))
+    writeFileSync(join(git(dir, 'rev-parse', '--path-format=absolute', '--git-dir').stdout.trim(), 'HEAD.lock'), '')
+    expect(rule(resetScratch(dir, head))).toBe('ok')
+  })
+})

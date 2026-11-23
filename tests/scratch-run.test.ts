@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig, type Config } from '../src/config.js'
@@ -132,5 +132,21 @@ describe('a scratch run (row 258)', () => {
     writeFileSync(join(dir, 'witness.config.yaml'), 'half-written')
     writeFileSync(join(repo.root, SCRATCH_LOCK), JSON.stringify({ pid: deadPid(), since: Date.now(), until: Date.now() + 60_000 }))
     expect(value(inScratch(repo.root, ctx, cfg, at, status)).value).toBe('')
+  })
+})
+
+describe('a scratch run — slice 2 review (row 258)', () => {
+  it('a run that leaves files in canon folders leaves the next run clean (I-A)', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: fixtureEnv() })
+    const cfg = cfgOf(repo.root)
+    const at = { tree: repo.git('rev-parse', 'HEAD') }
+    const litter = ['specs/tmp/out.md', 'specs/principles.md', '.witness/tmp/x.json']
+    value(inScratch(repo.root, ctx, cfg, at, (dir) => {
+      for (const rel of litter) { mkdirSync(join(dir, rel, '..'), { recursive: true }); writeFileSync(join(dir, rel), 'left') }
+      return ok({ value: 1, load: [] })
+    }))
+    const seen = value(inScratch(repo.root, ctx, cfg, at, (dir) => ok({ value: litter.filter((rel) => existsSync(join(dir, rel))), load: [] })))
+    expect(seen.value).toEqual([])
   })
 })

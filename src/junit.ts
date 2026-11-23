@@ -38,7 +38,9 @@ function attrs(tag: string): Record<string, string> {
 // named after its file, in the suite named after that file (probe t2b-junit-vitest-4.1.10.xml
 // beside the impl map), while a failed test is named for itself. The suite's name is what keeps
 // jest-junit out (slice 1 review): its defaults name every case '{classname} {title}' twice over,
-// inside a suite named after the top describe.
+// inside a suite named after the top describe. Under `test.projects` with roots of their own, vitest
+// names that case relative to its project and its classname and suite relative to the root config,
+// so a name the classname ends with, after a `/`, counts too (slice 2 review).
 export function parseJUnit(xml: string): TestOutcome[] {
   const clean = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '').replace(/<!--[\s\S]*?-->/g, '')
   const out: TestOutcome[] = []
@@ -65,7 +67,7 @@ export function parseJUnit(xml: string): TestOutcome[] {
       const failure = /<failure\b/.test(inner)
       if (error || failure) {
         status = 'failed'
-        load = error || (name === classname && suiteOf(m.index) === classname)
+        load = error || (suiteOf(m.index) === classname && (name === classname || classname.endsWith(`/${name}`)))
       } else if (/<skipped\b/.test(inner)) status = 'skipped'
       if (end !== -1) re.lastIndex = end + '</testcase>'.length
     }

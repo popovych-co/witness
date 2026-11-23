@@ -15,7 +15,10 @@ import { hasControl, shellWord, visible } from './toon.js'
 // (`none`) — a Cargo workspace builds on demand, and a human states anything else.
 export function detectPrepare(root: string): string {
   const has = (f: string) => existsSync(join(root, f))
-  if (has('pnpm-lock.yaml')) return 'pnpm install --frozen-lockfile'
+  // Slice 2 review: run headless, pnpm aborts whenever the kept node_modules must be purged (a
+  // hoisting setting that differs between trees, a pnpm upgrade) — ERR_PNPM_ABORTED_REMOVE_MODULES_
+  // DIR_NO_TTY — so prepare would fail for good; the scratch's modules are always witness's to purge.
+  if (has('pnpm-lock.yaml')) return 'pnpm install --frozen-lockfile --config.confirm-modules-purge=false'
   if (has('package-lock.json') || has('npm-shrinkwrap.json')) return 'npm ci'
   if (has('yarn.lock')) return has('.yarnrc.yml') ? 'yarn install --immutable' : 'yarn install --frozen-lockfile'
   if (has('bun.lock') || has('bun.lockb')) return 'bun install --frozen-lockfile'
@@ -68,8 +71,13 @@ function readRecord(p: string): PrepareRecord | undefined {
   }
 }
 
-const lastLine = (text: string): string =>
-  visible(text.split('\n').map((l) => l.trim()).filter((l) => l !== '').at(-1) ?? 'no output').slice(0, 200)
+// The output's reason: its last error line (`ERR_…`, `error`, `npm ERR!`, `fatal:`), else its last
+// line — a package manager's trailing hint never names what failed (slice 2 review).
+const lastLine = (text: string): string => {
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+  const errors = lines.filter((l) => /^(ERR_|npm ERR!|error\b|Error\b|ERROR\b|fatal\b)/.test(l))
+  return visible(errors.at(-1) ?? lines.at(-1) ?? 'no output').slice(0, 200)
+}
 
 // Prepares the scratch at `dir` (checked out at `tree`) when its inputs moved since the last
 // prepare that exited 0, or when `force`d (the load rule's second try). Headless: an untrusted

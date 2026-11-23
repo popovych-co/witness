@@ -50,6 +50,6 @@ describe('scratch.prepare at init (row 259)', () => {
     const repo = tmpRepo()
     repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
     expect((await repo.cli(['init'])).code).toBe(0)
-    expect(repo.read('witness.config.yaml')).toMatch(/^scratch:\n {2}prepare: pnpm install --frozen-lockfile +# /m)
+    expect(repo.read('witness.config.yaml')).toMatch(/^scratch:\n {2}prepare: pnpm install --frozen-lockfile --config\.confirm-modules-purge=false +# /m)
   })
 })

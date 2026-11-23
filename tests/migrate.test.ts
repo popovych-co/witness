@@ -265,9 +265,9 @@ describe('scratch.prepare at migrate (row 259)', () => {
     repo.git('commit', '-m', 'lock')
     const r = await repo.cli(['migrate'])
     expect(r.code).toBe(0)
-    expect(r.stdout).toContain('filled: scratch.prepare pnpm install --frozen-lockfile — was unset · scratch runs were off')
+    expect(r.stdout).toContain('filled: scratch.prepare pnpm install --frozen-lockfile --config.confirm-modules-purge=false — was unset · scratch runs were off')
     expect(r.stdout).toContain('config: schema 2 → 3')
-    expect(loaded(repo).scratch).toEqual({ prepare: 'pnpm install --frozen-lockfile' })
+    expect(loaded(repo).scratch).toEqual({ prepare: 'pnpm install --frozen-lockfile --config.confirm-modules-purge=false' })
   })
 })
 
@@ -278,7 +278,7 @@ describe('migrate grants what it proposes (row 259)', () => {
     repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'lock')
     return repo
   }
-  const PNPM = 'pnpm install --frozen-lockfile'
+  const PNPM = 'pnpm install --frozen-lockfile --config.confirm-modules-purge=false'
 
   it('at a terminal, grants the setup command it proposes, in the config\'s own commit (§6, row 259)', async () => {
     const repo = schema2Locked()

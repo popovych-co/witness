@@ -11,7 +11,7 @@ import { fakeCtx, fakeScenario, fixtureEnv, patchConfig, seededRepo, tmpRepo, ty
 
 describe('the setup command a repo declares (row 259)', () => {
   it.each([
-    [['pnpm-lock.yaml'], 'pnpm install --frozen-lockfile'],
+    [['pnpm-lock.yaml'], 'pnpm install --frozen-lockfile --config.confirm-modules-purge=false'],
     [['package-lock.json'], 'npm ci'],
     [['npm-shrinkwrap.json'], 'npm ci'],
     [['yarn.lock'], 'yarn install --frozen-lockfile'],
@@ -128,5 +128,14 @@ describe('prepare (row 259)', () => {
     expect(trustedNow(repo.root, { WITNESS_TRUST_CMDS: '1' }, 'pnpm install --frozen-lockfile')).toBe(true)
     grantCommands(repo.root, ['pnpm install --frozen-lockfile'])
     expect(trustedNow(repo.root, {}, 'pnpm install --frozen-lockfile')).toBe(true)
+  })
+})
+
+describe('prepare — slice 2 review (row 259)', () => {
+  it('a failing prepare names the error line, not a trailing hint', async () => {
+    const { prep, head } = await prepared('echo " ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY  Aborted removal of modules directory due to no TTY" >&2\necho "If you are running pnpm in CI, set the CI environment variable to true." >&2\nexit 1\n')
+    const r = prep(head())
+    expect(rule(r)).toBe('prepare-failed')
+    expect(r.ok ? '' : r.violations[0]!.got).toMatch(/^ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY/)
   })
 })

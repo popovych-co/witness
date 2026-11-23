@@ -69,3 +69,14 @@ describe('junit load failures — other producers (row 258, slice 1 review)', ()
     expect(loadFailures(parseJUnit(xml))).toEqual(['y.test.ts'])
   })
 })
+
+describe('junit load failures — vitest projects (row 258, slice 2 review)', () => {
+  // vitest 4.1.10 with test.projects whose projects have their own roots: the file-level case is
+  // named relative to its project, its classname and its suite relative to the root config.
+  it('a file-level case named for its project-relative path is a load failure; a red is not', () => {
+    const xml = '<testsuites><testsuite name="packages/api/test/missing.test.mjs">'
+      + '<testcase classname="packages/api/test/missing.test.mjs" name="test/missing.test.mjs"><failure message="Cannot find module"/></testcase></testsuite>'
+      + '<testsuite name="packages/api/test/a.test.mjs"><testcase classname="packages/api/test/a.test.mjs" name="adds"><failure/></testcase></testsuite></testsuites>'
+    expect(loadFailures(parseJUnit(xml))).toEqual(['packages/api/test/missing.test.mjs'])
+  })
+})

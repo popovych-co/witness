@@ -8,7 +8,7 @@ import { prepareScratch } from './prepare.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { withScratch } from './scratch-lock.js'
 import { visible } from './toon.js'
-import { ensureExcluded, excludeCanon } from './worktree.js'
+import { ensureExcluded, excludeCanon, materializedCanon } from './worktree.js'
 
 // Row 258. One persistent scratch checkout per repo, where machine work runs on trees other than a
 // plan's worktree (T2c's base lint first). It sits at `.witness/scratch`, inside the primary root:
@@ -63,6 +63,13 @@ export function openScratch(root: string): Result<string> {
     exists = false
   }
   ensureExcluded(root)
+  // Slice 2 review I-A. Nothing in the scratch is anyone's work: whatever a run left in a canon
+  // folder — a file a step wrote, one planted over a hidden path, one checked out — goes before the
+  // patterns are applied and verified, or the residue check would refuse every run until a human
+  // removed the scratch (plan worktrees' remedy, "adopt or revert", means nothing here).
+  if (exists) {
+    for (const r of materializedCanon(root, path)) rmSync(join(path, r.rel), { recursive: true, force: true })
+  }
   if (!exists) {
     // A scratch removed by hand leaves its registration behind, which `worktree add` refuses.
     tryGit(root, 'worktree', 'prune')
@@ -83,13 +90,16 @@ export function openScratch(root: string): Result<string> {
 // The scratch at `commit`, clean: everything untracked or ignored goes but `node_modules` and
 // `target` at any depth (the prepared install and cargo's build cache survive a reset).
 //
-// A reset killed mid-checkout (drive stopping a job at its box) leaves the scratch's index.lock, and
-// git refuses every later checkout until it goes. Under the scratch lock no other witness process
+// A reset killed mid-checkout (drive stopping a job at its box) leaves the scratch's index.lock (or,
+// in its last moment, HEAD.lock), and git refuses every later checkout until it goes. Under the scratch lock no other witness process
 // runs git here, so a leftover is removed first; one that cannot be removed refuses with its path.
 export function resetScratch(dir: string, commit: string): Result<void> {
   const gitDir = tryGit(dir, 'rev-parse', '--path-format=absolute', '--git-dir')
   if (gitDir.ok) {
-    try { rmSync(join(gitDir.out, 'index.lock'), { force: true }) } catch { /* git names it below */ }
+    // HEAD.lock too: a reset killed in its last moment (slice 2 review).
+    for (const lock of ['index.lock', 'HEAD.lock']) {
+      try { rmSync(join(gitDir.out, lock), { force: true }) } catch { /* git names it below */ }
+    }
   }
   const co = tryGit(dir, 'checkout', '--quiet', '--force', '--detach', commit)
   if (!co.ok) return refuse([v(SCRATCH_DIR, 'scratch-reset', lastLine(co.out), `a clean checkout of ${visible(commit)}`)])
