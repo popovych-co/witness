@@ -11,6 +11,8 @@ import { loadCanon } from '../src/scan.js'
 import { seededRepo, tmpRepo } from './helpers.js'
 
 const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
+const fixture = (o: Record<string, unknown> = {}) =>
+  JSON.stringify({ key: 'k1', shards: 1, turn: false, gated: true, boxMs: 1_000, cmd: 'true', ...o })
 const unit: JobUnit = { kind: 'fixture', key: 'k1', shards: 2 }
 const e = (shard: number, outcome: JobShardEntry['outcome'], extra: Partial<JobShardEntry> = {}): JobShardEntry =>
   ({ v: 1, t: 'job-shard', kind: 'fixture', key: 'k1', shard, of: 2, outcome, ms: 10, ...extra })
@@ -109,5 +111,16 @@ describe('job reading and the next shard (row 257)', () => {
     expect(jobKinds(env).map((k) => [k.kind, k.turn, k.gated, k.boxMs({} as Config)])).toEqual([['fixture', true, false, 1_000]])
     expect(jobKinds({ WITNESS_FIXTURE_JOB: '{' })).toEqual([])
     expect(jobKinds({ WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'K!', shards: 2 }) })).toEqual([])
+  })
+})
+
+describe('jobs in the scratch (row 258)', () => {
+  it('a kind says whether it runs in the scratch and which commands it runs (row 258)', async () => {
+    const repo = await seededRepo()
+    const [kind] = jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: true }) })
+    expect(kind).toMatchObject({ kind: 'fixture', scratch: true })
+    expect(kind!.commands(cfgOf(repo.root))).toEqual([])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture() })[0]).toMatchObject({ scratch: false })
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: 'yes' }) })).toEqual([])
   })
 })

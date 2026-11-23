@@ -10,6 +10,7 @@ import { startJob } from '../src/drive-jobs.js'
 import { JOB_STREAM, jobReading, type JobShardEntry } from '../src/jobs.js'
 import { appendEntry, readStream } from '../src/journal.js'
 import { TURN_DIR, runnerLockPath } from '../src/runner-lock.js'
+import { SCRATCH_LOCK } from '../src/scratch-lock.js'
 import { loadCanon } from '../src/scan.js'
 import type { Ticker } from '../src/session-clock.js'
 import {
@@ -53,6 +54,12 @@ const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok)
 const fixture = (o: Record<string, unknown>) =>
   JSON.stringify({ key: 'k1', shards: 1, turn: false, gated: true, boxMs: 30_000, cmd: 'true', ...o })
 const shards = (root: string) => readStream(root, JOB_STREAM) as unknown as JobShardEntry[]
+// An orphan living `s` seconds: its shell exits at once, so it is never this process's zombie (row 213).
+const orphan = (s: number): number => Number(spawnSync('sh', ['-c', `sleep ${s} >/dev/null 2>&1 & echo $!`], { encoding: 'utf8' }).stdout.trim())
+const lockAt = (root: string, l: { pid: number; since: number; until: number }) => {
+  mkdirSync(join(root, '.witness', 'live', 'scratch'), { recursive: true })
+  writeFileSync(join(root, SCRATCH_LOCK), JSON.stringify(l))
+}
 // A drive with nothing for a session to do, and jobs: the brainstorm is set aside, the jobs run.
 const jobsOnly = async (job: string, extra: Record<string, string> = {}, signal?: AbortSignal) => {
   const repo = await seededRepo({ noRecap: true })
@@ -229,3 +236,15 @@ describe('drive runs jobs (row 257)', () => {
   }, 90_000)
 })
 
+describe('drive runs jobs in the scratch (row 258)', () => {
+  it('a scratch job\'s wait for the scratch is never boxed, and its record rides the shard (row 258)', async () => {
+    const { repo, run } = await jobsOnly(fixture({ boxMs: 4_000, turn: false, scratch: true }))
+    lockAt(repo.root, { pid: orphan(6), since: Date.now(), until: Date.now() + 60_000 })
+    await run()
+    expect(shards(repo.root).map((x) => x.outcome)).toEqual(['done'])
+    // The shard ran at the commit before the one drive journaled it in.
+    const ran = repo.git('rev-parse', 'HEAD~1')
+    expect(repo.git('log', '-1', '--format=%s')).toMatch(/^job\(fixture\): k1 1\/1 done/)
+    expect(shards(repo.root)[0]!.result).toEqual({ exit: 0, tree: repo.git('rev-parse', `${ran}^{tree}`), commit: ran })
+  }, 90_000)
+})

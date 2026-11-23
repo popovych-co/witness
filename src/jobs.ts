@@ -6,7 +6,11 @@ import { stateFloor } from './floor.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { acquireLock } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
+import type { RunCommand } from './allowlist.js'
+import { tryGit } from './gitio.js'
+import { ok, type Result as Res } from './refusal.js'
 import { execCommand } from './runner.js'
+import { inScratch } from './scratch.js'
 import type { Canon } from './scan.js'
 import { logSafe } from './toon.js'
 import { pendingTxn, withTxn } from './txn.js'
@@ -40,6 +44,12 @@ export interface JobKind {
   kind: string                                        // an id (isId)
   turn: boolean                                       // its shards take the test turn
   gated: boolean                                      // a gate reads its results; false: it yields the turn to plan work
+  // Row 258. Its shards run in the scratch: the verb takes the scratch lock after the turn and before
+  // `running`, so a wait for the scratch is never boxed; reset and prepare run inside the box.
+  scratch: boolean
+  // Row 260. The repo commands its shards run, checked trusted before a shard starts. A scratch
+  // kind's `scratch.prepare` is added by that check, never listed here.
+  commands(cfg: Config): RunCommand[]
   boxMs(cfg: Config): number                          // each shard's time box, in awake ms
   owed(root: string, cfg: Config, canon: Canon): JobUnit[]
   run(root: string, ctx: Ctx, cfg: Config, unit: JobUnit, shard: number): JobResult   // in the job child
@@ -166,10 +176,11 @@ export function journalShard(root: string, entry: Omit<JobShardEntry, 'v' | 't'>
   }
 }
 
-// The test-only fixture (WITNESS_FIXTURE_JOB, JSON `{ key, shards, turn, gated, boxMs, cmd, fail? }`),
-// a seam on WITNESS_DRIVE_AGENT_BIN's precedent and never documented: anything malformed registers
-// nothing. Its `cmd` is the suite's own, with `{shard}` and `{of}` filled in; it runs without a turn
-// of its own — inside the verb's when the kind takes one.
+// The test-only fixture (WITNESS_FIXTURE_JOB, JSON `{ key, shards, turn, gated, boxMs, cmd, fail?,
+// scratch? }`), a seam on WITNESS_DRIVE_AGENT_BIN's precedent and never documented: anything
+// malformed registers nothing. Its `cmd` is the suite's own, with `{shard}` and `{of}` filled in; it
+// runs without a turn of its own — inside the verb's when the kind takes one. With `scratch` it runs
+// in the scratch at the root's HEAD (row 258), and its result names the tree and commit it ran.
 function fixtureKind(raw: string | undefined): JobKind | undefined {
   if (raw === undefined) return undefined
   let o: Record<string, unknown>
@@ -180,18 +191,25 @@ function fixtureKind(raw: string | undefined): JobKind | undefined {
   } catch {
     return undefined
   }
-  const { key, shards, turn, gated, boxMs, cmd, fail } = o
+  const { key, shards, turn, gated, boxMs, cmd, fail, scratch } = o
   if (typeof key !== 'string' || !isJobKey(key) || !isCount(shards) || typeof turn !== 'boolean' || typeof gated !== 'boolean') return undefined
   if (typeof boxMs !== 'number' || !Number.isInteger(boxMs) || boxMs < 1 || typeof cmd !== 'string') return undefined
   if (fail !== undefined && typeof fail !== 'string') return undefined
+  if (scratch !== undefined && typeof scratch !== 'boolean') return undefined
   return {
-    kind: 'fixture', turn, gated,
+    kind: 'fixture', turn, gated, scratch: scratch === true,
     boxMs: () => boxMs,
+    commands: () => [],
     owed: () => [{ kind: 'fixture', key, shards }],
-    run: (root, ctx, _cfg, unit, shard) => {
+    run: (root, ctx, cfg, unit, shard) => {
       if (fail !== undefined) return { outcome: 'failed', why: fail }
       const filled = cmd.replaceAll('{shard}', String(shard)).replaceAll('{of}', String(unit.shards))
-      return { outcome: 'done', result: { exit: execCommand(root, ctx, filled, { turn: false }).exitZero ? 0 : 1 } }
+      if (scratch !== true) return { outcome: 'done', result: { exit: execCommand(root, ctx, filled, { turn: false }).exitZero ? 0 : 1 } }
+      const head = tryGit(root, 'rev-parse', '--verify', 'HEAD')
+      const r = inScratch(root, ctx, cfg, { tree: head.ok ? head.out : 'HEAD' }, (dir): Res<{ value: number; load: string[] }> =>
+        ok({ value: execCommand(dir, ctx, filled, { turn: false }).exitZero ? 0 : 1, load: [] }))
+      if (!r.ok) return { outcome: 'failed', why: `${r.violations[0]!.rule}: ${r.violations[0]!.got}`.slice(0, 200) }
+      return { outcome: 'done', result: { exit: r.value.value, tree: r.value.record.tree, commit: r.value.record.commit } }
     },
   }
 }

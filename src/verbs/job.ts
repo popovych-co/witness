@@ -3,8 +3,10 @@ import { loadConfig } from '../config.js'
 import { driveChild } from '../drive-presence.js'
 import { primaryRoot } from '../gitio.js'
 import { JOB_ENV, RESULT_MAX_BYTES, isJobKey, jobKinds, type JobResult } from '../jobs.js'
-import { renderRefusal, v, type Violation } from '../refusal.js'
+import { ok, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { withRunnerTurn } from '../runner-lock.js'
+import { withScratch } from '../scratch-lock.js'
+import { TERM_GRACE_MS } from '../self.js'
 import { crashPoint } from '../txn.js'
 
 // Row 257. One shard of a drive job, run as drive's child: `witness job <kind> <key> <shard>/<of>`.
@@ -19,6 +21,9 @@ import { crashPoint } from '../txn.js'
 const USAGE = 'usage: witness job <kind> <key> <shard>/<of>'
 const MAX_SHARDS = 1_000
 const SHARD_RE = /^([1-9][0-9]*)\/([1-9][0-9]*)$/
+// Row 258. A scratch kind's lease outlasts its box, drive's grace before the kill, and this slack;
+// the lease is written once, at the take, and the box starts only after it.
+export const SCRATCH_LEASE_SLACK_MS = 600_000
 
 const refused = (ctx: Ctx, rows: Violation[]): number => {
   renderRefusal(rows).forEach((l) => ctx.err(l))
@@ -60,9 +65,16 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return { outcome: 'failed', why: 'the job threw' }
     }
   }
-  const result = kind.turn
-    ? withRunnerTurn(root, ctx, `job ${kind.kind} ${key} ${shard}/${of}`, work, { job: kind.kind, gated: kind.gated })
-    : work(ctx.env)
+  // Row 258. Lock order turn → scratch: a scratch kind takes the scratch inside its turn and before
+  // `running`, so neither wait is boxed. A scratch it cannot take ends the shard failed, unstarted.
+  const lease = kind.boxMs(cfgR.value) + TERM_GRACE_MS + SCRATCH_LEASE_SLACK_MS
+  const held = (env: Ctx['env']): Result<JobResult> =>
+    kind.scratch ? withScratch(root, { ...ctx, env }, lease, () => ok(work(env))) : ok(work(env))
+  const r = kind.turn
+    ? withRunnerTurn(root, ctx, `job ${kind.kind} ${key} ${shard}/${of}`, held, { job: kind.kind, gated: kind.gated })
+    : held(ctx.env)
+  const result: JobResult = r.ok ? r.value
+    : { outcome: 'failed', why: `${r.violations[0]!.rule}: ${r.violations[0]!.got}`.slice(0, 200) }
   crashPoint(ctx.env, 'job-result')
   const line = JSON.stringify({ job: 'result', ...result })
   // Settled point 4: a result line rides one pipe write, so a bigger one reads failed.

@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { readStream } from '../src/journal.js'
+import { SCRATCH_LOCK } from '../src/scratch-lock.js'
 import { fixtureEnv, patchConfig, seededRepo } from './helpers.js'
 
 const REPO = resolve(import.meta.dirname, '..')
@@ -65,4 +67,18 @@ describe('witness job (row 257)', () => {
       expect(r.stderr).toMatch(rule)
     }
   }, 120_000)
+})
+
+describe('witness job — the scratch (row 258)', () => {
+  it('a scratch job runs its command in the scratch at HEAD and names every sha (row 258)', async () => {
+    const repo = await seededRepo()
+    const r = await jobChild(repo.root, ['fixture', 'k1', '1/1'], {
+      WITNESS_JOB: '1', WITNESS_FIXTURE_JOB: fixture({ shards: 1, turn: false, scratch: true, cmd: 'test -f .git' }),
+    })
+    expect(lines(r.stdout)).toEqual([
+      { job: 'running' },
+      { job: 'result', outcome: 'done', result: { exit: 0, tree: repo.git('rev-parse', 'HEAD^{tree}'), commit: repo.git('rev-parse', 'HEAD') } },
+    ])
+    expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
+  }, 60_000)
 })
