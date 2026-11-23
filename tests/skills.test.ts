@@ -582,3 +582,11 @@ describe("the grill asks a fix's cause (row 253)", () => {
     expect(text).toContain('recap --effort <slug> --cause')
   })
 })
+
+describe("an old fix's cause is the human's, at an amend too (row 253, slice 2 review)", () => {
+  it('the grill asks the human the cause of an old fix it amends, never picks it', () => {
+    const text = readFileSync(skillPath('witness-brainstorm'), 'utf8')
+    expect(text).toContain('A fix with no recorded cause')
+    expect(text).toContain('never pick it yourself')
+  })
+})

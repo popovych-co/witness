@@ -119,6 +119,7 @@ $WITNESS recap --file "$DIR/recap.json" --ask <id>
 - A fix adds `"cause": "escape"` or `"cause": "decision"` beside `"class": "fix"`.
 - **An amendment** runs `$WITNESS recap --amend --file "$DIR/recap.json"`, the recap naming its effort, and keeps the fix's cause unless the file names another. It re-arms the decompose gate's feature-class stop: scope changed, scope gets re-approved.
 - A fix that predates causes is listed by `witness status` under `cause-owed`; the human classifies it in their own chat or terminal: `$WITNESS recap --effort <slug> --cause escape|decision`.
+- A fix with no recorded cause is refused `cause · required` when you amend it: ask the human its cause as in the walk and add it to the file — never pick it yourself, even inside the refusal repair loop.
 - **A confirmed recap deletes the draft.** Nothing is left to resume.
 - Effort slug: kebab-case `[a-z0-9][a-z0-9-]*`, minted from the scope title. A `slug-reuse` refusal means that history exists — mint a different slug; histories never merge, and `--amend` is never the dodge.
 - The refusal repair loop applies (3 attempts, then stop with the violation list).

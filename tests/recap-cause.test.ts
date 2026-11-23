@@ -33,6 +33,7 @@ describe('a fix carries its cause (row 253)', () => {
     const r = await recapFile(repo, { effort: 'quick-fix', class: 'fix' })
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('cause,required')
+    expect(r.stderr).toContain("the human's answer")      // slice 2 review M1: never the agent's pick
     expect(r.stderr).toContain('escape')
     expect(r.stderr).toContain('decision')
     expect(kinds(repo, 'quick-fix')).toEqual([])

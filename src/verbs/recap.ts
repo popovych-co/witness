@@ -35,7 +35,7 @@ export interface RecapInput {
 const CAUSES_WANT = 'escape | decision'
 const causeEnum = (got: unknown) => v('cause', 'enum', String(got), CAUSES_WANT)
 const CAUSE_REQUIRED = v('cause', 'required', 'absent',
-  'escape — it slipped past what should have caught it | decision — you chose to change how it works')
+  "the human's answer, added as \"cause\" — escape: it slipped past what should have caught it | decision: they chose to change how it works")
 
 export function validateRecap(raw: unknown): Violation[] {
   if (typeof raw !== 'object' || raw === null) return [v('recap', 'shape', String(raw), 'JSON object')]
