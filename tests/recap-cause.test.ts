@@ -155,6 +155,29 @@ describe('a fix carries its cause (row 253)', () => {
     expect(kinds(repo, 'old-fix')).toEqual(['recap'])
   })
 
+  // Security review (row 253). A cause is the human's word: no witness-spawned session journals one,
+  // through the classify act or through a recap file. Drive never spawns a grill (row 194), so this
+  // costs no flow; an amend that keeps the recorded cause writes no cause line and lands.
+  it('a spawned session journals no cause line through a recap file either', async () => {
+    const drive = { WITNESS_DRIVE: 'quick-fix' }
+    const born = await seededRepo({ noRecap: true })
+    born.write('r.json', JSON.stringify({ ...RECAP, effort: 'quick-fix', class: 'fix', cause: 'escape' }))
+    const birth = await born.cli(['recap', '--file', 'r.json'], { env: drive })
+    expect(birth.code).toBe(2)
+    expect(birth.stderr).toContain('cause-in-session')
+    expect(kinds(born, 'quick-fix')).toEqual([])
+
+    const repo = await seededRepo({ class: 'fix', slug: 'quick-fix', cause: 'decision' })
+    repo.write('r.json', JSON.stringify({ ...RECAP, effort: 'quick-fix', class: 'fix', cause: 'escape' }))
+    const flip = await repo.cli(['recap', '--amend', '--file', 'r.json'], { env: drive })
+    expect(flip.code).toBe(2)
+    expect(flip.stderr).toContain('cause-in-session')
+    expect(kinds(repo, 'quick-fix')).toEqual(['recap', 'cause'])
+    repo.write('r.json', JSON.stringify({ ...RECAP, effort: 'quick-fix', class: 'fix', cause: 'decision' }))
+    expect((await repo.cli(['recap', '--amend', '--file', 'r.json'], { env: drive })).code).toBe(0)
+    expect(kinds(repo, 'quick-fix')).toEqual(['recap', 'cause', 'recap'])
+  })
+
   it('a crash after the lines land completes to one recap and one cause', async () => {
     const repo = await seededRepo({ noRecap: true })
     repo.write('r.json', JSON.stringify({ ...RECAP, effort: 'quick-fix', class: 'fix', cause: 'escape' }))

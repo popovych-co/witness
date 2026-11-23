@@ -133,8 +133,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const slug = effortRefusal(root, recap.effort, values.amend === true)
   if (slug) { renderRefusal([slug]).forEach(ctx.err); return EXIT.REFUSED }
-  // Row 253. A fix names its cause unless an amend's effort already recorded one.
-  if (causeOwed(root, recap, values.amend === true)) { renderRefusal([CAUSE_REQUIRED]).forEach(ctx.err); return EXIT.REFUSED }
+  // Row 253. A fix names its cause unless an amend's effort already recorded one, and a cause line is
+  // the human's word: no witness-spawned session journals one (security review; the classify act's rule).
+  const causeRefused = (): Violation | undefined =>
+    causeOwed(root, recap, values.amend === true) ? CAUSE_REQUIRED
+    : causeLine(root, recap, values.amend === true) !== undefined ? causeInSession(ctx.env) : undefined
+  const owed = causeRefused()
+  if (owed) { renderRefusal([owed]).forEach(ctx.err); return EXIT.REFUSED }
   // Row 176. One ask births one effort: an amend re-scopes an effort an ask already birthed.
   if (recap.ask !== undefined) {
     if (values.amend) {
@@ -154,13 +159,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (crashed !== undefined) return crashed
     const raced = effortRefusal(root, recap.effort, values.amend === true)
       ?? (recap.ask !== undefined ? askRefusal(root, recap.ask) : undefined)
-      ?? (causeOwed(root, recap, values.amend === true) ? CAUSE_REQUIRED : undefined)
+      ?? causeRefused()
     if (raced) { renderRefusal([raced]).forEach(ctx.err); return EXIT.REFUSED }
-    // Row 253. The cause line rides the recap's transaction only when it says something new: a
-    // birth's cause, or an amend naming another than the one recorded.
     const recorded = values.amend ? effortCause(readStream(root, recap.effort)) : undefined
-    const causeEntry = recap.class === 'fix' && recap.cause !== undefined && recap.cause !== recorded
-      ? { t: 'cause' as const, effort: recap.effort, cause: recap.cause } : undefined
+    const causeEntry = causeLine(root, recap, values.amend === true)
 
     const entry = {
       t: 'recap' as const, effort: recap.effort, class: recap.class,
@@ -203,6 +205,21 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
 }
 
+// Row 253. The cause line a recap's transaction carries, only when it says something new: a fix
+// birth's cause, or an amend naming another than the one recorded.
+function causeLine(root: string, recap: RecapInput, amend: boolean): { t: 'cause'; effort: string; cause: FixCause } | undefined {
+  if (recap.class !== 'fix' || recap.cause === undefined) return undefined
+  if (amend && effortCause(readStream(root, recap.effort)) === recap.cause) return undefined
+  return { t: 'cause', effort: recap.effort, cause: recap.cause }
+}
+
+// Row 253 (row 205's pattern). A fix's cause is named by the human in their own chat or terminal.
+function causeInSession(env: Record<string, string | undefined>): Violation | undefined {
+  const marker = sessionMarker(env)
+  return marker === undefined ? undefined
+    : v('cause', 'cause-in-session', marker, 'the human names a fix\'s cause in their own chat or terminal')
+}
+
 // Row 253. Whether this fix recap is refused for lacking a cause: it names none, and (for an amend)
 // its effort has recorded none.
 function causeOwed(root: string, recap: RecapInput, amend: boolean): boolean {
@@ -227,8 +244,8 @@ async function classify(ctx: Ctx, values: { file?: string; amend?: boolean; ask?
   }
   if (values.effort === undefined) return refused(v('--effort', 'required', 'absent', 'the fix effort to classify — witness status lists the fixes owing a cause'))
   if (!isFixCause(values.cause)) return refused(causeEnum(values.cause))
-  const marker = sessionMarker(ctx.env)
-  if (marker !== undefined) return refused(v('--cause', 'cause-in-session', marker, 'the human names a fix\'s cause in their own chat or terminal'))
+  const inSession = causeInSession(ctx.env)
+  if (inSession) return refused({ ...inSession, field: '--cause' })
   const slug = values.effort
   const cause: FixCause = values.cause
 
