@@ -176,15 +176,18 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // marker line differs from what appendEntry wrote, so the two must be one derivation.
     const line = entryLine(entry)
     const stream = journalRel(recap.effort)
+    // Row 254. The op is the commit's subject, so a birth `recover` completes keeps its class for the
+    // merge clock (`recap(<slug>): fix (recovered)`).
+    const subject = `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}${recap.ask !== undefined ? ` · ask ${recap.ask}` : ''}`
     const marker = {
-      op: `recap(${recap.effort})`, files: [stream], journal: { stream: recap.effort, line },
+      op: subject, files: [stream], journal: { stream: recap.effort, line },
       ...(causeEntry ? { journalMulti: [{ stream: recap.effort, line: entryLine(causeEntry) }] } : {}),
     }
     const res = withTxn(root, marker, () => {
       appendEntry(root, recap.effort, entry)
       if (causeEntry) appendEntry(root, recap.effort, causeEntry)
       crashPoint(ctx.env, 'journal-append')
-      return stateCommit(root, marker.files, `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}${recap.ask !== undefined ? ` · ask ${recap.ask}` : ''}`)
+      return stateCommit(root, marker.files, subject)
     })
     if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
     // Row 199. The recap is the record now, so the grill's draft is done — only once the commit
@@ -278,11 +281,11 @@ async function classify(ctx: Ctx, values: { file?: string; amend?: boolean; ask?
     }
     const entry = { t: 'cause' as const, effort: slug, cause }
     const stream = journalRel(slug)
-    const txn = { op: `cause(${slug})`, files: [stream], journal: { stream: slug, line: entryLine(entry) } }
+    const txn = { op: `cause(${slug}): ${cause}`, files: [stream], journal: { stream: slug, line: entryLine(entry) } }
     const res = withTxn(root, txn, () => {
       appendEntry(root, slug, entry)
       crashPoint(ctx.env, 'journal-append')
-      return stateCommit(root, txn.files, `cause(${slug}): ${cause}`)
+      return stateCommit(root, txn.files, txn.op)
     })
     if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
     ctx.out(kv('cause', cause))
