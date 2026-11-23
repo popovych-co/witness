@@ -5,7 +5,9 @@ import type { Aside } from './drive.js'
 import { readStream, streamIds, type Entry } from './journal.js'
 import { needsYou, needYouRows, WAIT_KINDS } from './needs-you.js'
 import type { DecisionEntry } from './rounds.js'
+import { record, recordLine } from './record.js'
 import { loadCanon } from './scan.js'
+import { kv } from './toon.js'
 
 // Row 184. What the run did and what waits, read from the journal written since the run
 // began plus the state at its end (design B6). Drive journals nothing of its own (D145), so
@@ -63,6 +65,7 @@ export function driveReport(
     `drive: ${run.stopped !== undefined ? 'stopped' : 'done'} — ${tally}`,
     ...merged, ...waits, ...parked, ...stuck, ...obligations,
     `decisions: policy ${counts.policy} · arbiter ${counts.arbiter} · affirmation ${counts.affirmation} · named ${counts.named}`,
+    kv('record', recordLine(record(root, canon))),                     // row 254
     ...(w > 0 ? ['help: answer the waits above · then /witness or witness drive picks up where this run stopped'] : []),
   ]
   return { lines, summary: `witness drive — ${basename(root)} · ${tally}`, merged: m, waiting: w, parked: p, stuck: s }

@@ -21,6 +21,7 @@ import { kv, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
 import { pendingTxn } from '../txn.js'
 import { worktreePath } from '../worktree.js'
+import { owedRows, record, recordLine, recordTables } from '../record.js'
 
 function tally(docs: CanonDoc[]): string {
   const counts = new Map<string, number>()
@@ -216,10 +217,15 @@ export function writePathStats(root: string): { firstTry: number; artifacts: num
   return { artifacts: seen.length, firstTry: seen.filter((t) => t === 'write').length, refused }
 }
 
-export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
+export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const rootRes = primaryRoot(ctx.cwd)
   if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
   const root = rootRes.value
+  // Row 254. The track record in full, and nothing else: it stamps nothing and runs no lazy sweep.
+  if (argv.length === 1 && argv[0] === '--record') {
+    recordTables(record(root, loadCanon(root))).forEach(ctx.out)
+    return EXIT.OK
+  }
   const cfg = loadConfig(root)
   ctx.out(kv('witness', `${version()} · schema: ${cfg.ok ? cfg.value.schema : '?'}`))
   // Row 105's judgment lane, not its session lane: the judge line is the one `check` prints,
@@ -310,6 +316,10 @@ export async function run(ctx: Ctx, _argv: string[]): Promise<number> {
   if (wp.artifacts > 0 || wp.refused > 0) {
     ctx.out(kv('write-path', `${wp.firstTry}/${wp.artifacts} artifacts first-try · ${wp.refused} refusal(s)`))
   }
+  // Row 254. The line and the open work only; `status --record` prints the record in full.
+  const tr = record(root, canon)
+  ctx.out(kv('record', recordLine(tr)))
+  owedRows(tr).forEach(ctx.out)
   ctx.out(kv('canon', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.specs}/`)))))
   ctx.out(kv('plans', tally(canon.docs.filter((d) => d.rel.startsWith(`${canon.paths.plans}/`)))))
   // In-flight flows: the orientation surface between sessions, and the one `next` no

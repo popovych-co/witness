@@ -110,7 +110,7 @@ const VERB_USAGE: Record<string, string> = {
   dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',
-  status: 'witness status — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen)',
+  status: 'witness status [--record] — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen) · --record: the track record in full',
   'step-close': 'witness step-close <plan-id> --step <id>',
   sync: 'witness sync',
   trust: "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]",

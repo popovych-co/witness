@@ -2,6 +2,7 @@ import type { TestcaseOutcomes } from './criteria.js'
 import { effortAbandoned, effortCause, effortStreams, readStream, type Entry, type FixCause, type RecapEntry } from './journal.js'
 import { mergeClock, mergesBetween, type MergeClock } from './merge-clock.js'
 import type { Canon } from './scan.js'
+import { kv, rows } from './toon.js'
 
 // Row 254. The track record: a measured baseline for the human, computed from the journal, canon and
 // the merge clock, never inferred — a fold with no data reads "not measured". Decision 8: no gate,
@@ -153,4 +154,61 @@ export function liveFold(root: string, canon: Canon): LiveFold {
   }
   out.measured = out.specs > 0
   return out
+}
+
+// Row 254. The track record: its four folds, each "not measured" until it has data. `checks` (checks
+// added, tolerated spots) lands with T4a, `repairs` with T8b. Plain data: the models entry exports it.
+export interface TrackRecord {
+  escapes: EscapesFold
+  live: LiveFold
+  checks: { measured: false }
+  repairs: { measured: false }
+}
+
+export function record(root: string, canon: Canon): TrackRecord {
+  return { escapes: escapesFold(root, canon), live: liveFold(root, canon), checks: { measured: false }, repairs: { measured: false } }
+}
+
+const owing = (r: TrackRecord) => r.escapes.fixes.filter((f) => f.cause === undefined).map((f) => f.effort)
+
+// The `record:` line: ids, counts and versions only, never a test name.
+export function recordLine(r: TrackRecord): string {
+  const e = r.escapes
+  const owed = owing(r).length
+  const escapes = (e.measured ? `escapes ${e.escapes} of ${e.plans} shipped plans (approximate) · decisions ${e.decisions}` : 'escapes not measured') +
+    (owed === 0 ? '' : owed === 1 ? ' · 1 fix needs a cause' : ` · ${owed} fixes need a cause`)
+  const live = r.live.measured
+    ? `live specs failing ${r.live.failing.length} · could not verify ${r.live.couldNotVerify.length} of ${r.live.specs}`
+    : 'live specs failing not measured'
+  return [escapes, live, 'checks added not measured · repairs not measured'].join(' · ')
+}
+
+// The open work: fixes still owing a cause, a list that shrinks to nothing as the human names them.
+export function owedRows(r: TrackRecord): string[] {
+  const slugs = owing(r)
+  if (slugs.length === 0) return []
+  return [kv('cause-owed', slugs.join(' · ')), "help: name each fix's cause — witness recap --effort <slug> --cause escape|decision"]
+}
+
+const chargedCell = (f: FixRow) =>
+  f.charged ? f.charged.plan
+  : f.uncharged === 'nothing-shipped-before' ? 'none (nothing shipped before)'
+  : f.uncharged === 'order-unknown' ? 'none (order unknown)'
+  : '—'
+const ageCell = (f: FixRow) => (f.charged ? (f.charged.age === 1 ? '1 merge' : `${f.charged.age} merges`) : '—')
+
+// `witness status --record`: the line, then every fix and its charge, the versions, and the open work.
+export function recordTables(r: TrackRecord): string[] {
+  const e = r.escapes
+  return [
+    kv('record', recordLine(r)),
+    ...(e.fixes.length === 0 ? [] : [
+      ...rows('fixes', ['effort', 'cause', 'charged', 'version', 'age'], e.fixes.map((f) => ({
+        effort: f.effort, cause: f.cause ?? 'none', charged: chargedCell(f), version: f.charged?.version ?? '—', age: ageCell(f),
+      }))),
+      kv('note', 'a charge is approximate — the last plan of the amended spec that shipped before the fix'),
+    ]),
+    ...(e.measured ? rows('escapes-by-version', ['version', 'escapes', 'plans'], e.byVersion as unknown as Array<Record<string, unknown>>) : []),
+    ...owedRows(r),
+  ]
 }
