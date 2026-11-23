@@ -165,6 +165,17 @@ Each machine check registers beside GateSpec with three properties.
   matched. Pass 3 found fewhats' `&&` chain stopping at biome on a red base, so tsc never ran.
 - Only a human may book a base-red part (an LD item that closes when base goes green).
 
+**As built (T2c, rows 261–263).** `ship.lint` is one command (one part named `lint`) or `{name: command}` parts,
+schema 3; every part runs in file order whatever an earlier one did, with no turn, and the lane stays one `lint` check
+whose `parts` carry a verdict per part. "build" is a named part. A red part's base result is keyed
+`<part>@<base commit>.<h12>` (over the part's and its reader's commands) and measured on demand (correction C13): a
+gate that lacks it journals the key `pending` (red), and the `base-lint` job — the first production kind, in the
+scratch — owes exactly those keys and returns the base's diagnostics as hashed keys with counts, at most 2,000; more is
+"not judged". In chat mode the base reads "not measured". Diagnostics compare on every file the reader reports, minus
+witness's own paths (correction C12), not on PC files. A part passes when green, or red on the base too with nothing
+new; an opaque part red on the base, a report either side could not read, or a red part whose reader finds nothing on
+the plan's tree reads "not judged". Drive reads the config at each job's start.
+
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
 - decide refuses `--approve` on it.
@@ -330,6 +341,16 @@ terminal act (§3.9).
 
 **Normalized snippet.** The flagged source line with whitespace runs collapsed and the ends trimmed, paired with the
 rule id. Diagnostics compare as multisets.
+
+**As built (T2c, row 262).** Each reader is a setting, `readers.{biome,eslint,clippy,tsc}` (schema 3, `none` by
+default), bound to the `ship.lint` part of its tool's name; any other part is opaque. Biome's reader is SARIF (the JSON
+reporter stays out), ESLint's `-f json`, clippy's cargo's `--message-format=json` (built from its documentation, not
+probed), tsc's `--pretty false` lines. Error severity only. A reader prints every error, never stopping at the first
+failure: the base and the plan compare whole. A report that does not parse whole, or a red exit that reports no error,
+fails closed (`reader-unread`). Paths are placed in the run's tree (a `file://` URI, `\`, the folder's real path, a
+cargo span from its manifest's folder); a path witness cannot place is kept as printed. Keys are 16 hex over (tool,
+rule, file, snippet). `init` and `migrate` detect Biome and ESLint readers through the root lockfile's exec form; tsc
+and clippy are written by hand. No reader takes a path, so typed tokens still land with T4a (correction C10).
 
 **Check-definition paths.** A declared list per repo. By default: lint and format configs, `tsconfig*`,
 package.json scripts, Cargo `[lints]`, `.gitignore`, test-runner config, mutation config.
@@ -717,7 +738,7 @@ Human-only waivers (lint bookings) arrive as decisions in needs-you.
 
 | Train | Settings |
 |---|---|
-| A (T0–T2) | ship.lint named parts; scratch.prepare (as built, T2b: schema 3, which T2c extends; the map's C5) |
+| A (T0–T2) | ship.lint named parts; readers.{biome,eslint,clippy,tsc}; scratch.prepare (as built, T2b–T2c: all schema 3; the map's C5) |
 | B (T3–T6) | switch-off extra patterns; reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
@@ -878,3 +899,16 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   `--config.confirm-modules-purge=false`: run headless, pnpm aborts whenever the scratch's kept `node_modules` must be
   purged (a pnpm upgrade, a hoisting setting that differs between trees), and prepare would fail for good (slice 2
   review).
+- **C12 (T2c, row 263).** §3.2 compared diagnostics "on PC files"; they compare on every file the reader reports, minus
+  witness's own paths — a change can raise a diagnostic in a file it never touched (a type error in an importer, a rule
+  it switches on), and tsc prints cwd-relative paths, so a PC-only filter dropped a plan's new error and read green. A
+  path witness cannot place is kept as printed, never dropped (the user's call of 2026-11-23).
+- **C13 (T2c, row 263).** Base diagnostics came from a DJ job "cached per base tree"; the job runs on demand: a gate
+  that finds a part red journals the key it lacked (`pending`), and `base-lint` owes exactly those keys, keyed per
+  part, base commit and commands (the user's call of 2026-11-23).
+- **"build" is a named part (T2c, row 261).** §3.2's withholding "build" is a `ship.lint` part, with no check of its own.
+- **Readers bind by part name (T2c, row 262).** A reader is a setting per tool, reading the part of its tool's name.
+- **Error severity only (T2c, row 262).** A warn-level diagnostic is never a red, on either tree.
+- **The base's keys ride the shard's result (T2c, row 263)**, at most 2,000 distinct keys per result (one pipe write).
+- **Drive reads the config at each job's start (T2c, row 263).** Gates read the file fresh, so a part edited mid-run is
+  keyed and trusted as the gate that asked keyed it.

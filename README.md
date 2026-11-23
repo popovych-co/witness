@@ -266,15 +266,25 @@ gate, and `next` routes the owed work, steps first; `witness status` and `decide
 also restarts drive's caps for that target.
 
 **The scratch (`scratch.prepare`).** Machine work on a tree other than a plan's — the first is the
-base tree's lint, which a later release brings — runs in one scratch checkout per repo,
+base tree's lint, below — runs in one scratch checkout per repo,
 `.witness/scratch`: a detached worktree witness resets before every run, which `git status` never
 shows. `scratch.prepare` is the command that makes it runnable, run again only when a lockfile or a
 package manager's config changes; `init` and `migrate` write the one your root lockfile names
 (`pnpm install --frozen-lockfile --config.confirm-modules-purge=false` for pnpm), and `none`
-installs nothing. A repo command — the runner, `ship.test`, `ship.lint`, `scratch.prepare` — is
-granted once with `witness trust --cmd '<cmd>'`, or when `witness migrate` proposes it at a
-terminal; until then a job that runs it waits for you (`wait: trust grant · jobs`) and never fails
-for it.
+installs nothing. A repo command — the runner, `ship.test`, each `ship.lint` part, a reader,
+`scratch.prepare` — is granted once with `witness trust --cmd '<cmd>'`, or when `witness migrate`
+proposes it at a terminal; until then a job that runs it waits for you (`wait: trust grant · jobs`)
+and never fails for it.
+
+**Lint parts and readers (`ship.lint`, `readers.*`).** `ship.lint` may name its parts —
+`{biome: pnpm exec biome check ., eslint: pnpm exec eslint ., ui: pnpm check:ui, types: pnpm typecheck}`
+— and ship runs every part on its own, whatever an earlier one did, so a red first part never hides
+the others. A part named after a tool witness reads (`biome`, `eslint`, `clippy`, `tsc`) has a reader,
+`readers.<tool>`: a command printing that tool's report with every error (`init` and `migrate` write
+Biome's and ESLint's when your root has their configs). When such a part is red on the plan's base
+too, it is judged per diagnostic: only the errors the plan added are red, and drive lints the base in
+the scratch when a gate asks (`pending` until then). A part with no reader that is red on the base
+reads "not judged", never green.
 
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
