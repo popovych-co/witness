@@ -1,16 +1,18 @@
 import { parseArgs } from 'node:util'
 import { EXIT, type Ctx } from '../cli.js'
-import { commandsRun, grantCommands, pendingCmds, pendingRows, trustListing, unsafeLeft } from '../allowlist.js'
+import { commandsRun, configCommands, grantCommands, pendingCmds, pendingRows, trustedCommands, trustListing, unsafeLeft } from '../allowlist.js'
+import type { Config } from '../config.js'
 import { loadConfig } from '../config.js'
 import { sessionMarker } from '../drive-presence.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
-import { appendEntry, entryLine, journalRel } from '../journal.js'
+import { appendEntry, entryLine, journalRel, readStream } from '../journal.js'
 import { acquireLock } from '../lock.js'
-import { ok, renderRefusal, v, type Result } from '../refusal.js'
+import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { effortOf } from '../reviewed.js'
 import { findById, loadCanon } from '../scan.js'
 import { hasControl, kv, rows, shellWord, visible } from '../toon.js'
-import { crashPoint, guardTxn, withTxn } from '../txn.js'
+import { TRUST_STREAM } from '../streams.js'
+import { crashPoint, guardTxn, pendingTxn, withTxn } from '../txn.js'
 
 const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes]"
 
@@ -27,6 +29,11 @@ const USAGE = "witness trust [<artifact-id>] [--cmd '<exact command>']… [--yes
 //
 // The trust list resolves at the PRIMARY ROOT, like the runner config it governs: a branch
 // checkout cannot re-point what the repository trusts or runs (D132's doctrine).
+//
+// Row 259. A repo command — one a repo setting declares (the runner, ship.test, ship.lint,
+// scratch.prepare) — is also granted with no target: `witness trust --cmd '<exact>'`, journaled on
+// witness's reserved `trust` stream. A drive job or a scratch prepare serves no artifact, so the
+// grant its wait names has none. `--yes` still needs a target: a blanket yes is a target's act.
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   let parsed: { values: { cmd?: string[]; yes?: boolean }; positionals: string[] }
   try {
@@ -42,7 +49,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const id = positionals[0]
   const named = values.cmd ?? []
   const granting = named.length > 0 || values.yes === true
-  if (positionals.length > 1 || (granting && id === undefined)) {
+  if (positionals.length > 1 || (values.yes === true && id === undefined)) {
     renderRefusal([v('usage', 'required', positionals.length > 1 ? positionals.join(' ') : 'no target',
       'a grant names its target, which the act is journaled against: ' + USAGE)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
@@ -68,6 +75,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (blocked !== undefined) return blocked
   const cfgR = loadConfig(root)
   if (!cfgR.ok) { renderRefusal(cfgR.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  if (id === undefined && named.length > 0) return grantRepo(ctx, root, cfgR.value, named)
   const canon = loadCanon(root)
   // Rows 139/203. The listing is a model the verb prints: its rows, its counts and the grants it
   // offers. An unknown target is its refusal.
@@ -86,7 +94,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (id === undefined) {
     show(['cmd', 'source', 'doc', 'status'])
     if (listing.untrusted === 0) return settled(listing.unsafe)
-    ctx.out(kv('trust', `${listing.untrusted} untrusted — grant each from the target that runs it: witness trust <id> --cmd '<cmd>'`))
+    ctx.out(kv('trust', `${listing.untrusted} untrusted — a repo command (doc -): witness trust --cmd '<cmd>' · a doc's: witness trust <id> --cmd '<cmd>'`))
     return EXIT.FINDINGS
   }
 
@@ -165,6 +173,80 @@ export function grantTrust(ctx: Ctx, root: string, artifact: string, cmds: strin
       appendEntry(root, stream, entry)
       crashPoint(ctx.env, 'trust-journal')
       const committed = stateCommit(root, [rel], `trust(${artifact}): ${cmds.length} command(s)`)
+      if (committed.ok) grantCommands(root, cmds)
+      return committed
+    })
+    return res.ok ? ok(undefined) : res
+  } finally {
+    lock.value()
+  }
+}
+
+// ── Repo commands (row 259) ──────────────────────────────────────────────────────────────────
+
+const refused = (ctx: Ctx, rows: Violation[]): number => {
+  renderRefusal(rows).forEach((l) => ctx.err(l))
+  return rows.some((x) => x.rule === 'locked') ? EXIT.BLOCKED : EXIT.REFUSED
+}
+
+// The targetless grant: each named command must be one a repo setting declares, and printable
+// ASCII; those not yet trusted are journaled and granted in one act.
+function grantRepo(ctx: Ctx, root: string, cfg: Config, named: string[]): number {
+  const unsafe = named.find(hasControl)
+  if (unsafe !== undefined) {
+    return refused(ctx, [v('--cmd', 'control-characters', visible(unsafe),
+      'a command of printable ASCII — any other character can hide what it runs')])
+  }
+  const cmds = [...new Set(configCommands(cfg).map((c) => c.cmd))]
+  const unknown = named.filter((c) => !cmds.includes(c))
+  if (unknown.length > 0) {
+    return refused(ctx, [v('--cmd', 'unknown-command', visible(unknown[0]!),
+      `a repo command: ${cmds.map(visible).join(' · ') || '(none declared)'} · a doc's command takes its target: witness trust <id> --cmd '<cmd>'`)])
+  }
+  const trusted = new Set(trustedCommands(root))
+  const grant = [...new Set(named)].filter((c) => !trusted.has(c))
+  if (grant.length === 0) {
+    ctx.out(kv('trust', `already trusted: ${named.join(' · ')}`))
+    return EXIT.OK
+  }
+  const granted = grantRepoTrust(ctx, root, grant, 'verb')
+  if (!granted.ok) return refused(ctx, granted.violations)
+  ctx.out(kv('trusted', grant.join(' · ')))
+  return EXIT.OK
+}
+
+// A repo grant as journaled: a `trust` entry (an act, as a target's) whose artifact is '-'.
+export function repoTrustEntry(cmds: string[], via: 'verb' | 'migrate') {
+  return { t: 'trust' as const, artifact: '-', cmds, via }
+}
+
+// F7's rule for reserved streams: one an older witness, or another artifact, wrote under the name
+// is that history, and a grant appended to it would be read as part of it.
+export function trustStreamTaken(root: string): Violation | undefined {
+  const first = readStream(root, TRUST_STREAM)[0]
+  return first !== undefined && first.t !== 'trust'
+    ? v(TRUST_STREAM, 'stream-taken', `the stream starts with ${visible(String(first.t))}`,
+      'a stream for repo trust grants alone — witness check names the artifact that holds it')
+    : undefined
+}
+
+// grantTrust's shape (row 222) on witness's own `trust` stream: under the repo lock, one
+// transaction appends the entry and lands its trailer commit, and only then does allow.json take
+// the commands (D154's order).
+export function grantRepoTrust(ctx: Ctx, root: string, cmds: string[], via: 'verb' | 'migrate'): Result<void> {
+  const lock = acquireLock(root)
+  if (!lock.ok) return lock
+  try {
+    const pending = pendingTxn(root)
+    if (pending !== undefined) return refuse([v('.witness/txn.json', 'pending-txn', pending.op, 'witness recover --complete | --rollback')])
+    const taken = trustStreamTaken(root)
+    if (taken !== undefined) return refuse([taken])
+    const entry = repoTrustEntry(cmds, via)
+    const rel = journalRel(TRUST_STREAM)
+    const res = withTxn(root, { op: 'trust(repo)', files: [rel], journal: { stream: TRUST_STREAM, line: entryLine(entry) } }, () => {
+      appendEntry(root, TRUST_STREAM, entry)
+      crashPoint(ctx.env, 'trust-journal')
+      const committed = stateCommit(root, [rel], `trust: ${cmds.length} repo command(s)`)
       if (committed.ok) grantCommands(root, cmds)
       return committed
     })

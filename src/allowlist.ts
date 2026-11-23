@@ -73,6 +73,11 @@ export const unsafeLeft = (n: number): string =>
 export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): Act | undefined {
   return hasControl(c.cmd) ? undefined : actOn(platform, ['trust', target, '--cmd', c.cmd])
 }
+// Row 259. A repo command's grant: no target, since a job or a scratch prepare serves no artifact.
+// The same rule as `grantAct`: none for a command the verb would not take.
+export function repoGrantAct(c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): Act | undefined {
+  return hasControl(c.cmd) ? undefined : actOn(platform, ['trust', '--cmd', c.cmd])
+}
 // The grant's line, or why there is none. Row 239: a grant Windows withholds (`Act.withheld`) is
 // never offered to be pasted, so the line names the listing instead, which grants nothing by
 // itself: the command stays pending, and at a terminal the listing asks for each one.

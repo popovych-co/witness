@@ -13,6 +13,7 @@ import { execCommand } from './runner.js'
 import { inScratch } from './scratch.js'
 import type { Canon } from './scan.js'
 import { logSafe } from './toon.js'
+import { JOB_STREAM } from './streams.js'
 import { pendingTxn, withTxn } from './txn.js'
 import { compareTriple, version } from './version.js'
 
@@ -27,7 +28,7 @@ import { compareTriple, version } from './version.js'
 //
 // Production registers no kind until T2c's base lint; the test-only fixture exists only under
 // WITNESS_FIXTURE_JOB.
-export const JOB_STREAM = 'jobs'
+export { JOB_STREAM }
 export const MAX_STRIKES = 2
 // A result line rides one pipe write: on macOS a write past 64 KiB followed by `process.exit` was cut
 // at 65,536 bytes (probed), so a result is capped well below it. A kind with more keeps it elsewhere
