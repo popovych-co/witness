@@ -171,7 +171,8 @@ whose `parts` carry a verdict per part. "build" is a named part. A red part's ba
 `<part>@<base commit>.<h12>` (over the part's and its reader's commands) and measured on demand (correction C13): a
 gate that lacks it journals the key `pending` (red), and the `base-lint` job — the first production kind, in the
 scratch — owes exactly those keys and returns the base's diagnostics as hashed keys with counts, at most 2,000; more is
-"not judged". In chat mode the base reads "not measured". Diagnostics compare on every file the reader reports, minus
+"not judged". In chat mode the base reads "not measured", and its key is owed too, so a drive started later lints it; with scratch
+runs off, a missing base result reads "not measured", never pending. Diagnostics compare on every file the reader reports, minus
 witness's own paths (correction C12), not on PC files. A part passes when green, or red on the base too with nothing
 new; an opaque part red on the base, a report either side could not read, or a red part whose reader finds nothing on
 the plan's tree reads "not judged". A part's state joins the gate's resume signature, so the judged verdict is

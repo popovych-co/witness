@@ -162,3 +162,18 @@ describe('a part red on the base too — slice 3 review (row 263)', () => {
     expect(c.parts![0]).toMatchObject({ part: 'biome', state: 'base-only', base: 1 })
   }, 60_000)
 })
+
+describe('a part red on the base too — final review (row 263)', () => {
+  it('with scratch runs off, a red part under drive is not measured, never pending forever (I1)', async () => {
+    const { repo, keyOf, base } = await baseRed()
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      const off = { ...cfgOf(repo.root), scratch: {} }   // an older file read in memory: scratch.prepare unset
+      const c = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), off, base)
+      expect(c.parts![0]).toEqual({ part: 'biome', state: 'not-measured', key: keyOf('biome'),
+        why: 'scratch runs are off — scratch.prepare is not set · witness migrate proposes one' })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 60_000)
+})

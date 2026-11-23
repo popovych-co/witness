@@ -15,14 +15,15 @@ import type { CoverageItem, Finding } from './verdict.js'
 // name, ok, untrusted and held only, and no renderer prints it. Absent on every check before 251.
 export interface GateCheck {
   name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[]; duration_ms?: number
-  // Row 263. The lint check's verdict per part; never in an identity (`checkOk` reads name, ok,
-  // blocked and held).
+  // Row 263. The lint check's verdict per part; never in a reviewed identity. Each part's state joins
+  // the gate's resume signature (`checkOk`, with `pending` and `not-measured` one term).
   parts?: PartVerdict[]
 }
 
 // Row 263 (§3.2 base-red). A lint part's verdict: `green` (exit 0) · `untrusted` (its command, or its
 // reader when needed) · `red` (the base is green: the plan's red) · `pending` (drive lints the base)
-// · `not-measured` (the base's result is missing and nothing will run it, or it is malformed) ·
+// · `not-measured` (the base's result is missing and no drive runs, scratch runs are off, two
+// strikes, or it is malformed) ·
 // `not-judged` (red on the base too, with no reader, or a report either side could not read) ·
 // `new` (red on the base too; diagnostics the base lacks) · `base-only` (red on the base too;
 // nothing new). Only `green` and `base-only` pass.

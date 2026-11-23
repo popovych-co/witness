@@ -1,6 +1,6 @@
 // Row 263 (§3.2 base-red; correction C13). The base's lint result, measured on demand: a gate that
-// finds a part red journals the base key it lacked (`pending` on its `lint` check), and the
-// `base-lint` job — the first production kind — owes exactly those keys. A shard runs the part on
+// finds a part red journals the base key it lacked (`pending`, or `not-measured` in chat mode, on
+// its `lint` check), and the `base-lint` job — the first production kind — owes exactly those keys. A shard runs the part on
 // the base commit in the scratch and, red with a bound reader, the reader there, and returns the
 // base's diagnostics as hashed keys with counts. Keyed per part, base commit and commands, so an
 // edited command never reads a stale result.
@@ -81,7 +81,11 @@ function current(cfg: Config, key: string): boolean {
   return parsed !== undefined && part !== undefined && baseLintKey(part, boundReader(cfg, part)?.cmd, parsed.commit) === key
 }
 
-// The pending keys a plan's last implement and last ship gate-runs left on their `lint` check.
+// The keys a plan's last implement and last ship gate-runs left missing on their `lint` check:
+// `pending`, and `not-measured` (final review: a chat-mode round's key, so a drive started later
+// lints it). `nextShard` runs only a unit whose result is missing, so a key struck twice or a
+// malformed result is never run again.
+const MISSING: ReadonlySet<unknown> = new Set(['pending', 'not-measured'])
 function pendingKeys(root: string, plan: string): string[] {
   const entries = readStream(root, plan)
   const out: string[] = []
@@ -91,7 +95,7 @@ function pendingKeys(root: string, plan: string): string[] {
     const lint = checks.find((c): c is Obj => isObj(c) && c.name === 'lint')
     const parts: unknown[] = Array.isArray(lint?.parts) ? lint.parts : []
     for (const p of parts) {
-      if (isObj(p) && p.state === 'pending' && typeof p.key === 'string' && parseBaseKey(p.key) !== undefined) out.push(p.key)
+      if (isObj(p) && MISSING.has(p.state) && typeof p.key === 'string' && parseBaseKey(p.key) !== undefined) out.push(p.key)
     }
   }
   return out

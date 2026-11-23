@@ -46,6 +46,11 @@ async function judge(root: string, wt: string, ctx: Ctx, cfg: Config, base: stri
   const reader = boundReader(cfg, r.part)
   const key = baseLintKey(r.part, reader?.cmd, base)
   const reading = jobReading(root, { kind: BASE_LINT, key, shards: 1 })
+  // Final review: with scratch runs off (an older file read in memory) no drive can lint the base,
+  // so a missing result is not measured — `pending` would promise a run that never comes.
+  if (reading.state === 'pending' && cfg.scratch.prepare === undefined) {
+    return { verdict: { part, state: 'not-measured', key, why: 'scratch runs are off — scratch.prepare is not set · witness migrate proposes one' } }
+  }
   if (reading.state === 'pending') return { verdict: { part, state: 'pending', key } }
   if (reading.state === 'not-measured') return { verdict: { part, state: 'not-measured', key, why: reading.why } }
   const res = baseLintResult(reading.results[0])

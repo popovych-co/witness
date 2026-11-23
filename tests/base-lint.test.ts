@@ -46,6 +46,18 @@ describe('the base-lint job (row 263)', () => {
     expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([])
   })
 
+  it("a chat-mode round's not-measured key is owed too, so a drive started later lints it (final review I2)", async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    approve(repo, 'auth-refresh')
+    await writePlan(repo, 'p1')
+    repo.flipStatus('p1', 'in-progress')
+    patchConfig(repo, { ship: { lint: { biome: 'b' } } })
+    const key = baseLintKey(cfgOf(repo.root).ship.lint![0]!, undefined, 'a'.repeat(40))
+    appendEntry(repo.root, 'p1', gateRun('ship', [{ part: 'biome', state: 'not-measured', key, why: 'no drive runs jobs in this repo' }]))
+    expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))).toEqual([{ kind: BASE_LINT, key, shards: 1 }])
+  })
+
   it('a pending key the config no longer gives is never owed, so it is never struck (slice 3 review I3)', async () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')

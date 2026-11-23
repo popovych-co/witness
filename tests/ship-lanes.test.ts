@@ -196,3 +196,33 @@ describe('the lint lane in a ship gate — slice 3 review (row 263)', () => {
     }
   }, 240_000)
 })
+
+describe('the lint lane in a ship gate — final review (row 263)', () => {
+  it('a chat-mode round is judged once the base is linted, and starting drive spends no round (I2)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    patchConfig(repo, { ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part')
+    writeFileSync(join(wt, 'src', 'bad.ts'), 'LINTBAD\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...CLEAN, coverage: [...CLEAN.coverage, { anchor: 'src/bad.ts', note: 'read' }] })
+    const lint = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'lint')!.parts![0]!
+    const gate = (fresh: boolean) => runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh, manual: false })
+    await gate(true)                                        // chat mode: no drive
+    const first = lint()
+    expect(first).toMatchObject({ part: 'ui', state: 'not-measured', why: 'no drive runs jobs in this repo' })
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      await gate(false)                                     // drive started: the base is still missing
+      expect(runs(repo, planId)).toHaveLength(1)
+      const owed = baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))
+      expect(owed).toEqual([{ kind: BASE_LINT, key: first.key, shards: 1 }])
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), owed[0]!, 1)
+      journalShard(repo.root, { kind: BASE_LINT, key: first.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: (r as { result: unknown }).result })
+    } finally {
+      if (held.ok) held.value()
+    }
+    await gate(false)
+    expect(runs(repo, planId)).toHaveLength(2)
+    expect(lint()).toEqual({ part: 'ui', state: 'red', key: first.key })
+  }, 240_000)
+})
