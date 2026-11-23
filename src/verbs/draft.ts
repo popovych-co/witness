@@ -7,7 +7,7 @@ import {
   draftSummary, dropDraft, keyName, markRead, parseKey, readDraft, saveDraft, settledItems, validateDraft, type DraftKey,
 } from '../drafts.js'
 import { primaryRoot } from '../gitio.js'
-import { latestRecap } from '../journal.js'
+import { effortCause, latestRecap, readStream } from '../journal.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { kv, shellWord } from '../toon.js'
@@ -41,9 +41,12 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       // Builder's call 8: an amendment starts from the latest recap, every text exact, because a
       // decision's text is part of the pin of every plan that carries it.
       const r = latestRecap(root, k.effort)!
+      // Row 253. A fix's recorded cause rides the seed, so the amend keeps it unless the human changes it.
+      const cause = effortCause(readStream(root, k.effort))
       ctx.out(kv('draft', `${keyName(k)} · seeded from the latest recap`))
       const seed = {
-        effort: r.effort, class: r.class, goals: r.goals, non_goals: r.non_goals, constraints: r.constraints,
+        effort: r.effort, class: r.class, ...(cause !== undefined ? { cause } : {}),
+        goals: r.goals, non_goals: r.non_goals, constraints: r.constraints,
         ...(r.decisions !== undefined ? { decisions: r.decisions } : {}), slices: r.slices,
       }
       JSON.stringify(seed, null, 2).split('\n').forEach((l) => ctx.out(l))

@@ -8,7 +8,8 @@ import { dropDraft } from '../drafts.js'
 import { ID_RE } from '../dsl.js'
 import { idTextList } from '../idlists.js'
 import { primaryRoot, stateCommit } from '../gitio.js'
-import { appendEntry, effortAbandoned, entryLine, journalRel, readStream, streamExists } from '../journal.js'
+import { sessionMarker } from '../drive-presence.js'
+import { appendEntry, effortAbandoned, effortCause, entryLine, isFixCause, journalRel, latestRecap, readStream, streamExists, type FixCause } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { cmd, kv, shellWord } from '../toon.js'
@@ -25,7 +26,16 @@ export interface RecapInput {
   // Row 176. Set from --ask only, never from the file: the ask a recap answers is the CLI's
   // record of what the human asked, so a recap cannot name its own.
   ask?: string
+  // Row 253. A fix's cause. The file carries it; the verb journals it as a `cause` line beside the
+  // recap line, never inside it.
+  cause?: FixCause
 }
+
+// Row 253. The refusals a fix's cause can meet, one wording each for the file and the flag.
+const CAUSES_WANT = 'escape | decision'
+const causeEnum = (got: unknown) => v('cause', 'enum', String(got), CAUSES_WANT)
+const CAUSE_REQUIRED = v('cause', 'required', 'absent',
+  'escape — it slipped past what should have caught it | decision — you chose to change how it works')
 
 export function validateRecap(raw: unknown): Violation[] {
   if (typeof raw !== 'object' || raw === null) return [v('recap', 'shape', String(raw), 'JSON object')]
@@ -43,6 +53,13 @@ export function validateRecap(raw: unknown): Violation[] {
   out.push(...idTextList(e.decisions, 'decisions', 'd', false))
   if (e.slices !== undefined && (!Array.isArray(e.slices) || e.slices.some((s) => typeof s !== 'string' || s === ''))) {
     out.push(v('slices', 'shape', JSON.stringify(e.slices), 'list of non-empty strings (non-binding)'))
+  }
+  // Row 253. Only a fix carries a cause; whether a fix lacks one depends on what is recorded (`run`).
+  if (e.cause !== undefined) {
+    if (!isFixCause(e.cause)) out.push(causeEnum(e.cause))
+    else if (e.class === 'feature' || e.class === 'chore') {
+      out.push(v('cause', 'fix-only', e.class, 'no cause — only a fix carries one'))
+    }
   }
   return out
 }
@@ -73,7 +90,16 @@ export function askRefusal(root: string, id: string): Violation | undefined {
 }
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { file: { type: 'string' }, amend: { type: 'boolean' }, ask: { type: 'string' } } })
+  const { values } = parseArgs({ args: argv, options: {
+    file: { type: 'string' }, amend: { type: 'boolean' }, ask: { type: 'string' },
+    effort: { type: 'string' }, cause: { type: 'string' },
+  } })
+  // Row 253. `--effort <slug> --cause <c>` classifies an existing fix; it reads no recap file.
+  if (values.cause !== undefined) return classify(ctx, values)
+  if (values.effort !== undefined) {
+    renderRefusal([v('--cause', 'required', 'absent', `${CAUSES_WANT} — --effort names the fix to classify`)]).forEach(ctx.err)
+    return EXIT.REFUSED
+  }
   if (!values.file) {
     renderRefusal([v('--file', 'required', 'absent', 'path to a recap JSON file')]).forEach(ctx.err)
     return EXIT.REFUSED
@@ -107,6 +133,8 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   const slug = effortRefusal(root, recap.effort, values.amend === true)
   if (slug) { renderRefusal([slug]).forEach(ctx.err); return EXIT.REFUSED }
+  // Row 253. A fix names its cause unless an amend's effort already recorded one.
+  if (causeOwed(root, recap, values.amend === true)) { renderRefusal([CAUSE_REQUIRED]).forEach(ctx.err); return EXIT.REFUSED }
   // Row 176. One ask births one effort: an amend re-scopes an effort an ask already birthed.
   if (recap.ask !== undefined) {
     if (values.amend) {
@@ -126,7 +154,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (crashed !== undefined) return crashed
     const raced = effortRefusal(root, recap.effort, values.amend === true)
       ?? (recap.ask !== undefined ? askRefusal(root, recap.ask) : undefined)
+      ?? (causeOwed(root, recap, values.amend === true) ? CAUSE_REQUIRED : undefined)
     if (raced) { renderRefusal([raced]).forEach(ctx.err); return EXIT.REFUSED }
+    // Row 253. The cause line rides the recap's transaction only when it says something new: a
+    // birth's cause, or an amend naming another than the one recorded.
+    const recorded = values.amend ? effortCause(readStream(root, recap.effort)) : undefined
+    const causeEntry = recap.class === 'fix' && recap.cause !== undefined && recap.cause !== recorded
+      ? { t: 'cause' as const, effort: recap.effort, cause: recap.cause } : undefined
 
     const entry = {
       t: 'recap' as const, effort: recap.effort, class: recap.class,
@@ -140,9 +174,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     // marker line differs from what appendEntry wrote, so the two must be one derivation.
     const line = entryLine(entry)
     const stream = journalRel(recap.effort)
-    const marker = { op: `recap(${recap.effort})`, files: [stream], journal: { stream: recap.effort, line } }
+    const marker = {
+      op: `recap(${recap.effort})`, files: [stream], journal: { stream: recap.effort, line },
+      ...(causeEntry ? { journalMulti: [{ stream: recap.effort, line: entryLine(causeEntry) }] } : {}),
+    }
     const res = withTxn(root, marker, () => {
       appendEntry(root, recap.effort, entry)
+      if (causeEntry) appendEntry(root, recap.effort, causeEntry)
       crashPoint(ctx.env, 'journal-append')
       return stateCommit(root, marker.files, `recap(${recap.effort})${values.amend ? ' --amend' : ''}: ${recap.class}${recap.ask !== undefined ? ` · ask ${recap.ask}` : ''}`)
     })
@@ -153,11 +191,81 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (values.amend) dropDraft(root, { kind: 'amend', effort: recap.effort })
     ctx.out(kv('effort', recap.effort))
     ctx.out(kv('class', recap.class))
+    if (recap.class === 'fix') ctx.out(kv('cause', recap.cause ?? recorded ?? 'none'))
     ctx.out(kv('goals', recap.goals.length))
     if (recap.decisions?.length) ctx.out(kv('decisions', recap.decisions.length))
     if (recap.ask !== undefined) ctx.out(kv('ask', `${recap.ask} — answered`))
     if (values.amend) ctx.out(kv('amended', 'latest recap wins; coverage and decisions re-validate against it'))
     ctx.out(cmd('next', `witness write --effort ${shellWord(recap.effort)} --meta <m.json> --body <b.md> <spec-id>`))
+    return EXIT.OK
+  } finally {
+    lock.value()
+  }
+}
+
+// Row 253. Whether this fix recap is refused for lacking a cause: it names none, and (for an amend)
+// its effort has recorded none.
+function causeOwed(root: string, recap: RecapInput, amend: boolean): boolean {
+  if (recap.class !== 'fix' || recap.cause !== undefined) return false
+  return !amend || effortCause(readStream(root, recap.effort)) === undefined
+}
+
+// Row 253. `witness recap --effort <slug> --cause escape|decision`: names the cause of a fix that
+// predates causes, or changes one. The human's act, so a witness-spawned session is refused (row
+// 205's pattern). One `cause` line under the lock, one state commit; the recorded cause again
+// writes nothing.
+async function classify(ctx: Ctx, values: { file?: string; amend?: boolean; ask?: string; effort?: string; cause?: string }): Promise<number> {
+  const refused = (x: Violation): number => { renderRefusal([x]).forEach(ctx.err); return EXIT.REFUSED }
+  if (values.file !== undefined) {
+    return refused(v('--cause', 'cause-in-file', '--file',
+      'the recap file carries a fix\'s cause — drop --cause, or drop --file to classify an existing fix'))
+  }
+  for (const flag of ['amend', 'ask'] as const) {
+    if (values[flag] !== undefined) {
+      return refused(v('--cause', 'classify-only', `--${flag}`, 'witness recap --effort <slug> --cause escape|decision — nothing else'))
+    }
+  }
+  if (values.effort === undefined) return refused(v('--effort', 'required', 'absent', 'the fix effort to classify — witness status lists the fixes owing a cause'))
+  if (!isFixCause(values.cause)) return refused(causeEnum(values.cause))
+  const marker = sessionMarker(ctx.env)
+  if (marker !== undefined) return refused(v('--cause', 'cause-in-session', marker, 'the human names a fix\'s cause in their own chat or terminal'))
+  const slug = values.effort
+  const cause: FixCause = values.cause
+
+  const rootRes = primaryRoot(ctx.cwd)
+  if (!rootRes.ok) { renderRefusal(rootRes.violations).forEach(ctx.err); return EXIT.REFUSED }
+  const root = rootRes.value
+  const blocked = guardTxn(ctx, root)
+  if (blocked !== undefined) return blocked
+  const notFix = (): Violation | undefined => {
+    const cls = latestRecap(root, slug)?.class
+    return cls === 'fix' ? undefined : v('cause', 'fix-only', String(cls ?? 'absent'), 'a fix effort — only a fix carries a cause')
+  }
+  const early = effortRefusal(root, slug, true) ?? notFix()
+  if (early) return refused(early)
+
+  const lock = acquireLock(root)
+  if (!lock.ok) { renderRefusal(lock.violations).forEach(ctx.err); return EXIT.BLOCKED }
+  try {
+    const crashed = guardTxn(ctx, root)
+    if (crashed !== undefined) return crashed
+    const raced = effortRefusal(root, slug, true) ?? notFix()
+    if (raced) return refused(raced)
+    ctx.out(kv('effort', slug))
+    if (effortCause(readStream(root, slug)) === cause) {
+      ctx.out(kv('cause', `${cause} (unchanged)`))
+      return EXIT.OK
+    }
+    const entry = { t: 'cause' as const, effort: slug, cause }
+    const stream = journalRel(slug)
+    const txn = { op: `cause(${slug})`, files: [stream], journal: { stream: slug, line: entryLine(entry) } }
+    const res = withTxn(root, txn, () => {
+      appendEntry(root, slug, entry)
+      crashPoint(ctx.env, 'journal-append')
+      return stateCommit(root, txn.files, `cause(${slug}): ${cause}`)
+    })
+    if (!res.ok) { renderRefusal(res.violations).forEach(ctx.err); return EXIT.REFUSED }
+    ctx.out(kv('cause', cause))
     return EXIT.OK
   } finally {
     lock.value()

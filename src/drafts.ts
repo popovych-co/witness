@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { cliAct } from './act.js'
 import { ID_RE } from './dsl.js'
 import { idTextList } from './idlists.js'
+import { isFixCause } from './journal.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { ensureExcluded } from './worktree.js'
 
@@ -98,7 +99,7 @@ export function draftSessions(root: string): string[] {
   return out
 }
 
-const GRILL_FIELDS = ['effort', 'class', 'goals', 'non_goals', 'constraints', 'decisions', 'slices', 'open']
+const GRILL_FIELDS = ['effort', 'class', 'cause', 'goals', 'non_goals', 'constraints', 'decisions', 'slices', 'open']
 const DESIGN_FIELDS = ['direction', 'answers', 'open', 'page']
 const ID_LISTS = [['goals', 'g'], ['non_goals', 'n'], ['constraints', 'c'], ['decisions', 'd']] as const
 
@@ -134,6 +135,8 @@ export function validateDraft(k: DraftKey, raw: unknown): Violation[] {
   if (raw.class !== undefined && raw.class !== 'feature' && raw.class !== 'fix' && raw.class !== 'chore') {
     out.push(v('class', 'enum', String(raw.class), 'feature | fix | chore'))
   }
+  // Row 253. A draft may hold a fix's cause before the class settles; only its value is checked here.
+  if (raw.cause !== undefined && !isFixCause(raw.cause)) out.push(v('cause', 'enum', String(raw.cause), 'escape | decision'))
   for (const [field, prefix] of ID_LISTS) out.push(...idTextList(raw[field], field, prefix, false))
   out.push(...stringList(raw.slices, 'slices'), ...stringList(raw.open, 'open'))
   return out

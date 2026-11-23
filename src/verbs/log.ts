@@ -67,6 +67,7 @@ function detailOf(e: Entry): string {
       const s = e as unknown as { from: string; to: string; cause: string }
       return `${s.from} → ${s.to} (${s.cause})`
     }
+    case 'cause': return `cause=${String(e.cause)}`   // row 253
     case 'revise-returned': {
       // Row 244: the author's hand-back of a revise (`gate --unchanged`), named as a decision is — the
       // gate, then what happened — with the run it hands back and whether it was `--manual`.

@@ -24,6 +24,8 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   // drift check reads; a policy pin records the rule a decision ran under.
   'write-refused': 'bookkeeping', sync: 'bookkeeping', dispatch: 'bookkeeping',
   'drift-check': 'bookkeeping', 'policy-pin': 'bookkeeping',
+  // Row 253. A fix's cause is an input to the track record; classifying one moves no flow.
+  cause: 'bookkeeping',
 }
 
 // A vacuous red moves nothing either (row 191, final review I3). A kind this CLI does not

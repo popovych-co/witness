@@ -42,7 +42,7 @@ describe('next — live specs re-enter the plan queue when an effort owes them',
     stampLive(repo, 'auth-refresh')
     // a fix effort amends the spec…
     repo.write('recap-fix.json', JSON.stringify({
-      effort: 'fix-effort', class: 'fix',
+      effort: 'fix-effort', class: 'fix', cause: 'escape',
       goals: [{ id: 'g1', text: 'Refresh tokens rotate before expiry' }],
       non_goals: [], constraints: [], slices: [],
     }))
