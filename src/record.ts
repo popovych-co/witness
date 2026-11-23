@@ -1,3 +1,4 @@
+import type { TestcaseOutcomes } from './criteria.js'
 import { effortAbandoned, effortCause, effortStreams, readStream, type Entry, type FixCause, type RecapEntry } from './journal.js'
 import { mergeClock, mergesBetween, type MergeClock } from './merge-clock.js'
 import type { Canon } from './scan.js'
@@ -108,4 +109,48 @@ export function escapesFold(root: string, canon: Canon): EscapesFold {
     plans: plans.length,
     byVersion: [...versions.values()].sort((a, b) => versionOrder(a.version, b.version)),
   }
+}
+
+// Row 254. Live specs failing: each live spec read by its latest drift run. Only runs that carry
+// outcomes (row 251: full-suite runs from T1 on) are measured.
+export interface LiveFold {
+  measured: boolean                                   // once a live spec's latest drift run carries outcomes
+  specs: number                                       // live specs whose latest drift run carries outcomes
+  failing: Array<{ spec: string; tests: string[] }>
+  couldNotVerify: string[]
+  unconfirmed: string[]
+}
+
+const isOutcomes = (x: unknown): x is TestcaseOutcomes =>
+  typeof x === 'object' && x !== null && typeof (x as TestcaseOutcomes).failed === 'number' &&
+  Array.isArray((x as TestcaseOutcomes).failing)
+
+// The failing names of a run that names any — a red with at least one failed testcase; undefined for
+// a pass, a red that names none ("could not verify"), or a run with no outcomes.
+const namedRed = (e: Entry | undefined): string[] | undefined =>
+  e !== undefined && e.ok !== true && isOutcomes(e.outcomes) && e.outcomes.failed > 0
+    ? e.outcomes.failing.filter((n): n is string => typeof n === 'string') : undefined
+
+// The debounce: a named red is failing only in the names it shares with the run before it, itself a
+// named red; one failure alone is unconfirmed. A red with no named failure — 0 tagged, every tagged
+// case skipped, a failing `cmd`, a suite that did not run — could not verify, never failing or passing.
+export function liveFold(root: string, canon: Canon): LiveFold {
+  const out: LiveFold = { measured: false, specs: 0, failing: [], couldNotVerify: [], unconfirmed: [] }
+  const live = canon.docs.filter((d) => d.meta.type === 'spec' && String(d.meta.status) === 'live')
+    .map((d) => String(d.meta.id)).sort()
+  for (const spec of live) {
+    const runs = readStream(root, spec).filter((e) => e.t === 'drift-check')
+    const latest = runs.at(-1)
+    if (latest === undefined || !isOutcomes(latest.outcomes)) continue
+    out.specs++
+    if (latest.ok === true) continue
+    const now = namedRed(latest)
+    if (now === undefined) { out.couldNotVerify.push(spec); continue }
+    const before = new Set(namedRed(runs.at(-2)) ?? [])
+    const shared = [...new Set(now.filter((n) => before.has(n)))].sort()
+    if (shared.length > 0) out.failing.push({ spec, tests: shared })
+    else out.unconfirmed.push(spec)
+  }
+  out.measured = out.specs > 0
+  return out
 }
