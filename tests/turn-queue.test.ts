@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { DRIVE_DEADLINE_FILE_ENV, sessionToken } from '../src/deadline.js'
 import {
-  TURN_DIR, behindJob, headTicket, runnerLockPath, sweepTurnQueue, turnHolder, withRunnerTurn, type TurnTicket,
+  TURN_DIR, behindJob, headTicket, runnerLockPath, sweepTurnQueue, turnHolder, turnIo, withRunnerTurn, type TurnTicket,
 } from '../src/runner-lock.js'
 import { fakeCtx, fakeScenario, fixtureEnv, patchConfig, seededRepo, tmpRepo } from './helpers.js'
 
@@ -143,6 +143,23 @@ describe('the queued turn (row 255)', () => {
     expect(turnHolder(repo.root)).toEqual({ pid: OTHER })
     expect(behindJob(repo.root, '77-3')).toBeUndefined()
   })
+
+  it('a renewal a Windows scanner blocks is best effort: the wait goes on and the run is not lost (slice 1 review I1)', () => {
+    const repo = tmpRepo()
+    // An orphan holder that outlives one renewal (10 s), then dies, so the in-process wait is bounded.
+    const holder = Number(spawnSync('sh', ['-c', 'sleep 11 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim())
+    putLock(repo.root, { pid: holder })
+    const io = { ...turnIo }
+    const busy = () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) }
+    turnIo.rename = busy
+    turnIo.rm = busy
+    try {
+      expect(withRunnerTurn(repo.root, fakeCtx(repo.root), 'x', () => 42)).toBe(42)
+    } finally {
+      Object.assign(turnIo, io)
+    }
+    expect(tickets(repo.root)).toEqual([])
+  }, 30_000)
 
   it("sessionToken reads the token from the deadline file's name alone", () => {
     expect(sessionToken({ [DRIVE_DEADLINE_FILE_ENV]: '/r/.witness/live/deadline/77-3.json' })).toBe('77-3')

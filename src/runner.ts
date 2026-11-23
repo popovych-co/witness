@@ -56,8 +56,9 @@ export function interrupted(signal: NodeJS.Signals): Violation {
     're-run it where nothing stops it before the suite ends — no outcome was recorded')
 }
 
-// Row 255: `turn: false` runs at once, outside the test turn, and hands the command no
-// WITNESS_RUNNER_TURN — ship's lint lane, and a job's command inside a turn its verb already holds.
+// Row 255: `turn: false` takes no turn of its own and runs at once, passing `ctx.env` unchanged —
+// ship's lint lane (which holds no turn), and a job's command inside the turn its verb already holds,
+// whose WITNESS_RUNNER_TURN must reach the command so a witness it invokes re-enters that turn.
 export function execCommand(runRoot: string, ctx: Ctx, cmd: string, opts: { turn?: boolean } = {}): RunOutcome {
   if (opts.turn === false) return runCommand(runRoot, ctx, cmd)
   return withRunnerTurn(runRoot, ctx, cmd, (env) => runCommand(runRoot, { ...ctx, env }, cmd))

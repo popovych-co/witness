@@ -62,6 +62,13 @@ const CREATE_RETRY_MS = 1_000
 const RETRY_PAUSE_MS = 50
 const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES'])
 
+// The one seam for the queue's renames and removals, so a test can stand in for a Windows scanner
+// (busy.ts's `busyIo`).
+export const turnIo = {
+  rename(from: string, to: string): void { renameSync(from, to) },
+  rm(p: string): void { rmSync(p, { force: true }) },
+}
+
 // A symlink is never a holder: `wx` refuses it while a read follows it, so a dangling one
 // would read `absent` forever (the repo lock's fix, src/lock.ts).
 function holderOf(p: string): number | 'absent' | 'unreadable' {
@@ -243,7 +250,8 @@ function openTicket(root: string, ctx: Ctx, who: TurnWho | undefined): OwnTicket
   const renew = (now: number) => {
     const tmp = join(dir, `.${since}-${pid}.${randomBytes(8).toString('hex')}.tmp`)
     if (writeExclusive(tmp, body(now + TURN_LEASE_MS)) !== 'written') return
-    try { renameSync(tmp, p); renewed = now } catch { rmSync(tmp, { force: true }) }
+    // A temp a scanner still holds fails its removal the way it failed the rename: left to the sweep.
+    try { turnIo.rename(tmp, p); renewed = now } catch { try { turnIo.rm(tmp) } catch { /* the sweep removes it */ } }
   }
   return {
     since,
