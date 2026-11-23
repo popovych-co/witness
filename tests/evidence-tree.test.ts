@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -89,5 +89,25 @@ describe('evidence tree and producing test (row 251)', () => {
     expect(caps.find((c) => c.name === 'e.png')!.test).toBe('x'.repeat(1000))
     expect(warned.map((l) => /capture (\S+)/.exec(l)?.[1])).toEqual(['a.png', 'b.png', 'c.png', 'f.png', 'g.png', 'h.png'])
     expect(warned.every((l) => l.startsWith('warn: '))).toBe(true)
+  })
+
+  // Slice 1 security review. The sidecar is read without following a link — one pointing out of the
+  // screens dir at a well-formed file is refused unread, and a dangling one is still named — and a
+  // FIFO never blocks the read.
+  it('a symlinked or special sidecar is refused unread and warned', () => {
+    const root = mkdtempSync(join(tmpdir(), 'witness-cap-'))
+    const dir = screensDir(root, 'p1'); mkdirSync(dir, { recursive: true })
+    const outside = join(root, 'outside.json')
+    writeFileSync(outside, JSON.stringify({ test: 'read from outside the screens dir' }))
+    writeFileSync(join(dir, 's.png'), 's'); symlinkSync(outside, join(dir, 's.png.json'))
+    writeFileSync(join(dir, 't.png'), 't'); symlinkSync(join(root, 'missing.json'), join(dir, 't.png.json'))
+    const fifo = process.platform !== 'win32'
+    if (fifo) { writeFileSync(join(dir, 'u.png'), 'u'); execFileSync('mkfifo', [join(dir, 'u.png.json')]) }
+    const warned: string[] = []
+    const caps = collectCaptures(root, 'p1', (l) => warned.push(l))
+    const named = fifo ? ['s.png', 't.png', 'u.png'] : ['s.png', 't.png']
+    expect(caps.map((c) => c.name)).toEqual(named)
+    expect(caps.every((c) => c.test === undefined)).toBe(true)
+    expect(warned.map((l) => /capture (\S+)/.exec(l)?.[1])).toEqual(named)
   })
 })

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
@@ -42,13 +42,28 @@ const SIDECAR_BYTES_MAX = 16 * 1024
 const LINE_BREAK = /[\n\r\u2028\u2029]/
 
 // The sidecar's test name, or undefined with `bad` when one exists but is not the accepted shape.
+// Read without following a link: `lstat` names a sidecar that is a link (dangling or not) and refuses
+// it, and the file is then opened once — with no link followed where the OS can refuse one, and
+// without blocking should a FIFO have been swapped in since — and only the descriptor is checked and
+// read, at most one byte past the cap (slice 1 security review: no stat-then-read by path).
 function producingTest(dir: string, name: string): { test?: string; bad: boolean } {
   const side = join(dir, `${name}.json`)
-  if (!existsSync(side)) return { bad: false }
+  let fd: number | undefined
   try {
-    const st = statSync(side)
+    const st = lstatSync(side, { throwIfNoEntry: false })
+    if (st === undefined) return { bad: false }
     if (!st.isFile() || st.size > SIDECAR_BYTES_MAX) return { bad: true }
-    const parsed: unknown = JSON.parse(readFileSync(side, 'utf8'))
+    fd = openSync(side, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
+    if (!fstatSync(fd).isFile()) return { bad: true }
+    const buf = Buffer.alloc(SIDECAR_BYTES_MAX + 1)
+    let n = 0
+    while (n < buf.length) {
+      const got = readSync(fd, buf, n, buf.length - n, null)
+      if (got === 0) break
+      n += got
+    }
+    if (n > SIDECAR_BYTES_MAX) return { bad: true }
+    const parsed: unknown = JSON.parse(buf.subarray(0, n).toString('utf8'))
     const test = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>).test : undefined
     if (typeof test !== 'string') return { bad: true }
@@ -56,6 +71,8 @@ function producingTest(dir: string, name: string): { test?: string; bad: boolean
     return length >= 1 && length <= TEST_NAME_MAX && !LINE_BREAK.test(test) ? { test, bad: false } : { bad: true }
   } catch {
     return { bad: true }
+  } finally {
+    if (fd !== undefined) closeSync(fd)
   }
 }
 
