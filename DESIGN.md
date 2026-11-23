@@ -606,6 +606,8 @@ The rationale trail (ADR-lite; captured here since `adr/` is cut). Rows changed 
 - **An environment problem that makes tests fail, rather than skip, reads as a live failure** until T2b splits load errors from assertion failures (row 254).
 - **A history without witness's state-commit subjects leaves escapes uncharged, `order unknown`**: a squashed or shallow history, a hand-made merge, or a merge stamp or birth that a CLI before row 254 recovered (`merge-stamp (recovered)`, `recap(<slug>) (recovered)`) (row 254).
 - **Across merged lines the merge clock reads committer-time order, not ancestry**: a fix born on a branch that never held a plan's merge stamp, dated after it, is charged to that plan. Today's consumers read the same under `--topo-order` (row 254).
+- **A renamed plan keeps its old id in the merge clock**: its merge stamp names the id it shipped under, so escapes on its spec read `order unknown` from then on (row 254).
+- **`witness sync` rebases**: a fix born on one machine while another stamped and pushed a merge sits after that merge once synced, so it may be charged to a plan that shipped after it was born; the charge is labelled approximate (row 254).
 - **A session that strips the drive marker can journal a fix's cause**, through the classify act or a recap file; the record feeds no gate, and the entry carries its session (row 253).
 - **A capture names its producing test only where the consumer's harness writes the sidecar**: fewhats and wot owe the change (row 251).
 - **The implement gate still runs a foreign spec's regression and its criteria lane as separate suite runs** in full-suite mode; row 252 covers ship only (row 252).

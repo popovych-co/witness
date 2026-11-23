@@ -304,7 +304,8 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | verb | does |
 | --- | --- |
 | `init [--agent claude-code\|pi\|auto]` | scaffold config, principles, journal — one trailer commit; `--agent` also installs that harness's engine, guard and dashboard (idempotent) |
-| `recap [--amend] --file <json>` | validate + persist a scope recap — class, goals, non-goals, constraints and numbered decisions; births the effort journal |
+| `recap [--amend] --file <json>` | validate + persist a scope recap — class, goals, non-goals, constraints and numbered decisions; births the effort journal; a fix adds `"cause": "escape"` or `"cause": "decision"` |
+| `recap --effort <slug> --cause escape\|decision` | the human names the cause of a fix that predates causes, in their own chat or terminal (refused in a witness-spawned session); `status` lists those fixes under `cause-owed` |
 | `draft <key> [--file <json>]` | a grill's or design session's local draft — saved after every settled answer, read back to resume; never committed or journaled |
 | `write <id> --effort <e> --meta <json> --body <md>` | validated manifest → spec/plan on disk + journal entry; a spec's `covers` and `carries` map it to the recap's goals and decisions |
 | `diff <spec-id>` | delta since the last realized state (plan pin → empty), and the decisions that moved since that plan |
@@ -334,7 +335,7 @@ the wrong file refuses. There are no `WITNESS_*` env vars for configuration.
 | `clean` | reap stale worktrees |
 | `sync` | pull --rebase + push state commits |
 | `recover [--complete\|--rollback]` | resolve a crashed write transaction |
-| `status` | orientation: flows, blocked docs, reconcile rows, pending gates |
+| `status [--record]` | orientation: flows, blocked docs, reconcile rows, pending gates and the track record's line; `--record` prints the track record in full |
 | *(no verb)* | the same screen as `status` |
 
 ## Exit codes

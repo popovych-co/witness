@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { stateCommit } from '../src/gitio.js'
@@ -236,5 +237,20 @@ describe('a fix carries its cause (row 253)', () => {
     const r = await repo.cli(['log', 'quick-fix'])
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).toContain('cause=decision')
+  })
+})
+
+// Final review F1. The public references name the classify act and the cause a fix recap now needs.
+describe('the references name a fix cause (row 253)', () => {
+  it('recap --help names the classify act', async () => {
+    const repo = await seededRepo({ noRecap: true })
+    const r = await repo.cli(['recap', '--help'])
+    expect(r.stdout).toContain('witness recap --effort <slug> --cause escape|decision')
+  })
+  it("README's verb table names the classify act, a fix's cause and status --record", () => {
+    const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8')
+    expect(readme).toContain('`recap --effort <slug> --cause escape\\|decision`')
+    expect(readme).toContain('a fix adds `"cause": "escape"` or `"cause": "decision"`')
+    expect(readme).toContain('`status [--record]`')
   })
 })
