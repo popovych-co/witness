@@ -108,7 +108,7 @@ registerGate({
       const cmd = rc.suiteCmd
       const r = await runSuite(wt, ctx, rc, root)
       if (!r.ok) {
-        // the trust stop reads `untrusted` (row 205); an interrupted run says so (row 247)
+        // the trust stop reads `untrusted` (row 205)
         const trust = r.violations.find((x) => x.rule.startsWith('untrusted-'))
         return trust !== undefined
           ? { name: 'tests', ok: false, detail: `${cmd}: ${trust.rule.slice('untrusted-'.length)}`, untrusted: [cmd] }

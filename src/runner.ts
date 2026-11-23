@@ -137,8 +137,9 @@ export async function runFiltered(
 
 // Row 252. One suite run and its report's parse, held apart: ship's tests lane reads the run and
 // hands the parse to the criteria lane, so a full-suite ship runs its suite once. Refuses before
-// running when the command is untrusted, and after it when a signal ended it (row 247); a report
-// that does not parse is the `tests` refusal inside, beside the run that left it.
+// running when the command is untrusted. After a run, `tests` is the parse, or its refusal: a report
+// that does not parse, or a run a signal ended (row 247), whose report is never read — the run beside
+// it keeps its output, so the tests lane shows the tail 0.30's command lane showed (slice 1 review M2).
 export async function runSuite(
   runRoot: string, ctx: Ctx, rc: Extract<RunnerConfig, { mode: 'full-suite' }>, trustRoot = runRoot,
 ): Promise<Result<{ run: RunOutcome; tests: Result<TestOutcome[]> }>> {
@@ -150,7 +151,7 @@ export async function runSuite(
   for (const f of reportFiles(runRoot, rc.reportGlob)) rmSync(join(runRoot, f))
   const run = execCommand(runRoot, ctx, rc.suiteCmd)
   // Row 247: a killed suite's report is never read — whatever it holds is a run cut short.
-  if (run.signal !== undefined) return refuse([interrupted(run.signal)])
+  if (run.signal !== undefined) return ok({ run, tests: refuse([interrupted(run.signal)]) })
   return ok({ run, tests: mergeReports(runRoot, rc.reportGlob) })
 }
 

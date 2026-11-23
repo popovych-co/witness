@@ -35,14 +35,14 @@ const check = (r: GateRunEntry, name: string) => r.checks.find((c) => c.name ===
 // A full-suite ship whose suite counts its own runs in a file outside the repo (an untracked
 // file in the worktree would join the plan change set). The fixture ignores only node_modules/,
 // so the worktree ignores reports/ too, committed on the branch before any gate runs.
-async function fullSuiteShip() {
+async function fullSuiteShip(suite?: (dir: string) => string) {
   const seed = await shippableRepo()
   appendFileSync(join(seed.wt, '.gitignore'), 'reports/\n')
   execFileSync('git', ['commit', '-am', 'ignore reports'], { cwd: seed.wt })
   const dir = mkdtempSync(join(tmpdir(), 'witness-runs-'))
   const counter = join(dir, 'count.cjs')
   writeFileSync(counter, `require('fs').appendFileSync(${JSON.stringify(join(dir, 'runs'))}, 'x')`)
-  const suiteCmd = `node "${counter}" && node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml`
+  const suiteCmd = suite?.(dir) ?? `node "${counter}" && node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml`
   patchConfig(seed.repo, {
     criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' },
     ship: { test: suiteCmd, lint: 'true' },
@@ -100,6 +100,22 @@ describe('the ship suite (rows 251, 252)', () => {
     expect(check(ship, 'tests')).toMatchObject({ ok: false, untrusted: [cmd], detail: `${cmd}: blocked` })
     // the criteria lane, handed no suite, asks trust again and names the same block, as before
     expect(check(ship, 'drift-lane')).toMatchObject({ ok: false, untrusted: [cmd], detail: 'ac-rotate:fail' })
+    expect('junit' in ship).toBe(false)
+  }, 240_000)
+
+  // Review Focus 5 (slice 1 review M2). A suite a signal ended — exit 137 is how an OOM kill reads —
+  // shows its output tail in the tests check, as 0.30's command lane did, and journals no summary.
+  it('an interrupted suite keeps its output tail in the tests check, as before, and journals no summary', async () => {
+    const { repo, planId, ctx } = await fullSuiteShip((dir) => {
+      const killed = join(dir, 'killed.cjs')
+      writeFileSync(killed, "process.stdout.write('FATAL ERROR: heap limit — killed tail\\n'); process.exit(137)")
+      return `node "${killed}"`
+    })
+    await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
+    const ship = lastShipRun(repo, planId)
+    expect(check(ship, 'tests').ok).toBe(false)
+    expect(check(ship, 'tests').detail).toContain('FATAL ERROR: heap limit — killed tail')
+    expect(check(ship, 'drift-lane').ok).toBe(false)
     expect('junit' in ship).toBe(false)
   }, 240_000)
 
