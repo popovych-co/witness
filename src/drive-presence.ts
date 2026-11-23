@@ -11,6 +11,7 @@ export const DRIVE_ENV = 'WITNESS_DRIVE'
 export const TARGETLESS = '-'     // the marker's value for work with no target
 // Final review F14: when drive will kill this session (epoch ms). A reviewer inside it never
 // waits past that — a wait drive kills mid-way leaves an orphaned gate and a stuck target.
+// Row 256: the moving deadline is the file's (`WITNESS_DRIVE_DEADLINE_FILE`, src/deadline.ts).
 export const DRIVE_DEADLINE_ENV = 'WITNESS_DRIVE_DEADLINE'
 
 // unset → undefined · '-' → { target: undefined } · else → { target: <value> }

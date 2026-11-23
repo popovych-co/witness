@@ -35,6 +35,32 @@ function clock(limit: number) {
 }
 
 describe('sessionClock (row 210, issue #58)', () => {
+  it('a check that finds the session held does not count its interval, and heldMs says how much (row 256)', () => {
+    const h = host()
+    let held = false
+    let expired = 0
+    const c = sessionClock(3_000, h, { expire: () => { expired += 1 }, slept: () => {}, held: () => held })
+    h.run(1_000)
+    held = true; h.run(5_000)
+    expect(expired).toBe(0)
+    expect(c.heldMs()).toBe(5_000)
+    held = false; h.run(1_999)
+    expect(expired).toBe(0)
+    h.run(1)
+    expect(expired).toBe(1)
+    expect(c.awakeMs()).toBe(8_000)
+  })
+
+  it('a sleep while held is sleep, never held time (Review Focus 1)', () => {
+    const h = host()
+    const slept: number[] = []
+    const c = sessionClock(60_000, h, { expire: () => {}, slept: (ms) => slept.push(ms), held: () => true })
+    h.run(2_000); h.sleep(HOUR); h.run(1_000)
+    expect(slept).toEqual([HOUR - 1_000])
+    expect(c.heldMs()).toBe(4_000)
+    expect(c.awakeMs()).toBe(4_000)
+  })
+
   // Row 214: drive's quiet line and journal watch run on this clock's check, in awake time. The
   // next check is armed first, so a tick that throws never costs the session its limit.
   it('ticks with the awake time, after re-arming (issue #64)', () => {

@@ -22,36 +22,50 @@ export const monotonicTicker: Ticker = {
   after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t) },
 }
 
-export interface SessionClock { awakeMs(): number; stop(): void }
+export interface SessionClock { awakeMs(): number; heldMs(): number; stop(): void }
 
 // Row 214: `tick` hears every check with the awake time, so what drive does once a second for a
 // running session (its quiet line, its journal watch) runs on this one clock, in awake time.
+//
+// Row 256: `held` says whether the session waits behind a job for the test turn. A check that finds
+// it held does not count the awake interval since the last check toward the limit, and `heldMs`
+// says how much was held. Sleep is accounted first, so a host that slept while held counts the
+// sleep as sleep, never as held time. `awakeMs` stays the awake time, held included. A `held` that
+// throws reads as not held: the limit stands.
 export function sessionClock(
-  limitMs: number, ticker: Ticker, on: { expire(): void; slept(ms: number): void; tick?(awakeMs: number): void },
+  limitMs: number, ticker: Ticker,
+  on: { expire(): void; slept(ms: number): void; tick?(awakeMs: number): void; held?(): boolean },
 ): SessionClock {
   const t0 = ticker.now()
   let last = t0          // when the pending check was armed
   let wait = 0           // how far ahead of `last` it is due
   let asleep = 0
+  let held = 0
   let cancel: (() => void) | undefined
   let expired = false
   let frozen: number | undefined
-  // The interval since the last check, accounted: lateness past the gap is sleep.
+  const isHeld = (): boolean => {
+    try { return on.held?.() === true } catch { return false }
+  }
+  // The interval since the last check, accounted: lateness past the gap is sleep, and the awake
+  // rest of it is held when the session waits behind a job now. Returns the awake time.
   const account = (now: number): number => {
     const late = now - last - wait
-    if (late > SUSPEND_GAP_MS) { asleep += late; on.slept(late) }
+    const slept = late > SUSPEND_GAP_MS ? late : 0
+    if (slept > 0) { asleep += slept; on.slept(slept) }
+    if (isHeld()) held += Math.max(0, now - last - slept)
     last = now
     return now - t0 - asleep
   }
-  const arm = (awake: number) => {
-    wait = Math.min(SESSION_TICK_MS, limitMs - awake)
+  const arm = (counted: number) => {
+    wait = Math.min(SESSION_TICK_MS, limitMs - counted)
     cancel = ticker.after(wait, check)
   }
   // The next check is armed before `tick` runs: a tick that threw would otherwise leave the
   // session with no limit at all, and one that stopped the clock cancels the check it armed.
   const check = () => {
     const awake = account(ticker.now())
-    if (awake < limitMs) { arm(awake); on.tick?.(awake); return }
+    if (awake - held < limitMs) { arm(awake - held); on.tick?.(awake); return }
     expired = true
     cancel = undefined
     on.expire()
@@ -59,6 +73,7 @@ export function sessionClock(
   arm(0)
   return {
     awakeMs: () => frozen ?? ticker.now() - t0 - asleep,
+    heldMs: () => held,
     // Cancels the pending check and accounts its interval by the same rule, which catches a
     // sleep no check has seen yet (a session that ends right after the host wakes). After an
     // expiry nothing is pending, so it only freezes.

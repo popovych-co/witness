@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cliAct, type Act } from './act.js'
@@ -17,6 +17,7 @@ import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
 import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
+import { DRIVE_DEADLINE_FILE_ENV, deadlineFile, writeDeadline } from './deadline.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
@@ -116,7 +117,17 @@ export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
 // `ending`: drive stopped it after its turn ended, or as a run that never started (row 245); it is
 // then `exited` with the code its harness gives that ending, never the stop's own status, and its
 // `failed` and `tail` are what they were when the stop was sent (S4-A).
-export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean; ending?: EndCause }
+// `ms` is the session's awake time; `heldMs` the part of it spent waiting behind a job for the test
+// turn (row 256), absent when none.
+export interface SessionEnd {
+  outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean; ending?: EndCause; heldMs?: number
+}
+
+// Row 256 (amends row 183). What a session costs its target's `drive.caps.wallClockMs`: its awake
+// time less the time it waited behind a job, which no session spent — as a host sleep is not.
+export function chargedMs(end: SessionEnd): number {
+  return Math.max(0, end.ms - (end.heldMs ?? 0))
+}
 const TAIL_LINES = 3
 
 // The prompt every spawned session gets. Not a plan, not a stage instruction: the same
@@ -186,6 +197,7 @@ export async function spawnSession(
   opts: {
     manual?: boolean; signal?: AbortSignal; ticker?: Ticker; hear?: (line: string) => void; root?: string
     stream?: WorkerStream; next?: string; progress?: (session?: string) => string[]
+    deadline?: { root: string; token: string; behind: () => string | undefined }
   } = {},
 ): Promise<SessionEnd> {
   const t0 = Date.now()
@@ -219,6 +231,8 @@ export async function spawnSession(
     // The earliest wall-clock time drive may stop this session — a sleep moves drive's stop
     // later, never earlier (row 210).
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
+    // Row 256: where drive moves that deadline while the session waits behind a job.
+    ...(opts.deadline !== undefined ? { [DRIVE_DEADLINE_FILE_ENV]: deadlineFile(opts.deadline.root, opts.deadline.token) } : {}),
   }
   // Row 218: on Windows the session starts inside a job (src/contain.ts), and tells everything
   // under it what drive found, so no run or reviewer the session starts probes again.
@@ -246,6 +260,30 @@ export async function spawnSession(
   // Awake time on the session's clock once the child runs: what the quiet line measures in (row
   // 210). `started` prints before the clock exists, at 0.
   let awakeNow = (): number => 0
+  // Row 256: the awake time held behind a job so far, on the same clock.
+  let heldNow = (): number => 0
+  // A held stretch: the job it waits behind, and the held time when it began. Its end — or the
+  // session's end inside one — says how long the session waited, and the deadline file follows
+  // the held time while it grows.
+  let heldJob: string | undefined
+  let stretch: { job: string; from: number } | undefined
+  let heldWritten = 0
+  const waitedLine = () => {
+    if (stretch === undefined) return
+    emit(`waited ${duration(heldNow() - stretch.from)} behind job ${stretch.job} — not counted against drive.sessionTimeoutMs`)
+    stretch = undefined
+  }
+  const followHeld = () => {
+    if (opts.deadline === undefined) return
+    const held = heldNow()
+    if (held > heldWritten) {
+      stretch ??= { job: heldJob ?? 'unknown', from: heldWritten }
+      heldWritten = held
+      writeDeadline(opts.deadline.root, opts.deadline.token, t0 + cfg.drive.sessionTimeoutMs + held)
+    } else {
+      waitedLine()
+    }
+  }
   // The id the session's stream named last: whose journal entries are its own.
   let session: string | undefined
   // When a line was last printed, in awake time, and how many quiet lines followed it.
@@ -314,7 +352,10 @@ export async function spawnSession(
       if (n <= quiet) return
       quiet = n
       const what = stream.inFlight()
-      emit(`still running · ${duration(awake)} of ${duration(cfg.drive.sessionTimeoutMs)} · quiet ${duration(n * SESSION_QUIET_MS)}${what !== undefined ? ` · in: ${what}` : ''}`, true)
+      // Row 256: the time counted against the limit, and what was not.
+      const held = heldNow()
+      const notCounted = held > 0 ? ` · not counted: ${duration(held)} behind a job` : ''
+      emit(`still running · ${duration(awake - held)} of ${duration(cfg.drive.sessionTimeoutMs)}${notCounted} · quiet ${duration(n * SESSION_QUIET_MS)}${what !== undefined ? ` · in: ${what}` : ''}`, true)
     } catch { /* the next check says it */ }
   }
   return await new Promise<SessionEnd>((resolve) => {
@@ -379,6 +420,11 @@ export async function spawnSession(
       child.stdout.destroy()
       child.stderr.destroy()
       const ms = Math.max(1, clock.awakeMs())
+      const heldMs = clock.heldMs()
+      // Row 256: a stretch the session ended inside says so, and the moved deadline goes with it.
+      if (heldMs > heldWritten) stretch ??= { job: heldJob ?? 'unknown', from: heldWritten }
+      if (o !== 'spawn-failed') waitedLine()
+      if (opts.deadline !== undefined) rmSync(deadlineFile(opts.deadline.root, opts.deadline.token), { force: true })
       // Row 245. Stopped by the end watch, it is classified with the status its harness gives that
       // ending, never the stop's own (P46), and its error flag is the one read at the stop (S4-A).
       const ended = o === 'exited' && ending !== undefined ? ending : undefined
@@ -397,7 +443,10 @@ export async function spawnSession(
           : code === null ? 'killed' : `exit ${code}${failed ? ' (error)' : ''}`
         emit(`ended ${clockTime()} · ${how} · ${duration(ms)}`)
       }
-      resolve({ outcome: o, code, tail: [...tail], ms, failed, ...(ended !== undefined ? { ending: ended.cause } : {}) })
+      resolve({
+        outcome: o, code, tail: [...tail], ms, failed, ...(ended !== undefined ? { ending: ended.cause } : {}),
+        ...(heldMs > 0 ? { heldMs } : {}),
+      })
     }
     // Row 245: the end signal never stops the timeout. A deadline that falls inside a grace ends the
     // session clean, as its turn's end; one after a stop drive already sent changes nothing, and
@@ -409,14 +458,22 @@ export async function spawnSession(
         else stop('timeout')
       },
       slept: (ms) => emit(`host slept ${duration(ms)} — not counted against drive.sessionTimeoutMs`),
+      // Row 256: held while the session waits behind a job for the test turn.
+      held: () => {
+        const job = opts.deadline?.behind()
+        if (job !== undefined) heldJob = job
+        return job !== undefined
+      },
       // The watch first: once the grace or the never-started window is due, the session is stopped.
       tick: (awake) => {
+        followHeld()
         const cause = watch.due(awake)
         if (cause !== undefined) endStop(cause, false)
         else tick(awake)
       },
     })
     awakeNow = () => clock.awakeMs()
+    heldNow = () => clock.heldMs()
     opts.signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -978,7 +1035,7 @@ export async function driveLoop(
     // counted, never stuck. Read from the busy folder, never from the session's words.
     if (key !== TARGETLESS && busyOther(key)) { progress.delete(key); return }
     const u = use.get(key) ?? { spawns: 0, ms: 0 }
-    use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
+    use.set(key, { spawns: u.spawns + 1, ms: u.ms + chargedMs(end) })
     if (end.outcome === 'timeout') {
       if (asHeld(key)) return
       ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
