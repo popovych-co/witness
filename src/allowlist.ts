@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { actOn, runRow, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
+import { lintCommands } from './lint-parts.js'
 import { heldCriteria } from './needs.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { criteriaOwner, findById, type Canon, type CanonDoc } from './scan.js'
@@ -105,8 +106,8 @@ export function grantRowsOf(grant: Act | undefined, list: Act): string[] {
   return grant.withheld === undefined ? [runRow(grant)] : [`  note: ${grant.withheld}`, runRow(list)]
 }
 
-// The filtered runner template, `ship.test`, `ship.lint`, `scratch.prepare`, each when set. Full-suite mode's
-// runner IS `ship.test`, and a command listed twice is listed once, under its first source.
+// The filtered runner template, `ship.test`, every `ship.lint` part (row 261), `scratch.prepare`, each when
+// set. Full-suite mode's runner IS `ship.test`, and a command listed twice is listed once, under its first source.
 export function configCommands(cfg: Config): RunCommand[] {
   const out: RunCommand[] = []
   const add = (cmd: string | undefined, source: string) => {
@@ -114,7 +115,7 @@ export function configCommands(cfg: Config): RunCommand[] {
   }
   if (cfg.criteria.runner !== 'full-suite') add(cfg.criteria.runner, 'criteria.runner')
   add(cfg.ship.test, 'ship.test')
-  add(cfg.ship.lint, 'ship.lint')
+  for (const c of lintCommands(cfg)) add(c.cmd, c.source)
   // Row 259. The scratch's setup command, when there is one to run.
   if (cfg.scratch.prepare !== 'none') add(cfg.scratch.prepare, 'scratch.prepare')
   return out
@@ -225,10 +226,13 @@ function listingOf(
 // not trust yet, checked before any work: found only inside the session, a refusal journaled
 // nothing, `next` routed the same line again and drive respawned it to the cap. Only the
 // commands with no "no" path — the runner (the template, or ship.test in full-suite) for the
-// evidence verbs and the implement gate; that plus ship.test and ship.lint for ship; a start's
+// evidence verbs and the implement gate; that plus ship.test and every ship.lint part for ship; a start's
 // own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
 // headless gate, so trust is never the toll, and a gate whose check failed on one reaches the
 // settle pass's trust-grant stop instead.
+// Row 261. Ship runs its suite and every lint part.
+const shipOwes = (source: string): boolean => source === 'ship.test' || source === 'ship.lint' || source.startsWith('ship.lint.')
+
 export function trustOwed(
   root: string, env: Record<string, string | undefined>, cfg: Config, canon: Pick<Canon, 'docs'>,
   action: { line: string; target?: string },
@@ -239,7 +243,7 @@ export function trustOwed(
   const line = `${action.line} `
   const run: RunCommand[] =
     /^witness (test-evidence|verify-red|gate implement|check --drift) /.test(line) ? runner
-      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => c.source === 'ship.test' || c.source === 'ship.lint')]
+      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => shipOwes(c.source))]
         : /^witness start /.test(line) && action.target !== undefined
           ? (() => { const doc = canon.docs.find((d) => d.meta.id === action.target); return doc ? cmdNeeds(doc) : [] })()
           : []

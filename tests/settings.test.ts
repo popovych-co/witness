@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import {
   FIRST_LINE, GROUP_HEADINGS, RETIRED, SCHEMA_COMMENT, SCHEMA_FINGERPRINTS, SECTION_ORDER, SETTINGS,
-  defaultAt, defaultValues, fingerprint, knownAt, settingAt, withValues,
+  defaultAt, defaultValues, fingerprint, knownAt, settingAt, shapeAt, withValues,
 } from '../src/settings.js'
 import { SCHEMA_VERSION } from '../src/config.js'
 
@@ -80,5 +80,14 @@ describe('scratch.prepare (row 259)', () => {
     expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 3, scratch: { prepare: 'none' } })
     expect(defaultValues({ detected: { 'scratch.prepare': 'npm ci' } }).scratch).toEqual({ prepare: 'npm ci' })
     expect(defaultValues({ schema: 2 })).not.toHaveProperty('scratch')
+  })
+})
+
+describe('ship.lint parts (row 261)', () => {
+  it('ship.lint takes named parts from schema 3; schemas 1–2 keep text (row 261)', () => {
+    const s = settingAt('ship.lint')!
+    expect(s).toMatchObject({ shape: { kind: 'parts' }, older: { until: 2, shape: { kind: 'text' } }, since: 1, defaults: { 1: 'npm run lint' } })
+    expect(shapeAt(s, 2)).toEqual({ kind: 'text' })
+    expect(shapeAt(s, 3)).toEqual({ kind: 'parts' })
   })
 })

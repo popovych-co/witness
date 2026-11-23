@@ -18,7 +18,7 @@ import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
 import { stateDirs } from '../src/gitio.js'
 import type { Clock } from '../src/usage.js'
-import { parseDocument, stringify } from 'yaml'
+import { isMap as isYamlMap, parseDocument, stringify } from 'yaml'
 import { defaultValues, withValues } from '../src/settings.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
@@ -502,13 +502,14 @@ export function configYaml(patch: Record<string, unknown> = {}): string {
 const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 
 // Sets (or, for undefined, deletes) each leaf of `patch` in the repo's witness.config.yaml, keeping
-// everything else as written. Writes the file and does not commit it.
+// everything else as written. A map in the patch where the file holds no map (a part map over a
+// one-command `ship.lint`, row 261) is set whole. Writes the file and does not commit it.
 export function patchConfig(repo: TestRepo, patch: Record<string, unknown>): void {
   const doc = parseDocument(repo.read('witness.config.yaml'))
   const apply = (obj: Record<string, unknown>, at: string[]) => {
     for (const [k, val] of Object.entries(obj)) {
       if (val === undefined) doc.deleteIn([...at, k])
-      else if (isPatchMap(val)) apply(val, [...at, k])
+      else if (isPatchMap(val) && isYamlMap(doc.getIn([...at, k], true))) apply(val, [...at, k])
       else doc.setIn([...at, k], val)
     }
   }

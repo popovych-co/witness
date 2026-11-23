@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
-import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS } from '../src/settings.js'
+import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS, withValues } from '../src/settings.js'
 import { configYaml, seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
 
 describe('loadConfig', () => {
@@ -415,5 +415,27 @@ describe('scratch.prepare (row 259)', () => {
     expect(old.ok && old.value.warning).toMatch(/schema 2 is older than this witness \(3\)/)
     repo.write('witness.config.yaml', configYaml({ scratch: { prepare: 'pnpm install --frozen-lockfile' } }))
     expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { scratch: { prepare: 'pnpm install --frozen-lockfile' } } })
+  })
+})
+
+describe('ship.lint parts (row 261)', () => {
+  it('ship.lint is one command, a part named lint, or named parts in file order (row 261)', () => {
+    const repo = tmpRepo()
+    const lint = (val: unknown) => { repo.write('witness.config.yaml', configYaml({ ship: { lint: val } })); return loadConfig(repo.root) }
+    expect(lint('pnpm lint')).toMatchObject({ ok: true, value: { ship: { lint: [{ name: 'lint', cmd: 'pnpm lint', source: 'ship.lint' }] } } })
+    expect(lint({ biome: 'pnpm exec biome check .', types: 'pnpm typecheck' })).toMatchObject({ ok: true, value: { ship: { lint: [
+      { name: 'biome', cmd: 'pnpm exec biome check .', source: 'ship.lint.biome' },
+      { name: 'types', cmd: 'pnpm typecheck', source: 'ship.lint.types' },
+    ] } } })
+    for (const bad of [{}, { Biome: 'x' }, { '1st': 'x' }, { [`a${'b'.repeat(40)}`]: 'x' }, { a: '' }, { a: 1 }, ['a'], '']) {
+      expect(lint(bad)).toMatchObject({ ok: false, violations: [{ field: 'ship.lint', rule: 'invalid' }] })
+    }
+  })
+
+  it("a schema-2 file's ship.lint reads as one part named lint, as written (row 261)", () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(withValues(defaultValues({ harness: 'claude-code', schema: 2 }), { ship: { lint: 'pnpm lint && pnpm typecheck' } })))
+    const r = loadConfig(repo.root)
+    expect(r.ok && r.value.ship.lint).toEqual([{ name: 'lint', cmd: 'pnpm lint && pnpm typecheck', source: 'ship.lint' }])
   })
 })

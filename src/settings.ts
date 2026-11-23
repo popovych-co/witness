@@ -33,6 +33,8 @@ export type Shape =
   | { kind: 'int'; min: number; max?: number } | { kind: 'bool' } | { kind: 'enum'; values: readonly string[] }
   | { kind: 'text' } | { kind: 'dir' } | { kind: 'files' } | { kind: 'globs' }
   | { kind: 'runner' } | { kind: 'report' } | { kind: 'pin' } | { kind: 'battery' }
+  // Row 261. One command, or a map of part names to commands, each part run on its own.
+  | { kind: 'parts' }
 
 export type Group = 'setup' | 'behavior' | 'tuning'
 
@@ -50,6 +52,9 @@ export interface Setting {
   // be pasted. Not part of what a schema promises (`fingerprint`): it refuses only values no
   // shell-safe line can carry, and `migrate` has nothing to rewrite.
   pattern?: RegExp
+  // Row 261. Up to schema `until` the setting had this shape; `shapeAt` reads it, so a shape
+  // widened at a later schema leaves the older schemas' fingerprints where they were pinned.
+  older?: { until: number; shape: Shape }
   group: Group
   comment: string   // the end-of-line comment in the file
   want: string      // want: of an `invalid` refusal
@@ -139,8 +144,13 @@ export const SETTINGS: readonly Setting[] = [
     comment: 'the suite command ship runs · full-suite criteria run it too', want: 'a shell command',
   },
   {
-    path: 'ship.lint', shape: { kind: 'text' }, since: 1, defaults: { 1: 'npm run lint' }, ambient: true, group: 'setup',
-    comment: 'the lint command ship runs', want: 'a shell command',
+    // Row 261. One command is one part named lint; a map names each part, and every part runs
+    // whatever an earlier one did. witness never parses `&&`.
+    path: 'ship.lint', shape: { kind: 'parts' }, older: { until: 2, shape: { kind: 'text' } },
+    since: 1, defaults: { 1: 'npm run lint' }, ambient: true, group: 'setup',
+    comment: 'the lint ship runs · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic',
+    want: 'a shell command, or a map of part names to shell commands — e.g. {biome: pnpm exec biome check ., tsc: pnpm exec tsc --noEmit}'
+      + ' · a name is a lowercase letter, then up to 39 lowercase letters, digits or -',
   },
   {
     path: 'ship.branch', shape: { kind: 'text' }, pattern: BRANCH_RE, since: 1, defaults: { 1: 'main' }, group: 'setup',
@@ -245,6 +255,11 @@ export function settingAt(path: string, list: readonly Setting[] = SETTINGS): Se
   return list.find((s) => s.path === path)
 }
 
+// The shape a setting had at `schema` (row 261): its `older` shape up to that one's `until`.
+export function shapeAt(s: Setting, schema: number): Shape {
+  return s.older !== undefined && schema <= s.older.until ? s.older.shape : s.shape
+}
+
 // The default in force at `schema`: the entry under the greatest key ≤ schema. Undefined
 // before `since`, and for a schema that gave the setting no default (a pin at 1: the
 // session default).
@@ -311,7 +326,7 @@ export function defaultValues(opts: {
 // refuses only values no shell-safe line can carry.
 export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS): string {
   const live = list.filter((s) => s.since <= schema)
-    .map((s) => [s.path, s.shape, s.since, defaultAt(s, schema) ?? null] as const)
+    .map((s) => [s.path, shapeAt(s, schema), s.since, defaultAt(s, schema) ?? null] as const)
   const retired = RETIRED.filter((r) => r.until >= schema).map((r) => [r.path, r.shape, 'retired', r.until] as const)
   const all = [...live, ...retired].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
   return createHash('sha256').update(JSON.stringify(all)).digest('hex')
@@ -322,7 +337,7 @@ export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS)
 export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
-  3: 'ab0718be411ca715f199b602812832fe3a0e038a9596aeeb43ec94642fc85aef',
+  3: '9a68d22041c2560738eb774d6532d18db86324913025b47b1babbfc9fc34d6d4',
 }
 
 // A value as one line of the file. Quoted only where YAML needs it, except that a one-line

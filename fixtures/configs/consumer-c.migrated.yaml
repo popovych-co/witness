@@ -30,7 +30,7 @@ criteria:
 # example prose: lint runs the typecheck sweep too.
 ship:
   test: pnpm test              # the suite command ship runs · full-suite criteria run it too
-  lint: pnpm lint && pnpm typecheck  # the lint command ship runs
+  lint: pnpm lint && pnpm typecheck  # the lint ship runs · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic
   branch: main                 # the branch witness ships into
   merge: merge                 # how ship merges its own PR under autonomy · merge | squash | rebase
   ciSettleMs: 60000            # ms green CI must hold still before an autonomous merge · 0–1800000

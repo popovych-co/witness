@@ -134,3 +134,15 @@ describe('an unsafe command routes no grant (D205)', () => {
     expect(res.stdout).not.toContain('--cmd')
   })
 })
+
+describe('lint parts owe trust at ship (row 261)', () => {
+  const cfgOf = (root: string) => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
+  it('ship owes trust for every lint part (row 261)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: { biome: 'pnpm exec biome check .', types: 'pnpm typecheck' } } })
+    const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness ship p1' })
+    expect(owed.filter((c) => c.source.startsWith('ship.lint'))).toEqual([
+      { cmd: 'pnpm exec biome check .', source: 'ship.lint.biome' }, { cmd: 'pnpm typecheck', source: 'ship.lint.types' },
+    ])
+  })
+})

@@ -79,7 +79,29 @@ export type MergeStyle = 'merge' | 'squash' | 'rebase'
 // `ciSettleMs` (row 174): how long a check set must sit still before green counts. gh's
 // watch ends the moment nothing is pending, so a check that registers a few seconds late —
 // Actions behind an instant CLA status — would otherwise merge before it ever ran.
-export interface ShipConfig { test?: string; lint?: string; branch: string; merge: MergeStyle; ciSettleMs: number }
+// Row 261. `lint` is undefined only for an older file that never set it.
+export interface ShipConfig { test?: string; lint?: readonly LintPart[]; branch: string; merge: MergeStyle; ciSettleMs: number }
+
+// Row 261. One part of `ship.lint`: its name (`lint` for a plain command), its command, and the
+// setting that declares it — `ship.lint` for a plain command, `ship.lint.<name>` for a named part.
+export interface LintPart { name: string; cmd: string; source: string }
+// A part's name rides job keys, so it is short and plain.
+export const PART_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/
+
+// A non-empty string is one part named lint; a non-empty map of valid names to non-empty strings
+// is one part per entry, in file order. Anything else is no parts.
+export function partsOf(field: string, val: unknown): LintPart[] | undefined {
+  if (typeof val === 'string') return val === '' ? undefined : [{ name: 'lint', cmd: val, source: field }]
+  if (typeof val !== 'object' || val === null || Array.isArray(val)) return undefined
+  const entries = Object.entries(val as Record<string, unknown>)
+  if (entries.length === 0) return undefined
+  const out: LintPart[] = []
+  for (const [name, cmd] of entries) {
+    if (!PART_NAME_RE.test(name) || typeof cmd !== 'string' || cmd === '') return undefined
+    out.push({ name, cmd, source: `${field}.${name}` })
+  }
+  return out
+}
 // Row 259. `prepare` is undefined only for an older file read in memory: scratch runs are off.
 // 'none' means the scratch needs nothing installed.
 export interface ScratchConfig { prepare?: string }
@@ -184,6 +206,10 @@ export function checkValue(s: Setting, val: unknown): Result<unknown> {
       const perClass = isMap(val) && Object.keys(val).length === CHANGE_CLASSES.length
         && CHANGE_CLASSES.every((c) => isNameList(val[c]))
       return perClass ? ok(val) : refuse([v(field, 'battery-shape', shown(val), s.want)])
+    }
+    case 'parts': {
+      const parts = partsOf(field, val)
+      return parts !== undefined ? ok(parts) : invalid()
     }
   }
 }

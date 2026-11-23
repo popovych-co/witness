@@ -23,15 +23,15 @@ import { contentSha } from '../content-sha.js'
 import { gateSettled, openStepRow } from '../verbs/next.js'
 import { lastGateRun, timedCheck, type GateCheck } from '../rounds.js'
 import { serializeDoc } from '../fm.js'
+import { lintCheck } from '../lint-lane.js'
 
-// `turn` says whether the lane's command takes the test turn: lint takes none (row 255).
-async function commandLane(
-  wt: string, root: string, ctx: Parameters<typeof ensureTrusted>[1], name: string, cmd: string | undefined, turn: boolean,
-): Promise<GateCheck> {
-  if (!cmd) return { name, ok: false, detail: `ship.${name === 'tests' ? 'test' : 'lint'} not configured` }
+// The tests lane in filtered mode: `ship.test` under the test turn. Lint is its own lane (row 261).
+async function testsLane(wt: string, root: string, ctx: Parameters<typeof ensureTrusted>[1], cmd: string | undefined): Promise<GateCheck> {
+  const name = 'tests'
+  if (!cmd) return { name, ok: false, detail: 'ship.test not configured' }
   const trust = await ensureTrusted(root, ctx, cmd)
   if (trust !== 'trusted') return { name, ok: false, detail: `${cmd}: ${trust}`, untrusted: [cmd] }
-  const run = execCommand(wt, ctx, cmd, { turn })
+  const run = execCommand(wt, ctx, cmd, { turn: true })
   return { name, ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
 }
 
@@ -105,7 +105,7 @@ registerGate({
     const rc = rcR.ok && rcR.value.mode === 'full-suite' ? rcR.value : undefined
     let suite: TestOutcome[] | undefined
     checks.push(await timedCheck(async () => {
-      if (rc === undefined) return commandLane(wt, root, ctx, 'tests', cfg.ship.test, true)
+      if (rc === undefined) return testsLane(wt, root, ctx, cfg.ship.test)
       const cmd = rc.suiteCmd
       const r = await runSuite(wt, ctx, rc, root)
       if (!r.ok) {
@@ -119,7 +119,8 @@ registerGate({
       const { run } = r.value
       return { name: 'tests', ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
     }))
-    checks.push(await timedCheck(() => commandLane(wt, root, ctx, 'lint', cfg.ship.lint, false)))
+    // Row 261. Every part runs on its own; the lane stays one check named lint (`checkOk`'s signature).
+    checks.push(await timedCheck(() => lintCheck(root, wt, ctx, cfg, base)))
 
     // deterministic drift lane: spec content from MAIN, execution in the worktree; `repin` reads it below.
     // Handed the tests lane's parsed report (row 252); with none — the suite was untrusted, ended by a
