@@ -14,6 +14,7 @@ import { execFileSync } from './spawn.js'
 import { crashPoint, withTxn } from './txn.js'
 import { autoSync } from './verbs/sync.js'
 import { removeWorktree, worktreePath } from './worktree.js'
+import { dropCfRefs } from './cf-tree.js'
 
 export interface PreparedStamp {
   doc: CanonDoc
@@ -136,6 +137,7 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
         // hook — so this is the removal that used to delete the caller's own directory.
         if (!removeWorktree(root, planId, ctx.cwd)) result.kept.push(worktreePath(root, planId))
         dropKept(root, planId)
+        dropCfRefs(root, planId)   // row 258: the plan's scratch-run trees go with it
         result.stamped.push({ plan: planId, ...(specStamp ? { spec: specStamp.stream } : {}), pr })
       } else {
         result.stale.push({ plan: planId, why: txn.violations.map((x) => x.rule).join(' ') })
