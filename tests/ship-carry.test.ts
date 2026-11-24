@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import '../src/gates/index.js'
@@ -8,6 +7,7 @@ import { captureCarry, carryRef, cleanTree, keptRefs, operationInProgress, reapp
 import { clashLeft } from '../src/clash.js'
 import { readStream } from '../src/journal.js'
 import { gateRuns } from '../src/rounds.js'
+import { withScratch } from '../src/scratch.js'
 import { rebaseIfMoved, recordPushed } from '../src/ship.js'
 import { shellLine, shellWord } from '../src/toon.js'
 import { branchName } from '../src/worktree.js'
@@ -107,17 +107,20 @@ async function movedClash() {
 }
 
 // S1-8. The German test proves its point only with a git that has a German catalog (Homebrew's;
-// Apple's has none): without one, git prints English whatever LANGUAGE says.
+// Apple's has none): without one, git prints English whatever LANGUAGE says. Asked at collection,
+// so its repository is gone before the answer is: a file whose every test is filtered out runs no
+// hook that could remove it (row 268).
 function gitSpeaksGerman(): boolean {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-de-'))
-  execFileSync('git', ['init', '-q'], { cwd: dir })
-  const env = { ...process.env, LANGUAGE: 'de', LANG: 'de_DE.UTF-8' }
-  delete env.LC_ALL
-  delete env.LC_MESSAGES
-  // in a repository, so git's answer is the rebase's own: English "no rebase in progress", else translated
-  const r = spawnSync('git', ['rebase', '--abort'], { cwd: dir, env, encoding: 'utf8' })
-  const out = `${r.stdout}${r.stderr}`
-  return r.status !== 0 && out !== '' && !/no rebase in progress/.test(out)
+  return withScratch('witness-de-', (dir) => {
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    const env = { ...process.env, LANGUAGE: 'de', LANG: 'de_DE.UTF-8' }
+    delete env.LC_ALL
+    delete env.LC_MESSAGES
+    // in a repository, so git's answer is the rebase's own: English "no rebase in progress", else translated
+    const r = spawnSync('git', ['rebase', '--abort'], { cwd: dir, env, encoding: 'utf8' })
+    const out = `${r.stdout}${r.stderr}`
+    return r.status !== 0 && out !== '' && !/no rebase in progress/.test(out)
+  })
 }
 const GERMAN = gitSpeaksGerman()
 

@@ -1,5 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { arbitrate } from '../src/arbiter.js'
@@ -11,6 +10,7 @@ import { invokeReviewerAsync, type InvokeOpts } from '../src/reviewer.js'
 import type { Ticker } from '../src/session-clock.js'
 import { END_GRACE_MS } from '../src/session-end.js'
 import { awaitGone, callCount, fakeClock, fakeCtx, fakeScenario, gateEnv, orphansIn, putVerdict, seededRepo, writeSpec } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 245 (issue #80, design §4.3 "Reviewers and the arbiter"). A reviewer's attempt ends when its
 // turn ends, not when its process exits: the async invoker watches the harness's stream (pi's event
@@ -77,7 +77,7 @@ const say = (lines: string[], fd = 1): string => `printf '%s\\n' ${lines.map(sq)
 // given, is what the fake writes to stdout when it is stopped (the file `reaction` beside it).
 const pidFiles: string[] = []
 function fake(bin: 'pi' | 'claude', body: string, reaction?: string): { env: Record<string, string>; pids: string; calls: () => number } {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-turn-end-'))
+  const dir = scratchDir('witness-turn-end-')
   const pids = join(dir, 'pids')
   pidFiles.push(pids)
   writeFileSync(join(dir, bin), `#!/bin/sh\necho "call $$" >> ${sq(pids)}\n${body}\n`)
@@ -161,7 +161,7 @@ async function allGone(pids: string): Promise<void> {
 }
 
 const ask = (h: Harness, env: Record<string, string>, opts: Partial<InvokeOpts> = {}) => {
-  const root = mkdtempSync(join(tmpdir(), 'witness-reviewed-'))
+  const root = scratchDir('witness-reviewed-')
   return invokeReviewerAsync(fakeCtx(root, { env }), h, { cwd: root, prompt: 'LENS\nBODY', timeoutMs: 20_000, ...opts })
 }
 

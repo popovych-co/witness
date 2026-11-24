@@ -1,6 +1,5 @@
 import { once } from 'node:events'
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +7,7 @@ import type { Ctx } from '../src/cli.js'
 import { detachDrive, signalSession } from '../src/drive.js'
 import { NO_CONSOLE_ENV, execFileSync, execSync, spawn, spawnSync, withoutConsole } from '../src/spawn.js'
 import { seededRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Every child process witness starts, with the argv and options it was handed. Each call passes
 // through, except the background drive: it is recorded, never started.
@@ -84,7 +84,7 @@ describe('a child starts hidden only where witness has no console (row 201)', ()
   })
 
   it('reads the options behind an argv left out, as child_process does', () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-console-')))
+    const dir = scratchDir('witness-console-')
     const r = withoutConsole(() => spawnSync(node, undefined, { cwd: dir, encoding: 'utf8', input: 'process.stdout.write(process.cwd())' }))
     expect(r.stdout).toBe(dir)
     expect(calls[0]!.opts.windowsHide).toBe(true)
@@ -98,7 +98,7 @@ describe('a child starts hidden only where witness has no console (row 201)', ()
 
 describe('the background drive has no console (row 201)', () => {
   it('drive --detach hands the background drive the marker', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-console-'))
+    const root = scratchDir('witness-console-')
     const ctx: Ctx = { cwd: root, env: { ...process.env }, isTTY: false, out: () => {}, err: () => {}, ask: async () => '' }
     expect(detachDrive(root, ctx, ['--max-spawns', '1']).ok).toBe(true)
     const bg = calls.find((c) => c.fn === 'spawn' && c.opts.detached === true)
@@ -159,7 +159,7 @@ describe('a session drive stops by its tree (row 201)', () => {
 // console made without one.
 describe.runIf(process.platform === 'win32')('a child of a console-less witness has no window (win32 only)', () => {
   it('gets one outside the scope, and none inside it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'witness-console-'))
+    const dir = scratchDir('witness-console-')
     const helper = join(dir, 'helper.mts')
     const ps = ['-NoProfile', '-NonInteractive', '-Command',
       "Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [W.K]::GetConsoleWindow().ToInt64()"]

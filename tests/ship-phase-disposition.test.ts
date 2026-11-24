@@ -1,5 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { cliAct } from '../src/act.js'
@@ -18,6 +17,7 @@ import {
   addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writeSpec,
   type CliResult, type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 244 (#87, design §4.2.3, §4.2.9). Ship and the cache read a gate's LAST disposition, after the
 // run it disposed of (malformed runs skipped): an approve that answered a revise goes on to ship (P9),
@@ -251,7 +251,7 @@ const effortDec = (decision: string, extra: Record<string, unknown> = {}): Entry
   ({ ...(dec(G, decision, extra) as unknown as Record<string, unknown>), artifact: base.effort } as unknown as Entry)
 
 function copyOf(root: string): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-disposition-')))
+  const dir = scratchDir('witness-disposition-')
   cpSync(root, dir, { recursive: true })
   return dir
 }

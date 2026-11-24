@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { scratchDir } from './scratch.js'
 
 // Row 239. The paste harness: a line witness offers, pasted into each shell a human or an agent
 // pastes into, with stubs on PATH that record the argv they receive. A line passes when it made
@@ -63,8 +63,8 @@ const MARKER = /^M\d$/
 // program, so `$0` still names the program. Measured 2026-11-04 on this Mac: a newly written
 // script's first run took 140–190 ms, and eight first runs at once took 1037 ms, so a fresh script
 // per paste serialized a row's pastes however many ran at once; a fresh link to one script ran in
-// 13 ms, and eight at once in 21 ms. A file that pastes calls `dropStub` once its tests are done:
-// vitest stops its worker with no `exit` event to clean up on.
+// 13 ms, and eight at once in 21 ms. So one stub serves the test file: a shared scratchDir, removed
+// once the file has run (tests/scratch.ts).
 // Row 239 (ruling R24's K12 payloads). Beside it, the readline init file an interactive bash reads.
 // A paste runs with no LANG, so in the C locale, and there bash's readline reads a byte above 0x7f
 // as a Meta key and runs the command bound to it: a pasted `·` moved the cursor and rearranged the
@@ -72,53 +72,44 @@ const MARKER = /^M\d$/
 // terminal runs in a UTF-8 locale, where readline takes such a byte as text; this file says so in
 // every locale, as LANG=en_US.UTF-8 did in the same probe.
 const INPUTRC = 'set input-meta on\nset output-meta on\nset convert-meta off\n'
-let script: { dir: string; path: string; inputrc: string } | undefined
+let script: { path: string; inputrc: string } | undefined
 function stubScript(): { path: string; inputrc: string } {
   if (script === undefined) {
-    const dir = mkdtempSync(join(tmpdir(), 'witness-paste-stub-'))
-    script = { dir, path: join(dir, 'stub'), inputrc: join(dir, 'inputrc') }
+    const dir = scratchDir('witness-paste-stub-', { shared: true })
+    script = { path: join(dir, 'stub'), inputrc: join(dir, 'inputrc') }
     writeFileSync(script.path, STUB)
     chmodSync(script.path, 0o755)
     writeFileSync(script.inputrc, INPUTRC)
   }
   return script
 }
-export function dropStub(): void {
-  if (script !== undefined) rmSync(script.dir, { recursive: true, force: true })
-  script = undefined
-}
 
 // Row 239. Asynchronous, so a row's pastes run side by side while the worker's event loop stays
 // free, and clean for the next paste: a fresh stub directory and a fresh ARGVLOG every time, so
-// two pastes at once never share either, the markers found deleted, the stub directory and any
-// default `cwd` removed. Two pastes into one `cwd` at once would see each other's markers: a
-// caller pastes those in turn.
+// two pastes at once never share either, and the markers found deleted. The stub directory and any
+// default `cwd` are scratch directories of the calling test (tests/scratch.ts). Two pastes into one
+// `cwd` at once would see each other's markers: a caller pastes those in turn.
 // Ruling R27: `cLocale` drops the 8-bit-clean INPUTRC, so an interactive bash runs in the C locale,
 // where readline reads a byte above 0x7f as a Meta key — the state a minimal container or SSH
 // session lands in. An offered line holds no such byte (they are withheld), so it runs there exactly;
 // the dedicated test uses this to prove it.
 export async function pasteIn(mode: Mode, line: string, cwd?: string, opts: { cLocale?: boolean } = {}): Promise<Pasted> {
-  const stubs = mkdtempSync(join(tmpdir(), 'witness-paste-'))
-  const dir = cwd ?? mkdtempSync(join(tmpdir(), 'witness-paste-cwd-'))
-  try {
-    const bin = join(stubs, 'bin')
-    mkdirSync(bin)
-    const { path: stub, inputrc } = stubScript()
-    for (const name of STUBS) symlinkSync(stub, join(bin, name))
-    const log = join(stubs, 'argv.log')
-    // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
-    // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
-    await ran(mode, line, dir, {
-      PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null',
-      ...(opts.cLocale ? {} : { INPUTRC: inputrc }),
-    })
-    const markers = markersUnder(dir)
-    for (const m of markers) rmSync(join(dir, m), { recursive: true, force: true })
-    return { markers, calls: existsSync(log) ? callsIn(readFileSync(log, 'utf8')) : [] }
-  } finally {
-    rmSync(stubs, { recursive: true, force: true })
-    if (cwd === undefined) rmSync(dir, { recursive: true, force: true })
-  }
+  const stubs = scratchDir('witness-paste-')
+  const dir = cwd ?? scratchDir('witness-paste-cwd-')
+  const bin = join(stubs, 'bin')
+  mkdirSync(bin)
+  const { path: stub, inputrc } = stubScript()
+  for (const name of STUBS) symlinkSync(stub, join(bin, name))
+  const log = join(stubs, 'argv.log')
+  // No history file: an interactive bash writes `$HOME/.bash_history` as it exits, and HOME
+  // is the line's directory, so a later bash -i paste into a row's `cwd` would load it.
+  await ran(mode, line, dir, {
+    PATH: `${bin}:/usr/bin:/bin`, ARGVLOG: log, HOME: dir, ZDOTDIR: dir, HISTFILE: '/dev/null',
+    ...(opts.cLocale ? {} : { INPUTRC: inputrc }),
+  })
+  const markers = markersUnder(dir)
+  for (const m of markers) rmSync(join(dir, m), { recursive: true, force: true })
+  return { markers, calls: existsSync(log) ? callsIn(readFileSync(log, 'utf8')) : [] }
 }
 
 // One shell run of `line`, settled once its pipes close, not when the shell exits. Row 239: a

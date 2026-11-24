@@ -1,10 +1,10 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadHarness } from '../src/harness.js'
 import { invokeReviewerAsync, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
 import { fakeClock, fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 describe('prompt resolution', () => {
   it('resolves every shipped lens and hashes contents order-insensitively', () => {
@@ -196,7 +196,7 @@ describe('invokeReviewerAsync fails closed', () => {
   it('a reviewer that exits 0 without reading the whole prompt is refused', async () => {
     const repo = tmpRepo()
     // a claude that reads 64 KiB of its prompt, then answers clean and exits 0
-    const bin = mkdtempSync(join(tmpdir(), 'witness-partial-'))
+    const bin = scratchDir('witness-partial-')
     writeFileSync(join(bin, 'claude'),
       '#!/bin/sh\nhead -c 65536 > /dev/null\nprintf \'%s\' \'{"type":"result","subtype":"success","result":"{\\"coverage\\":[],\\"findings\\":[]}"}\'\n')
     chmodSync(join(bin, 'claude'), 0o755)

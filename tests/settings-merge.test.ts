@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mergeSettings, namesRetired } from '../src/install.js'
 import { formatJson } from '../src/json-format.js'
 import { jsonStyle } from '../src/lint-config.js'
+import { scratchDir } from './scratch.js'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = (f: string) => readFileSync(join(REPO, 'fixtures/settings', f), 'utf8')
@@ -34,7 +34,7 @@ describe('mergeSettings rewires witness hooks in place and writes the formatter 
   })
   it('keeps a tab-indented file in tabs', () => {
     const tabbed = formatJson(JSON.parse(fixture('fewhats-before.json')), { indent: '\t', lineWidth: 80, tabWidth: 2 })
-    const merged = mergeSettings(tabbed, jsonStyle(mkdtempSync(join(tmpdir(), 'witness-style-')), tabbed))
+    const merged = mergeSettings(tabbed, jsonStyle(scratchDir('witness-style-'), tabbed))
     expect(merged.text.split('\n')[1]).toBe('\t"hooks": {')
   })
 })

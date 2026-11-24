@@ -1,13 +1,13 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { detachArgv } from '../src/drive.js'
+import { scratchDir } from './scratch.js'
 
 // Real files, as tests/spawn.test.ts resolves them: on win32 resolution IS a filesystem walk.
 // `platform` is passed in, so the Windows branch runs on any host.
 function binDir(...files: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-detach-'))
+  const dir = scratchDir('witness-detach-')
   for (const f of files) {
     mkdirSync(dirname(join(dir, f)), { recursive: true })
     writeFileSync(join(dir, f), '')

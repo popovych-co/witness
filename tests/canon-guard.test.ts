@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonGuard, shellWord as twinWord, withheldOn as twinWithheld } from '../plugin/hooks/canon-guard.mjs';
 import { shellWord, withheldOn } from '../src/toon.js';
 import { CORPUS } from './shells.js';
+import { scratchDir } from './scratch.js';
 
 function witnessRepo(config = 'schema: 1\n'): string {
-  const dir = mkdtempSync(join(tmpdir(), 'canonguard-'));
+  const dir = scratchDir('canonguard-');
   writeFileSync(join(dir, 'witness.config.yaml'), config);
   for (const d of ['specs', 'plans', 'src']) mkdirSync(join(dir, d), { recursive: true });
   return dir;
@@ -29,7 +29,7 @@ describe('canonGuard — Claude Code input shape', () => {
     mkdirSync(join(repo, 'specsy'), { recursive: true });
     expect(canonGuard({ tool: 'Edit', input: { file_path: join(repo, 'src', 'x.ts') }, cwd: repo })).toBeUndefined();
     expect(canonGuard({ tool: 'Edit', input: { file_path: join(repo, 'specsy', 'x.md') }, cwd: repo })).toBeUndefined();
-    const plain = mkdtempSync(join(tmpdir(), 'plain-'));
+    const plain = scratchDir('plain-');
     mkdirSync(join(plain, 'specs'), { recursive: true });
     expect(canonGuard({ tool: 'Edit', input: { file_path: join(plain, 'specs', 'a.md') }, cwd: plain })).toBeUndefined();
   });

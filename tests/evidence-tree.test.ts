@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { planChangeSet } from '../src/change-set.js'
@@ -9,6 +8,7 @@ import { collectCaptures, diffBase, screensDir } from '../src/evidence.js'
 import { readStream } from '../src/journal.js'
 import { snapshotTree } from '../src/snapshot.js'
 import { fixtureEnv, shippableRepo, type TestRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 251. A test-evidence entry names the tree its run read (the snapshot tree, as a gate's
 // `reviewed_tree`), and each capture names the test that took it, from a sidecar beside the PNG.
@@ -66,7 +66,7 @@ describe('evidence tree and producing test (row 251)', () => {
   }, 180_000)
 
   it('a malformed, multi-line or oversized sidecar keeps the capture, drops the test, and warns', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-cap-'))
+    const root = scratchDir('witness-cap-')
     const dir = screensDir(root, 'p1'); mkdirSync(dir, { recursive: true })
     const sides = [
       ['a', '{'],
@@ -95,7 +95,7 @@ describe('evidence tree and producing test (row 251)', () => {
   // screens dir at a well-formed file is refused unread, and a dangling one is still named — and a
   // FIFO never blocks the read.
   it('a symlinked or special sidecar is refused unread and warned', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-cap-'))
+    const root = scratchDir('witness-cap-')
     const dir = screensDir(root, 'p1'); mkdirSync(dir, { recursive: true })
     const outside = join(root, 'outside.json')
     writeFileSync(outside, JSON.stringify({ test: 'read from outside the screens dir' }))

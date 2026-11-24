@@ -1,18 +1,18 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   BUSY_DIR, BUSY_MAX_MS, busyHolder, busyIo, settleUntil, shipUntil, sweepDeadBusy, takeBusy,
 } from '../src/busy.js'
 import type { Config } from '../src/config.js'
+import { scratchDir } from './scratch.js'
 
 // Row 240 (design §4.1.2). Lean busy locks: machine-local files nobody waits for, created
 // exclusively without following a link, live while the pid lives and `until` has not passed.
 
 const repo = (): string => {
-  const root = mkdtempSync(join(tmpdir(), 'witness-busy-'))
+  const root = scratchDir('witness-busy-')
   execFileSync('git', ['init', '-q', root])
   return root
 }
@@ -159,7 +159,7 @@ describe('takeBusy and busyHolder (row 240)', () => {
 
   it('a symlinked live folder is refused, and nothing is written through it', () => {
     const root = repo()
-    const elsewhere = mkdtempSync(join(tmpdir(), 'witness-elsewhere-'))
+    const elsewhere = scratchDir('witness-elsewhere-')
     mkdirSync(join(root, '.witness'), { recursive: true })
     symlinkSync(elsewhere, join(root, '.witness', 'live'))
     const r = takeBusy(root, 'settle', 'a-plan-1', NOW + 60_000, { pid: process.pid })

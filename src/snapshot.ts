@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { foreignRetired, lstatListed, witnessExcludes } from './change-set.js'
 import { gitBlob, tryGit } from './gitio.js'
+import { withScratch } from './scratch.js'
 import { execFileSync } from './spawn.js'
 
 // Row 186. What a gate's battery read, kept as a git tree so a later round can diff against
@@ -41,7 +41,6 @@ function indexRecord(runRoot: string, path: string): { mode: string; sha: string
 
 // base overlaid with the worktree's copy of each listed path · undefined on any git failure
 export function snapshotTree(runRoot: string, base: string, files: readonly string[]): string | undefined {
-  let dir: string | undefined
   try {
     const baseTree = run(runRoot, ['rev-parse', '--verify', `${base}^{tree}`])
     const zeros = '0'.repeat(baseTree.length)
@@ -53,15 +52,14 @@ export function snapshotTree(runRoot: string, base: string, files: readonly stri
       ...records.filter((r) => r.rec === undefined).map((r) => `0 ${zeros}\t${r.path}\0`),
       ...records.flatMap((r) => (r.rec ? [`${r.rec.mode} ${r.rec.sha}\t${r.path}\0`] : [])),
     ]
-    dir = mkdtempSync(join(tmpdir(), 'witness-snap-'))
-    const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
-    run(runRoot, ['read-tree', baseTree], { env })
-    if (lines.length > 0) run(runRoot, ['update-index', '-z', '--index-info'], { env, input: lines.join('') })
-    return run(runRoot, ['write-tree'], { env })
+    return withScratch('witness-snap-', (dir) => {
+      const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
+      run(runRoot, ['read-tree', baseTree], { env })
+      if (lines.length > 0) run(runRoot, ['update-index', '-z', '--index-info'], { env, input: lines.join('') })
+      return run(runRoot, ['write-tree'], { env })
+    })
   } catch {
     return undefined
-  } finally {
-    if (dir) rmSync(dir, { recursive: true, force: true })
   }
 }
 

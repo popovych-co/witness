@@ -1,5 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { cliAct, exitsLine, type Act } from '../src/act.js'
@@ -25,6 +24,7 @@ import {
   approve, commitEntry, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writePlan, writeSpec,
   type CliResult, type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 244 (#87, design §4.2.1 "Who reads it", §4.2.2, §4.2.9). Every screen, hint, refusal and the
 // arbiter's menu offers only live acts: the exits line, recommend's block, `decide --show`, what
@@ -115,24 +115,25 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind]> = [
 ]
 const STATE = new Map(STATES.map(([name, journal, kind]) => [name, { journal, kind }]))
 
-function copyOf(root: string): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-screens-')))
+function copyOf(root: string, shared = false): string {
+  const dir = scratchDir('witness-screens-', { shared })
   cpSync(root, dir, { recursive: true })
   return dir
 }
 // A repo with these entries appended to the effort's stream and committed.
-function repoWith(entries: Entry[], from = base.repo.root): string {
-  const root = copyOf(from)
+function repoWith(entries: Entry[], from = base.repo.root, shared = false): string {
+  const root = copyOf(from, shared)
   for (const e of entries) appendEntry(root, base.effort, e as unknown as { t: 'gate-run' })
   base.repo.git('-C', root, 'add', '.witness/journal')
   base.repo.git('-C', root, 'commit', '-qm', 'screens: state', '-m', 'Witness-State: 1')
   return root
 }
+// Shared: `built` hands one state's repo to every later test that reads that state.
 const built = new Map<string, string>()
 function stateRoot(name: string): string {
   const cached = built.get(name)
   if (cached !== undefined) return cached
-  const root = repoWith(STATE.get(name)!.journal(base.sha))
+  const root = repoWith(STATE.get(name)!.journal(base.sha), base.repo.root, true)
   built.set(name, root)
   return root
 }

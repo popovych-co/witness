@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { readdirSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { canonicalSha } from '../src/sha.js'
 import { decidedRepo, seededRepo, stampLive, turnDecision, writeSpec, type TestRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 function currentSha(repo: TestRepo, rel: string): string {
   const doc = splitDoc(repo.read(rel))
@@ -47,6 +49,28 @@ describe('witness diff', () => {
     expect(res.stdout).toContain('base: plan-pin auth-refresh-plan-1')
     expect(res.stdout).toContain('-summary: Refresh tokens rotate before expiry')
     expect(res.stdout).toContain('+summary: Rotation plus revocation')
+  })
+
+  it('removes its scratch directory once the diff is printed (issue #99)', async () => {
+    const repo = await seededRepo()
+    await writeSpec(repo, 'auth-refresh')
+    seedPlanPinnedAt(repo, currentSha(repo, 'specs/auth-refresh.md'))
+    await writeSpec(repo, 'auth-refresh', {
+      type: 'spec',
+      summary: 'Rotation plus revocation',
+      depends: [], needs: [],
+      criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }],
+      covers: ['g1'],
+    })
+    const probe = scratchDir('witness-probe-')
+    for (const k of ['TMPDIR', 'TMP', 'TEMP']) vi.stubEnv(k, probe)
+    try {
+      const res = await repo.cli(['diff', 'auth-refresh'])
+      expect(res.stdout).toContain('+summary: Rotation plus revocation')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(readdirSync(probe)).toEqual([])
   })
 
   it('reports no delta when the pin matches current content', async () => {

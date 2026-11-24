@@ -1,11 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { contained, containmentLine, JOB_PROBE_EXIT, JOB_SCRIPT, jobHost, type JobHost, winArg } from '../src/contain.js'
 import { system32, type ResolvedSpawn } from '../src/spawn.js'
 import { awaitGone, orphansIn, writeOrphanStarter } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 const PS = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 const host: JobHost = { ok: true, file: PS }
@@ -84,7 +83,7 @@ describe.runIf(process.platform === 'win32')('the job host on Windows (row 218)'
     }
   })
   const scratch = (): { starter: string; pidFile: string } => {
-    const dir = mkdtempSync(join(tmpdir(), 'witness-contain-'))
+    const dir = scratchDir('witness-contain-')
     return { starter: writeOrphanStarter(dir), pidFile: join(dir, 'pids') }
   }
   const run = (r: ResolvedSpawn, extra: Record<string, string> = {}) =>

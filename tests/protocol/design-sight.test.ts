@@ -1,10 +1,10 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   approve, fakeScenario, gateEnv, putVerdict, seededRepo, writeDesign, writeLocalConfig, writeSpec, DESIGN_HTML,
 } from '../helpers.js'
+import { scratchDir } from '../scratch.js'
 
 const CLEAN = {
   coverage: [{ anchor: 'design#save-bar', note: 'r' }, { anchor: 'auth-refresh > ## Behavior', note: 'r' }],
@@ -12,7 +12,7 @@ const CLEAN = {
 }
 
 function recorder(): { cmd: string; log: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'sf-proto-'))
+  const dir = scratchDir('sf-proto-')
   const log = join(dir, 'opened.txt')
   const cmd = join(dir, 'rec.sh')
   writeFileSync(cmd, `#!/bin/sh\necho "$1" >> "${log}"\n`)

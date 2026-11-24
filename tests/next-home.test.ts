@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
@@ -9,6 +8,7 @@ import { planChangeSet } from '../src/change-set.js'
 import { loadConfig } from '../src/config.js'
 import { fakeCtx, fakeScenario, gateEnv, nextLine, putVerdict, shippableRepo } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
+import { scratchDir } from './scratch.js'
 
 // The same battery fake flows.test.ts and implement-identity.test.ts drive the gate with.
 async function settleImplementGate(repo: { root: string }, wt: string, planId: string): Promise<void> {
@@ -93,7 +93,7 @@ describe('next answers whether this session is already home', () => {
   // as one that must be relocated. That is the field failure, not a hypothetical.
   it('resolves symlinks before deciding — a symlinked cwd is still home', async () => {
     const { repo, wt } = await shippableRepo()
-    const link = join(mkdtempSync(join(tmpdir(), 'witness-link-')), 'wt')
+    const link = join(scratchDir('witness-link-'), 'wt')
     symlinkSync(wt, link)
 
     const res = await repo.cli(['next'], { cwd: link })

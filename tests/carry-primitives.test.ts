@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -9,6 +8,7 @@ import {
 } from '../src/carry.js'
 import { shellLine } from '../src/toon.js'
 import { worktreePath } from '../src/worktree.js'
+import { scratchDir } from './scratch.js'
 
 // Row 243 (design §4.1.1 steps 2, 4, 7). The carry's git primitives, each against a real repo: a
 // primary checkout on main and a linked worktree `wt` on branch witness/p1, as witness makes them.
@@ -27,7 +27,7 @@ const put = (rel: string, content: string | Buffer, at = wt): void => {
 }
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'witness-carry-')))
+  root = scratchDir('witness-carry-')
   g(root, 'init', '-q', '-b', 'main')
   g(root, 'config', 'user.name', 'test')
   g(root, 'config', 'user.email', 'test@example.com')

@@ -1,10 +1,10 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { callFor, fakeBinDir, fakeScenario, gateEnv, ghState, putVerdict } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 function runFake(bin: string, args: string[], scenario: string, input?: string) {
   return execFileSync(join(fakeBinDir(), bin), args, {
@@ -50,7 +50,7 @@ describe.each(['claude', 'pi'] as const)('fake %s under a concurrent battery', (
   // success — so two concurrent calls each claimed call-2 (the trail, PR #63). This mkdir does
   // the same, with the window widened; a claim must not rest on the mkdir utility at all.
   it('claims stay distinct under a mkdir that reads a lost race as success (uutils 0.2)', async () => {
-    const racy = mkdtempSync(join(tmpdir(), 'witness-racy-mkdir-'))
+    const racy = scratchDir('witness-racy-mkdir-')
     writeFileSync(join(racy, 'mkdir'), [
       '#!/bin/sh',
       'if [ "$1" = "-p" ]; then exec /bin/mkdir "$@"; fi',

@@ -1,5 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { cliAct, type Act } from '../src/act.js'
@@ -26,6 +25,7 @@ import {
   PLAN_BLOCKING, callFor, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, writePlan, writeSpec,
   type CliResult, type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 244 (#87, design §4.2.6; amends rows 121, 171, 172). Who decides a revise its author handed back
 // unchanged: recommend's rule `revise-returned` (send upstream where the blocking finding anchors in the
@@ -476,8 +476,8 @@ const ARB = { selected: 'arbiter', reason: 'the bound is spent', arbiter: { mode
 const REOPEN = { caused_by: { artifact: 'auth-refresh', gate: 'design', round: 1 }, note: 'the slicing is wrong' }
 
 let base: { repo: TestRepo; sha: string; effort: string; real: GateRunEntry }
-const copyOf = (root: string): string => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-arbiter-walk-')))
+const copyOf = (root: string, shared = false): string => {
+  const dir = scratchDir('witness-arbiter-walk-', { shared })
   cpSync(root, dir, { recursive: true })
   return dir
 }
@@ -530,11 +530,12 @@ const STATE = new Map(STATES.map(([name, journal, kind, stale]) => [name, { jour
 // Where the policy hands the state's stop to the arbiter: the bound, and a standing hand-back.
 const REACHES_ARBITER = ['parked at the bound, then reopened', 'at the bound', 'handed back', 'handed back, then malformed on other content (S3-3)']
 
+// Shared: `built` hands one state's repo to every later test that walks that state.
 const built = new Map<string, string>()
 function stateRoot(name: string): string {
   const cached = built.get(name)
   if (cached !== undefined) return cached
-  const root = copyOf(base.repo.root)
+  const root = copyOf(base.repo.root, true)
   for (const e of STATE.get(name)!.journal(base.sha)) appendEntry(root, base.effort, e as unknown as { t: 'gate-run' })
   base.repo.git('-C', root, 'add', '.witness/journal')
   base.repo.git('-C', root, 'commit', '-qm', `walk: ${name}`, '-m', 'Witness-State: 1')

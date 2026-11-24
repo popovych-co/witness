@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir } from './scratch.js';
 
 const hook = join(__dirname, '..', 'plugin', 'hooks', 'session-dashboard.sh');
 
@@ -24,7 +24,7 @@ function stubBin(dir: string): string {
 
 describe('session-dashboard hook', () => {
   it('prints the dashboard in a witness repo (via WITNESS_BIN)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sfdash-'));
+    const dir = scratchDir('sfdash-');
     writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
     const r = runHook(dir, { WITNESS_BIN: stubBin(dir) });
     expect(r.code).toBe(0);
@@ -32,14 +32,14 @@ describe('session-dashboard hook', () => {
   });
 
   it('is silent outside witness repos, even with WITNESS_BIN set', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'plain-'));
+    const dir = scratchDir('plain-');
     const r = runHook(dir, { WITNESS_BIN: stubBin(dir) });
     expect(r.code).toBe(0);
     expect(r.stdout).toBe('');
   });
 
   it('is silent inside a reviewer, in a drive session too (issue #73)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sfrev-'));
+    const dir = scratchDir('sfrev-');
     writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
     for (const marks of [{ WITNESS_REVIEWER: '1' }, { WITNESS_DRIVE: 'p1', WITNESS_REVIEWER: '1' }]) {
       const r = runHook(dir, { WITNESS_BIN: stubBin(dir), ...marks });
@@ -49,7 +49,7 @@ describe('session-dashboard hook', () => {
   });
 
   it('swallows CLI failures (exit 0, session start must survive)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sffail-'));
+    const dir = scratchDir('sffail-');
     writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
     const bad = join(dir, 'bad.sh');
     writeFileSync(bad, '#!/bin/sh\nexit 7\n');

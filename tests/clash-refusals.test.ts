@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../src/gates/index.js'
@@ -16,6 +15,7 @@ import { worktreePath } from '../src/worktree.js'
 import {
   addOrigin, callCount, commitEntry, fakeScenario, fixtureEnv, gateEnv, patchConfig, putVerdict, shippableRepo, writePlan, type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 243 (design §4.1.2 "Who reads it", "The refusal"). An unresolved clash in a plan's worktree
 // is refused, exit 2, by every gate on that worktree (implement and ship), by test-evidence and
@@ -120,7 +120,7 @@ describe('clashGuard asks the plan\'s worktree (row 243)', () => {
   // A primary checkout whose own index holds a stash-apply clash on p.md, as a human's own work there
   // might leave it, over a base commit holding f.md; plan p1's worktree is asked, never the primary.
   function clashedPrimary(): string {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'witness-guard-')))
+    const root = scratchDir('witness-guard-')
     g(root, 'init', '-q', '-b', 'main')
     g(root, 'config', 'user.name', 'test')
     g(root, 'config', 'user.email', 'test@example.com')
