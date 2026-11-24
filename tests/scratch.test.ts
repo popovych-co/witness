@@ -45,3 +45,17 @@ it('a failing run keeps exactly its failed owners\' directories and names each (
   const fake = handed(r, r.left.find((n) => stem(n) === 'witness-fake-')!)
   expect(r.out).toContain(`fake claude trail · ${join(fake, 'claude-trace')}\nstart 1\nclaim 1 1`)
 }, 60_000)
+
+// A file whose every test a filter skips (`vitest run -t …`, a `describe.skip`) runs none of its
+// hooks, so the setup file never settles what its collection made: a test file makes nothing at
+// collection, and a directory with the file's lifetime is made in a beforeAll (final review, I1).
+it('a run that filters out every test leaves nothing behind (issue #99)', async () => {
+  const probe = scratchDir('witness-collect-probe-')
+  const cache = scratchDir('witness-collect-cache-')
+  const res = await spawnAsync(process.execPath, [
+    vitestBin(), 'run', '--config', join(ROOT, 'fixtures', 'scratch-life', 'collect-only.config.ts'),
+    '-t', '^no test is named this$',
+  ], { cwd: ROOT, env: fixtureEnv({ TMPDIR: probe, TMP: probe, TEMP: probe, SCRATCH_LIFE_CACHE: cache }) })
+  expect(res.code, res.stdout + res.stderr).toBe(0)
+  expect(readdirSync(probe).sort()).toEqual([])
+}, 120_000)

@@ -20,14 +20,16 @@ export interface ScratchOpts {
 
 interface Made { home: string; dir: string; report?: (dir: string) => string }
 
-// What the running file made outside any test (a beforeAll, an afterAll, a describe body, module
-// scope) or asked to share. Each test file evaluates this module afresh, so the list is its own.
+// What the running file made outside any test (a beforeAll, an afterAll) or asked to share. Each
+// test file evaluates this module afresh, so the list is its own. Never at collection (a describe
+// body, module scope): a run that filters out every test of a file runs none of its hooks, so
+// nothing would settle it (tests/scratch.test.ts runs every test file that way).
 const fileMade: Made[] = []
 
 // A directory owned by the scope vitest is running when it is made: inside a test (its body, a
-// beforeEach, an afterEach) by that test, anywhere else — or when `shared` — by the test file.
-// A passing or skipped owner's directories are removed when it finishes; a failed owner's are
-// kept, and each is named on stderr. The directory is `<home>/<name>` in a home of its own, so a
+// beforeEach, an afterEach) by that test, in a beforeAll or afterAll — or when `shared` — by the
+// test file. A passing or skipped owner's directories are removed when it finishes; a failed
+// owner's are kept, and each is named on stderr. The directory is `<home>/<name>` in a home of its own, so a
 // sibling a test makes beside it (`${dir}-origin.git`, `join(dir, '..', …)`) is in the home and
 // goes with it. Realpath'd, so it compares equal to what git and the CLI report on macOS.
 export function scratchDir(prefix: string, opts: ScratchOpts = {}): string {

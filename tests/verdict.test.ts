@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { anchorMenu, parseVerdict, resolveAnchor, verdictViolations, type Reviewed } from '../src/verdict.js'
 import { scratchDir } from './scratch.js'
 
@@ -183,8 +183,13 @@ describe('verdictViolations — fail-closed', () => {
   })
 
   describe('the delta floor (row 208)', () => {
-    const root = scratchDir('verdict-floor-')
-    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(root, f), 'export const x = 1\n')
+    // In a beforeAll, never the describe body: a run that filters out every test here runs no hook
+    // that could remove what collection made (row 268).
+    let root = ''
+    beforeAll(() => {
+      root = scratchDir('verdict-floor-')
+      for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(root, f), 'export const x = 1\n')
+    })
     const tree = (paths?: string[]) => ({ kind: 'tree' as const, root, files: ['a.ts', 'b.ts', 'c.ts'],
       ...(paths ? { floor: { round: 2, paths } } : {}) })
     const cover = (...anchors: string[]) => ({ coverage: anchors.map((anchor) => ({ anchor, note: 'x' })), findings: [] })
