@@ -35,7 +35,13 @@ it('a failing run keeps exactly its failed owners\' directories and names each (
   expect(r.code, r.out).toBe(1)
   expect(r.left.map(stem).sort()).toEqual([
     'life-cache-', 'life-collect-', 'life-each-', 'life-own-', 'life-setup-', 'life-shared-', 'life-slow-',
+    'witness-', 'witness-fake-',
   ])
   for (const home of r.left) expect(r.out).toContain(`scratch kept: ${handed(r, home)}`)
   expect(r.out).toContain(`report for ${handed(r, r.left.find((n) => n.startsWith('life-own-'))!)}`)
+  // A fixture repo's siblings live in its home, and a fake scenario's report is its fake trails.
+  const home = r.left.find((n) => stem(n) === 'witness-')!
+  expect(readdirSync(join(r.probe, home)).sort()).toEqual(['witness', 'witness-origin.git'])
+  const fake = handed(r, r.left.find((n) => stem(n) === 'witness-fake-')!)
+  expect(r.out).toContain(`fake claude trail · ${join(fake, 'claude-trace')}\nstart 1\nclaim 1 1`)
 }, 60_000)
