@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { checkWaiver } from './checks.js'
 import { readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
+import type { GateRunEntry, PartState } from './rounds.js'
 import type { ReaderTool } from './settings.js'
 import { LEDGER_STREAM } from './streams.js'
 import { visible } from './toon.js'
@@ -121,4 +123,49 @@ export function ledgerTaken(root: string): Violation | undefined {
   if (first === undefined || first.t === 'ledger-open') return undefined
   return v(LEDGER_STREAM, 'stream-taken', `the stream starts with ${visible(String(first.t))}`,
     'a stream for ledger items alone — witness check names the artifact that holds it')
+}
+
+// Row 270 (settled point 3). What one part of a checks-only round books: per diagnostic where the
+// lane gave the part a `book`, whole otherwise (held at the part's base key until main moves, C19).
+export interface Booking { part: string; part_key: string; tool?: ReaderTool; subject: LedgerSubject }
+
+// Never `pending` (drive is measuring the base: book once it lands), `untrusted` (a trust grant comes
+// first) or a passing state.
+const BOOKABLE: ReadonlySet<PartState> = new Set<PartState>(['red', 'new', 'not-measured', 'not-judged'])
+
+// The bookable parts of `run` when it is checks only, its withheld (last) check is `check`, and that
+// check carries a waiver; `[]` for any other run.
+export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
+  if (run.checks_only !== true || checkWaiver(check) === undefined) return []
+  const last = run.checks.at(-1)
+  if (last === undefined || last.name !== check) return []
+  return (last.parts ?? []).flatMap((p) => (BOOKABLE.has(p.state) && p.key !== undefined
+    ? [{ part: p.part, part_key: p.key, subject: p.book !== undefined ? { diagnostics: { ...p.book } } : { whole: true as const } }]
+    : []))
+}
+
+// Read under the caller's repo lock: per booking, the open item whose key it matches (reused, no
+// entry: the idempotence key) or a fresh id and its `ledger-open`. An id the ledger ever held is
+// minted again, never reused.
+export function bookLines(root: string, plan: string, gate: string, run: GateRunEntry, bookings: readonly Booking[], note?: string):
+Array<{ id: string; entry?: LedgerOpen }> {
+  const check = run.checks.at(-1)?.name ?? ''
+  const items = ledgerItems(root)
+  const taken = new Set(items.map((i) => i.id))
+  const open = items.filter((i) => i.state === 'open')
+  return bookings.map((b) => {
+    const kind: LedgerKind = 'booked-check'
+    const key = itemKey({ kind, check, plan, part: b.part, part_key: b.part_key, subject: b.subject })
+    const same = open.find((i) => itemKey(i) === key)
+    if (same !== undefined) return { id: same.id }
+    let id = newItemId()
+    while (taken.has(id)) id = newItemId()
+    taken.add(id)
+    const entry: LedgerOpen = {
+      v: 1, t: 'ledger-open', id, key, kind, check, plan, gate, round: run.round, run_id: run.run_id,
+      part: b.part, part_key: b.part_key, ...(b.tool !== undefined ? { tool: b.tool } : {}), subject: b.subject,
+      ...(note !== undefined ? { note } : {}),
+    }
+    return { id, entry }
+  })
 }

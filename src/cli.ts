@@ -90,7 +90,7 @@ const VERB_USAGE: Record<string, string> = {
   check: 'witness check',
   clean: 'witness clean',
   draft: 'witness draft <ask-<id>|amend-<effort>|design-<spec-id>> [--file <json>]',
-  decide: 'witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]',
+  decide: 'witness decide <gate> <target> --approve|--revise|--stop|--book <check> [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]',
   floor: 'witness floor --show | --set <triple> --note <why>',
   design: 'witness design <spec-id> --file <html> | --reconfirm | --open | --preview <html>',
   diff: 'witness diff <spec-id>',

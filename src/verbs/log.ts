@@ -51,7 +51,9 @@ function detailOf(e: Entry): string {
       const d = e as unknown as DecisionEntry
       // Row 173: a decision nobody typed says who made it; a named human one reads as before.
       const by = d.selected !== undefined ? ` · ${decidedBy(d)}` : ''
-      return `${d.gate}: ${d.decision}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
+      // Row 270: a booking names its check and the items it holds.
+      const booked = d.decision === 'book' && d.book !== undefined ? ` ${String(d.book.check)} (${(d.book.items ?? []).map(String).join(', ')})` : ''
+      return `${d.gate}: ${d.decision}${booked}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
     }
     case 'test-evidence': {
       // Row 191 §4.3: a cycle names the plan step it closes; a fix round names none.

@@ -3,6 +3,7 @@ import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
 import type { JunitSummary } from './junit.js'
+import { bookingsOf } from './ledger.js'
 import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
@@ -135,7 +136,10 @@ export interface DecisionEntry {
   gate: string
   artifact: string
   round: number
-  decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort'
+  decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort' | 'book'
+  // Row 270. A human's booking of a withheld check's red (`decide --book <check>`): the check, and
+  // the ledger items it opened or reused, in part order. The gate is then re-run, never settled.
+  book?: { check: string; items: string[] }
   override?: boolean
   // Row 109. A revise that buys the one extra round the bound otherwise forbids. Only ever
   // set on a `revise`, only ever at the bound, and only once per budget window — the whole
@@ -512,7 +516,8 @@ export interface ActFacts {
 }
 
 // Row 244 (design §4.2.2). Where a gate stands, for every reader alike.
-export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'handed-back-moved' | 'at-bound' | 'settled' | 'retracted' | 'parked'
+// Row 270: `booked` — the latest disposition is a booking, and the re-gate reads it.
+export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'handed-back-moved' | 'at-bound' | 'settled' | 'retracted' | 'parked' | 'booked'
 
 // Row 244 (design §4.2.6, §4.2.7). The states where a plain revise — neither upstream nor a repair —
 // revises the gate again (revised, handed back, retracted) or retracts its settlement (settled): a
@@ -593,6 +598,9 @@ function settledBefore(entries: Entry[], gate: string, runAt: number, reviseAt: 
   return (entries[runAt] as unknown as GateRunEntry).outcome === 'passed'
 }
 
+// Row 270: the states a booking is offered in.
+const BOOKS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'parked'])
+
 // Design §4.2.2: the free re-run leads in these states, and never at the bound, settled or parked.
 const LEADS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'handed-back-moved', 'retracted'])
 
@@ -600,6 +608,7 @@ const LEADS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 're
 // from one pure derivation, so a screen never offers an act `decide` refuses. The states, first
 // match wins:
 //   none        no run, or the effort abandoned;
+//   booked      the latest disposition is a booking (row 270): its one act is the re-gate;
 //   parked      the latest disposition since the last run that judged something is a stop;
 //   at-bound    the round budget is spent: the endgame set;
 //   settled     an approve, or a pass with no disposition since;
@@ -649,6 +658,10 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
 
   let state: GateStateKind
   let acts: Act[]
+  if (decision === 'book') {
+    // Row 270. The booking is read by the next lint run: nothing else is decided on this round.
+    return { state: 'booked', anchor, acts: [regate], malformedRerun: false }
+  }
   if (decision === 'stop') {
     state = 'parked'
     acts = parkedActs(gate, target, entries, upstream, facts.owed, moved)
@@ -699,6 +712,13 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   // so no lens ran. No approve is live on it, in any state — `decide` refuses one (`checks-only`), the
   // block offers none, and the arbiter's menu bars it.
   if (anchor.checks_only === true) acts = acts.filter((a) => !a.argv.includes('--approve'))
+  // Row 270 (§3.2's waiver, §3.3). A checks-only round whose withheld check carries a waiver and holds
+  // a part a booking takes offers the booking, on unmoved content below the bound — never once
+  // content or a check's input moved (the re-gate judges that first), never settled.
+  const withheld = anchor.checks_only === true ? anchor.checks.at(-1)?.name : undefined
+  if (withheld !== undefined && !moved && !atBound && BOOKS.has(state) && bookingsOf(anchor, withheld).length > 0) {
+    acts = [...acts, d('--book', withheld)]
+  }
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')
   const listed = acts.filter((a) => !unnamed(a))
@@ -733,11 +753,11 @@ function approveTwin(gate: string, target: string, acts: readonly Act[]): Act[] 
 // `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells. One set
 // for `decide`'s parser (`decideWords`) and for `actKey`, so the two never disagree on which word is a
 // value.
-export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via'])
+export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via', '--book'])
 // The flags that make an act another act (design §4.2.1). Notes, `--pin`, `--via`, `--trust-cmds`,
 // `--manual` and the upstream's value never do.
 const COUNTED_FLAGS: Record<string, readonly string[]> = {
-  decide: ['--approve', '--revise', '--stop', '--override', '--repair', '--upstream'],
+  decide: ['--approve', '--revise', '--stop', '--override', '--repair', '--upstream', '--book'],
   gate: ['--fresh', '--unchanged'],
 }
 // `decide` and `gate` read their gate and target and ignore any positional word after them
