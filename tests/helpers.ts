@@ -6,6 +6,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configCommands, grantCommands } from '../src/allowlist.js'
 import { scratchDir } from './scratch.js'
+import { FIXTURE_GIT_ENV } from './git-env.js'
 import { main, type Ctx } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
 import { diffBase } from '../src/evidence.js'
@@ -339,6 +340,9 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
     WITNESS_TRUST_CMDS: '1',
     VITEST_BIN: vitestBin(),
     CI: '',
+    // Row 272: an env built from nothing carries the suite's git config, since src hands it to
+    // children that run git (drive's agents, the fake gh's hooks)
+    ...FIXTURE_GIT_ENV,
     ...extra,
   }
 }
@@ -485,7 +489,9 @@ export function fakeCtx(root: string, opts: {
   const answers = [...(opts.answers ?? [])]
   return {
     cwd: root,
-    env: { ...opts.env },
+    // Row 272: an env built from nothing carries the suite's git config, since src hands it to
+    // children that run git
+    env: { ...FIXTURE_GIT_ENV, ...opts.env },
     isTTY: opts.tty ?? answers.length > 0,
     out: opts.out ?? (() => {}),
     err: opts.err ?? (() => {}),

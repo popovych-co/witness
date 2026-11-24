@@ -1,0 +1,11 @@
+# The global git config every git a test runs reads, in place of the config of whoever runs the
+# suite (GIT_CONFIG_GLOBAL, tests/git-env.ts). Row 272, issue #101.
+[maintenance]
+	# A commit, merge, rebase or fetch ends by starting `git maintenance run --auto --detach`, and
+	# so does receive-pack in a local origin on a push. It outlives the command and writes into the
+	# repository (.git/objects/maintenance.lock; a repack on some git versions). No test owns it.
+	auto = false
+[receive]
+	# From git 2.45 receive-pack's auto run goes through maintenance.auto above. Up to 2.44 it runs
+	# `git gc --auto` itself, which only this stops.
+	autoGC = false

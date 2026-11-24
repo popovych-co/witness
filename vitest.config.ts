@@ -1,8 +1,12 @@
 import { configDefaults, defineConfig } from 'vitest/config'
+import { FIXTURE_GIT_ENV } from './tests/git-env.js'
 
 export default defineConfig({
   test: {
     pool: 'forks',
+    // Row 272 (issue #101): every git a test runs, in process or in a child that inherits the env,
+    // reads tests/gitconfig as its global config, so none starts auto maintenance that outlives it
+    env: { ...FIXTURE_GIT_ENV },
     // 20000 was a budget for unit tests, and 49 of the 125 files are not unit tests: they
     // drive the CLI against throwaway git repos and spawn a NESTED `vitest run` plus real
     // `git` (helpers.ts `vitestBin`/`fixtureEnv`). Measured 2026-08-30 on a 10-core box:
