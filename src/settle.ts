@@ -115,9 +115,10 @@ export const busyLine = (gate: string, target: string, s: { pid: number; since: 
   `busy: ${target} — another witness run is deciding ${gate} (pid ${s.pid}, since ${hhmm(s.since)})`
 
 // Row 267. Where a verb settles, a stop waiting on drive's base lint is named, and the verb exits as
-// its gate did: drive runs the job, then the gate again.
+// its gate did: drive runs the job, then the gate again. Its own key (final review M-a): `waiting:` is
+// `next`'s line for what only the human can move, and this is drive's work in flight.
 export const waitingLine = (gate: string, target: string, why: string): string =>
-  kv('waiting', `${gate} ${target} — ${why} · the gate runs again once it lands`)
+  kv('awaits-drive', `${gate} ${target} — ${why} · the gate runs again once it lands`)
 
 const byOf = (d: DecisionEntry): 'human' | 'policy' | 'arbiter' =>
   d.selected === 'policy' || d.selected === 'arbiter' ? d.selected : 'human'

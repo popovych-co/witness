@@ -233,7 +233,7 @@ describe('a round red only for drive\'s base lint (row 267)', () => {
     const held = acquireDriveLock(repo.root, {})
     try {
       const out = await gateOut('ship')
-      expect(out).toContain('waiting: ship auth-refresh-plan-1 — drive lints the base of ui first')
+      expect(out).toContain('awaits-drive: ship auth-refresh-plan-1 — drive lints the base of ui first')
       expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship')).toEqual([])
       const unit = baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))[0]!
       const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), unit, 1) as { result: unknown }
@@ -257,7 +257,7 @@ describe('a round red only for drive\'s base lint — slice 3 review (row 267)',
     const { repo, wt, planId, scenario, gateOut } = await redForShip()
     const held = acquireDriveLock(repo.root, {})
     try {
-      expect(await gateOut('ship')).toContain('waiting: ship auth-refresh-plan-1')
+      expect(await gateOut('ship')).toContain('awaits-drive: ship auth-refresh-plan-1')
       writeFileSync(join(wt, 'src', 'token.ts'), TOKEN_FIXED)          // the author fixed the lint: the content moved
       const s = await settleStop(fakeCtx(repo.root, { env: gateEnv(scenario) }), repo.root, cfgOf(repo.root), 'ship', planId)
       expect(s).toMatchObject({ kind: 'routed', line: expect.stringContaining('witness gate ship auth-refresh-plan-1') })

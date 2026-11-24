@@ -289,8 +289,9 @@ reads "not judged", never green.
 **Checks before reviewers.** The implement and ship gates run the conflict-marker check (an opener
 like `<<<<<<< HEAD` on a line the plan adds) and every `ship.lint` part before any reviewer. A red
 one ends the round as "checks only": no reviewer runs, no round of your budget is spent, and nothing
-is offered to approve — fix what the check names and re-run the gate. Under drive, a round red only
-because a part is red on the base too waits for drive's base lint (`waiting:`), then runs again.
+is offered to approve — fix what the check names and re-run the gate. Under drive with autonomy on, a
+round whose red lint parts all wait on the base's lint result waits for drive's base lint
+(`awaits-drive:`), then runs again.
 
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
