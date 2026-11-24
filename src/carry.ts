@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { cliAct } from './act.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
+import { withScratch } from './scratch.js'
 import { spawnSync } from './spawn.js'
 import { logSafe, shellLine, shellWord, withheldOn, type Platform } from './toon.js'
 import { branchName } from './worktree.js'
@@ -402,8 +402,7 @@ export function freshStop(wt: string): StopReading {
 export function keepStopped(wt: string, planId: string, files: readonly string[]): Result<string> {
   const pending = (step: string, out: string): Result<string> =>
     refuse([carryPending(planId, `${step} failed, so witness's own stopped rebase was not aborted: ${gitWords(out)}`)])
-  const dir = mkdtempSync(join(tmpdir(), 'witness-kept-'))
-  try {
+  return withScratch('witness-kept-', (dir) => {
     const scratch = { GIT_INDEX_FILE: join(dir, 'index') }
     const seeded = carryGitWith(wt, scratch, 'read-tree', 'HEAD')
     if (seeded.code !== 0) return pending('seeding a scratch index from HEAD', seeded.stderr)
@@ -425,9 +424,7 @@ export function keepStopped(wt: string, planId: string, files: readonly string[]
     const created = carryGit(wt, 'update-ref', kept, sha, '')
     if (created.code !== 0) return pending(`creating ${kept}`, created.stderr)
     return ok(kept)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  })
 }
 
 // M6. A kept ref under the plan's prefix that already holds this backup: the same tree, the stop's

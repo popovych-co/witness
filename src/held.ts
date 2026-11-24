@@ -1,5 +1,4 @@
-import { lstatSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { cliAct, type Act } from './act.js'
 import { seeWork } from './carry.js'
@@ -10,6 +9,7 @@ import { checkoutRoot, diffBase } from './evidence.js'
 import { git, gitWith, tryGit } from './gitio.js'
 import { acquireLock, isAlive } from './lock.js'
 import { ok, refuse, renderRefusal, v, type Result, type Violation } from './refusal.js'
+import { withScratch } from './scratch.js'
 import { kv, shellWord, shellLine } from './toon.js'
 
 // Row 247 (#92). verify-red's held work: the ref a run sets its non-test work aside in, what that
@@ -87,8 +87,7 @@ export function holdWork(runRoot: string, planId: string, paths: readonly string
     : { GIT_AUTHOR_NAME: 'witness', GIT_AUTHOR_EMAIL: 'witness@verify-red', GIT_COMMITTER_NAME: 'witness', GIT_COMMITTER_EMAIL: 'witness@verify-red' }
   const commit = (tree: string, parents: string[], message: string): string =>
     gitWith(runRoot, ident, 'commit-tree', tree, ...parents.flatMap((p) => ['-p', p]), '-m', message)
-  const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
-  try {
+  return withScratch('witness-verify-red-', (dir) => {
     const scratch = (name: string): Record<string, string> => ({ GIT_INDEX_FILE: join(dir, name) })
     gitWith(runRoot, scratch('index'), 'read-tree', head)
     const entries = paths.flatMap((p) => (staged.has(p) ? ['--cacheinfo', staged.get(p)!] : []))
@@ -107,9 +106,7 @@ export function holdWork(runRoot: string, planId: string, paths: readonly string
     }
     return commit(workTree, parents,
       `WIP on ${on}\n\npid: ${process.pid}\ncheckout: ${JSON.stringify(runRoot)}\nbase: ${JSON.stringify(base)}\nfiles: ${JSON.stringify(paths)}`)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  })
 }
 
 // What a held commit's message records, read from the raw commit so no configured encoding
@@ -283,17 +280,14 @@ export function restoreHeld(runRoot: string, held: string, paths: readonly strin
   const work = treeEntries(runRoot, held, want)
   const untracked = tryGit(runRoot, 'rev-parse', '--verify', '-q', `${held}^3`).ok
     ? treeEntries(runRoot, `${held}^3`, want) : new Map<string, TreeEntry>()
-  const dir = mkdtempSync(join(tmpdir(), 'witness-verify-red-'))
-  try {
+  withScratch('witness-verify-red-', (dir) => {
     for (const [name, rev, entries] of [['work', held, work], ['untracked', `${held}^3`, untracked]] as const) {
       if (entries.size === 0) continue
       const scratch = { GIT_INDEX_FILE: join(dir, name) }
       gitWith(runRoot, scratch, 'read-tree', rev)
       gitWith(runRoot, scratch, 'checkout-index', '-f', '--', ...entries.keys())
     }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  })
   for (const p of paths) if (!work.has(p) && !untracked.has(p)) removeListed(runRoot, p)
   // Removals first (row 248): a rename between a file and a directory of one name lists both, and
   // the index refuses `src/x` while it still holds `src/x/index.ts`.
