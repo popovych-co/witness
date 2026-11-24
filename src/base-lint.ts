@@ -17,7 +17,7 @@ import { lastGateRun, type GateRunEntry } from './rounds.js'
 import { partPasses } from './lint-lane.js'
 import { execCommand, interrupted } from './runner.js'
 import type { Canon } from './scan.js'
-import { inScratch, type CfStep } from './scratch.js'
+import { inScratch, type CfStep } from './scratch-checkout.js'
 
 export const BASE_LINT = 'base-lint'
 // One reset, one prepare (and a re-prepare's worth of slack), a part and its reader.

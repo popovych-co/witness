@@ -6,7 +6,7 @@ import { configCommands, grantCommands, trustedNow } from '../src/allowlist.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { detectPrepare, prepareInputs, prepareScratch } from '../src/prepare.js'
 import type { Result } from '../src/refusal.js'
-import { openScratch, resetScratch } from '../src/scratch.js'
+import { openScratch, resetScratch } from '../src/scratch-checkout.js'
 import { fakeCtx, fakeScenario, fixtureEnv, patchConfig, seededRepo, tmpRepo, type TestRepo } from './helpers.js'
 
 describe('the setup command a repo declares (row 259)', () => {

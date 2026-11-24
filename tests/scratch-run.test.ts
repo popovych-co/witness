@@ -9,7 +9,7 @@ import { ok, type Result } from '../src/refusal.js'
 import { execCommand, runnerConfig, type RunnerConfig } from '../src/runner.js'
 import { withRunnerTurn } from '../src/runner-lock.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { inScratch } from '../src/scratch.js'
+import { inScratch } from '../src/scratch-checkout.js'
 import { SCRATCH_LOCK } from '../src/scratch-lock.js'
 import { grantCommands } from '../src/allowlist.js'
 import {

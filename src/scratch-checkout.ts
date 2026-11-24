@@ -6,7 +6,7 @@ import type { Config } from './config.js'
 import { tryGit } from './gitio.js'
 import { prepareScratch } from './prepare.js'
 import { ok, refuse, v, type Result } from './refusal.js'
-import { withScratch } from './scratch-lock.js'
+import { withScratchLock } from './scratch-lock.js'
 import { visible } from './toon.js'
 import { ensureExcluded, excludeCanon, materializedCanon } from './worktree.js'
 
@@ -176,7 +176,7 @@ export function inScratch<T>(
     if (!pinned.ok) return pinned
     commit = pinned.value
   }
-  return withScratch(root, ctx, opts.leaseMs ?? cfg.drive.sessionTimeoutMs, () => {
+  return withScratchLock(root, ctx, opts.leaseMs ?? cfg.drive.sessionTimeoutMs, () => {
     const dir = openScratch(root)
     if (!dir.ok) return dir
     const fresh = () => resetScratch(dir.value, commit)

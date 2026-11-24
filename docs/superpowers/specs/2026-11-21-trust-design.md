@@ -270,10 +270,10 @@ failure: re-prepare once, then fail the job. It is never a red, and never feeds 
 - A killed prepare re-runs next time.
 - A load error never becomes a red.
 
-**As built (T2b, row 258; it landed in T2, the map's correction C1).** The scratch is `.witness/scratch`, a detached
+**As built (T2b, row 258; it landed in T2, the map's correction C1).** The scratch (`src/scratch-checkout.ts`) is `.witness/scratch`, a detached
 worktree with a plan worktree's sparse patterns and its reflog off, set up on every open (a found one first loses
 whatever a run left in a canon folder), excluded from the root's `git status` and exempt from the state-path audit.
-Its lock is `.witness/live/scratch/lock.json`, leased once at the take, waited for while its holder lives, taken over
+Its lock (`withScratchLock`) is `.witness/live/scratch/lock.json`, leased once at the take, waited for while its holder lives, taken over
 once dead or lapsed, released by drive's sweep; what a process holds is kept in memory, never read back from the
 file's pid. Lock order is test turn → scratch → repo lock, and `takeTurn` throws inside the scratch. A commit runs as
 itself; a bare tree is wrapped deterministically (`commit-tree --no-gpg-sign`, a fixed identity and date) and pinned at

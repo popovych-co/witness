@@ -123,7 +123,7 @@ function releaseIf(p: string, text: string): void {
 // nothing released); a live holder is waited for, said once on stderr; a dead or lapsed holder's
 // lock, or a leftover naming this process, is taken over. The lock goes in a `finally`, so a throw
 // in `fn` releases it too.
-export function withScratch<T>(root: string, ctx: Ctx, leaseMs: number, fn: () => Result<T>): Result<T> {
+export function withScratchLock<T>(root: string, ctx: Ctx, leaseMs: number, fn: () => Result<T>): Result<T> {
   if (holdsScratch(root)) return fn()
   const dir = liveFolder(root, SCRATCH_SUB, true)
   if (dir === undefined) return unusable('a link, or a folder that could not be made')

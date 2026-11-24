@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ok, type Result } from '../src/refusal.js'
 import { withRunnerTurn } from '../src/runner-lock.js'
-import { openScratch, resetScratch, scratchPath } from '../src/scratch.js'
-import { SCRATCH_LOCK, releaseDeadScratch, withScratch } from '../src/scratch-lock.js'
+import { openScratch, resetScratch, scratchPath } from '../src/scratch-checkout.js'
+import { SCRATCH_LOCK, releaseDeadScratch, withScratchLock } from '../src/scratch-lock.js'
 import { fakeCtx, seededRepo, tmpRepo } from './helpers.js'
 
 const value = <T>(r: Result<T>): T => { if (!r.ok) throw new Error(JSON.stringify(r.violations)); return r.value }
@@ -68,7 +68,7 @@ describe('the scratch (row 258)', () => {
   it('holds the scratch: re-entry runs at once; a dead holder or a lapsed lease is taken; a live holder is waited for', () => {
     const repo = tmpRepo()
     const ctx = fakeCtx(repo.root)
-    const run = () => withScratch(repo.root, ctx, 60_000, () => ok(process.pid))
+    const run = () => withScratchLock(repo.root, ctx, 60_000, () => ok(process.pid))
     lockAt(repo.root, { pid: deadPid(), since: Date.now(), until: Date.now() + 60_000 })
     expect(value(run())).toBe(process.pid)
     expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
@@ -77,7 +77,7 @@ describe('the scratch (row 258)', () => {
       lockAt(repo.root, { pid: lapsed, since: Date.now() - 2_000, until: Date.now() - 1_000 })
       expect(value(run())).toBe(process.pid)
     } finally { process.kill(lapsed) }
-    expect(value(withScratch(repo.root, ctx, 60_000, () => run()))).toBe(process.pid)
+    expect(value(withScratchLock(repo.root, ctx, 60_000, () => run()))).toBe(process.pid)
     lockAt(repo.root, { pid: orphan(2), since: Date.now(), until: Date.now() + 60_000 })
     const t0 = Date.now()
     expect(value(run())).toBe(process.pid)
@@ -94,9 +94,9 @@ describe('the scratch (row 258)', () => {
       lockAt(repo.root, { pid: live, since: Date.now(), until: Date.now() + 60_000 })
       expect(releaseDeadScratch(repo.root)).toBe(false)
     } finally { process.kill(live); rmSync(join(repo.root, SCRATCH_LOCK), { force: true }) }
-    expect(() => withScratch(repo.root, ctx, 60_000, () => ok(withRunnerTurn(repo.root, ctx, 'x', () => 1)))).toThrow(/lock order/)
+    expect(() => withScratchLock(repo.root, ctx, 60_000, () => ok(withRunnerTurn(repo.root, ctx, 'x', () => 1)))).toThrow(/lock order/)
     expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
-    expect(withRunnerTurn(repo.root, ctx, 'x', () => withScratch(repo.root, ctx, 60_000, () => ok(1)))).toEqual({ ok: true, value: 1 })
+    expect(withRunnerTurn(repo.root, ctx, 'x', () => withScratchLock(repo.root, ctx, 60_000, () => ok(1)))).toEqual({ ok: true, value: 1 })
   })
 
   it('check never takes the scratch for a stray worktree, canon residue or a hand edit (Review Focus 3)', async () => {
@@ -144,7 +144,7 @@ describe('the scratch — slice 1 review (row 258)', () => {
       lockAt(repo.root, { pid: process.pid, since: Date.now() - 5_000, until })
       expect(withRunnerTurn(repo.root, ctx, 'x', () => 1)).toBe(1)
       const t0 = Date.now()
-      const lease = value(withScratch(repo.root, ctx, 60_000, () => ok(leaseOf())))
+      const lease = value(withScratchLock(repo.root, ctx, 60_000, () => ok(leaseOf())))
       expect(lease.since).toBeGreaterThanOrEqual(t0)
       expect(lease.until).toBe(lease.since + 60_000)
       expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
