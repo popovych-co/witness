@@ -107,18 +107,18 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind, boolean]> = 
 const STATE = new Map(STATES.map(([name, journal, kind, stale]) => [name, { journal, kind, stale }]))
 
 // A copy of a repo in a directory of its own: every act runs on the state as the walk wrote it.
-// Shared: `built` hands one state's copy to every later test that walks that state.
-function copyOf(root: string): string {
-  const dir = scratchDir('witness-live-', { shared: true })
+function copyOf(root: string, shared = false): string {
+  const dir = scratchDir('witness-live-', { shared })
   cpSync(root, dir, { recursive: true })
   return dir
 }
 const built = new Map<string, string>()
-// The state's repo: the seeded effort with the state's journal appended and committed.
+// The state's repo: the seeded effort with the state's journal appended and committed. Shared:
+// `built` hands it to every later test that walks that state.
 function stateRoot(name: string): string {
   const cached = built.get(name)
   if (cached !== undefined) return cached
-  const root = copyOf(base.repo.root)
+  const root = copyOf(base.repo.root, true)
   for (const e of STATE.get(name)!.journal(base.sha)) appendEntry(root, base.effort, e as unknown as { t: 'gate-run' })
   base.repo.git('-C', root, 'add', '.witness/journal')
   base.repo.git('-C', root, 'commit', '-qm', `walk: ${name}`, '-m', 'Witness-State: 1')

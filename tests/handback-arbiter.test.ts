@@ -476,9 +476,8 @@ const ARB = { selected: 'arbiter', reason: 'the bound is spent', arbiter: { mode
 const REOPEN = { caused_by: { artifact: 'auth-refresh', gate: 'design', round: 1 }, note: 'the slicing is wrong' }
 
 let base: { repo: TestRepo; sha: string; effort: string; real: GateRunEntry }
-// Shared: `built` below hands one state's copy to every later test that walks that state.
-const copyOf = (root: string): string => {
-  const dir = scratchDir('witness-arbiter-walk-', { shared: true })
+const copyOf = (root: string, shared = false): string => {
+  const dir = scratchDir('witness-arbiter-walk-', { shared })
   cpSync(root, dir, { recursive: true })
   return dir
 }
@@ -531,11 +530,12 @@ const STATE = new Map(STATES.map(([name, journal, kind, stale]) => [name, { jour
 // Where the policy hands the state's stop to the arbiter: the bound, and a standing hand-back.
 const REACHES_ARBITER = ['parked at the bound, then reopened', 'at the bound', 'handed back', 'handed back, then malformed on other content (S3-3)']
 
+// Shared: `built` hands one state's repo to every later test that walks that state.
 const built = new Map<string, string>()
 function stateRoot(name: string): string {
   const cached = built.get(name)
   if (cached !== undefined) return cached
-  const root = copyOf(base.repo.root)
+  const root = copyOf(base.repo.root, true)
   for (const e of STATE.get(name)!.journal(base.sha)) appendEntry(root, base.effort, e as unknown as { t: 'gate-run' })
   base.repo.git('-C', root, 'add', '.witness/journal')
   base.repo.git('-C', root, 'commit', '-qm', `walk: ${name}`, '-m', 'Witness-State: 1')
