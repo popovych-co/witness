@@ -196,6 +196,11 @@ describe('the arbiter reads checks as facts (row 266)', () => {
     expect(facts(part('pending'))).toBe("lint: FAILED · p red, the base's result pending")
     expect(facts(part('not-judged', { why: 'x' }))).toBe('lint: FAILED · p red on the base too, not judged')
     expect(facts(part('untrusted'))).toBe('lint: FAILED · p not run, its command not trusted')
+    // Row 270: a booked part names the human and what the booking covers, never the item ids
+    expect(checkFacts({ name: 'lint', ok: true, parts: [{ part: 'ui', state: 'booked', booked: 3, items: ['l-1a2b3c4d'] }] }))
+      .toBe('lint: ok · ui booked by the human (3 diagnostics)')
+    expect(checkFacts({ name: 'lint', ok: true, parts: [{ part: 'ui', state: 'booked', items: ['l-1a2b3c4d'] }] }))
+      .toBe('lint: ok · ui booked whole by the human')
     expect(checkFacts({ name: 'lint', ok: false, parts: [{ part: 'p', state: 'new', new: 1, base: 0, rules: ['r\u202e1'] }] }))
       .not.toMatch(/\u202e/)
     expect(checkFacts({ name: 'evidence', ok: true })).toBe('evidence: ok')

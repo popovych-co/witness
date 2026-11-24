@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CHECKS, checksSignature, runChecks } from '../src/checks.js'
+import { CHECKS, checksSignature, checkWaiver, runChecks } from '../src/checks.js'
 import type { GateCheck, PartState } from '../src/rounds.js'
 
 const step = (name: string, ok: boolean, ran: string[]) => ({ name, run: (): GateCheck => { ran.push(name); return { name, ok } } })
@@ -27,6 +27,15 @@ describe('the check registry (row 264)', () => {
   it('a step the registry lacks, or one naming another check, is a witness bug', async () => {
     await expect(runChecks([{ name: 'nope', run: () => ({ name: 'nope', ok: true }) }])).rejects.toThrow(/nope/)
     await expect(runChecks([{ name: 'lint', run: () => ({ name: 'tests', ok: true }) }])).rejects.toThrow(/lint/)
+  })
+  it("lint's waiver is the human's, and no other check has one (row 270)", () => {
+    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human']])
+    expect(checkWaiver('lint')).toBe('human')
+    expect(checkWaiver('markers')).toBeUndefined()
+  })
+  it('a booking made since a round moves the signature: booked is a state term (row 270)', () => {
+    const lint = (state: PartState): GateCheck[] => [{ name: 'lint', ok: state === 'booked', parts: [{ part: 'ui', state, key: 'k1' }] }]
+    expect(checksSignature(lint('booked'))).not.toBe(checksSignature(lint('not-judged')))
   })
   it('lists each check once, the withholding tier first', () => {
     const names = CHECKS.map((c) => c.name)

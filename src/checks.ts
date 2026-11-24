@@ -5,17 +5,23 @@
 //
 // Ordered by tier, then by this list, never by a measured cost (C14): cost could only reorder within
 // a tier, and across tiers it would harm — ship's criteria lane reads the tests lane's suite run (row
-// 252), so a measured order could run the suite twice. Two tiers now (C15): `waiver` lands with its
-// first reader (`--book`), `precondition` and `advisory` with their first checks. The doc gates
-// register nothing: none of their checks withholds.
+// 252), so a measured order could run the suite twice. Two tiers now (C15): `precondition` and
+// `advisory` land with their first checks. The doc gates register nothing: none of their checks
+// withholds.
+//
+// Row 270 (§3.2's waiver). `waiver` names who may book a check's red: lint's is the human's alone
+// (row 172: the AI judge never books lint). A check with none is never booked; T3 and T4a add the
+// judge's.
 import { timedCheck, type GateCheck } from './rounds.js'
 
 export type CheckTier = 'withholding' | 'judged'
 
-export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier }> = [
+export type CheckWaiver = 'human'
+
+export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: CheckWaiver }> = [
   // Row 265. A file scan before the repo's tools: an unresolved conflict is read before it is linted.
   { name: 'markers', tier: 'withholding' },
-  { name: 'lint', tier: 'withholding' },
+  { name: 'lint', tier: 'withholding', waiver: 'human' },
   { name: 'implement-gate', tier: 'judged' },
   { name: 'diff', tier: 'judged' },
   { name: 'evidence', tier: 'judged' },
@@ -26,6 +32,10 @@ export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier }> = [
 
 export function checkTier(name: string): CheckTier | undefined {
   return CHECKS.find((c) => c.name === name)?.tier
+}
+
+export function checkWaiver(name: string): CheckWaiver | undefined {
+  return CHECKS.find((c) => c.name === name)?.waiver
 }
 
 // A check a gate runs: its registered name, and the body that produces it.

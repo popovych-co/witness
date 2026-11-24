@@ -148,7 +148,7 @@ registerGate({
       // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
       // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
-      { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base) },
+      { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
       { name: 'diff', run: () => ({ name: 'diff', ok: files.length > 0,
         detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' }) },
       { name: 'evidence', run: () => {

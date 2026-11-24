@@ -8,9 +8,12 @@ import { acquireDriveLock } from '../src/drive-presence.js'
 import { journalShard } from '../src/jobs.js'
 import { lintCheck } from '../src/lint-lane.js'
 import { boundReader } from '../src/lint-parts.js'
+import { diagnosticKey } from '../src/diagnostics.js'
 import { fakeCtx, fakeLint, fakeScenario, fixtureEnv, patchConfig, seededRepo } from './helpers.js'
 
 const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
+// Row 270: the key a booking of fake-lint's error in `file` takes.
+const bad = (file: string) => diagnosticKey({ tool: 'biome', rule: 'lint/test/noBad', file, snippet: 'BAD' })
 
 describe('lint parts (row 261)', () => {
   it("every part runs whatever an earlier one did — the && chain stopped at biome on fewhats' red main (map acceptance)", async () => {
@@ -18,7 +21,7 @@ describe('lint parts (row 261)', () => {
     const log = join(fakeScenario(), 'parts')
     const part = (name: string, exit: number) => `echo ${name} >> "${log}"; exit ${exit}`
     patchConfig(repo, { ship: { lint: { biome: part('biome', 1), eslint: part('eslint', 0), ui: part('ui', 0), types: part('types', 2) } } })
-    const check = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), repo.git('rev-parse', 'HEAD'))
+    const check = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), repo.git('rev-parse', 'HEAD'), 'p1')
     expect(readFileSync(log, 'utf8')).toBe('biome\neslint\nui\ntypes\n')
     expect(check).toMatchObject({ name: 'lint', ok: false })
     expect(check.detail).toMatch(/^biome: red — [^]* · eslint: ok · ui: ok · types: red — /)
@@ -28,7 +31,7 @@ describe('lint parts (row 261)', () => {
     const repo = await seededRepo()
     patchConfig(repo, { ship: { lint: { a: 'true', b: 'echo b' } } })
     grantCommands(repo.root, ['true'])
-    const check = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_TRUST_CMDS: '' }) }), cfgOf(repo.root), repo.git('rev-parse', 'HEAD'))
+    const check = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv({ WITNESS_TRUST_CMDS: '' }) }), cfgOf(repo.root), repo.git('rev-parse', 'HEAD'), 'p1')
     expect(check).toMatchObject({ ok: false, untrusted: ['echo b'] })
     expect(check.detail).toBe('a: ok · b: echo b: blocked')
   })
@@ -37,7 +40,7 @@ describe('lint parts (row 261)', () => {
     const repo = await seededRepo()
     const base = repo.git('rev-parse', 'HEAD')
     patchConfig(repo, { ship: { lint: 'true' } })
-    expect(await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), base))
+    expect(await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), base, 'p1'))
       .toMatchObject({ name: 'lint', ok: true, detail: 'true' })
   })
 })
@@ -64,7 +67,7 @@ async function baseRed(reader: 'sarif' | 'garbage' = 'sarif') {
     journalShard(repo.root, { kind: BASE_LINT, key, shard: 1, of: 1, outcome: 'done', ms: 1, result: r.result })
     return key
   }
-  const check = () => lintCheck(repo.root, repo.root, ctx, cfgOf(repo.root), base)
+  const check = () => lintCheck(repo.root, repo.root, ctx, cfgOf(repo.root), base, 'p1')
   return { repo, base, keyOf, lintBase, check }
 }
 
@@ -74,7 +77,7 @@ describe('a part red on the base too is judged per diagnostic (row 263)', () => 
     const key = lintBase('biome')
     repo.write('src/new.ts', 'BAD\n')
     const c = await check()
-    expect(c.parts![0]).toEqual({ part: 'biome', state: 'new', key, new: 1, base: 1, rules: ['lint/test/noBad'] })
+    expect(c.parts![0]).toEqual({ part: 'biome', state: 'new', key, new: 1, base: 1, rules: ['lint/test/noBad'], book: { [bad('src/new.ts')]: 1 } })
     expect(c.detail).toContain("biome: red — 1 new beside the base's 1: src/new.ts:1 lint/test/noBad")
     expect(c.detail).not.toContain('src/old.ts')
     expect(c.ok).toBe(false)
@@ -116,12 +119,14 @@ describe('a part red on the base too is judged per diagnostic (row 263)', () => 
     const { repo, base, keyOf, check } = await baseRed()
     const key = keyOf('biome')
     journalShard(repo.root, { kind: BASE_LINT, key, shard: 1, of: 1, outcome: 'done', ms: 1, result: { exit: 0, tree: repo.git('rev-parse', 'HEAD^{tree}'), commit: base } })
-    expect((await check()).parts![0]).toEqual({ part: 'biome', state: 'red', key })
+    // row 270 (C20): the plan's tree is read, every error there the plan's
+    expect((await check()).parts![0]).toEqual({ part: 'biome', state: 'red', key, new: 1, rules: ['lint/test/noBad'], book: { [bad('src/old.ts')]: 1 } })
   }, 60_000)
 
   it('a missing base result is not measured with no drive and pending under one, its key on the verdict (row 263)', async () => {
     const { repo, keyOf, check } = await baseRed()
-    expect((await check()).parts![0]).toEqual({ part: 'biome', state: 'not-measured', key: keyOf('biome'), why: 'no drive runs jobs in this repo' })
+    // row 270 (C20): unmeasured, the base's own errors count as the plan's to book until it is
+    expect((await check()).parts![0]).toEqual({ part: 'biome', state: 'not-measured', key: keyOf('biome'), why: 'no drive runs jobs in this repo', book: { [bad('src/old.ts')]: 1 } })
     const held = acquireDriveLock(repo.root, {})
     expect(held.ok).toBe(true)
     try {
@@ -169,9 +174,9 @@ describe('a part red on the base too — final review (row 263)', () => {
     const held = acquireDriveLock(repo.root, {})
     try {
       const off = { ...cfgOf(repo.root), scratch: {} }   // an older file read in memory: scratch.prepare unset
-      const c = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), off, base)
+      const c = await lintCheck(repo.root, repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), off, base, 'p1')
       expect(c.parts![0]).toEqual({ part: 'biome', state: 'not-measured', key: keyOf('biome'),
-        why: 'scratch runs are off — scratch.prepare is not set · witness migrate proposes one' })
+        why: 'scratch runs are off — scratch.prepare is not set · witness migrate proposes one', book: { [bad('src/old.ts')]: 1 } })
     } finally {
       if (held.ok) held.value()
     }

@@ -27,12 +27,19 @@ export interface GateCheck {
 // strikes, or it is malformed) ·
 // `not-judged` (red on the base too, with no reader, or a report either side could not read) ·
 // `new` (red on the base too; diagnostics the base lacks) · `base-only` (red on the base too;
-// nothing new). Only `green` and `base-only` pass.
-export type PartState = 'green' | 'untrusted' | 'red' | 'pending' | 'not-measured' | 'not-judged' | 'new' | 'base-only'
+// nothing new) · `booked` (row 270: what is red, the plan's own booking covers — a whole part at this
+// key, or every diagnostic it books). Only `green`, `base-only` and `booked` pass.
+export type PartState = 'green' | 'untrusted' | 'red' | 'pending' | 'not-measured' | 'not-judged' | 'new' | 'base-only' | 'booked'
 // `key` on every state that read the base's result; `new`, `base` and `rules` (once each, sorted, at
 // most 20) on `new`; `base` on `base-only`; `why` (witness's own words) on not-measured and not-judged.
+// Row 270: `new` and `rules` on `red` too, once the plan's tree is read; `book` the multiset of
+// diagnostic keys a booking of this part takes (the plan's beyond the base's, or all of them where
+// the base gave none; 1–MAX_BOOK_KEYS distinct, else absent and the part books whole); `booked` the
+// diagnostics the plan's per-diagnostic bookings cover; `items` the ledger items applied; `cleared`
+// the open per-diagnostic items on this part (any plan) whose every key this tree lacks.
 export interface PartVerdict {
   part: string; state: PartState; key?: string; new?: number; base?: number; rules?: string[]; why?: string
+  book?: Record<string, number>; booked?: number; items?: string[]; cleared?: string[]
 }
 
 // Row 251. One check, timed over its whole run — the inputs only it reads belong inside `run`.

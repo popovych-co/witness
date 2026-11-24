@@ -131,7 +131,7 @@ registerGate({
         return { name: 'tests', ok: run.exitZero, detail: run.exitZero ? cmd : run.output.slice(-300) }
       } },
       // Row 261. Every part runs on its own; the lane stays one check named lint.
-      { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base) },
+      { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
       { name: 'drift-lane', run: async () => laneCheck(lane = await runCriteria(wt, ctx, parent,
         { trustRoot: root, ...(suite !== undefined ? { suite } : {}) })) },
     ]

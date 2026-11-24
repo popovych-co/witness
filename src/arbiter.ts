@@ -164,6 +164,10 @@ function partFact(p: PartVerdict): string {
     case 'not-measured': return `${name} red, the base not measured`
     case 'not-judged': return `${name} red on the base too, not judged`
     case 'untrusted': return `${name} not run, its command not trusted`
+    // Row 270: what the human's booking covers, as a count — never the items or the keys.
+    case 'booked': return p.booked === undefined
+      ? `${name} booked whole by the human`
+      : `${name} booked by the human (${p.booked} diagnostic${p.booked === 1 ? '' : 's'})`
   }
 }
 
