@@ -193,8 +193,8 @@ rounds cap (which counts the round), `lastJudgedRun` and its readers (the gate's
 decision is owed), the pairing, or the malformed-streak brake. No approve is live on it (`liveActs`); `decide` refuses
 one `checks-only`, `recommend`'s rule `checks-only` offers the bare revise (the policy takes it), and the arbiter's menu
 bars approve. Markers test `OPENS` on the lines the plan adds (C16). Implement runs the lint parts too, and `trustOwed`
-owes them. A round red only for base results a drive will lint is left to drive (`Settled.waiting`); the landing makes
-the stop stale (`ActFacts.checksMoved`), so the policy routes the re-gate.
+owes them. A round red only for base results a drive will lint — keys the job owes, on unmoved content — is left to drive
+(`Settled.waiting`); the landing makes the stop stale (`ActFacts.checksMoved`), so the policy routes the re-gate.
 
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
