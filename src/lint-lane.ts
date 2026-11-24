@@ -19,7 +19,7 @@ import { diagnosticKey, keyCounts, newDiagnostics, readPart, type Diagnostic } f
 import { jobReading } from './jobs.js'
 import { openItems, type LedgerItem } from './ledger.js'
 import { boundReader } from './lint-parts.js'
-import type { GateCheck, PartVerdict } from './rounds.js'
+import { partPasses, type GateCheck, type PartVerdict } from './rounds.js'
 import { execCommand, type RunOutcome } from './runner.js'
 import { visible } from './toon.js'
 
@@ -35,8 +35,7 @@ export async function runParts(dir: string, trustRoot: string, ctx: Ctx, parts: 
   return out
 }
 
-// A green part, a part red on the base with nothing new, and a part the plan's booking covers pass.
-export const partPasses = (v: PartVerdict): boolean => v.state === 'green' || v.state === 'base-only' || v.state === 'booked'
+export { partPasses }
 
 const MAX_RULES = 20
 const MAX_LISTED = 10

@@ -404,3 +404,32 @@ describe('a stop waiting on drive\'s base lint — final review (row 267)', () =
     expect(Date.now() - t0).toBeLessThan(40_000)
   }, 120_000)
 })
+
+// Row 270 (§5, C23). A checks-only ship stop whose one lint part is red on its base too and unjudged:
+// only the human books it, so drive sets it aside as a decision whose rows name the booking.
+describe('a lint red only the human books (row 270)', () => {
+  it('drive sets a book-owed stop aside for the human, and its report names the booking (row 270)', async () => {
+    const repo = await startedFlows(['a'])
+    const stale = cfgOf(repo.root)
+    const cmd = fakeLint(repo)
+    patchConfig(repo, { ship: { lint: { ui: cmd.check } } })
+    repo.write('src/old.ts', 'BAD\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'an opaque lint part')
+    const base = repo.git('rev-parse', 'HEAD')
+    const key = baseLintKey(cfgOf(repo.root).ship.lint![0]!, undefined, base)
+    journalShard(repo.root, { kind: 'base-lint', key, shard: 1, of: 1, outcome: 'done', ms: 1,
+      result: { exit: 1, tree: repo.git('rev-parse', 'HEAD^{tree}'), commit: base } })
+    const sha = gateSpec('ship')!.currentSha!(repo.root, loadCanon(repo.root), cfgOf(repo.root), 'a-plan-1')!
+    appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'ship', artifact: 'a-plan-1', round: 1, run_id: 'rs1',
+      reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks_only: true,
+      checks: [{ name: 'markers', ok: true }, { name: 'lint', ok: false, parts: [{ part: 'ui', state: 'not-judged', key, why: 'red on the base too — no reader for this part' }] }] })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'the ship round')
+    grantCommands(repo.root, [cmd.check])
+    const out: string[] = []
+    await driveLoop(repo.root, stale, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out),
+      { maxSpawns: 1 })
+    expect(out).toContain('drive: waits on you — a-plan-1 · decision · only the human books lint — ui red on the base too')
+    expect(out.join('\n')).toContain('  book: witness decide ship a-plan-1 --book lint')
+    expect(readStream(repo.root, 'a-plan-1').filter((e) => e.t === 'human-decision' && (e as unknown as { gate: string }).gate === 'ship')).toEqual([])
+  }, 180_000)
+})

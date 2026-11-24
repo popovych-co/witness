@@ -262,6 +262,14 @@ async function judgeStop(
     return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }
   }
 
+  // Row 270 (§5, C23). A stop only the human may decide: its block and the left line, no model call,
+  // nothing journaled. Drive sets it aside as a decision; needs-you names its act.
+  if (policy.kind === 'decision') {
+    renderDecision(block).forEach((l) => ctx.out(l))
+    ctx.out(leftLine(gate, target, policy.why))
+    return { kind: 'left', why: policy.why, code: EXIT.FINDINGS }
+  }
+
   if (policy.kind === 'take') {
     const { act } = policy
     if (act.argv[0] !== 'decide') {

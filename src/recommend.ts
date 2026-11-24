@@ -1,10 +1,27 @@
 import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
-  actKey, actLive, anchorRecurrence, boundReached, decisionOwed, ladderSpent, lastGateRun, liveActs, repairsOnRegate,
+  actKey, actLive, anchorRecurrence, boundReached, decisionOwed, ladderSpent, lastGateRun, liveActs, partPasses, repairsOnRegate,
   repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type GateStateKind, type LiveActs,
 } from './rounds.js'
+import { checkWaiver } from './checks.js'
+import { bookingsOf } from './ledger.js'
 import { hasControl, visible } from './toon.js'
+
+// Row 270 (§3.3). What a booking costs and how it ends, in one spelling for every block that offers it.
+export const BOOK_TRADEOFF = 'opens a ledger item per part, which waives exactly what it books for this plan; each closes once the part is green on main (the discharge), or by witness dismiss ledger'
+
+// Row 270 (§5, the map's C23). The parts of a checks-only round's withheld check no author can clear:
+// every part that does not pass is red on the base too and unjudgeable, the check's waiver is the
+// human's, and the round holds a part a booking takes. Empty otherwise — one part the author may own
+// (`new`, `red`, `not-measured`) leaves the stop to the revise first.
+export function bookOwed(run: GateRunEntry): string[] {
+  const check = run.checks.at(-1)
+  if (run.checks_only !== true || check === undefined || checkWaiver(check.name) !== 'human') return []
+  const failing = (check.parts ?? []).filter((p) => !partPasses(p))
+  if (failing.length === 0 || !failing.every((p) => p.state === 'not-judged') || bookingsOf(run, check.name).length === 0) return []
+  return failing.map((p) => p.part)
+}
 
 // D121. The block: every set of live options renders ranked, with runnable commands.
 // This module is PURE — it takes journal entries and ids the caller already resolved and
@@ -236,6 +253,9 @@ function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Dec
         tradeoff: 'parks the flow — next stops offering it and reopening is an explicit act',
       })
     }
+    if (w.includes('--book')) {
+      return option(a, 'deferral', { when: 'the red is not this plan\'s to fix — red on the base too, or one only you accept', tradeoff: BOOK_TRADEOFF })
+    }
     if (w.includes('--upstream')) {
       return option(a, 'root', {
         ...(upFirst
@@ -368,17 +388,46 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
     }
   }
 
-  // 2b — checks only (row 264, §3.2). A withholding check was red, so no lens ran: there is no verdict
+  // 2b — book owed (row 270, §5; the map's C23). Every part of the withheld check that does not pass is
+  // red on the base too and unjudgeable: no author can clear it, so the booking leads — the human's,
+  // never the policy's (`policyFor` leaves it) — naming its discharge; the revise fixes the base's red
+  // in this plan instead.
+  const owedParts = atBound ? [] : bookOwed(last)
+  if (owedParts.length > 0) {
+    const name = last.checks.at(-1)!.name
+    return {
+      key: 'decide', rule: 'book-owed',
+      options: [
+        option(d('--book', name), 'deferral', {
+          why: `${owedParts.map(visible).join(', ')} ${owedParts.length === 1 ? 'is' : 'are'} red on the base too, and witness cannot judge which errors are this plan's — no author can clear it, so only you book ${name}`,
+          tradeoff: BOOK_TRADEOFF,
+        }),
+        option(note, 'root', {
+          when: `the base's ${name} red should be fixed in this plan`,
+          tradeoff: `sends the work back to its author; this round spent no budget (${spent} of ${budget} spent)`,
+        }),
+        ...upAlt('the check fails because of what the stage above asked for', 'reopens the parent stage and resets this budget'),
+        stopOpt,
+      ],
+    }
+  }
+
+  // 2c — checks only (row 264, §3.2). A withholding check was red, so no lens ran: there is no verdict
   // to weigh and no approve (row 172). The fix is the author's — the bare revise — and the round spent
-  // none of the human's budget. The policy takes it (`TAKEN`).
+  // none of the human's budget. The policy takes it (`TAKEN`). Row 270: a part a booking takes is
+  // offered after it, for the red the author finds is not theirs.
   if (last.checks_only === true && !atBound) {
     const name = last.checks.at(-1)?.name ?? 'a check'
+    const book = bookingsOf(last, name).length > 0
+      ? [option(d('--book', name), 'deferral', { when: 'the red is not this plan\'s to fix — red on the base too, or one only you accept', tradeoff: BOOK_TRADEOFF })]
+      : []
     return {
       key: 'decide', rule: 'checks-only',
       options: [
         option(note, 'root', {
           why: `${name} is red, so no lens ran — fix what it names and re-run the gate · this round spent no budget (${spent} of ${budget} spent)`,
         }),
+        ...book,
         ...upAlt('the check fails because of what the stage above asked for',
           'reopens the parent stage and resets this budget'),
         stopOpt,

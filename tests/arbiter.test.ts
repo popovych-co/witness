@@ -160,6 +160,18 @@ describe('the arbiter and the checks-only round (row 264)', () => {
   })
 })
 
+describe('the arbiter never books lint (row 270)', () => {
+  it("no booking of a check whose waiver is the human's reaches the arbiter's menu (row 270)", () => {
+    const run = lastGateRun([{ ...(only(1) as object), checks: [{ name: 'lint', ok: false, parts: [{ part: 'ui', state: 'not-judged', key: `ui@${'a'.repeat(40)}.000000000000` }] }] } as unknown as Entry], 'ship')!
+    const block: Decision = { key: 'decide', rule: 'book-owed', options: [
+      option(cliAct('decide', 'ship', 'p1', '--book', 'lint'), 'deferral'), option(cliAct('decide', 'ship', 'p1', '--revise'), 'root'),
+      option(cliAct('decide', 'ship', 'p1', '--stop'), 'terminal')] }
+    const menu = menuFor(block, run).map((o) => o.act.argv)
+    expect(menu).not.toContainEqual(expect.arrayContaining(['--book']))
+    expect(menu).toHaveLength(2)
+  })
+})
+
 describe('the arbiter reads checks as facts (row 266)', () => {
   let root = ''
   beforeAll(async () => { root = (await seededRepo()).root }, 120_000)

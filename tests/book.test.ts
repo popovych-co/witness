@@ -16,6 +16,9 @@ import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { LEDGER_STREAM } from '../src/streams.js'
 import { applyDecision, run as decide } from '../src/verbs/decide.js'
 import { gateParked } from '../src/verbs/next.js'
+import { loadConfig } from '../src/config.js'
+import { needsYou, needYouRows } from '../src/needs-you.js'
+import { loadCanon } from '../src/scan.js'
 import {
   TOKEN_FIXED, callCount, crashCli, fakeCtx, fakeLint, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo,
 } from './helpers.js'
@@ -50,8 +53,13 @@ async function redForShip(autonomy: 'on' | 'off' = 'off') {
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'one lint part')
   grantCommands(repo.root, [LINT])
   writeFileSync(join(wt, 'src', 'token.ts'), `${TOKEN_FIXED}// LINTBAD\n`)
+  const gateOut = async (name: string): Promise<string> => {
+    const lines: string[] = []
+    await runGate(fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => lines.push(l) }), name, planId, PLAIN)
+    return lines.join('\n')
+  }
   const lastRun = () => runs(repo, planId).at(-1)!
-  return { repo, wt, planId, scenario, gate, lastRun }
+  return { repo, wt, planId, scenario, gate, gateOut, lastRun }
 }
 type Bench = Awaited<ReturnType<typeof redForShip>>
 
@@ -227,4 +235,65 @@ describe('a human books a lint red (row 270)', () => {
     const lines = bookLines(b.repo.root, b.planId, 'ship', b.lastRun(), bookingsOf(b.lastRun(), 'lint'))
     expect(lines).toEqual([{ id: open!.id }])
   }, 240_000)
+})
+
+// Row 270 (§5, C23). Who gets the booking: the human, as a decision naming its act; never the policy.
+describe('the human gets the booking; nobody else takes it (row 270)', () => {
+  const cfgOf = (root: string) => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
+
+  it('a stop only the human may book is a decision naming its --book act (Done-when)', async () => {
+    const b = await notJudged()
+    const item = needsYou(b.repo.root, fakeCtx(b.repo.root), cfgOf(b.repo.root), loadCanon(b.repo.root), []).find((i) => i.kind === 'decision')!
+    expect(needYouRows(item)).toEqual([`wait: decision · ship ${b.planId}`, `  run: witness decide ship ${b.planId} --show`, `  book: witness decide ship ${b.planId} --book lint`])
+  }, 240_000)
+
+  it('under autonomy a stop red only on the base is left for the human with no model call, and nothing is journaled (§5)', async () => {
+    const b = await redForShip('on')
+    expect(await b.gate('ship')).toBe(1)                                    // not measured: the policy revises
+    baseRedFor(b)
+    const decided = decisions(b.repo, b.planId).length
+    const calls = callCount(b.scenario)
+    const out = await b.gateOut('ship')                                     // the base read red: not judged
+    expect(b.lastRun().checks.at(-1)!.parts).toEqual([expect.objectContaining({ part: 'ui', state: 'not-judged' })])
+    expect(out).toContain(`autonomy: left for a human — only the human books lint — ui red on the base too · witness decide ship ${b.planId} --show`)
+    expect(callCount(b.scenario)).toBe(calls)
+    expect(decisions(b.repo, b.planId)).toHaveLength(decided)
+  }, 240_000)
+
+  it("two parts red, one the author can fix: the policy revises; once it is fixed the stop is the human's; a --book typed first books both (Review Focus 3)", async () => {
+    const FIX = '! grep -rq FIXME src'
+    const twoParts = async () => {
+      const b = await redForShip('on')
+      patchConfig(b.repo, { ship: { lint: { ui: LINT, fx: FIX } } })
+      b.repo.git('add', 'witness.config.yaml'); b.repo.git('commit', '-q', '-m', 'two lint parts')
+      grantCommands(b.repo.root, [FIX])
+      writeFileSync(join(b.wt, 'src', 'fix.ts'), '// FIXME\n')
+      expect(await b.gate('ship')).toBe(1)                                  // both not measured: the policy revises
+      // ui red on the base too, fx green there: fx's red is the plan's own
+      const [ui, fx] = b.lastRun().checks.at(-1)!.parts!
+      const commit = parseBaseKey(ui!.key!)!.commit
+      const tree = b.repo.git('rev-parse', `${commit}^{tree}`)
+      journalShard(b.repo.root, { kind: BASE_LINT, key: ui!.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: { exit: 1, tree, commit } })
+      journalShard(b.repo.root, { kind: BASE_LINT, key: fx!.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: { exit: 0, tree, commit } })
+      expect(await b.gate('ship')).toBe(1)
+      expect(b.lastRun().checks.at(-1)!.parts!.map((p) => [p.part, p.state])).toEqual([['ui', 'not-judged'], ['fx', 'red']])
+      expect(decisions(b.repo, b.planId).at(-1)).toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-only' })
+      return b
+    }
+    const b = await twoParts()
+    writeFileSync(join(b.wt, 'src', 'fix.ts'), '// fixed\n')              // the author fixes theirs
+    const calls = callCount(b.scenario)
+    const out = await b.gateOut('ship')
+    expect(b.lastRun().checks.at(-1)!.parts!.map((p) => [p.part, p.state])).toEqual([['ui', 'not-judged'], ['fx', 'green']])
+    expect(out).toContain('autonomy: left for a human — only the human books lint — ui red on the base too')
+    expect(callCount(b.scenario)).toBe(calls)
+    // a --book typed before the fix, at the human's terminal, books both parts, each listed
+    const c = await twoParts()
+    const asked: string[] = []
+    const ctx: Ctx = { ...fakeCtx(c.repo.root, { tty: true }), ask: async (q) => { asked.push(q); return 'y' } }
+    expect(await decide(ctx, ['ship', c.planId, '--book', 'lint'])).toBe(0)
+    expect(asked[0]).toContain('\n  ui — the whole part, red against ')
+    expect(asked[0]).toContain('\n  fx — the whole part, red against ')
+    expect(openItems(c.repo.root, { plan: c.planId }).map((i) => i.part)).toEqual(['ui', 'fx'])
+  }, 480_000)
 })

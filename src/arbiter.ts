@@ -16,6 +16,7 @@ import { REVISE_HUMAN, anchorRecurrence, gateRuns, roundBudget, type DecisionEnt
 import { findById, type Canon } from './scan.js'
 import { canonicalJson } from './sha.js'
 import { visible } from './toon.js'
+import { checkWaiver } from './checks.js'
 
 // Row 172. The arbiter is a LENS in the judgment lane (D48, D88): the repo's judge harness,
 // its own `arbiter.model` pin, the hermetic reviewer spawn and a vendored prompt — never the
@@ -133,9 +134,17 @@ export function menuFor(block: Decision, run: GateRunEntry): Array<Option & { ac
     (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))
   const reviseBarred = block.state !== undefined && REVISE_HUMAN.has(block.state)
   const plainRevise = (argv: readonly string[]) => argv.includes('--revise') && !argv.includes('--upstream') && !argv.includes('--repair')
+  // Row 270 (row 172). A booking of a check whose waiver is the human's (or that has none) is never
+  // the arbiter's; T3's judge-waived checks are the ones it may take.
+  const humanBook = (argv: readonly string[]) => {
+    const at = argv.indexOf('--book')
+    const waiver = at >= 0 ? checkWaiver(argv[at + 1] ?? '') : undefined
+    return at >= 0 && (waiver === undefined || waiver === 'human')
+  }
   return block.options.filter((o): o is Option & { act: Act } =>
     o.act?.argv[0] === 'decide' &&
     !o.act.argv.includes('--trust-cmds') &&
+    !humanBook(o.act.argv) &&
     o.act.inputs.every((i) => i.name === 'why') &&
     !(approveBarred && o.act.argv.includes('--approve')) &&
     !(reviseBarred && plainRevise(o.act.argv)))

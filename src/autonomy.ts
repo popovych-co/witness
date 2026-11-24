@@ -1,9 +1,9 @@
 import { cliAct, runRow, type Act } from './act.js'
 import type { Config } from './config.js'
 import type { Entry } from './journal.js'
-import type { Decision } from './recommend.js'
+import { bookOwed, type Decision } from './recommend.js'
 import { boundReached, fellBack, type DecisionEntry, type GateRunEntry } from './rounds.js'
-import { cmd, kv, logSafe } from './toon.js'
+import { cmd, kv, logSafe, visible } from './toon.js'
 
 // Rows 171-175. PURE, like recommend.ts: the setting's rendering, the kept-stop names, and
 // (row 171) the policy that acts on a stop under `autonomy: on`. It takes facts its caller
@@ -48,7 +48,10 @@ export function unmetNeedLine(needs: ReadonlyArray<{ text: string; satisfyAct: A
 // for a human because it is a kept stop. Row 239 (the plan's B7): an act, run as its argv, and
 // never a printed line read back; `pick` answers a choose block, whose options name specs, not
 // commands (`readyChoice`).
+// Row 270 (§5, C23): `decision` — a stop only the human may decide (a lint red only they book), left
+// to them as a decision, never a kept stop, and never the arbiter's: no model is asked.
 export type Policy = { kind: 'take'; act: Act } | { kind: 'pick'; id: string } | { kind: 'arbiter' } | { kind: 'human'; stop: KeptStop }
+  | { kind: 'decision'; why: string }
 
 // `untrusted` is caller-resolved — the commands a failed check of `run` names that the repo
 // STILL does not trust — so this module never reads allow.json (D154's precedent for
@@ -107,6 +110,12 @@ export function policyFor(facts: StopFacts): Policy {
   // not a revise — sending the author back would have them "fix" a command nobody judged.
   if (failed.some((c) => (c.untrusted?.length ?? 0) > 0) && !boundReached(entries, gate)) {
     return { kind: 'take', act: cliAct('gate', gate, target) }
+  }
+  // Row 270 (§5, C23; row 172). A lint red no author can clear is the human's to book: left to them,
+  // after the trust grant and the free re-runs, with no model call.
+  if (block.rule === 'book-owed') {
+    const parts = bookOwed(run)
+    return { kind: 'decision', why: `only the human books ${run.checks.at(-1)?.name ?? 'lint'} — ${parts.map(visible).join(', ')} red on the base too` }
   }
   // Row 244 (design §4.2.6; the user's decision 2). A revise its author handed back unchanged is decided
   // again, by the arbiter: neither the author nor a reviewer found a fix, so no rule has the right

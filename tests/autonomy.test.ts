@@ -162,3 +162,17 @@ it('an anchor that reads like a placeholder still leaves the CLI\'s revise runna
   expect(policy('plan', [run(1, 'a', {}, blocking('p1 > ## Rendering <SaveBar>'))]))
     .toEqual(take('decide', 'plan', 'p1', '--revise'))
 })
+
+// Row 270 (C23). A lint red nobody but the human can clear is theirs: the policy leaves it, with no
+// model call; one the author may fix is still the policy's revise.
+const shipOnly = (parts: Array<Record<string, unknown>>): Entry[] => [run(1, 'a', {
+  gate: 'ship', checks_only: true, verdicts: undefined,
+  checks: [{ name: 'markers', ok: true }, { name: 'lint', ok: false, parts }],
+})]
+const UI = { part: 'ui', state: 'not-judged', key: `ui@${'a'.repeat(40)}.000000000000` }
+it('the policy leaves book-owed to the human and still takes checks-only (row 270)', () => {
+  expect(policy('ship', shipOnly([UI]), { upstream: null })).toEqual({ kind: 'decision', why: 'only the human books lint — ui red on the base too' })
+  expect(policy('ship', shipOnly([UI, { ...UI, part: 'tsc', key: `tsc@${'a'.repeat(40)}.000000000000` }]), { upstream: null }))
+    .toEqual({ kind: 'decision', why: 'only the human books lint — ui, tsc red on the base too' })
+  expect(policy('ship', shipOnly([{ ...UI, state: 'not-measured' }]), { upstream: null })).toMatchObject({ kind: 'take' })
+})

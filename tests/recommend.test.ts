@@ -1125,6 +1125,37 @@ const onlyShip = (round: number): Entry => ({
   prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm', checks_only: true, checks: [{ name: 'lint', ok: false }], outcome: 'stopped',
 } as unknown as Entry)
 
+// Row 270. A checks-only ship round whose lint parts are given.
+const KEY = `ui@${'a'.repeat(40)}.000000000000`
+const KEY2 = `biome@${'a'.repeat(40)}.000000000000`
+const checksOnly = (parts: Array<Record<string, unknown>>) => recommend({ gate: 'ship', target: 'p1', upstream: undefined, stale: false, entries: [{
+  ...(onlyShip(1) as object), checks: [{ name: 'markers', ok: true }, { name: 'lint', ok: false, parts }],
+} as unknown as Entry] })
+
+describe('the book-owed rule (row 270)', () => {
+  it('every part red on the base too and unjudged: book-owed, the booking first with its discharge, then the revise and the stop (row 270)', () => {
+    const d = checksOnly([{ part: 'ui', state: 'not-judged', key: KEY }])!
+    expect(d.rule).toBe('book-owed')
+    expect(d.options.map((o) => o.command)).toEqual(['witness decide ship p1 --book lint', 'witness decide ship p1 --revise', 'witness decide ship p1 --stop'])
+    expect(d.options[0]).toMatchObject({ depth: 'deferral', tradeoff: expect.stringContaining('green on main') })
+    expect(d.options[0]!.why).toContain('ui is red on the base too')
+  })
+  it('a part the author can fix keeps checks-only: the revise first, the booking after it (row 270)', () => {
+    const d = checksOnly([{ part: 'ui', state: 'not-judged', key: KEY }, { part: 'biome', state: 'new', key: KEY2, new: 1, book: { ['d'.repeat(16)]: 1 } }])!
+    expect(d.rule).toBe('checks-only')
+    expect(d.options.map((o) => o.command).slice(0, 2)).toEqual(['witness decide ship p1 --revise', 'witness decide ship p1 --book lint'])
+    expect(d.options[1]).toMatchObject({ depth: 'deferral' })
+  })
+  it('a not-measured part is the author\'s to look at first: checks-only, the booking after the revise (row 270)', () => {
+    expect(checksOnly([{ part: 'ui', state: 'not-measured', key: KEY, why: 'no drive runs jobs in this repo' }])!.rule).toBe('checks-only')
+  })
+  it('a part nobody can book (pending) offers no booking (row 270)', () => {
+    const d = checksOnly([{ part: 'ui', state: 'pending', key: KEY }])!
+    expect(d.rule).toBe('checks-only')
+    expect(d.options.some((o) => o.command.includes('--book'))).toBe(false)
+  })
+})
+
 describe('the checks-only rule (row 264)', () => {
   it('a checks-only round\'s block recommends the bare revise and offers no approve (row 264)', () => {
     const d = recommend({ gate: 'ship', target: 'p1', entries: [onlyShip(1)], upstream: 'p1', stale: false })!

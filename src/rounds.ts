@@ -43,6 +43,10 @@ export interface PartVerdict {
   book?: Record<string, number>; booked?: number; items?: string[]; cleared?: string[]
 }
 
+// A green part, a part red on the base with nothing new, and a part the plan's booking covers pass.
+// Beside the verdict, so a reader of journaled parts (recommend) needs no lane.
+export const partPasses = (v: PartVerdict): boolean => v.state === 'green' || v.state === 'base-only' || v.state === 'booked'
+
 // Row 251. One check, timed over its whole run — the inputs only it reads belong inside `run`.
 export async function timedCheck(run: () => GateCheck | Promise<GateCheck>): Promise<GateCheck> {
   const start = performance.now()
