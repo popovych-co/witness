@@ -179,6 +179,23 @@ the plan's tree reads "not judged". A part's state joins the gate's resume signa
 journaled once the base result lands. Drive reads the config at each job's start, and owes no key the config no longer
 gives.
 
+**As built (T2d, rows 264–267).** The registry is `CHECKS` (`src/checks.ts`), in run order: `markers`, `lint`
+(withholding); `implement-gate`, `diff`, `evidence`, `regression`, `tests`, `drift-lane` (judged). Each code gate hands
+`runChecks` its steps; they run tier first, then in the registry's order, never by measured cost (correction C14), each
+timed, cut after the first withholding red. Two tiers only (C15): `waiver` lands with `--book` (T2e), `precondition` and
+`advisory` with their first checks; today's refusals stay where they are and the doc gates register nothing. The
+checks-only round carries its checks up to the red one, `model` = `pin`, the full-review `prompts_sha`, the snapshot
+fields any round carries and nothing a battery writes; its round number is shared with the round after it. It resumes,
+or answers changed-nothing, only on the same key and the same `checksSignature` (a lint part's key joins it, so an edited
+part command never resumes); once green it runs fresh. At the round bound nothing is journaled. `lensesRan` is read by
+the budget, the discharge, the verdict cache (`answersKey`), the delta base, recurrence and demotions — not by drive's
+rounds cap (which counts the round), `lastJudgedRun` and its readers (the gate's state anchors on the round, so its
+decision is owed), the pairing, or the malformed-streak brake. No approve is live on it (`liveActs`); `decide` refuses
+one `checks-only`, `recommend`'s rule `checks-only` offers the bare revise (the policy takes it), and the arbiter's menu
+bars approve. Markers test `OPENS` on the lines the plan adds (C16). Implement runs the lint parts too, and `trustOwed`
+owes them. A round red only for base results a drive will lint is left to drive (`Settled.waiting`); the landing makes
+the stop stale (`ActFacts.checksMoved`), so the policy routes the re-gate.
+
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
 - decide refuses `--approve` on it.
@@ -422,6 +439,11 @@ idempotence key.
 **Arbiter input** gets only CLI-structured facts about checks (names, counts, rule ids), never tool output, diff
 text or finding prose written by the agent.
 
+**As built (T2d, row 266).** `checkFacts` prints each check's name and verdict, each lint part's state with its counts
+and rule ids, how many commands trust kept from running, and the held criteria's ids — never a check's `detail`, a part's
+`why` or a command; foreign names are spelled out. Every gate's checks read so. A checks-only round says so on the stop's
+round line, as `model: no reviewer was asked`, and in the round history.
+
 ---
 
 ## 4. Items
@@ -509,7 +531,10 @@ prints the record in full.
 **Builds:** CR (§3.2), DJ (§3.5), LD with booked-check items (§3.3), TR readers (§3.7).
 
 **Checks.**
-- Conflict openers on the PC files, using `clash.ts`'s `OPENS` rule; a plain `=======` never counts.
+- Conflict openers on the PC files, using `clash.ts`'s `OPENS` rule; a plain `=======` never counts. As built (C16,
+  row 265): on the lines the plan adds to text files in PC — a tracked file's added lines against the base, an
+  untracked file whole — so a marker the base already holds is not the plan's; binaries and symlinks are skipped, and
+  a diff that fails reads the file whole.
 - ship.lint by named parts; trustOwed includes ship.lint for gate implement.
 - The existing evidence, regression and criteria checks.
 
@@ -915,3 +940,18 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
 - **The base's keys ride the shard's result (T2c, row 263)**, at most 2,000 distinct keys per result (one pipe write).
 - **Drive reads the config at each job's start (T2c, row 263).** Gates read the file fresh, so a part edited mid-run is
   keyed and trusted as the gate that asked keyed it.
+- **C14 (T2d, row 264).** §3.2 ordered checks by a cold-start order, then the journaled median `duration_ms`; they run
+  by tier, then in the registry's order, never by cost: cost could only reorder within a tier, and across tiers ship's
+  criteria lane reads the tests lane's suite (row 252), so a measured order could run the suite twice. `duration_ms`
+  keeps no reader.
+- **C15 (T2d, row 264).** §3.2's four tiers and its waiver: T2d builds `withholding` and `judged`; `waiver` lands with
+  `--book` (T2e), its first reader; `precondition` with T5's `mutation-pending` and T7b's `map-unseen`, `advisory` with
+  T5's survivors. Today's refusals (steps-open, screens-matched-nothing, design-unseen) stay put.
+- **C16 (T2d, row 265).** §4 T2 scanned conflict openers "on the PC files"; it scans the lines the plan adds to text files
+  in PC, per base-red's per-diagnostic rule: a marker the base already holds is not the plan's.
+- **A checks-only round at the bound journals nothing (T2d, row 264).** The endgame decides at the bound (row 67), and a
+  moved tree already reads stale; a checks-only round never brings the bound nearer.
+- **A round red only for drive's base lint waits for drive (T2d, row 267).** The settle ran before the base lint existed,
+  so under autonomy such a round was revised; it is now `waiting` to the settle — drive's work in flight — and the
+  landed result makes the stop stale, so the policy routes the re-gate. With jobs off for the run, drive sets it aside
+  for the human.
