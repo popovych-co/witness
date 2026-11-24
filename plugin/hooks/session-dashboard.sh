@@ -5,4 +5,4 @@
 [ -f witness.config.yaml ] || exit 0
 # row 217: a reviewer reads; it never runs witness
 [ -n "$WITNESS_REVIEWER" ] && exit 0
-${WITNESS_BIN:-npx -y @popovych.co/witness@0.31.0} 2>/dev/null || true
+${WITNESS_BIN:-npx -y @popovych.co/witness@0.31.1} 2>/dev/null || true
