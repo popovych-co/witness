@@ -113,18 +113,38 @@ describe('the base-lint job (row 263)', () => {
   }, 60_000)
 })
 
+// Row 267. A plan in progress whose ship.lint is `parts` (each a fakeLint mode), committed; a checks-only
+// ship round built from parts (`only`), or built and journaled as the plan's last ship run (`journaled`).
+async function waitRepo(parts: Record<string, 'check' | 'sarif'>) {
+  const repo = await seededRepo()
+  const root = repo.root
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  await writePlan(repo, 'p1')
+  repo.flipStatus('p1', 'in-progress')
+  const cmd = fakeLint(repo)
+  patchConfig(repo, { ship: { lint: Object.fromEntries(Object.entries(parts).map(([n, m]) => [n, cmd[m]])) } })
+  commitAll(repo, 'lint parts')
+  const head = repo.git('rev-parse', 'HEAD')
+  let n = 0
+  const only = (parts: PartVerdict[]) => ({ v: 1, t: 'gate-run', gate: 'ship', artifact: 'p1', round: 1, run_id: `r${++n}`,
+    reviewed_sha: 's', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks_only: true,
+    checks: [{ name: 'lint', ok: false, parts }] }) as unknown as GateRunEntry
+  const journaled = (parts: PartVerdict[]) => {
+    const e = only(parts)
+    appendEntry(root, 'p1', e as unknown as Parameters<typeof appendEntry>[2])
+    commitAll(repo, `round ${e.run_id}`)                        // a journal entry is committed state
+    return e
+  }
+  return { repo, root, cmd, head, only, journaled }
+}
+
 describe('what a checks-only round waits on (row 267)', () => {
   it('what a checks-only round\'s lint waits on, read now (row 267)', async () => {
-    const repo = await seededRepo()
-    const root = repo.root
-    const cmd = fakeLint(repo)
-    patchConfig(repo, { ship: { lint: { ui: cmd.check, api: cmd.check, web: cmd.check, db: cmd.check } } })
-    commitAll(repo, 'four parts')
-    const head = repo.git('rev-parse', 'HEAD')
+    const { repo, root, cmd, head, only, journaled } = await waitRepo({ ui: 'check', api: 'check', web: 'check', db: 'check' })
     const key = (part: string) => baseLintKey(cfgOf(root).ship.lint!.find((p) => p.name === part)!, undefined, head)
     const [k1, k2, k3, k4] = ['ui', 'api', 'web', 'db'].map(key) as [string, string, string, string]
-    const only = (parts: PartVerdict[]) => ({ checks_only: true, checks: [{ name: 'lint', ok: false, parts }] }) as unknown as GateRunEntry
-    const r = only([{ part: 'ui', state: 'pending', key: k1 }, { part: 'api', state: 'not-measured', key: k2 },
+    const r = journaled([{ part: 'ui', state: 'pending', key: k1 }, { part: 'api', state: 'not-measured', key: k2 },
       { part: 'web', state: 'pending', key: k3 }, { part: 'db', state: 'pending', key: k4 }])
     const DONE = { exit: 0, tree: 'a'.repeat(40), commit: head }
     const shard = (k: string, o: Partial<JobShardEntry>) => journalShard(root, { kind: BASE_LINT, key: k, shard: 1, of: 1, outcome: 'done', ms: 1, ...o })
@@ -140,13 +160,33 @@ describe('what a checks-only round waits on (row 267)', () => {
       expect(baseWait(root, r)).toEqual({ waiting: ['db'], landed: ['ui', 'api'], red: ['web'] })
       // scratch runs off — an older file (schema 2: no scratch.prepare, one plain lint part) — so no job will run
       const lone = baseLintKey({ name: 'lint', cmd: 'npm run lint', source: 'ship.lint' }, undefined, head)
-      const plain = only([{ part: 'lint', state: 'pending', key: lone }])
+      const plain = journaled([{ part: 'lint', state: 'pending', key: lone }])
       repo.write('witness.config.yaml', configYaml())
       expect(baseWait(root, plain)).toEqual({ waiting: ['lint'], landed: [], red: [] })
       repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
       expect(baseWait(root, plain)).toEqual({ waiting: [], landed: [], red: ['lint'] })
       expect(baseWait(root, only([{ part: 'ui', state: 'red', key: k1 }]))).toEqual({ waiting: [], landed: [], red: ['ui'] })
       expect(baseWait(root, { ...r, checks_only: undefined } as never)).toEqual({ waiting: [], landed: [], red: [] })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 120_000)
+})
+
+describe('what a checks-only round waits on — slice 3 review (row 267)', () => {
+  it('a part waits only on a key a job owes: a later round of the gate with the part green owes none (I1)', async () => {
+    const { repo, root, head, journaled } = await waitRepo({ biome: 'check' })
+    const k = baseLintKey(cfgOf(root).ship.lint![0]!, undefined, head)
+    const r1 = journaled([{ part: 'biome', state: 'pending', key: k }])
+    const held = acquireDriveLock(root, {})
+    try {
+      expect(baseWait(root, r1)).toEqual({ waiting: ['biome'], landed: [], red: [] })
+      // a later ship round, malformed, its lint green: the gate's last run owes no key
+      appendEntry(root, 'p1', { ...(r1 as unknown as Record<string, unknown>), run_id: 'r-later', checks_only: undefined, outcome: 'malformed',
+        checks: [{ name: 'lint', ok: true, parts: [{ part: 'biome', state: 'green' }] }], verdicts: [], malformed: [{ reviewer: 'x', violations: [] }] } as never)
+      commitAll(repo, 'a later round')
+      expect(baseLintKind.owed(root, cfgOf(root), loadCanon(root))).toEqual([])
+      expect(baseWait(root, r1)).toEqual({ waiting: [], landed: [], red: ['biome'] })
     } finally {
       if (held.ok) held.value()
     }

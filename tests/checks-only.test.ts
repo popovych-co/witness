@@ -251,3 +251,18 @@ describe('a round red only for drive\'s base lint (row 267)', () => {
     expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship').at(-1)).toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-only' })
   }, 240_000)
 })
+
+describe('a round red only for drive\'s base lint — slice 3 review (row 267)', () => {
+  it('a waiting stop whose content moved since is routed to the re-gate, never left waiting (I1)', async () => {
+    const { repo, wt, planId, scenario, gateOut } = await redForShip()
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      expect(await gateOut('ship')).toContain('waiting: ship auth-refresh-plan-1')
+      writeFileSync(join(wt, 'src', 'token.ts'), TOKEN_FIXED)          // the author fixed the lint: the content moved
+      const s = await settleStop(fakeCtx(repo.root, { env: gateEnv(scenario) }), repo.root, cfgOf(repo.root), 'ship', planId)
+      expect(s).toMatchObject({ kind: 'routed', line: expect.stringContaining('witness gate ship auth-refresh-plan-1') })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 240_000)
+})

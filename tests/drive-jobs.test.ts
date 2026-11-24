@@ -20,6 +20,8 @@ import {
 } from './helpers.js'
 import { baseLintKey } from '../src/base-lint.js'
 import { acquireDriveLock } from '../src/drive-presence.js'
+import { gateSpec } from '../src/gate.js'
+import '../src/gates/index.js'
 
 // Row 257 (spec §3.5). Drive runs jobs one shard at a time beside its sessions, boxes each from the
 // child's own "running" line, and journals what the shard ended on.
@@ -354,8 +356,10 @@ async function waitingStop(opts: { jobsOff?: boolean } = {}) {
   repo.write('src/old.ts', 'BAD\n')
   repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part and its reader')
   const key = baseLintKey(cfgOf(repo.root).ship.lint![0]!, cmd.sarif, repo.git('rev-parse', 'HEAD'))
+  // on the content as it stands (slice 3 review I1: a stop whose content moved is re-gated, never left waiting)
+  const sha = gateSpec('ship')!.currentSha!(repo.root, loadCanon(repo.root), cfgOf(repo.root), 'a-plan-1')!
   appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'ship', artifact: 'a-plan-1', round: 1, run_id: 'rs1',
-    reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks_only: true,
+    reviewed_sha: sha, prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks_only: true,
     checks: [{ name: 'lint', ok: false, parts: [{ part: 'biome', state: 'pending', key }] }] })
   // slice 3 review I1's foreign first entry: drive's first job write is refused, so jobs turn off
   if (opts.jobsOff === true) appendEntry(repo.root, JOB_STREAM, { t: 'retry', artifact: 'x' })

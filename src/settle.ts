@@ -136,18 +136,20 @@ async function judgeStop(
   // every settle that reads it (row 244, design §4.2.4).
   const owed = settlerOwed(entries, gate)
   if (owed === undefined) return { kind: 'none' }
-  // Row 267 (T2c's hand-off). A checks-only round red only for base results a drive will lint is
-  // drive's: no decision now, which would revise the author over a red nobody judged yet.
-  const wait = baseWait(root, owed)
-  if (awaitsDrive(wait)) return { kind: 'waiting', why: `drive lints the base of ${wait.waiting.join(' · ')} first` }
   // Row 240 (R2). What this settler read of its stop, taken before any model call; every act
   // below carries it, so none can land on a disposition this read did not see.
   const token = settledToken(entries, gate, owed.run_id)
 
   const canon = loadCanon(root)
   const now = spec.currentSha?.(root, canon, cfg, target)
-  const stale = (now !== undefined && now !== owed.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), owed).length > 0 ||
-    wait.landed.length > 0
+  const moved = (now !== undefined && now !== owed.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), owed).length > 0
+  // Row 267 (T2c's hand-off). A checks-only round red only for base results a drive will lint is
+  // drive's: no decision now, which would revise the author over a red nobody judged yet. Only on
+  // unmoved content (slice 3 review I1): where the content or a hold moved, the re-gate is owed now,
+  // and it keys the base anew.
+  const wait = baseWait(root, owed)
+  if (!moved && awaitsDrive(wait)) return { kind: 'waiting', why: `drive lints the base of ${wait.waiting.join(' · ')} first` }
+  const stale = moved || wait.landed.length > 0
   const block = recommend({
     gate, target, entries, upstream: spec.upstreamOf?.(root, canon, target), stale,
     untrustedCmds: untrustedCmdsFor(root, criteriaOwner(canon, target)),

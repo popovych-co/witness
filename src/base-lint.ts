@@ -111,9 +111,11 @@ function pendingKeys(root: string, plan: string): string[] {
 //   landed  its result is done and well formed;
 //   red     done but malformed: the lane reads that not measured for good, and waiting on it would
 //           loop the re-gate;
-//   waiting its result is missing while a drive holds the repo — unless scratch runs are off, when no
-//           job will run (red);
-//   red     struck twice, or no drive runs (nothing reads pending without one).
+//   waiting its result is missing while a drive holds the repo and the job owes it — the key rides the
+//           plan's last implement or ship run (`pendingKeys`, what `owed` reads; slice 3 review I1: a later
+//           round of the gate that no longer asks for it owes nothing, and waiting on it would poll
+//           forever) — unless scratch runs are off, when no job will run (red);
+//   red     struck twice, no drive runs (nothing reads pending without one), or no job owes it.
 // Every other part that did not pass is red, and so is a missing part with no key. All empty for any
 // run but a checks-only round whose last check is lint, and for a config file that does not load.
 export interface BaseWait { waiting: string[]; landed: string[]; red: string[] }
@@ -124,13 +126,14 @@ export function baseWait(root: string, run: GateRunEntry): BaseWait {
   const cfgR = loadConfig(root)
   if (!cfgR.ok) return out
   const cfg = cfgR.value
+  const owes = new Set(pendingKeys(root, run.artifact))
   for (const p of lint.parts) {
     if (partPasses(p)) continue
     if (!MISSING.has(p.state) || p.key === undefined) { out.red.push(p.part); continue }
     if (!current(cfg, p.key)) { out.landed.push(p.part); continue }
     const reading = jobReading(root, { kind: BASE_LINT, key: p.key, shards: 1 })
     if (reading.state === 'done') (baseLintResult(reading.results[0]) !== undefined ? out.landed : out.red).push(p.part)
-    else if (reading.state === 'pending' && cfg.scratch.prepare !== undefined) out.waiting.push(p.part)
+    else if (reading.state === 'pending' && cfg.scratch.prepare !== undefined && owes.has(p.key)) out.waiting.push(p.part)
     else out.red.push(p.part)
   }
   return out
