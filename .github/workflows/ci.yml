@@ -6,13 +6,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      # one runtime's failure must not cancel the other's run
+      fail-fast: false
+      matrix:
+        # the floor package.json#engines names and the node release.yml publishes from: a release
+        # is never the first run on its runtime (issue #101, tests/workflows.test.ts)
+        node: [20, 24]
     steps:
       - uses: actions/checkout@v4
       # pnpm version comes from package.json#packageManager
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
