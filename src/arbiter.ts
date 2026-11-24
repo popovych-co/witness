@@ -12,9 +12,10 @@ import type { Decision, Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
 import { effortCanon, effortOf } from './reviewed.js'
-import { REVISE_HUMAN, anchorRecurrence, gateRuns, roundBudget, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { REVISE_HUMAN, anchorRecurrence, gateRuns, roundBudget, type DecisionEntry, type GateCheck, type GateRunEntry, type PartVerdict } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { canonicalJson } from './sha.js'
+import { visible } from './toon.js'
 
 // Row 172. The arbiter is a LENS in the judgment lane (D48, D88): the repo's judge harness,
 // its own `arbiter.model` pin, the hermetic reviewer spawn and a vendored prompt — never the
@@ -147,6 +148,39 @@ export const HANDED_BACK_FACT = 'the author handed this revise back with the con
 const anchorText = (a: string | { scope: string }) => (typeof a === 'string' ? a : `omission:${a.scope}`)
 const HISTORY_RUNS = 10
 
+// Row 266 (§3.9). A lint part as the arbiter reads it: its state, the counts and the rule ids — never
+// its `why`, which can carry a refusal's `got` (T2c slice 3 M7).
+function partFact(p: PartVerdict): string {
+  const name = visible(p.part)
+  switch (p.state) {
+    case 'green': return `${name} green`
+    case 'base-only': return `${name} red on the base too, nothing new (${p.base ?? 0} there)`
+    case 'new': {
+      const rules = (p.rules ?? []).map(visible)
+      return `${name} ${p.new ?? 0} new beside the base's ${p.base ?? 0}${rules.length > 0 ? `, rules ${rules.join(', ')}` : ''}`
+    }
+    case 'red': return `${name} red, the base green`
+    case 'pending': return `${name} red, the base's result pending`
+    case 'not-measured': return `${name} red, the base not measured`
+    case 'not-judged': return `${name} red on the base too, not judged`
+    case 'untrusted': return `${name} not run, its command not trusted`
+  }
+}
+
+// Row 266 (§3.9). A check as the arbiter reads it: CLI-structured facts only — its name and verdict,
+// each lint part's state with its counts and rule ids, how many commands trust kept from running, and
+// the held criteria's ids. Never `detail` (tool output on some checks, foreign paths on others), never
+// a part's `why`, never a command. Foreign names (parts, rule ids, criterion ids) are spelled out.
+export function checkFacts(c: GateCheck): string {
+  const n = c.untrusted?.length ?? 0
+  const facts = [
+    ...(c.parts ?? []).map(partFact),
+    ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
+    ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
+  ]
+  return [`${visible(c.name)}: ${c.ok ? 'ok' : 'FAILED'}`, ...facts].join(' · ')
+}
+
 // The evidence the arbiter reads, composed by the CLI from the journal and canon. It never
 // carries a session transcript: none exists to carry, and the author's narration is
 // exactly what the arbiter must not hear (anti-goal 1). A hand-back reaches it as a fact the CLI
@@ -162,16 +196,18 @@ export function decisionEvidence(
       title: 'The stop',
       body: [
         `gate: ${gate} · target: ${target}`,
-        `round: ${run.round} of ${roundBudget(entries, gate)}`,
+        `round: ${run.round} of ${roundBudget(entries, gate)}${run.checks_only === true ? ' · checks only — no lens ran' : ''}`,
         `rule: ${block.rule}`,
         `standing: ${run.standing ?? 'none'}`,
-        `model: reviewers answered on ${run.model} · pinned ${run.pin ?? run.model}`,
+        // Row 266: no reviewer answered a checks-only round.
+        run.checks_only === true
+          ? `model: no reviewer was asked · pinned ${run.pin ?? run.model}`
+          : `model: reviewers answered on ${run.model} · pinned ${run.pin ?? run.model}`,
       ].join('\n'),
     },
     {
       title: 'Checks',
-      body: run.checks.length === 0 ? 'none'
-        : run.checks.map((c) => `- ${c.name}: ${c.ok ? 'ok' : 'FAILED'}${c.detail ? ` — ${c.detail}` : ''}`).join('\n'),
+      body: run.checks.length === 0 ? 'none' : run.checks.map((c) => `- ${checkFacts(c)}`).join('\n'),
     },
     {
       title: 'Findings',
@@ -185,7 +221,9 @@ export function decisionEvidence(
   const runs = gateRuns(entries, gate).slice(-HISTORY_RUNS)
   for (const r of runs) {
     const blocks = [...new Set((r.verdicts ?? []).flatMap((rv) => rv.findings.filter((f) => f.blocking).map((f) => anchorText(f.anchor))))]
-    history.push(`- round ${r.round} · @${r.reviewed_sha.slice(0, 7)} · ${r.outcome}${blocks.length ? ` · blocking: ${blocks.join(' · ')}` : ''}`)
+    // Row 266: a checks-only round names the check that withheld its review where a round names its outcome.
+    const outcome = r.checks_only === true ? `checks only — ${visible(r.checks.at(-1)?.name ?? 'a check')}` : r.outcome
+    history.push(`- round ${r.round} · @${r.reviewed_sha.slice(0, 7)} · ${outcome}${blocks.length ? ` · blocking: ${blocks.join(' · ')}` : ''}`)
     const at = entries.indexOf(r as unknown as Entry)
     for (const e of entries.slice(at + 1)) {
       if (e.t === 'gate-run' && (e as unknown as GateRunEntry).gate === gate) break
