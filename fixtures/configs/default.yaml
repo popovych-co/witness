@@ -16,7 +16,7 @@ criteria:
   exclude: []                  # extra globs never scanned for criteria tags · [] = none
 ship:
   test: npm test               # the suite command ship runs · full-suite criteria run it too
-  lint: npm run lint           # the lint ship runs · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic
+  lint: npm run lint           # the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic
   branch: main                 # the branch witness ships into
   merge: merge                 # how ship merges its own PR under autonomy · merge | squash | rebase
   ciSettleMs: 60000            # ms green CI must hold still before an autonomous merge · 0–1800000

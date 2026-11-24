@@ -70,8 +70,8 @@ describe('trust is checked before work (D205)', () => {
     if (!cfg.ok) throw new Error('config')
     const canon = loadCanon(repo.root)
     const owed = (line: string) => trustOwed(repo.root, NO_TRUST, cfg.value, canon, { line, target: 'ingest-plan-1' })
-    // the runner and the ship lanes are owed; the spec's cmd: criterion never is
-    expect(owed('witness gate implement ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"'])
+    // the runner and the ship lanes are owed; the spec's cmd: criterion never is (implement runs lint too, row 265)
+    expect(owed('witness gate implement ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"', 'npm run lint'])
     expect(owed('witness ship ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"', 'npm test', 'npm run lint'])
     expect(owed('witness gate ship ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"', 'npm test', 'npm run lint'])
     expect(owed('witness verify-red ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"'])
@@ -158,5 +158,22 @@ describe('lint parts owe trust at ship (row 261)', () => {
     patchConfig(repo, { ship: { lint: { biome: 'b' } }, readers: { biome: 'b-sarif' } })
     const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness gate ship p1' })
     expect(owed.filter((c) => c.source === 'readers.biome')).toEqual([{ cmd: 'b-sarif', source: 'readers.biome' }])
+  })
+})
+
+describe('trust owed by the implement gate (row 265)', () => {
+  it('gate implement owes the runner, every lint part and every bound reader — never ship.test (row 265)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { criteria: { runner: 'run {id}' }, ship: { test: 'st', lint: { biome: 'b', types: 't' } }, readers: { biome: 'r' } })
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'parts')
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error('config')
+    const canon = loadCanon(repo.root)
+    const owed = (line: string) => trustOwed(repo.root, {}, cfg.value, canon, { line, target: 'p1' }).map((c) => c.cmd)
+    expect(owed('witness gate implement p1')).toEqual(['run {id}', 'b', 't', 'r'])
+    expect(owed('witness test-evidence p1')).toEqual(['run {id}'])
+    expect(owed('witness verify-red p1')).toEqual(['run {id}'])
+    expect(owed('witness check --drift p1')).toEqual(['run {id}'])
+    expect(owed('witness gate ship p1')).toEqual(['run {id}', 'st', 'b', 't', 'r'])
   })
 })

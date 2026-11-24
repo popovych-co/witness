@@ -231,8 +231,8 @@ function listingOf(
 // not trust yet, checked before any work: found only inside the session, a refusal journaled
 // nothing, `next` routed the same line again and drive respawned it to the cap. Only the
 // commands with no "no" path — the runner (the template, or ship.test in full-suite) for the
-// evidence verbs and the implement gate; that plus ship.test, every ship.lint part and bound reader for ship; a start's
-// own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
+// evidence verbs; that plus every ship.lint part and bound reader for the implement gate (row
+// 265); those plus ship.test for ship; a start's own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
 // headless gate, so trust is never the toll, and a gate whose check failed on one reaches the
 // settle pass's trust-grant stop instead.
 
@@ -244,11 +244,14 @@ export function trustOwed(
   const config = configCommands(cfg)
   const runner = config.filter((c) => c.source === (cfg.criteria.runner === 'full-suite' ? 'ship.test' : 'criteria.runner'))
   // Rows 261–262. Ship runs its suite, every lint part and every bound reader — never a reader no
-  // part bears the name of (slice 1 review I1).
-  const shipRuns = new Set([cfg.ship.test, ...lintCommands(cfg).map((c) => c.cmd)])
+  // part bears the name of (slice 1 review I1). Row 265: the implement gate runs the lint parts and
+  // their readers too, never ship.test.
+  const lints = lintCommands(cfg)
+  const shipRuns = new Set([cfg.ship.test, ...lints.map((c) => c.cmd)])
   const line = `${action.line} `
   const run: RunCommand[] =
-    /^witness (test-evidence|verify-red|gate implement|check --drift) /.test(line) ? runner
+    /^witness (test-evidence|verify-red|check --drift) /.test(line) ? runner
+      : /^witness gate implement /.test(line) ? [...runner, ...lints]
       : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => shipRuns.has(c.cmd))]
         : /^witness start /.test(line) && action.target !== undefined
           ? (() => { const doc = canon.docs.find((d) => d.meta.id === action.target); return doc ? cmdNeeds(doc) : [] })()

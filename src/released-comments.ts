@@ -74,7 +74,7 @@ export const RELEASED_COMMENTS: ReadonlySet<string> = new Set([
   "the judge: the agent CLI that runs this repo's gate reviewers and arbiter · claude-code | pi",
   "the junit report witness reads · junit:<glob>, or none · full-suite needs one",
   "the lint command ship runs",
-  "the lint ship runs · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic",
+  "the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic",
   "the suite command ship runs · full-suite criteria run it too",
   "upstream resets one target may take, then it is parked · ≥ 1",
   "what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none",

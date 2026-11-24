@@ -20,6 +20,7 @@ import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import { contentSha } from '../content-sha.js'
 import { runChecks, type CheckStep } from '../checks.js'
 import { markersCheck } from '../markers.js'
+import { lintCheck } from '../lint-lane.js'
 import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
 
@@ -144,8 +145,10 @@ registerGate({
     // ends the round before any lens, and a step it cut leaves its side output empty.
     let present: string[] = []
     const steps: CheckStep[] = [
-      // Row 265. A conflict opener on a line the plan adds withholds the review.
+      // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
+      // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
+      { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base) },
       { name: 'diff', run: () => ({ name: 'diff', ok: files.length > 0,
         detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' }) },
       { name: 'evidence', run: () => {

@@ -9,6 +9,10 @@ import { openDeferrals } from '../src/deferral.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
+import { baseLintKind } from '../src/base-lint.js'
+import { loadConfig, type Config } from '../src/config.js'
+import { acquireDriveLock } from '../src/drive-presence.js'
+import { loadCanon } from '../src/scan.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { TOKEN_FIXED, callCount, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
 
@@ -26,6 +30,8 @@ const BLOCKING = { ...CLEAN, findings: [{ blocking: true, anchor: 'src/token.ts'
 
 const runs = (repo: { root: string }, id: string) =>
   readStream(repo.root, id).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
+
+const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
 
 type Flags = { fresh: boolean; manual: boolean }
 const PLAIN: Flags = { fresh: false, manual: false }
@@ -179,5 +185,26 @@ describe('conflict markers at implement (row 265)', () => {
     expect(last.checks.map((c) => c.name)).toEqual(['markers'])
     expect(last.checks[0]!.detail).toContain('src/token.ts:')
     expect(callCount(scenario)).toBe(calls)
+  }, 240_000)
+})
+
+describe('lint at implement (row 265)', () => {
+  it('the implement gate runs every lint part and withholds on a red one, owing its base key (row 265)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    const scenario = fakeScenario(); putVerdict(scenario, CLEAN)
+    setLint(repo, { ui: '! grep -rq LINTBAD src' })               // an opaque part, red on the plan's tree
+    writeFileSync(join(wt, 'src', 'token.ts'), `${TOKEN_FIXED}// LINTBAD\n`)
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, PLAIN)).toBe(1)
+      const last = runs(repo, planId).at(-1)!
+      expect(last).toMatchObject({ gate: 'implement', checks_only: true })
+      const lint = last.checks.at(-1)!
+      expect(lint.name).toBe('lint')
+      expect(lint.parts).toEqual([expect.objectContaining({ part: 'ui', state: 'pending' })])
+      expect(baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root)).map((u) => u.key)).toEqual([lint.parts![0]!.key])
+    } finally {
+      if (held.ok) held.value()
+    }
   }, 240_000)
 })

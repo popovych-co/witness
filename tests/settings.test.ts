@@ -7,6 +7,7 @@ import {
   READER_TOOLS, defaultAt, defaultValues, fingerprint, knownAt, settingAt, shapeAt, withValues,
 } from '../src/settings.js'
 import { SCHEMA_VERSION } from '../src/config.js'
+import { RELEASED_COMMENTS } from '../src/released-comments.js'
 
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
 
@@ -89,6 +90,15 @@ describe('ship.lint parts (row 261)', () => {
     expect(s).toMatchObject({ shape: { kind: 'parts' }, older: { until: 2, shape: { kind: 'text' } }, since: 1, defaults: { 1: 'npm run lint' } })
     expect(shapeAt(s, 2)).toEqual({ kind: 'text' })
     expect(shapeAt(s, 3)).toEqual({ kind: 'parts' })
+  })
+})
+
+describe('ship.lint\'s comment (row 265)', () => {
+  it('ship.lint\'s comment says both code gates run it (row 265)', () => {
+    const comment = 'the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic'
+    expect(settingAt('ship.lint')!.comment).toBe(comment)
+    expect(RELEASED_COMMENTS.has(comment)).toBe(true)
+    expect(RELEASED_COMMENTS.has('the lint command ship runs')).toBe(true)     // 0.30's text stays
   })
 })
 

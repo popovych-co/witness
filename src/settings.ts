@@ -158,7 +158,7 @@ export const SETTINGS: readonly Setting[] = [
     // whatever an earlier one did. witness never parses `&&`.
     path: 'ship.lint', shape: { kind: 'parts' }, older: { until: 2, shape: { kind: 'text' } },
     since: 1, defaults: { 1: 'npm run lint' }, ambient: true, group: 'setup',
-    comment: 'the lint ship runs · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic',
+    comment: 'the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic',
     want: 'a shell command, or a map of part names to shell commands — e.g. {biome: pnpm exec biome check ., tsc: pnpm exec tsc --noEmit}'
       + ' · a name is a lowercase letter, then up to 39 lowercase letters, digits or -',
   },

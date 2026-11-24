@@ -230,8 +230,10 @@ it('a dead arbiter pin is named where the settle pass leaves the stop (row 212)'
 it('a granted command that really fails lands a round and is revised, never resumed forever (F3)', async () => {
   const { repo, planId } = await shippableRepo()
   const runner = `node "${vitestBin()}" run -t "@spec:{id}" --passWithNoTests`
-  repo.write('witness.config.yaml', `schema: 1\ncriteria:\n  runner: '${runner}'\nship:\n  test: 'true'\n  lint: 'false'\nautonomy: on\n`)
-  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint false')
+  // Row 265: implement runs lint too, so it stays green through implement and turns red for ship
+  const config = (lint: string) => `schema: 1\ncriteria:\n  runner: '${runner}'\nship:\n  test: 'true'\n  lint: '${lint}'\nautonomy: on\n`
+  repo.write('witness.config.yaml', config('true'))
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint true')
   const SHIP_CLEAN = {
     coverage: [
       { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
@@ -241,6 +243,8 @@ it('a granted command that really fails lands a round and is revised, never resu
   }
   const scenario = fakeScenario(); putVerdict(scenario, SHIP_CLEAN)
   expect(await runGate(capture(repo.root, scenario).ctx, 'implement', planId, F)).toBe(0)
+  repo.write('witness.config.yaml', config('false'))
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint false')
   writeFileSync(join(repo.root, '.witness', 'allow.json'), JSON.stringify({ commands: ['true', runner] }))
   const blocked = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
   expect(await runGate(blocked.ctx, 'ship', planId, F)).toBe(1)
