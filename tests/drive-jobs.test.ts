@@ -348,7 +348,7 @@ describe('the base lint in drive — slice 3 review (row 263)', () => {
 
 // Row 267. A stop red only for drive's base lint: as 'drive runs the base lint a gate left pending', the
 // ship round a checks-only one.
-async function waitingStop(opts: { jobsOff?: boolean } = {}) {
+async function waitingStop(opts: { jobsOff?: boolean; grant?: boolean; signal?: AbortSignal } = {}) {
   const repo = await startedFlows(['a'])
   const stale = cfgOf(repo.root)
   const cmd = fakeLint(repo)
@@ -364,13 +364,14 @@ async function waitingStop(opts: { jobsOff?: boolean } = {}) {
   // slice 3 review I1's foreign first entry: drive's first job write is refused, so jobs turn off
   if (opts.jobsOff === true) appendEntry(repo.root, JOB_STREAM, { t: 'retry', artifact: 'x' })
   repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'the ship round')
-  grantCommands(repo.root, [cmd.check, cmd.sarif])
+  if (opts.grant !== false) grantCommands(repo.root, [cmd.check, cmd.sarif])
   const out: string[] = []
   // the drive verb's lock, which `driveLoop` itself does not take: with no drive holding the repo no
   // part reads pending (`jobReading`)
   const held = acquireDriveLock(repo.root, {})
   try {
-    await driveLoop(repo.root, stale, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out), { maxSpawns: 1 })
+    await driveLoop(repo.root, stale, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out),
+      { maxSpawns: 1, ...(opts.signal !== undefined ? { signal: opts.signal } : {}) })
   } finally {
     if (held.ok) held.value()
   }
@@ -393,4 +394,13 @@ describe('a stop waiting on drive\'s base lint (row 267)', () => {
     const { out } = await waitingStop({ jobsOff: true })
     expect(out.some((l) => l.startsWith('drive: waits on you — a-plan-1 · decision · drive lints the base of biome first, but jobs are off for this run'))).toBe(true)
   }, 180_000)
+})
+
+describe('a stop waiting on drive\'s base lint — final review (row 267)', () => {
+  it('while the base-lint job waits on a trust grant, a waiting stop never holds drive in its poll: the run pauses for the human and ends at its idle limit (I1)', async () => {
+    const t0 = Date.now()
+    const { out } = await waitingStop({ grant: false, signal: AbortSignal.timeout(45_000) })
+    expect(out.some((l) => l.startsWith('drive: jobs wait for a trust grant'))).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(40_000)
+  }, 120_000)
 })

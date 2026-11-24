@@ -788,6 +788,10 @@ export async function driveLoop(
   // skipped by the settle pass, the fill, `waitingNeed`, `capped` and `unmoved` alike, so none
   // reads it as a cap or as no progress. While one waits and no lane runs, drive polls.
   const busySeen = new Set<string>()
+  // Row 267. This round's targets whose stop waits on drive's base lint: kept out of the fill and the
+  // notifications as a busy one is, but they hold the loop in its poll only while a base-lint shard can
+  // run (final review I1) — see `jobLive`.
+  const waitSeen = new Set<string>()
   const busyOther = (t: string): boolean => {
     if (busyHolder(root, 'settle', t) === undefined && busyHolder(root, 'ship', t) === undefined) return false
     busySeen.add(t)
@@ -795,7 +799,7 @@ export async function driveLoop(
   }
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
-    if (lanes.has(k) || aside.has(k) || busySeen.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
+    if (lanes.has(k) || aside.has(k) || busySeen.has(k) || waitSeen.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
     if (t === undefined) return true
     const mine = family(t)
     if ([...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))) return false
@@ -804,7 +808,7 @@ export async function driveLoop(
     return !busyOther(t)
   }
   const settleAdmits = (t: string | undefined): boolean =>
-    !busySeen.has(t ?? TARGETLESS) && settleAdmitsFor(t, { lanes, aside, ...(flags.flow !== undefined ? { flow: flags.flow } : {}), busy: busyOther })
+    !busySeen.has(t ?? TARGETLESS) && !waitSeen.has(t ?? TARGETLESS) && settleAdmitsFor(t, { lanes, aside, ...(flags.flow !== undefined ? { flow: flags.flow } : {}), busy: busyOther })
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
   // Row 240. Drive's timers: the earliest due time, and each timer whose time came — only its aside
   // is deleted (row 207's release resets a target's use and must not be used), its kept act handed
@@ -1102,7 +1106,7 @@ export async function driveLoop(
       // this run no job will run, so the stop is set aside for the human, saying why.
       if (s.kind === 'waiting') {
         if (jobsOff === undefined) {
-          busySeen.add(r.target)
+          waitSeen.add(r.target)
           const said = `drive: waiting — ${r.target} · ${s.why}`
           if (waitingSaid.get(r.target) !== said) { ctx.out(said); waitingSaid.set(r.target, said) }
         } else {
@@ -1408,6 +1412,7 @@ export async function driveLoop(
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
       busySeen.clear()
+      waitSeen.clear()
       stillAutonomous()
       // Row 240. Once a newer CLI has journaled, the state floor refuses this one at dispatch — and
       // this drive's sessions run its own bin. It ends rather than work beside its successor.
@@ -1487,7 +1492,7 @@ export async function driveLoop(
       beginJob()
       if (autonomous) {
         publish()
-        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target)))
+        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target) && !waitSeen.has(i.target)))
       }
       if (lanes.size === 0) {
         // Every wait here also wakes when a job ends (slice 3 review).
@@ -1498,7 +1503,15 @@ export async function driveLoop(
         }
         // Row 240. A target another process holds is work in flight, not the human's: drive polls on
         // its pause cadence — no pause, no notification — until a take or a release frees it.
-        if (!stop && !signalled && busySeen.size > 0) {
+        // Row 267 (final review I1): a stop waiting on drive's base lint is drive's work in flight only while
+        // a shard can run — none waits on a trust grant (the jobs trust aside), none is queued behind a turn
+        // holder that is not drive's, and jobs are on. Otherwise the wait falls through to the human's
+        // pause, with its idle limit and the host released; the stop stays undecided meanwhile.
+        const jobLive = jobsOff === undefined && !aside.has(JOB_STREAM) && !(job !== undefined && jobWaiting(job))
+        // Jobs turned off after this round's settle read a stop as waiting: one more pass sets it aside for
+        // the human, with the reason, before the run pauses or ends (Review Focus 2).
+        if (!stop && !signalled && waitSeen.size > 0 && jobsOff !== undefined) continue
+        if (!stop && !signalled && (busySeen.size > 0 || (waitSeen.size > 0 && jobLive))) {
           await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted, ...jobEnd])
           continue
         }
