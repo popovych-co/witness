@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest'
+import { CHECKS, checksSignature, runChecks } from '../src/checks.js'
+import type { GateCheck, PartState } from '../src/rounds.js'
+
+const step = (name: string, ok: boolean, ran: string[]) => ({ name, run: (): GateCheck => { ran.push(name); return { name, ok } } })
+
+describe('the check registry (row 264)', () => {
+  it('runs a gate\'s steps withholding tier first, then judged, each in registry order', async () => {
+    const ran: string[] = []
+    const r = await runChecks(['drift-lane', 'tests', 'implement-gate', 'lint'].map((n) => step(n, true, ran)))
+    expect(ran).toEqual(['lint', 'implement-gate', 'tests', 'drift-lane'])
+    expect(r.withheld).toBeUndefined()
+    expect(r.checks.every((c) => typeof c.duration_ms === 'number')).toBe(true)
+  })
+  it('stops at the first withholding red and names it; no judged step runs', async () => {
+    const ran: string[] = []
+    const r = await runChecks([step('drift-lane', true, ran), step('lint', false, ran), step('evidence', true, ran)])
+    expect(ran).toEqual(['lint'])
+    expect(r).toMatchObject({ withheld: 'lint', checks: [{ name: 'lint', ok: false }] })
+  })
+  it('a judged red never cuts the round', async () => {
+    const ran: string[] = []
+    const r = await runChecks([step('evidence', false, ran), step('lint', true, ran), step('drift-lane', true, ran)])
+    expect(ran).toEqual(['lint', 'evidence', 'drift-lane'])
+    expect(r.withheld).toBeUndefined()
+  })
+  it('a step the registry lacks, or one naming another check, is a witness bug', async () => {
+    await expect(runChecks([{ name: 'nope', run: () => ({ name: 'nope', ok: true }) }])).rejects.toThrow(/nope/)
+    await expect(runChecks([{ name: 'lint', run: () => ({ name: 'tests', ok: true }) }])).rejects.toThrow(/lint/)
+  })
+  it('lists each check once, the withholding tier first', () => {
+    const names = CHECKS.map((c) => c.name)
+    expect(new Set(names).size).toBe(names.length)
+    const first = CHECKS.findIndex((c) => c.tier === 'judged')
+    expect(CHECKS.slice(first).every((c) => c.tier === 'judged')).toBe(true)
+  })
+  it('the signature: pending and not-measured are one term; a part\'s state and key join it; detail and duration never do', () => {
+    const lint = (state: PartState, key?: string, extra: Partial<GateCheck> = {}): GateCheck[] =>
+      [{ name: 'lint', ok: false, parts: [{ part: 'ui', state, ...(key !== undefined ? { key } : {}) }], ...extra }]
+    expect(checksSignature(lint('pending', 'k1'))).toBe(checksSignature(lint('not-measured', 'k1')))
+    expect(checksSignature(lint('pending', 'k1'))).not.toBe(checksSignature(lint('pending', 'k2')))
+    expect(checksSignature(lint('pending', 'k1'))).not.toBe(checksSignature(lint('red', 'k1')))
+    expect(checksSignature(lint('red', 'k1', { detail: 'a', duration_ms: 1 }))).toBe(checksSignature(lint('red', 'k1', { detail: 'b', duration_ms: 9 })))
+  })
+})

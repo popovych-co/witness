@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFil
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { grantCommands } from '../src/allowlist.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
@@ -93,6 +94,8 @@ describe('the ship suite (rows 251, 252)', () => {
     const { repo, planId, ctx, scenario, suiteCmd: cmd } = await fullSuiteShip()
     await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
     rmSync(join(repo.root, '.witness/allow.json'))
+    // lint withholds the round while its command is blocked (row 264), so it alone is granted
+    grantCommands(repo.root, ['true'])
     // no TTY and no automation grant: the trust prompt cannot be asked, so the command is blocked
     const blocked = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '0' }) })
     await runGate(blocked, 'ship', planId, { fresh: false, manual: false })

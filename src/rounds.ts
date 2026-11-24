@@ -11,12 +11,13 @@ import type { CoverageItem, Finding } from './verdict.js'
 // Present only when non-empty.
 // held (row 179): the criteria an unmet need kept the drift lane from running.
 // duration_ms (row 251): how long the check took, in whole milliseconds — journaled for a later
-// reader (T2d's median per check name). Never part of an identity: `checkOk` (src/gate.ts) compares
-// name, ok, untrusted and held only, and no renderer prints it. Absent on every check before 251.
+// reader. Never part of an identity: `checksSignature` (src/checks.ts) never reads it, and no renderer
+// prints it. Absent on every check before 251. Row 264: checks run in the registry's order, never by
+// measured cost (C14), so it has no reader yet.
 export interface GateCheck {
   name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[]; duration_ms?: number
-  // Row 263. The lint check's verdict per part; never in a reviewed identity. Each part's state joins
-  // the gate's resume signature (`checkOk`, with `pending` and `not-measured` one term).
+  // Row 263. The lint check's verdict per part; never in a reviewed identity. Each part's state and key
+  // join the gate's resume signature (`checksSignature`, with `pending` and `not-measured` one term).
   parts?: PartVerdict[]
 }
 
@@ -108,7 +109,17 @@ export interface GateRunEntry {
   junit?: JunitSummary
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
+  // Row 264 (§3.2). A withholding check was red, so no lens ran: the round carries its checks up to
+  // the red one and nothing a battery writes. Never in an identity.
+  checks_only?: true
   outcome: 'passed' | 'stopped' | 'malformed'
+}
+
+// Row 264 (§3.2). Did the battery run and deliver a judgment? A malformed round judged nothing; a
+// checks-only round asked no lens. Not `lastJudgedRun`, which means "not malformed": a checks-only
+// round is a run the gate's state anchors on — its decision is owed — but not one lenses ran.
+export function lensesRan(run: GateRunEntry): boolean {
+  return run.checks_only !== true && run.outcome !== 'malformed'
 }
 
 export interface DecisionEntry {

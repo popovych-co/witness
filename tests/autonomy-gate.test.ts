@@ -1,6 +1,7 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
+import { grantCommands } from '../src/allowlist.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { appendEntry, readStream } from '../src/journal.js'
@@ -151,8 +152,15 @@ it('a command trust blocked is the human\'s to grant (kept stop)', async () => {
   expect(callFor(scenario, 'arbiter')).toBeUndefined()
   // final review: one kept stop per command, with its source and the grant that names it (row 205),
   // the grant on a `run:` row of its own under it (row 239)
-  expect(h.out()).toContain('kept-stop: trust grant — true (ship.test)\n  run: witness trust auth-refresh-plan-1 --cmd true\n')
-  expect(h.out()).toMatch(/^kept-stop: trust grant — node .* \(criteria\.runner\)\n {2}run: witness trust auth-refresh-plan-1 --cmd '/m)
+  expect(h.out()).toContain('kept-stop: trust grant — true (ship.test)\n  run: witness trust auth-refresh-plan-1 --cmd true')
+  // Row 264: lint runs first and withholds while `true` is blocked, so the round is checks only and the
+  // criteria lane's command is asked once `true` is granted — a judged round, its trust stop kept too
+  grantCommands(repo.root, ['true'])
+  const h2 = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
+  expect(await runGate(h2.ctx, 'ship', planId, F)).toBe(1)
+  expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship')).toEqual([])
+  expect(callFor(scenario, 'arbiter')).toBeUndefined()
+  expect(h2.out()).toMatch(/^kept-stop: trust grant — node .* \(criteria\.runner\)\n {2}run: witness trust auth-refresh-plan-1 --cmd '/m)
 })
 
 it('a --manual run keeps its stop for a human (Review Focus 4)', async () => {

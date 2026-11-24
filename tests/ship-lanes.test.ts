@@ -1,6 +1,7 @@
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { grantCommands } from '../src/allowlist.js'
 import { readStream } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
@@ -135,9 +136,17 @@ describe('a check names the commands trust blocked (A1)', () => {
     rmSync(join(repo.root, '.witness', 'allow.json'))           // a machine that trusts nothing yet
     const blocked = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '' }) })
     expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
+    // Row 264: lint runs first and withholds — a checks-only round naming lint's command alone
+    expect(runs(repo, planId).at(-1)).toMatchObject({ checks_only: true })
+    expect(runs(repo, planId).at(-1)!.checks.map((c) => [c.name, c.untrusted])).toEqual([['lint', ['true']]])
+    // lint trusted under its own command: the judged checks name theirs, and lint names none
+    patchConfig(repo, { ship: { lint: 'echo lint' } })
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'a lint of its own')
+    grantCommands(repo.root, ['echo lint'])
+    expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
     const checks = runs(repo, planId).at(-1)!.checks
     expect(checks.find((c) => c.name === 'tests')!.untrusted).toEqual(['true'])
-    expect(checks.find((c) => c.name === 'lint')!.untrusted).toEqual(['true'])
+    expect(checks.find((c) => c.name === 'lint')!.untrusted).toBeUndefined()
     const lane = checks.find((c) => c.name === 'drift-lane')!
     expect(lane.untrusted).toHaveLength(1)
     expect(lane.untrusted![0]).toContain('run -t "@spec:{id}"')

@@ -29,7 +29,7 @@ import {
   basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
 } from './delta.js'
 import {
-  actKey, appendKind, boundReached, disposedRun, fellBack, keyOf, lastGateRun, liveActs,
+  actKey, appendKind, boundReached, disposedRun, fellBack, keyOf, lastGateRun, lensesRan, liveActs,
   roundsSinceApprove, runsSinceReset, sameKey, settledSinceViolation, settledToken, standingHandBack,
   type ActFacts, type AppendKind, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
 } from './rounds.js'
@@ -37,6 +37,7 @@ export { liveExits } from './rounds.js'
 import { actFacts, openStepRow, settlerOwed, stepsOpenViolation } from './verbs/next.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { recommend, renderDecision } from './recommend.js'
+import { checksSignature } from './checks.js'
 import { autonomyLines } from './autonomy.js'
 import { reportHandover, slicesLine } from './slice.js'
 
@@ -77,6 +78,9 @@ export interface GateInput {
   snapshot?: { tree: string; context: string }
   // Row 251. Ship's one suite run, counted (full-suite mode only), journaled on the gate-run.
   junit?: JunitSummary
+  // Row 264. The withholding check that is red (`runChecks`, src/checks.ts) — the last of `checks`:
+  // no lens runs, and the gate journals a checks-only round. `promptBody` is then '' (no lens reads it).
+  withheld?: string
 }
 
 export interface GateSpec {
@@ -448,8 +452,9 @@ function handBackHolds(entries: Entry[], gate: string, read: HandBackRead): bool
 // Why `--unchanged` handed nothing back, from what the gate does instead (design §4.2.4, P11). Worded
 // without a comma, so the `note:` line prints unquoted, and never as `witness <word>` before a value,
 // which would read as a witness command printing a bare value (row 239's prose-quote lint).
-function notHandedBack(kind: AppendKind, key: GateKey, disposed: GateRunEntry): string {
+function notHandedBack(kind: RunKind, key: GateKey, disposed: GateRunEntry, withheld: string | undefined): string {
   const n = `round ${disposed.round}`
+  if (kind.kind === 'checks-only' && sameKey(keyOf(disposed), key)) return `a check changed since ${n} — no lens runs while ${withheld ?? 'a check'} is red`
   if (kind.kind === 'cached' && kind.from.run_id === disposed.run_id) return `a check changed since ${n} — the gate replays its verdicts with the checks as they stand`
   if (kind.kind === 'repair') return 'the last round was malformed on this content — the gate repairs it'
   if (fellBack(disposed)) return `${n} fell back from its pin — its verdict answers nothing`
@@ -458,6 +463,10 @@ function notHandedBack(kind: AppendKind, key: GateKey, disposed: GateRunEntry): 
   if (!sameKey(keyOf(disposed), key)) return `the reviewer setup (prompts or pin or harness) moved since ${n}`
   return `the gate does not pair this content with ${n}`
 }
+
+// Row 264. What a run journals: what `appendKind` reads, or a checks-only round — a withholding check
+// is red, so no lens runs (§3.2).
+type RunKind = AppendKind | { kind: 'checks-only' }
 
 // Design §4.2.4. The hand-back: journaled under the lock once the read is checked again (S3-1), then
 // the screen — `outcome: handed back` and, with autonomy off or a stop left to the human, the decision
@@ -624,7 +633,7 @@ async function judge(
     return EXIT.REFUSED
   }
 
-  let kind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
+  let kind: RunKind = flags.fresh ? { kind: 'fresh' as const } : appendKind(entries, spec.gate, key)
   // Row 112. The cache key is the REVIEWED content digest, but the deterministic checks
   // read inputs it cannot see — decompose's `goal-coverage`/`spec-coverage` read journaled
   // `covers`, `amendment-ack` reads a sibling plan's pin, `graph` reads the whole canon. So
@@ -634,28 +643,20 @@ async function judge(
   // `resolve` has already recomputed the checks by this point — the fresh answer was in
   // hand and thrown away. A flip is a new judgment, so it appends a real round rather than
   // silently re-rendering; the verdicts are REPLAYED (`cached`), so no battery is spent.
-  // Compared on `ok` alone: a detail carries run output on some gates (timings, paths), and
-  // keying on it would append a round for every re-run of an unchanged tree.
-  // A check trust kept from running and one that ran and failed are both `ok: false`, but they
-  // are different judgments: granting the command flips the first into the second, and without
-  // this term the gate resumed the blocked round forever while the policy re-ran it (F3).
-  // A hold that lifts or lands is a new judgment too (row 179): the lane may stay green while
-  // the set of criteria it did not run changes, and a resumed round would re-render a stale `held:`.
-  // Row 263 (slice 3 review): so is a lint part's verdict. A part whose base result is missing reads
-  // `red` (or `new`, `not-judged`) once drive has linted the base, with the same `ok: false`; a
-  // resumed round would keep the missing one, and the judged verdict — what T2d and T2e read — would
-  // never be written. `pending` and `not-measured` are one term, `missing` (final review): they differ
-  // only by whether a drive runs, not by the tree or the base, and both keys are owed, so starting or
-  // stopping drive spends no round.
-  const partTerm = (s: string) => (s === 'pending' || s === 'not-measured' ? 'missing' : s)
-  const checkOk = (cs: GateCheck[]) =>
-    cs.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}:${
-      (c.held ?? []).map((h) => h.criterion).sort().join('+')}${
-      c.parts !== undefined ? `:${c.parts.map((p) => `${p.part}=${partTerm(p.state)}`).join(',')}` : ''}`).sort().join('|')
-  if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') &&
-      checkOk(kind.entry.checks) !== checkOk(input.checks) &&
-      kind.entry.outcome !== 'malformed' && (kind.entry.verdicts?.length ?? 0) > 0) {
-    kind = { kind: 'cached' as const, from: kind.entry }
+  // Compared on the registry's signature (`checksSignature`, src/checks.ts): what a judgment is —
+  // `ok`, trust, holds, each lint part's state and key — never a detail, which carries run output.
+  // Row 264 (§3.2). With a withholding red no lens runs: the gate resumes, or answers changed-nothing,
+  // only where its pairing names a checks-only round red the same way; anywhere else it journals a
+  // new checks-only round. With none, a checks-only round red otherwise is not replayed — there are
+  // no verdicts — so the round runs fresh: a fix or a trust grant on the same tree re-runs fresh.
+  const sameChecks = (e: GateRunEntry) => checksSignature(e.checks) === checksSignature(input.checks)
+  if (input.withheld !== undefined) {
+    const same = (kind.kind === 'resume' || kind.kind === 'changed-nothing') && kind.entry.checks_only === true && sameChecks(kind.entry)
+    if (!same) kind = { kind: 'checks-only' }
+  } else if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') && !sameChecks(kind.entry) &&
+      kind.entry.outcome !== 'malformed') {
+    if (kind.entry.checks_only === true) kind = { kind: 'fresh' as const }
+    else if ((kind.entry.verdicts?.length ?? 0) > 0) kind = { kind: 'cached' as const, from: kind.entry }
   }
   // Row 244 (design §4.2.4). Where the gate would answer changed-nothing about the run the revise
   // disposed of — content, setup and checks as that run read them — `--unchanged` journals the author's
@@ -667,7 +668,7 @@ async function judge(
         sha: input.reviewedSha, manual: flags.manual, upstream: upstreamId, leftToTail,
       })
     }
-    ctx.out(kv('note', `nothing was handed back — ${notHandedBack(kind, key, handBack.run)}`))
+    ctx.out(kv('note', `nothing was handed back — ${notHandedBack(kind, key, handBack.run, input.withheld)}`))
   }
   // A key that moved for a NON-content reason — edited prompt, re-pinned model, new
   // witness version — un-settles just as quietly as --fresh did. Content moving explains
@@ -699,6 +700,12 @@ async function judge(
     ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entries, spec.gate)} rounds since last approve)`))
     if (!leftToTail(entries)) renderChoices(ctx, spec.gate, target, entries, upstreamId, { sha: input.reviewedSha })
     return EXIT.BLOCKED
+  }
+  // Row 264. A checks-only round ran no battery, so the malformed-streak brake has nothing to guard.
+  if (kind.kind === 'checks-only') {
+    return checksOnlyRound(ctx, root, spec, target, input, key, {
+      manual: flags.manual, upstreamId, leftToTail, setupSha, basis,
+    })
   }
   if (!flags.fresh) {
     // Both brakes guard the SAME window as the round budget (rounds.ts): exempt rounds
@@ -871,7 +878,7 @@ async function judge(
       !replayedDelta && (delta === undefined || delta.view.state(anchorFromKey(anchor)) === 'changed')
     // Row 216. And only a debt some lens in this battery could read: silence on content no lens
     // was handed is not evidence either.
-    const discharged = entry.outcome === 'malformed' ? []
+    const discharged = !lensesRan(entry) ? []
       : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor) && silenceCounts(d.anchor)
         && judgeable(root, d, entriesNow, spec.gate, active))
         .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))
@@ -914,6 +921,60 @@ async function judge(
     for (const d of discharged) ctx.out(kv('discharged', `${d.id} — no longer reported by this round`))
     if (input.repin) ctx.out(kv('re-pinned', `derives-from → ${input.repin.sha.slice(0, 7)} (witnessed by the drift lane)`))
     return outcome === 'passed' ? EXIT.OK : EXIT.FINDINGS
+  } finally {
+    release()
+  }
+}
+
+// Row 264 (§3.2). A withholding check is red, so no lens runs: the round journals its checks up to the
+// red one, the identity any round carries, `model` = `pin` (nothing answered) and the full-review
+// `prompts_sha` (what a battery would have been asked) — and nothing a battery writes: no verdicts,
+// malformed, skipped, rerolled, carried, standing, delta, setup_sha, junit, stamps, repin or
+// discharges. Its round shares its number with the round after it, as a malformed round's does: it
+// spends none of the human's budget (`lensesRan`). Journaled under the lock, the bound read again there
+// as the judged path does.
+function checksOnlyRound(
+  ctx: Ctx, root: string, spec: GateSpec, target: string, input: GateInput, key: GateKey,
+  opts: { manual: boolean; upstreamId?: string; leftToTail: (es: Entry[]) => boolean; setupSha: string; basis: string },
+): number {
+  const lockR = acquireLock(root)
+  if (!lockR.ok) { renderRefusal(lockR.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
+  const release = lockR.value
+  try {
+    const entriesNow = readStream(root, target)
+    if (boundReached(entriesNow, spec.gate)) {
+      ctx.out(kv('gate', spec.gate))
+      ctx.out(kv('outcome', `round bound reached (${roundsSinceApprove(entriesNow, spec.gate)} rounds since last approve)`))
+      if (!opts.leftToTail(entriesNow)) renderChoices(ctx, spec.gate, target, entriesNow, opts.upstreamId, { sha: input.reviewedSha })
+      return EXIT.BLOCKED
+    }
+    const entry: GateRunEntry = {
+      v: 1, t: 'gate-run', gate: spec.gate, artifact: target,
+      round: roundsSinceApprove(entriesNow, spec.gate) + 1, run_id: newRunId(),
+      reviewed_sha: input.reviewedSha, prompts_sha: opts.setupSha,
+      witness: key.witness, model: key.pin, pin: key.pin, harness: key.harness,
+      ...(opts.manual ? { manual: true } : {}),
+      ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
+      ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
+      ...(input.snapshot ? { reviewed_tree: input.snapshot.tree, basis_sha: opts.basis } : {}),
+      checks: input.checks,
+      checks_only: true,
+      outcome: 'stopped',
+    }
+    const line = entry as unknown as { t: 'gate-run'; [k: string]: unknown }
+    const files = [journalRel(target)]
+    const txn = withTxn(root, { op: `gate-${spec.gate}`, files, journal: { stream: target, line: entryLine(line) } }, () => {
+      appendEntry(root, target, line)
+      crashPoint(ctx.env, 'gate-journal')
+      return stateCommit(root, files, `gate(${spec.gate}): ${target} round ${entry.round} checks only`)
+    })
+    if (!txn.ok) { renderRefusal(txn.violations).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+    const after = [...entriesNow, line as unknown as Entry]
+    renderGateRun(ctx, entry, 'ran', {
+      entries: after, upstream: opts.upstreamId, sha: input.reviewedSha,
+      ...(opts.leftToTail(after) ? { help: false } : {}),
+    })
+    return EXIT.FINDINGS
   } finally {
     release()
   }
