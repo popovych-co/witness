@@ -3,9 +3,16 @@
 // line never count (P22).
 import { symlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { markersCheck } from '../src/markers.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
+
+// Slice 2 review M1: the git calls markersCheck makes, counted (tmpRepo runs git itself, uncounted).
+const gitCalls = vi.hoisted(() => ({ n: 0 }))
+vi.mock('../src/gitio.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/gitio.js')>()
+  return { ...real, tryGitC: (...a: Parameters<typeof real.tryGitC>) => { gitCalls.n += 1; return real.tryGitC(...a) } }
+})
 
 // A repo whose base commit holds `files`; the change is made after it, uncommitted.
 function based(files: Record<string, string>): { repo: TestRepo; root: string; base: string } {
@@ -66,5 +73,13 @@ describe('markersCheck (row 265)', () => {
     repo.write('a.ts', 'keep\n++ x\n<<<<<<< new\n')
     const c = markersCheck(root, base, ['a.ts'])
     expect(c.detail!.match(/a\.ts:\d+/g)).toEqual(['a.ts:3'])
+  })
+
+  it('a file holding no opener anywhere costs no git call (slice 2 review M1)', () => {
+    const { repo, root, base } = based({ 'a.ts': 'one\n', 'b.ts': 'two\n' })
+    repo.write('a.ts', 'one\nchanged <<<<<< six\n'); repo.write('c.ts', 'new\n')
+    gitCalls.n = 0
+    expect(markersCheck(root, base, ['a.ts', 'b.ts', 'c.ts']).ok).toBe(true)
+    expect(gitCalls.n).toBe(0)
   })
 })

@@ -50,6 +50,9 @@ function placesIn(wt: string, base: string, file: string): number[] {
   if (lstatListed(abs)?.isFile() !== true) return []
   const bytes = read(abs)
   if (bytes === undefined || bytes.subarray(0, BINARY_PROBE).includes(0)) return []
+  // Slice 2 review M1: a file holding no seven `<` in a row holds no opener on any line — its added
+  // lines are lines of it — so it costs no git call. Most of a plan's files end here.
+  if (bytes.indexOf('<<<<<<<') === -1) return []
   const listed = tryGitC(wt, '--literal-pathspecs', 'ls-files', '--', file)
   if (listed.ok && listed.out.trim() === '') return wholeFile(bytes.toString('latin1'))
   // `labelled`'s settings (clash.ts): nothing hides a line or misnames the file.
