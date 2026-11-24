@@ -18,7 +18,7 @@ import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
 import { ASK_STREAM, reservedId } from '../ask.js'
-import { JOB_STREAM, TRUST_STREAM } from '../streams.js'
+import { JOB_STREAM, LEDGER_STREAM, TRUST_STREAM } from '../streams.js'
 import { ID_RE, isId } from '../dsl.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit, tryGitC } from '../gitio.js'
@@ -46,6 +46,7 @@ const RESERVED_STREAMS: ReadonlyMap<string, { first: string; what: string; refus
   [ASK_STREAM, { first: 'ask', what: "witness's ask queue", refuses: 'witness ask refuses until it moves' }],
   [JOB_STREAM, { first: 'job-shard', what: "witness's job results", refuses: 'drive journals no job until it moves' }],
   [TRUST_STREAM, { first: 'trust', what: "witness's repo-level trust grants", refuses: 'no repo command is granted until it moves' }],
+  [LEDGER_STREAM, { first: 'ledger-open', what: "witness's ledger", refuses: 'witness books and dismisses nothing until it moves' }],
 ])
 
 interface Finding {

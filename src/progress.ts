@@ -19,6 +19,8 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   // Row 244: a revise handed back asks for the revise to be decided again — a session that hands
   // back has acted.
   'revise-returned': 'act',
+  // Row 269: a booking and a dismissal are a human's acts on the repo ledger.
+  'ledger-open': 'act', 'ledger-dismissed': 'act',
   // A refused write is the CLI saying no (F5). A sync is the merge stamp's or `start`'s
   // automatic act on the human's behalf (D138). A dispatch report is telemetry (row 81). A
   // drift check reads; a policy pin records the rule a decision ran under.
@@ -28,6 +30,8 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   cause: 'bookkeeping',
   // Row 257. A job's shard is machine work drive runs beside the sessions, never a flow's motion.
   'job-shard': 'bookkeeping',
+  // Row 269. A ledger item closed by observation: the merge stamp or the abandon saw it gone.
+  'ledger-closed': 'bookkeeping',
 }
 
 // A vacuous red moves nothing either (row 191, final review I3). A kind this CLI does not

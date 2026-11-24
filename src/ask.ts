@@ -3,7 +3,7 @@ import type { Ctx } from './cli.js'
 import { draftLine, dropDraft } from './drafts.js'
 import { isId } from './dsl.js'
 import { FLOOR_STREAM } from './floor.js'
-import { JOB_STREAM, TRUST_STREAM } from './streams.js'
+import { JOB_STREAM, LEDGER_STREAM, TRUST_STREAM } from './streams.js'
 import { stateCommit } from './gitio.js'
 import { appendEntry, effortStreams, entryLine, journalRel, readStream } from './journal.js'
 import { acquireLock } from './lock.js'
@@ -74,6 +74,7 @@ export function reservedId(id: string): string | undefined {
   if (id === FLOOR_STREAM) return "witness's own floor stream"
   if (id === JOB_STREAM) return "witness's own job results"   // row 257
   if (id === TRUST_STREAM) return "witness's own trust grants" // row 259
+  if (id === LEDGER_STREAM) return "witness's own ledger"      // row 269
   return undefined
 }
 

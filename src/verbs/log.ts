@@ -70,6 +70,18 @@ function detailOf(e: Entry): string {
     }
     case 'cause': return `cause=${String(e.cause)}`   // row 253
     case 'job-shard': return `${String(e.kind)} ${String(e.key)} ${String(e.shard)}/${String(e.of)} ${String(e.outcome)} ${duration(Number(e.ms))}`   // row 257
+    // Row 269: each ledger transition, named — the item, then what happened to it.
+    case 'ledger-open': {
+      const s = e.subject as { whole?: boolean; diagnostics?: Record<string, number> } | undefined
+      const what = s?.whole === true ? 'whole part'
+        : `${Object.values(s?.diagnostics ?? {}).reduce((a, n) => a + Number(n), 0)} diagnostics`
+      return `${String(e.id)} booked ${String(e.check)} · ${String(e.part)} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)} · ${what}`
+    }
+    case 'ledger-closed':
+      return e.by === 'abandon'
+        ? `${String(e.id)} closed — ${String(e.plan)} was abandoned`
+        : `${String(e.id)} closed — gone at the merge of ${String(e.plan)}${e.pr === undefined ? '' : ` (pr #${String(e.pr)})`}`
+    case 'ledger-dismissed': return `${String(e.id)} dismissed — ${String(e.cause)}: ${String(e.note)}`
     case 'revise-returned': {
       // Row 244: the author's hand-back of a revise (`gate --unchanged`), named as a decision is — the
       // gate, then what happened — with the run it hands back and whether it was `--manual`.
