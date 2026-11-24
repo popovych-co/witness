@@ -272,7 +272,7 @@ export function deltaBase(entries: Entry[], gate: string, reviewedSha: string): 
   const runs = runsSinceReset(entries, gate)
   for (let i = runs.length - 1; i >= 0; i--) {
     const r = runs[i]!
-    if (r.outcome === 'malformed' || fellBack(r) || !(r.verdicts?.length) || r.reviewed_sha === reviewedSha) continue
+    if (!lensesRan(r) || fellBack(r) || !(r.verdicts?.length) || r.reviewed_sha === reviewedSha) continue
     return r
   }
   return undefined
@@ -284,9 +284,10 @@ export function roundsSinceApprove(entries: Entry[], gate: string): number {
   // spends the human's budget. `malformed` is a verdict witness could not parse; a
   // fallback is a model witness could not reach. Row 105 deliberately does NOT join them:
   // a harness flip still spends its round, or a repo could flip judges forever and never
-  // reach the bound.
+  // reach the bound. Row 264 (§3.2): nor does a checks-only round — no lens ran, so the human's
+  // budget, which buys judgments, is untouched; drive's rounds cap still counts it (`capHit`).
   return runsSinceReset(entries, gate)
-    .filter((r) => r.outcome !== 'malformed' && !fellBack(r)).length
+    .filter((r) => lensesRan(r) && !fellBack(r)).length
 }
 
 // Row 109. The final round's blocking findings can only be VERIFIED by another round, so
@@ -327,11 +328,12 @@ const blockingAnchorsOf = (r: GateRunEntry): string[] =>
 // D123, memory one: how many honest attempts have failed at this seam IN THE CURRENT GAME.
 // Distinct shas only — a resumed or unchanged round is not an attempt. Malformed and
 // fallen-back rounds are excluded for the same reason row 67 and row 107 exempt them from
-// the budget: witness failed to deliver a judgment, which is not evidence about the seam.
+// the budget: witness failed to deliver a judgment, which is not evidence about the seam. Row 264:
+// a checks-only round asked no lens, so it is no attempt either.
 export function anchorRecurrence(entries: Entry[], gate: string, anchor: string): number {
   const seen = new Set<string>()
   for (const r of runsSinceReset(entries, gate)) {
-    if (r.outcome === 'malformed' || fellBack(r)) continue
+    if (!lensesRan(r) || fellBack(r)) continue
     if (!anchorsOf(r).includes(anchor)) continue
     seen.add(r.reviewed_sha)
   }
@@ -685,6 +687,10 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const malformedRerun = malformedLast && LEADS.has(state) &&
     (moved || revisedRun(entries, gate, anchor.reviewed_sha) === undefined)
   if (malformedRerun && (acts[0] === undefined || actKey(acts[0]) !== actKey(regate))) acts = [regate, ...acts]
+  // Row 264 (§3.2, row 172). A checks-only round is no verdict to stamp: a withholding check was red,
+  // so no lens ran. No approve is live on it, in any state — `decide` refuses one (`checks-only`), the
+  // block offers none, and the arbiter's menu bars it.
+  if (anchor.checks_only === true) acts = acts.filter((a) => !a.argv.includes('--approve'))
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')
   const listed = acts.filter((a) => !unnamed(a))
@@ -887,9 +893,9 @@ export function repairsOnRegate(entries: Entry[], gate: string): boolean {
 
 // Row 215 (D3). Does this journaled run answer `key` — the one evidence rule for the gate's
 // cache and for a review's replay? A malformed round judged nothing; a fallen-back one was asked
-// of another model; a run with no verdicts said nothing.
+// of another model; a run with no verdicts said nothing; a checks-only round asked no lens (row 264).
 export function answersKey(run: GateRunEntry, key: GateKey): boolean {
-  return run.outcome !== 'malformed' && !fellBack(run) && (run.verdicts?.length ?? 0) > 0 && sameKey(keyOf(run), key)
+  return lensesRan(run) && !fellBack(run) && (run.verdicts?.length ?? 0) > 0 && sameKey(keyOf(run), key)
 }
 
 export function appendKind(entries: Entry[], gate: string, key: GateKey): AppendKind {

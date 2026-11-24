@@ -145,3 +145,22 @@ describe('the checks-only round (row 264)', () => {
     expect(runs(repo, planId)).toHaveLength(n)
   }, 240_000)
 })
+
+describe('a checks-only round offers no approve and says so (row 264)', () => {
+  it('decide refuses --approve on a checks-only round, naming it (§3.2)', async () => {
+    const { repo, planId, gate } = await bench()
+    setLint(repo, 'false'); await gate('ship')
+    for (const argv of [['--approve'], ['--approve', '--override']]) {
+      const r = await repo.cli(['decide', 'ship', planId, ...argv])
+      expect(r.code).toBe(2)
+      expect(r.stderr).toContain('checks-only')
+    }
+  }, 240_000)
+
+  it('the gate and decide --show say the round ran checks only (row 264)', async () => {
+    const { repo, planId, gateOut } = await bench()
+    setLint(repo, 'false')
+    expect(await gateOut('ship')).toContain('checks-only: lint is red so no lens ran — this round spends no budget')
+    expect((await repo.cli(['decide', 'ship', planId, '--show'])).stdout).toContain('checks-only: lint is red so no lens ran')
+  }, 240_000)
+})

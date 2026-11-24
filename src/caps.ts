@@ -35,7 +35,9 @@ export function capHit(entries: Entry[], use: TargetUse, caps: DriveCaps): CapHi
   entries.forEach((e, i) => { if (isCapPark(e) || unparkAt(entries, i)) lastPark = i })
   const since = entries.slice(lastPark + 1)
   // Every budget reset is ignored: this counts the rounds a gate ran, not its window. The
-  // exemptions are `roundsSinceApprove`'s — a malformed or fallen-back round spends nothing.
+  // exemptions are `roundsSinceApprove`'s — a malformed or fallen-back round spends nothing — but a
+  // checks-only round counts here (row 264, §3.2): it spends none of the human's budget, while drive
+  // bounds every round it pays for.
   const gates = [...new Set(since.filter((e) => e.t === 'gate-run').map((e) => String((e as unknown as GateRunEntry).gate)))]
   for (const gate of gates) {
     const n = gateRuns(since, gate).filter((r) => r.outcome !== 'malformed' && !fellBack(r)).length

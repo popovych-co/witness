@@ -62,8 +62,9 @@ export type StopFacts =
 // The rules whose recommendation the CLI takes as it stands (design §7 A2's table). Each is
 // a fix with a right answer — revise here, revise upstream, approve over nits, re-run a
 // stale or malformed round — so no judgment is owed and none is spent.
+// Row 264: `checks-only` — a withholding check was red, so the author fixes what it names.
 const TAKEN = new Set(['blocking-here', 'blocking-parent', 'bound-recurrence', 'non-blocking-only',
-  'stale-below-bound', 'malformed-rerun'])
+  'stale-below-bound', 'malformed-rerun', 'checks-only'])
 
 // An ordered first-match list, like recommend.ts's rule table, and dispatched by GATE before
 // RULE: the recommender's rules overlap, so a design stop with only non-blocking findings

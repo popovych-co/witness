@@ -9,6 +9,7 @@ import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/ro
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
+import { policyFor } from '../src/autonomy.js'
 import { PLAN_BLOCKING, approve, fakeScenario, readyTrio, gateEnv, putVerdict, seededRepo, writePlan, writeSpec } from './helpers.js'
 
 const D: Decision = {
@@ -1115,5 +1116,23 @@ describe('options carry their act (rows 139/203)', () => {
     const lines = renderDecision({ key: 'decide', rule: 'blocking-here', options: [o] })
     expect(lines).toContain('1 · recommended · root · not runnable')
     expect(lines.filter((l) => l.startsWith('run: '))).toEqual([])
+  })
+})
+
+// Row 264 (§3.2). A ship round that ran checks only: lint was red, so no lens ran.
+const onlyShip = (round: number): Entry => ({
+  v: 1, t: 'gate-run', gate: 'ship', artifact: 'p1', round, run_id: `r-only-${round}`, reviewed_sha: 'a'.repeat(40),
+  prompts_sha: 'ps', witness: '0', model: 'm', pin: 'm', checks_only: true, checks: [{ name: 'lint', ok: false }], outcome: 'stopped',
+} as unknown as Entry)
+
+describe('the checks-only rule (row 264)', () => {
+  it('a checks-only round\'s block recommends the bare revise and offers no approve (row 264)', () => {
+    const d = recommend({ gate: 'ship', target: 'p1', entries: [onlyShip(1)], upstream: 'p1', stale: false })!
+    expect(d.rule).toBe('checks-only')
+    expect(d.options[0]!.command).toBe('witness decide ship p1 --revise')
+    expect(d.options[0]!.why).toContain('lint is red, so no lens ran')
+    expect(d.options.some((o) => o.command.includes('--approve'))).toBe(false)
+    expect(policyFor({ at: 'gate', gate: 'ship', target: 'p1', entries: [onlyShip(1)], run: onlyShip(1) as never, block: d, untrusted: [] }))
+      .toMatchObject({ kind: 'take' })
   })
 })

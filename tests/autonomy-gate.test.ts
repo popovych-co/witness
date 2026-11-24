@@ -251,8 +251,10 @@ it('a granted command that really fails lands a round and is revised, never resu
   const ships = (readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]).filter((r) => r.gate === 'ship')
   expect(ships).toHaveLength(2)
   expect(ships[1]!.checks.find((c) => c.name === 'lint')!.untrusted).toBeUndefined()
+  // Row 264: lint withholds, so both ship rounds ran checks only, and the policy's revise is that rule's
+  expect(ships.map((r) => r.checks_only)).toEqual([true, true])
   expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship').at(-1))
-    .toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-failed' })
+    .toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-only' })
 })
 
 it('an arbiter choice the one door refuses parks the flow once, so no stop re-asks the model (F4)', async () => {

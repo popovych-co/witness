@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { cliAct, type Act } from '../src/act.js'
 import type { Entry } from '../src/journal.js'
 import {
-  VALUED_FLAGS, actKey, actLive, disposedRun, exitActs, liveActs, reopenActs, standingHandBack,
-  type ActFacts, type GateStateKind,
+  VALUED_FLAGS, actKey, actLive, boundReached, disposedRun, exitActs, liveActs, reopenActs, roundsSinceApprove, standingHandBack,
+  type ActFacts, type GateStateKind, type LiveActs,
 } from '../src/rounds.js'
 import { decisionAct } from '../src/verbs/decide.js'
 
@@ -472,5 +472,24 @@ describe('exitActs and reopenActs share liveActs\' own sets', () => {
     const parkedAtBound = [...BOUND, dec('stop')]
     expect(live(parkedAtBound).acts).toEqual(reopenActs(G, T, parkedAtBound, false, 'e1', false))
     expect(live(parkedAtBound, { stale: true }).acts).toEqual(reopenActs(G, T, parkedAtBound, true, 'e1', false))
+  })
+})
+
+// Row 264 (§3.2). A checks-only round: a withholding check was red, so no lens ran.
+const only = (n: number): Entry => ({ ...(run(n) as object), checks_only: true, verdicts: undefined, checks: [{ name: 'lint', ok: false }] } as unknown as Entry)
+
+describe('a checks-only round (row 264)', () => {
+  it('a checks-only round spends none of the human\'s budget, a repair grant included (row 264)', () => {
+    expect(roundsSinceApprove([run(1), run(2), only(3), only(3)], G)).toBe(2)
+    expect(boundReached([run(1), run(2), only(3), only(3)], G)).toBe(false)
+    const granted = [run(1), run(2), run(3), dec('revise', { repair: true }), only(4)]
+    expect(roundsSinceApprove(granted, G)).toBe(3)
+    expect(boundReached(granted, G)).toBe(false)                 // the granted round is still the next judged one
+  })
+  it('no approve is live on a checks-only round, in any state (row 264)', () => {
+    const approves = (l: LiveActs) => [...l.acts, ...(l.slots ?? [])].filter((a) => a.argv.includes('--approve'))
+    expect(approves(liveActs(G, T, [only(1)], facts))).toEqual([])
+    expect(approves(liveActs(G, T, [only(1), dec('revise')], facts))).toEqual([])
+    expect(liveActs(G, T, [only(1)], { ...facts, stale: true }).acts[0]!.line).toBe('witness gate implement p1')
   })
 })

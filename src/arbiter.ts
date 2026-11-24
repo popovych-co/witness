@@ -127,7 +127,9 @@ export async function arbitrate(ctx: Ctx, root: string, cfg: Config, req: Arbite
 // no rounds, so the bound would never stop a revise → hand-back loop.
 export function menuFor(block: Decision, run: GateRunEntry): Array<Option & { act: Act }> {
   const failed = run.checks.filter((c) => !c.ok)
-  const approveBarred = run.gate === 'design' || (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))
+  // Row 264: nor over a checks-only round, which no lens judged.
+  const approveBarred = run.gate === 'design' || run.checks_only === true ||
+    (failed.length > 0 && !failed.every((c) => c.name === 'amendment-ack'))
   const reviseBarred = block.state !== undefined && REVISE_HUMAN.has(block.state)
   const plainRevise = (argv: readonly string[]) => argv.includes('--revise') && !argv.includes('--upstream') && !argv.includes('--repair')
   return block.options.filter((o): o is Option & { act: Act } =>

@@ -55,6 +55,8 @@ export interface GateRunView {
   demoted: Array<{ anchor: string; round: number }>
   malformed: Array<{ reviewer: string; violations: Array<{ field: string; rule: string }> }>
   standing?: string
+  // Row 264. A checks-only round's withheld check: the last of its checks.
+  checksOnly?: string
   outcome: GateRunEntry['outcome']
   lastRound: boolean                                                     // not passed, and the budget is spent
 }
@@ -83,6 +85,7 @@ export function gateRunView(entry: GateRunEntry, mode: 'ran' | 'resume', entries
     malformed: (entry.malformed ?? [])
       .map((m) => ({ reviewer: m.reviewer, violations: m.violations.map((x) => ({ field: x.field, rule: x.rule })) })),
     ...(entry.standing ? { standing: entry.standing } : {}),
+    ...(entry.checks_only === true ? { checksOnly: entry.checks.at(-1)?.name ?? 'a check' } : {}),
     outcome: entry.outcome,
     lastRound: entry.outcome !== 'passed' && entries !== undefined && boundReached(entries, entry.gate),
   }
@@ -116,6 +119,8 @@ export function gateRunLines(view: GateRunView): string[] {
   for (const d of view.demoted) out.push(kv('demoted', `${d.anchor} — unchanged since round ${d.round}`))
   if (view.malformed.length > 0) out.push(rows('malformed', ['reviewer', 'field', 'rule'], malformedRows(view.malformed)).join('\n'))
   if (view.standing) out.push(kv('standing-stop', view.standing))
+  // Worded without a comma, so the line prints unquoted (`esc`).
+  if (view.checksOnly !== undefined) out.push(kv('checks-only', `${view.checksOnly} is red so no lens ran — this round spends no budget`))
   out.push(kv('outcome', view.outcome))
   // Row 110. The round that SPENDS the budget is the one that has to say so. It rendered
   // like any other, so the natural next act — fix the finding, re-gate — was advertised

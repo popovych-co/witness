@@ -368,6 +368,24 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
     }
   }
 
+  // 2b — checks only (row 264, §3.2). A withholding check was red, so no lens ran: there is no verdict
+  // to weigh and no approve (row 172). The fix is the author's — the bare revise — and the round spent
+  // none of the human's budget. The policy takes it (`TAKEN`).
+  if (last.checks_only === true && !atBound) {
+    const name = last.checks.at(-1)?.name ?? 'a check'
+    return {
+      key: 'decide', rule: 'checks-only',
+      options: [
+        option(note, 'root', {
+          why: `${name} is red, so no lens ran — fix what it names and re-run the gate · this round spent no budget (${spent} of ${budget} spent)`,
+        }),
+        ...upAlt('the check fails because of what the stage above asked for',
+          'reopens the parent stage and resets this budget'),
+        stopOpt,
+      ],
+    }
+  }
+
   const anchors = blockingAnchors(last)
   const primary = anchors[0]
   const recurrence = primary === undefined ? 0 : anchorRecurrence(entries, gate, primary)

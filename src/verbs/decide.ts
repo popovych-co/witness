@@ -475,6 +475,13 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // costs a round of thinking on an exit that was never available.
   if (decision === 'approve') {
     const blockers = []
+    // Row 264 (§3.2, row 172). No lens judged a checks-only round, so nothing approves over it: the
+    // withholding check names the fix, and a round the lenses judge comes after it.
+    if (anchor.checks_only === true) {
+      const name = anchor.checks.at(-1)?.name ?? 'a check'
+      blockers.push(v('gate', 'checks-only', `round ${anchor.round} ran checks only — ${name} is red, so no lens ran`,
+        `a round the lenses judged — fix what ${name} names, then run: ${cliAct('gate', gate, target).line}`))
+    }
     if (atBound && !override) {
       blockers.push(v('decision', 'override-required', 'approve at the round bound',
         'witness decide … --approve --override'))

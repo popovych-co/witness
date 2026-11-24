@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { arbitrate, menuFor, type ArbiterRequest } from '../src/arbiter.js'
 import { loadConfig, type Config } from '../src/config.js'
 import type { Entry } from '../src/journal.js'
-import { recommend } from '../src/recommend.js'
+import { option, recommend, type Decision } from '../src/recommend.js'
+import { cliAct } from '../src/act.js'
 import { lastGateRun } from '../src/rounds.js'
 import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo } from './helpers.js'
 
@@ -133,5 +134,27 @@ describe('the look is never the arbiter\'s to approve (F1)', () => {
     expect(at([d(1, 'a'), d(2, 'b'), d(3, 'c')]).filter((c) => c.includes('--approve'))).toEqual([])
     expect(at([d(1, 'a', { pin: 'pinned-model' })]).filter((c) => c.includes('--approve'))).toEqual([])
     expect(at([d(1, 'a'), d(2, 'b'), d(3, 'c')])).toContain('witness decide design p1 --stop')
+  })
+})
+
+// Row 264 (§3.2). A ship round that ran checks only.
+const only = (n: number) => run(n, 'a', { gate: 'ship', checks_only: true, verdicts: undefined, checks: [{ name: 'lint', ok: false }] })
+
+describe('the arbiter and the checks-only round (row 264)', () => {
+  it('the arbiter\'s menu holds no approve on a checks-only round (row 264)', () => {
+    const block: Decision = { key: 'decide', rule: 'bound', options: [
+      option(cliAct('decide', 'ship', 'p1', '--approve', '--override'), 'deferral'), option(cliAct('decide', 'ship', 'p1', '--stop'), 'terminal')] }
+    expect(menuFor(block, lastGateRun([only(1)], 'ship')!).map((o) => o.command)).toEqual(['witness decide ship p1 --stop'])
+  })
+  it('a handed-back revise of a checks-only round reaches the arbiter with no approve and no plain revise (Review Focus 4)', () => {
+    const entries = [only(1),
+      { v: 1, t: 'human-decision', gate: 'ship', artifact: 'p1', round: 1, decision: 'revise' },
+      { v: 1, t: 'revise-returned', gate: 'ship', artifact: 'p1', run_id: 'r-1', sha: 'a' }] as unknown as Entry[]
+    const block = recommend({ gate: 'ship', target: 'p1', entries, upstream: 'p1', stale: false })!
+    expect(block.rule).toBe('revise-returned')
+    const menu = menuFor(block, lastGateRun(entries, 'ship')!).map((o) => o.command)
+    expect(menu).toContain('witness decide ship p1 --stop')
+    expect(menu.some((c) => c.includes('--approve'))).toBe(false)
+    expect(menu.some((c) => c.includes('--revise') && !c.includes('--upstream'))).toBe(false)
   })
 })
