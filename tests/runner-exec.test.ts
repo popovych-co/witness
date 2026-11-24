@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,6 +10,7 @@ import { worktreePath } from '../src/worktree.js'
 import {
   approve, awaitGone, breakSingleFixture, copyFixture, fakeCtx, fakeScenario, fixtureEnv, seededRepo, tmpRepo, vitestBin,
   writePlan, writeSpec, type TestRepo, patchConfig, orphansIn, writeOrphanStarter } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // D158 (#20). execSync at Node's 1 MiB default threw ENOBUFS into the catch, so a
 // chatty-but-GREEN suite was reported as a failed lane and blocked ship with a false red.
@@ -220,7 +220,7 @@ describe('witness turn (row 218)', () => {
 
   it.runIf(process.platform === 'win32')('what a witness turn run starts is gone when it returns', async () => {
     const repo = tmpRepo()
-    const dir = mkdtempSync(join(tmpdir(), 'witness-turn-'))
+    const dir = scratchDir('witness-turn-')
     const pidFile = join(dir, 'pids')
     const r = await turnChild(repo.root, ['node', writeOrphanStarter(dir), pidFile])
     const pids = orphansIn(pidFile)
@@ -247,7 +247,7 @@ describe.runIf(process.platform === 'win32')('a test run ends with what it start
     }
   })
   const scratch = (): { starter: string; pidFile: string } => {
-    const dir = mkdtempSync(join(tmpdir(), 'witness-run-'))
+    const dir = scratchDir('witness-run-')
     return { starter: writeOrphanStarter(dir), pidFile: join(dir, 'pids') }
   }
 

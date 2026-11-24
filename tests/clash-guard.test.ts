@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { carryGit, carryRef, keepCarry, keptRefs, unmergedPaths } from '../src/carry.js'
@@ -8,6 +7,7 @@ import { clashLeft, clashViolations, fileRemedies } from '../src/clash.js'
 import { renderRefusal } from '../src/refusal.js'
 import { shellLine, shellWord } from '../src/toon.js'
 import { worktreePath } from '../src/worktree.js'
+import { scratchDir } from './scratch.js'
 
 // Row 243 (design §4.1.2, §4.1.3, §4.1.5). The one predicate every gate, evidence run, turn and
 // ship asks, and the per-file rows its refusal prints. A tmp repo with a linked worktree `wt` on
@@ -27,7 +27,7 @@ const put = (rel: string, content: string | Buffer): void => {
 const LABELS = 'a\n<<<<<<< Updated upstream\nMAIN\n=======\nPLAN\n>>>>>>> Stashed changes\nc\n'
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'witness-clash-')))
+  root = scratchDir('witness-clash-')
   g(root, 'init', '-q', '-b', 'main')
   g(root, 'config', 'user.name', 'test')
   g(root, 'config', 'user.email', 'test@example.com')

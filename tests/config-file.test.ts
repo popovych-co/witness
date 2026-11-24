@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
@@ -10,6 +9,7 @@ import { migrateValues } from '../src/migration.js'
 import { defaultValues, withValues } from '../src/settings.js'
 import { recordHarness } from '../src/install.js'
 import { RELEASED_COMMENTS as RELEASED_CONFIG_COMMENTS } from '../src/released-comments.js'
+import { scratchDir } from './scratch.js'
 
 // Row 193 §4.5. The file `init` writes and `migrate` rewrites, and who owns which comment.
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
@@ -37,7 +37,7 @@ describe('renderConfig (row 193 §4.5)', () => {
 
   it('stays readable by the hook readers', () => {
     expect(contextLimitOf(renderConfig(withValues(defaults(), { session: { contextLimit: 35 } })))).toBe(35)
-    const repo = mkdtempSync(join(tmpdir(), 'rendered-'))
+    const repo = scratchDir('rendered-')
     writeFileSync(join(repo, 'witness.config.yaml'),
       renderConfig(withValues(defaults(), { paths: { specs: 'docs/specs', plans: 'docs/plans', designs: 'docs/designs' } })))
     mkdirSync(join(repo, 'docs', 'specs'), { recursive: true })

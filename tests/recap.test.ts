@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { askQueue } from '../src/ask.js'
 import { appendEntry, latestRecap, readStream } from '../src/journal.js'
 import { autonomyOn, draftPath, draftSave, seededRepo, tmpRepo, type TestRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 const RECAP = {
   effort: 'auth-hardening',
@@ -41,16 +41,12 @@ describe('witness recap', () => {
 
   it('honors an absolute --file path outside the repo', async () => {
     const repo = await initialized()
-    const dir = mkdtempSync(join(tmpdir(), 'witness-recap-abs-'))
+    const dir = scratchDir('witness-recap-abs-')
     const abs = join(dir, 'recap.json')
     writeFileSync(abs, JSON.stringify(RECAP))
-    try {
-      const res = await repo.cli(['recap', '--file', abs])
-      expect(res.code).toBe(0)
-      expect(readStream(repo.root, 'auth-hardening')).toHaveLength(1)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+    const res = await repo.cli(['recap', '--file', abs])
+    expect(res.code).toBe(0)
+    expect(readStream(repo.root, 'auth-hardening')).toHaveLength(1)
   })
 
   it('refuses schema violations with structured rows', async () => {

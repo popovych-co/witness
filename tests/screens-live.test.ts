@@ -1,5 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { cliAct, exitsLine, type Act } from '../src/act.js'
@@ -25,6 +24,7 @@ import {
   approve, commitEntry, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, writePlan, writeSpec,
   type CliResult, type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 244 (#87, design §4.2.1 "Who reads it", §4.2.2, §4.2.9). Every screen, hint, refusal and the
 // arbiter's menu offers only live acts: the exits line, recommend's block, `decide --show`, what
@@ -116,7 +116,7 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind]> = [
 const STATE = new Map(STATES.map(([name, journal, kind]) => [name, { journal, kind }]))
 
 function copyOf(root: string): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-screens-')))
+  const dir = scratchDir('witness-screens-')
   cpSync(root, dir, { recursive: true })
   return dir
 }

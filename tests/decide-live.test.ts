@@ -1,6 +1,4 @@
-import { cpSync, mkdtempSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { cpSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Act } from '../src/act.js'
 import { loadConfig } from '../src/config.js'
@@ -16,6 +14,7 @@ import { loadCanon } from '../src/scan.js'
 import { applyDecision } from '../src/verbs/decide.js'
 import { actFacts } from '../src/verbs/next.js'
 import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, writeSpec, type CliResult, type TestRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 244 (#87, design §4.2.1 "What stays in decide", §4.2.3's retraction, §4.2.7, §4.2.9). `decide`
 // accepts exactly the acts `liveActs` offers: every act a state offers lands, an act it does not offer
@@ -108,8 +107,9 @@ const STATES: Array<[string, (s: string) => Entry[], GateStateKind, boolean]> = 
 const STATE = new Map(STATES.map(([name, journal, kind, stale]) => [name, { journal, kind, stale }]))
 
 // A copy of a repo in a directory of its own: every act runs on the state as the walk wrote it.
+// Shared: `built` hands one state's copy to every later test that walks that state.
 function copyOf(root: string): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-live-')))
+  const dir = scratchDir('witness-live-', { shared: true })
   cpSync(root, dir, { recursive: true })
   return dir
 }

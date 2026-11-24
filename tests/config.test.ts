@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
 import { fingerprint, SCHEMA_FINGERPRINTS } from '../src/settings.js'
 import { seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 describe('loadConfig', () => {
   it('refuses when the config is missing', () => {
@@ -228,7 +228,7 @@ describe('gates.reviewerTimeoutMs', () => {
 })
 
 describe('loadLocalConfig — .witness/config.local.yaml', () => {
-  const scratch = () => mkdtempSync(join(tmpdir(), 'witness-local-'))
+  const scratch = () => scratchDir('witness-local-')
   const put = (root: string, yaml: string) => {
     mkdirSync(join(root, '.witness'), { recursive: true })
     writeFileSync(localConfigPath(root), yaml)

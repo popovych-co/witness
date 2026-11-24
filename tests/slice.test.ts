@@ -1,5 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Fill } from '../src/context.js'
@@ -7,6 +6,7 @@ import type { Entry } from '../src/journal.js'
 import type { CanonDoc } from '../src/scan.js'
 import { closedThisSession, contextLine, largestGrowth, sessionActed, sliceLine, stepCloseVerdict, type SliceVerdict } from '../src/slice.js'
 import { stepProgress, type Progress, type StepState } from '../src/steps.js'
+import { scratchDir } from './scratch.js'
 
 const m = (tokens: number, window = 1_000_000): Fill => ({ measured: true, reading: { session: 'S', tokens, window } })
 const un: Fill = { measured: false, reason: 'no adapter' }
@@ -115,7 +115,7 @@ describe('what this session did (row 191 §4.5 · §4.7 · §4.8)', () => {
   // Plan's call 8. The lines are written raw: a line the CLI journals carries only the writer's
   // own stamp, never one it was handed.
   it('sessionActed counts acts and ignores bookkeeping', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-slice-'))
+    const root = scratchDir('witness-slice-')
     const dir = join(root, '.witness', 'journal')
     mkdirSync(dir, { recursive: true })
     const line = (stream: string, e: Record<string, unknown>) => appendFileSync(join(dir, `${stream}.jsonl`), JSON.stringify({ v: 1, ...e }) + '\n')
@@ -129,7 +129,7 @@ describe('what this session did (row 191 §4.5 · §4.7 · §4.8)', () => {
   // Row 244 (design §4.2.4). A hand-back is the author's own act on a revise — the gate run that would
   // have answered changed-nothing, journaled as the author's word — so it is stage work, as a gate run is.
   it('sessionActed counts a hand-back', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-slice-'))
+    const root = scratchDir('witness-slice-')
     const dir = join(root, '.witness', 'journal')
     mkdirSync(dir, { recursive: true })
     appendFileSync(join(dir, 'p.jsonl'), JSON.stringify({ v: 1, t: 'revise-returned', gate: 'plan', artifact: 'p', run_id: 'r1', sha: 's', ctx: { session: 'hb' } }) + '\n')
@@ -138,7 +138,7 @@ describe('what this session did (row 191 §4.5 · §4.7 · §4.8)', () => {
   // Final review I3. A vacuous red observed the behavior already there: no act, so a session
   // that only re-runs one cannot hand over. A genuine red is one.
   it('sessionActed does not count a vacuous red', () => {
-    const root = mkdtempSync(join(tmpdir(), 'witness-slice-'))
+    const root = scratchDir('witness-slice-')
     const dir = join(root, '.witness', 'journal')
     mkdirSync(dir, { recursive: true })
     const line = (e: Record<string, unknown>) => appendFileSync(join(dir, 'p.jsonl'), JSON.stringify({ v: 1, ...e }) + '\n')

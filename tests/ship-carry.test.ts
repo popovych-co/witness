@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import '../src/gates/index.js'
@@ -12,6 +11,7 @@ import { rebaseIfMoved, recordPushed } from '../src/ship.js'
 import { shellLine, shellWord } from '../src/toon.js'
 import { branchName } from '../src/worktree.js'
 import { addOrigin, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // A clean verdict, so a `witness ship` that gets past the move meets a fake reviewer, never a real one.
 const CLEAN = {
@@ -109,7 +109,7 @@ async function movedClash() {
 // S1-8. The German test proves its point only with a git that has a German catalog (Homebrew's;
 // Apple's has none): without one, git prints English whatever LANGUAGE says.
 function gitSpeaksGerman(): boolean {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-de-'))
+  const dir = scratchDir('witness-de-')
   execFileSync('git', ['init', '-q'], { cwd: dir })
   const env = { ...process.env, LANGUAGE: 'de', LANG: 'de_DE.UTF-8' }
   delete env.LC_ALL

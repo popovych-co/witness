@@ -1,9 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { mkdtempSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { anchorMenu, parseVerdict, resolveAnchor, verdictViolations, type Reviewed } from '../src/verdict.js'
+import { scratchDir } from './scratch.js'
 
 const SPEC_DOCS: Reviewed = {
   kind: 'docs',
@@ -14,7 +13,7 @@ const SPEC_DOCS: Reviewed = {
 }
 
 function tree(): Reviewed {
-  const root = mkdtempSync(join(tmpdir(), 'verdict-tree-'))
+  const root = scratchDir('verdict-tree-')
   mkdirSync(join(root, 'src'), { recursive: true })
   writeFileSync(join(root, 'src/token.ts'), 'export function rotateToken() {}\n')
   writeFileSync(join(root, 'src/quota.ts'), 'export function quota() {}\n')
@@ -66,7 +65,7 @@ describe('code anchors', () => {
   // resolver, and no verdict could satisfy both. A changed path IS reviewed content: its
   // diff hunk is in the prompt. Bare path resolves; a symbol still needs a file body.
   it('resolves a changed path by bare path whatever is on disk — gitlink, deleted, directory', () => {
-    const root = mkdtempSync(join(tmpdir(), 'verdict-changed-'))
+    const root = scratchDir('verdict-changed-')
     mkdirSync(join(root, 'src'), { recursive: true })
     mkdirSync(join(root, 'vendor'))                                   // a submodule checkout: a directory
     writeFileSync(join(root, 'src/token.ts'), 'export function rotateToken() {}\n')
@@ -92,7 +91,7 @@ describe('every changed path is coverable (D162)', () => {
     const { planChangeSet } = await import('../src/change-set.js')
     const { execFileSync } = await import('node:child_process')
     const { rmSync, symlinkSync } = await import('node:fs')
-    const root = mkdtempSync(join(tmpdir(), 'verdict-git-'))
+    const root = scratchDir('verdict-git-')
     const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
     const init = (cwd: string) => {
       g(cwd, 'init', '-b', 'main')
@@ -184,7 +183,7 @@ describe('verdictViolations — fail-closed', () => {
   })
 
   describe('the delta floor (row 208)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'verdict-floor-'))
+    const root = scratchDir('verdict-floor-')
     for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(root, f), 'export const x = 1\n')
     const tree = (paths?: string[]) => ({ kind: 'tree' as const, root, files: ['a.ts', 'b.ts', 'c.ts'],
       ...(paths ? { floor: { round: 2, paths } } : {}) })
@@ -274,11 +273,11 @@ describe('screens reviewed-kind', () => {
 // unresolvable anchor malforms the WHOLE round. Canon resolves where canon lives.
 describe('canon anchors resolve at the primary root (D151)', () => {
   function contaminatedPair(): { reviewed: Reviewed; primaryRoot: string } {
-    const primary = mkdtempSync(join(tmpdir(), 'verdict-primary-'))
+    const primary = scratchDir('verdict-primary-')
     mkdirSync(join(primary, 'plans'), { recursive: true })
     writeFileSync(join(primary, 'plans/p1.md'), '## Step: s1\nexport function rotateToken() {}\n')
     // the reviewed tree is a worktree with canon sparse-excluded: plans/ simply is not here
-    const wt = mkdtempSync(join(tmpdir(), 'verdict-wt-'))
+    const wt = scratchDir('verdict-wt-')
     mkdirSync(join(wt, 'src'), { recursive: true })
     writeFileSync(join(wt, 'src/token.ts'), 'export function rotateToken() {}\n')
     return {

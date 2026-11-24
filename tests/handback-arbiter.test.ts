@@ -1,5 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { cliAct, type Act } from '../src/act.js'
@@ -26,6 +25,7 @@ import {
   PLAN_BLOCKING, callFor, fakeCtx, fakeScenario, gateEnv, plannedRepo, putVerdict, seededRepo, writePlan, writeSpec,
   type CliResult, type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 244 (#87, design §4.2.6; amends rows 121, 171, 172). Who decides a revise its author handed back
 // unchanged: recommend's rule `revise-returned` (send upstream where the blocking finding anchors in the
@@ -476,8 +476,9 @@ const ARB = { selected: 'arbiter', reason: 'the bound is spent', arbiter: { mode
 const REOPEN = { caused_by: { artifact: 'auth-refresh', gate: 'design', round: 1 }, note: 'the slicing is wrong' }
 
 let base: { repo: TestRepo; sha: string; effort: string; real: GateRunEntry }
+// Shared: `built` below hands one state's copy to every later test that walks that state.
 const copyOf = (root: string): string => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'witness-arbiter-walk-')))
+  const dir = scratchDir('witness-arbiter-walk-', { shared: true })
   cpSync(root, dir, { recursive: true })
   return dir
 }

@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { addOrigin, approve, autonomyOn, seededRepo, threeStepPlan, writePlan, writeSpec } from './helpers.js'
 import { worktreePath } from '../src/worktree.js'
+import { scratchDir } from './scratch.js'
 
 // Every D137 case needs the same approved plan; the difference is what remote exists.
 async function planReady(): Promise<Awaited<ReturnType<typeof seededRepo>>> {
@@ -48,7 +47,7 @@ describe('start cuts from the fetched remote tip (D137)', () => {
     const repo = await planReady()
     addOrigin(repo)
     // origin advances beyond local main
-    const clone = mkdtempSync(join(tmpdir(), 'd137-'))
+    const clone = scratchDir('d137-')
     execFileSync('git', ['clone', `${repo.root}-origin.git`, clone], { stdio: 'ignore' })
     for (const [k, v] of [['user.name', 'test'], ['user.email', 't@e.c'], ['commit.gpgsign', 'false']]) {
       execFileSync('git', ['-C', clone, 'config', k!, v!])

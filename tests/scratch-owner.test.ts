@@ -21,3 +21,13 @@ function offenders(dir: string, allowed: string[], pattern: RegExp): string[] {
 it('the CLI makes scratch directories only through withScratch (row 268)', () => {
   expect(offenders('src', ['src/scratch.ts'], /\bmkdtemp(Sync)?\b|\btmpdir\b/)).toEqual([])
 })
+
+it('tests make scratch directories only through scratchDir (row 268)', () => {
+  expect(offenders('tests', ['tests/scratch.ts', 'tests/scratch-owner.test.ts'], /\bmkdtemp(Sync)?\b|\btmpdir\b/)).toEqual([])
+})
+
+// scratchDir names a directory's owner by the test vitest is running: a concurrent test would
+// hand its directories to a neighbour, and an inverted one (`.fails`) is kept though it reads green.
+it('no test runs concurrently or inverts its result (row 268)', () => {
+  expect(offenders('tests', ['tests/scratch-owner.test.ts'], /\.(concurrent|fails)\b/)).toEqual([])
+})

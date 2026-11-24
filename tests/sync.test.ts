@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { classifyPullFailure, classifyPushFailure } from '../src/verbs/sync.js'
 import { lazyStamp } from '../src/stamp.js'
@@ -9,6 +8,7 @@ import { loadCanon } from '../src/scan.js'
 import {
   addOrigin, fakeCtx, fakeScenario, gateEnv, ghState, seededRepo, shippableRepo, writeSpec,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 describe('classifyPullFailure', () => {
   it('names the three shapes', () => {
@@ -24,7 +24,7 @@ describe('witness sync', () => {
     await writeSpec(repo, 'auth-refresh')
     addOrigin(repo)
     // Diverge with a content conflict: clone the bare, append to the same journal tail, push.
-    const clone = mkdtempSync(join(tmpdir(), 'sync-clone-'))
+    const clone = scratchDir('sync-clone-')
     execFileSync('git', ['clone', `${repo.root}-origin.git`, clone], { stdio: 'ignore' })
     const gitIn = (...args: string[]) =>
       execFileSync('git', ['-C', clone, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })

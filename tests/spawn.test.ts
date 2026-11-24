@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
@@ -13,12 +12,13 @@ import type { Result } from '../src/refusal.js'
 import { invokeReviewerAsync } from '../src/reviewer.js'
 import { resolveSpawn, system32, treeStop } from '../src/spawn.js'
 import { awaitGone, fakeCtx, orphansIn, seededRepo, writeOrphanStarter } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // A PATH directory holding the named files. Real files, not a predicate: resolution IS
 // a filesystem walk, and a fake predicate would test the walk against itself. These
 // tests pass `win32` explicitly, so the Windows algorithm runs on the Linux CI runner.
 function binDir(...files: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-spawn-'))
+  const dir = scratchDir('witness-spawn-')
   for (const f of files) writeFileSync(join(dir, f), '')
   return dir
 }
@@ -198,7 +198,7 @@ const onWindows = process.platform === 'win32'
 // forward the arguments with %* — which cmd.exe expands and then PARSES AGAIN. That
 // second parse is why a batch target needs its arguments escaped twice.
 function shimmed(name: string, script: string): string {
-  const dir = join(mkdtempSync(join(tmpdir(), 'witness-shim-')), 'Jane Doe (x) 100% a=b')
+  const dir = join(scratchDir('witness-shim-'), 'Jane Doe (x) 100% a=b')
   mkdirSync(dir)
   writeFileSync(join(dir, `${name}.js`), script)
   writeFileSync(join(dir, `${name}.cmd`), [
@@ -301,7 +301,7 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
   })
 
   it('a reviewer stopped at its timeout leaves nothing running (row 218)', async () => {
-    const scratch = mkdtempSync(join(tmpdir(), 'witness-reviewer-'))
+    const scratch = scratchDir('witness-reviewer-')
     const starter = writeOrphanStarter(scratch)
     const pidFile = join(scratch, 'pids')
     // A reviewer that never answers, with a tool of its own still running: it records itself,
@@ -330,7 +330,7 @@ describe.runIf(onWindows)('the harness spawn sites reach a .cmd CLI (win32 only)
     // With no node.exe beside it (every standard install), the shim runs a bare `node`, and
     // cmd.exe looks for that name in the current directory first — the reviewed repo.
     const dir = shimmed('pi', PI_ECHO)
-    const repo = mkdtempSync(join(tmpdir(), 'witness-repo-'))
+    const repo = scratchDir('witness-repo-')
     writeFileSync(join(repo, 'node.cmd'),
       '@echo {"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"PLANTED"}],"stopReason":"stop"}]}\r\n')
     // The opt-out may be set in this machine's own shell; the planted judge must lose without it.
@@ -383,7 +383,7 @@ process.stdin.on('end', () => {
     const repo = await seededRepo()
     const cfg = loadConfig(repo.root)
     if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
-    const late = join(mkdtempSync(join(tmpdir(), 'witness-late-')), 'late')
+    const late = join(scratchDir('witness-late-'), 'late')
     const dir = shimmed('agent', `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(late)}, 'acted'), 2000); setTimeout(() => {}, 30000)`)
     const env = { ...envWith(dir), WITNESS_DRIVE_AGENT_BIN: join(dir, 'agent.cmd') } as Record<string, string>
     const quick = { ...cfg.value, drive: { ...cfg.value.drive, sessionTimeoutMs: 300 } }
@@ -396,7 +396,7 @@ process.stdin.on('end', () => {
     const repo = await seededRepo()
     const cfg = loadConfig(repo.root)
     if (!cfg.ok) throw new Error(`config refused: ${JSON.stringify(cfg.violations)}`)
-    const scratch = mkdtempSync(join(tmpdir(), 'witness-orphan-'))
+    const scratch = scratchDir('witness-orphan-')
     const starter = writeOrphanStarter(scratch)
     // The agent starts the suite's app through a starter that exits, then exits — or hangs.
     const dir = shimmed('agent', `require('node:child_process').execFileSync(process.execPath, [${JSON.stringify(starter)}, process.env.ORPHAN_PIDS])

@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
@@ -12,6 +11,7 @@ import {
   TOKEN_BROKEN, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
   type TestRepo,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Rows 251, 252. In full-suite mode the ship gate runs the suite once — the tests lane is the run
 // the criteria lane reads — and journals that run's junit summary on the tree the gate reviewed.
@@ -39,7 +39,7 @@ async function fullSuiteShip(suite?: (dir: string) => string) {
   const seed = await shippableRepo()
   appendFileSync(join(seed.wt, '.gitignore'), 'reports/\n')
   execFileSync('git', ['commit', '-am', 'ignore reports'], { cwd: seed.wt })
-  const dir = mkdtempSync(join(tmpdir(), 'witness-runs-'))
+  const dir = scratchDir('witness-runs-')
   const counter = join(dir, 'count.cjs')
   writeFileSync(counter, `require('fs').appendFileSync(${JSON.stringify(join(dir, 'runs'))}, 'x')`)
   const suiteCmd = suite?.(dir) ?? `node "${counter}" && node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml`
