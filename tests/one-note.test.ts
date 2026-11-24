@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterAll, expect, it } from 'vitest'
+import { expect, it } from 'vitest'
 import { loadConfig, type Config } from '../src/config.js'
 import { decideView } from '../src/decide-view.js'
 import { driveLoop } from '../src/drive.js'
@@ -11,7 +11,7 @@ import { notePrefill, type DecisionEntry } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { settleStop } from '../src/settle.js'
 import { autonomyOn, commitEntry, fakeCtx, fakeScenario, fixtureEnv, noopOpener, plannedRepo, type TestRepo } from './helpers.js'
-import { dropStub, MODES, pasteIn } from './shells.js'
+import { MODES, pasteIn } from './shells.js'
 
 // Row 239. One block, one note: every surface that takes a decision runs the option's argv, and
 // `decide` derives the note from the journal, so the note the UI, drive, settle and a pasted
@@ -78,8 +78,6 @@ const SURFACES: Surface[] = [
     expect((await repo.cli(pasted.calls[0]!.slice(1))).code).toBe(0)
   }] as Surface] : []),
 ]
-
-afterAll(dropStub)
 
 it('one block journals one note on every surface, and no line is reparsed (row 239)', async () => {
   for (const [surface, selected, revise] of SURFACES) {

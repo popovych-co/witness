@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { diffBase, diffTags, evidenceForDiff } from '../src/evidence.js'
 import { loadConfig } from '../src/config.js'
@@ -11,6 +9,7 @@ import {
   TOKEN_BROKEN, TOKEN_FIXED, TOKEN_TESTS_TAGGED, TOKEN_TESTS_UNTAGGED,
   addOrigin, copyFixture, fixtureEnv, seededRepo, singleConfig, stampLive, writePlan, writeSpec,
 } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 async function tddRepo(): Promise<{ repo: TestRepo; base: string }> {
   const repo = await seededRepo()
@@ -185,7 +184,7 @@ describe('diffBase resolves the true cut point (D142)', () => {
     repo.git('branch', 'witness/legacy-plan', 'main')              // legacy cut, carries the state commit
 
     // origin advances independently (stand-in for the squash-merge of the same content)
-    const clone = mkdtempSync(join(tmpdir(), 'd142-'))
+    const clone = scratchDir('d142-')
     execFileSync('git', ['clone', `${repo.root}-origin.git`, clone], { stdio: 'ignore' })
     for (const [k, v] of [['user.name', 'test'], ['user.email', 't@e.c'], ['commit.gpgsign', 'false']]) {
       execFileSync('git', ['-C', clone, 'config', k!, v!])
@@ -194,7 +193,7 @@ describe('diffBase resolves the true cut point (D142)', () => {
     execFileSync('git', ['-C', clone, 'push', 'origin', 'main'], { stdio: 'ignore' })
     repo.git('fetch', 'origin', 'main')
 
-    const wt = join(mkdtempSync(join(tmpdir(), 'd142-wt-')), 'legacy')
+    const wt = join(scratchDir('d142-wt-'), 'legacy')
     repo.git('worktree', 'add', wt, 'witness/legacy-plan')
 
     const b = diffBase(wt, cfgOf(repo.root))
@@ -210,7 +209,7 @@ describe('diffBase resolves the true cut point (D142)', () => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh')
     addOrigin(repo)
-    const clone = mkdtempSync(join(tmpdir(), 'd142b-'))
+    const clone = scratchDir('d142b-')
     execFileSync('git', ['clone', `${repo.root}-origin.git`, clone], { stdio: 'ignore' })
     for (const [k, v] of [['user.name', 'test'], ['user.email', 't@e.c'], ['commit.gpgsign', 'false']]) {
       execFileSync('git', ['-C', clone, 'config', k!, v!])
@@ -220,7 +219,7 @@ describe('diffBase resolves the true cut point (D142)', () => {
     repo.git('fetch', 'origin', 'main')
     repo.git('branch', 'witness/clean-plan', 'origin/main')        // D137's cut
 
-    const wt = join(mkdtempSync(join(tmpdir(), 'd142b-wt-')), 'clean')
+    const wt = join(scratchDir('d142b-wt-'), 'clean')
     repo.git('worktree', 'add', wt, 'witness/clean-plan')
 
     const b = diffBase(wt, cfgOf(repo.root))

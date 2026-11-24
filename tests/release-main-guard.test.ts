@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { scratchDir } from './scratch.js'
 
 // Row 165. Both release scripts decided they were the CLI with
 // `import.meta.url === \`file://${process.argv[1]}\``, and a template is not a URL: on
@@ -25,7 +25,7 @@ function packageRoot(dir: string): string {
 }
 
 function tmp(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'witness-')))
+  return scratchDir('witness-')
 }
 
 function gate(script: string, cwd: string) {

@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import '../src/gates/index.js'
@@ -11,6 +10,7 @@ import { finishMove } from '../src/ship.js'
 import { shellLine, shellWord } from '../src/toon.js'
 import { branchName } from '../src/worktree.js'
 import { addOrigin, fakeScenario, gateEnv, hermeticEnv, putVerdict, shippableRepo, writePlan, type TestRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Row 243 (design §4.1.1 step 0, §4.1.3, §4.1.5; issue #86). A ship run that crashed mid-move leaves
 // refs/witness/carry/<plan> behind, with the plan's uncommitted work in it and maybe not in the tree.
@@ -134,7 +134,7 @@ function crashAt(repo: TestRepo, wt: string, planId: string, point: 'after-captu
 // A git that answers its version as an old one, and runs the real git for everything else.
 function oldGitDir(version: string): string {
   const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
-  const dir = mkdtempSync(join(tmpdir(), 'witness-oldgit-'))
+  const dir = scratchDir('witness-oldgit-')
   writeFileSync(join(dir, 'git'),
     `#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "version" ]; then echo "git version ${version}"; exit 0; fi\nexec '${real}' "$@"\n`)
   chmodSync(join(dir, 'git'), 0o755)
@@ -352,26 +352,22 @@ describe('step 0 finishes an interrupted move at every ship run (row 243, #86)',
     if (process.platform === 'win32') return   // the failing git is a shell script on PATH
     const { repo, wt, planId, stop } = await crashedStop()
     const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
-    const dir = mkdtempSync(join(tmpdir(), 'witness-noabort-'))
+    const dir = scratchDir('witness-noabort-')
     writeFileSync(join(dir, 'git'),
       `#!/bin/sh\nseen=\nfor a in "$@"; do [ "$a" = rebase ] && seen=1; [ -n "$seen" ] && [ "$a" = --abort ] && { echo 'error: the abort was refused' >&2; exit 1; }; done\nexec '${real}' "$@"\n`)
     chmodSync(join(dir, 'git'), 0o755)
-    try {
-      const env = fakeHarness()
-      const r = shipChild(repo, planId, { ...env, PATH: `${dir}${delimiter}${env.PATH}` })
-      expect(r.status, r.stderr).toBe(2)
-      expect(r.stderr).toMatch(/carry-pending/)
-      expect(r.stderr).toContain('the abort was refused')
-      const kept = `${keptPrefix(planId)}1`
-      expect(keptRefs(wt, planId).map((k) => k.ref)).toEqual([kept])
-      expect(r.stderr).toContain(kept)
-      expect(r.stdout.split('\n').filter((l) => l.startsWith('kept:'))).toEqual([])
-      expect(operationInProgress(wt)).toBe('rebase-merge')
-      expect(head(wt)).toBe(stop)
-      expect(hasCarry(wt, planId)).toBe(true)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+    const env = fakeHarness()
+    const r = shipChild(repo, planId, { ...env, PATH: `${dir}${delimiter}${env.PATH}` })
+    expect(r.status, r.stderr).toBe(2)
+    expect(r.stderr).toMatch(/carry-pending/)
+    expect(r.stderr).toContain('the abort was refused')
+    const kept = `${keptPrefix(planId)}1`
+    expect(keptRefs(wt, planId).map((k) => k.ref)).toEqual([kept])
+    expect(r.stderr).toContain(kept)
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('kept:'))).toEqual([])
+    expect(operationInProgress(wt)).toBe('rebase-merge')
+    expect(head(wt)).toBe(stop)
+    expect(hasCarry(wt, planId)).toBe(true)
   }, 240_000)
 
   it('a session continued witness\'s rebase → operation-in-progress; nothing aborted, its commits kept (P53)', async () => {
@@ -654,42 +650,38 @@ describe('step 0 finishes an interrupted move at every ship run (row 243, #86)',
     expect(gitAtLeast('not a git', 2, 40)).toBe(false)
     if (process.platform === 'win32') return   // the old git is a shell script on PATH
     const old = oldGitDir('2.39.5')
-    try {
-      // a crash before the reset leaves the work in the tree: with no comparison, that is not clean
-      {
-        const { repo, wt, planId, moveMain } = await movedPlan()
-        putWork(wt)
-        moveMain({ 'm.txt': 'main\n' })
-        crashAt(repo, wt, planId, 'after-capture')
-        const before = { head: head(wt), status: porcelain(wt) }
-        const env = fakeHarness()
-        const r = shipChild(repo, planId, { ...env, PATH: `${old}${delimiter}${env.PATH}` })
-        expect(r.status, r.stderr).toBe(2)
-        expect(r.stderr).toMatch(/carry-pending/)
-        expect(r.stderr).toContain('2.39.5')
-        expect(r.stderr).toContain('older than 2.40')
-        expect(r.stderr).toContain(shellLine(['git', 'stash', 'apply', '--index', carryRef(planId)]))
-        expect(r.stderr).toContain(keptPrefix(planId))
-        // never resets, the ref kept
-        expect({ head: head(wt), status: porcelain(wt) }).toEqual(before)
-        expectWork(wt)
-        expect(hasCarry(wt, planId)).toBe(true)
-      }
-      // a clean tracked tree is re-applied without a comparison
-      {
-        const { repo, wt, planId, moveMain } = await movedPlan()
-        putWork(wt)
-        moveMain({ 'm.txt': 'main\n' })
-        crashAt(repo, wt, planId, 'after-reset')
-        const env = fakeHarness()
-        const r = shipChild(repo, planId, { ...env, PATH: `${old}${delimiter}${env.PATH}` })
-        expect(r.stderr).not.toMatch(/carry-pending|clash-unresolved/)
-        expect(r.stdout).toMatch(/interrupted move is finished/)
-        expect(hasCarry(wt, planId)).toBe(false)
-        expectWork(wt)
-      }
-    } finally {
-      rmSync(old, { recursive: true, force: true })
+    // a crash before the reset leaves the work in the tree: with no comparison, that is not clean
+    {
+      const { repo, wt, planId, moveMain } = await movedPlan()
+      putWork(wt)
+      moveMain({ 'm.txt': 'main\n' })
+      crashAt(repo, wt, planId, 'after-capture')
+      const before = { head: head(wt), status: porcelain(wt) }
+      const env = fakeHarness()
+      const r = shipChild(repo, planId, { ...env, PATH: `${old}${delimiter}${env.PATH}` })
+      expect(r.status, r.stderr).toBe(2)
+      expect(r.stderr).toMatch(/carry-pending/)
+      expect(r.stderr).toContain('2.39.5')
+      expect(r.stderr).toContain('older than 2.40')
+      expect(r.stderr).toContain(shellLine(['git', 'stash', 'apply', '--index', carryRef(planId)]))
+      expect(r.stderr).toContain(keptPrefix(planId))
+      // never resets, the ref kept
+      expect({ head: head(wt), status: porcelain(wt) }).toEqual(before)
+      expectWork(wt)
+      expect(hasCarry(wt, planId)).toBe(true)
+    }
+    // a clean tracked tree is re-applied without a comparison
+    {
+      const { repo, wt, planId, moveMain } = await movedPlan()
+      putWork(wt)
+      moveMain({ 'm.txt': 'main\n' })
+      crashAt(repo, wt, planId, 'after-reset')
+      const env = fakeHarness()
+      const r = shipChild(repo, planId, { ...env, PATH: `${old}${delimiter}${env.PATH}` })
+      expect(r.stderr).not.toMatch(/carry-pending|clash-unresolved/)
+      expect(r.stdout).toMatch(/interrupted move is finished/)
+      expect(hasCarry(wt, planId)).toBe(false)
+      expectWork(wt)
     }
   }, 400_000)
 })

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { standingHeld } from '../src/held.js'
 import { readStream } from '../src/journal.js'
 import type { TestRepo } from './helpers.js'
 import { fixtureEnv, heldWorktree, worktreeState } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 const REPO = resolve(import.meta.dirname, '..')
 const LOADER = pathToFileURL(join(REPO, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href
@@ -28,7 +28,7 @@ async function waitFor(pred: () => boolean, ms: number): Promise<void> {
 // verify-red in a process group of its own (drive stops a session by its group), signalled once the
 // red run has written the flag. Resolves how the process ended.
 async function stopDuringRed(wt: string, planId: string, sig: NodeJS.Signals): Promise<{ code: number | null; signal: string | null }> {
-  const flag = join(mkdtempSync(join(tmpdir(), 'witness-flag-')), 'in')
+  const flag = join(scratchDir('witness-flag-'), 'in')
   const child = spawn(process.execPath, ['--import', LOADER, join(REPO, 'src', 'bin.ts'), 'verify-red', planId, '--step', 's1'],
     { cwd: wt, env: fixtureEnv({ WITNESS_TEST_FLAG: flag }) as NodeJS.ProcessEnv, stdio: 'ignore', detached: true })
   const ended = new Promise<{ code: number | null; signal: string | null }>((done) => child.on('exit', (code, signal) => done({ code, signal })))

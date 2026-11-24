@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { scratchDir } from './scratch.js'
 
 // Row 163. version() found its package.json through `URL.pathname`, and a pathname is
 // URL syntax, not a filesystem path: on Windows it is `/C:/…`, which readFileSync resolves
@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 // a test that only failed on a Windows box would guard nothing in CI.
 describe('version', () => {
   it('reads the package.json beside its own install, even when the install path needs URL escaping', async () => {
-    const pkg = join(realpathSync(mkdtempSync(join(tmpdir(), 'witness-'))), 'Jane Doe', 'witness')
+    const pkg = join(scratchDir('witness-'), 'Jane Doe', 'witness')
     mkdirSync(join(pkg, 'src'), { recursive: true })
     copyFileSync(fileURLToPath(new URL('../src/version.ts', import.meta.url)), join(pkg, 'src', 'version.ts'))
     writeFileSync(join(pkg, 'package.json'), JSON.stringify({ version: '7.8.9' }))

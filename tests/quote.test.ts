@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
@@ -8,6 +7,7 @@ import { grantRows } from '../src/allowlist.js'
 import { handoffLine, loadHarness } from '../src/harness.js'
 import { hasControl, offeredLine, quotedWord, shellArg, shellLine, shellWord, shellWordExact, shellWords, withheldOn } from '../src/toon.js'
 import { CORPUS } from './shells.js'
+import { scratchDir } from './scratch.js'
 
 // PowerShell's reading of one word, after its tokenizer: a word opening with any of its five
 // single quotes is a string running to the next one, where two together are one literal quote;
@@ -187,31 +187,27 @@ describe('one quoter for every pasted word (row 239)', () => {
   // branch and the canon guard's path are shown and never offered. The handoff's path is a cmdlet's
   // argument, which PowerShell alone reads: quoted, never withheld.
   it('on Windows every kind a foreign word reaches withholds a risky one or a quote-like (row 239)', () => {
-    const repo = mkdtempSync(join(tmpdir(), 'quote-guard-'))
-    try {
-      writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
-      const claude = loadHarness('claude-code')
-      if (!claude.ok) throw new Error('claude-code')
-      const risky = ['&', '|', '^', '<', '>', '"', '%', '!'].map((c) => [c, withheld(c), c] as const)
-      const straight = [["'", `not offered on Windows \u2014 it holds ', which PowerShell and Git Bash read differently`, "''"] as const]
-      // Ruling R27: each curly quote-like is not ASCII, so it is withheld on every platform with the
-      // printable-ASCII message; the handoff keeps and doubles it, as PowerShell reads it (exempt).
-      const nonAscii = "not offered \u2014 it holds a character outside printable ASCII, which a terminal's line editor can read as a command"
-      const curly = [0x2018, 0x2019, 0x201a, 0x201b].map((n) => String.fromCodePoint(n)).map((c) => [c, nonAscii, c + c] as const)
-      for (const [c, why, inPs] of [...risky, ...straight, ...curly]) {
-        expect(actOn('win32', ['trust', 'p1', '--cmd', `x${c}y`]).withheld, c).toBe(why)
-        expect(grantRows('p1', { cmd: `x${c}y` }, 'win32').filter((r) => r.includes('--cmd')), c).toEqual([])
-        expect(offeredLine(['git', 'checkout', '--', `d${c}.html`], 'win32'), c).toBeUndefined()
-        expect(offeredLine(['git', 'push', '-u', 'origin', `b${c}`], 'win32'), c).toBeUndefined()
-        const guard = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${c}b.md`) }, cwd: repo, platform: 'win32' })
-        expect(guard?.block, c).toBe(true)
-        expect(guard?.reason, c).not.toContain('run: witness adopt')
-        expect(guard?.reason, c).toContain(`witness adopt ${shellWord(`specs/a${c}b.md`, 'win32')} \u2014 ${why}`)
-        expect(handoffLine(claude.value, `C:\\a${c}b`, undefined, 'win32'), c)
-          .toBe(`Set-Location -LiteralPath 'C:\\a${inPs}b' -ErrorAction Stop; claude '/witness'`)
-      }
-    } finally {
-      rmSync(repo, { recursive: true, force: true })
+    const repo = scratchDir('quote-guard-')
+    writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
+    const claude = loadHarness('claude-code')
+    if (!claude.ok) throw new Error('claude-code')
+    const risky = ['&', '|', '^', '<', '>', '"', '%', '!'].map((c) => [c, withheld(c), c] as const)
+    const straight = [["'", `not offered on Windows \u2014 it holds ', which PowerShell and Git Bash read differently`, "''"] as const]
+    // Ruling R27: each curly quote-like is not ASCII, so it is withheld on every platform with the
+    // printable-ASCII message; the handoff keeps and doubles it, as PowerShell reads it (exempt).
+    const nonAscii = "not offered \u2014 it holds a character outside printable ASCII, which a terminal's line editor can read as a command"
+    const curly = [0x2018, 0x2019, 0x201a, 0x201b].map((n) => String.fromCodePoint(n)).map((c) => [c, nonAscii, c + c] as const)
+    for (const [c, why, inPs] of [...risky, ...straight, ...curly]) {
+      expect(actOn('win32', ['trust', 'p1', '--cmd', `x${c}y`]).withheld, c).toBe(why)
+      expect(grantRows('p1', { cmd: `x${c}y` }, 'win32').filter((r) => r.includes('--cmd')), c).toEqual([])
+      expect(offeredLine(['git', 'checkout', '--', `d${c}.html`], 'win32'), c).toBeUndefined()
+      expect(offeredLine(['git', 'push', '-u', 'origin', `b${c}`], 'win32'), c).toBeUndefined()
+      const guard = canonGuard({ tool: 'Write', input: { file_path: join(repo, 'specs', `a${c}b.md`) }, cwd: repo, platform: 'win32' })
+      expect(guard?.block, c).toBe(true)
+      expect(guard?.reason, c).not.toContain('run: witness adopt')
+      expect(guard?.reason, c).toContain(`witness adopt ${shellWord(`specs/a${c}b.md`, 'win32')} \u2014 ${why}`)
+      expect(handoffLine(claude.value, `C:\\a${c}b`, undefined, 'win32'), c)
+        .toBe(`Set-Location -LiteralPath 'C:\\a${inPs}b' -ErrorAction Stop; claude '/witness'`)
     }
   })
 

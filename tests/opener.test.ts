@@ -1,15 +1,15 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { openArtifact, platformOpener, probeArgv } from '../src/opener.js'
 import { waitForLine } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // A recorder standing in for `open`/`xdg-open`: appends its argv to a file so the
 // test can assert WHICH path the CLI handed the platform. Spawn is detached and
 // unawaited, so the assertion polls rather than reading immediately.
 function recorder(): { cmd: string; log: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'sf-opener-'))
+  const dir = scratchDir('sf-opener-')
   const log = join(dir, 'opened.txt')
   const cmd = join(dir, 'rec.sh')
   writeFileSync(cmd, `#!/bin/sh\necho "$1" >> "${log}"\n`)

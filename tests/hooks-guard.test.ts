@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir } from './scratch.js';
 
 const guard = join(__dirname, '..', 'plugin', 'hooks', 'guard-state.mjs');
 
@@ -12,7 +12,7 @@ function runGuard(input: unknown): { code: number; stderr: string } {
 }
 
 function witnessRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sfhook-'));
+  const dir = scratchDir('sfhook-');
   writeFileSync(join(dir, 'witness.config.yaml'), 'schema: 1\n');
   mkdirSync(join(dir, 'specs'), { recursive: true });
   mkdirSync(join(dir, 'plans'), { recursive: true });
@@ -21,7 +21,7 @@ function witnessRepo(): string {
 }
 
 function plainDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'plain-'));
+  const dir = scratchDir('plain-');
   mkdirSync(join(dir, 'specs'), { recursive: true });
   return dir;
 }
@@ -55,7 +55,7 @@ describe('guard-state hook — Edit/Write/MultiEdit', () => {
 
 describe('guard-state hook — configured canon paths', () => {
   function docsRepo(config: string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'sfhook-'));
+    const dir = scratchDir('sfhook-');
     writeFileSync(join(dir, 'witness.config.yaml'), config);
     mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
     mkdirSync(join(dir, 'specs'), { recursive: true });

@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { stringify } from 'yaml'
 import { defaultValues } from '../src/settings.js'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { version } from '../src/cli.js'
 import { STAGE_SKILLS } from '../src/harness.js'
@@ -15,6 +14,7 @@ import { RECAP, SPEC_META, approve, commitEntry, decidedRepo, turnDecision, fake
 import { captureCarry, keepCarry, keepStopped } from '../src/carry.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { shellLine } from '../src/toon.js'
+import { scratchDir } from './scratch.js'
 
 // A local dist-tags endpoint. The suite pins WITNESS_REGISTRY off (helpers.ts); the
 // skew tests are the only ones that turn it back on, and they point it here.
@@ -141,7 +141,7 @@ describe('witness check — harness findings', () => {
   // it with a directory holding git and nothing else.
   it('reports the resolved harness launch binary as a gate prerequisite, not a later slice', async () => {
     const repo = await seededRepo()
-    const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
+    const bin = scratchDir('nobin-')
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
     const res = await repo.cli(['check'], { env: { PATH: bin } })
     const claudeRow = res.stdout.split('\n').find((l) => l.includes('claude'))
@@ -165,7 +165,7 @@ describe('witness check — harness findings', () => {
   it('names the resolved harness binary when THAT binary is the missing one', async () => {
     const repo = await seededRepo()
     patchConfig(repo, { harness: 'pi' })   // row 193: the judge is declared, never detected
-    const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
+    const bin = scratchDir('nobin-')
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
     const res = await repo.cli(['check'], { env: { PATH: bin, PI_CODING_AGENT: 'true' } })
     const row = res.stdout.split('\n').find((l) => l.includes('probes') && l.includes('pi'))
@@ -175,7 +175,7 @@ describe('witness check — harness findings', () => {
 
   it('flags a project-scope skills install as invisible from worktrees', async () => {
     const repo = await seededRepo()
-    const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
+    const home = scratchDir('ckhome-')
     for (const s of STAGE_SKILLS) {
       mkdirSync(join(repo.root, '.pi', 'skills', s), { recursive: true })
       writeFileSync(join(repo.root, '.pi', 'skills', s, 'SKILL.md'), '---\nname: x\n---\n')
@@ -191,7 +191,7 @@ describe('witness check — harness findings', () => {
   // silence. One answer for the whole repo, naming every harness.
   it('states skills absence once, for every registry entry, without a finding', async () => {
     const repo = await seededRepo()
-    const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
+    const home = scratchDir('ckhome-')
     const res = await repo.cli(['check'], { env: { HOME: home } })
     expect(res.code).toBe(0)
     expect(res.stdout).not.toContain('skills-not-installed')
@@ -205,7 +205,7 @@ describe('witness check — harness findings', () => {
   // says so rather than saying nothing.
   it('explains a bundled absence rather than suppressing it', async () => {
     const repo = await seededRepo()
-    const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
+    const home = scratchDir('ckhome-')
     const res = await repo.cli(['check'], { env: { HOME: home } })
     expect(res.stdout).toContain('claude-code — expected under the marketplace plugin')
   })
@@ -252,7 +252,7 @@ describe('witness check — harness findings', () => {
     writeFileSync(join(wt, rel),
       readFileSync(join(wt, rel), 'utf8').replace(/@popovych\.co\/witness@[\d.]+/g, '@popovych.co/witness@0.0.1'))
 
-    const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
+    const home = scratchDir('ckhome-')
     const res = await repo.cli(['check'], { env: { HOME: home } })
     expect(res.stdout).toContain('payload-stale')
     expect(res.stdout).toContain(planId)
@@ -346,7 +346,7 @@ describe('witness check — harness findings', () => {
     const repo = await seededRepo()
     patchConfig(repo, { harness: 'pi' })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'declare the judge')
-    const bin = mkdtempSync(join(tmpdir(), 'nobin-'))
+    const bin = scratchDir('nobin-')
     symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), join(bin, 'git'))
     const res = await repo.cli(['check'], { env: { PATH: bin, CLAUDECODE: '1' } })
     expect(res.stdout).toContain('pi,missing')
@@ -390,7 +390,7 @@ describe('witness check — harness findings', () => {
   // stale CLI, and dashboard.ts prints that version and sees nothing wrong.
   it('warns that visible skills pin an older CLI than the published latest', async () => {
     const repo = await seededRepo()
-    const home = mkdtempSync(join(tmpdir(), 'ckhome-'))
+    const home = scratchDir('ckhome-')
     for (const s of STAGE_SKILLS) {
       mkdirSync(join(home, '.pi', 'agent', 'skills', s), { recursive: true })
       writeFileSync(join(home, '.pi', 'agent', 'skills', s, 'SKILL.md'),

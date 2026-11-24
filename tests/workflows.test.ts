@@ -91,4 +91,23 @@ describe('workflow tiers', () => {
     expect(r).toMatch(/^\s+- run: npm publish --provenance$/m);
     expect(r).not.toContain('pnpm publish');
   });
+
+  // Issue #101: ci ran node 20 and release ran 24, so the runtime that publishes first ran on the
+  // tag. CI's matrix holds the node release.yml publishes from and the floor package.json names.
+  it('ci runs the node the release publishes from, and the engines floor (issue #101)', () => {
+    type Step = { uses?: string; with?: Record<string, unknown> }
+    const setupNode = (steps: Step[]) => steps.find((s) => s.uses?.startsWith('actions/setup-node'));
+    // a node's major ('24', 24, '24.x'); NaN for anything else, which the checks below refuse:
+    // vitest's arrayContaining counts NaN equal to NaN
+    const major = (v: unknown): number => Number(/^(\d+)(?:\.|$)/.exec(String(v))?.[1]);
+    const ci = wf('ci.yml').jobs.test;
+    const release = major(setupNode(wf('release.yml').jobs.release.steps)?.with?.['node-version']);
+    const engines: string = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')).engines.node;
+    const floor = major(/^>=\s*(\S+)$/.exec(engines)?.[1]);
+    const matrix = ((ci.strategy?.matrix?.node ?? []) as unknown[]).map(major);
+    const read: Array<[string, number]> = [['release', release], ['engines floor', floor], ...matrix.map((m): [string, number] => ['ci matrix', m])];
+    for (const [what, n] of read) expect(Number.isInteger(n), `${what}: ${n}`).toBe(true);
+    expect(setupNode(ci.steps)?.with?.['node-version']).toBe('${{ matrix.node }}');
+    expect(matrix).toEqual(expect.arrayContaining([floor, release]));
+  });
 });

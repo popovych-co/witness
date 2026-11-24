@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -9,6 +8,7 @@ import { runGate } from '../src/gate.js'
 import { ghBody, rebaseIfMoved, runShip } from '../src/ship.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { addOrigin, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 // Deliberately distinct from both TOKEN_BROKEN and TOKEN_FIXED: rebasing the worktree's
 // BROKEN→FIXED commit onto either of those would apply cleanly (identical end content),
@@ -50,7 +50,7 @@ describe('witness ship', () => {
 
   it('keeps the command line short for a 40,000-character body (row 249, #94)', () => {
     const scenario = fakeScenario()
-    const dir = mkdtempSync(join(tmpdir(), 'witness-gh-'))
+    const dir = scratchDir('witness-gh-')
     const body = 'x'.repeat(40_000)
     const r = ghBody(fakeCtx(dir, { env: gateEnv(scenario) }), dir, ['pr', 'create', '--head', 'witness/p', '--title', 'p: t'], body)
     expect(r.ok).toBe(true)

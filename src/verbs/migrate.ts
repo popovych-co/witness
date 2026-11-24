@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { parse as parseYaml } from 'yaml'
@@ -11,6 +10,7 @@ import { resolveDriver } from '../harness.js'
 import { acquireLock } from '../lock.js'
 import { deepEqual, migrateValues, withoutEmpty, type Change } from '../migration.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
+import { withScratch } from '../scratch.js'
 import { GATE_NAMES, SETTINGS, getIn, settingAt } from '../settings.js'
 import { execFileSync } from '../spawn.js'
 import { kv } from '../toon.js'
@@ -139,8 +139,7 @@ export function guardMigration(input: {
 }
 
 function diffOf(oldText: string, newText: string): string[] {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-migrate-'))
-  try {
+  return withScratch('witness-migrate-', (dir) => {
     writeFileSync(join(dir, 'before.yaml'), oldText)
     writeFileSync(join(dir, 'after.yaml'), newText)
     try {
@@ -150,9 +149,7 @@ function diffOf(oldText: string, newText: string): string[] {
       // `git diff --no-index` exits 1 when the files differ: the diff is its stdout.
       return String((e as { stdout?: unknown }).stdout ?? '').trimEnd().split('\n')
     }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  })
 }
 
 export async function run(ctx: Ctx, argv: string[]): Promise<number> {

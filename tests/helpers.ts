@@ -1,12 +1,12 @@
 import { expect } from 'vitest'
 import { execFileSync, spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configCommands, grantCommands } from '../src/allowlist.js'
-import { scenariosMade } from './scenarios.js'
+import { scratchDir } from './scratch.js'
+import { FIXTURE_GIT_ENV } from './git-env.js'
 import { main, type Ctx } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
 import { diffBase } from '../src/evidence.js'
@@ -65,6 +65,9 @@ export interface CliOpts {
   cwd?: string
 }
 
+// A fixture repo is a scratchDir (tests/scratch.ts): removed when its test passes, kept and named
+// when it fails. `root` is `<home>/witness`, so a path a test makes beside it — `${root}-<name>`
+// (addOrigin's `-origin.git`) or `join(root, '..', …)` — lies in the same home and goes with it.
 export interface TestRepo {
   root: string
   effort: string
@@ -84,7 +87,7 @@ export interface TestRepo {
 const NO_SESSION = { WITNESS_CONTEXT: undefined, CLAUDE_CODE_SESSION_ID: undefined, PI_SESSION_ID: undefined }
 
 export function tmpRepo(): TestRepo {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'witness-')))
+  const root = scratchDir('witness-')
   const git = (...args: string[]) =>
     execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
   git('init', '-b', 'main')
@@ -337,6 +340,9 @@ export function fixtureEnv(extra: Record<string, string> = {}): Record<string, s
     WITNESS_TRUST_CMDS: '1',
     VITEST_BIN: vitestBin(),
     CI: '',
+    // Row 272: an env built from nothing carries the suite's git config, since src hands it to
+    // children that run git (drive's agents, the fake gh's hooks)
+    ...FIXTURE_GIT_ENV,
     ...extra,
   }
 }
@@ -410,11 +416,19 @@ export function fakeClock(start: number): Clock & { slept: number[] } {
   }
 }
 
-// Recorded (tests/scenarios.ts) so a failing test can print its fake calls' trails.
+// A scratchDir whose failure report is its fake calls' trails: a gate run turns the fake's own
+// stderr into a refusal row (cut to 200 characters) or nothing at all, so a barrier that never
+// filled or a count off by one would otherwise fail with no account of the calls behind it.
 export function fakeScenario(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-fake-'))
-  scenariosMade.push(dir)
-  return dir
+  return scratchDir('witness-fake-', { report: fakeTrails })
+}
+
+// The trail of each fake bin that ran in one scenario, '' when none did (row 213).
+export function fakeTrails(dir: string): string {
+  return (['claude', 'pi'] as const).flatMap((bin) => {
+    const trace = join(dir, `${bin}-trace`)
+    return existsSync(trace) ? [`fake ${bin} trail · ${trace}\n${readFileSync(trace, 'utf8').trimEnd()}`] : []
+  }).join('\n')
 }
 
 export function gateEnv(scenario: string, extra: Record<string, string> = {}): Record<string, string> {
@@ -475,7 +489,9 @@ export function fakeCtx(root: string, opts: {
   const answers = [...(opts.answers ?? [])]
   return {
     cwd: root,
-    env: { ...opts.env },
+    // Row 272: an env built from nothing carries the suite's git config, since src hands it to
+    // children that run git
+    env: { ...FIXTURE_GIT_ENV, ...opts.env },
     isTTY: opts.tty ?? answers.length > 0,
     out: opts.out ?? (() => {}),
     err: opts.err ?? (() => {}),

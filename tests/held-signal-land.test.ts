@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { scratchDir } from './scratch.js'
 
 const REPO = resolve(import.meta.dirname, '..')
 const LOADER = pathToFileURL(join(REPO, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href
@@ -14,7 +14,7 @@ const HELD = pathToFileURL(join(REPO, 'src', 'held.ts')).href
 // before the listener runs. The trap must still win before the caller journals or lets go.
 // `extra`: another SIGTERM listener, so the trap's re-raise does not end the process.
 function runScript(extra: boolean): Promise<{ code: number | null; signal: string | null; dir: string }> {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-land-'))
+  const dir = scratchDir('witness-land-')
   const script = join(dir, 'land.mts')
   writeFileSync(script, `
 import { readFile, writeFileSync } from 'node:fs'

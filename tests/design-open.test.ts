@@ -1,13 +1,13 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { approve, noopOpener, seededRepo, waitForLine, witnessDesign, writeDesign, writeLocalConfig, writeSpec, type TestRepo } from './helpers.js'
 import { readStream } from '../src/journal.js'
 import { htmlSha } from '../src/design.js'
+import { scratchDir } from './scratch.js'
 
 function recorder(): { cmd: string; log: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'sf-open-'))
+  const dir = scratchDir('sf-open-')
   const log = join(dir, 'opened.txt')
   const cmd = join(dir, 'rec.sh')
   writeFileSync(cmd, `#!/bin/sh\necho "$1" >> "${log}"\n`)
@@ -92,7 +92,7 @@ describe('next routes to --open', () => {
 // page through the same opener as --open and records nothing — `design-shown` stays reserved for
 // registered bytes (row 72).
 describe('witness design --preview', () => {
-  const page = () => { const p = join(mkdtempSync(join(tmpdir(), 'pv-')), 'p.html'); writeFileSync(p, '<!doctype html><p>directions</p>'); return p }
+  const page = () => { const p = join(scratchDir('pv-'), 'p.html'); writeFileSync(p, '<!doctype html><p>directions</p>'); return p }
   const uiSpec = async (): Promise<TestRepo> => {
     const repo = await seededRepo()
     await writeSpec(repo, 'auth-refresh', { ui: true })
@@ -128,7 +128,7 @@ describe('witness design --preview', () => {
   it('--preview refuses an unreadable page and an unknown spec', async () => {
     const repo = await uiSpec()
     writeLocalConfig(repo.root, { opener: noopOpener() })
-    const missing = await repo.cli(['design', 'auth-refresh', '--preview', join(tmpdir(), 'no-such-page.html')])
+    const missing = await repo.cli(['design', 'auth-refresh', '--preview', join(scratchDir('witness-absent-'), 'no-such-page.html')])
     expect(missing.code).toBe(2)
     expect(missing.stderr).toContain('input-unreadable')
     const ghost = await repo.cli(['design', 'ghost', '--preview', page()])

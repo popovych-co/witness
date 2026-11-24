@@ -31,7 +31,7 @@ const cfgOf = (repo: TestRepo): Config => {
   if (!r.ok) throw new Error(`config refused: ${JSON.stringify(r.violations)}`)
   return r.value
 }
-// Fakes are written into a mkdtemp scenario dir, never fakeBinDir() — that one is a
+// Fakes are written into a scratch scenario dir, never fakeBinDir() — that one is a
 // COMMITTED fixture directory and a test that writes there dirties the repo.
 const fakeAgent = (body: string): string => {
   const bin = join(fakeScenario(), 'fake-agent')

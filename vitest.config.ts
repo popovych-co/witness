@@ -1,8 +1,12 @@
 import { configDefaults, defineConfig } from 'vitest/config'
+import { FIXTURE_GIT_ENV } from './tests/git-env.js'
 
 export default defineConfig({
   test: {
     pool: 'forks',
+    // Row 272 (issue #101): every git a test runs, in process or in a child that inherits the env,
+    // reads tests/gitconfig as its global config, so none starts auto maintenance that outlives it
+    env: { ...FIXTURE_GIT_ENV },
     // 20000 was a budget for unit tests, and 49 of the 125 files are not unit tests: they
     // drive the CLI against throwaway git repos and spawn a NESTED `vitest run` plus real
     // `git` (helpers.ts `vitestBin`/`fixtureEnv`). Measured 2026-08-30 on a 10-core box:
@@ -17,8 +21,9 @@ export default defineConfig({
     // dist/ is built once here, never per file (tests/global-setup.ts says why)
     globalSetup: ['tests/global-setup.ts'],
     // loop-watch names a test that holds its worker's event loop near vitest's 60 s RPC limit;
-    // fake-trails prints the fake reviewer calls behind a failing test (each says why)
-    setupFiles: ['tests/loop-watch.ts', 'tests/fake-trails.ts'],
+    // scratch-setup settles the scratch directories a test file owns once the file has run, and
+    // names those a failure keeps (each says why)
+    setupFiles: ['tests/loop-watch.ts', 'tests/scratch-setup.ts'],
     // `.claude/**`: a git worktree checked out INSIDE the repo is a second full copy of
     // `tests/`, so vitest collected every file twice — 243 files and ~5000s of test time,
     // which starves the fork pool until the heaviest files trip the 20s timeout. The

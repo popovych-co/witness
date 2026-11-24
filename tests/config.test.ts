@@ -8,6 +8,7 @@ import {
 } from '../src/config.js'
 import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS, withValues } from '../src/settings.js'
 import { configYaml, seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 describe('loadConfig', () => {
   it('refuses when the config is missing', () => {
@@ -228,7 +229,7 @@ describe('gates.reviewerTimeoutMs', () => {
 })
 
 describe('loadLocalConfig — .witness/config.local.yaml', () => {
-  const scratch = () => mkdtempSync(join(tmpdir(), 'witness-local-'))
+  const scratch = () => scratchDir('witness-local-')
   const put = (root: string, yaml: string) => {
     mkdirSync(join(root, '.witness'), { recursive: true })
     writeFileSync(localConfigPath(root), yaml)

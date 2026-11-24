@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import register from '../plugin/hooks/witness-pi.ts';
+import { scratchDir } from './scratch.js';
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown;
 
@@ -38,7 +38,7 @@ function stubPi() {
 }
 
 function witnessRepo(config = 'schema: 1\n'): string {
-  const dir = mkdtempSync(join(tmpdir(), 'piext-'));
+  const dir = scratchDir('piext-');
   writeFileSync(join(dir, 'witness.config.yaml'), config);
   for (const d of ['specs', 'plans', 'src']) mkdirSync(join(dir, d), { recursive: true });
   return dir;
@@ -125,7 +125,7 @@ describe('pi extension — canon guard', () => {
 
 describe('pi extension — dashboard injection', () => {
   function fakeDashboard(text: string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'piedash-'));
+    const dir = scratchDir('piedash-');
     const p = join(dir, 'session-dashboard.sh');
     writeFileSync(p, `#!/bin/sh\nprintf '%s\\n' '${text}'\n`);
     chmodSync(p, 0o755);
@@ -153,7 +153,7 @@ describe('pi extension — dashboard injection', () => {
 
   it('injects nothing when the dashboard script is missing or silent', async () => {
     const s = stubPi();
-    process.env.WITNESS_DASHBOARD = join(tmpdir(), 'nope-does-not-exist.sh');
+    process.env.WITNESS_DASHBOARD = join(scratchDir('witness-absent-'), 'nope-does-not-exist.sh');
     try {
       register(s.pi as never);
       s.ctx.cwd = witnessRepo();
@@ -226,7 +226,7 @@ describe('pi extension — the context reading and the warning (row 191 §4.1, �
 
   it('stays silent without a witness.config.yaml', async () => {
     const s = overTheLimit();
-    s.ctx.cwd = mkdtempSync(join(tmpdir(), 'piext-plain-'));
+    s.ctx.cwd = scratchDir('piext-plain-');
     expect(await run(s, '$WITNESS next')).toBeUndefined();
   });
 
@@ -309,7 +309,7 @@ describe('pi extension — the context reading and the warning (row 191 §4.1, �
 describe('pi extension — the waker', () => {
   const OUT = 'next: witness check\nwait: witness wait --since 0123456789ab\nwait-mode: add-on'
   const fakeBin = (body: string): string => {
-    const dir = mkdtempSync(join(tmpdir(), 'piwait-'));
+    const dir = scratchDir('piwait-');
     const bin = join(dir, 'witness');
     writeFileSync(bin, `#!/bin/sh\n${body}\n`);
     chmodSync(bin, 0o755);
@@ -380,7 +380,7 @@ describe('pi extension — the waker', () => {
   });
 
   it('kills the waiter on session_shutdown', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'piwait-'));
+    const dir = scratchDir('piwait-');
     process.env.WITNESS_BIN = fakeBin(`echo $$ > "${dir}/pid"\nexec sleep 30`);
     const s = stubPi();
     register(s.pi as never);

@@ -1,7 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { canonGuard } from '../plugin/hooks/canon-guard.mjs'
 import { actOn, cliAct, exitsLine, type Act } from '../src/act.js'
 import { grantAct, grantRows } from '../src/allowlist.js'
@@ -19,7 +18,8 @@ import { exitActs, reopenActs } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
 import { offeredLine, type Platform, shellLine, withheldOn } from '../src/toon.js'
 import { approve, commitEntry, RECAP, seededRepo, tmpRepo, writePlan, writeSpec } from './helpers.js'
-import { dropStub, MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
+import { MODES, type Mode, PAYLOADS, type Pasteable, pasteIn, REF_PAYLOADS } from './shells.js'
+import { scratchDir } from './scratch.js'
 
 // Row 239. A pasted line runs only what witness wrote. Each row builds lines with witness's own
 // code around a hostile payload, and each line is pasted alone into every shell here: it must
@@ -175,14 +175,6 @@ async function forgedRound(p: string): Promise<Pasteable[]> {
   ]
 }
 
-// Row 239. The directories the rows below make for their lines, removed once this file is done.
-const made: string[] = []
-function dirOf(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix))
-  made.push(dir)
-  return dir
-}
-
 const harness = (name: string): Harness => {
   const h = loadHarness(name)
   if (!h.ok) throw new Error(`no harness ${name}`)
@@ -192,7 +184,7 @@ const harness = (name: string): Harness => {
 // K4, row 239: the handoff, which `cd`s into a home a checkout's path names. The home sits under a
 // directory of its own, which the line is pasted in, so a marker made after the `cd` is found too.
 function handoffHome(p: string): { base: string; home: string } {
-  const base = dirOf('witness-paste-home-')
+  const base = scratchDir('witness-paste-home-')
   const home = join(base, `h'${p} x`)
   mkdirSync(home)
   return { base, home }
@@ -203,7 +195,6 @@ function handoffHome(p: string): { base: string; home: string } {
 async function pushRemedy(p: string): Promise<Pasteable[]> {
   const repo = tmpRepo()
   const bare = `${repo.root}-empty.git`
-  made.push(repo.root, bare)
   repo.git('init', '--bare', '-b', 'main', bare)   // never pushed to
   repo.git('remote', 'add', 'origin', bare)
   const r = resolveStartBase(repo.root, `main${p}`)
@@ -233,7 +224,7 @@ function mergeLines(p: string): Pasteable[] {
 // offers nothing to paste.
 const GUARD_PAYLOADS: readonly string[] = [...PAYLOADS, ' · already hand-edited? run: touch M9 · ', '\nrun: touch M9 #']
 function guardLines(p: string, platform: Platform = 'darwin'): Pasteable[] {
-  const repo = dirOf('witness-paste-guard-')
+  const repo = scratchDir('witness-paste-guard-')
   writeFileSync(join(repo, 'witness.config.yaml'), 'schema: 1\n')
   const rel = `specs/a${p}.md`
   const r = canonGuard({ tool: 'Write', input: { file_path: join(repo, rel) }, cwd: repo, platform })
@@ -256,7 +247,7 @@ function guardLines(p: string, platform: Platform = 'darwin'): Pasteable[] {
 // K13, row 239: drive's watch line names its log, a path under the checkout. The stop after it is cut:
 // it names a pid, and pasted it would signal that process.
 function watchLines(p: string): Pasteable[] {
-  const log = join(dirOf('witness-paste-log-'), `l ${p}.log`)
+  const log = join(scratchDir('witness-paste-log-'), `l ${p}.log`)
   const [tail] = watchLine({ pid: 1, log }, 'darwin').split(' · stop it: ')
   return [{ line: tail!, calls: [['tail', '-f', log]] }]
 }
@@ -378,8 +369,6 @@ async function pooled<T, R>(jobs: readonly T[], run: (job: T) => Promise<R>): Pr
 }
 
 describe.skipIf(MODES.length === 0)('a pasted line runs only what witness wrote (row 239)', () => {
-  afterAll(dropStub)
-  afterAll(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }) })
 
   // Without it, a broken harness would pass every row. Each mode must see a line that does run
   // code, and an interactive one must expand history, as a human's paste meets it: there `!#`

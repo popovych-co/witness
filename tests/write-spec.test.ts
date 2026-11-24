@@ -1,25 +1,21 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { splitDoc } from '../src/fm.js'
 import { readStream } from '../src/journal.js'
 import { SPEC_BODY, SPEC_META, seededRepo, writeSpec } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 describe('witness write (spec)', () => {
   it('honors absolute --meta/--body paths outside the repo', async () => {
     const repo = await seededRepo()
-    const dir = mkdtempSync(join(tmpdir(), 'witness-write-abs-'))
+    const dir = scratchDir('witness-write-abs-')
     writeFileSync(join(dir, 'm.json'), JSON.stringify(SPEC_META))
     writeFileSync(join(dir, 'b.md'), SPEC_BODY)
-    try {
-      const res = await repo.cli(['write', 'auth-refresh', '--effort', 'auth-hardening',
-        '--meta', join(dir, 'm.json'), '--body', join(dir, 'b.md')])
-      expect(res.code).toBe(0)
-      expect(repo.git('log', '-1', '--format=%s')).toBe('write(auth-refresh): create spec')
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+    const res = await repo.cli(['write', 'auth-refresh', '--effort', 'auth-hardening',
+      '--meta', join(dir, 'm.json'), '--body', join(dir, 'b.md')])
+    expect(res.code).toBe(0)
+    expect(repo.git('log', '-1', '--format=%s')).toBe('write(auth-refresh): create spec')
   })
 
   it('creates a draft spec, journals a write entry, commits with the trailer', async () => {

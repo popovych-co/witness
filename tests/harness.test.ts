@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import {
   HARNESSES, STAGE_SKILLS, handoffLine, loadHarness, relayLine,
   resolveDriver, resolveJudge, resolveSkills, skillPins, skillsVisibility, validatePin,
 } from '../src/harness.js'
 import { toolsFor } from '../src/reviewer.js'
+import { scratchDir } from './scratch.js'
 
 const hx = (name: string) => {
   const r = loadHarness(name)
@@ -155,8 +156,8 @@ describe('skills visibility', () => {
   }
 
   it('reports global, project-only and absent', () => {
-    const home = mkdtempSync(join(tmpdir(), 'hxhome-'))
-    const root = mkdtempSync(join(tmpdir(), 'hxroot-'))
+    const home = scratchDir('hxhome-')
+    const root = scratchDir('hxroot-')
     expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('absent')
     seed(join(root, '.pi', 'skills'))
     expect(skillsVisibility({ HOME: home }, root, hx('pi'))).toBe('project-only')
@@ -165,8 +166,8 @@ describe('skills visibility', () => {
   })
 
   it('resolveSkills returns the directory it resolved, so the pin reader can find it', () => {
-    const home = mkdtempSync(join(tmpdir(), 'skhome-'))
-    const root = mkdtempSync(join(tmpdir(), 'skroot-'))
+    const home = scratchDir('skhome-')
+    const root = scratchDir('skroot-')
     for (const s of STAGE_SKILLS) {
       mkdirSync(join(root, '.pi', 'skills', s), { recursive: true })
       writeFileSync(join(root, '.pi', 'skills', s, 'SKILL.md'),

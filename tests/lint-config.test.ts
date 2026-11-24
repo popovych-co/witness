@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { jsonStyle, parseJsonc, payloadLinted, readBiomeConfig } from '../src/lint-config.js'
+import { scratchDir } from './scratch.js'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 function dirWith(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'witness-lint-'))
+  const dir = scratchDir('witness-lint-')
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text)
   return dir
 }

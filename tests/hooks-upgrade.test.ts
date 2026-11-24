@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { loadHarness } from '../src/harness.js'
 import { dropRetired, namesRetired, retireAtRoot } from '../src/install.js'
 import { refreshSparse } from '../src/worktree.js'
 import { git, legacyHooksPlan, tmpRepo, unwrap } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 const OLD = ['.claude/hooks/canon-guard.mjs', '.claude/hooks/guard-state.mjs', '.claude/hooks/session-dashboard.sh']
 const NEW = ['.witness/hooks/canon-guard.mjs', '.witness/hooks/guard-state.mjs', '.witness/hooks/session-dashboard.sh']
@@ -60,7 +60,7 @@ describe('upgrading moves the hooks at the root and leaves started worktrees on 
 // and a removal through it would delete a file outside the tree.
 describe("witness's retired-file removals never follow a symlinked parent out of the tree (row 250)", () => {
   function linkedHooks(root: string): string {
-    const outside = mkdtempSync(join(tmpdir(), 'witness-outside-'))
+    const outside = scratchDir('witness-outside-')
     writeFileSync(join(outside, 'guard-state.mjs'), '// not witness\'s\n')
     mkdirSync(join(root, '.claude'), { recursive: true })
     symlinkSync(outside, join(root, '.claude/hooks'))

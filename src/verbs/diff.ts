@@ -1,5 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
 import { serializeDoc } from '../fm.js'
@@ -8,6 +7,7 @@ import { baseForSpec, contentAtSha } from '../history.js'
 import { basisMoved, specBasis } from '../basis.js'
 import { carriedDecisions, decisionDelta } from '../decisions.js'
 import { renderRefusal, v } from '../refusal.js'
+import { withScratch } from '../scratch.js'
 import { findById, loadCanon } from '../scan.js'
 import { canonicalSha, short, VOLATILE_FIELDS } from '../sha.js'
 import { kv, rows } from '../toon.js'
@@ -76,10 +76,11 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ]).forEach(ctx.out)
     return EXIT.FINDINGS
   }
-  const tmp = mkdtempSync(join(tmpdir(), 'witness-diff-'))
-  writeFileSync(join(tmp, 'base.md'), canonicalRender(baseDoc.meta, baseDoc.body))
-  writeFileSync(join(tmp, 'current.md'), canonicalRender(spec.meta, spec.body))
-  const diff = tryGit(root, 'diff', '--no-index', '--', join(tmp, 'base.md'), join(tmp, 'current.md'))
+  const diff = withScratch('witness-diff-', (tmp) => {
+    writeFileSync(join(tmp, 'base.md'), canonicalRender(baseDoc.meta, baseDoc.body))
+    writeFileSync(join(tmp, 'current.md'), canonicalRender(spec.meta, spec.body))
+    return tryGit(root, 'diff', '--no-index', '--', join(tmp, 'base.md'), join(tmp, 'current.md'))
+  })
   ctx.out(diff.out)
   decisionsBlock()
   return EXIT.OK
