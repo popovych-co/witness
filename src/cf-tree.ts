@@ -1,8 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isId } from './dsl.js'
 import { ok, refuse, v, type Result } from './refusal.js'
+import { withScratch } from './scratch.js'
 import { execFileSync } from './spawn.js'
 import { visible } from './toon.js'
 
@@ -83,7 +82,6 @@ export function foldOverlay(root: string, base: string, overlay: CfOverlay): Res
   if (fromTree === undefined) {
     return refuse([v('overlay.from', 'tree-unknown', visible(overlay.from), 'a full commit or tree sha this repo holds')])
   }
-  let dir: string | undefined
   try {
     const removals: string[] = []
     const adds: string[] = []
@@ -96,15 +94,14 @@ export function foldOverlay(root: string, base: string, overlay: CfOverlay): Res
       removals.push(`0 ${'0'.repeat(baseTree.length)}\t${path}\0`)
       if (theirs !== undefined) adds.push(`${theirs.mode} ${theirs.sha}\t${path}\0`)
     }
-    dir = mkdtempSync(join(tmpdir(), 'witness-cf-'))
-    const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
-    git(root, ['read-tree', baseTree], { env })
-    git(root, ['update-index', '-z', '--index-info'], { env, input: [...removals, ...adds].join('') })
-    return ok(git(root, ['write-tree'], { env }))
+    return withScratch('witness-cf-', (dir) => {
+      const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
+      git(root, ['read-tree', baseTree], { env })
+      git(root, ['update-index', '-z', '--index-info'], { env, input: [...removals, ...adds].join('') })
+      return ok(git(root, ['write-tree'], { env }))
+    })
   } catch (e) {
     return refuse([v('overlay', 'overlay-fold', gitWhy(e), 'a tree git can build from the base and the overlay')])
-  } finally {
-    if (dir) rmSync(dir, { recursive: true, force: true })
   }
 }
 

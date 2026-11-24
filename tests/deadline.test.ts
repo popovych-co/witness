@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DEADLINE_DIR, deadlineFile, driveDeadline, liveIo, sweepDeadlines, writeDeadline } from '../src/deadline.js'
 import { tmpRepo } from './helpers.js'
+import { scratchDir } from './scratch.js'
 
 const deadPid = (): number => spawnSync(process.execPath, ['-e', '']).pid!
 
@@ -22,7 +22,7 @@ describe('the deadline file (row 256)', () => {
   })
 
   it('a missing, linked, oversized or garbled file leaves the spawn deadline', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'witness-dl-'))
+    const dir = scratchDir('witness-dl-')
     const real = join(dir, 'real.json'); writeFileSync(real, '{"deadline":9000000000000}')
     const link = join(dir, '1-1.json'); symlinkSync(real, link)
     const big = join(dir, '1-2.json'); writeFileSync(big, `{"deadline":9000000000000,"pad":"${'x'.repeat(2048)}"}`)
