@@ -50,7 +50,7 @@ const j = {
 }
 const BOUND = [run(1), dec('revise'), run(2), dec('revise'), run(3)]
 
-const facts: ActFacts = { upstream: 'e1', stale: false, holdLifted: false, owed: false, upstreamOwed: false }
+const facts: ActFacts = { upstream: 'e1', stale: false, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false }
 const live = (entries: Entry[], f: Partial<ActFacts> = {}) => liveActs(G, T, entries, { ...facts, ...f })
 // argv holds no `witness`, so the whole argv is the command after it.
 const shown = (acts: readonly Act[]) => acts.map((a) => a.argv.join(' '))
@@ -491,5 +491,12 @@ describe('a checks-only round (row 264)', () => {
     expect(approves(liveActs(G, T, [only(1)], facts))).toEqual([])
     expect(approves(liveActs(G, T, [only(1), dec('revise')], facts))).toEqual([])
     expect(liveActs(G, T, [only(1)], { ...facts, stale: true }).acts[0]!.line).toBe('witness gate implement p1')
+  })
+})
+
+describe('a base result landed since a checks-only round (row 267)', () => {
+  it('a base result landed since the round leads its stop with the re-gate (row 267)', () => {
+    expect(liveActs(G, T, [only(1)], { ...facts, checksMoved: true }).acts[0]!.line).toBe('witness gate implement p1')
+    expect(liveActs(G, T, [only(1)], facts).acts[0]!.line).toBe('witness decide implement p1 --revise')
   })
 })

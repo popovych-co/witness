@@ -1085,6 +1085,8 @@ export async function driveLoop(
   // whose retry fell due this round.
   const retries = new Map<string, number>()
   const dueKept = new Map<string, DecisionAct>()
+  // Row 267. The waiting line said per target, said again only when it changes.
+  const waitingSaid = new Map<string, string>()
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
     const reports = await settleOwed(ctx, root, cfg, { scope: settleAdmits, kept: dueKept })
@@ -1094,6 +1096,27 @@ export async function driveLoop(
       const s = r.settled
       // Row 240: another process took the stop's settle lock after the scope was read.
       if (s.kind === 'busy') { busySeen.add(r.target); continue }
+      // Row 267. A stop red only for base results drive owes is drive's own work in flight (row 240's
+      // busy path: no aside, no notification, polled on the pause cadence): the base-lint job runs, and
+      // once its result lands the stop is stale and the policy routes the re-gate. With jobs off for
+      // this run no job will run, so the stop is set aside for the human, saying why.
+      if (s.kind === 'waiting') {
+        if (jobsOff === undefined) {
+          busySeen.add(r.target)
+          const said = `drive: waiting — ${r.target} · ${s.why}`
+          if (waitingSaid.get(r.target) !== said) { ctx.out(said); waitingSaid.set(r.target, said) }
+        } else {
+          waitingSaid.delete(r.target)
+          const why = `${s.why}, but jobs are off for this run`
+          ctx.out(`drive: waits on you — ${r.target} · decision · ${why}`)
+          setAside(r.target, {
+            kind: 'decision', line: cliAct('decide', r.gate, r.target, '--show').line, why: `${why} — ${jobsOff}`,
+            gate: r.gate, key0: keyOf(ownNext(r.target)),
+          })
+        }
+        continue
+      }
+      waitingSaid.delete(r.target)
       if (s.kind === 'left' && s.code === EXIT.BLOCKED && s.limit === undefined) {
         const tries = (retries.get(r.target) ?? 0) + 1
         retries.set(r.target, tries)

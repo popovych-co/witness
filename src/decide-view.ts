@@ -85,7 +85,7 @@ export function decideView(root: string, cfg: Config, canon: Canon, gate: GateNa
   // `witness gate …` in the one state where the gate answers changed-nothing. An
   // uncomputable sha is NOT staleness — same doctrine as the approve-time check. Row 244 (S2-1):
   // read as `decide` reads it (`actFacts`), against the last run that judged something.
-  const stale = facts.stale || facts.holdLifted
+  const stale = facts.stale || facts.holdLifted || facts.checksMoved
   const lastRun: LastRun = { round: last.round, sha: short(last.reviewed_sha), outcome: last.outcome }
   // D154: the block's trusting twins name the artifact's `cmd:` criteria this repo does not
   // trust yet.

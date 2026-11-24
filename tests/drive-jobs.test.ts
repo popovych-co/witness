@@ -19,6 +19,7 @@ import {
   writePlan, writeSpec, type TestRepo,
 } from './helpers.js'
 import { baseLintKey } from '../src/base-lint.js'
+import { acquireDriveLock } from '../src/drive-presence.js'
 
 // Row 257 (spec §3.5). Drive runs jobs one shard at a time beside its sessions, boxes each from the
 // child's own "running" line, and journals what the shard ended on.
@@ -340,5 +341,52 @@ describe('the base lint in drive — slice 3 review (row 263)', () => {
     const out: string[] = []
     await driveLoop(repo.root, cfg, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out), { maxSpawns: 1 })
     expect(shards(repo.root).filter((s) => s.kind === 'base-lint')).toEqual([])
+  }, 180_000)
+})
+
+// Row 267. A stop red only for drive's base lint: as 'drive runs the base lint a gate left pending', the
+// ship round a checks-only one.
+async function waitingStop(opts: { jobsOff?: boolean } = {}) {
+  const repo = await startedFlows(['a'])
+  const stale = cfgOf(repo.root)
+  const cmd = fakeLint(repo)
+  patchConfig(repo, { ship: { lint: { biome: cmd.check } }, readers: { biome: cmd.sarif } })
+  repo.write('src/old.ts', 'BAD\n')
+  repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part and its reader')
+  const key = baseLintKey(cfgOf(repo.root).ship.lint![0]!, cmd.sarif, repo.git('rev-parse', 'HEAD'))
+  appendEntry(repo.root, 'a-plan-1', { v: 1, t: 'gate-run', gate: 'ship', artifact: 'a-plan-1', round: 1, run_id: 'rs1',
+    reviewed_sha: 's1', prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks_only: true,
+    checks: [{ name: 'lint', ok: false, parts: [{ part: 'biome', state: 'pending', key }] }] })
+  // slice 3 review I1's foreign first entry: drive's first job write is refused, so jobs turn off
+  if (opts.jobsOff === true) appendEntry(repo.root, JOB_STREAM, { t: 'retry', artifact: 'x' })
+  repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'the ship round')
+  grantCommands(repo.root, [cmd.check, cmd.sarif])
+  const out: string[] = []
+  // the drive verb's lock, which `driveLoop` itself does not take: with no drive holding the repo no
+  // part reads pending (`jobReading`)
+  const held = acquireDriveLock(repo.root, {})
+  try {
+    await driveLoop(repo.root, stale, autoCtx(repo, { WITNESS_BIN: witnessCli(), WITNESS_DRIVE_AGENT_BIN: script('true'), WITNESS_TRUST_CMDS: '0' }, out), { maxSpawns: 1 })
+  } finally {
+    if (held.ok) held.value()
+  }
+  return { repo, key, out }
+}
+
+describe('a stop waiting on drive\'s base lint (row 267)', () => {
+  it('drive leaves a stop waiting on its base lint, runs the lint, then routes the re-gate (row 267)', async () => {
+    const { repo, key, out } = await waitingStop()
+    expect(shards(repo.root).filter((s) => s.kind === 'base-lint')).toEqual([expect.objectContaining({ key, outcome: 'done' })])
+    expect(readStream(repo.root, 'a-plan-1').filter((e) => e.t === 'human-decision' && (e as unknown as { gate: string }).gate === 'ship')).toEqual([])
+    const waited = out.findIndex((l) => l === 'drive: waiting — a-plan-1 · drive lints the base of biome first')
+    const routed = out.findIndex((l) => l.includes('re-run owed — witness gate ship a-plan-1'))
+    expect(waited).toBeGreaterThanOrEqual(0)
+    expect(routed).toBeGreaterThan(waited)
+    expect(out.filter((l) => l.startsWith('drive: waiting — '))).toHaveLength(1)
+  }, 180_000)
+
+  it('with jobs off, a stop waiting on its base lint is set aside for the human with the reason (Review Focus 2)', async () => {
+    const { out } = await waitingStop({ jobsOff: true })
+    expect(out.some((l) => l.startsWith('drive: waits on you — a-plan-1 · decision · drive lints the base of biome first, but jobs are off for this run'))).toBe(true)
   }, 180_000)
 })

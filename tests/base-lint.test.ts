@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { baseLintKey, baseLintKind, BASE_LINT, MAX_BASE_KEYS } from '../src/base-lint.js'
+import { baseLintKey, baseLintKind, baseWait, BASE_LINT, MAX_BASE_KEYS } from '../src/base-lint.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { boundReader } from '../src/lint-parts.js'
 import { appendEntry } from '../src/journal.js'
+import { acquireDriveLock } from '../src/drive-presence.js'
+import { journalShard, type JobShardEntry } from '../src/jobs.js'
+import type { GateRunEntry, PartVerdict } from '../src/rounds.js'
 import { loadCanon } from '../src/scan.js'
-import { approve, fakeCtx, fakeLint, fixtureEnv, patchConfig, seededRepo, writePlan, writeSpec, type TestRepo } from './helpers.js'
+import { approve, configYaml, fakeCtx, fakeLint, fixtureEnv, patchConfig, seededRepo, writePlan, writeSpec, type TestRepo } from './helpers.js'
+import { stringify } from 'yaml'
+import { defaultValues } from '../src/settings.js'
 
 const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
 const commitAll = (repo: TestRepo, m: string) => { repo.git('add', '-A'); repo.git('commit', '-q', '-m', m) }
@@ -106,4 +111,44 @@ describe('the base-lint job (row 263)', () => {
     const { key, run } = await lintRepo('garbage', { 'src/old.ts': 'BAD\n' })
     expect(run(key('biome'))).toMatchObject({ outcome: 'done', result: { exit: 1, unread: expect.stringMatching(/^reader-unread: /) } })
   }, 60_000)
+})
+
+describe('what a checks-only round waits on (row 267)', () => {
+  it('what a checks-only round\'s lint waits on, read now (row 267)', async () => {
+    const repo = await seededRepo()
+    const root = repo.root
+    const cmd = fakeLint(repo)
+    patchConfig(repo, { ship: { lint: { ui: cmd.check, api: cmd.check, web: cmd.check, db: cmd.check } } })
+    commitAll(repo, 'four parts')
+    const head = repo.git('rev-parse', 'HEAD')
+    const key = (part: string) => baseLintKey(cfgOf(root).ship.lint!.find((p) => p.name === part)!, undefined, head)
+    const [k1, k2, k3, k4] = ['ui', 'api', 'web', 'db'].map(key) as [string, string, string, string]
+    const only = (parts: PartVerdict[]) => ({ checks_only: true, checks: [{ name: 'lint', ok: false, parts }] }) as unknown as GateRunEntry
+    const r = only([{ part: 'ui', state: 'pending', key: k1 }, { part: 'api', state: 'not-measured', key: k2 },
+      { part: 'web', state: 'pending', key: k3 }, { part: 'db', state: 'pending', key: k4 }])
+    const DONE = { exit: 0, tree: 'a'.repeat(40), commit: head }
+    const shard = (k: string, o: Partial<JobShardEntry>) => journalShard(root, { kind: BASE_LINT, key: k, shard: 1, of: 1, outcome: 'done', ms: 1, ...o })
+    expect(baseWait(root, r)).toEqual({ waiting: [], landed: [], red: ['ui', 'api', 'web', 'db'] })   // no drive: nothing pending
+    const held = acquireDriveLock(root, {})
+    try {
+      expect(baseWait(root, r)).toEqual({ waiting: ['ui', 'api', 'web', 'db'], landed: [], red: [] })
+      shard(k1, { result: DONE })
+      shard(k2, { outcome: 'failed', why: 'x' }); shard(k2, { outcome: 'failed', why: 'x' })          // struck twice
+      shard(k3, { result: { exit: 9 } })                                                             // done, malformed
+      expect(baseWait(root, r)).toEqual({ waiting: ['db'], landed: ['ui'], red: ['api', 'web'] })
+      patchConfig(repo, { ship: { lint: { api: `${cmd.check} --edited` } } })                        // api's key no longer given
+      expect(baseWait(root, r)).toEqual({ waiting: ['db'], landed: ['ui', 'api'], red: ['web'] })
+      // scratch runs off — an older file (schema 2: no scratch.prepare, one plain lint part) — so no job will run
+      const lone = baseLintKey({ name: 'lint', cmd: 'npm run lint', source: 'ship.lint' }, undefined, head)
+      const plain = only([{ part: 'lint', state: 'pending', key: lone }])
+      repo.write('witness.config.yaml', configYaml())
+      expect(baseWait(root, plain)).toEqual({ waiting: ['lint'], landed: [], red: [] })
+      repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+      expect(baseWait(root, plain)).toEqual({ waiting: [], landed: [], red: ['lint'] })
+      expect(baseWait(root, only([{ part: 'ui', state: 'red', key: k1 }]))).toEqual({ waiting: [], landed: [], red: ['ui'] })
+      expect(baseWait(root, { ...r, checks_only: undefined } as never)).toEqual({ waiting: [], landed: [], red: [] })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 120_000)
 })

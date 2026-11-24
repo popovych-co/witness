@@ -13,8 +13,12 @@ import { baseLintKind } from '../src/base-lint.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { acquireDriveLock } from '../src/drive-presence.js'
 import { loadCanon } from '../src/scan.js'
+import { BASE_LINT } from '../src/base-lint.js'
+import { journalShard } from '../src/jobs.js'
+import { settleStop } from '../src/settle.js'
+import type { DecisionEntry } from '../src/rounds.js'
 import type { GateRunEntry } from '../src/rounds.js'
-import { TOKEN_FIXED, callCount, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
+import { TOKEN_FIXED, callCount, fakeCtx, fakeScenario, fixtureEnv, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
 
 // vitest-single lands 4 files in the worktree diff — coverage-minimum needs an anchor for each.
 const CLEAN = {
@@ -206,5 +210,44 @@ describe('lint at implement (row 265)', () => {
     } finally {
       if (held.ok) held.value()
     }
+  }, 240_000)
+})
+
+const decisions = (root: string, stream: string) =>
+  readStream(root, stream).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
+
+// Row 267. Autonomy on, ship.lint one opaque part; implement passes on the clean tree (it runs lint
+// too), then the plan's tree turns red for ship alone.
+async function redForShip() {
+  const b = await bench()
+  patchConfig(b.repo, { autonomy: 'on', ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+  b.repo.git('add', 'witness.config.yaml'); b.repo.git('commit', '-q', '-m', 'autonomy, one lint part')
+  grantCommands(b.repo.root, ['! grep -rq LINTBAD src'])
+  writeFileSync(join(b.wt, 'src', 'token.ts'), `${TOKEN_FIXED}// LINTBAD\n`)
+  return b
+}
+
+describe('a round red only for drive\'s base lint (row 267)', () => {
+  it('a stop red only for a base result drive owes is left to drive, then re-gated once the result lands (row 267)', async () => {
+    const { repo, planId, scenario, gateOut } = await redForShip()
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      const out = await gateOut('ship')
+      expect(out).toContain('waiting: ship auth-refresh-plan-1 — drive lints the base of ui first')
+      expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship')).toEqual([])
+      const unit = baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))[0]!
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), unit, 1) as { result: unknown }
+      journalShard(repo.root, { kind: BASE_LINT, key: unit.key, shard: 1, of: 1, outcome: 'done', ms: 1, result: r.result })
+      const s = await settleStop(fakeCtx(repo.root, { env: gateEnv(scenario) }), repo.root, cfgOf(repo.root), 'ship', planId)
+      expect(s).toMatchObject({ kind: 'routed', line: expect.stringContaining('witness gate ship auth-refresh-plan-1') })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 240_000)
+
+  it('with no drive the same stop is the policy\'s revise (row 267)', async () => {
+    const { repo, planId, gate } = await redForShip()
+    await gate('ship')
+    expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship').at(-1)).toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-only' })
   }, 240_000)
 })

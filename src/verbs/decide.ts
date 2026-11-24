@@ -452,7 +452,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       const up = live.acts.some((a) => actKey(a) === actKey(['decide', gate, target, '--revise', '--upstream', '_']))
       const fix = live.acts.some((a) => actKey(a) === actKey(['decide', gate, target, '--revise', '--repair']))
       const instead = [...(up ? ['upstream reopens the parent and resets the budget'] : []), ...(fix ? ['--repair buys one more round here'] : [])]
-      return renderBound(ctx, gate, target, entries, facts.stale || facts.holdLifted, upstreamId,
+      return renderBound(ctx, gate, target, entries, facts.stale || facts.holdLifted || facts.checksMoved, upstreamId,
         live.acts, plainRevise && instead.length > 0 ? instead.join('; ') : undefined)
     }
     return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
@@ -547,7 +547,8 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // The truth, not `false`. The hardcode existed because a stale state produced no rule at
     // all and the entry's fields would have been empty; with the stale rule in place it only
     // misattributes — D130's audit was reporting rules that were never rendered.
-    stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0,
+    stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0 ||
+      facts.checksMoved,
   })
   // Row 239. Read off the act's words, never its printed line.
   const recommendedVerb = rec?.options[0]?.act?.argv.find((w) => w === '--approve' || w === '--revise' || w === '--stop')?.slice(2)

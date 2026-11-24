@@ -7,13 +7,14 @@
 import { createHash } from 'node:crypto'
 import { shownCmd, trustedNow } from './allowlist.js'
 import type { Ctx } from './cli.js'
-import type { Config, LintPart } from './config.js'
+import { loadConfig, type Config, type LintPart } from './config.js'
 import { diagnosticKey, readPart } from './diagnostics.js'
-import type { JobKind, JobResult, JobUnit } from './jobs.js'
+import { jobReading, type JobKind, type JobResult, type JobUnit } from './jobs.js'
 import { readStream } from './journal.js'
 import { boundReader, lintCommands } from './lint-parts.js'
 import { ok, refuse, v, type Result } from './refusal.js'
-import { lastGateRun } from './rounds.js'
+import { lastGateRun, type GateRunEntry } from './rounds.js'
+import { partPasses } from './lint-lane.js'
 import { execCommand, interrupted } from './runner.js'
 import type { Canon } from './scan.js'
 import { inScratch, type CfStep } from './scratch.js'
@@ -99,6 +100,45 @@ function pendingKeys(root: string, plan: string): string[] {
     }
   }
   return out
+}
+
+// Row 267 (T2c's hand-off). What a checks-only round's lint is waiting on, read now: each part that did
+// not pass, as `waiting` (drive will lint the base for it), `landed` (its input arrived since: the
+// re-gate reads it) or `red` (nothing will arrive — the plan's own red). In this order, for a part
+// whose journaled base was missing (`pending` or `not-measured`):
+//   landed  the config no longer gives its key: the next gate keys it anew, and the key joins the
+//           signature (`checksSignature`), so the round never resumes over it;
+//   landed  its result is done and well formed;
+//   red     done but malformed: the lane reads that not measured for good, and waiting on it would
+//           loop the re-gate;
+//   waiting its result is missing while a drive holds the repo — unless scratch runs are off, when no
+//           job will run (red);
+//   red     struck twice, or no drive runs (nothing reads pending without one).
+// Every other part that did not pass is red, and so is a missing part with no key. All empty for any
+// run but a checks-only round whose last check is lint, and for a config file that does not load.
+export interface BaseWait { waiting: string[]; landed: string[]; red: string[] }
+export function baseWait(root: string, run: GateRunEntry): BaseWait {
+  const out: BaseWait = { waiting: [], landed: [], red: [] }
+  const lint = run.checks_only === true ? run.checks.at(-1) : undefined
+  if (lint?.name !== 'lint' || lint.parts === undefined) return out
+  const cfgR = loadConfig(root)
+  if (!cfgR.ok) return out
+  const cfg = cfgR.value
+  for (const p of lint.parts) {
+    if (partPasses(p)) continue
+    if (!MISSING.has(p.state) || p.key === undefined) { out.red.push(p.part); continue }
+    if (!current(cfg, p.key)) { out.landed.push(p.part); continue }
+    const reading = jobReading(root, { kind: BASE_LINT, key: p.key, shards: 1 })
+    if (reading.state === 'done') (baseLintResult(reading.results[0]) !== undefined ? out.landed : out.red).push(p.part)
+    else if (reading.state === 'pending' && cfg.scratch.prepare !== undefined) out.waiting.push(p.part)
+    else out.red.push(p.part)
+  }
+  return out
+}
+
+// A stop whose every red part waits on drive's base lint, and no other.
+export function awaitsDrive(w: BaseWait): boolean {
+  return w.waiting.length > 0 && w.landed.length === 0 && w.red.length === 0
 }
 
 function owed(root: string, cfg: Config, canon: Canon): JobUnit[] {

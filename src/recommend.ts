@@ -158,7 +158,7 @@ function recommendCore(ctx: GateContext): Decision | undefined {
   const { gate, target, entries, upstream, stale } = ctx
   const last = lastGateRun(entries, gate)
   if (!last) return undefined
-  const live = liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false })
+  const live = liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false })
   if (live.state === 'pending' || live.state === 'at-bound' || (live.state === 'parked' && boundReached(entries, gate))) {
     const d = ruleTable(ctx, last)
     const options = d?.options.filter((o) => o.act !== undefined && actLive(live, actKey(o.act))) ?? []

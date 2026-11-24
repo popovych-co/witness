@@ -456,7 +456,7 @@ function parkedActs(
 export function exitActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
 ): Act[] {
-  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false }).acts
+  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false }).acts
 }
 
 // Rows 139/203. The exits line: `exitActs` rendered in one line.
@@ -490,7 +490,7 @@ export function unparkAt(entries: Entry[], i: number): boolean {
 export function reopenActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined, owed: boolean,
 ): Act[] {
-  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed, upstreamOwed: false }).acts
+  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed, upstreamOwed: false, checksMoved: false }).acts
 }
 
 // Row 244 (#87, design §4.2.1). The facts beside the journal that decide which acts are legal. The
@@ -501,6 +501,7 @@ export interface ActFacts {
   holdLifted: boolean            // a hold lifted since the anchor run (row 179)
   owed: boolean                  // row 241's owed work: open step, plan reopen, evidence row, upstream work
   upstreamOwed: boolean          // the gate's own latest revise is upstream and its work is still owed there (P48)
+  checksMoved: boolean           // row 267: a check's input landed since the anchor run (a lint part's base result)
 }
 
 // Row 244 (design §4.2.2). Where a gate stands, for every reader alike.
@@ -630,7 +631,7 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const disposition = lastDecision > judged ? (entries[lastDecision] as unknown as DecisionEntry) : undefined
   const decision = disposition?.decision
   const revised = decision === 'revise' || decision === 'revise-upstream'
-  const moved = facts.stale || facts.holdLifted
+  const moved = facts.stale || facts.holdLifted || facts.checksMoved
   const atBound = boundReached(entries, gate)
   // Where no parent resolves, the send-upstream a state offers carries `<effort>` for the human to
   // fill, and is held in `slots` below, never listed (design §4.2.9).

@@ -15,6 +15,7 @@ import { humanCall, ok, refuse, renderRefusal, v, type Result, type Violation } 
 import { cmd, kv, logSafe, shellLine } from './toon.js'
 import { gateSpec, runGate } from './gate.js'
 import { lastGateRun, lastJudgedRun, liveExits, standingHandBack, type DecisionEntry } from './rounds.js'
+import { baseWait } from './base-lint.js'
 import { recommend, renderDecision } from './recommend.js'
 import { prepareStamp, writeStamp } from './stamp.js'
 import { branchName, worktreePath } from './worktree.js'
@@ -25,7 +26,7 @@ import { handOverIfDue } from './slice.js'
 import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
-import { busyLine, hhmm, settleStop, settledCode } from './settle.js'
+import { busyLine, hhmm, settleStop, settledCode, waitingLine } from './settle.js'
 import {
   carryClashViolations, clashGuard, clashLeft, clashViolations, refuseClash, replayConflictViolations,
 } from './clash.js'
@@ -1030,6 +1031,8 @@ async function shipMarked(
       if (phase !== 'pr' && phase !== 'watch') return EXIT.FINDINGS
     } else if (s.kind !== 'none') {
       if (s.kind === 'busy') ctx.out(busyLine('ship', planId, s))
+      // Row 267: red only for base results drive owes — drive lints the base, then runs the gate again.
+      if (s.kind === 'waiting') ctx.out(waitingLine('ship', planId, s.why))
       return settledCode(EXIT.FINDINGS, s)
     }
     // `none` — a stop the policy does not settle (a `--manual` run's): the human's, rendered below.
@@ -1048,7 +1051,8 @@ async function shipMarked(
     // `stale-verdict`. An unresolvable base reads as unmoved ("cannot compute", never "moved").
     const judged = lastJudgedRun(entries, 'ship')
     const treeMoved = reviewedSha !== undefined && judged !== undefined && judged.reviewed_sha !== reviewedSha
-    const stale = treeMoved || liftedNow.length > 0
+    // Row 267: and a checks-only round whose base result landed since — the re-gate reads it.
+    const stale = treeMoved || liftedNow.length > 0 || (judged !== undefined && baseWait(root, judged).landed.length > 0)
     const d = recommend({ gate: 'ship', target: planId, entries, upstream: up, stale, untrustedCmds })
     if (d) renderDecision(d).forEach((l) => ctx.out(l))
     else ctx.out(cmd('help', liveExits('ship', planId, entries, stale, up)))
