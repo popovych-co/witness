@@ -23,6 +23,7 @@ import { contentSha } from '../content-sha.js'
 import { gateSettled, openStepRow } from '../verbs/next.js'
 import { lastGateRun, type GateCheck } from '../rounds.js'
 import { runChecks, type CheckStep } from '../checks.js'
+import { markersCheck } from '../markers.js'
 import { serializeDoc } from '../fm.js'
 import { lintCheck } from '../lint-lane.js'
 
@@ -84,6 +85,8 @@ registerGate({
     // signal, or left no report — the lane runs as before, and re-running reports the same reason.
     let lane: Awaited<ReturnType<typeof runCriteria>> | undefined
     const steps: CheckStep[] = [
+      // Row 265. A conflict opener on a line the plan adds withholds the review.
+      { name: 'markers', run: () => markersCheck(wt, base, files) },
       { name: 'implement-gate', run: () => {
         const entries = readStream(root, planId)
         const lastImplement = lastGateRun(entries, 'implement')

@@ -136,9 +136,10 @@ describe('a check names the commands trust blocked (A1)', () => {
     rmSync(join(repo.root, '.witness', 'allow.json'))           // a machine that trusts nothing yet
     const blocked = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '' }) })
     expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
-    // Row 264: lint runs first and withholds — a checks-only round naming lint's command alone
+    // Row 264: lint runs first (after the conflict-marker scan, row 265) and withholds — a checks-only
+    // round naming lint's command alone
     expect(runs(repo, planId).at(-1)).toMatchObject({ checks_only: true })
-    expect(runs(repo, planId).at(-1)!.checks.map((c) => [c.name, c.untrusted])).toEqual([['lint', ['true']]])
+    expect(runs(repo, planId).at(-1)!.checks.map((c) => [c.name, c.untrusted])).toEqual([['markers', undefined], ['lint', ['true']]])
     // lint trusted under its own command: the judged checks name theirs, and lint names none
     patchConfig(repo, { ship: { lint: 'echo lint' } })
     repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'a lint of its own')

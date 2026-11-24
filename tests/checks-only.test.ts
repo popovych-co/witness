@@ -1,6 +1,8 @@
 // Row 264 (§3.2). A withholding check that is red ends a code gate's round before any lens runs: a
 // checks-only round — no reviewer, no verdicts, no debt discharged — that resumes only on identical
 // checks and runs fresh once they are green.
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { grantCommands } from '../src/allowlist.js'
 import { openDeferrals } from '../src/deferral.js'
@@ -8,7 +10,7 @@ import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
-import { callCount, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
+import { TOKEN_FIXED, callCount, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo } from './helpers.js'
 
 // vitest-single lands 4 files in the worktree diff — coverage-minimum needs an anchor for each.
 const CLEAN = {
@@ -66,7 +68,7 @@ describe('the checks-only round (row 264)', () => {
     expect(last.verdicts).toBeUndefined()
     expect(last.model).toBe(last.pin)
     expect(last.prompts_sha).toMatch(/\S/)
-    expect(last.checks.map((c) => c.name)).toEqual(['lint'])
+    expect(last.checks.map((c) => c.name)).toEqual(['markers', 'lint'])     // markers green, then lint red (row 265)
     expect(callCount(scenario)).toBe(calls)
     expect(openDeferrals(readStream(repo.root, planId))).toHaveLength(1)
     expect(readStream(repo.root, planId).some((e) => e.t === 'deferral-discharged')).toBe(false)
@@ -162,5 +164,20 @@ describe('a checks-only round offers no approve and says so (row 264)', () => {
     setLint(repo, 'false')
     expect(await gateOut('ship')).toContain('checks-only: lint is red so no lens ran — this round spends no budget')
     expect((await repo.cli(['decide', 'ship', planId, '--show'])).stdout).toContain('checks-only: lint is red so no lens ran')
+  }, 240_000)
+})
+
+describe('conflict markers at implement (row 265)', () => {
+  it('a plan that adds a conflict opener ends the implement round checks only, before lint runs (row 265)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    const scenario = fakeScenario(); putVerdict(scenario, CLEAN)
+    writeFileSync(join(wt, 'src', 'token.ts'), `${TOKEN_FIXED}<<<<<<< HEAD\n`)
+    const calls = callCount(scenario)
+    expect(await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'implement', planId, PLAIN)).toBe(1)
+    const last = runs(repo, planId).at(-1)!
+    expect(last).toMatchObject({ gate: 'implement', checks_only: true })
+    expect(last.checks.map((c) => c.name)).toEqual(['markers'])
+    expect(last.checks[0]!.detail).toContain('src/token.ts:')
+    expect(callCount(scenario)).toBe(calls)
   }, 240_000)
 })

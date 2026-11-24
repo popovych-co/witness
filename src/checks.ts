@@ -13,6 +13,8 @@ import { timedCheck, type GateCheck } from './rounds.js'
 export type CheckTier = 'withholding' | 'judged'
 
 export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier }> = [
+  // Row 265. A file scan before the repo's tools: an unresolved conflict is read before it is linted.
+  { name: 'markers', tier: 'withholding' },
   { name: 'lint', tier: 'withholding' },
   { name: 'implement-gate', tier: 'judged' },
   { name: 'diff', tier: 'judged' },

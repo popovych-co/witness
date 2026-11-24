@@ -98,8 +98,9 @@ const SIDES: Record<ClashOp, Sides> = {
 }
 
 // Any operation's conflict markers: `<<<<<<< Updated upstream` from a stash apply, `<<<<<<< HEAD`
-// from a rebase or a merge — a marker line and its label, or the marker alone (S1-5).
-const OPENS = /^<{7,}(?: |\r?$)/m
+// from a rebase or a merge — a marker line and its label, or the marker alone (S1-5). Row 265: the
+// conflict-marker check (src/markers.ts) tests each line a plan adds against the same opener.
+export const OPENS = /^<{7,}(?: |\r?$)/m
 const CLOSES = /^>{7,}(?: |\r?$)/m
 
 const contentRow = (file: string): string =>
