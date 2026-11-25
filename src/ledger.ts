@@ -5,7 +5,9 @@ import { readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
 import type { GateRunEntry, OffVerdict, PartState } from './rounds.js'
 import type { ReaderTool } from './settings.js'
+import { treeReadable } from './snapshot.js'
 import { LEDGER_STREAM } from './streams.js'
+import { copiesInTree } from './switch-offs.js'
 import { visible } from './toon.js'
 
 // Row 269 (the trust design §3.3, LD). The repo ledger: what a human booked, kept on witness's own
@@ -271,11 +273,13 @@ Array<{ id: string; entry?: LedgerOpen }> {
 // is this one or merged before it closes when its part reads green there, or the part's `cleared`
 // lists it. No such round observes nothing, and closes nothing: nothing reads gone by absence. An
 // item of a plan still in flight waits for its own merge, since its booking reaches main only then.
+//
+// Row 274 (§3.3). A booked switch-off closes when the line is gone: from the plan's last ship round whose
+// `reviewed_tree` the repo can read, every open switch-off item of this plan or of one merged before it
+// closes when that tree's blob at its file holds no line it books (`copiesInTree`; a missing file holds
+// none). No readable tree observes nothing.
 export function mergeCloses(root: string, plan: string, pr: number): LedgerClosed[] {
   const runs = readStream(root, plan).filter((e) => e.t === 'gate-run' && e.gate === 'ship') as unknown as GateRunEntry[]
-  const observed = [...runs].reverse().find((r) => (r.checks ?? []).some((c) => c.name === 'lint' && c.parts !== undefined))
-  if (observed === undefined) return []
-  const parts = observed.checks.find((c) => c.name === 'lint' && c.parts !== undefined)!.parts!
   const mergedBefore = new Map<string, boolean>()
   const merged = (p: string): boolean => {
     if (p === plan) return true
@@ -285,7 +289,10 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     }
     return mergedBefore.get(p)!
   }
-  return openItems(root).flatMap((i) => {
+  const open = openItems(root)
+  const observed = [...runs].reverse().find((r) => (r.checks ?? []).some((c) => c.name === 'lint' && c.parts !== undefined))
+  const parts = observed?.checks.find((c) => c.name === 'lint' && c.parts !== undefined)?.parts ?? []
+  const lint = observed === undefined ? [] : open.flatMap((i) => {
     // M-g (T2e slice 3): the lint observation reads lint items alone.
     if (i.kind !== 'booked-check' || i.check !== 'lint' || !merged(i.plan)) return []
     const part = parts.find((p) => p.part === i.part)
@@ -293,6 +300,14 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(observed.reviewed_tree !== undefined ? { tree: observed.reviewed_tree } : {}) }
     return [close]
   })
+  const tree = [...runs].reverse().map((r) => r.reviewed_tree).find((t): t is string => t !== undefined && treeReadable(root, t))
+  const offs = tree === undefined ? [] : open.flatMap((i) => {
+    if (i.kind !== 'booked-switch-off' || !merged(i.plan)) return []
+    if (copiesInTree(root, tree, i.file, i.token, new Set(Object.keys(i.subject.lines))) > 0) return []
+    const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
+    return [close]
+  })
+  return [...lint, ...offs]
 }
 
 // Row 269. An abandoned plan never merges, so nothing it booked reaches main: each of its open items

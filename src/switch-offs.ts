@@ -342,3 +342,15 @@ export function switchOffNotes(offs: readonly OffVerdict[]): string {
   const rows = offs.map((o) => `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`)
   return `### Switch-offs this plan adds\n\n${rows.join('\n')}\n\nJudge whether each is right as it stands; a finding on one says why it must go.`
 }
+
+// Row 274 (§3.3). How many lines of `tree`'s blob at `file` a booked switch-off item still finds: those
+// whose key — the item's own token and file, the line normalized — is one it books. It reads the item's
+// token, never the config, so a token the repo dropped since still waits for its line. A file the tree
+// lacks holds none; a file read two ways counts by its fullest reading.
+export function copiesInTree(root: string, tree: string, file: string, token: string, keys: ReadonlySet<string>): number {
+  const blob = gitBlob(root, tree, file)
+  if (blob === undefined) return 0
+  return Math.max(0, ...textsOf(file, blob).map((t) =>
+    t.split('\n').filter((line) => keys.has(switchOffKey({ token, file, snippet: normalizeSnippet(line) }))).length))
+}
+

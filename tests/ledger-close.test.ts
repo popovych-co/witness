@@ -1,6 +1,7 @@
 // Row 269 (the trust design §3.3, the map's C18, C22). A ledger item ends by observation — at the
 // merge stamp, from the shipped tree's lint, or at the abandon of its plan — or by a human at a
 // terminal (`witness dismiss ledger`).
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { Ctx } from '../src/cli.js'
 import { appendEntry, readStream } from '../src/journal.js'
@@ -8,6 +9,7 @@ import { ledgerItems, mergeCloses, newItemId } from '../src/ledger.js'
 import { loadCanon } from '../src/scan.js'
 import { lazyStamp } from '../src/stamp.js'
 import { LEDGER_STREAM } from '../src/streams.js'
+import { switchOffKey } from '../src/switch-offs.js'
 import { bookedRows } from '../src/verbs/dashboard.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
 import {
@@ -255,5 +257,84 @@ describe('a switch-off item where a human reads it (row 274)', () => {
     offItem(repo, { plan: 'p1' })
     shipRun(repo, 'p1', [{ part: 'biome', state: 'green' }])
     expect(mergeCloses(repo.root, 'p1', 7).map((c) => c.id)).toEqual([lintId])
+  }, 120_000)
+})
+
+// Row 274 (§3.3). A switch-off item booking one line, keyed as the check keys it.
+const offLine = (repo: TestRepo, o: { plan: string; file: string; token: string; snippet: string }): string => {
+  const id = newItemId()
+  line(repo, LEDGER_STREAM, {
+    t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-switch-off', check: 'switch-offs', plan: o.plan, gate: 'ship',
+    round: 1, run_id: 'r-1', file: o.file, token: o.token, subject: { lines: { [switchOffKey(o)]: 1 } },
+  })
+  return id
+}
+// A real tree in the repo holding `files`, built through a scratch index (no checkout moves).
+const treeWith = (repo: TestRepo, files: Record<string, string>): string => {
+  const env = { ...process.env, GIT_INDEX_FILE: `${repo.root}/.git/witness-test-index-${Math.random().toString(16).slice(2)}` }
+  const git = (args: string[], input?: string) => execFileSync('git', args, { cwd: repo.root, env, input, encoding: 'utf8' }).trim()
+  for (const [path, body] of Object.entries(files)) {
+    const blob = git(['hash-object', '-w', '--stdin'], body)
+    git(['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`])
+  }
+  return git(['write-tree'])
+}
+// The plan's last ship round, reviewed on `tree`, no lint parts.
+const shipRunAt = (repo: TestRepo, planId: string, tree: string) => line(repo, planId, {
+  t: 'gate-run', gate: 'ship', artifact: planId, round: 9, run_id: `r-ship-${tree.slice(0, 6)}`, reviewed_sha: 'c'.repeat(40), reviewed_tree: tree,
+  prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks: [{ name: 'switch-offs', ok: true }],
+})
+
+describe('a booked switch-off ends by observation (row 274)', () => {
+  it("closes at the first merge whose tree no longer holds the line (§3.3; the map's Done-when)", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const id = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const tree = treeWith(s.repo, { 'src/a.ts': 'clean()\n' })
+    shipRunAt(s.repo, s.planId, tree)
+    expect(s.stamp().stamped).toHaveLength(1)
+    expect(byId(s.repo.root, id)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: s.planId, pr: 7, tree } })
+  }, 120_000)
+
+  it("stays open while the tree holds the line, re-indented too; the merging plan's own line stays open", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const old = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const own = offLine(s.repo, { plan: s.planId, file: 'src/b.ts', token: 'eslint-disable-next-line', snippet: '// eslint-disable-next-line no-console' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'x()\n    // @ts-ignore\n', 'src/b.ts': '// eslint-disable-next-line no-console\nlog()\n' }))
+    s.stamp()
+    expect([byId(s.repo.root, old).state, byId(s.repo.root, own).state]).toEqual(['open', 'open'])
+  }, 120_000)
+
+  it('a plan in flight waits for its own merge; no readable tree observes nothing', async () => {
+    const s = await mergedSeed()
+    const flying = offLine(s.repo, { plan: 'other-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    mergedPlan(s.repo, 'old-plan')
+    const gone = offLine(s.repo, { plan: 'old-plan', file: 'src/c.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    shipRunAt(s.repo, s.planId, 'b'.repeat(40))                    // a tree the repo cannot read
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/z.ts': 'z()\n' }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([gone])
+    expect(byId(s.repo.root, flying).state).toBe('open')
+    expect(closes(s.repo.root)).toEqual([])                         // mergeCloses reads; only the stamp writes
+  }, 120_000)
+
+  it('an extra token dropped from the config still waits for its line (Review Focus 5)', async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    // the config names no checks.switchOffs: the observation reads the item's own token and key
+    const id = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: 'extra:istanbul ignore', snippet: '/* istanbul ignore next */' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': '/* istanbul ignore next */\nf()\n' }))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'f()\n' }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([id])
+  }, 240_000)
+
+  it("an abandoned plan's switch-off items close in the abandon", async () => {
+    const { repo, planId } = await shippableRepo()
+    const mine = offLine(repo, { plan: planId, file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const r = await repo.cli(['abandon', planId])
+    expect(r.code, r.stderr).toBe(0)
+    expect(byId(repo.root, mine)).toMatchObject({ state: 'closed', end: { by: 'abandon', plan: planId } })
   }, 120_000)
 })
