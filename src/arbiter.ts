@@ -12,7 +12,7 @@ import type { Decision, Option } from './recommend.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { invokeReviewerAsync, parseVerdictText, promptsSha, resolvePrompt } from './reviewer.js'
 import { effortCanon, effortOf } from './reviewed.js'
-import { REVISE_HUMAN, anchorRecurrence, gateRuns, roundBudget, type DecisionEntry, type GateCheck, type GateRunEntry, type PartVerdict } from './rounds.js'
+import { REVISE_HUMAN, anchorRecurrence, gateRuns, offUnbooked, roundBudget, type DecisionEntry, type GateCheck, type GateRunEntry, type OffVerdict, type PartVerdict } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { canonicalJson } from './sha.js'
 import { visible } from './toon.js'
@@ -180,6 +180,21 @@ function partFact(p: PartVerdict): string {
   }
 }
 
+// Row 274 (§3.9). The switch-off lines as the arbiter reads them: the unbooked ones grouped by token,
+// rule ids and place (a test file or code), with their copies past one; then how many copies the
+// plan's bookings cover. Never a file, a line number or a line's text.
+function offFacts(offs: readonly OffVerdict[]): string[] {
+  const groups = new Map<string, number>()
+  for (const o of offs) {
+    const n = offUnbooked(o)
+    if (n === 0) continue
+    const label = `${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
+    groups.set(label, (groups.get(label) ?? 0) + n)
+  }
+  const booked = offs.reduce((a, o) => a + Math.min(o.count, o.booked ?? 0), 0)
+  return [...[...groups].map(([label, n]) => `${label}${n > 1 ? ` ×${n}` : ''}`), ...(booked > 0 ? [`${booked} booked`] : [])]
+}
+
 // Row 266 (§3.9). A check as the arbiter reads it: CLI-structured facts only — its name and verdict,
 // each lint part's state with its counts and rule ids, how many commands trust kept from running, and
 // the held criteria's ids. Never `detail` (tool output on some checks, foreign paths on others), never
@@ -188,6 +203,7 @@ export function checkFacts(c: GateCheck): string {
   const n = c.untrusted?.length ?? 0
   const facts = [
     ...(c.parts ?? []).map(partFact),
+    ...offFacts(c.offs ?? []),
     ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
     ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
   ]

@@ -117,6 +117,9 @@ export function policyFor(facts: StopFacts): Policy {
     const parts = bookOwed(run)
     return { kind: 'decision', why: `only the human books ${run.checks.at(-1)?.name ?? 'lint'} — ${parts.map(visible).join(', ')} red on the base too` }
   }
+  // Row 274 (the map's C26). Whether a switch-off is right as it stands is a judgment, not a rule: the
+  // policy takes rules and never books (row 172), so the arbiter revises or books it.
+  if (block.rule === 'waivable') return { kind: 'arbiter' }
   // Row 244 (design §4.2.6; the user's decision 2). A revise its author handed back unchanged is decided
   // again, by the arbiter: neither the author nor a reviewer found a fix, so no rule has the right
   // answer. It comes after the arms that belong elsewhere — the human's trust grant, the free re-runs

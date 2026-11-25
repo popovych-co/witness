@@ -224,3 +224,19 @@ describe('the arbiter reads checks as facts (row 266)', () => {
     expect(section(ev, 'Round history')).toContain('round 1 · @a · checks only — lint')
   })
 })
+
+describe('switch-off facts (row 274)', () => {
+  it('checkFacts folds switch-off lines by token, rules and place, and counts what is booked — never a path (row 274)', () => {
+    expect(checkFacts({ name: 'switch-offs', ok: false, offs: [
+      { key: 'a', token: 'eslint-disable-next-line', file: 'src/x.ts', line: 3, count: 1, rules: ['no-console'] },
+      { key: 'b', token: '.skip(', file: 't/a.test.ts', line: 1, count: 2, test: true },
+      { key: 'c', token: '@ts-ignore', file: 'src/y.ts', line: 9, count: 1, booked: 1, items: ['l-00000001'] }] } as never))
+      .toBe('switch-offs: FAILED · eslint-disable-next-line (no-console) in code · .skip( in a test file ×2 · 1 booked')
+    const odd = `extra:a${String.fromCodePoint(0x202e)}b`
+    expect(checkFacts({ name: 'switch-offs', ok: false, offs: [{ key: 'd', token: odd, file: 'f', line: 1, count: 1 }] } as never))
+      .toBe('switch-offs: FAILED · extra:a\\u{202e}b in code')
+  })
+  it("the arbiter's prompt gains its switch-off rule (row 274)", () => {
+    expect(readFileSync(join(__dirname, '..', 'prompts', 'arbiter.md'), 'utf8')).toContain('A switch-off — a suppression comment, a skipped or focused test, a loosened option — is booked only when the evidence shows it is right as it stands')
+  })
+})

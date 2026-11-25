@@ -176,3 +176,16 @@ it('the policy leaves book-owed to the human and still takes checks-only (row 27
     .toEqual({ kind: 'decision', why: 'only the human books lint — ui, tsc red on the base too' })
   expect(policy('ship', shipOnly([{ ...UI, state: 'not-measured' }]), { upstream: null })).toMatchObject({ kind: 'take' })
 })
+
+// Row 274 (the map's C26). Whether a switch-off is right as it stands is a judgment, not a rule.
+it('policyFor hands rule waivable to the arbiter (row 274)', () => {
+  const run = {
+    v: 1, t: 'gate-run', gate: 'implement', artifact: 'p1', round: 1, run_id: 'r1', reviewed_sha: 'a'.repeat(40), prompts_sha: 'ps',
+    witness: '0', model: 'm', pin: 'm', outcome: 'stopped', verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings: [] }],
+    checks: [{ name: 'switch-offs', ok: false, offs: [{ key: 'k1', token: '@ts-ignore', file: 'src/a.ts', line: 1, count: 1 }] }],
+  } as unknown as GateRunEntry
+  const entries = [run as unknown as Entry]
+  const block = recommend({ gate: 'implement', target: 'p1', entries, upstream: undefined, stale: false })!
+  expect(block.rule).toBe('waivable')
+  expect(policyFor({ at: 'gate', gate: 'implement', target: 'p1', entries, run, block, untrusted: [] })).toEqual({ kind: 'arbiter' })
+})

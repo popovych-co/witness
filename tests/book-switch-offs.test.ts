@@ -1,7 +1,7 @@
 // Row 274 (the trust design §3.2's waiver, §3.3, §3.9; the map's C26). A switch-off red on a round the
 // lenses ran offers the booking — the AI judge's or the human's — after the revise that removes it; one
 // item per line, and the re-gate on unchanged content replays the round's verdicts.
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Ctx } from '../src/cli.js'
@@ -10,7 +10,7 @@ import { ledgerItems, openItems } from '../src/ledger.js'
 import type { DecisionEntry } from '../src/rounds.js'
 import { applyDecision, run as decide } from '../src/verbs/decide.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
-import { CLEAN_FOUR, TOKEN_BROKEN, TOKEN_FIXED, callCount, fakeCtx, offRed, patchConfig, putVerdict } from './helpers.js'
+import { CLEAN_FOUR, TOKEN_BROKEN, TOKEN_FIXED, callCount, callFor, fakeCtx, offRed, patchConfig, putVerdict } from './helpers.js'
 
 const decisions = (b: Awaited<ReturnType<typeof offRed>>) =>
   readStream(b.repo.root, b.planId).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
@@ -123,6 +123,37 @@ describe('a switch-off red offers the booking (row 274)', () => {
     await b.gate()
     const r = await b.repo.cli(['decide', 'implement', b.planId, '--book', 'lint'])
     expect([r.code, r.stderr]).toEqual([2, expect.stringContaining('nothing-pending')])
+    expect(ledgerItems(b.repo.root)).toEqual([])
+  }, 300_000)
+})
+
+describe('the judge books under autonomy (row 274)', () => {
+  it('under autonomy the arbiter judges a switch-off-only stop; its booking lands in the gate a drive session ran (Review Focus 4)', async () => {
+    const b = await offRed()
+    patchConfig(b.repo, { autonomy: 'on' }); b.repo.git('add', 'witness.config.yaml'); b.repo.git('commit', '-q', '-m', 'autonomy')
+    putVerdict(b.scenario, { choice: 2, reason: 'the console call is the command line output this plan adds' }, 'arbiter')
+    expect(await b.gate('implement', { WITNESS_DRIVE: b.planId })).toBe(1)
+    expect(decisions(b).at(-1)).toMatchObject({ decision: 'book', selected: 'arbiter', rule: 'waivable', book: { check: 'switch-offs' } })
+    expect(openItems(b.repo.root, { plan: b.planId })).toEqual([expect.objectContaining({ kind: 'booked-switch-off', gate: 'implement' })])
+    const asked = readFileSync(join(callFor(b.scenario, 'arbiter')!, 'stdin'), 'utf8')
+    expect(asked).toContain(`2. witness decide implement ${b.planId} --book switch-offs`)
+    expect(asked).not.toContain('--approve')
+    expect(asked).toContain('switch-offs: FAILED · eslint-disable-next-line (no-console) in code')
+    expect(asked).not.toContain('src/token.ts:8')                    // facts, never a place
+    const typed = await b.repo.cli(['decide', 'implement', b.planId, '--book', 'switch-offs'], { env: { WITNESS_DRIVE: b.planId } })
+    expect(typed.stderr).toMatch(/book-human|nothing-pending/)      // a typed booking in the session never lands
+    expect(openItems(b.repo.root, { plan: b.planId })).toHaveLength(1)
+  }, 300_000)
+
+  it('the policy never books, and the arbiter never books lint (row 172)', async () => {
+    const b = await offRed()
+    expect(await b.gate()).toBe(1)
+    const errs: string[] = []
+    const ctx = fakeCtx(b.repo.root, { err: (l) => errs.push(l) })
+    const base = { gate: 'implement', target: b.planId, decision: 'book' as const }
+    expect(await applyDecision(ctx, { ...base, book: 'switch-offs', selected: 'policy' })).toBe(2)
+    expect(await applyDecision(ctx, { ...base, book: 'lint', selected: 'arbiter', reason: 'r', arbiter: { model: 'm', prompts_sha: 'p' } })).toBe(2)
+    expect(errs.filter((l) => l.includes('autonomy-cannot'))).toHaveLength(2)
     expect(ledgerItems(b.repo.root)).toEqual([])
   }, 300_000)
 })
