@@ -53,3 +53,14 @@ describe('gate --manual inside a drive session (row 271)', () => {
     expect(entries.slice(run + 1).filter((e) => e.t === 'human-decision')).toEqual([])
   }, 120_000)
 })
+
+describe('gate --manual inside a job drive started (row 271, security review)', () => {
+  it('a drive job is no human either: --manual refuses under WITNESS_JOB, naming the marker', async () => {
+    const { repo, planId, env } = await bench()
+    const before = readStream(repo.root, planId).length
+    const r = await repo.cli(['gate', 'ship', planId, '--manual'], { env: { ...env, WITNESS_JOB: 'base-lint' } })
+    expect([r.code, r.stderr]).toEqual([2, expect.stringContaining('manual-in-session')])
+    expect(r.stderr).toContain('WITNESS_JOB')
+    expect(readStream(repo.root, planId)).toHaveLength(before)
+  }, 120_000)
+})

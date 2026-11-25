@@ -43,7 +43,7 @@ import { reportHandover, slicesLine } from './slice.js'
 
 import type { ChangeClass, GateName } from './settings.js'
 import type { JunitSummary } from './junit.js'
-import { driveChild } from './drive-presence.js'
+import { sessionMarker } from './drive-presence.js'
 export type { ChangeClass, GateName } from './settings.js'
 
 export interface Stamp { artifact: string; to: string }
@@ -340,10 +340,12 @@ export async function runGate(
   flags: { fresh: boolean; manual: boolean; handover?: boolean; unchanged?: boolean },
 ): Promise<number> {
   // Row 271 (§3.9). `--manual` keeps a stop for the human, whatever the autonomy setting; a session
-  // drive started is no human, so it never keeps one for itself — refused before anything is read or
+  // drive started — or any process witness marked as its own (a job; a reviewer is refused at
+  // dispatch) — is no human, so it never keeps one for itself: refused before anything is read or
   // journaled, `--unchanged --manual` included.
-  if (flags.manual && driveChild(ctx.env) !== undefined) {
-    renderRefusal([v('--manual', 'manual-in-session', 'a session drive started',
+  const marker = flags.manual ? sessionMarker(ctx.env) : undefined
+  if (marker !== undefined) {
+    renderRefusal([v('--manual', 'manual-in-session', `${marker} is set — a session witness started`,
       `the human, in their own chat or terminal — ${cliAct('gate', gateName, target, '--manual').line} keeps a stop for them`)])
       .forEach((l) => ctx.err(l))
     return EXIT.REFUSED

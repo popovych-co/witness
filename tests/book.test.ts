@@ -322,3 +322,13 @@ describe('a booking dismissed in flight (row 269)', () => {
     expect(b.lastRun().checks.at(-1)!.parts).toEqual([expect.objectContaining({ part: 'ui', state: 'not-judged' })])
   }, 240_000)
 })
+
+describe('a booking under a job marker (row 270, security review)', () => {
+  it('a drive job never books: --book refuses book-human under WITNESS_JOB', async () => {
+    const b = await notJudged()
+    const r = await b.repo.cli(['decide', 'ship', b.planId, '--book', 'lint'], { env: { WITNESS_JOB: 'base-lint' } })
+    expect([r.code, r.stderr]).toEqual([2, expect.stringContaining('book-human')])
+    expect(r.stderr).toContain('WITNESS_JOB')
+    expect(ledgerLen(b.repo)).toBe(0)
+  }, 240_000)
+})

@@ -18,7 +18,7 @@ import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon, type Canon } from '../scan.js'
 import { actFacts, openStepRow } from './next.js'
-import { driveChild } from '../drive-presence.js'
+import { driveChild, sessionMarker } from '../drive-presence.js'
 import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
@@ -899,8 +899,10 @@ function bookRefusal(ctx: Ctx, root: string, gate: string, target: string, check
     return v('selected', 'autonomy-cannot', `${act.selected} with --book ${check}`,
       `a named human selection — only the human books ${check} (row 172)`)
   }
-  if (driveChild(ctx.env) !== undefined) {
-    return v('decide', 'book-human', 'a session drive started',
+  // Any process witness marked as its own — a drive session, a job — is no human (security review).
+  const marker = sessionMarker(ctx.env)
+  if (marker !== undefined) {
+    return v('decide', 'book-human', `${marker} is set — a session witness started`,
       `the human, in their own chat or terminal — ${cliAct('decide', gate, target, '--book', check).line}`)
   }
   return ledgerTaken(root)
