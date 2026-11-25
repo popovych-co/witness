@@ -271,6 +271,9 @@ describe('switch-off facts (row 274)', () => {
     expect(checkFacts({ name: 'definitions', ok: true, detail: 'not checked — no drive runs jobs in this repo (.gitignore)',
       lint_effect: { read: 'not-checked', changed: ['.gitignore'], why: 'no drive runs jobs in this repo' } } as never)).toBe('definitions: ok · lint effect not checked')
     expect(checkFacts({ name: 'definitions', ok: true, lint_effect: { read: 'measured', changed: ['.gitignore'] } } as never)).toBe('definitions: ok')
+    // final review I1: a reader the job could not read under the base's definitions is a fact too — never its why
+    expect(checkFacts({ name: 'definitions', ok: true, detail: ' · eslint could not be read under the base\'s definitions — reader-unread: x',
+      lint_effect: { read: 'measured', changed: ['.gitignore'], unread: ['eslint'] } } as never)).toBe("definitions: ok · eslint not read under the base's definitions")
     expect(checkFacts({ name: 'definitions', ok: false, owes: [{ kind: 'lint-effect', key: 'k' }] } as never)).toBe('definitions: FAILED')
   })
 

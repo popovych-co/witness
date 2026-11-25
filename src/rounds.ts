@@ -32,8 +32,9 @@ export interface GateCheck {
   tests_effect?: { read: 'compared'; specs: number } | { read: 'not-checked'; why: string }
   // Row 277. Whether the definitions check measured the base's check definitions over the plan's tree,
   // or why not (`changed` the restored definitions' names). Absent while the result is pending (the
-  // check is red then). Never in the signature.
-  lint_effect?: { read: 'measured' | 'not-checked'; changed: string[]; why?: string }
+  // check is red then). Never in the signature. Final review I1: `unread` the readers a measured effect could not
+  // read on a side — what the arbiter is told was not measured.
+  lint_effect?: { read: 'measured' | 'not-checked'; changed: string[]; why?: string; unread?: ReaderTool[] }
 }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the

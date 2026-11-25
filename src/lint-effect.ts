@@ -404,7 +404,8 @@ export function definitionsCheck(
   const defs = Object.fromEntries(restored.value.map((r) => [restoredName(r), r.held]))
   return {
     check: {
-      name: 'definitions', ok: true, lint_effect: { read: 'measured', changed },
+      name: 'definitions', ok: true,
+      lint_effect: { read: 'measured', changed, ...(unread.length > 0 ? { unread: unread.map((u) => u.tool) } : {}) },
       detail: `the base's check definitions measured over this tree: ${namesShown(changed)}${
         unread.map((u) => ` · ${u.tool} could not be read under the base's definitions — ${visible(u.why)}`).join('')}`,
     },

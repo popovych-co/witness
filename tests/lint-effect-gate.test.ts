@@ -374,6 +374,7 @@ describe('what a plan\'s check definitions hide is a switch-off (row 277)', () =
     })
     await b.measure()
     expect(b.check('definitions').detail).toContain(" · biome could not be read under the base's definitions — reader-unread")
+    expect(b.check('definitions').lint_effect).toEqual({ read: 'measured', changed: ['fake-lint.json', '.gitignore'].sort(), unread: ['biome'] })
     expect(b.check('switch-offs').offs).toEqual([expect.objectContaining({ kind: 'loosened', part: 'biome', count: 1 })])
   }, 240_000)
 })

@@ -231,6 +231,8 @@ export function checkFacts(c: GateCheck): string {
     ...(c.tests_effect?.read === 'not-checked' ? ['tests not checked'] : []),
     // Row 278: and a definitions check whose lint effect was not checked, never why.
     ...(c.lint_effect?.read === 'not-checked' ? ['lint effect not checked'] : []),
+    // Final review I1: and each reader a measured effect could not read, never why.
+    ...(c.lint_effect?.read === 'measured' ? (c.lint_effect.unread ?? []).map((t) => `${t} not read under the base's definitions`) : []),
     ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
     ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
   ]
