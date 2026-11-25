@@ -40,6 +40,7 @@ export const RELEASED_COMMENTS: ReadonlySet<string> = new Set([
   "design docs handed to design-critic and design-reviewer · file list, [] = none",
   "extra globs never scanned for criteria tags · [] = none",
   "extra switch-off tokens the implement and ship gates flag in the lines a plan adds, beside witness's own lists · [] = none",
+  "files whose base copy the implement and ship gates restore to see what a plan's check-definition changes hide · [] = off",
   "folder for approved designs, repo-relative · git mv the docs when you change it",
   "folder for plans, repo-relative · git mv the docs when you change it",
   "folder for specs, repo-relative · git mv the docs when you change it",

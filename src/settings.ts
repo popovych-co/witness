@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { stringify } from 'yaml'
+import { DEFAULT_DEFINITIONS } from './definitions.js'
 
 // Row 193 §4.1. The one list of every setting witness.config.yaml holds. Everything else is
 // derived from it: the resolver (config.ts), the file `init` writes and `migrate` rewrites
@@ -37,6 +38,8 @@ export type Shape =
   | { kind: 'parts' }
   // Row 273. A list of literal tokens, each 1–100 printable ASCII characters, trimmed.
   | { kind: 'tokens' }
+  // Row 277. A list of repo paths or globs, each optionally `#member` (src/definitions.ts).
+  | { kind: 'definitions' }
 
 export type Group = 'setup' | 'behavior' | 'tuning'
 
@@ -194,6 +197,13 @@ export const SETTINGS: readonly Setting[] = [
     path: 'checks.switchOffs', shape: { kind: 'tokens' }, since: 4, defaults: { 4: [] }, group: 'setup',
     comment: "extra switch-off tokens the implement and ship gates flag in the lines a plan adds, beside witness's own lists · [] = none",
     want: "a list of literal tokens, each 1–100 printable ASCII characters with no space at either end — e.g. ['istanbul ignore', 'c8 ignore'] ([] = none)",
+  },
+  {
+    // Row 277. The files whose base copy the gates fold back into a plan's tree to see what its own
+    // check definitions hide. Not ambient: an older file reads the default list.
+    path: 'checks.definitions', shape: { kind: 'definitions' }, since: 4, defaults: { 4: [...DEFAULT_DEFINITIONS] }, group: 'setup',
+    comment: 'files whose base copy the implement and ship gates restore to see what a plan\'s check-definition changes hide · [] = off',
+    want: "a list of repo paths or globs (no / = any folder), each optionally #member for one top-level key of a JSON file — e.g. ['.gitignore', 'biome.json', 'package.json#scripts'] ([] = off)",
   },
   {
     // Row 259. Ambient: an older file never declared it, and absent means scratch runs are off
@@ -367,7 +377,7 @@ export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
   3: '51284227f73adb71cf04db675bbcb12ca91ce9c90d74256cff4b5142d1a452e3',
-  4: 'c59e2c142900cf86381480d74783aec2aeaa89cf9708aa4f6ffe57781dd44696',
+  4: '6ea6543ded5fc9342d52522ac42be6dcf13a8e6f6342fc5fe7db4bb032035fce',
 }
 
 // A value as one line of the file. Quoted only where YAML needs it, except that a one-line

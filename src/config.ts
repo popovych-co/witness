@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { inlineValue } from './config-file.js'
 import { migrateValues, newestSchema, olderSchemaWarning, sectionsOf, withoutEmpty } from './migration.js'
+import { definitionEntry, type DefinitionEntry } from './definitions.js'
 import { checkPin } from './pin.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import {
@@ -122,7 +123,8 @@ export interface Config {
   // Row 262. The reader per tool; a tool set to `none`, or an older file's, is absent.
   readers: Partial<Record<ReaderTool, string>>
   // Row 273. The repo's own switch-off tokens; an older file's read [].
-  checks: { switchOffs: string[] }
+  // Row 277. The check-definition entries; an older file's read the default list.
+  checks: { switchOffs: string[]; definitions: DefinitionEntry[] }
   scratch: ScratchConfig
   harness?: string
   // Rows 171-175. Whether the CLI settles its own stops is a REPO fact — committed, read by
@@ -222,6 +224,12 @@ export function checkValue(s: Setting, val: unknown): Result<unknown> {
     case 'tokens':
       return Array.isArray(val) && val.every((x) => typeof x === 'string' && TOKEN_RE.test(x) && x === x.trim())
         ? ok(val) : invalid()
+    // Row 277. Repo paths or globs, each with at most one `#member`, typed to entries.
+    case 'definitions': {
+      if (!Array.isArray(val) || !val.every((x) => typeof x === 'string')) return invalid()
+      const entries = (val as string[]).map(definitionEntry)
+      return entries.every((e) => e !== undefined) ? ok(entries) : invalid()
+    }
   }
 }
 
@@ -368,7 +376,7 @@ export function resolveSettings(raw: Raw, mode: 'strict' | 'lenient'): Result<Re
       merge: at('ship.merge'), ciSettleMs: at('ship.ciSettleMs'),
     },
     readers,
-    checks: { switchOffs: at('checks.switchOffs') },
+    checks: { switchOffs: at('checks.switchOffs'), definitions: at('checks.definitions') },
     scratch: { prepare: at('scratch.prepare') },
     harness: at('harness'),
     autonomy: at<string>('autonomy') === 'on',

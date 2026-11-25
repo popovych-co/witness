@@ -27,6 +27,7 @@ readers:
   tsc: none                    # reads the ship.lint part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false) with every error, or none
 checks:
   switchOffs: []               # extra switch-off tokens the implement and ship gates flag in the lines a plan adds, beside witness's own lists · [] = none
+  definitions: [.gitignore, .eslintignore, .prettierignore, .editorconfig, biome.json, biome.jsonc, eslint.config.*, .eslintrc*, prettier.config.*, .prettierrc*, tsconfig*.json, jsconfig*.json, package.json#scripts, vitest.config.*, vitest.workspace.*, jest.config.*, playwright.config.*, stryker.config.*, stryker.conf.*, clippy.toml, .clippy.toml, rustfmt.toml, .rustfmt.toml, ruff.toml, .ruff.toml, .golangci.*]  # files whose base copy the implement and ship gates restore to see what a plan's check-definition changes hide · [] = off
 scratch:
   prepare: none                # what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none
 

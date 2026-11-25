@@ -183,6 +183,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       findings.push(f('warn', 'config', 'scratch.prepare', 'feature-off',
         'scratch runs are off — scratch.prepare is not set · witness migrate proposes one'))
     }
+    // Row 277. With no check-definition entry, a plan's definition changes are never measured.
+    if (cfg.value.checks.definitions.length === 0) {
+      findings.push(f('warn', 'config', 'checks.definitions', 'feature-off', 'the lint effect is off — checks.definitions is empty'))
+    }
     // Row 262. A reader no part bears the name of reads nothing: said once per tool.
     for (const tool of unboundReaders(cfg.value.readers, cfg.value.ship.lint)) {
       findings.push(f('warn', 'config', `readers.${tool}`, 'reader-unused', readerUnused(tool)))
