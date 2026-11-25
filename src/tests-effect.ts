@@ -4,13 +4,14 @@ import type { Config } from './config.js'
 import { baseForSpec } from './history.js'
 import { jobReading } from './jobs.js'
 import { readStream, streamIds } from './journal.js'
-import type { JunitCounts, TestOutcome } from './junit.js'
+import { loadFailures, type JunitCounts, type TestOutcome } from './junit.js'
 import { matchesTag } from './matcher.js'
 import { runnerConfig, suiteKey, type RunnerConfig } from './runner.js'
 import type { DroppedOff } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { codeTree } from './snapshot.js'
 import { JOB_STREAM } from './streams.js'
+import { visible } from './toon.js'
 
 // Row 275. The tests effect (§4 T3): passing tagged cases per spec never drop without a spec amendment.
 
@@ -130,6 +131,10 @@ export function testsEffect(
   const rc = runnerConfig(cfg)
   if (rc.ok && rc.value.mode !== 'full-suite') return notChecked('the runner is filtered — the tests effect reads a full-suite junit report')
   if (!rc.ok || rc.value.mode !== 'full-suite' || suite === undefined) return notChecked('no full-suite run this round')
+  // Slice 2 review I1: a file that failed to load is one untagged failed case, so its spec's tagged cases
+  // vanish — read as lost they would be a loss (C30: a failure is never one). The tests lane owns it.
+  const load = loadFailures(suite)
+  if (load.length > 0) return notChecked(`a test file failed to load — ${load.map(visible).join(' · ')}`)
   const found = baseCounts(root, rc.value, base)
   if (found.read === 'unreadable') return notChecked(found.why)
   if (found.read === 'missing') {

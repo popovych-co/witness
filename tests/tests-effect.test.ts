@@ -191,6 +191,13 @@ describe('the tests effect (row 275, C32)', () => {
     expect(testsEffect(repo.root, canon, unwrap(loadConfig(repo.root)), plan, base, [])).toEqual({ read: 'not-checked',
       why: 'the runner is filtered — the tests effect reads a full-suite junit report', offs: [], licensed: [] })
   })
+  it('a round whose suite failed to load a file reads not checked, never a loss (slice 2 review I1)', async () => {
+    const { repo, rc, canon, plan, cfg, base } = await planRepo()
+    shipped(repo, 'old-plan', { ...c(3), specs: { 'auth-refresh': c(3) }, code: codeTree(repo.root, base)!, suite: suiteKey(rc) })
+    const broken: TestOutcome = { name: 'tests/b.test.ts', classname: 'tests/b.test.ts', status: 'failed', load: true }
+    expect(testsEffect(repo.root, canon, cfg, plan, base, [...cases('auth-refresh', 1), broken])).toEqual({ read: 'not-checked',
+      why: 'a test file failed to load — tests/b.test.ts', offs: [], licensed: [] })
+  })
   it('compares against a found base and reports the counts it compared against', async () => {
     const { repo, rc, canon, plan, cfg, base } = await planRepo()
     shipped(repo, 'old-plan', { ...c(2), specs: { 'auth-refresh': c(2), gone: c(4) }, code: codeTree(repo.root, base)!, suite: suiteKey(rc) })
