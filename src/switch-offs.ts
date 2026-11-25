@@ -15,8 +15,11 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { lstatListed } from './change-set.js'
+import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
 import { gitBlob } from './gitio.js'
+import type { GateCheck, OffVerdict } from './rounds.js'
+import { visible } from './toon.js'
 
 export type SwitchOffLang = 'ts' | 'rust' | 'python' | 'go'
 
@@ -249,4 +252,47 @@ function fileOffs(wt: string, base: string, file: string, extra: readonly string
 // the last ones, as `newDiagnostics` takes — files sorted, each in its line order.
 export function planSwitchOffs(wt: string, base: string, files: readonly string[], extra: readonly string[]): SwitchOff[] {
   return [...files].sort().flatMap((f) => fileOffs(wt, base, f, extra))
+}
+
+// Row 273. Past this many distinct lines the check journals none: nothing is bookable, the revise is
+// the way on (a booking's subject rides the journal).
+export const MAX_OFFS = 500
+const MAX_LISTED = 10
+
+const place = (o: OffVerdict): string =>
+  `${visible(o.file)}:${o.line} ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`
+
+// The plan's switch-offs folded by key: the first new copy's line, `count` the copies beyond the base's.
+function foldOffs(found: readonly SwitchOff[]): OffVerdict[] {
+  const byKey = new Map<string, OffVerdict>()
+  for (const s of found) {
+    const key = switchOffKey(s)
+    const o = byKey.get(key)
+    if (o !== undefined) { o.count += 1; continue }
+    byKey.set(key, { key, token: s.token, file: s.file, line: s.line, count: 1,
+      ...(s.rules.length > 0 ? { rules: s.rules } : {}), ...(s.test ? { test: true as const } : {}) })
+  }
+  return [...byKey.values()]
+}
+
+// Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line.
+// `root` and `plan` name whose bookings apply (row 274).
+export function switchOffsCheck(_root: string, wt: string, cfg: Config, base: string, _plan: string, files: readonly string[]): GateCheck {
+  const offs = foldOffs(planSwitchOffs(wt, base, files, cfg.checks.switchOffs))
+  if (offs.length === 0) return { name: 'switch-offs', ok: true, detail: `no switch-off in the lines the plan adds (${files.length} files)` }
+  if (offs.length > MAX_OFFS) {
+    return { name: 'switch-offs', ok: false,
+      detail: `${offs.length} switch-off lines the plan adds — more than ${MAX_OFFS}: nothing is bookable, remove them` }
+  }
+  const more = offs.length > MAX_LISTED ? ` · and ${offs.length - MAX_LISTED} more` : ''
+  return { name: 'switch-offs', ok: false, offs,
+    detail: `${offs.length} switch-off line${offs.length === 1 ? '' : 's'} the plan adds — ${offs.slice(0, MAX_LISTED).map(place).join(' · ')}${more}` }
+}
+
+// Row 273. What the reviewers are told: each line the plan adds, from the tree — never from the ledger
+// (§3.3: an item never reaches a reviewer), so a booked line is listed as any other.
+export function switchOffNotes(offs: readonly OffVerdict[]): string {
+  if (offs.length === 0) return ''
+  const rows = offs.map((o) => `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`)
+  return `### Switch-offs this plan adds\n\n${rows.join('\n')}\n\nJudge whether each is right as it stands; a finding on one says why it must go.`
 }

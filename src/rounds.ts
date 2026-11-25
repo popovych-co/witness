@@ -20,7 +20,21 @@ export interface GateCheck {
   // Row 263. The lint check's verdict per part; never in a reviewed identity. Each part's state and key
   // join the gate's resume signature (`checksSignature`, with `pending` and `not-measured` one term).
   parts?: PartVerdict[]
+  // Row 273. The switch-off lines the plan adds (src/switch-offs.ts), one per key; absent where none
+  // is, or past MAX_OFFS distinct lines. Each line's unbooked copies join the resume signature.
+  offs?: OffVerdict[]
 }
+
+// Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
+// first new copy's line number, `count` the copies beyond the base's, the rule ids it names, whether a
+// test file holds it. Row 274: `booked` the copies the plan's open bookings cover, `items` their ids.
+export interface OffVerdict {
+  key: string; token: string; file: string; line: number; count: number
+  rules?: string[]; test?: true; booked?: number; items?: string[]
+}
+
+// The copies of a line no booking covers.
+export const offUnbooked = (o: OffVerdict): number => Math.max(0, o.count - (o.booked ?? 0))
 
 // Row 263 (§3.2 base-red). A lint part's verdict: `green` (exit 0) · `untrusted` (its command, or its
 // reader when needed) · `red` (the base is green: the plan's red) · `pending` (drive lints the base)

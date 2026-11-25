@@ -20,6 +20,8 @@ import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import { contentSha } from '../content-sha.js'
 import { runChecks, type CheckStep } from '../checks.js'
 import { markersCheck } from '../markers.js'
+import type { OffVerdict } from '../rounds.js'
+import { switchOffNotes, switchOffsCheck } from '../switch-offs.js'
 import { lintCheck } from '../lint-lane.js'
 import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
@@ -144,6 +146,7 @@ registerGate({
     // Row 264. The checks are steps the registry orders and times (`runChecks`); a withholding red
     // ends the round before any lens, and a step it cut leaves its side output empty.
     let present: string[] = []
+    let offs: OffVerdict[] = []
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
       // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
@@ -151,6 +154,12 @@ registerGate({
       { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
       { name: 'diff', run: () => ({ name: 'diff', ok: files.length > 0,
         detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' }) },
+      // Row 273. A switch-off the plan adds is a judged red; its lines reach the reviewers below.
+      { name: 'switch-offs', run: () => {
+        const check = switchOffsCheck(root, wt, cfg, base, planId, files)
+        offs = check.offs ?? []
+        return check
+      } },
       { name: 'evidence', run: () => {
         const report = evidenceForDiff(wt, root, plan, base)
         const missing = report.required.filter((r) => !(r.red && r.green && !r.vacuous))
@@ -208,7 +217,8 @@ registerGate({
         `### Plan under implementation: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}` +
         (present.length > 0
           ? `\n\n### Evidence notes\n${present.map((p) => `- ${p}: judge whether the test tells the behavior apart from its absence`).join('\n')}`
-          : '')),
+          : '') +
+        (offs.length > 0 ? `\n\n${switchOffNotes(offs)}` : '')),
       checks,
       ...(withheld !== undefined ? { withheld } : {}),
       stamps: [],
