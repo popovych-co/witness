@@ -74,7 +74,8 @@ interface TokenDef {
 }
 
 const C = String.raw`(?:\/\/|\/\*)` // a comment opens here
-const CFG_ATTR = /#!?\[\s*cfg_attr\s*\(.*\b(?:allow|expect)\s*\(/
+// Rust allows whitespace between `#`, `!` and `[` (push security review), so the patterns do too.
+const CFG_ATTR = /#\s*!?\s*\[\s*cfg_attr\s*\(.*\b(?:allow|expect)\s*\(/
 
 // The table (C25; the plan's probe `t3a-tokens.mjs`), in the order a line's hits are listed.
 export const TOKENS: readonly TokenDef[] = [
@@ -89,12 +90,12 @@ export const TOKENS: readonly TokenDef[] = [
   { lang: 'ts', where: 'code', tests: true, re: /(?<![\w$.])x(it|test|describe)\s*\(/, id: (m) => `x${m[1]!}(` },
   { lang: 'ts', where: 'code', tests: true, re: /(?<![\w$])(skip|only|todo|fails)\s*:\s*true\b/, id: (m) => `${m[1]!}: true` },
   { lang: 'ts', where: 'code', tests: true, re: /(?<![\w$])retry\s*:\s*[1-9]\d*\b/, id: () => 'retry:' },
-  { lang: 'rust', where: 'code', tests: false, re: /#(!?)\[\s*(allow|expect)\s*\(/, id: (m) => `#${m[1]!}[${m[2]!}(`,
+  { lang: 'rust', where: 'code', tests: false, re: /#\s*(!?)\s*\[\s*(allow|expect)\s*\(/, id: (m) => `#${m[1]!}[${m[2]!}(`,
     rules: rustListRules, unless: CFG_ATTR },
   { lang: 'rust', where: 'code', tests: false, re: CFG_ATTR, id: () => 'cfg_attr allow', rules: cfgAttrRules },
-  { lang: 'rust', where: 'code', tests: false, re: /#\[\s*ignore\b/, id: () => '#[ignore]' },
+  { lang: 'rust', where: 'code', tests: false, re: /#\s*\[\s*ignore\b/, id: () => '#[ignore]' },
   { lang: 'rust', where: 'code', tests: false, re: /\bmutants::skip\b/, id: () => 'mutants::skip' },
-  { lang: 'python', where: 'comment', tests: false, re: /#\s*noqa\b/i, id: () => 'noqa', rules: noqaRules },
+  { lang: 'python', where: 'comment', tests: false, re: /#\s*(?:(?:ruff|flake8)\s*:\s*)?noqa\b/i, id: () => 'noqa', rules: noqaRules },
   { lang: 'python', where: 'comment', tests: false, re: /#\s*type:\s*ignore\b/, id: () => 'type: ignore', rules: typeIgnoreRules },
   { lang: 'python', where: 'comment', tests: false, re: /#\s*pylint:\s*disable\b/, id: () => 'pylint: disable', rules: pylintRules },
   { lang: 'go', where: 'comment', tests: false, re: /\/\/\s*nolint\b/, id: () => 'nolint', rules: nolintRules },

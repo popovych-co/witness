@@ -311,7 +311,7 @@ the copies beyond the base's are the plan's, so a moved line is not new. The rev
 told every such line. The way on is the revise that removes it, or
 `witness decide <gate> <plan> --book switch-offs` when it is right as it stands: one ledger item per
 line, which waives that line for this plan. You or, under autonomy, the AI judge may book it — the
-judge reading only facts (the token, its rules, whether a test file holds it) — never the policy, and
+judge reading only facts (the token, how many rules it names, whether a test file holds it) — never the policy, and
 never beside a blocking finding or another red check, or at the round bound; approving over the red
 books nothing, so the next gate meets it again. A booked line closes once a merged tree no longer
 holds it. `checks.switchOffs` adds your repo's own literal tokens (e.g. `['istanbul ignore']`).

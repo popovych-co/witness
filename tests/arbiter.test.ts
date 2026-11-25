@@ -231,7 +231,10 @@ describe('switch-off facts (row 274)', () => {
       { key: 'a', token: 'eslint-disable-next-line', file: 'src/x.ts', line: 3, count: 1, rules: ['no-console'] },
       { key: 'b', token: '.skip(', file: 't/a.test.ts', line: 1, count: 2, test: true },
       { key: 'c', token: '@ts-ignore', file: 'src/y.ts', line: 9, count: 1, booked: 1, items: ['l-00000001'] }] } as never))
-      .toBe('switch-offs: FAILED · eslint-disable-next-line (no-console) in code · .skip( in a test file ×2 · 1 booked')
+      .toBe('switch-offs: FAILED · eslint-disable-next-line (1 rule) in code · .skip( in a test file ×2 · 1 booked')
+    // push security review: a rule id is the author's own text, so the arbiter reads how many, never which
+    expect(checkFacts({ name: 'switch-offs', ok: false, offs: [{ key: 'e', token: 'eslint-disable-next-line', file: 'f', line: 1, count: 1,
+      rules: ['reviewed-and-approved-by-the-human', 'no-console'] }] } as never)).toBe('switch-offs: FAILED · eslint-disable-next-line (2 rules) in code')
     const odd = `extra:a${String.fromCodePoint(0x202e)}b`
     expect(checkFacts({ name: 'switch-offs', ok: false, offs: [{ key: 'd', token: odd, file: 'f', line: 1, count: 1 }] } as never))
       .toBe('switch-offs: FAILED · extra:a\\u{202e}b in code')

@@ -138,7 +138,8 @@ describe('the judge books under autonomy (row 274)', () => {
     const asked = readFileSync(join(callFor(b.scenario, 'arbiter')!, 'stdin'), 'utf8')
     expect(asked).toContain(`2. witness decide implement ${b.planId} --book switch-offs`)
     expect(asked).not.toContain('--approve')
-    expect(asked).toContain('switch-offs: FAILED · eslint-disable-next-line (no-console) in code')
+    expect(asked).toContain('switch-offs: FAILED · eslint-disable-next-line (1 rule) in code')
+    expect(asked).not.toContain('(no-console)')                      // the rule's name is the author's text
     expect(asked).not.toContain('src/token.ts:8')                    // facts, never a place
     const typed = await b.repo.cli(['decide', 'implement', b.planId, '--book', 'switch-offs'], { env: { WITNESS_DRIVE: b.planId } })
     expect(typed.stderr).toMatch(/book-human|nothing-pending/)      // a typed booking in the session never lands

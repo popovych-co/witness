@@ -181,14 +181,17 @@ function partFact(p: PartVerdict): string {
 }
 
 // Row 274 (§3.9). The switch-off lines as the arbiter reads them: the unbooked ones grouped by token,
-// rule ids and place (a test file or code), with their copies past one; then how many copies the
-// plan's bookings cover. Never a file, a line number or a line's text.
+// how many rule ids they name and place (a test file or code), with their copies past one; then how many
+// copies the plan's bookings cover. Never a file, a line number or a line's text — nor a rule id's name,
+// which the author typed into the comment (push security review; slice 2 review M5): the reviewers read
+// the line itself, the judge the facts.
 function offFacts(offs: readonly OffVerdict[]): string[] {
   const groups = new Map<string, number>()
   for (const o of offs) {
     const n = offUnbooked(o)
     if (n === 0) continue
-    const label = `${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
+    const rules = o.rules?.length ?? 0
+    const label = `${visible(o.token)}${rules > 0 ? ` (${rules} rule${rules === 1 ? '' : 's'})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
     groups.set(label, (groups.get(label) ?? 0) + n)
   }
   const booked = offs.reduce((a, o) => a + Math.min(o.count, o.booked ?? 0), 0)
