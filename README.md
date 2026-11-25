@@ -198,6 +198,7 @@ the list the CLI reads (`src/settings.ts`).
 | `readers.eslint` | reads the ship.lint part named eslint per diagnostic · a command printing ESLint's JSON report (-f json) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only ESLint's JSON report (-f json) for what the part named eslint checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
 | `readers.clippy` | reads the ship.lint part named clippy per diagnostic · a command printing cargo's JSON messages (--message-format=json) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only cargo's JSON messages (--message-format=json) for what the part named clippy checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
 | `readers.tsc` | reads the ship.lint part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only tsc's diagnostic lines (--pretty false) for what the part named tsc checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
+| `checks.switchOffs` | extra switch-off tokens the implement and ship gates flag in the lines a plan adds, beside witness's own lists · [] = none — accepts: a list of literal tokens, each 1–100 printable ASCII characters with no space at either end — e.g. ['istanbul ignore', 'c8 ignore'] ([] = none) | `[]` |
 | `scratch.prepare` | what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none — accepts: a shell command, or none — what witness runs in its scratch checkout when a lockfile or a package manager's config changes | `none` |
 | `autonomy` | on = the CLI settles its own stops and merges green PRs · on \| off · counts once committed — accepts: on \| off | `off` |
 | `arbiter.model` | model for the arbiter that settles stops under autonomy · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
@@ -301,6 +302,19 @@ whole part until main moves — and the gate runs again. Under autonomy it is yo
 own terminal, and drive leaves a stop for you when no author could clear it (every red part red on
 the base too and not judgeable); otherwise the author is sent to fix it first. `witness status` lists every open booking; each
 closes once main no longer holds it, and `witness dismiss ledger` ends one at your terminal.
+
+**Switch-offs.** A line a plan adds that turns a check off — an `eslint-disable` or `@ts-ignore`
+comment, a `biome-ignore`, an `it.skip(` or `.only(` in a test file, a `{ retry: 3 }`, a Rust
+`#[allow(`, a `# noqa` — makes the implement and ship gates' `switch-offs` check red. Each token counts
+where its tool reads it (`process.exit(` is never `xit(`, and `retry: false` is no switch-off), and only
+the copies beyond the base's are the plan's, so a moved line is not new. The reviewers still run and are
+told every such line. The way on is the revise that removes it, or
+`witness decide <gate> <plan> --book switch-offs` when it is right as it stands: one ledger item per
+line, which waives that line for this plan. You or, under autonomy, the AI judge may book it — the
+judge reading only facts (the token, its rules, whether a test file holds it) — never the policy, and
+never beside a blocking finding or another red check, or at the round bound; approving over the red
+books nothing, so the next gate meets it again. A booked line closes once a merged tree no longer
+holds it. `checks.switchOffs` adds your repo's own literal tokens (e.g. `['istanbul ignore']`).
 
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command

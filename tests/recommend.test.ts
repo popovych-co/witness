@@ -1183,3 +1183,38 @@ describe('a booking in the blocks a revise leaves — slice 2 review (row 270)',
     }
   })
 })
+
+// Row 274 (C26). A round the lenses ran whose every red check is the judge's to book, with no
+// blocking finding: rule waivable.
+describe('the waivable rule (row 274)', () => {
+  const offRun = (checks: unknown[]): Entry => ({
+    v: 1, t: 'gate-run', gate: 'implement', artifact: 'p1', round: 1, run_id: 'r1', reviewed_sha: 'a'.repeat(40), prompts_sha: 'ps',
+    witness: '0', model: 'm', pin: 'm', verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings: [] }], checks, outcome: 'stopped',
+  } as unknown as Entry)
+  const OFF = { name: 'switch-offs', ok: false, offs: [
+    { key: 'k1', token: 'eslint-disable-next-line', file: 'src/a.ts', line: 3, count: 1, rules: ['no-console'] },
+    { key: 'k2', token: '.skip(', file: 't/a.test.ts', line: 1, count: 1, test: true }] }
+  const block = (checks: unknown[]) => recommend({ gate: 'implement', target: 'p1', upstream: 'e1', stale: false, entries: [offRun(checks)] })!
+
+  it('the revise leads, then the booking with its discharge, the upstream, the approve that books nothing, the stop (row 274)', () => {
+    const d = block([{ name: 'diff', ok: true }, OFF])
+    expect(d.rule).toBe('waivable')
+    expect(d.options.map((o) => [o.command.replace(/ --note .*$/, ''), o.depth])).toEqual([
+      ['witness decide implement p1 --revise', 'root'],
+      ['witness decide implement p1 --book switch-offs', 'deferral'],
+      ['witness decide implement p1 --revise --upstream e1', 'root'],
+      ['witness decide implement p1 --approve', 'deferral'],
+      ['witness decide implement p1 --stop', 'terminal'],
+    ])
+    expect(d.options[0]!.why).toMatch(/^2 switch-off lines the plan adds \(eslint-disable-next-line, \.skip\(\) — no finding blocks · remove them, or book what is right as it stands; round 1 of \d+$/)
+    expect(d.options[1]).toMatchObject({ when: 'the switch-off is right as it stands — say why in the note',
+      tradeoff: 'opens a ledger item per line, which waives that line for this plan; each closes once main no longer holds the line (the discharge), or by witness dismiss ledger' })
+    expect(d.options[3]).toMatchObject({ when: 'the switch-off is right and you take it without booking it',
+      tradeoff: 'stamps the artifact over the red check — nothing books it, so the next gate meets it again' })
+    expect(BOOK_TRADEOFF).toContain('per part')                                    // lint's words stand
+  })
+
+  it('a red check nobody may book beside it keeps checks-failed (row 170)', () => {
+    expect(block([OFF, { name: 'evidence', ok: false }]).rule).toBe('checks-failed')
+  })
+})

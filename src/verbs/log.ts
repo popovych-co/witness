@@ -10,6 +10,7 @@ import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
 import { kv, logSafe, rows } from '../toon.js'
+import { offWhere } from '../ledger.js'
 import { decidedBy } from '../autonomy.js'
 import { duration } from '../usage.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
@@ -74,6 +75,10 @@ function detailOf(e: Entry): string {
     case 'job-shard': return `${String(e.kind)} ${String(e.key)} ${String(e.shard)}/${String(e.of)} ${String(e.outcome)} ${duration(Number(e.ms))}`   // row 257
     // Row 269: each ledger transition, named — the item, then what happened to it.
     case 'ledger-open': {
+      // Row 274: a switch-off item names its token in its file, spelled out.
+      if (e.kind === 'booked-switch-off') {
+        return `${String(e.id)} booked ${String(e.check)} · ${offWhere(String(e.token), String(e.file))} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)}`
+      }
       const s = e.subject as { whole?: boolean; diagnostics?: Record<string, number> } | undefined
       const what = s?.whole === true ? 'whole part'
         : `${Object.values(s?.diagnostics ?? {}).reduce((a, n) => a + Number(n), 0)} diagnostics`

@@ -1,5 +1,5 @@
 # witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.
-schema: 3                      # format version · witness migrate raises it; never edit by hand
+schema: 4                      # format version · witness migrate raises it; never edit by hand
 
 # ── Setup: what this repo is ─────────────────────────────────────────────────
 harness: pi                    # the judge: the agent CLI that runs this repo's gate reviewers and arbiter · claude-code | pi
@@ -39,6 +39,8 @@ readers:
   eslint: none                 # reads the ship.lint part named eslint per diagnostic · a command printing ESLint's JSON report (-f json) with every error, or none
   clippy: none                 # reads the ship.lint part named clippy per diagnostic · a command printing cargo's JSON messages (--message-format=json) with every error, or none
   tsc: none                    # reads the ship.lint part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false) with every error, or none
+checks:
+  switchOffs: []               # extra switch-off tokens the implement and ship gates flag in the lines a plan adds, beside witness's own lists · [] = none
 scratch:
   prepare: none                # what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none
 

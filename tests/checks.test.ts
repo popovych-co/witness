@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CHECKS, checksSignature, checkWaiver, runChecks } from '../src/checks.js'
+import { CHECKS, checksSignature, checkTier, checkWaiver, runChecks } from '../src/checks.js'
 import type { GateCheck, PartState } from '../src/rounds.js'
 
 const step = (name: string, ok: boolean, ran: string[]) => ({ name, run: (): GateCheck => { ran.push(name); return { name, ok } } })
@@ -28,8 +28,8 @@ describe('the check registry (row 264)', () => {
     await expect(runChecks([{ name: 'nope', run: () => ({ name: 'nope', ok: true }) }])).rejects.toThrow(/nope/)
     await expect(runChecks([{ name: 'lint', run: () => ({ name: 'tests', ok: true }) }])).rejects.toThrow(/lint/)
   })
-  it("lint's waiver is the human's, and no other check has one (row 270)", () => {
-    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human']])
+  it("lint's waiver is the human's, switch-offs' the judge's, and no other check has one (rows 270, 273)", () => {
+    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human'], ['switch-offs', 'judge']])
     expect(checkWaiver('lint')).toBe('human')
     expect(checkWaiver('markers')).toBeUndefined()
   })
@@ -50,5 +50,22 @@ describe('the check registry (row 264)', () => {
     expect(checksSignature(lint('pending', 'k1'))).not.toBe(checksSignature(lint('pending', 'k2')))
     expect(checksSignature(lint('pending', 'k1'))).not.toBe(checksSignature(lint('red', 'k1')))
     expect(checksSignature(lint('red', 'k1', { detail: 'a', duration_ms: 1 }))).toBe(checksSignature(lint('red', 'k1', { detail: 'b', duration_ms: 9 })))
+  })
+})
+
+describe('the switch-offs check in the registry (row 273)', () => {
+  it("switch-offs is judged and the judge's to waive, right after diff (row 273)", () => {
+    expect([checkTier('switch-offs'), checkWaiver('switch-offs')]).toEqual(['judged', 'judge'])
+    const names = CHECKS.map((c) => c.name)
+    expect(names.indexOf('switch-offs')).toBe(names.indexOf('diff') + 1)
+  })
+  it('the signature reads each unbooked switch-off line with its copies; a check without offs reads as before (row 273)', () => {
+    const sig = (offs: unknown[]) => checksSignature([{ name: 'switch-offs', ok: false, offs } as never])
+    const line = { key: 'aaaaaaaaaaaaaaaa', token: 't', file: 'f', line: 1, count: 2 }
+    expect(sig([line])).toBe('switch-offs:false::offs=aaaaaaaaaaaaaaaax2')
+    expect(sig([{ ...line, booked: 1 }])).toBe('switch-offs:false::offs=aaaaaaaaaaaaaaaax1')
+    expect(sig([{ ...line, booked: 2 }])).toBe('switch-offs:false::offs=')
+    expect(sig([{ ...line, key: 'b'.repeat(16) }, line])).toBe(`switch-offs:false::offs=aaaaaaaaaaaaaaaax2+${'b'.repeat(16)}x2`)
+    expect(checksSignature([{ name: 'diff', ok: true }])).toBe('diff:true:')
   })
 })

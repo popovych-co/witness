@@ -33,7 +33,7 @@ import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
 import { parseBaseKey } from '../base-lint.js'
 import { CHECKS, checkTier, checkWaiver } from '../checks.js'
-import { bookLines, bookingsOf, ledgerTaken, type Booking, type LedgerOpen } from '../ledger.js'
+import { bookLines, bookingsOf, ledgerTaken, offWhere, type Booking, type LedgerOpen } from '../ledger.js'
 import { boundReader } from '../lint-parts.js'
 import { LEDGER_STREAM } from '../streams.js'
 import type { Violation } from '../refusal.js'
@@ -399,6 +399,13 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // inside a session drive started (rows 205, 207, 225), and never the policy's or the arbiter's,
   // since a settler that parked a gate must not be the one to un-park it.
   const unparking = plainRevise && live.state === 'parked' && !atBound
+  // Row 274: a booking of a parked gate un-parks it as well, so it stays the human's (row 241).
+  if (booking && live.state === 'parked' && (act.selected === 'policy' || act.selected === 'arbiter')) {
+    renderRefusal([v('decide', 'unpark-human', `${act.selected} booking on a parked gate`,
+      `the human, in their own chat or terminal — ${cliAct('decide', gate, target, '--book', bookCheck).line} books a parked gate's red`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   if (unparking && notHuman) {
     renderRefusal([v('decide', 'unpark-human',
       act.selected === 'policy' || act.selected === 'arbiter' ? `${act.selected} revise on a parked gate` : 'a session drive started',
@@ -505,8 +512,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   const bookings = booking ? withTools(cfgR.value, bookingsOf(anchor, bookCheck)) : []
   if (booking && bookings.length === 0) return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
   // Slice 2 review I3 (row 171): committed autonomy is HEAD's config — a working-copy `autonomy: off`
-  // edit grants nothing, so it never lifts the terminal either.
-  if (booking && autonomyAt(root, 'HEAD')) {
+  // edit grants nothing, so it never lifts the terminal either. Row 274: a typed booking only — the
+  // arbiter decides in-process inside the gate and needs neither a terminal nor a y (§3.9).
+  if (booking && act.selected === undefined && autonomyAt(root, 'HEAD')) {
     const typed = cliAct('decide', gate, target, '--book', bookCheck).line
     if (!ctx.isTTY) {
       renderRefusal([v('decide', 'book-needs-terminal', 'no terminal — autonomy is on',
@@ -838,8 +846,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}${by}`))
   if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
   // Row 270: each item the booking holds, and the act that reads it. Printed whole (a value holding a
-  // comma would be quoted by kv), its part name spelled out.
-  for (const b of bookedLines) ctx.out(`booked: ${b.id} — ${visible(b.booking.part)} · ${bookWhat(b.booking)}`)
+  // comma would be quoted by kv), its part name spelled out. Row 274: a switch-off item by its check,
+  // then its token in its file.
+  for (const b of bookedLines) ctx.out(`booked: ${b.id} — ${bookName(bookCheck, b.booking)}`)
   if (booking) ctx.out(`help: the re-gate reads it — ${cliAct('gate', gate, target).line}`)
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   // Row 239. A shape: each foreign word is quoted, and the cause and the note are the human's.
@@ -895,11 +904,16 @@ function bookRefusal(ctx: Ctx, root: string, gate: string, target: string, check
   if (act.selected === 'affirmation') {
     return v('--via', 'nod-cannot', 'affirmation with --book', 'a named option — a booking opens a ledger item, and is never taken on a nod (D143)')
   }
-  if (act.selected === 'policy' || act.selected === 'arbiter') {
+  // Row 274 (§3.2's waiver, §3.9). The policy takes rules, never judgments, so it books nothing; the
+  // arbiter books a check whose waiver is the judge's, in-process inside the gate a drive session ran.
+  const judge = checkWaiver(check) === 'judge'
+  if (act.selected === 'policy' || (act.selected === 'arbiter' && !judge)) {
     return v('selected', 'autonomy-cannot', `${act.selected} with --book ${check}`,
-      `a named human selection — only the human books ${check} (row 172)`)
+      `a named ${judge ? 'selection' : 'human selection'} — ${judge ? `the arbiter or the human books ${check}` : `only the human books ${check} (row 172)`}`)
   }
-  // Any process witness marked as its own — a drive session, a job — is no human (security review).
+  if (act.selected === 'arbiter') return ledgerTaken(root)
+  // A typed booking: any process witness marked as its own — a drive session, a job — is no human
+  // (security review).
   const marker = sessionMarker(ctx.env)
   if (marker !== undefined) {
     return v('decide', 'book-human', `${marker} is set — a session witness started`,
@@ -908,18 +922,23 @@ function bookRefusal(ctx: Ctx, root: string, gate: string, target: string, check
   return ledgerTaken(root)
 }
 
-// A reader-bound booking names its reader's tool, so the item says whose keys it holds.
+// A reader-bound booking names its reader's tool, so the item says whose keys it holds. Lint's alone.
 function withTools(cfg: Config, bookings: readonly Booking[]): Booking[] {
   return bookings.map((b) => {
-    if (!('diagnostics' in b.subject)) return b
+    if (b.kind !== 'booked-check' || !('diagnostics' in b.subject)) return b
     const part = cfg.ship.lint?.find((p) => p.name === b.part)
     const tool = part === undefined ? undefined : boundReader(cfg, part)?.tool
     return tool === undefined ? b : { ...b, tool }
   })
 }
 
-// What one booking holds, in words: the count it covers, or the whole part at its base.
-function bookWhat(b: Booking): string {
+// One booking, named: a lint part and what it holds, or a switch-off's check and its token in its file.
+function bookName(check: string, b: Booking): string {
+  return b.kind === 'booked-switch-off' ? `${visible(check)} · ${offWhere(b.token, b.file)}` : `${visible(b.part)} · ${bookWhat(b)}`
+}
+
+// What one lint booking holds, in words: the count it covers, or the whole part at its base.
+function bookWhat(b: Extract<Booking, { kind: 'booked-check' }>): string {
   if ('diagnostics' in b.subject) {
     const n = Object.values(b.subject.diagnostics).reduce((a, x) => a + x, 0)
     return `${n} diagnostic${n === 1 ? '' : 's'}`
@@ -928,10 +947,16 @@ function bookWhat(b: Booking): string {
   return `the whole part, red against ${commit === undefined ? 'its base' : short(commit)}, until main moves`
 }
 
-// The terminal's question under committed autonomy: each part and what booking it takes.
+// The terminal's question under committed autonomy: each part and what booking it takes. Row 274: each
+// switch-off line, its token in its file and the rules it names.
 function bookQuestion(gate: string, target: string, check: string, anchor: GateRunEntry, bookings: readonly Booking[]): string {
   const parts = anchor.checks.at(-1)?.parts ?? []
+  const offs = anchor.checks.find((c) => c.name === check)?.offs ?? []
   const lines = bookings.map((b) => {
+    if (b.kind === 'booked-switch-off') {
+      const rules = offs.find((o) => Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
+      return `  ${offWhere(b.token, b.file)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
+    }
     const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []
     return `  ${visible(b.part)} — ${bookWhat(b)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
   })

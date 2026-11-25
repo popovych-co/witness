@@ -20,7 +20,21 @@ export interface GateCheck {
   // Row 263. The lint check's verdict per part; never in a reviewed identity. Each part's state and key
   // join the gate's resume signature (`checksSignature`, with `pending` and `not-measured` one term).
   parts?: PartVerdict[]
+  // Row 273. The switch-off lines the plan adds (src/switch-offs.ts), one per key; absent where none
+  // is, or past MAX_OFFS distinct lines. Each line's unbooked copies join the resume signature.
+  offs?: OffVerdict[]
 }
+
+// Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
+// first new copy's line number, `count` the copies beyond the base's, the rule ids it names, whether a
+// test file holds it. Row 274: `booked` the copies the plan's open bookings cover, `items` their ids.
+export interface OffVerdict {
+  key: string; token: string; file: string; line: number; count: number
+  rules?: string[]; test?: true; booked?: number; items?: string[]
+}
+
+// The copies of a line no booking covers.
+export const offUnbooked = (o: OffVerdict): number => Math.max(0, o.count - (o.booked ?? 0))
 
 // Row 263 (§3.2 base-red). A lint part's verdict: `green` (exit 0) · `untrusted` (its command, or its
 // reader when needed) · `red` (the base is green: the plan's red) · `pending` (drive lints the base)
@@ -108,6 +122,10 @@ export interface GateRunEntry {
   // Optional because every entry before C3 lacks them — such a round is never a delta base.
   reviewed_tree?: string
   basis_sha?: string
+  // Row 274 (unit review I1). The commit the round's change set was cut from (ship): the merge stamp
+  // closes another plan's switch-off item only where this base held its line and the tree does not.
+  // Absent on every round before it, and on gates that cut no change set.
+  reviewed_base?: string
   // Row 185. `prompts_sha` without the delta block, written only when the two differ — the
   // malformed-streak brake compares setups, and two delta rounds over changing content carry
   // different blocks under one setup. `delta` names the round this one was judged against.
@@ -722,6 +740,16 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const withheld = anchor.checks_only === true ? anchor.checks.at(-1)?.name : undefined
   if (withheld !== undefined && !moved && !atBound && BOOKS.has(state) && bookingsOf(anchor, withheld).length > 0) {
     acts = [...acts, d('--book', withheld)]
+  }
+  // Row 274 (§3.2's waiver, the map's C26). A round the lenses ran whose every failed check holds a line
+  // a booking takes — which only a check carrying the judge's waiver does (`bookingsOf`) — with no
+  // blocking finding standing, offers each check's booking, on unmoved content below the bound. Anywhere
+  // else the revise comes first: a blocking finding or another red is the author's. Its re-gate replays
+  // the round's verdicts (row 112's `cached`), so it spends a round, never a battery.
+  const failed = lensesRan(anchor) ? anchor.checks.filter((c) => !c.ok) : []
+  if (failed.length > 0 && !moved && !atBound && BOOKS.has(state) && blockingAnchorsOf(anchor).length === 0 &&
+      failed.every((c) => bookingsOf(anchor, c.name).length > 0)) {
+    acts = [...acts, ...failed.map((c) => d('--book', c.name))]
   }
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')

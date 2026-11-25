@@ -10,13 +10,13 @@
 // withholds.
 //
 // Row 270 (§3.2's waiver). `waiver` names who may book a check's red: lint's is the human's alone
-// (row 172: the AI judge never books lint). A check with none is never booked; T3 and T4a add the
-// judge's.
-import { timedCheck, type GateCheck } from './rounds.js'
+// (row 172: the AI judge never books lint). A check with none is never booked. Row 273: a switch-off's
+// is the judge's — the AI judge or the human (§3.2); T4a adds a guard's.
+import { offUnbooked, timedCheck, type GateCheck } from './rounds.js'
 
 export type CheckTier = 'withholding' | 'judged'
 
-export type CheckWaiver = 'human'
+export type CheckWaiver = 'human' | 'judge'
 
 export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: CheckWaiver }> = [
   // Row 265. A file scan before the repo's tools: an unresolved conflict is read before it is linted.
@@ -24,6 +24,8 @@ export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: Che
   { name: 'lint', tier: 'withholding', waiver: 'human' },
   { name: 'implement-gate', tier: 'judged' },
   { name: 'diff', tier: 'judged' },
+  // Row 273. A switch-off a plan adds: judged, so the battery runs and the reviewers are told.
+  { name: 'switch-offs', tier: 'judged', waiver: 'judge' },
   { name: 'evidence', tier: 'judged' },
   { name: 'regression', tier: 'judged' },
   { name: 'tests', tier: 'judged' },
@@ -75,11 +77,16 @@ export async function runChecks(steps: readonly CheckStep[]): Promise<CheckRun> 
 // that a part command edited while a round stands moves the signature, and the round never resumes
 // over a key no job owes. `pending` and `not-measured` are one term, `missing`: they differ only by
 // whether a drive runs, not by the tree or the base, so starting or stopping drive spends no round.
+// Row 273: each switch-off line with copies no booking covers, with that count — a booking or a
+// dismissal since a round moves it.
 export function checksSignature(checks: readonly GateCheck[]): string {
   const partTerm = (s: string) => (s === 'pending' || s === 'not-measured' ? 'missing' : s)
   return checks.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}:${
     (c.held ?? []).map((h) => h.criterion).sort().join('+')}${
     c.parts !== undefined
       ? `:${c.parts.map((p) => `${p.part}=${partTerm(p.state)}${p.key !== undefined ? `@${p.key}` : ''}`).join(',')}`
+      : ''}${
+    c.offs !== undefined
+      ? `:offs=${c.offs.filter((o) => offUnbooked(o) > 0).map((o) => `${o.key}x${offUnbooked(o)}`).sort().join('+')}`
       : ''}`).sort().join('|')
 }

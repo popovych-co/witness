@@ -12,9 +12,9 @@ import { RELEASED_COMMENTS } from '../src/released-comments.js'
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
 
 describe('the settings list (row 193)', () => {
-  it('holds 41 settings, each path once, each section in SECTION_ORDER', () => {
-    expect(SETTINGS).toHaveLength(41)
-    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(41)
+  it('holds 42 settings, each path once, each section in SECTION_ORDER', () => {
+    expect(SETTINGS).toHaveLength(42)
+    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(42)
     for (const s of SETTINGS) expect(SECTION_ORDER, s.path).toContain(s.path.split('.')[0])
     // the list is the file's order: sections appear in SECTION_ORDER, never interleaved
     const sections = SETTINGS.map((s) => s.path.split('.')[0]!).filter((x, i, a) => a[i - 1] !== x)
@@ -63,7 +63,7 @@ describe('the settings list (row 193)', () => {
         + 'schema step — add the default under the next schema number, raise SCHEMA_VERSION and pin its fingerprint')
         .toBe(want)
     }
-    expect(Object.keys(SCHEMA_FINGERPRINTS).map(Number).sort()).toEqual([1, 2, 3])
+    expect(Object.keys(SCHEMA_FINGERPRINTS).map(Number).sort()).toEqual([1, 2, 3, 4])
   })
 
   it('a comment-only change raises no schema step', () => {
@@ -77,8 +77,8 @@ describe('the settings list (row 193)', () => {
 describe('scratch.prepare (row 259)', () => {
   it('schema 3 adds scratch.prepare: setup, ambient, a shell command or none (row 259)', () => {
     expect(settingAt('scratch.prepare')).toMatchObject({ shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, ambient: true, group: 'setup' })
-    expect(SCHEMA_VERSION).toBe(3)
-    expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 3, scratch: { prepare: 'none' } })
+    expect(SCHEMA_VERSION).toBe(4)
+    expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 4, scratch: { prepare: 'none' } })
     expect(defaultValues({ detected: { 'scratch.prepare': 'npm ci' } }).scratch).toEqual({ prepare: 'npm ci' })
     expect(defaultValues({ schema: 2 })).not.toHaveProperty('scratch')
   })
@@ -119,5 +119,17 @@ describe('readers (row 262)', () => {
       expect(s.comment).toContain('every error')
       expect(s.want).toContain('never stopping at the first failure')
     }
+  })
+})
+
+describe('checks.switchOffs (row 273)', () => {
+  it('schema 4 adds checks.switchOffs, [] by default, and pins its fingerprint; the older ones hold (row 273)', () => {
+    expect(SCHEMA_FINGERPRINTS[4]).toBe(fingerprint(4))
+    expect([1, 2, 3].map((n) => fingerprint(n))).toEqual([1, 2, 3].map((n) => SCHEMA_FINGERPRINTS[n]))
+    expect(settingAt('checks.switchOffs')).toMatchObject({ since: 4, shape: { kind: 'tokens' }, defaults: { 4: [] }, group: 'setup' })
+    expect(settingAt('checks.switchOffs')!.ambient).toBeUndefined()
+    expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 4, checks: { switchOffs: [] } })
+    expect(defaultValues({ schema: 3 })).not.toHaveProperty('checks')
+    expect(SECTION_ORDER.indexOf('checks')).toBe(SECTION_ORDER.indexOf('readers') + 1)
   })
 })

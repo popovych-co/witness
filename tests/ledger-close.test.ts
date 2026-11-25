@@ -1,13 +1,16 @@
 // Row 269 (the trust design §3.3, the map's C18, C22). A ledger item ends by observation — at the
 // merge stamp, from the shipped tree's lint, or at the abandon of its plan — or by a human at a
 // terminal (`witness dismiss ledger`).
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { Ctx } from '../src/cli.js'
 import { appendEntry, readStream } from '../src/journal.js'
-import { ledgerItems, newItemId } from '../src/ledger.js'
+import { ledgerItems, mergeCloses, newItemId } from '../src/ledger.js'
 import { loadCanon } from '../src/scan.js'
 import { lazyStamp } from '../src/stamp.js'
 import { LEDGER_STREAM } from '../src/streams.js'
+import { switchOffKey } from '../src/switch-offs.js'
+import { bookedRows } from '../src/verbs/dashboard.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
 import {
   crashCli, fakeCtx, fakeScenario, gateEnv, ghState, seededRepo, shippableRepo, type TestRepo,
@@ -201,17 +204,170 @@ describe('witness dismiss ledger (row 269)', () => {
 })
 
 describe('status lists open bookings (row 269)', () => {
-  it('status lists open bookings with their plan, part and what they hold, and the dismissal (row 269)', async () => {
+  it('status lists open bookings with their plan, check and what they hold, and the dismissal (rows 269, 274)', async () => {
     const repo = await seededRepo()
     item(repo, {})
     item(repo, { part: 'tsc', subject: { diagnostics: { ['a'.repeat(16)]: 2, ['b'.repeat(16)]: 1 } } })
     const gone = item(repo, { part: 'ui' })
     line(repo, LEDGER_STREAM, { t: 'ledger-dismissed', id: gone, cause: 'declined', note: 'x' })
     const out = (await repo.cli(['status'])).stdout
-    expect(out).toMatch(/^booked\[2\]\{item,plan,part,holds,since\}:$/m)
-    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,biome,whole part at aaaaaaa,ship r1$/m)
-    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,tsc,3 diagnostics,ship r1$/m)
+    expect(out).toMatch(/^booked\[2\]\{item,plan,check,holds,since\}:$/m)
+    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,lint\/biome,whole part at aaaaaaa,ship r1$/m)
+    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,lint\/tsc,3 diagnostics,ship r1$/m)
     expect(out).not.toContain(gone)
     expect(out).toContain('help: witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>" — at your own terminal')
+  }, 120_000)
+})
+
+// Row 274 (§3.3). The second kind, wherever a human reads the ledger.
+const offItem = (repo: TestRepo, over: Record<string, unknown> = {}): string => {
+  const id = newItemId()
+  line(repo, LEDGER_STREAM, {
+    t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-switch-off', check: 'switch-offs', plan: 'p1', gate: 'implement',
+    round: 2, run_id: 'r-1', file: 'src/a.ts', token: 'eslint-disable-next-line', subject: { lines: { ['1'.repeat(16)]: 1 } }, ...over,
+  })
+  return id
+}
+
+describe('a switch-off item where a human reads it (row 274)', () => {
+  it('status names a switch-off item by its token and file, spelled out, its copies past one (Review Focus 3)', async () => {
+    const repo = await seededRepo()
+    const lint = item(repo, {})
+    const a = offItem(repo)
+    const odd = offItem(repo, { file: `src/we${String.fromCodePoint(0x202e)}ird.ts`, subject: { lines: { ['1'.repeat(16)]: 1, ['2'.repeat(16)]: 2 } } })
+    expect(bookedRows(repo.root)).toEqual([
+      { item: lint, plan: 'p1', check: 'lint/biome', holds: 'whole part at aaaaaaa', since: 'ship r1' },
+      { item: a, plan: 'p1', check: 'switch-offs', holds: 'eslint-disable-next-line in src/a.ts', since: 'implement r2' },
+      { item: odd, plan: 'p1', check: 'switch-offs', holds: 'eslint-disable-next-line in src/we\\u{202e}ird.ts ×3', since: 'implement r2' },
+    ])
+  }, 120_000)
+
+  it("the dismissal's question names a switch-off item and says it stops waiving from the next gate run", async () => {
+    const repo = await seededRepo()
+    const id = offItem(repo)
+    const asked: string[] = []
+    const ctx = { ...fakeCtx(repo.root, { tty: true }), ask: async (q: string) => { asked.push(q); return 'n' } } as Ctx
+    await dismiss(ctx, ['ledger', '--item', id, '--cause', 'judged-wrong', '--note', 'remove it'])
+    expect(asked[0]).toBe(`dismiss ${id} — switch-offs · eslint-disable-next-line in src/a.ts · p1: judged-wrong\ndismiss? the booking stops waiving from the next gate run [y/N]`)
+  }, 120_000)
+
+  it('the lint observation reads lint items only; a switch-off item of the plan stays open (M-g)', async () => {
+    const repo = await seededRepo()
+    const lintId = item(repo, { plan: 'p1' })
+    offItem(repo, { plan: 'p1' })
+    shipRun(repo, 'p1', [{ part: 'biome', state: 'green' }])
+    expect(mergeCloses(repo.root, 'p1', 7).map((c) => c.id)).toEqual([lintId])
+  }, 120_000)
+})
+
+// Row 274 (§3.3). A switch-off item booking one line, keyed as the check keys it.
+const offLine = (repo: TestRepo, o: { plan: string; file: string; token: string; snippet: string }): string => {
+  const id = newItemId()
+  line(repo, LEDGER_STREAM, {
+    t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-switch-off', check: 'switch-offs', plan: o.plan, gate: 'ship',
+    round: 1, run_id: 'r-1', file: o.file, token: o.token, subject: { lines: { [switchOffKey(o)]: 1 } },
+  })
+  return id
+}
+// A real tree in the repo holding `files`, built through a scratch index (no checkout moves).
+const treeWith = (repo: TestRepo, files: Record<string, string>): string => {
+  const env = { ...process.env, GIT_INDEX_FILE: `${repo.root}/.git/witness-test-index-${Math.random().toString(16).slice(2)}` }
+  const git = (args: string[], input?: string) => execFileSync('git', args, { cwd: repo.root, env, input, encoding: 'utf8' }).trim()
+  for (const [path, body] of Object.entries(files)) {
+    const blob = git(['hash-object', '-w', '--stdin'], body)
+    git(['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`])
+  }
+  return git(['write-tree'])
+}
+// The plan's last ship round, reviewed on `tree` cut from `base` (a commit; absent as on a round before
+// unit review I1), no lint parts.
+const shipRunAt = (repo: TestRepo, planId: string, tree: string | undefined, base?: string) => line(repo, planId, {
+  t: 'gate-run', gate: 'ship', artifact: planId, round: 9, run_id: `r-ship-${Math.random().toString(16).slice(2, 8)}`, reviewed_sha: 'c'.repeat(40),
+  ...(tree !== undefined ? { reviewed_tree: tree } : {}), ...(base !== undefined ? { reviewed_base: base } : {}),
+  prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks: [{ name: 'switch-offs', ok: true }],
+})
+// A commit whose tree holds `files`: the base a ship round's tree was cut from.
+const baseWith = (repo: TestRepo, files: Record<string, string>): string =>
+  execFileSync('git', ['commit-tree', treeWith(repo, files), '-m', 'base'], { cwd: repo.root, encoding: 'utf8' }).trim()
+const HELD = { 'src/a.ts': '// @ts-ignore\nclean()\n', 'src/c.ts': '// @ts-ignore\n' }
+
+describe('a booked switch-off ends by observation (row 274)', () => {
+  it("closes at the first merge whose tree no longer holds the line (§3.3; the map's Done-when)", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const id = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const tree = treeWith(s.repo, { 'src/a.ts': 'clean()\n' })
+    shipRunAt(s.repo, s.planId, tree, baseWith(s.repo, HELD))
+    expect(s.stamp().stamped).toHaveLength(1)
+    expect(byId(s.repo.root, id)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: s.planId, pr: 7, tree } })
+  }, 120_000)
+
+  it("stays open while the tree holds the line, re-indented too; the merging plan's own line stays open", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const old = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const own = offLine(s.repo, { plan: s.planId, file: 'src/b.ts', token: 'eslint-disable-next-line', snippet: '// eslint-disable-next-line no-console' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'x()\n    // @ts-ignore\n', 'src/b.ts': '// eslint-disable-next-line no-console\nlog()\n' }), baseWith(s.repo, HELD))
+    s.stamp()
+    expect([byId(s.repo.root, old).state, byId(s.repo.root, own).state]).toEqual(['open', 'open'])
+  }, 120_000)
+
+  it('a plan in flight waits for its own merge; no readable tree observes nothing', async () => {
+    const s = await mergedSeed()
+    const flying = offLine(s.repo, { plan: 'other-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    mergedPlan(s.repo, 'old-plan')
+    const gone = offLine(s.repo, { plan: 'old-plan', file: 'src/c.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    shipRunAt(s.repo, s.planId, 'b'.repeat(40), baseWith(s.repo, HELD))    // a tree the repo cannot read
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/z.ts': 'z()\n' }), baseWith(s.repo, HELD))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([gone])
+    expect(byId(s.repo.root, flying).state).toBe('open')
+    expect(closes(s.repo.root)).toEqual([])                         // mergeCloses reads; only the stamp writes
+  }, 120_000)
+
+  it('an extra token dropped from the config still waits for its line (Review Focus 5)', async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    // the config names no checks.switchOffs: the observation reads the item's own token and key
+    const id = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: 'extra:istanbul ignore', snippet: '/* istanbul ignore next */' })
+    const held = baseWith(s.repo, { 'src/a.ts': '/* istanbul ignore next */\nf()\n' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': '/* istanbul ignore next */\nf()\n' }), held)
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'f()\n' }), held)
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([id])
+  }, 240_000)
+
+  it("another plan's item closes only where the merging round's base held its line (unit review I1)", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const old = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const own = offLine(s.repo, { plan: s.planId, file: 'src/b.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const lacking = treeWith(s.repo, { 'src/a.ts': 'clean()\n', 'src/b.ts': 'b()\n' })
+    // the merging tree lacks old-plan's line, but its base never held it (merged after the fork): no word on it
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, { 'src/a.ts': 'clean()\n' }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([own])
+    // a round from before the base was journaled observes the merging plan's own items only
+    shipRunAt(s.repo, s.planId, lacking)
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([own])
+    // the base held it and the merging tree does not: this merge took it out
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, HELD))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id).sort()).toEqual([old, own].sort())
+  }, 120_000)
+
+  it('reads the newest ship round only: one with no readable tree observes nothing (unit review M-a)', async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'clean()\n' }), baseWith(s.repo, HELD))
+    shipRunAt(s.repo, s.planId, undefined, baseWith(s.repo, HELD))       // what merged: no tree written
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+  }, 120_000)
+
+  it("an abandoned plan's switch-off items close in the abandon", async () => {
+    const { repo, planId } = await shippableRepo()
+    const mine = offLine(repo, { plan: planId, file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const r = await repo.cli(['abandon', planId])
+    expect(r.code, r.stderr).toBe(0)
+    expect(byId(repo.root, mine)).toMatchObject({ state: 'closed', end: { by: 'abandon', plan: planId } })
   }, 120_000)
 })

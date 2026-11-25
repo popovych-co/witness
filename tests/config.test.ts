@@ -3,9 +3,9 @@ import { parse, stringify } from 'yaml'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
+  DEFAULT_REVIEWER_TIMEOUT_MS, checkValue, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
-import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS, withValues } from '../src/settings.js'
+import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS, settingAt, withValues } from '../src/settings.js'
 import { configYaml, seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
 import { scratchDir } from './scratch.js'
 
@@ -25,12 +25,12 @@ describe('loadConfig', () => {
     expect(res.value.schema).toBe(1)
     expect(res.value).not.toHaveProperty('raw')
     expect(res.value.ship.test).toBe('npm test')
-    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(3\) — witness migrate adds/)
+    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(4\) — witness migrate adds/)
   })
 
   it('refuses a newer schema and warns on an older one', () => {
     const repo = tmpRepo()
-    repo.write('witness.config.yaml', 'schema: 4\n')
+    repo.write('witness.config.yaml', 'schema: 5\n')
     const newer = loadConfig(repo.root)
     expect(!newer.ok && newer.violations[0]?.rule).toBe('newer-than-cli')
     expect(!newer.ok && newer.violations[0]?.want).toContain('upgrade witness')
@@ -412,7 +412,7 @@ describe('scratch.prepare (row 259)', () => {
     repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
     const old = loadConfig(repo.root)
     expect(old.ok && old.value.scratch.prepare).toBeUndefined()
-    expect(old.ok && old.value.warning).toMatch(/schema 2 is older than this witness \(3\)/)
+    expect(old.ok && old.value.warning).toMatch(/schema 2 is older than this witness \(4\)/)
     repo.write('witness.config.yaml', configYaml({ scratch: { prepare: 'pnpm install --frozen-lockfile' } }))
     expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { scratch: { prepare: 'pnpm install --frozen-lockfile' } } })
   })
@@ -449,5 +449,26 @@ describe('readers (row 262)', () => {
     repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
     const old = loadConfig(repo.root)
     expect(old.ok && old.value.readers).toEqual({})
+  })
+})
+
+describe('checks.switchOffs (row 273)', () => {
+  it('checks.switchOffs holds literal tokens: printable ASCII, trimmed, 1–100 characters (row 273)', () => {
+    const s = settingAt('checks.switchOffs')!
+    expect(checkValue(s, ['istanbul ignore', 'c8 ignore'])).toEqual({ ok: true, value: ['istanbul ignore', 'c8 ignore'] })
+    expect(checkValue(s, [])).toEqual({ ok: true, value: [] })
+    for (const bad of [[''], [' x'], ['x '], [`a${String.fromCodePoint(0x202e)}b`], ['x'.repeat(101)], 'istanbul', [1]]) {
+      expect(checkValue(s, bad)).toMatchObject({ ok: false, violations: [expect.objectContaining({ field: 'checks.switchOffs', rule: 'invalid' })] })
+    }
+  })
+
+  it('a schema 3 file reads checks.switchOffs as [] in memory (row 193)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 3 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.checks).toEqual({ switchOffs: [] })
+    expect(old.ok && old.value.warning).toMatch(/schema 3 is older than this witness \(4\)/)
+    repo.write('witness.config.yaml', configYaml({ checks: { switchOffs: ['istanbul ignore'] } }))
+    expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { checks: { switchOffs: ['istanbul ignore'] } } })
   })
 })

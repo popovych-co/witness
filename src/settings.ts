@@ -35,6 +35,8 @@ export type Shape =
   | { kind: 'runner' } | { kind: 'report' } | { kind: 'pin' } | { kind: 'battery' }
   // Row 261. One command, or a map of part names to commands, each part run on its own.
   | { kind: 'parts' }
+  // Row 273. A list of literal tokens, each 1–100 printable ASCII characters, trimmed.
+  | { kind: 'tokens' }
 
 export type Group = 'setup' | 'behavior' | 'tuning'
 
@@ -187,6 +189,13 @@ export const SETTINGS: readonly Setting[] = [
       + ' checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs)',
   })),
   {
+    // Row 273. The repo's own switch-off tokens, beside witness's lists (src/switch-offs.ts): literals,
+    // never regexes. Not ambient: an older file reads [], no extra token.
+    path: 'checks.switchOffs', shape: { kind: 'tokens' }, since: 4, defaults: { 4: [] }, group: 'setup',
+    comment: "extra switch-off tokens the implement and ship gates flag in the lines a plan adds, beside witness's own lists · [] = none",
+    want: "a list of literal tokens, each 1–100 printable ASCII characters with no space at either end — e.g. ['istanbul ignore', 'c8 ignore'] ([] = none)",
+  },
+  {
     // Row 259. Ambient: an older file never declared it, and absent means scratch runs are off
     // (check says so, once); `none` means the scratch needs nothing installed.
     path: 'scratch.prepare', shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, ambient: true, group: 'setup',
@@ -260,7 +269,7 @@ export const RETIRED: readonly Retired[] = [
 ]
 
 export const SECTION_ORDER: readonly string[] = [
-  'harness', 'paths', 'docs', 'criteria', 'ship', 'readers', 'scratch', 'autonomy', 'arbiter', 'session', 'implement', 'gates', 'drive',
+  'harness', 'paths', 'docs', 'criteria', 'ship', 'readers', 'checks', 'scratch', 'autonomy', 'arbiter', 'session', 'implement', 'gates', 'drive',
 ]
 
 export const FIRST_LINE = '# witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.'
@@ -358,6 +367,7 @@ export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
   3: '51284227f73adb71cf04db675bbcb12ca91ce9c90d74256cff4b5142d1a452e3',
+  4: 'c59e2c142900cf86381480d74783aec2aeaa89cf9708aa4f6ffe57781dd44696',
 }
 
 // A value as one line of the file. Quoted only where YAML needs it, except that a one-line
