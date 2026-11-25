@@ -124,6 +124,12 @@ export function diagnosticKey(d: Diagnostic): string {
   return createHash('sha256').update(JSON.stringify([d.tool, d.rule, d.file, d.snippet])).digest('hex').slice(0, 16)
 }
 
+// Row 277. A hidden diagnostic's key (the lint effect, src/lint-effect.ts): a key space of its own,
+// over the normalized line the effect tree holds, so the merge stamp finds it again in a merged tree.
+export function loosenedKey(d: Pick<Diagnostic, 'tool' | 'rule' | 'file' | 'snippet'>): string {
+  return createHash('sha256').update(JSON.stringify(['loosened', d.tool, d.rule, d.file, d.snippet])).digest('hex').slice(0, 16)
+}
+
 export function keyCounts(ds: readonly Diagnostic[]): Map<string, number> {
   const out = new Map<string, number>()
   for (const d of ds) {

@@ -531,15 +531,23 @@ const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'o
 // any error exists; `sarif` prints them as SARIF; `garbage` prints no report; `many` prints 2,001
 // distinct errors. It sets `process.exitCode` rather than calling `process.exit`, which cuts a pipe
 // write past 64 KiB (T2a's probe) — `many`'s report is ~400 KB.
+// Row 277. Its own check definitions, read in `check` and `sarif` alike: a file is skipped when the root
+// .gitignore holds its path, `/` plus its path, or a folder of it ending in `/`, or when fake-lint.json's
+// `skip` lists it; fake-lint.json's `"report": "garbage"` makes `sarif` print no report.
 const FAKE_LINT = `// A lint tool for tests: an error is each line holding BAD in a .ts file under src/.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+const ignored = existsSync('.gitignore') ? readFileSync('.gitignore', 'utf8').split('\\n').map((l) => l.trim()).filter(Boolean) : []
+const conf = existsSync('fake-lint.json') ? JSON.parse(readFileSync('fake-lint.json', 'utf8')) : {}
+const skip = (file) => (conf.skip ?? []).includes(file)
+  || ignored.some((l) => l === file || l === \`/\${file}\` || (l.endsWith('/') && file.startsWith(l.replace(/^\\//, ''))))
 const found = []
 if (existsSync('src')) {
   for (const f of readdirSync('src', { recursive: true }).map(String).filter((n) => n.endsWith('.ts')).sort()) {
+    if (skip(\`src/\${f}\`)) continue
     readFileSync(\`src/\${f}\`, 'utf8').split('\\n').forEach((l, i) => { if (l.includes('BAD')) found.push({ file: \`src/\${f}\`, line: i + 1 }) })
   }
 }
-const mode = process.argv[2]
+const mode = process.argv[2] === 'sarif' && conf.report === 'garbage' ? 'garbage' : process.argv[2]
 const result = (ruleId, file, line) => ({ ruleId, level: 'error', locations: [{ physicalLocation: { artifactLocation: { uri: \`\${process.cwd()}/\${file}\` }, region: { startLine: line } } }] })
 if (mode === 'sarif') process.stdout.write(JSON.stringify({ version: '2.1.0', runs: [{ results: found.map((x) => result('lint/test/noBad', x.file, x.line)) }] }))
 if (mode === 'many') process.stdout.write(JSON.stringify({ runs: [{ results: Array.from({ length: 2_001 }, (_, i) => result(\`lint/test/r\${i}\`, 'src/many.ts', 1)) }] }))
@@ -550,6 +558,19 @@ export function fakeLint(repo: TestRepo): { check: string; sarif: string; garbag
   repo.write('fake-lint.mjs', FAKE_LINT)
   const at = (mode: string) => `node fake-lint.mjs ${mode}`
   return { check: at('check'), sarif: at('sarif'), garbage: at('garbage'), many: at('many') }
+}
+
+// Row 277. `pnpm lint`'s shape for tests: run-script.mjs runs package.json's `scripts[argv[2]]` through
+// the shell, stdio inherited, its exit code passed on. Returns the command; the caller commits the file.
+const RUN_SCRIPT = `import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+const script = JSON.parse(readFileSync('package.json', 'utf8')).scripts?.[process.argv[2]]
+if (typeof script !== 'string') { console.error(\`missing script: \${process.argv[2]}\`); process.exit(1) }
+process.exitCode = spawnSync(script, { shell: true, stdio: 'inherit' }).status ?? 1
+`
+export function runScript(repo: TestRepo): string {
+  repo.write('run-script.mjs', RUN_SCRIPT)
+  return 'node run-script.mjs'
 }
 
 // Sets (or, for undefined, deletes) each leaf of `patch` in the repo's witness.config.yaml, keeping
