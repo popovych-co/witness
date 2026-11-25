@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { parse } from 'yaml'
+import { parse, stringify } from 'yaml'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   DEFAULT_REVIEWER_TIMEOUT_MS, loadConfig, loadLocalConfig, localConfigPath, resolveSession,
 } from '../src/config.js'
-import { fingerprint, SCHEMA_FINGERPRINTS } from '../src/settings.js'
-import { seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
+import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS, withValues } from '../src/settings.js'
+import { configYaml, seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
 import { scratchDir } from './scratch.js'
 
 describe('loadConfig', () => {
@@ -25,12 +25,12 @@ describe('loadConfig', () => {
     expect(res.value.schema).toBe(1)
     expect(res.value).not.toHaveProperty('raw')
     expect(res.value.ship.test).toBe('npm test')
-    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(2\) — witness migrate adds/)
+    expect(res.value.warning).toMatch(/^schema 1 is older than this witness \(3\) — witness migrate adds/)
   })
 
   it('refuses a newer schema and warns on an older one', () => {
     const repo = tmpRepo()
-    repo.write('witness.config.yaml', 'schema: 3\n')
+    repo.write('witness.config.yaml', 'schema: 4\n')
     const newer = loadConfig(repo.root)
     expect(!newer.ok && newer.violations[0]?.rule).toBe('newer-than-cli')
     expect(!newer.ok && newer.violations[0]?.want).toContain('upgrade witness')
@@ -403,5 +403,51 @@ describe('machine-local notify (B6)', () => {
     repo.write('.witness/config.local.yaml', "notify: ''\n")
     const bad = loadLocalConfig(repo.root)
     expect(!bad.ok && [bad.violations[0]!.field, bad.violations[0]!.rule]).toEqual(['notify', 'invalid'])
+  })
+})
+
+describe('scratch.prepare (row 259)', () => {
+  it('an older file reads scratch.prepare as absent, so scratch runs are off (row 259)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.scratch.prepare).toBeUndefined()
+    expect(old.ok && old.value.warning).toMatch(/schema 2 is older than this witness \(3\)/)
+    repo.write('witness.config.yaml', configYaml({ scratch: { prepare: 'pnpm install --frozen-lockfile' } }))
+    expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { scratch: { prepare: 'pnpm install --frozen-lockfile' } } })
+  })
+})
+
+describe('ship.lint parts (row 261)', () => {
+  it('ship.lint is one command, a part named lint, or named parts in file order (row 261)', () => {
+    const repo = tmpRepo()
+    const lint = (val: unknown) => { repo.write('witness.config.yaml', configYaml({ ship: { lint: val } })); return loadConfig(repo.root) }
+    expect(lint('pnpm lint')).toMatchObject({ ok: true, value: { ship: { lint: [{ name: 'lint', cmd: 'pnpm lint', source: 'ship.lint' }] } } })
+    expect(lint({ biome: 'pnpm exec biome check .', types: 'pnpm typecheck' })).toMatchObject({ ok: true, value: { ship: { lint: [
+      { name: 'biome', cmd: 'pnpm exec biome check .', source: 'ship.lint.biome' },
+      { name: 'types', cmd: 'pnpm typecheck', source: 'ship.lint.types' },
+    ] } } })
+    for (const bad of [{}, { Biome: 'x' }, { '1st': 'x' }, { [`a${'b'.repeat(40)}`]: 'x' }, { a: '' }, { a: 1 }, ['a'], '']) {
+      expect(lint(bad)).toMatchObject({ ok: false, violations: [{ field: 'ship.lint', rule: 'invalid' }] })
+    }
+  })
+
+  it("a schema-2 file's ship.lint reads as one part named lint, as written (row 261)", () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(withValues(defaultValues({ harness: 'claude-code', schema: 2 }), { ship: { lint: 'pnpm lint && pnpm typecheck' } })))
+    const r = loadConfig(repo.root)
+    expect(r.ok && r.value.ship.lint).toEqual([{ name: 'lint', cmd: 'pnpm lint && pnpm typecheck', source: 'ship.lint' }])
+  })
+})
+
+describe('readers (row 262)', () => {
+  it("a reader set to none, or an older file's, is no reader (row 262)", () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', configYaml({ readers: { biome: 'pnpm exec biome check --reporter=sarif .' } }))
+    const r = loadConfig(repo.root)
+    expect(r.ok && r.value.readers).toEqual({ biome: 'pnpm exec biome check --reporter=sarif .' })
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.readers).toEqual({})
   })
 })

@@ -2,7 +2,7 @@ import { closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, read
 import { join } from 'node:path'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
-import { DRIVE_DEADLINE_ENV } from './drive-presence.js'
+import { driveDeadline } from './deadline.js'
 import { isId } from './dsl.js'
 import { LOCK_WAIT_MS, isAlive, pause, takeStale } from './lock.js'
 import { v, type Violation } from './refusal.js'
@@ -220,9 +220,10 @@ export function sweepDeadBusy(root: string, opts: { pid?: number } = {}): number
 
 // The bound a taker writes: the estimate, or inside a drive session the session's deadline when
 // later — a reviewer there may wait out a usage limit until then (reviewer.ts) — and never more
-// than the cap after now. The cap goes last (pass 6, P20), so no bound is stale at birth.
+// than the cap after now. The cap goes last (pass 6, P20), so no bound is stale at birth. Row 256:
+// the deadline is the later of the spawn deadline and the one drive moved (`driveDeadline`).
 function bound(estimateMs: number, env: Ctx['env'], now: number): number {
-  const deadline = Number(env[DRIVE_DEADLINE_ENV]) || 0
+  const deadline = driveDeadline(env) ?? 0
   return Math.min(Math.max(now + estimateMs, deadline), now + BUSY_MAX_MS)
 }
 

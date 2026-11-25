@@ -2,6 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadHarness } from '../src/harness.js'
+import { deadlineFile, writeDeadline } from '../src/deadline.js'
 import { invokeReviewerAsync, parseVerdictText, PROMPT_NAMES, promptsSha, resolvePrompt } from '../src/reviewer.js'
 import { fakeClock, fakeScenario, gateEnv, putVerdict, fakeCtx, tmpRepo } from './helpers.js'
 import { scratchDir } from './scratch.js'
@@ -302,13 +303,19 @@ describe('usage limits on the claude harness (B4)', () => {
 describe('a reviewer wait fits its session (B4)', () => {
   const LIMIT = "You've hit your session limit · resets 2pm (America/Los_Angeles)"   // 1h31m away
   const START = Date.parse('2026-10-19T19:30:00Z')
-  const setup = async (deadline: number) => {
+  // `moved`: the deadline drive moved in the session's deadline file (row 256).
+  const setup = async (deadline: number, moved?: number) => {
     const repo = await tmpRepo()
     const scenario = fakeScenario()
     putVerdict(scenario, { coverage: [], findings: [] })
     writeFileSync(join(scenario, 'pi-error'), LIMIT)
     writeFileSync(join(scenario, 'pi-error-calls'), '1')
-    const ctx = fakeCtx(repo.root, { env: { ...gateEnv(scenario), WITNESS_DRIVE: 'p1', WITNESS_DRIVE_DEADLINE: String(deadline) } })
+    const env: Record<string, string> = { ...gateEnv(scenario), WITNESS_DRIVE: 'p1', WITNESS_DRIVE_DEADLINE: String(deadline) }
+    if (moved !== undefined) {
+      writeDeadline(repo.root, '77-3', moved)
+      env.WITNESS_DRIVE_DEADLINE_FILE = deadlineFile(repo.root, '77-3')
+    }
+    const ctx = fakeCtx(repo.root, { env })
     return { repo, ctx, clock: fakeClock(START) }
   }
   it('refuses a wait that outlives the session', async () => {
@@ -319,6 +326,11 @@ describe('a reviewer wait fits its session (B4)', () => {
   })
   it('waits when the reset comes inside the session', async () => {
     const { repo, ctx, clock } = await setup(START + 3 * 3_600_000)
+    expect((await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })).ok).toBe(true)
+    expect(clock.slept).toEqual([5_460_000])
+  })
+  it('waits when drive moved the deadline past the reset (row 256)', async () => {
+    const { repo, ctx, clock } = await setup(START + 30 * 60_000, START + 3 * 3_600_000)
     expect((await invokeReviewerAsync(ctx, piHarness, { cwd: repo.root, prompt: 'x', clock })).ok).toBe(true)
     expect(clock.slept).toEqual([5_460_000])
   })

@@ -3,6 +3,7 @@ import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
 import type { JunitSummary } from './junit.js'
+import { bookingsOf } from './ledger.js'
 import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
 
@@ -11,11 +12,40 @@ import type { CoverageItem, Finding } from './verdict.js'
 // Present only when non-empty.
 // held (row 179): the criteria an unmet need kept the drift lane from running.
 // duration_ms (row 251): how long the check took, in whole milliseconds — journaled for a later
-// reader (T2d's median per check name). Never part of an identity: `checkOk` (src/gate.ts) compares
-// name, ok, untrusted and held only, and no renderer prints it. Absent on every check before 251.
+// reader. Never part of an identity: `checksSignature` (src/checks.ts) never reads it, and no renderer
+// prints it. Absent on every check before 251. Row 264: checks run in the registry's order, never by
+// measured cost (C14), so it has no reader yet.
 export interface GateCheck {
   name: string; ok: boolean; detail?: string; untrusted?: string[]; held?: HeldRow[]; duration_ms?: number
+  // Row 263. The lint check's verdict per part; never in a reviewed identity. Each part's state and key
+  // join the gate's resume signature (`checksSignature`, with `pending` and `not-measured` one term).
+  parts?: PartVerdict[]
 }
+
+// Row 263 (§3.2 base-red). A lint part's verdict: `green` (exit 0) · `untrusted` (its command, or its
+// reader when needed) · `red` (the base is green: the plan's red) · `pending` (drive lints the base)
+// · `not-measured` (the base's result is missing and no drive runs, scratch runs are off, two
+// strikes, or it is malformed) ·
+// `not-judged` (red on the base too, with no reader, or a report either side could not read) ·
+// `new` (red on the base too; diagnostics the base lacks) · `base-only` (red on the base too;
+// nothing new) · `booked` (row 270: what is red, the plan's own booking covers — a whole part at this
+// key, or every diagnostic it books). Only `green`, `base-only` and `booked` pass.
+export type PartState = 'green' | 'untrusted' | 'red' | 'pending' | 'not-measured' | 'not-judged' | 'new' | 'base-only' | 'booked'
+// `key` on every state that read the base's result; `new`, `base` and `rules` (once each, sorted, at
+// most 20) on `new`; `base` on `base-only`; `why` (witness's own words) on not-measured and not-judged.
+// Row 270: `new` and `rules` on `red` too, once the plan's tree is read; `book` the multiset of
+// diagnostic keys a booking of this part takes (the plan's beyond the base's, or all of them where
+// the base gave none; 1–MAX_BOOK_KEYS distinct, else absent and the part books whole); `booked` the
+// diagnostics the plan's per-diagnostic bookings cover; `items` the ledger items applied; `cleared`
+// the open per-diagnostic items on this part (any plan) whose every key this tree lacks.
+export interface PartVerdict {
+  part: string; state: PartState; key?: string; new?: number; base?: number; rules?: string[]; why?: string
+  book?: Record<string, number>; booked?: number; items?: string[]; cleared?: string[]
+}
+
+// A green part, a part red on the base with nothing new, and a part the plan's booking covers pass.
+// Beside the verdict, so a reader of journaled parts (recommend) needs no lane.
+export const partPasses = (v: PartVerdict): boolean => v.state === 'green' || v.state === 'base-only' || v.state === 'booked'
 
 // Row 251. One check, timed over its whole run — the inputs only it reads belong inside `run`.
 export async function timedCheck(run: () => GateCheck | Promise<GateCheck>): Promise<GateCheck> {
@@ -91,7 +121,17 @@ export interface GateRunEntry {
   junit?: JunitSummary
   verdicts?: ReviewerVerdict[]
   malformed?: Array<{ reviewer: string; violations: Violation[] }>
+  // Row 264 (§3.2). A withholding check was red, so no lens ran: the round carries its checks up to
+  // the red one and nothing a battery writes. Never in an identity.
+  checks_only?: true
   outcome: 'passed' | 'stopped' | 'malformed'
+}
+
+// Row 264 (§3.2). Did the battery run and deliver a judgment? A malformed round judged nothing; a
+// checks-only round asked no lens. Not `lastJudgedRun`, which means "not malformed": a checks-only
+// round is a run the gate's state anchors on — its decision is owed — but not one lenses ran.
+export function lensesRan(run: GateRunEntry): boolean {
+  return run.checks_only !== true && run.outcome !== 'malformed'
 }
 
 export interface DecisionEntry {
@@ -100,7 +140,10 @@ export interface DecisionEntry {
   gate: string
   artifact: string
   round: number
-  decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort'
+  decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort' | 'book'
+  // Row 270. A human's booking of a withheld check's red (`decide --book <check>`): the check, and
+  // the ledger items it opened or reused, in part order. The gate is then re-run, never settled.
+  book?: { check: string; items: string[] }
   override?: boolean
   // Row 109. A revise that buys the one extra round the bound otherwise forbids. Only ever
   // set on a `revise`, only ever at the bound, and only once per budget window — the whole
@@ -244,7 +287,7 @@ export function deltaBase(entries: Entry[], gate: string, reviewedSha: string): 
   const runs = runsSinceReset(entries, gate)
   for (let i = runs.length - 1; i >= 0; i--) {
     const r = runs[i]!
-    if (r.outcome === 'malformed' || fellBack(r) || !(r.verdicts?.length) || r.reviewed_sha === reviewedSha) continue
+    if (!lensesRan(r) || fellBack(r) || !(r.verdicts?.length) || r.reviewed_sha === reviewedSha) continue
     return r
   }
   return undefined
@@ -256,9 +299,10 @@ export function roundsSinceApprove(entries: Entry[], gate: string): number {
   // spends the human's budget. `malformed` is a verdict witness could not parse; a
   // fallback is a model witness could not reach. Row 105 deliberately does NOT join them:
   // a harness flip still spends its round, or a repo could flip judges forever and never
-  // reach the bound.
+  // reach the bound. Row 264 (§3.2): nor does a checks-only round — no lens ran, so the human's
+  // budget, which buys judgments, is untouched; drive's rounds cap still counts it (`capHit`).
   return runsSinceReset(entries, gate)
-    .filter((r) => r.outcome !== 'malformed' && !fellBack(r)).length
+    .filter((r) => lensesRan(r) && !fellBack(r)).length
 }
 
 // Row 109. The final round's blocking findings can only be VERIFIED by another round, so
@@ -299,11 +343,12 @@ const blockingAnchorsOf = (r: GateRunEntry): string[] =>
 // D123, memory one: how many honest attempts have failed at this seam IN THE CURRENT GAME.
 // Distinct shas only — a resumed or unchanged round is not an attempt. Malformed and
 // fallen-back rounds are excluded for the same reason row 67 and row 107 exempt them from
-// the budget: witness failed to deliver a judgment, which is not evidence about the seam.
+// the budget: witness failed to deliver a judgment, which is not evidence about the seam. Row 264:
+// a checks-only round asked no lens, so it is no attempt either.
 export function anchorRecurrence(entries: Entry[], gate: string, anchor: string): number {
   const seen = new Set<string>()
   for (const r of runsSinceReset(entries, gate)) {
-    if (r.outcome === 'malformed' || fellBack(r)) continue
+    if (!lensesRan(r) || fellBack(r)) continue
     if (!anchorsOf(r).includes(anchor)) continue
     seen.add(r.reviewed_sha)
   }
@@ -426,7 +471,7 @@ function parkedActs(
 export function exitActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined,
 ): Act[] {
-  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false }).acts
+  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false }).acts
 }
 
 // Rows 139/203. The exits line: `exitActs` rendered in one line.
@@ -460,7 +505,7 @@ export function unparkAt(entries: Entry[], i: number): boolean {
 export function reopenActs(
   gate: string, target: string, entries: Entry[], stale: boolean, upstream: string | undefined, owed: boolean,
 ): Act[] {
-  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed, upstreamOwed: false }).acts
+  return liveActs(gate, target, entries, { upstream, stale, holdLifted: false, owed, upstreamOwed: false, checksMoved: false }).acts
 }
 
 // Row 244 (#87, design §4.2.1). The facts beside the journal that decide which acts are legal. The
@@ -471,10 +516,12 @@ export interface ActFacts {
   holdLifted: boolean            // a hold lifted since the anchor run (row 179)
   owed: boolean                  // row 241's owed work: open step, plan reopen, evidence row, upstream work
   upstreamOwed: boolean          // the gate's own latest revise is upstream and its work is still owed there (P48)
+  checksMoved: boolean           // row 267: a check's input landed since the anchor run (a lint part's base result)
 }
 
 // Row 244 (design §4.2.2). Where a gate stands, for every reader alike.
-export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'handed-back-moved' | 'at-bound' | 'settled' | 'retracted' | 'parked'
+// Row 270: `booked` — the latest disposition is a booking, and the re-gate reads it.
+export type GateStateKind = 'none' | 'pending' | 'revised' | 'handed-back' | 'handed-back-moved' | 'at-bound' | 'settled' | 'retracted' | 'parked' | 'booked'
 
 // Row 244 (design §4.2.6, §4.2.7). The states where a plain revise — neither upstream nor a repair —
 // revises the gate again (revised, handed back, retracted) or retracts its settlement (settled): a
@@ -555,6 +602,9 @@ function settledBefore(entries: Entry[], gate: string, runAt: number, reviseAt: 
   return (entries[runAt] as unknown as GateRunEntry).outcome === 'passed'
 }
 
+// Row 270: the states a booking is offered in.
+const BOOKS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'parked'])
+
 // Design §4.2.2: the free re-run leads in these states, and never at the bound, settled or parked.
 const LEADS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 'revised', 'handed-back', 'handed-back-moved', 'retracted'])
 
@@ -562,6 +612,7 @@ const LEADS: ReadonlySet<GateStateKind> = new Set<GateStateKind>(['pending', 're
 // from one pure derivation, so a screen never offers an act `decide` refuses. The states, first
 // match wins:
 //   none        no run, or the effort abandoned;
+//   booked      the latest disposition is a booking (row 270): its one act is the re-gate;
 //   parked      the latest disposition since the last run that judged something is a stop;
 //   at-bound    the round budget is spent: the endgame set;
 //   settled     an approve, or a pass with no disposition since;
@@ -600,7 +651,7 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const disposition = lastDecision > judged ? (entries[lastDecision] as unknown as DecisionEntry) : undefined
   const decision = disposition?.decision
   const revised = decision === 'revise' || decision === 'revise-upstream'
-  const moved = facts.stale || facts.holdLifted
+  const moved = facts.stale || facts.holdLifted || facts.checksMoved
   const atBound = boundReached(entries, gate)
   // Where no parent resolves, the send-upstream a state offers carries `<effort>` for the human to
   // fill, and is held in `slots` below, never listed (design §4.2.9).
@@ -611,6 +662,10 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
 
   let state: GateStateKind
   let acts: Act[]
+  if (decision === 'book') {
+    // Row 270. The booking is read by the next lint run: nothing else is decided on this round.
+    return { state: 'booked', anchor, acts: [regate], malformedRerun: false }
+  }
   if (decision === 'stop') {
     state = 'parked'
     acts = parkedActs(gate, target, entries, upstream, facts.owed, moved)
@@ -657,6 +712,17 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   const malformedRerun = malformedLast && LEADS.has(state) &&
     (moved || revisedRun(entries, gate, anchor.reviewed_sha) === undefined)
   if (malformedRerun && (acts[0] === undefined || actKey(acts[0]) !== actKey(regate))) acts = [regate, ...acts]
+  // Row 264 (§3.2, row 172). A checks-only round is no verdict to stamp: a withholding check was red,
+  // so no lens ran. No approve is live on it, in any state — `decide` refuses one (`checks-only`), the
+  // block offers none, and the arbiter's menu bars it.
+  if (anchor.checks_only === true) acts = acts.filter((a) => !a.argv.includes('--approve'))
+  // Row 270 (§3.2's waiver, §3.3). A checks-only round whose withheld check carries a waiver and holds
+  // a part a booking takes offers the booking, on unmoved content below the bound — never once
+  // content or a check's input moved (the re-gate judges that first), never settled.
+  const withheld = anchor.checks_only === true ? anchor.checks.at(-1)?.name : undefined
+  if (withheld !== undefined && !moved && !atBound && BOOKS.has(state) && bookingsOf(anchor, withheld).length > 0) {
+    acts = [...acts, d('--book', withheld)]
+  }
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')
   const listed = acts.filter((a) => !unnamed(a))
@@ -691,11 +757,11 @@ function approveTwin(gate: string, target: string, acts: readonly Act[]): Act[] 
 // `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells. One set
 // for `decide`'s parser (`decideWords`) and for `actKey`, so the two never disagree on which word is a
 // value.
-export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via'])
+export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via', '--book'])
 // The flags that make an act another act (design §4.2.1). Notes, `--pin`, `--via`, `--trust-cmds`,
 // `--manual` and the upstream's value never do.
 const COUNTED_FLAGS: Record<string, readonly string[]> = {
-  decide: ['--approve', '--revise', '--stop', '--override', '--repair', '--upstream'],
+  decide: ['--approve', '--revise', '--stop', '--override', '--repair', '--upstream', '--book'],
   gate: ['--fresh', '--unchanged'],
 }
 // `decide` and `gate` read their gate and target and ignore any positional word after them
@@ -859,9 +925,9 @@ export function repairsOnRegate(entries: Entry[], gate: string): boolean {
 
 // Row 215 (D3). Does this journaled run answer `key` — the one evidence rule for the gate's
 // cache and for a review's replay? A malformed round judged nothing; a fallen-back one was asked
-// of another model; a run with no verdicts said nothing.
+// of another model; a run with no verdicts said nothing; a checks-only round asked no lens (row 264).
 export function answersKey(run: GateRunEntry, key: GateKey): boolean {
-  return run.outcome !== 'malformed' && !fellBack(run) && (run.verdicts?.length ?? 0) > 0 && sameKey(keyOf(run), key)
+  return lensesRan(run) && !fellBack(run) && (run.verdicts?.length ?? 0) > 0 && sameKey(keyOf(run), key)
 }
 
 export function appendKind(entries: Entry[], gate: string, key: GateKey): AppendKind {

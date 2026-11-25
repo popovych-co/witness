@@ -165,6 +165,47 @@ Each machine check registers beside GateSpec with three properties.
   matched. Pass 3 found fewhats' `&&` chain stopping at biome on a red base, so tsc never ran.
 - Only a human may book a base-red part (an LD item that closes when base goes green).
 
+**As built (T2c, rows 261–263).** `ship.lint` is one command (one part named `lint`) or `{name: command}` parts,
+schema 3; every part runs in file order whatever an earlier one did, with no turn, and the lane stays one `lint` check
+whose `parts` carry a verdict per part. "build" is a named part. A red part's base result is keyed
+`<part>@<base commit>.<h12>` (over the part's and its reader's commands) and measured on demand (correction C13): a
+gate that lacks it journals the key `pending` (red), and the `base-lint` job — the first production kind, in the
+scratch — owes exactly those keys and returns the base's diagnostics as hashed keys with counts, at most 2,000; more is
+"not judged". In chat mode the base reads "not measured", and its key is owed too, so a drive started later lints it; with scratch
+runs off, a missing base result reads "not measured", never pending. Diagnostics compare on every file the reader reports, minus
+witness's own paths (correction C12), not on PC files. A part passes when green, or red on the base too with nothing
+new; an opaque part red on the base, a report either side could not read, or a red part whose reader finds nothing on
+the plan's tree reads "not judged". A part's state joins the gate's resume signature, so the judged verdict is
+journaled once the base result lands. Drive reads the config at each job's start, and owes no key the config no longer
+gives.
+
+**As built (T2d, rows 264–267).** The registry is `CHECKS` (`src/checks.ts`), in run order: `markers`, `lint`
+(withholding); `implement-gate`, `diff`, `evidence`, `regression`, `tests`, `drift-lane` (judged). Each code gate hands
+`runChecks` its steps; they run tier first, then in the registry's order, never by measured cost (correction C14), each
+timed, cut after the first withholding red. Two tiers only (C15): `waiver` lands with `--book` (T2e), `precondition` and
+`advisory` with their first checks; today's refusals stay where they are and the doc gates register nothing. The
+checks-only round carries its checks up to the red one, `model` = `pin`, the full-review `prompts_sha`, the snapshot
+fields any round carries and nothing a battery writes; its round number is shared with the round after it. It resumes,
+or answers changed-nothing, only on the same key and the same `checksSignature` (a lint part's key joins it, so an edited
+part command never resumes); once green it runs fresh. At the round bound nothing is journaled. `lensesRan` is read by
+the budget, the discharge, the verdict cache (`answersKey`), the delta base, recurrence and demotions — not by drive's
+rounds cap (which counts the round), `lastJudgedRun` and its readers (the gate's state anchors on the round, so its
+decision is owed), the pairing, or the malformed-streak brake. No approve is live on it (`liveActs`); `decide` refuses
+one `checks-only`, `recommend`'s rule `checks-only` offers the bare revise (the policy takes it), and the arbiter's menu
+bars approve. Markers test `OPENS` on the lines the plan adds (C16). Implement runs the lint parts too, and `trustOwed`
+owes them. A round red only for base results a drive will lint — keys the job owes, on unmoved content — is left to drive
+(`Settled.waiting`); the landing makes the stop stale (`ActFacts.checksMoved`), so the policy routes the re-gate.
+
+**As built (T2e, row 270).** The waiver is `CHECKS.waiver` (`checkWaiver`): `lint` is the human's; no other check has
+one yet (T3 and T4a add the judge's). A checks-only round's withheld check with a waiver offers `--book <check>`, which
+books each part `red`, `new`, `not-measured` or `not-judged` — never `pending` or `untrusted` — per diagnostic where the
+lane gave it a `book`, whole otherwise, held at the part's base key until main moves (the map's C19). Base-red's
+readers widen (C20): a red part with a bound, trusted reader reads the plan's tree whatever its base, but `pending`, so a
+whole booking is left for parts witness cannot read (no reader, an unreadable report, past 500 distinct keys). A booking
+waives its own plan only (C17), at both gates; a booked part reads `booked`, passes, and moves `checksSignature`. Rule
+`book-owed` sends a round whose every non-passing part is `not-judged` to the human (C23); a part the author may own
+keeps `checks-only`, the revise first and the booking after it.
+
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
 - decide refuses `--approve` on it.
@@ -215,6 +256,21 @@ subject) and never move between streams.
 - Owed work drops when an item is declined.
 - A booked switch-off closes on the first merged tree without the line.
 
+**As built (T2e, rows 269–270).** The stream is `ledger` (`src/ledger.ts`): `ledger-open` (an act), `ledger-closed`
+(bookkeeping), `ledger-dismissed` (an act); ids `l-<8 hex>`, each open carrying `key` (16 hex over kind, check, plan,
+part and subject), so an item's identity names its plan (C17) and a booking reuses an open item by it — unless the
+round's part already applies that item. `born` and owed work wait for the first kind with a birth: a booked check is
+never owed work (C21). Closing is by observation at two acts that already write a transaction (C18): the merge stamp of
+plan M, from M's last ship round that ran lint with parts (the tree that merges, its `reviewed_tree` on the close), for
+M's open items and merged plans' — a part green there, or the lane's `cleared` (per-diagnostic items whose every key the
+tree lacks); and the abandon, for the abandoned plans' items. No base-lint job is owed for an item; an observation that
+did not happen closes nothing. Dismissal is `witness dismiss ledger --item <id|index> --cause
+<rule-retired|declined|judged-wrong> --note "<why>"` (C22), at a terminal, never under a session marker, after a y/N.
+`decide … --book <check>` writes its decision (`decision: 'book'`, `book: {check, items}`) and its new opens in one
+transaction under the repo lock, re-reading the ledger there; the gate's state is then `booked`, whose one act is the
+re-gate. `status` lists open items (`booked[n]{item,plan,part,holds,since}`) with the dismissal; `log` names each
+transition; `check` reports a `ledger` stream another history holds.
+
 ### 3.4 Counterfactual runs (CF) — T3
 
 **Where.** One persistent, provisioned scratch worktree per repo, at a short fixed path, under the scratch lock.
@@ -239,6 +295,22 @@ failure: re-prepare once, then fail the job. It is never a red, and never feeds 
 - A killed prepare re-runs next time.
 - A load error never becomes a red.
 
+**As built (T2b, row 258; it landed in T2, the map's correction C1).** The scratch (`src/scratch-checkout.ts`) is `.witness/scratch`, a detached
+worktree with a plan worktree's sparse patterns and its reflog off, set up on every open (a found one first loses
+whatever a run left in a canon folder), excluded from the root's `git status` and exempt from the state-path audit.
+Its lock (`withScratchLock`) is `.witness/live/scratch/lock.json`, leased once at the take, waited for while its holder lives, taken over
+once dead or lapsed, released by drive's sweep; what a process holds is kept in memory, never read back from the
+file's pid. Lock order is test turn → scratch → repo lock, and `takeTurn` throws inside the scratch. A commit runs as
+itself; a bare tree is wrapped deterministically (`commit-tree --no-gpg-sign`, a fixed identity and date) and pinned at
+`refs/witness/cf/<plan>/<tree>` — per (plan, tree), not per round — and the merge stamp drops the plan's refs. Reset
+removes a killed reset's `index.lock`/`HEAD.lock` first. The run is `inScratch(root, ctx, cfg, at, step)`: synchronous,
+headless, with a step rather than a command; it journals nothing and keeps no cache (each caller's journal is its
+cache, correction C10), and returns a record of every sha. `expect` and the "green on current" reuse land with T4a's
+guards. The junit rule is correction C8: `<error>`, or vitest's file-level case (a failed case named after its file
+in the suite named after that file; under `test.projects`, a name that ends its classname after a `/`); a run with
+load failures is reset, prepared again once and re-run, and a second is `load-failure`, never a red. A job kind may
+run in the scratch, whose lock its verb takes after the turn and before its box starts.
+
 ### 3.5 Drive jobs and the queued test turn (DJ) — T2
 
 **What a job is.** Base runs, mutation and explore are jobs that drive schedules, never work inside a session's gate
@@ -262,6 +334,22 @@ Jobs register in the UI run registry (roadmap 1a.5).
 **Acceptance.**
 - A stuck session beside a running job is set aside after one spawn.
 - A session waiting on a job's turn is not killed by its own deadline.
+
+**As built (T2a, rows 255–257).** Waiters hold leased tickets in `.witness/live/turn/` (60 s, renewed every 10 s, put
+back with their place), and only the head may take a free turn; an ungated job yields to plan work. The lock names a
+job holder's kind, and a ticket names the session it waits for, so drive sees a session waiting behind a job. Ship's
+lint lane takes no turn. A session waiting behind a job is held: its clock leaves that time out of
+`drive.sessionTimeoutMs` (sleep stays sleep), drive moves its deadline through `WITNESS_DRIVE_DEADLINE_FILE`
+(`.witness/live/deadline/<drive pid>-<spawn n>.json`; the busy bound and the reviewer's wait read the later of it and
+`WITNESS_DRIVE_DEADLINE`), and the target's wall-clock cap is charged `ms − heldMs`. A job kind declares `turn`,
+`gated`, its box, its owed units (`{kind, key, shards}`) and `run`; there is no setting. `witness job <kind> <key>
+<k>/<n>` runs one shard as drive's child and reports on stdout (`running`, then `result`, at most 48 KiB). Drive runs
+one shard at a time beside the lanes, in every drive; the box starts at `running`, on the awake clock; a timeout or a
+failure is a strike, two read not measured, and a stop journals nothing. A refused journal write turns jobs off for
+the run (a crash marker's excepted: no shard starts while one waits), drive journals nothing once a newer CLI has, the
+human pause is said while a job runs, and a job still queued for the turn is stopped when the run would end. Drive journals each shard on the reserved
+`jobs` stream (bookkeeping), and its report names machine time per kind. A missing result reads pending while a drive
+holds the repo, otherwise not measured. No production kind exists until T2c.
 
 ### 3.6 Machine births (MB) and realization-repair plans (RP) — MB in T4, RP in T8
 
@@ -299,6 +387,16 @@ terminal act (§3.9).
 **Normalized snippet.** The flagged source line with whitespace runs collapsed and the ends trimmed, paired with the
 rule id. Diagnostics compare as multisets.
 
+**As built (T2c, row 262).** Each reader is a setting, `readers.{biome,eslint,clippy,tsc}` (schema 3, `none` by
+default), bound to the `ship.lint` part of its tool's name; any other part is opaque. Biome's reader is SARIF (the JSON
+reporter stays out), ESLint's `-f json`, clippy's cargo's `--message-format=json` (built from its documentation, not
+probed), tsc's `--pretty false` lines. Error severity only. A reader prints every error, never stopping at the first
+failure: the base and the plan compare whole. A report that does not parse whole, or a red exit that reports no error,
+fails closed (`reader-unread`). Paths are placed in the run's tree (a `file://` URI, `\`, the folder's real path, a
+cargo span from its manifest's folder); a path witness cannot place is kept as printed. Keys are 16 hex over (tool,
+rule, file, snippet). `init` and `migrate` detect Biome and ESLint readers through the root lockfile's exec form; tsc
+and clippy are written by hand. No reader takes a path, so typed tokens still land with T4a (correction C10).
+
 **Check-definition paths.** A declared list per repo. By default: lint and format configs, `tsconfig*`,
 package.json scripts, Cargo `[lints]`, `.gitignore`, test-runner config, mutation config.
 
@@ -311,6 +409,18 @@ package.json scripts, Cargo `[lints]`, `.gitignore`, test-runner config, mutatio
   (from the last junit) and witness-owned report paths.
 - Tokens go as separate argv with no shell, or through a file witness writes. Agent text is never appended.
 - A job whose command is untrusted raises a trust needs-you item.
+
+**As built (T2b, rows 259–260).** `scratch.prepare` is declared once (schema 3) and granted once. Prepare pins nothing
+(correction C9): a pin earns its stop only where a command runs with access the agents lack — explore's login reads
+real secrets — while prepare runs as every session runs, and pinning manifests and lockfiles would ask again after 11
+of fewhats' 22 merges and 14 of wot's 16. Pins land in T8 with the explore host and login, with the acceptance "a
+changed blob-pinned file raises the trust item again". Typed tokens land with the first command that appends one (T2c's
+readers or T4a's guards, correction C10); nothing in T2b appends a token. A repo command — the runner, `ship.test`,
+`ship.lint`, `scratch.prepare` — is granted with no target, `witness trust --cmd '<exact>'`, journaled on witness's
+reserved `trust` stream, since a job or a scratch prepare serves no artifact; a doc's command still takes its target.
+`migrate` at a terminal asks once per command it proposes and grants each yes in the config's own commit. A job kind
+declares its commands; one whose commands (with `scratch.prepare` for a scratch kind) are untrusted is skipped, never
+struck, and drive sets aside one `jobs` trust wait naming the targetless grant.
 
 ### 3.8 Proof and record models (PM) — record in T1, proof in T6
 
@@ -353,6 +463,19 @@ idempotence key.
 
 **Arbiter input** gets only CLI-structured facts about checks (names, counts, rule ids), never tool output, diff
 text or finding prose written by the agent.
+
+**As built (T2e, rows 270–271).** A typed `--book` under committed autonomy — HEAD's config, which a working-copy edit
+cannot lift — needs `isTTY` and a y/N listing each part; it is refused for the policy and the arbiter, on a nod, and
+under any session marker witness set (`WITNESS_DRIVE`, `WITNESS_JOB`; a reviewer is refused every acting verb at
+dispatch). `witness dismiss ledger` is always a terminal act, autonomy or not. `gate --manual` refuses
+`manual-in-session` under any session marker, before anything is read or journaled. The two-stream acts built here —
+`--book`, the merge stamp's and the abandon's closes, the dismissal — each run in one transaction with the ledger read
+again under its lock.
+
+**As built (T2d, row 266).** `checkFacts` prints each check's name and verdict, each lint part's state with its counts
+and rule ids, how many commands trust kept from running, and the held criteria's ids — never a check's `detail`, a part's
+`why` or a command; foreign names are spelled out. Every gate's checks read so. A checks-only round says so on the stop's
+round line, as `model: no reviewer was asked`, and in the round history.
 
 ---
 
@@ -441,7 +564,10 @@ prints the record in full.
 **Builds:** CR (§3.2), DJ (§3.5), LD with booked-check items (§3.3), TR readers (§3.7).
 
 **Checks.**
-- Conflict openers on the PC files, using `clash.ts`'s `OPENS` rule; a plain `=======` never counts.
+- Conflict openers on the PC files, using `clash.ts`'s `OPENS` rule; a plain `=======` never counts. As built (C16,
+  row 265): on the lines the plan adds to text files in PC — a tracked file's added lines against the base, an
+  untracked file whole — so a marker the base already holds is not the plan's; binaries and symlinks are skipped, and
+  a diff that fails reads the file whole.
 - ship.lint by named parts; trustOwed includes ship.lint for gate implement.
 - The existing evidence, regression and criteria checks.
 
@@ -667,14 +793,18 @@ grant.
 Booked switch-offs and waived guards are decisions the AI judge may take, and they show in the PR's top block.
 Human-only waivers (lint bookings) arrive as decisions in needs-you.
 
+**As built (T2e, row 270).** The policy leaves a `book-owed` stop to the human (`autonomy: left for a human — only the
+human books lint — <parts> red on the base too`), with no model call; drive sets it aside as a decision, and needs-you's
+decision item names its act on a `book:` row (`witness decide <gate> <plan> --book lint`), read from the journal's facts.
+
 ---
 
 ## 6. Settings and migrate
 
 | Train | Settings |
 |---|---|
-| A (T0–T2) | ship.lint named parts |
-| B (T3–T6) | switch-off extra patterns; reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; scratch.prepare; check-definition paths |
+| A (T0–T2) | ship.lint named parts; readers.{biome,eslint,clippy,tsc}; scratch.prepare (as built, T2b–T2c: all schema 3; the map's C5) |
+| B (T3–T6) | switch-off extra patterns; reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
 **migrate** detects and proposes values:
@@ -691,7 +821,10 @@ trusted login command. `check` names each feature that is off for lack of a sett
 ## 7. Rollout, upgrade effects and machine time
 
 **Trains.**
-- A = T0–T2: one migrate for the named parts; one re-review.
+- A = T0–T2: one migrate for the named parts; one re-review. As built: migrate writes `scratch.prepare` and the
+  detected readers and grants them; it keeps a one-command `ship.lint` one part named `lint`, so a reader binds only
+  once the human names the part for its tool — migrate and init say so (`note: readers.<tool> is set, but no ship.lint
+  part is named <tool>`), as `check` does.
 - B = T3–T6: one migrate.
 - C = T7–T8: one migrate; map stops begin.
 
@@ -800,8 +933,91 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   later would move a finished effort's identity and reach a reviewer.
 - **Ship runs its suite once (T1, row 252).** Full-suite ship ran the suite twice, in the tests lane and again in the
   criteria lane; the criteria lane now reads the tests lane's run, so "ship's junit summary" names one run.
+- **Drive journals its jobs' shards (T2a, row 257).** §3.5 left who journals a shard open; row 145 says children
+  journal their own acts. A job child stopped at its box dies at once, even blocked in `execSync` (probe
+  `t2a-group-kill`), so it prints its result and drive journals it: row 145 is amended for jobs only.
+- **A failure is a strike (T2a, row 257).** §3.5 names timeouts only; a shard that fails counts too, so a crashing
+  job cannot loop drive.
+- **Boxes and shard counts belong to each kind (T2a, row 257).** §6's Train A list gains nothing from T2a.
+- **The box starts at `running` (T2a, row 257).** Time a shard spends queued for the turn is never boxed.
+- **Results live on the reserved `jobs` stream (T2a, row 257)**, one state commit per shard; `jobs` is a reserved id.
+- **`turn: false` passes the env unchanged (T2a, row 255).** A job's command inside its verb's turn keeps
+  `WITNESS_RUNNER_TURN`, so a witness it invokes re-enters rather than waiting on its own parent.
 - **Charging is conservative (T1, row 254).** An escape is charged only when the merge clock places every candidate
   plan, since one it cannot place may have shipped later; a fix whose writes name no spec in canon reads `no amended
   spec`. Transaction ops equal their commit subjects, so a merge stamp or birth that `recover` completes keeps its
   place.
-
+- **C8 (T2b, row 258).** §3.4 said a junit `<error>` is a load failure; vitest 4.1.10, both consumers' runner, never
+  writes one: a missing import, a syntax error, a module that throws at import and a throwing `beforeAll` each write
+  `<failure>` on a synthetic case named after its file (probe `t2b-junit-vitest-4.1.10.xml`). A load failure is a case
+  holding `<error>`, or that file-level case — in the suite named after its file, so jest-junit's
+  `'{classname} {title}'` names stay reds (slice 1 review), with a `/`-suffix name under `test.projects` (slice 2 review).
+- **C9 (T2b, row 259).** §3.7 had prepare, the explore host and login pin their files' blob shas; prepare pins nothing,
+  and pins land in T8 with the host and login (the user's call of 2026-11-23, "what is not a band aid").
+- **C10 (T2b, rows 258–259).** §3.4's `run(tree, overlay, command, expect)` was cached and reused the round's junit, and
+  §3.7 appended typed tokens; CF keeps no cache — each caller's journal is its cache, since a job child never journals
+  (row 257) — and takes a step, not a command; `expect`, the reuse and the tokens land with their first users (T4a's
+  guards, T2c's readers) — the user's call of 2026-11-23.
+- **C11 (T2b, row 259).** §3.4's prepare ran "when the lockfile or manifests differ"; its inputs are a built-in list of
+  lockfiles and package-manager configs at any depth, never a setting, with `package.json` left out (a dependency edit
+  moves the lockfile; a scripts-only edit needs no reinstall); an input the list misses is caught by the load rule.
+- **Refs per (plan, tree) (T2b, row 258).** §3.4's per-(plan, round) refs: nothing finds, keeps or drops one by its
+  round, so a ref names its plan and tree only.
+- **The detected pnpm prepare (T2b, row 259).** §6's `pnpm install --frozen-lockfile` gains
+  `--config.confirm-modules-purge=false`: run headless, pnpm aborts whenever the scratch's kept `node_modules` must be
+  purged (a pnpm upgrade, a hoisting setting that differs between trees), and prepare would fail for good (slice 2
+  review).
+- **C12 (T2c, row 263).** §3.2 compared diagnostics "on PC files"; they compare on every file the reader reports, minus
+  witness's own paths — a change can raise a diagnostic in a file it never touched (a type error in an importer, a rule
+  it switches on), and tsc prints cwd-relative paths, so a PC-only filter dropped a plan's new error and read green. A
+  path witness cannot place is kept as printed, never dropped (the user's call of 2026-11-23).
+- **C13 (T2c, row 263).** Base diagnostics came from a DJ job "cached per base tree"; the job runs on demand: a gate
+  that finds a part red journals the key it lacked (`pending`), and `base-lint` owes exactly those keys, keyed per
+  part, base commit and commands (the user's call of 2026-11-23).
+- **"build" is a named part (T2c, row 261).** §3.2's withholding "build" is a `ship.lint` part, with no check of its own.
+- **Readers bind by part name (T2c, row 262).** A reader is a setting per tool, reading the part of its tool's name.
+- **Error severity only (T2c, row 262).** A warn-level diagnostic is never a red, on either tree.
+- **The base's keys ride the shard's result (T2c, row 263)**, at most 2,000 distinct keys per result (one pipe write).
+- **Drive reads the config at each job's start (T2c, row 263).** Gates read the file fresh, so a part edited mid-run is
+  keyed and trusted as the gate that asked keyed it.
+- **C14 (T2d, row 264).** §3.2 ordered checks by a cold-start order, then the journaled median `duration_ms`; they run
+  by tier, then in the registry's order, never by cost: cost could only reorder within a tier, and across tiers ship's
+  criteria lane reads the tests lane's suite (row 252), so a measured order could run the suite twice. `duration_ms`
+  keeps no reader.
+- **C15 (T2d, row 264).** §3.2's four tiers and its waiver: T2d builds `withholding` and `judged`; `waiver` lands with
+  `--book` (T2e), its first reader; `precondition` with T5's `mutation-pending` and T7b's `map-unseen`, `advisory` with
+  T5's survivors. Today's refusals (steps-open, screens-matched-nothing, design-unseen) stay put.
+- **C16 (T2d, row 265).** §4 T2 scanned conflict openers "on the PC files"; it scans the lines the plan adds to text files
+  in PC, per base-red's per-diagnostic rule: a marker the base already holds is not the plan's.
+- **A checks-only round at the bound journals nothing (T2d, row 264).** The endgame decides at the bound (row 67), and a
+  moved tree already reads stale; a checks-only round never brings the bound nearer.
+- **A round red only for drive's base lint waits for drive (T2d, row 267).** The settle ran before the base lint existed,
+  so under autonomy such a round was revised; it is now `waiting` to the settle — drive's work in flight — and the
+  landed result makes the stop stale, so the policy routes the re-gate. With jobs off for the run, drive sets it aside
+  for the human.
+- **The scratch checkout's names (T2e, row 258).** Main's row 268 (#99) took `src/scratch.ts` and `withScratch` for its
+  temp-directory owner; T2b's unreleased checkout moved to `src/scratch-checkout.ts` and its lock holder to
+  `withScratchLock` before the merge, and the scratch run's temp index goes through main's `withScratch`.
+- **C17 (T2e, row 270).** §3.3 keys items (kind, check, subject); a booked check's subject names its plan, so a booking
+  waives its own plan's lint at both gates and reaches main only through its plan's merge. Ids are minted; the 16-hex
+  key is the idempotence key.
+- **C18 (T2e, row 269).** "Closes when they are gone", observed by the owning check on the merged tree, is the merge
+  stamp of the merging plan reading that plan's last ship lint (a green part, or the lane's `cleared` ids) for its own
+  items and merged plans'; an abandoned plan's items close in the abandon's transaction; no base-lint job is owed for
+  an item.
+- **C19 (T2e, row 270).** A base-red part's human-only booking, extent unsaid, holds whole at the part's base key (base
+  commit and commands): asked again once main moves (the user's call of 2026-11-24).
+- **C20 (T2e, row 270).** Readers diffed (tool, rule, file, snippet) only when the base was red; a reader-bound red part
+  reads the plan's own diagnostics whatever its base (green, not measured, unreadable), so bookings are exact wherever
+  witness can read the plan's tree, whole only for opaque or unreadable parts or past 500 distinct keys.
+- **C21 (T2e, row 269).** Owed work is "open and not born"; a booked check (and T3's booked switch-off) has no birth, so
+  it is never owed work: it closes by observation or dismissal, and nothing routes it.
+- **C22 (T2e, row 269).** `witness dismiss <item> --cause <cause>` is `witness dismiss ledger --item <id|index> --cause
+  <rule-retired|declined|judged-wrong> --note "<why>"`, row 122's verb shape with the reserved stream as its artifact,
+  always at a terminal (isTTY and a prompt), never in a session.
+- **C23 (T2e, row 270).** Human-only waivers arrive in needs-you as decisions where no author could clear the red: the
+  policy leaves a lint stop to the human (`book-owed`) only when every part that does not pass is `not-judged`; a part
+  the author may fix (`new`, `red`, `not-measured`) is revised first, the booking offered beside it — a machine cannot
+  tell whose such a red is.
+- **Any session marker (T2e, rows 270–271; security review).** §3.9 refused `gate --manual` inside a drive session; it
+  and `--book` refuse under any marker witness sets (a drive job's too), as `dismiss ledger` does.

@@ -19,6 +19,8 @@ import { jsonStyle, payloadLinted, payloadLintedDetail } from '../lint-config.js
 import { renderRefusal, v } from '../refusal.js'
 import { kv } from '../toon.js'
 import { defaultValues } from '../settings.js'
+import { detectPrepare } from '../prepare.js'
+import { detectReaders, readerUnused, unboundReaders } from '../lint-parts.js'
 
 const GITIGNORE_BLOCK = `# witness local (never committed)
 .witness/lock
@@ -103,7 +105,9 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   try {
     const files: string[] = []
     if (!scaffolded) {
-      writeFileSync(configPath(root), renderConfig(defaultValues({ harness: judge?.name })))
+      writeFileSync(configPath(root), renderConfig(defaultValues({
+        harness: judge?.name, detected: { 'scratch.prepare': detectPrepare(root), ...detectReaders(root) },
+      })))
       mkdirSync(join(root, 'plans'), { recursive: true })
       mkdirSync(join(root, '.witness', 'journal'), { recursive: true })
       writeFileSync(join(root, 'plans', '.gitkeep'), '')
@@ -205,6 +209,10 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
       ctx.out(kv('initialized', root))
       ctx.out(kv('canon', 'specs/principles.md (approved)'))
       if (judge !== undefined) ctx.out(kv('harness', `${judge.name} · ${judge.from}`))
+      // Whole-branch review I2: a detected reader beside the default one-part ship.lint binds nothing
+      // until a part is named for its tool.
+      const fresh = loadConfig(root)
+      if (fresh.ok) for (const tool of unboundReaders(fresh.value.readers, fresh.value.ship.lint)) ctx.out(`note: ${readerUnused(tool)}`)
     } else {
       // Row 193 §4.8. `init --agent` is the upgrade command, so an older file says here what
       // `witness migrate` would bring it.

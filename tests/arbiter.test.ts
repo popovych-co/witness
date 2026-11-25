@@ -1,11 +1,13 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { arbitrate, menuFor, type ArbiterRequest } from '../src/arbiter.js'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { arbitrate, checkFacts, decisionEvidence, menuFor, type ArbiterRequest, type ArbiterSection } from '../src/arbiter.js'
 import { loadConfig, type Config } from '../src/config.js'
 import type { Entry } from '../src/journal.js'
-import { recommend } from '../src/recommend.js'
-import { lastGateRun } from '../src/rounds.js'
+import { option, recommend, type Decision } from '../src/recommend.js'
+import { cliAct } from '../src/act.js'
+import { lastGateRun, type GateRunEntry } from '../src/rounds.js'
+import { loadCanon } from '../src/scan.js'
 import { callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo } from './helpers.js'
 
 const run = (round: number, sha: string, extra: Record<string, unknown> = {}, findings: unknown[] = []): Entry => ({
@@ -133,5 +135,92 @@ describe('the look is never the arbiter\'s to approve (F1)', () => {
     expect(at([d(1, 'a'), d(2, 'b'), d(3, 'c')]).filter((c) => c.includes('--approve'))).toEqual([])
     expect(at([d(1, 'a', { pin: 'pinned-model' })]).filter((c) => c.includes('--approve'))).toEqual([])
     expect(at([d(1, 'a'), d(2, 'b'), d(3, 'c')])).toContain('witness decide design p1 --stop')
+  })
+})
+
+// Row 264 (§3.2). A ship round that ran checks only.
+const only = (n: number) => run(n, 'a', { gate: 'ship', checks_only: true, verdicts: undefined, checks: [{ name: 'lint', ok: false }] })
+
+describe('the arbiter and the checks-only round (row 264)', () => {
+  it('the arbiter\'s menu holds no approve on a checks-only round (row 264)', () => {
+    const block: Decision = { key: 'decide', rule: 'bound', options: [
+      option(cliAct('decide', 'ship', 'p1', '--approve', '--override'), 'deferral'), option(cliAct('decide', 'ship', 'p1', '--stop'), 'terminal')] }
+    expect(menuFor(block, lastGateRun([only(1)], 'ship')!).map((o) => o.command)).toEqual(['witness decide ship p1 --stop'])
+  })
+  it('a handed-back revise of a checks-only round reaches the arbiter with no approve and no plain revise (Review Focus 4)', () => {
+    const entries = [only(1),
+      { v: 1, t: 'human-decision', gate: 'ship', artifact: 'p1', round: 1, decision: 'revise' },
+      { v: 1, t: 'revise-returned', gate: 'ship', artifact: 'p1', run_id: 'r-1', sha: 'a' }] as unknown as Entry[]
+    const block = recommend({ gate: 'ship', target: 'p1', entries, upstream: 'p1', stale: false })!
+    expect(block.rule).toBe('revise-returned')
+    const menu = menuFor(block, lastGateRun(entries, 'ship')!).map((o) => o.command)
+    expect(menu).toContain('witness decide ship p1 --stop')
+    expect(menu.some((c) => c.includes('--approve'))).toBe(false)
+    expect(menu.some((c) => c.includes('--revise') && !c.includes('--upstream'))).toBe(false)
+  })
+})
+
+describe('the arbiter never books lint (row 270)', () => {
+  it("no booking of a check whose waiver is the human's reaches the arbiter's menu (row 270)", () => {
+    const run = lastGateRun([{ ...(only(1) as object), checks: [{ name: 'lint', ok: false, parts: [{ part: 'ui', state: 'not-judged', key: `ui@${'a'.repeat(40)}.000000000000` }] }] } as unknown as Entry], 'ship')!
+    const block: Decision = { key: 'decide', rule: 'book-owed', options: [
+      option(cliAct('decide', 'ship', 'p1', '--book', 'lint'), 'deferral'), option(cliAct('decide', 'ship', 'p1', '--revise'), 'root'),
+      option(cliAct('decide', 'ship', 'p1', '--stop'), 'terminal')] }
+    const menu = menuFor(block, run).map((o) => o.act.argv)
+    expect(menu).not.toContainEqual(expect.arrayContaining(['--book']))
+    expect(menu).toHaveLength(2)
+  })
+})
+
+describe('the arbiter reads checks as facts (row 266)', () => {
+  let root = ''
+  beforeAll(async () => { root = (await seededRepo()).root }, 120_000)
+  const block: Decision = { key: 'decide', rule: 'checks-failed', options: [option(cliAct('decide', 'plan', 'p1', '--stop'), 'terminal')] }
+  const evidenceFor = (entries: Entry[]): ArbiterSection[] =>
+    decisionEvidence(root, loadCanon(root), { gate: 'plan', target: 'p1', entries, run: entries.at(-1) as unknown as GateRunEntry, block })
+  const section = (ev: ArbiterSection[], title: string) => ev.find((x) => x.title === title)!.body
+  const checks = (r: Entry) => section(evidenceFor([r]), 'Checks')
+
+  it('the arbiter reads each check\'s name, verdict, part states, counts and rule ids — never its detail or a part\'s why (§3.9)', () => {
+    const lint = { name: 'lint', ok: false, detail: 'TOOL OUTPUT', parts: [
+      { part: 'biome', state: 'new', key: 'k', new: 3, base: 12, rules: ['lint/a', 'lint/b'] },
+      { part: 'ui', state: 'not-measured', key: 'k2', why: 'REFUSAL GOT' }, { part: 'tsc', state: 'green' }] }
+    const body = checks(run(1, 'a', { checks: [lint, { name: 'tests', ok: false, detail: 'FAIL OUTPUT' }] }))
+    expect(body).toContain("lint: FAILED · biome 3 new beside the base's 12, rules lint/a, lint/b · ui red, the base not measured · tsc green")
+    expect(body).toContain('tests: FAILED')
+    for (const leaked of ['TOOL OUTPUT', 'FAIL OUTPUT', 'REFUSAL GOT']) expect(body).not.toContain(leaked)
+  })
+
+  it('untrusted commands read as a count and held criteria as their ids (§3.9)', () => {
+    const body = checks(run(1, 'a', { checks: [
+      { name: 'lint', ok: false, untrusted: ['pnpm secret-cmd'] },
+      { name: 'drift-lane', ok: false, held: [{ criterion: 'ac-1', need: 'n1' }] }] }))
+    expect(body).toContain('lint: FAILED · 1 command not trusted')
+    expect(body).not.toContain('secret-cmd')
+    expect(body).toContain('drift-lane: FAILED · held: ac-1')
+  })
+
+  it('every part state reads as its fact, and foreign names are spelled out (§3.9)', () => {
+    const part = (state: string, extra: Record<string, unknown> = {}) => ({ part: 'p', state, ...extra })
+    const facts = (p: Record<string, unknown>) => checkFacts({ name: 'lint', ok: false, parts: [p as never] })
+    expect(facts(part('base-only', { base: 4 }))).toBe('lint: FAILED · p red on the base too, nothing new (4 there)')
+    expect(facts(part('red'))).toBe('lint: FAILED · p red, the base green')
+    expect(facts(part('pending'))).toBe("lint: FAILED · p red, the base's result pending")
+    expect(facts(part('not-judged', { why: 'x' }))).toBe('lint: FAILED · p red on the base too, not judged')
+    expect(facts(part('untrusted'))).toBe('lint: FAILED · p not run, its command not trusted')
+    // Row 270: a booked part names the human and what the booking covers, never the item ids
+    expect(checkFacts({ name: 'lint', ok: true, parts: [{ part: 'ui', state: 'booked', booked: 3, items: ['l-1a2b3c4d'] }] }))
+      .toBe('lint: ok · ui booked by the human (3 diagnostics)')
+    expect(checkFacts({ name: 'lint', ok: true, parts: [{ part: 'ui', state: 'booked', items: ['l-1a2b3c4d'] }] }))
+      .toBe('lint: ok · ui booked whole by the human')
+    expect(checkFacts({ name: 'lint', ok: false, parts: [{ part: 'p', state: 'new', new: 1, base: 0, rules: ['r\u202e1'] }] }))
+      .not.toMatch(/\u202e/)
+    expect(checkFacts({ name: 'evidence', ok: true })).toBe('evidence: ok')
+  })
+
+  it('a checks-only round says so in the stop and in the round history (row 266)', () => {
+    const ev = evidenceFor([run(1, 'a', { checks_only: true, verdicts: undefined, checks: [{ name: 'lint', ok: false }] })])
+    expect(section(ev, 'The stop')).toContain('checks only — no lens ran')
+    expect(section(ev, 'Round history')).toContain('round 1 · @a · checks only — lint')
   })
 })

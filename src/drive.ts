@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { cliAct, type Act } from './act.js'
 import { EXIT, main, type Ctx } from './cli.js'
 import { canonPaths, loadConfig, loadLocalConfig, type Config } from './config.js'
@@ -9,14 +8,19 @@ import { sessionHash, withoutSession } from './context.js'
 import { detectionVariables, resolveJudge } from './harness.js'
 import { ok, refuse, renderRefusal, v, type Result } from './refusal.js'
 import { findById, loadCanon, type Canon } from './scan.js'
-import { NO_CONSOLE_ENV, resolveSpawn, spawn, treeStop, type ResolvedSpawn } from './spawn.js'
+import { NO_CONSOLE_ENV, resolveSpawn, spawn, type ResolvedSpawn } from './spawn.js'
+import { LIVE_GROUPS, TERM_GRACE_MS, localBin, selfArgv, signalSession } from './self.js'
 import { contained, containmentLine, JOB_HOST_ENV, jobHost } from './contain.js'
-import { releaseDeadTurn } from './runner-lock.js'
+import { behindJob, releaseDeadTurn, sweepTurnQueue, turnTickets } from './runner-lock.js'
+import { releaseDeadScratch } from './scratch-lock.js'
+import { startJob, type JobEnd, type RunningJob } from './drive-jobs.js'
+import { JOB_STREAM, jobKinds, jobsBlocked, jobTrustOwed, nextShard } from './jobs.js'
 import { computeNext, conversationStage, heldPlan, type NextAction } from './verbs/next.js'
 import { shownView, type DecisionAct } from './verbs/decide.js'
 import { decideViewLines } from './decide-view.js'
 import { renderDecision, type Decision, type Option } from './recommend.js'
 import { entryDetail } from './verbs/log.js'
+import { DRIVE_DEADLINE_FILE_ENV, deadlineFile, removeDeadline, sweepDeadlines, writeDeadline } from './deadline.js'
 import { DRIVE_DEADLINE_ENV, DRIVE_ENV, DRIVE_LOG, DRIVE_LOG_ENV, TARGETLESS, driveHolder } from './drive-presence.js'
 import { LOCK_WAIT_MS, isAlive, pause } from './lock.js'
 import { BUSY_DIR, busyHolder, sweepDeadBusy } from './busy.js'
@@ -30,7 +34,7 @@ import { unmetNeeds } from './needs.js'
 import { capHit, parkAtCap, type TargetUse } from './caps.js'
 import { effortStreams, journalActs, journalRel, readStream, type Entry } from './journal.js'
 import { movesFlow } from './progress.js'
-import { sourced, type RunCommand } from './allowlist.js'
+import { shownCmd, sourced, trustedNow, type RunCommand } from './allowlist.js'
 import { effortOf } from './reviewed.js'
 import { pendingTxn } from './txn.js'
 import { logSafe, shellWords } from './toon.js'
@@ -116,7 +120,17 @@ export type SpawnOutcome = 'exited' | 'timeout' | 'spawn-failed' | 'stopped'
 // `ending`: drive stopped it after its turn ended, or as a run that never started (row 245); it is
 // then `exited` with the code its harness gives that ending, never the stop's own status, and its
 // `failed` and `tail` are what they were when the stop was sent (S4-A).
-export interface SessionEnd { outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean; ending?: EndCause }
+// `ms` is the session's awake time; `heldMs` the part of it spent waiting behind a job for the test
+// turn (row 256), absent when none.
+export interface SessionEnd {
+  outcome: SpawnOutcome; code: number | null; tail: string[]; ms: number; failed: boolean; ending?: EndCause; heldMs?: number
+}
+
+// Row 256 (amends row 183). What a session costs its target's `drive.caps.wallClockMs`: its awake
+// time less the time it waited behind a job, which no session spent — as a host sleep is not.
+export function chargedMs(end: SessionEnd): number {
+  return Math.max(0, end.ms - (end.heldMs ?? 0))
+}
 const TAIL_LINES = 3
 
 // The prompt every spawned session gets. Not a plan, not a stage instruction: the same
@@ -127,13 +141,9 @@ const SESSION_PROMPT = '/witness'
 // A `--manual` run's sessions arm the engine the same way: every gate they run stops.
 const MANUAL_PROMPT = '/witness --manual'
 
-// How long a SIGTERMed session gets before SIGKILL, and how long a dead session's pipes
-// get to drain before drive stops waiting on the grandchildren that inherited them.
-const TERM_GRACE_MS = 5_000
-// The process groups of the sessions now running (F11): a second signal to drive kills them
-// before drive itself goes, so nothing a session started outlives the run.
-const LIVE_GROUPS = new Set<number>()
-const EXIT_GRACE_MS = 2_000
+// How long a dead session's pipes get to drain before drive stops waiting on the grandchildren
+// that inherited them. TERM_GRACE_MS and LIVE_GROUPS live in self.ts (row 257: jobs share them).
+export const EXIT_GRACE_MS = 2_000
 // Row 214. How long a session may print nothing before drive says it still runs, and what on —
 // then again after each further stretch as long. Awake time, on the session's own clock (row
 // 210). A constant, not a setting, on row 202's precedent: no `migrate` for an upgrade.
@@ -141,31 +151,8 @@ export const SESSION_QUIET_MS = 300_000
 // Local wall-clock time, `HH:MM:SS`: what a human at the terminal reads `started` and `ended` by.
 const clockTime = (): string => new Date().toTimeString().slice(0, 8)
 
-// This CLI, for the child. A spawned session shells out to `witness` through
-// ${WITNESS_BIN:-npx …} in every stage skill, and an unset value means the child resolves
-// the PUBLISHED version while its parent runs an unpublished one — which the state floor
-// then refuses (cli-behind-state). An explicitly set value wins: a session that already
-// knows its bin is stating a fact drive has no better answer for.
-function localBin(ctx: Ctx): string {
-  return ctx.env.WITNESS_BIN ?? `node ${join(dirname(fileURLToPath(import.meta.url)), 'bin.js')}`
-}
-
-// How drive stops a session it started: its process group (F11), or on Windows, which has no
-// groups to signal, its process tree (row 201).
-export function signalSession(
-  child: ReturnType<typeof spawn>, grouped: boolean, env: Record<string, string | undefined>, sig: NodeJS.Signals,
-): void {
-  try {
-    if (grouped && child.pid !== undefined) process.kill(-child.pid, sig)
-    else if (child.pid === undefined) child.kill(sig)
-    else if (child.exitCode === null && child.signalCode === null) {
-      // Only while it runs: Node closes the handle before it reports the exit, and from then on
-      // the pid may name another process, which a tree kill would take down with its own.
-      const stop = treeStop(child.pid, env)
-      spawn(stop.file, stop.args, { stdio: 'ignore' }).on('error', () => {})
-    }
-  } catch { /* already gone */ }
-}
+// Moved to self.ts with the job runner (row 257); re-exported for the console tests.
+export { signalSession }
 
 // One headless session, in the action's home, streamed to the driver's terminal.
 //
@@ -186,6 +173,7 @@ export async function spawnSession(
   opts: {
     manual?: boolean; signal?: AbortSignal; ticker?: Ticker; hear?: (line: string) => void; root?: string
     stream?: WorkerStream; next?: string; progress?: (session?: string) => string[]
+    deadline?: { root: string; token: string; behind: () => string | undefined }
   } = {},
 ): Promise<SessionEnd> {
   const t0 = Date.now()
@@ -219,6 +207,8 @@ export async function spawnSession(
     // The earliest wall-clock time drive may stop this session — a sleep moves drive's stop
     // later, never earlier (row 210).
     [DRIVE_DEADLINE_ENV]: String(t0 + cfg.drive.sessionTimeoutMs),
+    // Row 256: where drive moves that deadline while the session waits behind a job.
+    ...(opts.deadline !== undefined ? { [DRIVE_DEADLINE_FILE_ENV]: deadlineFile(opts.deadline.root, opts.deadline.token) } : {}),
   }
   // Row 218: on Windows the session starts inside a job (src/contain.ts), and tells everything
   // under it what drive found, so no run or reviewer the session starts probes again.
@@ -246,6 +236,30 @@ export async function spawnSession(
   // Awake time on the session's clock once the child runs: what the quiet line measures in (row
   // 210). `started` prints before the clock exists, at 0.
   let awakeNow = (): number => 0
+  // Row 256: the awake time held behind a job so far, on the same clock.
+  let heldNow = (): number => 0
+  // A held stretch: the job it waits behind, and the held time when it began. Its end — or the
+  // session's end inside one — says how long the session waited, and the deadline file follows
+  // the held time while it grows.
+  let heldJob: string | undefined
+  let stretch: { job: string; from: number } | undefined
+  let heldWritten = 0
+  const waitedLine = () => {
+    if (stretch === undefined) return
+    emit(`waited ${duration(heldNow() - stretch.from)} behind job ${stretch.job} — not counted against drive.sessionTimeoutMs`)
+    stretch = undefined
+  }
+  const followHeld = () => {
+    if (opts.deadline === undefined) return
+    const held = heldNow()
+    if (held > heldWritten) {
+      stretch ??= { job: heldJob ?? 'unknown', from: heldWritten }
+      heldWritten = held
+      writeDeadline(opts.deadline.root, opts.deadline.token, t0 + cfg.drive.sessionTimeoutMs + held)
+    } else {
+      waitedLine()
+    }
+  }
   // The id the session's stream named last: whose journal entries are its own.
   let session: string | undefined
   // When a line was last printed, in awake time, and how many quiet lines followed it.
@@ -314,7 +328,10 @@ export async function spawnSession(
       if (n <= quiet) return
       quiet = n
       const what = stream.inFlight()
-      emit(`still running · ${duration(awake)} of ${duration(cfg.drive.sessionTimeoutMs)} · quiet ${duration(n * SESSION_QUIET_MS)}${what !== undefined ? ` · in: ${what}` : ''}`, true)
+      // Row 256: the time counted against the limit, and what was not.
+      const held = heldNow()
+      const notCounted = held > 0 ? ` · not counted: ${duration(held)} behind a job` : ''
+      emit(`still running · ${duration(awake - held)} of ${duration(cfg.drive.sessionTimeoutMs)}${notCounted} · quiet ${duration(n * SESSION_QUIET_MS)}${what !== undefined ? ` · in: ${what}` : ''}`, true)
     } catch { /* the next check says it */ }
   }
   return await new Promise<SessionEnd>((resolve) => {
@@ -379,6 +396,11 @@ export async function spawnSession(
       child.stdout.destroy()
       child.stderr.destroy()
       const ms = Math.max(1, clock.awakeMs())
+      const heldMs = clock.heldMs()
+      // Row 256: a stretch the session ended inside says so, and the moved deadline goes with it.
+      if (heldMs > heldWritten) stretch ??= { job: heldJob ?? 'unknown', from: heldWritten }
+      if (o !== 'spawn-failed') waitedLine()
+      if (opts.deadline !== undefined) removeDeadline(opts.deadline.root, opts.deadline.token)
       // Row 245. Stopped by the end watch, it is classified with the status its harness gives that
       // ending, never the stop's own (P46), and its error flag is the one read at the stop (S4-A).
       const ended = o === 'exited' && ending !== undefined ? ending : undefined
@@ -397,7 +419,10 @@ export async function spawnSession(
           : code === null ? 'killed' : `exit ${code}${failed ? ' (error)' : ''}`
         emit(`ended ${clockTime()} · ${how} · ${duration(ms)}`)
       }
-      resolve({ outcome: o, code, tail: [...tail], ms, failed, ...(ended !== undefined ? { ending: ended.cause } : {}) })
+      resolve({
+        outcome: o, code, tail: [...tail], ms, failed, ...(ended !== undefined ? { ending: ended.cause } : {}),
+        ...(heldMs > 0 ? { heldMs } : {}),
+      })
     }
     // Row 245: the end signal never stops the timeout. A deadline that falls inside a grace ends the
     // session clean, as its turn's end; one after a stop drive already sent changes nothing, and
@@ -409,14 +434,22 @@ export async function spawnSession(
         else stop('timeout')
       },
       slept: (ms) => emit(`host slept ${duration(ms)} — not counted against drive.sessionTimeoutMs`),
+      // Row 256: held while the session waits behind a job for the test turn.
+      held: () => {
+        const job = opts.deadline?.behind()
+        if (job !== undefined) heldJob = job
+        return job !== undefined
+      },
       // The watch first: once the grace or the never-started window is due, the session is stopped.
       tick: (awake) => {
+        followHeld()
         const cause = watch.due(awake)
         if (cause !== undefined) endStop(cause, false)
         else tick(awake)
       },
     })
     awakeNow = () => clock.awakeMs()
+    heldNow = () => clock.heldMs()
     opts.signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -466,6 +499,10 @@ export const AUTONOMY_MAX_SPAWNS = 200
 // through the Clock seam, and a CLI-level test bounds the idle limit through an undocumented
 // seam on WITNESS_KEEP_AWAKE_BIN's precedent.
 export const PAUSE_POLL_MS = 5_000
+// Row 257: how often drive looks at a job child still starting (before its box or its ticket), and
+// how long a start may take before drive reads the child as waiting.
+const JOB_START_POLL_MS = 250
+const JOB_START_MS = 30_000
 const DETACH_LOCK_WAIT_MS = 10_000
 export const PAUSE_IDLE_MAX_MS = 43_200_000
 const idleMaxOf = (env: Record<string, string | undefined>): number => {
@@ -678,7 +715,10 @@ export function journalWatch(root: string, target: string): (session?: string) =
 }
 
 // `streamAt`: the target's stream length when the lane started — what it journaled is after it.
-interface Lane { action: NextAction; end: Promise<SessionEnd>; streamAt: number }
+// Row 257: the one job a drive runs, how to stop it alone, and how it ended once it has.
+interface DriveJob { run: RunningJob; stop: AbortController; over?: JobEnd }
+// `token`: the session's `<drive pid>-<spawn n>`, its deadline file's name (row 256).
+interface Lane { action: NextAction; end: Promise<SessionEnd>; streamAt: number; token: string }
 
 const lastRunGate = (entries: ReturnType<typeof readStream>): string | undefined => {
   const run = [...entries].reverse().find((e) => e.t === 'gate-run') as { gate?: unknown } | undefined
@@ -748,6 +788,10 @@ export async function driveLoop(
   // skipped by the settle pass, the fill, `waitingNeed`, `capped` and `unmoved` alike, so none
   // reads it as a cap or as no progress. While one waits and no lane runs, drive polls.
   const busySeen = new Set<string>()
+  // Row 267. This round's targets whose stop waits on drive's base lint: kept out of the fill and the
+  // notifications as a busy one is, but they hold the loop in its poll only while a base-lint shard can
+  // run (final review I1) — see `jobLive`.
+  const waitSeen = new Set<string>()
   const busyOther = (t: string): boolean => {
     if (busyHolder(root, 'settle', t) === undefined && busyHolder(root, 'ship', t) === undefined) return false
     busySeen.add(t)
@@ -755,7 +799,7 @@ export async function driveLoop(
   }
   const admits = (t: string | undefined): boolean => {
     const k = t ?? TARGETLESS
-    if (lanes.has(k) || aside.has(k) || busySeen.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
+    if (lanes.has(k) || aside.has(k) || busySeen.has(k) || waitSeen.has(k) || (flags.flow !== undefined && t !== flags.flow)) return false
     if (t === undefined) return true
     const mine = family(t)
     if ([...lanes.keys()].some((l) => mine.includes(l) || family(l).includes(t))) return false
@@ -764,7 +808,7 @@ export async function driveLoop(
     return !busyOther(t)
   }
   const settleAdmits = (t: string | undefined): boolean =>
-    !busySeen.has(t ?? TARGETLESS) && settleAdmitsFor(t, { lanes, aside, ...(flags.flow !== undefined ? { flow: flags.flow } : {}), busy: busyOther })
+    !busySeen.has(t ?? TARGETLESS) && !waitSeen.has(t ?? TARGETLESS) && settleAdmitsFor(t, { lanes, aside, ...(flags.flow !== undefined ? { flow: flags.flow } : {}), busy: busyOther })
   const setAside = (key: string, a: Omit<Aside, 'target'>) => { aside.set(key, { target: key, ...a }) }
   // Row 240. Drive's timers: the earliest due time, and each timer whose time came — only its aside
   // is deleted (row 207's release resets a target's use and must not be used), its kept act handed
@@ -837,7 +881,19 @@ export async function driveLoop(
         continue
       }
       const now = ownNext(key)
-      if (!ownAnswer(key, now) || keyOf(now) === a.key0) continue
+      if (!ownAnswer(key, now)) continue
+      if (keyOf(now) === a.key0) {
+        // Slice 3 review (row 259). A trust stop set aside with its commands is the human's only
+        // while one of them is untrusted: a grant that lands on no target's stream (the targetless
+        // one, or allow.json alone) moves no progress key — a gate's stop keeps its line — so the
+        // commands themselves are read.
+        if (a.kind === 'kept' && a.stop === 'trust-grant' && a.trust !== undefined && a.trust.length > 0
+          && a.trust.every((c) => trustedNow(root, ctx.env, c.cmd))) {
+          release(key)
+          ctx.out(`drive: taken back — ${key} · trusted`)
+        }
+        continue
+      }
       release(key)
       ctx.out(`drive: taken back — ${key === TARGETLESS ? 'untargeted work' : key} · ${now.line}`)
     }
@@ -917,16 +973,19 @@ export async function driveLoop(
 
   // `next` is the line the session takes (D13): the action's, or the re-run a settle routed.
   const launch = (step: SpawnStep, action: NextAction, n: number, next: string): Lane => {
+    const token = `${process.pid}-${n}`
     const lane: Lane = {
       action, end: Promise.resolve(undefined as unknown as SessionEnd),
-      streamAt: action.target !== undefined ? readStream(root, action.target).length : 0,
+      streamAt: action.target !== undefined ? readStream(root, action.target).length : 0, token,
     }
     // Row 242: a merge or fix left to the human is read from the record ship journals, so drive no
     // longer listens for ship's words (the merge sniff of rows 180 and 214 retired).
     // Row 214: what the session journals for its flow. Target-less work has no stream of its own
     // to watch (row 181 keys it on counts).
     const progress = action.target !== undefined ? journalWatch(root, action.target) : undefined
-    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, root, next, progress })
+    // Row 256: the session's deadline file, and whether it waits behind a job for the test turn.
+    const deadline = { root, token, behind: () => behindJob(root, token) }
+    lane.end = spawnSession(step, cfg, ctx, n, { manual: flags.manual, signal: abort.signal, root, next, progress, deadline })
     return lane
   }
 
@@ -978,7 +1037,7 @@ export async function driveLoop(
     // counted, never stuck. Read from the busy folder, never from the session's words.
     if (key !== TARGETLESS && busyOther(key)) { progress.delete(key); return }
     const u = use.get(key) ?? { spawns: 0, ms: 0 }
-    use.set(key, { spawns: u.spawns + 1, ms: u.ms + end.ms })
+    use.set(key, { spawns: u.spawns + 1, ms: u.ms + chargedMs(end) })
     if (end.outcome === 'timeout') {
       if (asHeld(key)) return
       ctx.out(`drive: spawn-timeout — ${lane.action.line}`)
@@ -1030,6 +1089,8 @@ export async function driveLoop(
   // whose retry fell due this round.
   const retries = new Map<string, number>()
   const dueKept = new Map<string, DecisionAct>()
+  // Row 267. The waiting line said per target, said again only when it changes.
+  const waitingSaid = new Map<string, string>()
   const settlePass = async () => {
     const { settleOwed, settledLine } = await import('./settle.js')
     const reports = await settleOwed(ctx, root, cfg, { scope: settleAdmits, kept: dueKept })
@@ -1039,6 +1100,27 @@ export async function driveLoop(
       const s = r.settled
       // Row 240: another process took the stop's settle lock after the scope was read.
       if (s.kind === 'busy') { busySeen.add(r.target); continue }
+      // Row 267. A stop red only for base results drive owes is drive's own work in flight (row 240's
+      // busy path: no aside, no notification, polled on the pause cadence): the base-lint job runs, and
+      // once its result lands the stop is stale and the policy routes the re-gate. With jobs off for
+      // this run no job will run, so the stop is set aside for the human, saying why.
+      if (s.kind === 'waiting') {
+        if (jobsOff === undefined) {
+          waitSeen.add(r.target)
+          const said = `drive: waiting — ${r.target} · ${s.why}`
+          if (waitingSaid.get(r.target) !== said) { ctx.out(said); waitingSaid.set(r.target, said) }
+        } else {
+          waitingSaid.delete(r.target)
+          const why = `${s.why}, but jobs are off for this run`
+          ctx.out(`drive: waits on you — ${r.target} · decision · ${why}`)
+          setAside(r.target, {
+            kind: 'decision', line: cliAct('decide', r.gate, r.target, '--show').line, why: `${why} — ${jobsOff}`,
+            gate: r.gate, key0: keyOf(ownNext(r.target)),
+          })
+        }
+        continue
+      }
+      waitingSaid.delete(r.target)
       if (s.kind === 'left' && s.code === EXIT.BLOCKED && s.limit === undefined) {
         const tries = (retries.get(r.target) ?? 0) + 1
         retries.set(r.target, tries)
@@ -1193,22 +1275,29 @@ export async function driveLoop(
       pausePrinted = token
     }
     notifyNew(items)
-    releaseAwake()
+    // Row 257 (final review F1): a job keeps running through the pause — drive's own work, like its
+    // timers — so the machine stays awake for it, the idle limit waits, and its end wakes the pause
+    // so the next shard starts.
+    if (job === undefined) releaseAwake()
     publish()
     pauseSince ??= clock.now()
     const signature = roundSignature
     for (;;) {
       if (watchSignature(root) !== signature) return true
+      if (job?.over !== undefined) return true
       // Row 240: drive's own timers wake it at their due times (the repo lock is outside the signature).
       const due = nextDue()
       if (due !== undefined && clock.now() >= due) return true
       // Row 242: drive's own timers are its own work — the idle limit does not run while one waits.
-      if (due === undefined && clock.now() - pauseSince >= idleMax) {
+      if (due === undefined && job === undefined && clock.now() - pauseSince >= idleMax) {
         ctx.out(`drive: idle limit — waited ${duration(idleMax)} on you · the run ends`)
         stop = 'idle-limit'
         return false
       }
-      await Promise.race([clock.sleep(due !== undefined ? Math.max(0, Math.min(PAUSE_POLL_MS, due - clock.now())) : PAUSE_POLL_MS), aborted])
+      await Promise.race([
+        clock.sleep(due !== undefined ? Math.max(0, Math.min(PAUSE_POLL_MS, due - clock.now())) : PAUSE_POLL_MS), aborted,
+        ...(job !== undefined ? [job.run.end] : []),
+      ])
       if (signalled !== undefined) return false
     }
   }
@@ -1228,14 +1317,102 @@ export async function driveLoop(
   process.on('SIGTERM', onSignal)
   publish()
   // Row 218. A runner turn whose holder died — a session drive stopped mid-run — is released
-  // now and after every session, before Windows hands its pid to another process. Row 240: so are
-  // the busy locks of dead holders, and this drive's own leftovers.
-  releaseDeadTurn(root)
-  sweepDeadBusy(root, { pid: process.pid })
+  // now and after every session, before Windows hands its pid to another process; row 258: so is a
+  // dead or lapsed scratch lock. Row 240: so are the busy locks of dead holders, and this drive's
+  // own leftovers. Row 257: and after every job, with the turn's stale tickets and the deadline
+  // files no running lane holds.
+  const sweep = () => {
+    releaseDeadTurn(root)
+    releaseDeadScratch(root)
+    sweepTurnQueue(root)
+    sweepDeadBusy(root, { pid: process.pid })
+    sweepDeadlines(root, new Set([...lanes.values()].map((l) => l.token)))
+  }
+  sweep()
+  // Row 257. One job runs at a time, beside the lanes, in every drive: started after each round's
+  // fill while the run is not stopping, and awaited with the lanes. Drive journals each shard's
+  // outcome itself (drive-jobs.ts): a child stopped at its box dies at once and must never die
+  // mid-write, the one exception to row 145's "children journal their own acts".
+  //
+  // Slice 3 review. A journal write refused or thrown turns jobs off for the rest of the run, said
+  // once and on the report: the shard would read missing and run again at once, forever. A `jobs`
+  // stream another history holds is found before any box is spent. With no lane running, drive never
+  // waits on a job alone: a boxed job is awaited on the pause cadence, so take-back, the settle pass
+  // and the fill still run, and a job still queued for the test turn — behind a holder that is not
+  // drive's — is stopped when the run would end, journaling nothing; the next drive runs it.
+  let job: DriveJob | undefined
+  let jobsOff: string | undefined
+  const jobsOffNow = (why: string) => {
+    if (jobsOff !== undefined) return
+    jobsOff = logSafe(why)                                  // every source spelled out once more: it is printed twice
+    ctx.out(`drive: jobs off for this run — ${jobsOff}`)
+  }
+  // Row 260. A job kind whose commands this machine does not trust yet is skipped, never struck, and
+  // drive sets aside one `jobs` trust wait — published, listed and notified like a target's — naming
+  // the targetless grant (witness's reserved stream id is its target: no doc can take it, and it has
+  // no key0, so take-back never touches it). Said once per set of commands; gone once they are trusted.
+  let jobsWaitSaid = ''
+  const jobsWait = (cmds: readonly RunCommand[]) => {
+    const said = cmds.map(shownCmd).join(' · ')
+    if (cmds.length === 0) aside.delete(JOB_STREAM)
+    else {
+      aside.set(JOB_STREAM, {
+        target: JOB_STREAM, kind: 'kept', stop: 'trust-grant', line: cliAct('trust').line,
+        why: KEPT_STOP_NAMES['trust-grant'], trust: [...cmds],
+      })
+      if (said !== jobsWaitSaid) ctx.out(`drive: jobs wait for a trust grant — ${said}`)
+    }
+    jobsWaitSaid = said
+  }
+  const beginJob = () => {
+    if (job !== undefined || stop || signalled || jobsOff !== undefined) return
+    const kinds = jobKinds(ctx.env)
+    // Row 263 (settled point 11). Gates read the config file fresh, so a job reads it as it stands
+    // now: a part edited mid-run is keyed and trusted as the gate that asked keyed it. The run's
+    // config stays for everything else.
+    // Slice 3 review: a file that does not load (mid-edit) starts no job — the child loads the
+    // file itself and would refuse, a strike — and the next loop tries again.
+    const now = loadConfig(root)
+    if (!now.ok) return
+    const jobCfg = now.value
+    // Only a kind that owes a shard can wait on the human (slice 3 review): one whose work is all
+    // done needs no grant, and drive must not pause on it.
+    const owed = jobTrustOwed(root, ctx.env, jobCfg, kinds.filter((k) => nextShard(root, jobCfg, canonNow, [k]) !== undefined))
+    jobsWait(owed.commands)
+    // Nothing owed is nothing to say: a repo with no kind never hears that jobs are off (F4).
+    if (nextShard(root, jobCfg, canonNow, kinds, owed.blocked) === undefined) return
+    const blocked = jobsBlocked(root)
+    if (blocked !== undefined) { jobsOffNow(blocked); return }
+    // A crashed transaction refuses every write until recovery: no shard starts meanwhile, and none
+    // is spent on a refusal (F3).
+    if (pendingTxn(root) !== undefined) return
+    const ctl = new AbortController()
+    const relay = () => ctl.abort()
+    abort.signal.addEventListener('abort', relay, { once: true })
+    const run = startJob(root, jobCfg, ctx, canonNow, { signal: ctl.signal, skip: owed.blocked })
+    if (run === undefined) { abort.signal.removeEventListener('abort', relay); return }
+    const j: DriveJob = { run, stop: ctl }
+    void run.end.then((e) => { j.over = e; abort.signal.removeEventListener('abort', relay) })
+    job = j
+  }
+  // A job whose end has come is cleared, its refusal read, and the leftovers swept.
+  const reapJob = (): boolean => {
+    if (job?.over === undefined) return false
+    // A refusal turns jobs off for the run, except a crash marker's: recovery clears it, and no shard
+    // starts until it has (F3).
+    if (job.over.refused !== undefined && job.over.rule !== 'pending-txn') jobsOffNow(job.over.refused)
+    job = undefined
+    sweep()
+    return true
+  }
+  // Queued for the test turn, or never got as far as saying where it is.
+  const jobWaiting = (j: DriveJob): boolean =>
+    !j.run.running() && (turnTickets(root).some((t) => t.job === j.run.kind) || Date.now() - j.run.startedAt >= JOB_START_MS)
   try {
     for (;;) {
       if (autonomous) roundSignature = watchSignature(root)
       busySeen.clear()
+      waitSeen.clear()
       stillAutonomous()
       // Row 240. Once a newer CLI has journaled, the state floor refuses this one at dispatch — and
       // this drive's sessions run its own bin. It ends rather than work beside its successor.
@@ -1243,6 +1420,7 @@ export async function driveLoop(
       if (stop === undefined && floor !== undefined && (compareTriple(floor.pin, version()) ?? 0) > 0) {
         ctx.out('drive: superseded — a newer witness CLI took over')
         stop = 'superseded'
+        job?.stop.abort()                                   // its shard journals nothing past the newer CLI (F2)
       }
       canonNow = loadCanon(root)
       // A run that is stopping fills nothing more, so a target released now would be set aside
@@ -1310,39 +1488,68 @@ export async function driveLoop(
         pauseSince = undefined
         lanes.set(key, launch(step, action, spawns, next))
       }
+      reapJob()
+      beginJob()
       if (autonomous) {
         publish()
-        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target)))
+        notifyNew(owed().filter((i) => i.kind !== 'pending-txn' && !busy(i.target) && !busySeen.has(i.target) && !waitSeen.has(i.target)))
       }
       if (lanes.size === 0) {
+        // Every wait here also wakes when a job ends (slice 3 review).
+        const jobEnd = job !== undefined ? [job.run.end] : []
         if (!stop && !signalled && pausedUntil > clock.now()) {
-          await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted])
+          await Promise.race([clock.sleep(pausedUntil - clock.now()), aborted, ...jobEnd])
           continue
         }
         // Row 240. A target another process holds is work in flight, not the human's: drive polls on
         // its pause cadence — no pause, no notification — until a take or a release frees it.
-        if (!stop && !signalled && busySeen.size > 0) {
-          await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted])
+        // Row 267 (final review I1): a stop waiting on drive's base lint is drive's work in flight only while
+        // a shard can run — none waits on a trust grant (the jobs trust aside), none is queued behind a turn
+        // holder that is not drive's, and jobs are on. Otherwise the wait falls through to the human's
+        // pause, with its idle limit and the host released; the stop stays undecided meanwhile.
+        const jobLive = jobsOff === undefined && !aside.has(JOB_STREAM) && !(job !== undefined && jobWaiting(job))
+        // Jobs turned off after this round's settle read a stop as waiting: one more pass sets it aside for
+        // the human, with the reason, before the run pauses or ends (Review Focus 2).
+        if (!stop && !signalled && waitSeen.size > 0 && jobsOff !== undefined) continue
+        if (!stop && !signalled && (busySeen.size > 0 || (waitSeen.size > 0 && jobLive))) {
+          await Promise.race([clock.sleep(PAUSE_POLL_MS), aborted, ...jobEnd])
           continue
         }
         // Row 202. Not --manual: there the human is at drive's prompt, and the run ends as before.
         const forHuman = humanAsides().some((a) => !notice(a))
         if (autonomous && !stop && !signalled && forHuman && await pauseForHuman()) continue
+        // Row 257. A job in its box, or still starting, is drive's own work: awaited on the pause cadence
+        // (a start on a short one), so the round still runs meanwhile. One queued for the turn is not.
+        if (job !== undefined && job.over === undefined && !signalled && !jobWaiting(job)) {
+          await Promise.race([job.run.end, clock.sleep(job.run.running() ? PAUSE_POLL_MS : JOB_START_POLL_MS), aborted])
+          continue
+        }
         // Row 240. Only drive's own timers wait: it sleeps until the earliest is due.
         const due = nextDue()
         if (autonomous && !stop && !signalled && !forHuman && due !== undefined) {
-          await Promise.race([clock.sleep(Math.max(0, due - clock.now())), aborted])
+          await Promise.race([clock.sleep(Math.max(0, due - clock.now())), aborted, ...jobEnd])
           continue
         }
         break
       }
-      const { key, end } = await Promise.race([...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))))
+      const ended = await Promise.race([
+        ...[...lanes].map(([k, l]) => l.end.then((e) => ({ key: k, end: e }))),
+        ...(job !== undefined ? [job.run.end.then(() => undefined)] : []),
+      ])
+      if (ended === undefined) continue                     // the job's shard ended: reaped at the top
+      const { key, end } = ended
       settle(key, lanes.get(key)!, end)                     // a usage limit pauses every lane here
       lanes.delete(key)
-      releaseDeadTurn(root)
-      sweepDeadBusy(root, { pid: process.pid })
+      sweep()
     }
 
+    // The run ends: a job still queued for the turn (or one a signal already stopped) is stopped
+    // and its child awaited; it journals nothing.
+    if (job !== undefined && job.over === undefined) {
+      job.stop.abort()
+      await job.run.end
+    }
+    reapJob()
     if (signalled !== undefined) ctx.out(`drive: stopped — signal ${signalled}`)
     else if (idle !== undefined) ctx.out(`drive: idle — ${idle}`)
     // Row 184. One report when nothing else can move, and for an autonomous run one
@@ -1350,7 +1557,9 @@ export async function driveLoop(
     // The idle limit is no failure: the run waited on the human as long as it could.
     const stopped = signalled !== undefined ? `signal ${signalled}` : stop === 'idle-limit' ? undefined : stop
     refreshAside()
-    const report = driveReport(root, ctx, cfg, start, humanAsides(), { autonomous, ...(stopped ? { stopped } : {}) })
+    const report = driveReport(root, ctx, cfg, start, humanAsides(), {
+      autonomous, ...(stopped ? { stopped } : {}), ...(jobsOff !== undefined ? { jobsOff } : {}),
+    })
     report.lines.forEach((l) => ctx.out(l))
     if (autonomous) {
       const local = loadLocalConfig(root)
@@ -1379,17 +1588,7 @@ export function detachArgv(
   bin: string | undefined, args: readonly string[], env: Record<string, string | undefined>,
   platform: NodeJS.Platform = process.platform,
 ): Result<ResolvedSpawn> {
-  if (bin === undefined) {
-    return ok({ file: process.execPath, args: [join(dirname(fileURLToPath(import.meta.url)), 'bin.js'), 'drive', ...args], env, windowsVerbatimArguments: false })
-  }
-  if (platform !== 'win32') {
-    return ok({ file: '/bin/sh', args: ['-c', `exec ${bin} "$@"`, 'witness', 'drive', ...args], env, windowsVerbatimArguments: false })
-  }
-  const [first, ...rest] = splitArgv(bin)
-  if (first === undefined) {
-    return refuse([v('WITNESS_BIN', 'bin-empty', JSON.stringify(bin), 'the command that runs witness, e.g. node C:\\path\\to\\bin.js — or unset it')])
-  }
-  return resolveSpawn(first, [...rest, 'drive', ...args], env, 'win32')
+  return selfArgv(bin, ['drive', ...args], env, platform)
 }
 
 // Row 180. `--detach`: this CLI again, as `witness drive <args>`, in the background at the
@@ -1507,28 +1706,6 @@ function selectOption(answer: string, options: Selectable[]): Pick {
     return { refuse: `${answer} matches options ${matches.map((o) => o.n).join(', ')} — name the number` }
   }
   return { refuse: `not an option: ${answer} — answer with a number, an option verb, or the command itself` }
-}
-
-// Split a WITNESS_BIN command line into argv, honoring double quotes: on Windows `detachArgv`
-// starts the bin it names with no shell, and a first word quoted for its spaces (an install
-// under Program Files) is one word. Row 239: its one use. A printed decision is never read back
-// through it, and a typed answer at `decide>` reads by `shellWords`.
-export function splitArgv(command: string): string[] {
-  const argv: string[] = []
-  let cur = ''
-  let quoted = false
-  let started = false
-  for (const ch of command) {
-    if (ch === '"') { quoted = !quoted; started = true; continue }
-    if (ch === ' ' && !quoted) {
-      if (started) { argv.push(cur); cur = ''; started = false }
-      continue
-    }
-    cur += ch
-    started = true
-  }
-  if (started) argv.push(cur)
-  return argv
 }
 
 // How many times drive re-asks before leaving the stop standing. A human who cannot name

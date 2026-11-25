@@ -31,7 +31,7 @@ function expectConsumer(cfg: Config, pin: string, lint: string) {
   }
   expect(cfg.arbiter.model).toBe(pin)
   expect(cfg.gates.reviewerTimeoutMs).toBe(600_000)
-  expect(cfg.ship).toEqual({ test: 'pnpm test', lint, branch: 'main', merge: 'merge', ciSettleMs: 60_000 })
+  expect(cfg.ship).toEqual({ test: 'pnpm test', lint: [{ name: 'lint', cmd: lint, source: 'ship.lint' }], branch: 'main', merge: 'merge', ciSettleMs: 60_000 })
   expect(cfg.criteria).toEqual({ runner: 'full-suite', report: 'junit:reports/junit.xml', exclude: ['docs/superpowers/**'] })
   expect(cfg.paths).toEqual({ specs: 'docs/specs', plans: 'docs/plans', designs: 'docs/designs' })
   expect(cfg.docs.design).toEqual(['docs/ui/design-language.md', 'docs/ui/primitives.md'])
@@ -128,7 +128,7 @@ describe('typed config from the list (row 193, schema 1 read in memory)', () => 
     for (const g of GATE_NAMES) expect(cfg.gates[g].model, g).toBe('claude-fable-5')
     expect(cfg.arbiter.model).toBe('claude-fable-5')
     expect(cfg.criteria.runner).toBe('npm test -- -t "@spec:{id}"')
-    expect(cfg.ship).toMatchObject({ test: 'npm test', lint: 'npm run lint', branch: 'main' })
+    expect(cfg.ship).toMatchObject({ test: 'npm test', lint: [{ name: 'lint', cmd: 'npm run lint', source: 'ship.lint' }], branch: 'main' })
     expect(cfg.harness).toBeUndefined()
   })
 })

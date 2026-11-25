@@ -1,5 +1,5 @@
 # witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.
-schema: 2                      # format version · witness migrate raises it; never edit by hand
+schema: 3                      # format version · witness migrate raises it; never edit by hand
 
 # ── Setup: what this repo is ─────────────────────────────────────────────────
 harness: pi                    # the judge: the agent CLI that runs this repo's gate reviewers and arbiter · claude-code | pi
@@ -30,10 +30,17 @@ criteria:
 # example prose: lint runs the typecheck sweep too.
 ship:
   test: pnpm test              # the suite command ship runs · full-suite criteria run it too
-  lint: pnpm lint && pnpm typecheck  # the lint command ship runs
+  lint: pnpm lint && pnpm typecheck  # the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic
   branch: main                 # the branch witness ships into
   merge: merge                 # how ship merges its own PR under autonomy · merge | squash | rebase
   ciSettleMs: 60000            # ms green CI must hold still before an autonomous merge · 0–1800000
+readers:
+  biome: none                  # reads the ship.lint part named biome per diagnostic · a command printing biome's SARIF report (--reporter=sarif) with every error, or none
+  eslint: none                 # reads the ship.lint part named eslint per diagnostic · a command printing ESLint's JSON report (-f json) with every error, or none
+  clippy: none                 # reads the ship.lint part named clippy per diagnostic · a command printing cargo's JSON messages (--message-format=json) with every error, or none
+  tsc: none                    # reads the ship.lint part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false) with every error, or none
+scratch:
+  prepare: none                # what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none
 
 # ── Behavior: how witness works here ─────────────────────────────────────────
 autonomy: off                  # on = the CLI settles its own stops and merges green PRs · on | off · counts once committed

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, hermeticEnv, putVerdict,
+  approve, fakeScenario, fixtureEnv, fixturePath, gateEnv, hermeticEnv, patchConfig, putVerdict,
   seededRepo, singleConfig, spawnAsync, TOKEN_BROKEN, TOKEN_FIXED, witnessDesign, writeDesign, writePlan, writeSpec,
 } from '../helpers.js'
 import { splitDoc } from '../../src/fm.js'
@@ -62,7 +62,9 @@ function treeClean(worktree: string) {
 describe('the design lens, end to end', () => {
   it('approved design → capture → design-reviewer blocks → revise → green, and converges through a crash', async () => {
     const repo = await seededRepo()
+    // ship.lint green (row 265: the implement gate runs it, and the fixture has no lint script)
     repo.write('witness.config.yaml', singleConfig('filtered'))
+    patchConfig(repo, { ship: { lint: 'true' } })
     repo.git('add', 'witness.config.yaml')
     repo.git('commit', '-m', 'runner config')
     await writeSpec(repo, 'auth-refresh', { ui: true })

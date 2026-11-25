@@ -111,3 +111,10 @@ describe('a cap park lands only on what it read (row 240)', () => {
     expect(decisions(repo.root)).toEqual(['stop · policy'])
   })
 })
+
+describe('drive caps and the checks-only round (row 264)', () => {
+  it('drive\'s rounds cap counts checks-only rounds (§3.2)', () => {
+    const entries = [1, 2, 3, 4].map((n) => run('implement', n, { checks_only: true, checks: [{ name: 'lint', ok: false }] }))
+    expect(capHit(entries as unknown as Entry[], { spawns: 0, ms: 0 }, CAPS)?.cap).toBe('rounds')
+  })
+})

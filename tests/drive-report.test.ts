@@ -1,10 +1,13 @@
 import { basename } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadConfig } from '../src/config.js'
+import { loadConfig, type Config } from '../src/config.js'
 import { driveReport, runStart } from '../src/drive-report.js'
+import { journalShard } from '../src/jobs.js'
 import { appendEntry } from '../src/journal.js'
 import { notifyArgv } from '../src/notify.js'
-import { approve, autonomyOn, fakeCtx, seededRepo, writePlan, writeSpec } from './helpers.js'
+import { approve, autonomyOn, fakeCtx, seededRepo, writePlan, writeSpec, type TestRepo } from './helpers.js'
+
+const cfgOf = (repo: TestRepo): Config => { const r = loadConfig(repo.root); if (!r.ok) throw new Error('config'); return r.value }
 
 describe('the run report (B6)', () => {
   it('names what merged · what waits with its command · what was parked · obligations · decisions', async () => {
@@ -89,5 +92,17 @@ describe('notify (B6)', () => {
     // row 203: Windows has a default now (tests/notify.test.ts)
     expect(notifyArgv('win32', undefined, 'witness drive', 'm')?.argv[0]).toMatch(/\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/)
     expect(notifyArgv('win32', '/bin/ping-me', 'witness drive', 'm')).toEqual({ argv: ['/bin/ping-me', 'm'] })
+  })
+})
+
+describe('jobs in the report (row 257)', () => {
+  it('names machine time per job kind since the run began (row 257)', async () => {
+    const repo = await seededRepo()
+    const start = runStart(repo.root)
+    journalShard(repo.root, { kind: 'fixture', key: 'k1', shard: 1, of: 3, outcome: 'done', ms: 1_000 })
+    journalShard(repo.root, { kind: 'fixture', key: 'k1', shard: 2, of: 3, outcome: 'timeout', ms: 2_000, why: 'box 2s passed' })
+    journalShard(repo.root, { kind: 'fixture', key: 'k1', shard: 3, of: 3, outcome: 'failed', ms: 0, why: 'exit 9 without a result' })
+    const r = driveReport(repo.root, fakeCtx(repo.root), cfgOf(repo), start, [], { autonomous: false })
+    expect(r.lines).toContain('jobs: fixture 3s — 3 shard(s) · 1 timed out · 1 failed')
   })
 })

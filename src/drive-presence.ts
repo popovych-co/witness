@@ -11,6 +11,7 @@ export const DRIVE_ENV = 'WITNESS_DRIVE'
 export const TARGETLESS = '-'     // the marker's value for work with no target
 // Final review F14: when drive will kill this session (epoch ms). A reviewer inside it never
 // waits past that — a wait drive kills mid-way leaves an orphaned gate and a stuck target.
+// Row 256: the moving deadline is the file's (`WITNESS_DRIVE_DEADLINE_FILE`, src/deadline.ts).
 export const DRIVE_DEADLINE_ENV = 'WITNESS_DRIVE_DEADLINE'
 
 // unset → undefined · '-' → { target: undefined } · else → { target: <value> }
@@ -28,9 +29,12 @@ export function isReviewer(env: Record<string, string | undefined>): boolean {
 
 // Rows 173 and 207. A session acts for the human only through the chat it answers to: one
 // drive spawned, or a reviewer, never grants trust or un-sticks a target. Names the marker.
-export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | undefined {
+// Row 260 (slice 3 review): neither does a command a drive job runs — `WITNESS_JOB`, the mark
+// drive puts on its job child (`JOB_ENV`, spelled here: jobs.ts imports this module's neighbours).
+export function sessionMarker(env: Record<string, string | undefined>): 'WITNESS_DRIVE' | 'WITNESS_REVIEWER' | 'WITNESS_JOB' | undefined {
   if (driveChild(env) !== undefined) return DRIVE_ENV
   if (env.WITNESS_REVIEWER !== undefined && env.WITNESS_REVIEWER !== '') return 'WITNESS_REVIEWER'
+  if (env.WITNESS_JOB !== undefined && env.WITNESS_JOB !== '') return 'WITNESS_JOB'
   return undefined
 }
 
@@ -42,7 +46,9 @@ export const DRIVE_LOG = '.witness/drive.log'
 // How a background drive learns its own log path, set by `detachDrive` on its child alone.
 export const DRIVE_LOG_ENV = 'WITNESS_DRIVE_LOG'
 
-export interface DriveHolder { pid: number; log?: string }
+// Row 271 (whole-branch review): `manual`, a `drive --manual` run — its sessions keep every stop for
+// the human, so `gate --manual` is theirs to type.
+export interface DriveHolder { pid: number; log?: string; manual?: true }
 
 // Row 224 (#69). The drive lock is a lease. A pid alone outlives its drive: a drive stopped
 // hard (`taskkill /F`, `kill -9`, a reboot) never runs its `finally`, and once that pid is
@@ -76,12 +82,13 @@ function readHolder(root: string): Held | 'absent' | 'unreadable' {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable'
   }
   try {
-    const h = JSON.parse(text) as { pid?: unknown; log?: unknown; lease?: unknown; busy?: unknown }
+    const h = JSON.parse(text) as { pid?: unknown; log?: unknown; lease?: unknown; busy?: unknown; manual?: unknown }
     if (typeof h.pid !== 'number' || !Number.isInteger(h.pid) || h.pid < 1) return 'unreadable'
     // The lock says only WHETHER a background log exists; its path is always derived. What
     // the file says is never printed: `watch:` is a line the engine acts on, and a path read
     // from a file could carry a newline and a forged `launch:` or `run:` line.
-    return { pid: h.pid, renewed, leased: h.lease === 1, busy: h.busy === 1, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}) }
+    return { pid: h.pid, renewed, leased: h.lease === 1, busy: h.busy === 1, ...(h.log !== undefined ? { log: join(root, DRIVE_LOG) } : {}),
+      ...(h.manual === 1 ? { manual: true as const } : {}) }
   } catch {
     return 'unreadable'
   }
@@ -94,7 +101,7 @@ const leaseLive = (h: Held, now: number): boolean => !h.leased || now - h.renewe
 export function driveHolder(root: string, now = Date.now()): DriveHolder | undefined {
   const h = readHolder(root)
   if (typeof h !== 'object' || !isAlive(h.pid) || !leaseLive(h, now)) return undefined
-  return { pid: h.pid, ...(h.log !== undefined ? { log: h.log } : {}) }
+  return { pid: h.pid, ...(h.log !== undefined ? { log: h.log } : {}), ...(h.manual === true ? { manual: true as const } : {}) }
 }
 
 // Row 240. A live drive from before 0.29 (its lock has no `busy: 1`), or none.
@@ -144,7 +151,7 @@ export function holdLease(root: string, onLost: () => void, everyMs = DRIVE_RENE
 }
 
 export function acquireDriveLock(
-  root: string, info: { log?: string }, pid = process.pid, graceMs = DRIVE_TAKEOVER_GRACE_MS,
+  root: string, info: { log?: string; manual?: boolean }, pid = process.pid, graceMs = DRIVE_TAKEOVER_GRACE_MS,
 ): Result<() => void> {
   const p = join(root, DRIVE_LOCK)
   mkdirSync(join(root, '.witness'), { recursive: true })
@@ -154,7 +161,7 @@ export function acquireDriveLock(
   let expired: { pid: number; renewed: number; since: number } | undefined
   for (;;) {
     try {
-      writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}), lease: 1, busy: 1 }), { flag: 'wx' })
+      writeFileSync(p, JSON.stringify({ pid, ...(info.log !== undefined ? { log: info.log } : {}), lease: 1, busy: 1, ...(info.manual === true ? { manual: 1 } : {}) }), { flag: 'wx' })
       return ok(release)
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {

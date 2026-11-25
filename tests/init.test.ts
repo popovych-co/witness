@@ -6,7 +6,7 @@ describe('witness init', () => {
     const repo = tmpRepo()
     const res = await repo.cli(['init'])
     expect(res.code).toBe(0)
-    expect(repo.read('witness.config.yaml')).toContain('schema: 2 ')
+    expect(repo.read('witness.config.yaml')).toContain('schema: 3 ')
     expect(repo.read('witness.config.yaml')).toContain('gates:')
     expect(repo.read('specs/principles.md')).toContain('type: principles')
     expect(repo.read('specs/principles.md')).toContain('status: approved')
@@ -42,5 +42,14 @@ describe('drive local files (B1)', () => {
     const repo = tmpRepo()
     await repo.cli(['init'])
     expect(repo.read('.gitignore')).toContain('.witness/drive.lock\n.witness/drive.log\n')
+  })
+})
+
+describe('scratch.prepare at init (row 259)', () => {
+  it('writes the setup command the root lockfile names (row 259)', async () => {
+    const repo = tmpRepo()
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    expect((await repo.cli(['init'])).code).toBe(0)
+    expect(repo.read('witness.config.yaml')).toMatch(/^scratch:\n {2}prepare: pnpm install --frozen-lockfile --config\.confirm-modules-purge=false +# /m)
   })
 })

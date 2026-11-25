@@ -126,7 +126,7 @@ function stateRoot(name: string): string {
   return root
 }
 const factsOf = (name: string): ActFacts =>
-  ({ upstream: base.effort, stale: STATE.get(name)!.stale, holdLifted: false, owed: false, upstreamOwed: false })
+  ({ upstream: base.effort, stale: STATE.get(name)!.stale, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false })
 // What the state offers: liveActs over the journal as decide reads it.
 const liveOf = (name: string) => liveActs(G, base.effort, readStream(stateRoot(name), base.effort), factsOf(name))
 

@@ -13,10 +13,12 @@ import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
 import { canonPaths, loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
+import { readerUnused, unboundReaders } from '../lint-parts.js'
 import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
 import { ASK_STREAM, reservedId } from '../ask.js'
+import { JOB_STREAM, LEDGER_STREAM, TRUST_STREAM } from '../streams.js'
 import { ID_RE, isId } from '../dsl.js'
 import { runDrift } from '../drift.js'
 import { auditStateCommits, dirtyStatePaths, divergence, primaryRoot, stateDirs, tryGit, tryGitC } from '../gitio.js'
@@ -37,6 +39,15 @@ import { seeWork } from '../carry.js'
 import { standingHeld } from '../held.js'
 import { isAlive } from '../lock.js'
 import { listWorktrees, materializedCanon, RESIDUE_GOT, worktreePath } from '../worktree.js'
+
+// Final review F7 and row 257. Each reserved stream witness writes, by the kind its first entry must
+// be: one an older witness wrote under the name is another artifact's history.
+const RESERVED_STREAMS: ReadonlyMap<string, { first: string; what: string; refuses: string }> = new Map([
+  [ASK_STREAM, { first: 'ask', what: "witness's ask queue", refuses: 'witness ask refuses until it moves' }],
+  [JOB_STREAM, { first: 'job-shard', what: "witness's job results", refuses: 'drive journals no job until it moves' }],
+  [TRUST_STREAM, { first: 'trust', what: "witness's repo-level trust grants", refuses: 'no repo command is granted until it moves' }],
+  [LEDGER_STREAM, { first: 'ledger-open', what: "witness's ledger", refuses: 'witness books and dismisses nothing until it moves' }],
+])
 
 interface Finding {
   level: 'error' | 'warn'
@@ -165,7 +176,18 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
   const cfg = loadConfig(root)
   // The want rides along: a config refusal says how to fix it (row 193), check's included.
   if (!cfg.ok) cfg.violations.forEach((x) => findings.push(f('error', 'config', x.field, x.rule, `${x.got} — ${x.want}`)))
-  else if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
+  else {
+    if (cfg.value.warning) findings.push(f('warn', 'config', 'schema', 'older-schema', cfg.value.warning))
+    // Row 259. A feature off for lack of a setting is named once, here, never at each use.
+    if (cfg.value.scratch.prepare === undefined) {
+      findings.push(f('warn', 'config', 'scratch.prepare', 'feature-off',
+        'scratch runs are off — scratch.prepare is not set · witness migrate proposes one'))
+    }
+    // Row 262. A reader no part bears the name of reads nothing: said once per tool.
+    for (const tool of unboundReaders(cfg.value.readers, cfg.value.ship.lint)) {
+      findings.push(f('warn', 'config', `readers.${tool}`, 'reader-unused', readerUnused(tool)))
+    }
+  }
 
   // Machine config is read here as FINDINGS, never a refusal — same doctrine that
   // keeps harness resolution out of loadConfig (row 87): check must be able to
@@ -385,8 +407,11 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
           findings.push(f('warn', 'journal', file, 'ask-id', `ask ${visible(String(e.id))} is named outside [a-z0-9][a-z0-9-]* — never offered as a command`))
         }
       }
-      if (id === ASK_STREAM && entries[0] !== undefined && entries[0].t !== 'ask') {
-        findings.push(f('error', 'journal', file, 'reserved-stream-taken', `witness's ask queue is held by a ${entries[0].t} history — witness ask refuses until it moves`))
+      // A reserved stream another history holds: the writer that owns it refuses until it moves.
+      const owner = RESERVED_STREAMS.get(id)
+      if (owner !== undefined && entries[0] !== undefined && entries[0].t !== owner.first) {
+        // The kind is another writer's text: spelled out before it reaches the terminal (slice 3 review).
+        findings.push(f('error', 'journal', file, 'reserved-stream-taken', `${owner.what} is held by a ${visible(String(entries[0].t))} history — ${owner.refuses}`))
         continue
       }
       if (entries[0]?.t === 'recap' || reservedId(id) !== undefined) continue

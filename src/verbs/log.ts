@@ -11,6 +11,7 @@ import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
 import { kv, logSafe, rows } from '../toon.js'
 import { decidedBy } from '../autonomy.js'
+import { duration } from '../usage.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
 
 // Row 214: drive's `journal:` lines print an act as `witness log` does. Rows 205, 244: a journal line
@@ -50,7 +51,9 @@ function detailOf(e: Entry): string {
       const d = e as unknown as DecisionEntry
       // Row 173: a decision nobody typed says who made it; a named human one reads as before.
       const by = d.selected !== undefined ? ` · ${decidedBy(d)}` : ''
-      return `${d.gate}: ${d.decision}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
+      // Row 270: a booking names its check and the items it holds.
+      const booked = d.decision === 'book' && d.book !== undefined ? ` ${String(d.book.check)} (${(d.book.items ?? []).map(String).join(', ')})` : ''
+      return `${d.gate}: ${d.decision}${booked}${by}${d.note ? ` — ${d.note.slice(0, 60)}` : ''}`
     }
     case 'test-evidence': {
       // Row 191 §4.3: a cycle names the plan step it closes; a fix round names none.
@@ -68,6 +71,19 @@ function detailOf(e: Entry): string {
       return `${s.from} → ${s.to} (${s.cause})`
     }
     case 'cause': return `cause=${String(e.cause)}`   // row 253
+    case 'job-shard': return `${String(e.kind)} ${String(e.key)} ${String(e.shard)}/${String(e.of)} ${String(e.outcome)} ${duration(Number(e.ms))}`   // row 257
+    // Row 269: each ledger transition, named — the item, then what happened to it.
+    case 'ledger-open': {
+      const s = e.subject as { whole?: boolean; diagnostics?: Record<string, number> } | undefined
+      const what = s?.whole === true ? 'whole part'
+        : `${Object.values(s?.diagnostics ?? {}).reduce((a, n) => a + Number(n), 0)} diagnostics`
+      return `${String(e.id)} booked ${String(e.check)} · ${String(e.part)} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)} · ${what}`
+    }
+    case 'ledger-closed':
+      return e.by === 'abandon'
+        ? `${String(e.id)} closed — ${String(e.plan)} was abandoned`
+        : `${String(e.id)} closed — gone at the merge of ${String(e.plan)}${e.pr === undefined ? '' : ` (pr #${String(e.pr)})`}`
+    case 'ledger-dismissed': return `${String(e.id)} dismissed — ${String(e.cause)}: ${String(e.note)}`
     case 'revise-returned': {
       // Row 244: the author's hand-back of a revise (`gate --unchanged`), named as a decision is — the
       // gate, then what happened — with the run it hands back and whether it was `--manual`.

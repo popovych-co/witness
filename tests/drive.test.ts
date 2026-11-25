@@ -6,7 +6,8 @@ import { basename, join, resolve } from 'node:path'
 import type { Ctx } from '../src/cli.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { cliAct } from '../src/act.js'
-import { classifyAction, driveLoop, resolveDecision, spawnSession } from '../src/drive.js'
+import { chargedMs, classifyAction, driveLoop, resolveDecision, spawnSession } from '../src/drive.js'
+import { deadlineFile } from '../src/deadline.js'
 import { option, renderDecision, type Decision } from '../src/recommend.js'
 import type { Ticker } from '../src/session-clock.js'
 import { watchLine } from '../src/drive-presence.js'
@@ -225,6 +226,51 @@ describe('spawnSession (D145 addendum §3-5)', () => {
     expect(end.tail.some((l) => l.includes('host slept'))).toBe(false)
     expect(end.ms).toBeLessThan(60_000)
   }, 20000)
+
+  it('a session behind a job keeps its time: no timeout, a waited line, the deadline moved, then removed (row 256)', async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const token = `${process.pid}-1`
+    const file = deadlineFile(repo.root, token)
+    const agent = fakeAgent('echo "file=$WITNESS_DRIVE_DEADLINE_FILE spawn=$WITNESS_DRIVE_DEADLINE"\nsleep 2\necho "moved=$(cat "$WITNESS_DRIVE_DEADLINE_FILE")"\nsleep 1')
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: agent }, out: (l) => lines.push(l) })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 1_000 } }
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1,
+      { root: repo.root, deadline: { root: repo.root, token, behind: () => 'fixture' } })
+    expect(end.outcome).toBe('exited')
+    expect(end.heldMs).toBeGreaterThanOrEqual(2_000)
+    const spawnAt = Number(/spawn=(\d+)/.exec(lines.find((l) => l.includes(`file=${file}`))!)![1])
+    const moved = Number(/"deadline":(\d+)/.exec(lines.find((l) => l.includes('"deadline"'))!)![1])
+    expect(moved).toBeGreaterThanOrEqual(spawnAt + 1_000)
+    expect(lines.some((l) => /\] waited \S+ behind job fixture — not counted against drive\.sessionTimeoutMs$/.test(l))).toBe(true)
+    expect(existsSync(file)).toBe(false)
+  }, 20_000)
+
+  it("a session behind another session's run keeps the old limit (Review Focus 3)", async () => {
+    const repo = await seededRepo()
+    const lines: string[] = []
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('sleep 5') }, out: (l) => lines.push(l) })
+    const cfg = { ...cfgOf(repo), drive: { ...cfgOf(repo).drive, sessionTimeoutMs: 1_000 } }
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfg, ctx, 1,
+      { root: repo.root, deadline: { root: repo.root, token: `${process.pid}-2`, behind: () => undefined } })
+    expect(end.outcome).toBe('timeout')
+    expect(end.heldMs).toBeUndefined()
+    expect(lines.some((l) => l.includes(' behind job '))).toBe(false)
+  }, 20_000)
+
+  it('a session that puts a directory where its deadline file goes still ends, and drive goes on (slice 2 review I1)', async () => {
+    const repo = await seededRepo()
+    const ctx = fakeCtx(repo.root, { env: { WITNESS_DRIVE_AGENT_BIN: fakeAgent('mkdir -p "$WITNESS_DRIVE_DEADLINE_FILE"') } })
+    const end = await spawnSession({ kind: 'spawn', home: repo.root, stage: 'implement', target: 'p1' }, cfgOf(repo), ctx, 1,
+      { root: repo.root, deadline: { root: repo.root, token: `${process.pid}-4`, behind: () => undefined } })
+    expect(end.outcome).toBe('exited')
+  }, 20_000)
+
+  it("chargedMs leaves the time held out of the target's wall clock (row 256)", () => {
+    const end = { outcome: 'exited' as const, code: 0, tail: [], ms: 9_000, failed: false }
+    expect(chargedMs({ ...end, heldMs: 7_000 })).toBe(2_000)
+    expect(chargedMs(end)).toBe(9_000)
+  })
 
   it('a session timeout past 2^31 ms does not stop the session at once (P4)', async () => {
     const repo = await seededRepo()

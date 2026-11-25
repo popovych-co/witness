@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeReports, parseJUnit } from '../src/junit.js'
+import { mergeReports, parseJUnit, reportFiles } from '../src/junit.js'
 import { tmpRepo } from './helpers.js'
 
 const REPORT = `<?xml version="1.0" encoding="UTF-8"?>
@@ -60,5 +60,13 @@ describe('mergeReports', () => {
     expect(res.ok).toBe(false)
     if (res.ok) return
     expect(res.violations[0]?.rule).toBe('no-reports')
+  })
+})
+
+describe('report globs (row 263)', () => {
+  it('a root-level report glob never walks the scratch or plan worktrees (T2b slice 1 M10, row 263)', () => {
+    const repo = tmpRepo()
+    for (const at of ['reports', '.witness/scratch/reports', '.witness/worktrees/p1/reports']) repo.write(`${at}/junit.xml`, '<testsuite/>')
+    expect(reportFiles(repo.root, '**/junit.xml')).toEqual(['reports/junit.xml'])
   })
 })

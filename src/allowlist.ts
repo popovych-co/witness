@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { actOn, runRow, type Act } from './act.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
+import { lintCommands } from './lint-parts.js'
+import { READER_TOOLS } from './settings.js'
 import { heldCriteria } from './needs.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { criteriaOwner, findById, type Canon, type CanonDoc } from './scan.js'
@@ -73,6 +75,11 @@ export const unsafeLeft = (n: number): string =>
 export function grantAct(target: string, c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): Act | undefined {
   return hasControl(c.cmd) ? undefined : actOn(platform, ['trust', target, '--cmd', c.cmd])
 }
+// Row 259. A repo command's grant: no target, since a job or a scratch prepare serves no artifact.
+// The same rule as `grantAct`: none for a command the verb would not take.
+export function repoGrantAct(c: Pick<RunCommand, 'cmd'>, platform: Platform = process.platform): Act | undefined {
+  return hasControl(c.cmd) ? undefined : actOn(platform, ['trust', '--cmd', c.cmd])
+}
 // The grant's line, or why there is none. Row 239: a grant Windows withholds (`Act.withheld`) is
 // never offered to be pasted, so the line names the listing instead, which grants nothing by
 // itself: the command stays pending, and at a terminal the listing asks for each one.
@@ -100,8 +107,11 @@ export function grantRowsOf(grant: Act | undefined, list: Act): string[] {
   return grant.withheld === undefined ? [runRow(grant)] : [`  note: ${grant.withheld}`, runRow(list)]
 }
 
-// The filtered runner template, `ship.test`, `ship.lint`, each when set. Full-suite mode's
-// runner IS `ship.test`, and a command listed twice is listed once, under its first source.
+// The filtered runner template, `ship.test`, every `ship.lint` part and its bound reader (rows 261–262),
+// every other set reader, `scratch.prepare`, each when set. Full-suite mode's runner IS `ship.test`,
+// and a command listed twice is listed once, under its first source. A reader no part bears the name
+// of is declared all the same (slice 1 review I1): migrate proposes and grants it, so the targetless
+// grant takes it, but nothing owes it until a part bears its name (`trustOwed`).
 export function configCommands(cfg: Config): RunCommand[] {
   const out: RunCommand[] = []
   const add = (cmd: string | undefined, source: string) => {
@@ -109,7 +119,10 @@ export function configCommands(cfg: Config): RunCommand[] {
   }
   if (cfg.criteria.runner !== 'full-suite') add(cfg.criteria.runner, 'criteria.runner')
   add(cfg.ship.test, 'ship.test')
-  add(cfg.ship.lint, 'ship.lint')
+  for (const c of lintCommands(cfg)) add(c.cmd, c.source)
+  for (const tool of READER_TOOLS) add(cfg.readers[tool], `readers.${tool}`)
+  // Row 259. The scratch's setup command, when there is one to run.
+  if (cfg.scratch.prepare !== 'none') add(cfg.scratch.prepare, 'scratch.prepare')
   return out
 }
 
@@ -218,10 +231,11 @@ function listingOf(
 // not trust yet, checked before any work: found only inside the session, a refusal journaled
 // nothing, `next` routed the same line again and drive respawned it to the cap. Only the
 // commands with no "no" path — the runner (the template, or ship.test in full-suite) for the
-// evidence verbs and the implement gate; that plus ship.test and ship.lint for ship; a start's
-// own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
+// evidence verbs; that plus every ship.lint part and bound reader for the implement gate (row
+// 265); those plus ship.test for ship; a start's own cmd: needs. Never cmd: criteria (row 154): a plain approve leaves them blocked at a
 // headless gate, so trust is never the toll, and a gate whose check failed on one reaches the
 // settle pass's trust-grant stop instead.
+
 export function trustOwed(
   root: string, env: Record<string, string | undefined>, cfg: Config, canon: Pick<Canon, 'docs'>,
   action: { line: string; target?: string },
@@ -229,10 +243,16 @@ export function trustOwed(
   if (env.WITNESS_TRUST_CMDS === '1') return []
   const config = configCommands(cfg)
   const runner = config.filter((c) => c.source === (cfg.criteria.runner === 'full-suite' ? 'ship.test' : 'criteria.runner'))
+  // Rows 261–262. Ship runs its suite, every lint part and every bound reader — never a reader no
+  // part bears the name of (slice 1 review I1). Row 265: the implement gate runs the lint parts and
+  // their readers too, never ship.test.
+  const lints = lintCommands(cfg)
+  const shipRuns = new Set([cfg.ship.test, ...lints.map((c) => c.cmd)])
   const line = `${action.line} `
   const run: RunCommand[] =
-    /^witness (test-evidence|verify-red|gate implement|check --drift) /.test(line) ? runner
-      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => c.source === 'ship.test' || c.source === 'ship.lint')]
+    /^witness (test-evidence|verify-red|check --drift) /.test(line) ? runner
+      : /^witness gate implement /.test(line) ? [...runner, ...lints]
+      : /^witness (ship|gate ship) /.test(line) ? [...runner, ...config.filter((c) => shipRuns.has(c.cmd))]
         : /^witness start /.test(line) && action.target !== undefined
           ? (() => { const doc = canon.docs.find((d) => d.meta.id === action.target); return doc ? cmdNeeds(doc) : [] })()
           : []
@@ -240,6 +260,12 @@ export function trustOwed(
   const out: RunCommand[] = []
   for (const c of run) if (!trusted.has(c.cmd) && !out.some((o) => o.cmd === c.cmd)) out.push(c)
   return out
+}
+
+// Row 259. Trusted right now, by the human's list or the automation switch. Never prompts: the
+// headless paths (a scratch prepare, a job's commands) ask nothing, they wait for the human's grant.
+export function trustedNow(root: string, env: Record<string, string | undefined>, cmd: string): boolean {
+  return env.WITNESS_TRUST_CMDS === '1' || load(root).includes(cmd)
 }
 
 export async function ensureTrusted(root: string, ctx: Ctx, cmd: string): Promise<'trusted' | 'declined' | 'blocked'> {

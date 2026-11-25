@@ -17,7 +17,10 @@ import { decisionOwed, lastGateRun, standingHandBack, type DecisionEntry, type G
 import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
-import { kv, rows } from '../toon.js'
+import { kv, rows, visible } from '../toon.js'
+import { openItems } from '../ledger.js'
+import { parseBaseKey } from '../base-lint.js'
+import { isId } from '../dsl.js'
 import { decidedBy } from '../autonomy.js'
 import { pendingTxn } from '../txn.js'
 import { worktreePath } from '../worktree.js'
@@ -91,6 +94,20 @@ export function demotedRows(
 
 // D122. Aged in ROUNDS, never in wall-clock: this CLI has no timestamps anywhere — the
 // gate-run entry carries none — so "61 rounds" is derivable and "3 weeks" is not.
+// Row 269. The open ledger items as status lists them — the order `dismiss ledger --item <index>`
+// counts in. `holds`: the whole part at the base it was booked against, or the diagnostics it covers.
+// `since`: the gate and round it was booked at, or `merged` once its plan has.
+export function bookedRows(root: string): Array<Record<string, unknown>> {
+  return openItems(root).map((i) => {
+    const base = parseBaseKey(i.part_key)?.commit
+    const holds = 'whole' in i.subject
+      ? `whole part at ${base === undefined ? 'its base' : base.slice(0, 7)}`
+      : `${Object.values(i.subject.diagnostics).reduce((a, n) => a + n, 0)} diagnostics`
+    const merged = isId(i.plan) && readStream(root, i.plan).some((e) => e.t === 'status' && e.to === 'done' && e.cause === 'merge')
+    return { item: visible(i.id), plan: visible(i.plan), part: visible(i.part), holds, since: merged ? 'merged' : `${visible(i.gate)} r${i.round}` }
+  })
+}
+
 export function deferralRows(
   root: string, canon: Canon,
 ): Array<{ id: string; artifact: string; gate: string; anchor: string; kind: string; age: string }> {
@@ -296,6 +313,13 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (debts.length > 0) {
     rows('deferrals', ['id', 'artifact', 'gate', 'anchor', 'kind', 'age'],
       debts as unknown as Array<Record<string, unknown>>).forEach(ctx.out)
+  }
+  // Row 269 (§3.3). Every open booking: owed by nobody (C21), so `next` never routes one — this is
+  // where a human sees what the repo carries, and the one act that ends one early.
+  const booked = bookedRows(root)
+  if (booked.length > 0) {
+    rows('booked', ['item', 'plan', 'part', 'holds', 'since'], booked).forEach(ctx.out)
+    ctx.out('help: witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>" — at your own terminal')
   }
   const demoted = demotedRows(root, canon)
   if (demoted.length > 0) {

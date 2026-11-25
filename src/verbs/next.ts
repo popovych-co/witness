@@ -36,6 +36,7 @@ import { lazyStamp, type PrView } from '../stamp.js'
 import { ok, refuse, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { cmd, kv, logSafe, rows, shellWord } from '../toon.js'
 import { openDeferrals } from '../deferral.js'
+import { baseWait } from '../base-lint.js'
 import { renderDecision, type Decision } from '../recommend.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
 import { contentSha } from '../content-sha.js'
@@ -115,7 +116,7 @@ export function settlementTaken(entries: Entry[], gate: string): boolean {
 }
 
 // What liveActs reads of a gate's state where no facts but the journal and the content matter.
-const JOURNAL_FACTS: ActFacts = { upstream: undefined, stale: false, holdLifted: false, owed: false, upstreamOwed: false }
+const JOURNAL_FACTS: ActFacts = { upstream: undefined, stale: false, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false }
 
 // Design §4.2.2's retracted row, as a route. A retraction asks for a re-review, not an edit: its lead
 // is `gate --fresh` (a session may run it), or the re-gate on moved content, under the session's line.
@@ -989,6 +990,8 @@ export function actFacts(
     holdLifted: liftedHolds(criteriaOwner(canon, target), judged).length > 0,
     owed: parkOwed(root, cfg, canon, gate, target, entries),
     upstreamOwed: upstreamOwed(root, gate, target, entries),
+    // Row 267. A checks-only round's base result landed since it ran: the re-gate reads it.
+    checksMoved: judged !== undefined && baseWait(root, judged).landed.length > 0,
   }
 }
 

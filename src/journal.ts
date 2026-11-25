@@ -16,6 +16,8 @@ export type EntryType =
   // D154. A trust grant is a human act with consequences at headless gates, so it is
   // recorded like every other one: which commands, and through which surface.
   | 'trust'
+  // Row 257. One shard of a drive job: how it ended, on witness's own `jobs` stream.
+  | 'job-shard'
   // D122. An obligation's whole lifecycle, append-only: minted by a deferral, moved when
   // its flow ends, retyped when the pattern turns out to be a lens problem, and closed by
   // evidence (discharged) or by an explicit human cause (dismissed).
@@ -37,6 +39,9 @@ export type EntryType =
   // Row 244 (#87). The author's word that a revise needs no change: `gate --unchanged` journals it
   // where the gate would answer changed-nothing, and it asks the revise to be decided again.
   | 'revise-returned'
+  // Row 269. A repo ledger item's lifecycle, on witness's own `ledger` stream: opened by a booking,
+  // closed by an observation (the merge stamp, the abandon), or dismissed by a human at a terminal.
+  | 'ledger-open' | 'ledger-closed' | 'ledger-dismissed'
   // Row 253. A fix effort's cause — escaped, or decided — beside its recap, never inside it: the
   // recap is hashed into the decompose identity and read by the arbiter, and a cause must reach
   // neither (decision 8). Read only by the track record.

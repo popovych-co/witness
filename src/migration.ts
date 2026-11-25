@@ -121,8 +121,11 @@ const STEPS: Record<number, (raw: Raw, changes: Change[]) => Result<Raw>> = {
   1: expandGatesModel,
 }
 
+// `detected` (row 259): what the repo shows for a setting (the setup command its lockfile names);
+// in write mode a missing setting takes it before its default. `harness` keeps its own option.
 export function migrateValues(raw: Raw, from: number, opts: {
   mode: 'memory' | 'write'; to?: number; settings?: readonly Setting[]; harness?: string
+  detected?: Readonly<Record<string, unknown>>
 }): Result<{ raw: Raw; changes: Change[] }> {
   const write = opts.mode === 'write'
   const list = opts.settings ?? SETTINGS
@@ -157,7 +160,9 @@ export function migrateValues(raw: Raw, from: number, opts: {
   for (const s of list) {
     if (s.since > to || getIn(out, s.path) !== undefined || !fillable(out, s.path)) continue
     if (s.ambient && !write) continue
-    const d = write && s.path === 'harness' && opts.harness !== undefined ? opts.harness : defaultAt(s, to)
+    const d = !write ? defaultAt(s, to)
+      : s.path === 'harness' && opts.harness !== undefined ? opts.harness
+      : opts.detected?.[s.path] ?? defaultAt(s, to)
     if (d === undefined) continue
     out = withValues(out, nest(s.path, d))
     changes.push({ kind: s.ambient ? 'filled' : 'added', path: s.path, to: d })

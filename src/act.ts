@@ -72,7 +72,7 @@ export function cliAct(...argv: string[]): Act {
 // through here, so no printer can forget the check, but one: a decision block's own `run:` line
 // (`renderDecision`), which prints only an option `option()` made `runnable`, and `option()` never
 // makes a withheld act runnable.
-export function runRow(act: Act, label: 'run' | 'then' | 'revise' | 'fresh' | 'recheck' = 'run', indent = '  '): string {
+export function runRow(act: Act, label: 'run' | 'then' | 'revise' | 'fresh' | 'recheck' | 'book' = 'run', indent = '  '): string {
   return act.withheld === undefined ? `${indent}${label}: ${act.line}` : `${indent}note: ${act.line} — ${act.withheld}`
 }
 

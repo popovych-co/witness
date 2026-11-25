@@ -1,6 +1,7 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
+import { grantCommands } from '../src/allowlist.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { appendEntry, readStream } from '../src/journal.js'
@@ -151,8 +152,15 @@ it('a command trust blocked is the human\'s to grant (kept stop)', async () => {
   expect(callFor(scenario, 'arbiter')).toBeUndefined()
   // final review: one kept stop per command, with its source and the grant that names it (row 205),
   // the grant on a `run:` row of its own under it (row 239)
-  expect(h.out()).toContain('kept-stop: trust grant — true (ship.test)\n  run: witness trust auth-refresh-plan-1 --cmd true\n')
-  expect(h.out()).toMatch(/^kept-stop: trust grant — node .* \(criteria\.runner\)\n {2}run: witness trust auth-refresh-plan-1 --cmd '/m)
+  expect(h.out()).toContain('kept-stop: trust grant — true (ship.test)\n  run: witness trust auth-refresh-plan-1 --cmd true')
+  // Row 264: lint runs first and withholds while `true` is blocked, so the round is checks only and the
+  // criteria lane's command is asked once `true` is granted — a judged round, its trust stop kept too
+  grantCommands(repo.root, ['true'])
+  const h2 = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
+  expect(await runGate(h2.ctx, 'ship', planId, F)).toBe(1)
+  expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship')).toEqual([])
+  expect(callFor(scenario, 'arbiter')).toBeUndefined()
+  expect(h2.out()).toMatch(/^kept-stop: trust grant — node .* \(criteria\.runner\)\n {2}run: witness trust auth-refresh-plan-1 --cmd '/m)
 })
 
 it('a --manual run keeps its stop for a human (Review Focus 4)', async () => {
@@ -222,8 +230,10 @@ it('a dead arbiter pin is named where the settle pass leaves the stop (row 212)'
 it('a granted command that really fails lands a round and is revised, never resumed forever (F3)', async () => {
   const { repo, planId } = await shippableRepo()
   const runner = `node "${vitestBin()}" run -t "@spec:{id}" --passWithNoTests`
-  repo.write('witness.config.yaml', `schema: 1\ncriteria:\n  runner: '${runner}'\nship:\n  test: 'true'\n  lint: 'false'\nautonomy: on\n`)
-  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint false')
+  // Row 265: implement runs lint too, so it stays green through implement and turns red for ship
+  const config = (lint: string) => `schema: 1\ncriteria:\n  runner: '${runner}'\nship:\n  test: 'true'\n  lint: '${lint}'\nautonomy: on\n`
+  repo.write('witness.config.yaml', config('true'))
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint true')
   const SHIP_CLEAN = {
     coverage: [
       { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
@@ -233,6 +243,8 @@ it('a granted command that really fails lands a round and is revised, never resu
   }
   const scenario = fakeScenario(); putVerdict(scenario, SHIP_CLEAN)
   expect(await runGate(capture(repo.root, scenario).ctx, 'implement', planId, F)).toBe(0)
+  repo.write('witness.config.yaml', config('false'))
+  repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint false')
   writeFileSync(join(repo.root, '.witness', 'allow.json'), JSON.stringify({ commands: ['true', runner] }))
   const blocked = capture(repo.root, scenario, { WITNESS_TRUST_CMDS: '' })
   expect(await runGate(blocked.ctx, 'ship', planId, F)).toBe(1)
@@ -243,8 +255,10 @@ it('a granted command that really fails lands a round and is revised, never resu
   const ships = (readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]).filter((r) => r.gate === 'ship')
   expect(ships).toHaveLength(2)
   expect(ships[1]!.checks.find((c) => c.name === 'lint')!.untrusted).toBeUndefined()
+  // Row 264: lint withholds, so both ship rounds ran checks only, and the policy's revise is that rule's
+  expect(ships.map((r) => r.checks_only)).toEqual([true, true])
   expect(decisions(repo.root, planId).filter((d) => d.gate === 'ship').at(-1))
-    .toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-failed' })
+    .toMatchObject({ decision: 'revise', selected: 'policy', rule: 'checks-only' })
 })
 
 it('an arbiter choice the one door refuses parks the flow once, so no stop re-asks the model (F4)', async () => {

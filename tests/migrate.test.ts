@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { stringify } from 'yaml'
 import { contextLimitOf } from '../plugin/hooks/context-core.mjs'
+import { trustedCommands } from '../src/allowlist.js'
 import { readComments } from '../src/config-file.js'
 import { loadConfig, resolveSettings, type Resolved } from '../src/config.js'
+import { readStream } from '../src/journal.js'
 import { migrateValues } from '../src/migration.js'
 import { SETTINGS, defaultValues, getIn, withValues } from '../src/settings.js'
-import { guardMigration } from '../src/verbs/migrate.js'
+import { guardMigration, proposalsOf } from '../src/verbs/migrate.js'
 import { patchConfig, tmpRepo, type TestRepo } from './helpers.js'
 
 // Row 193 §4.6. `witness migrate` brings witness.config.yaml to the current schema, complete,
@@ -49,13 +52,15 @@ describe('witness migrate (row 193 §4.6)', () => {
     await expect(after).toMatchFileSnapshot(`../fixtures/configs/consumer-${x}.migrated.yaml`)
     const now = loaded(repo)
     expect(now.warning).toBeUndefined()
-    expect(now.schema).toBe(2)
-    expect(values(now)).toEqual(values(was))       // the consumers declare everything ambient: nothing filled
-    expect(r.stdout).not.toContain('filled:')
+    expect(now.schema).toBe(3)
+    // the consumers declare everything ambient schema 2 knew; schema 3's setup command is filled
+    // with what the root's (absent) lockfile names (row 259)
+    expect(values(now)).toEqual({ ...values(was), scratch: { prepare: 'none' } })
+    expect(r.stdout.match(/^filled:.*$/gm)).toEqual(['filled: scratch.prepare none — was unset · scratch runs were off'])
     for (const line of humanLines(before)) expect(after).toContain(line.trim())
     expect(r.stdout).toContain(`dropped ${x === 'a' ? 0 : 2} old template lines`)
-    expect(r.stdout).toContain('config: schema 1 → 2')
-    expect(repo.git('log', '-1', '--format=%s')).toBe('migrate: config schema 1 → 2')
+    expect(r.stdout).toContain('config: schema 1 → 3')
+    expect(repo.git('log', '-1', '--format=%s')).toBe('migrate: config schema 1 → 3')
     expect(repo.git('log', '-1', '--format=%b')).toContain('Witness-State: 1')
     expect(repo.git('status', '--porcelain', '--', 'witness.config.yaml')).toBe('')
   })
@@ -75,7 +80,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     const text = repo.read('witness.config.yaml')
     const again = await repo.cli(['migrate'])
     expect(again.code).toBe(0)
-    expect(again.stdout).toContain('config: schema 2 · up to date')
+    expect(again.stdout).toContain('config: schema 3 · up to date')
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
     expect(repo.read('witness.config.yaml')).toBe(text)
   })
@@ -89,7 +94,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     const r = await repo.cli(['migrate'])
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).toContain('added: drive.caps.spawns 24 —')
-    expect(r.stdout).toContain('config: schema 2 → 2')
+    expect(r.stdout).toContain('config: schema 3 → 3')
     expect(loaded(repo).drive.caps.spawns).toBe(24)
   })
 
@@ -113,7 +118,7 @@ describe('witness migrate (row 193 §4.6)', () => {
   })
 
   it('refuses a newer schema', async () => {
-    const r = await committed('schema: 3\n').cli(['migrate'])
+    const r = await committed('schema: 4\n').cli(['migrate'])
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('newer-than-cli')
   })
@@ -153,7 +158,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).toContain('expanded: gates.model claude-opus-5 →')
     expect(r.stdout).toContain('diff:')
-    expect(r.stdout).toContain('+schema: 2')
+    expect(r.stdout).toContain('+schema: 3')
     expect(r.stdout).toContain('-schema: 1')
     expect(repo.read('witness.config.yaml')).toBe(text)
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
@@ -236,7 +241,7 @@ describe('witness migrate (row 193 §4.6)', () => {
     const head = repo.git('rev-parse', 'HEAD')
     const again = await repo.cli(['migrate'])
     expect(again.code, again.stderr).toBe(0)
-    expect(again.stdout).toContain('config: schema 2 · up to date')
+    expect(again.stdout).toContain('config: schema 3 · up to date')
     expect(repo.read('witness.config.yaml')).toContain('\r\n')
     expect(repo.git('rev-parse', 'HEAD')).toBe(head)
   })
@@ -249,5 +254,114 @@ describe('witness migrate (row 193 §4.6)', () => {
     expect(r.code, r.stderr).toBe(0)
     expect(repo.read('witness.config.yaml')).toBe(fixture('consumer-b.migrated.yaml'))
     expect(readFileSync(join(wt, 'witness.config.yaml'), 'utf8')).toBe(fixture('consumer-b.yaml'))
+  })
+})
+
+describe('scratch.prepare at migrate (row 259)', () => {
+  it('fills scratch.prepare from the root lockfile and says so (row 259)', async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'lock')
+    const r = await repo.cli(['migrate'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('filled: scratch.prepare pnpm install --frozen-lockfile --config.confirm-modules-purge=false — was unset · scratch runs were off')
+    expect(r.stdout).toContain('config: schema 2 → 3')
+    expect(loaded(repo).scratch).toEqual({ prepare: 'pnpm install --frozen-lockfile --config.confirm-modules-purge=false' })
+  })
+})
+
+describe('migrate grants what it proposes (row 259)', () => {
+  const schema2Locked = () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'lock')
+    return repo
+  }
+  const PNPM = 'pnpm install --frozen-lockfile --config.confirm-modules-purge=false'
+
+  it('at a terminal, grants the setup command it proposes, in the config\'s own commit (§6, row 259)', async () => {
+    const repo = schema2Locked()
+    const r = await repo.cli(['migrate'], { tty: true, answers: ['y'] })
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain(`trusted: ${PNPM}`)
+    expect(trustedCommands(repo.root)).toContain(PNPM)
+    expect(repo.git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort())
+      .toEqual(['.witness/journal/trust.jsonl', 'witness.config.yaml'])
+    expect(readStream(repo.root, 'trust')).toEqual([expect.objectContaining({ cmds: [PNPM], via: 'migrate' })])
+  })
+
+  it('declined, away from a terminal, or inside a session, writes the proposal and grants nothing (row 259)', async () => {
+    for (const opts of [{ tty: true, answers: ['n'] }, {}, { tty: true, answers: ['y'], env: { WITNESS_DRIVE: 'p1' } }]) {
+      const repo = schema2Locked()
+      const r = await repo.cli(['migrate'], opts)
+      expect(r.code).toBe(0)
+      expect(loaded(repo).scratch).toEqual({ prepare: PNPM })
+      expect(trustedCommands(repo.root)).not.toContain(PNPM)
+      expect(r.stdout).toContain(`run: witness trust --cmd '${PNPM}'`)
+      expect(readStream(repo.root, 'trust')).toEqual([])
+    }
+  })
+
+  it('--dry-run asks nothing and grants nothing (row 259)', async () => {
+    const repo = schema2Locked()
+    const r = await repo.cli(['migrate', '--dry-run'], { tty: true, answers: ['y'] })
+    expect(r.code).toBe(0)
+    expect(trustedCommands(repo.root)).not.toContain(PNPM)
+    expect(r.stdout).toContain(`run: witness trust --cmd '${PNPM}'`)
+  })
+})
+
+describe('migrate proposals — final review (row 259)', () => {
+  it('a command setting migrate adds is proposed as one it fills is', () => {
+    expect(proposalsOf([
+      { kind: 'added', path: 'scratch.prepare', to: 'make setup' },
+      { kind: 'filled', path: 'scratch.prepare', to: 'none' },
+      { kind: 'added', path: 'ship.branch', to: 'main' },
+    ])).toEqual([{ cmd: 'make setup', source: 'scratch.prepare' }])
+  })
+})
+
+describe('migrate proposes lint parts and readers (rows 261–262)', () => {
+  it('adds the detected readers and asks to grant them with the setup command (row 262)', async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.write('biome.json', '{}\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'tools')
+    const r = await repo.cli(['migrate'], { tty: true, answers: ['y', 'y'] })
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('added: readers.biome pnpm exec biome check --reporter=sarif .')
+    expect(loaded(repo).readers).toEqual({ biome: 'pnpm exec biome check --reporter=sarif .' })
+    expect(trustedCommands(repo.root)).toContain('pnpm exec biome check --reporter=sarif .')
+    // whole-branch review I2: ship.lint is still one part named lint, so the reader binds nothing yet
+    expect(r.stdout).toContain('note: readers.biome is set, but no ship.lint part is named biome — name the part that runs biome "biome" and a red base is judged per diagnostic')
+  })
+
+  it('a ship.lint it fills proposes each part; a string it finds stays a string (row 261)', async () => {
+    const raw = defaultValues({ harness: 'claude-code', schema: 2 }) as { ship: Record<string, unknown> }
+    delete raw.ship.lint
+    const repo = committed(stringify(raw))
+    const r = await repo.cli(['migrate'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain("run: witness trust --cmd 'npm run lint'")
+    const kept = committed(stringify(withValues(defaultValues({ harness: 'claude-code', schema: 2 }), { ship: { lint: 'pnpm lint && pnpm typecheck' } })))
+    expect((await kept.cli(['migrate'])).code).toBe(0)
+    expect(kept.read('witness.config.yaml')).toMatch(/^ {2}lint: pnpm lint && pnpm typecheck +# /m)
+  })
+})
+
+describe('migrate offers only grants the trust verb takes — slice 1 review (row 262)', () => {
+  it("every run: grant a migrate away from a terminal prints is one witness trust takes, an unbound reader's too (I1)", async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.write('biome.json', '{}\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'tools')
+    const r = await repo.cli(['migrate'])
+    expect(r.code).toBe(0)
+    const grants = r.stdout.split('\n').filter((l) => l.trim().startsWith('run: witness trust --cmd '))
+      .map((l) => /--cmd '([^']*)'/.exec(l)![1]!)
+    expect(grants).toContain('pnpm exec biome check --reporter=sarif .')
+    for (const cmd of grants) expect((await repo.cli(['trust', '--cmd', cmd])).code).toBe(0)
+    expect(trustedCommands(repo.root)).toContain('pnpm exec biome check --reporter=sarif .')
   })
 })

@@ -190,10 +190,15 @@ the list the CLI reads (`src/settings.ts`).
 | `criteria.report` | the junit report witness reads · junit:<glob>, or none · full-suite needs one — accepts: none, or junit:<glob> (only junit is supported) | `none` |
 | `criteria.exclude` | extra globs never scanned for criteria tags · [] = none — accepts: a list of globs ([] = none) | `[]` |
 | `ship.test` | the suite command ship runs · full-suite criteria run it too — accepts: a shell command | `npm test` |
-| `ship.lint` | the lint command ship runs — accepts: a shell command | `npm run lint` |
+| `ship.lint` | the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic — accepts: a shell command, or a map of part names to shell commands — e.g. {biome: pnpm exec biome check ., tsc: pnpm exec tsc --noEmit} · a name is a lowercase letter, then up to 39 lowercase letters, digits or - | `npm run lint` |
 | `ship.branch` | the branch witness ships into — accepts: a branch name: letters, digits and . _ / + -, as git allows them — it is printed into git commands | `main` |
 | `ship.merge` | how ship merges its own PR under autonomy · merge \| squash \| rebase — accepts: merge \| squash \| rebase | `merge` |
 | `ship.ciSettleMs` | ms green CI must hold still before an autonomous merge · 0–1800000 — accepts: an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges | `60000` |
+| `readers.biome` | reads the ship.lint part named biome per diagnostic · a command printing biome's SARIF report (--reporter=sarif) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only biome's SARIF report (--reporter=sarif) for what the part named biome checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
+| `readers.eslint` | reads the ship.lint part named eslint per diagnostic · a command printing ESLint's JSON report (-f json) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only ESLint's JSON report (-f json) for what the part named eslint checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
+| `readers.clippy` | reads the ship.lint part named clippy per diagnostic · a command printing cargo's JSON messages (--message-format=json) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only cargo's JSON messages (--message-format=json) for what the part named clippy checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
+| `readers.tsc` | reads the ship.lint part named tsc per diagnostic · a command printing tsc's diagnostic lines (--pretty false) with every error, or none — accepts: a shell command, or none — run from the repo root, it prints only tsc's diagnostic lines (--pretty false) for what the part named tsc checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs) | `none` |
+| `scratch.prepare` | what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none — accepts: a shell command, or none — what witness runs in its scratch checkout when a lockfile or a package manager's config changes | `none` |
 | `autonomy` | on = the CLI settles its own stops and merges green PRs · on \| off · counts once committed — accepts: on \| off | `off` |
 | `arbiter.model` | model for the arbiter that settles stops under autonomy · exact id, no aliases — accepts: [provider/]model[:thinking] | `claude-opus-5-5` |
 | `session.contextLimit` | % of the context window at which a session hands over to a fresh one · 1–100 — accepts: an integer from 1 to 100 — % of the session's context window at which witness hands over to a fresh session | `20` |
@@ -249,9 +254,9 @@ plain-words question per turn with up to three ranked answers, the repo explored
 draft after every settled answer, so a dead session resumes. Design shows up to three rendered,
 checked directions on one page before it asks which.
 
-**`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns — witness's
-own and every `witness turn`, which is how a session runs its tests — because suites that boot
-servers or browsers collide. On Windows each session, test run and gate reviewer runs in a job
+**`drive`.** `drive.parallelSuites: false` makes test runs in two worktrees take turns, in the
+order they asked — witness's own and every `witness turn`, which is how a session runs its tests —
+because suites that boot servers or browsers collide; lint takes no turn. On Windows each session, test run and gate reviewer runs in a job
 object, so whatever it starts — detached, or orphaned by an installer that exited — ends with it;
 elsewhere a session's process group does. A target that reaches any `drive.caps.*` bound is
 parked. Below the round bound a parked gate goes back to work with your own
@@ -259,6 +264,43 @@ parked. Below the round bound a parked gate goes back to work with your own
 gate, and `next` routes the owed work, steps first; `witness status` and `decide --show` print it on a
 `revise:` row, beside a `fresh:` row (a re-review of the work as it stands) when no work is owed. It
 also restarts drive's caps for that target.
+
+**The scratch (`scratch.prepare`).** Machine work on a tree other than a plan's — the first is the
+base tree's lint, below — runs in one scratch checkout per repo,
+`.witness/scratch`: a detached worktree witness resets before every run, which `git status` never
+shows. `scratch.prepare` is the command that makes it runnable, run again only when a lockfile or a
+package manager's config changes; `init` and `migrate` write the one your root lockfile names
+(`pnpm install --frozen-lockfile --config.confirm-modules-purge=false` for pnpm), and `none`
+installs nothing. A repo command — the runner, `ship.test`, each `ship.lint` part, a reader,
+`scratch.prepare` — is granted once with `witness trust --cmd '<cmd>'`, or when `witness migrate`
+proposes it at a terminal; until then a job that runs it waits for you (`wait: trust grant · jobs`)
+and never fails for it.
+
+**Lint parts and readers (`ship.lint`, `readers.*`).** `ship.lint` may name its parts —
+`{biome: pnpm exec biome check ., eslint: pnpm exec eslint ., ui: pnpm check:ui, types: pnpm typecheck}`
+— and ship runs every part on its own, whatever an earlier one did, so a red first part never hides
+the others. A part named after a tool witness reads (`biome`, `eslint`, `clippy`, `tsc`) has a reader,
+`readers.<tool>`: a command printing that tool's report with every error (`init` and `migrate` write
+Biome's and ESLint's when your root has their configs, and say so when no part bears the tool's name
+yet — a one-command `ship.lint` is one part named `lint`, which no reader binds). When such a part is
+red on the plan's base too, it is judged per diagnostic: only the errors the plan added are red, and
+drive lints the base in the scratch when a gate asks (`pending` until then). Without drive the base
+reads "not measured" and the red part withholds; starting drive once lints the base for it. A part with
+no reader that is red on the base reads "not judged", never green.
+
+**Checks before reviewers.** The implement and ship gates run the conflict-marker check (an opener
+like `<<<<<<< HEAD` on a line the plan adds) and every `ship.lint` part before any reviewer. A red
+one ends the round as "checks only": no reviewer runs, no round of your budget is spent, and nothing
+is offered to approve — fix what the check names and re-run the gate. Under drive with autonomy on, a
+round whose red lint parts all wait on the base's lint result waits for drive's base lint
+(`awaits-drive:`), then runs again.
+
+When a lint part is red on the base too, or red in a way only you can accept,
+`witness decide <gate> <plan> --book lint` books it — exactly the errors witness can read, or the
+whole part until main moves — and the gate runs again. Under autonomy it is yours alone, typed at your
+own terminal, and drive leaves a stop for you when no author could clear it (every red part red on
+the base too and not judgeable); otherwise the author is sent to fix it first. `witness status` lists every open booking; each
+closes once main no longer holds it, and `witness dismiss ledger` ends one at your terminal.
 
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command

@@ -60,8 +60,9 @@ export function ensureExcluded(root: string): void {
   // worktree so they stay out of planChangeSet() and the reviewed tree-sha. Drafts (row 199)
   // are a conversation's local memory, never committed: a repo whose .gitignore predates
   // them would otherwise show each one to `git status` and to a human's `git add -A`; drive's
-  // live folder (row 203) is the same kind
-  const missing = ['.witness/worktrees/', '.witness/screens/', '.witness/drafts/', '.witness/live/'].filter((l) => !lines.includes(l))
+  // live folder (row 203) is the same kind, and so is the scratch checkout (row 258)
+  const missing = ['.witness/worktrees/', '.witness/screens/', '.witness/drafts/', '.witness/live/', '.witness/scratch/']
+    .filter((l) => !lines.includes(l))
   // A file a human left without a final newline keeps its last line whole.
   const sep = current !== '' && !current.endsWith('\n') ? '\n' : ''
   if (missing.length) appendFileSync(excludePath, `${sep}${missing.map((l) => `${l}\n`).join('')}`)
@@ -186,9 +187,15 @@ export function excludeCanon(root: string, wtPath: string): Result<void> {
   const gitDir = git(wtPath, 'rev-parse', '--path-format=absolute', '--git-dir')
   mkdirSync(join(gitDir, 'info'), { recursive: true })
   writeFileSync(join(gitDir, 'info', 'sparse-checkout'), sparseText(root))
-  git(root, 'config', 'extensions.worktreeConfig', 'true')
-  git(wtPath, 'config', '--worktree', 'core.sparseCheckout', 'true')
-  git(wtPath, 'config', '--worktree', 'core.sparseCheckoutCone', 'false')
+  // Row 263 (T2b slice 2 M2). Each setting is written only where its scope reads another value:
+  // the scratch is found again on every run, and a rewrite of the shared .git/config collides
+  // (`config.lock`) with a session making a worktree at the same moment.
+  const set = (at: string, scope: '--local' | '--worktree', key: string, val: string) => {
+    if (tryGit(at, 'config', scope, '--get', key).out.trim() !== val) git(at, 'config', scope, key, val)
+  }
+  set(root, '--local', 'extensions.worktreeConfig', 'true')
+  set(wtPath, '--worktree', 'core.sparseCheckout', 'true')
+  set(wtPath, '--worktree', 'core.sparseCheckoutCone', 'false')
   // An edit elsewhere in the tree, staged or not, is the NORMAL mid-slice state (the implement
   // stage leaves the worktree dirty by design) and `applySparse` carries it through untouched
   // (row 250: read-tree used to reset staged work); a dirty canon path is what it declines, and

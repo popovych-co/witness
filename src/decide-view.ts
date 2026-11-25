@@ -40,6 +40,8 @@ export type DecideView = { gate: string; target: string; autonomy: boolean } & (
   | { state: 'reopened'; by: { gate: string; artifact: string; round: number }; note?: string; last: LastRun; disposition?: Disposition; exits: Act[] }
   // A pass settles with no disposition.
   | { state: 'settled'; disposition?: Disposition; last: LastRun; exits: Act[] }
+  // Row 270: the latest disposition is a booking; its one act is the re-gate.
+  | { state: 'booked'; disposition: Disposition; last: LastRun; exits: Act[] }
   // Row 241 (R11): a gate a stop took off the board, who parked it and why, and its way back.
   | { state: 'parked'; why: string; disposition: Disposition; last: LastRun; reopen: Act[] }
   | { state: 'actionable'; run: GateRunView; pins: PolicyPin[]; disposition?: Disposition; block?: Decision; exits: Act[] }
@@ -85,7 +87,7 @@ export function decideView(root: string, cfg: Config, canon: Canon, gate: GateNa
   // `witness gate …` in the one state where the gate answers changed-nothing. An
   // uncomputable sha is NOT staleness — same doctrine as the approve-time check. Row 244 (S2-1):
   // read as `decide` reads it (`actFacts`), against the last run that judged something.
-  const stale = facts.stale || facts.holdLifted
+  const stale = facts.stale || facts.holdLifted || facts.checksMoved
   const lastRun: LastRun = { round: last.round, sha: short(last.reviewed_sha), outcome: last.outcome }
   // D154: the block's trusting twins name the artifact's `cmd:` criteria this repo does not
   // trust yet.
@@ -122,6 +124,9 @@ export function decideView(root: string, cfg: Config, canon: Canon, gate: GateNa
   }
   if (live.state === 'settled') {
     return { ...head, state: 'settled', ...(disposition ? { disposition } : {}), last: lastRun, exits: live.acts }
+  }
+  if (live.state === 'booked' && disposition !== undefined) {
+    return { ...head, state: 'booked', disposition, last: lastRun, exits: live.acts }
   }
   // pending (no disposition) or revise (the author's input): the verdict is actionable
   // The surface a human actually reads while deciding, so it is the one that most owes a
@@ -163,6 +168,16 @@ export function decideViewLines(view: DecideView): string[] {
     out.push(kv('decided-by', decidedBy(view.disposition)))
     out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · ${cliAct('log', target).line}`))
     out.push(...reopenRows(view.reopen))
+    return out
+  }
+  if (view.state === 'booked') {
+    out.push(kv('gate', gate))
+    out.push(kv('target', target))
+    out.push(kv('state', 'booked — the re-gate reads the booking'))
+    out.push(kv('decided-by', decidedBy(view.disposition)))
+    if (view.disposition.note) out.push(kv('note', view.disposition.note))
+    out.push(kv('last-run', `round ${view.last.round} @${view.last.sha} — ${view.last.outcome} · ${cliAct('log', target).line}`))
+    out.push(cmd('exits', exitsLine(view.exits)))
     return out
   }
   if (view.state === 'settled') {

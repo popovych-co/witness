@@ -11,6 +11,7 @@ import { readStream, type Entry } from './journal.js'
 import { recommend, renderDecision } from './recommend.js'
 import { renderRefusal, type Result } from './refusal.js'
 import { actKey, liveActs, settledToken, type DecisionEntry, type GateRunEntry } from './rounds.js'
+import { awaitsDrive, baseWait } from './base-lint.js'
 import { criteriaOwner, findById, loadCanon } from './scan.js'
 import { cmd, kv } from './toon.js'
 import { applyDecision, decisionAct, printReviseContext, type DecisionAct } from './verbs/decide.js'
@@ -41,6 +42,10 @@ export type Settled =
   | { kind: 'routed'; act: Act; line: string; row?: NextAction; note?: string }
   // Row 205: a trust grant carries the commands its gate's checks found untrusted.
   | { kind: 'kept'; stop: KeptStop; line: string; untrusted?: string[] }
+  // Row 267. A checks-only round red only for base results drive owes: drive lints the base, and the
+  // landing makes the stop stale, so the policy routes the re-gate. No decision, no model call. Drive
+  // treats it as work in flight (row 240's busy path).
+  | { kind: 'waiting'; why: string }
   // limit: the usage limit that refused the arbiter. act: the refused act (row 240), which drive
   // keeps for its retry (§4.1.4) when `paid` says its making cost a model call.
   | { kind: 'left'; why: string; code: number; limit?: string; act?: DecisionAct; paid?: true }
@@ -94,7 +99,7 @@ export async function settleStop(
 // Read from `liveActs`, as every screen reads its session line; `stale` is this settle's own read.
 function movedHandBackLine(gate: string, target: string, entries: Entry[], stale: boolean, act: Act): string | undefined {
   if (actKey(act) !== actKey(cliAct('gate', gate, target))) return undefined
-  const live = liveActs(gate, target, entries, { upstream: undefined, stale, holdLifted: false, owed: false, upstreamOwed: false })
+  const live = liveActs(gate, target, entries, { upstream: undefined, stale, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false })
   return live.state === 'handed-back-moved' ? live.session : undefined
 }
 
@@ -108,6 +113,12 @@ export const hhmm = (ms: number): string => {
 // named once and the verb exits 3: another run is deciding it, and there is nothing to do.
 export const busyLine = (gate: string, target: string, s: { pid: number; since: number }): string =>
   `busy: ${target} — another witness run is deciding ${gate} (pid ${s.pid}, since ${hhmm(s.since)})`
+
+// Row 267. Where a verb settles, a stop waiting on drive's base lint is named, and the verb exits as
+// its gate did: drive runs the job, then the gate again. Its own key (final review M-a): `waiting:` is
+// `next`'s line for what only the human can move, and this is drive's work in flight.
+export const waitingLine = (gate: string, target: string, why: string): string =>
+  kv('awaits-drive', `${gate} ${target} — ${why} · the gate runs again once it lands`)
 
 const byOf = (d: DecisionEntry): 'human' | 'policy' | 'arbiter' =>
   d.selected === 'policy' || d.selected === 'arbiter' ? d.selected : 'human'
@@ -132,7 +143,14 @@ async function judgeStop(
 
   const canon = loadCanon(root)
   const now = spec.currentSha?.(root, canon, cfg, target)
-  const stale = (now !== undefined && now !== owed.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), owed).length > 0
+  const moved = (now !== undefined && now !== owed.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), owed).length > 0
+  // Row 267 (T2c's hand-off). A checks-only round red only for base results a drive will lint is
+  // drive's: no decision now, which would revise the author over a red nobody judged yet. Only on
+  // unmoved content (slice 3 review I1): where the content or a hold moved, the re-gate is owed now,
+  // and it keys the base anew.
+  const wait = baseWait(root, owed)
+  if (!moved && awaitsDrive(wait)) return { kind: 'waiting', why: `drive lints the base of ${wait.waiting.join(' · ')} first` }
+  const stale = moved || wait.landed.length > 0
   const block = recommend({
     gate, target, entries, upstream: spec.upstreamOf?.(root, canon, target), stale,
     untrustedCmds: untrustedCmdsFor(root, criteriaOwner(canon, target)),
@@ -242,6 +260,14 @@ async function judgeStop(
     renderDecision(block).forEach((l) => ctx.out(l))
     ctx.out(line)
     return { kind: 'kept', stop: policy.stop, line, ...(policy.stop === 'trust-grant' ? { untrusted } : {}) }
+  }
+
+  // Row 270 (§5, C23). A stop only the human may decide: its block and the left line, no model call,
+  // nothing journaled. Drive sets it aside as a decision; needs-you names its act.
+  if (policy.kind === 'decision') {
+    renderDecision(block).forEach((l) => ctx.out(l))
+    ctx.out(leftLine(gate, target, policy.why))
+    return { kind: 'left', why: policy.why, code: EXIT.FINDINGS }
   }
 
   if (policy.kind === 'take') {
@@ -373,6 +399,7 @@ export function settledLine(r: SettleReport): string | undefined {
     case 'superseded': return kv('decided', `${r.gate} ${r.target} → ${s.decision} · ${s.by} (decided first)`)
     case 'moved': return undefined
     case 'busy': return undefined
+    case 'waiting': return waitingLine(r.gate, r.target, s.why)
     case 'routed': return s.line
     case 'kept': return s.line
     case 'left': return leftLine(r.gate, r.target, s.why)

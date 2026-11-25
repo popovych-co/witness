@@ -226,16 +226,21 @@ describe('witness trust per command (D205)', () => {
     expect(allowed(repo)).toEqual(['pnpm test', 'pnpm lint', 'echo first'])
   })
 
-  it('with no id it lists everything the repo runs, and a grant needs a target', async () => {
+  // Row 259 amends this: a repo command is granted with no target; a doc's command still takes its
+  // target, and so does --yes.
+  it('with no id it lists everything the repo runs; only a repo command is granted with no target', async () => {
     const repo = await planWithCmdCriterion()
     const res = await repo.cli(['trust'])
     expect(res.code).toBe(1)
     expect(res.stdout).toContain('pnpm test,ship.test,-,untrusted')
     expect(res.stdout).toContain('echo first,cmd: ac-a,ingest,untrusted')
     expect(res.stdout).toContain('test -d .git,need: 1,ingest,untrusted')
-    const bare = await repo.cli(['trust', '--cmd', 'pnpm test'], { tty: true })
-    expect(bare.code).toBe(2)
-    expect(bare.stderr).toContain('usage')
+    const docs = await repo.cli(['trust', '--cmd', 'echo first'], { tty: true })
+    expect(docs.code).toBe(2)
+    expect(docs.stderr).toContain('unknown-command')
+    const yes = await repo.cli(['trust', '--yes'], { tty: true })
+    expect(yes.code).toBe(2)
+    expect(yes.stderr).toContain('usage')
   })
 })
 

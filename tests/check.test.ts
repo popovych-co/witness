@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { stringify } from 'yaml'
+import { defaultValues } from '../src/settings.js'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -8,7 +10,7 @@ import { STAGE_SKILLS } from '../src/harness.js'
 import { appendEntry } from '../src/journal.js'
 import { NPX_LATEST } from '../src/version.js'
 import { worktreePath } from '../src/worktree.js'
-import { RECAP, SPEC_META, approve, commitEntry, decidedRepo, turnDecision, fakeScenario, gateEnv, ghState, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig, type TestRepo } from './helpers.js'
+import { RECAP, SPEC_META, approve, commitEntry, decidedRepo, turnDecision, fakeScenario, gateEnv, ghState, measuredEnv, seededRepo, shippableRepo, stampLive, undoCanonExclusion, writePlan, writeSpec, patchConfig, configYaml, type TestRepo } from './helpers.js'
 import { captureCarry, keepCarry, keepStopped } from '../src/carry.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { shellLine } from '../src/toon.js'
@@ -910,4 +912,34 @@ describe('witness check — the carry\'s leftovers (row 243)', () => {
       .toContain('auth-refresh-plan-1 is done, and this backup of its work stays')
     expect(again.code).toBe(res.code)
   }, 180_000)
+})
+
+describe('witness check — scratch runs (row 259)', () => {
+  it('names scratch runs off once while scratch.prepare is unset (row 259)', async () => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 2 })))
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'schema 2')
+    const out = (await repo.cli(['check'])).stdout
+    expect(out.split('\n').filter((l) => l.includes('feature-off'))).toHaveLength(1)
+    expect(out).toContain('scratch runs are off — scratch.prepare is not set · witness migrate proposes one')
+    repo.write('witness.config.yaml', configYaml())
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'schema 3')
+    expect((await repo.cli(['check'])).stdout).not.toContain('feature-off')
+  })
+})
+
+describe('reader-unused (row 262)', () => {
+  it('names a reader no part bears the name of, once each (row 262)', async () => {
+    const repo = await seededRepo()
+    patchConfig(repo, { readers: { biome: 'pnpm exec biome check --reporter=sarif .' } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'reader')
+    const out = (await repo.cli(['check'])).stdout
+    expect(out.split('\n').filter((l) => l.includes('reader-unused'))).toHaveLength(1)
+    expect(out).toContain('readers.biome is set, but no ship.lint part is named biome')
+    patchConfig(repo, { ship: { lint: { biome: 'pnpm exec biome check .' } }, readers: { biome: 'pnpm exec biome check --reporter=sarif .' } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'part')
+    expect((await repo.cli(['check'])).stdout).not.toContain('reader-unused')
+  })
 })

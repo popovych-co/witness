@@ -1,13 +1,20 @@
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { grantCommands } from '../src/allowlist.js'
 import { readStream } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { canonicalSha } from '../src/sha.js'
 import { findById, loadCanon } from '../src/scan.js'
-import { TOKEN_BROKEN, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, writeSpec } from './helpers.js'
+import { TOKEN_BROKEN, fakeCtx, fakeScenario, fixtureEnv, gateEnv, patchConfig, putVerdict, shippableRepo, writeSpec } from './helpers.js'
+import { BASE_LINT, baseLintKind } from '../src/base-lint.js'
+import { loadConfig, type Config } from '../src/config.js'
+import { acquireDriveLock } from '../src/drive-presence.js'
+import { journalShard } from '../src/jobs.js'
+
+const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
 
 // vitest-single fixture lands 4 files in the worktree diff (.gitignore, package.json,
 // src/token.ts, tests/token.test.ts) — coverage-minimum needs an anchor per each.
@@ -129,12 +136,103 @@ describe('a check names the commands trust blocked (A1)', () => {
     rmSync(join(repo.root, '.witness', 'allow.json'))           // a machine that trusts nothing yet
     const blocked = fakeCtx(repo.root, { env: gateEnv(scenario, { WITNESS_TRUST_CMDS: '' }) })
     expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
+    // Row 264: lint runs first (after the conflict-marker scan, row 265) and withholds — a checks-only
+    // round naming lint's command alone
+    expect(runs(repo, planId).at(-1)).toMatchObject({ checks_only: true })
+    expect(runs(repo, planId).at(-1)!.checks.map((c) => [c.name, c.untrusted])).toEqual([['markers', undefined], ['lint', ['true']]])
+    // lint trusted under its own command: the judged checks name theirs, and lint names none
+    patchConfig(repo, { ship: { lint: 'echo lint' } })
+    repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'a lint of its own')
+    grantCommands(repo.root, ['echo lint'])
+    expect(await runGate(blocked, 'ship', planId, { fresh: false, manual: false })).toBe(1)
     const checks = runs(repo, planId).at(-1)!.checks
     expect(checks.find((c) => c.name === 'tests')!.untrusted).toEqual(['true'])
-    expect(checks.find((c) => c.name === 'lint')!.untrusted).toEqual(['true'])
+    expect(checks.find((c) => c.name === 'lint')!.untrusted).toBeUndefined()
     const lane = checks.find((c) => c.name === 'drift-lane')!
     expect(lane.untrusted).toHaveLength(1)
     expect(lane.untrusted![0]).toContain('run -t "@spec:{id}"')
     expect(lane.detail).toBe('ac-rotate:fail')
   })
+})
+
+describe('the lint lane in a ship gate (row 263)', () => {
+  it('a ship gate journals a pending base key, the job answers it, and the next round reads it (row 263)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    patchConfig(repo, { ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part')
+    writeFileSync(join(wt, 'src', 'bad.ts'), 'LINTBAD\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...CLEAN, coverage: [...CLEAN.coverage, { anchor: 'src/bad.ts', note: 'read' }] })
+    const lint = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'lint')!.parts![0]!
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: true, manual: false })
+      const pending = lint()
+      expect(pending).toMatchObject({ part: 'ui', state: 'pending', key: expect.stringMatching(/^ui@[0-9a-f]{40}\.[0-9a-f]{12}$/) })
+      const owed = baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))
+      expect(owed).toEqual([{ kind: BASE_LINT, key: pending.key, shards: 1 }])
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), owed[0]!, 1)
+      expect(r).toMatchObject({ outcome: 'done', result: { exit: 0 } })
+      journalShard(repo.root, { kind: BASE_LINT, key: pending.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: (r as { result: unknown }).result })
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: true, manual: false })
+      expect(lint()).toEqual({ part: 'ui', state: 'red', key: pending.key })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 240_000)
+})
+
+describe('the lint lane in a ship gate — slice 3 review (row 263)', () => {
+  it('a re-run gate on unchanged content journals the judged verdict, never resumes the pending round (I1)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    patchConfig(repo, { ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part')
+    writeFileSync(join(wt, 'src', 'bad.ts'), 'LINTBAD\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...CLEAN, coverage: [...CLEAN.coverage, { anchor: 'src/bad.ts', note: 'read' }] })
+    const lint = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'lint')!.parts![0]!
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: true, manual: false })
+      const pending = lint()
+      expect(pending).toMatchObject({ state: 'pending' })
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), { kind: BASE_LINT, key: pending.key!, shards: 1 }, 1)
+      journalShard(repo.root, { kind: BASE_LINT, key: pending.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: (r as { result: unknown }).result })
+      await runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh: false, manual: false })
+      expect(runs(repo, planId)).toHaveLength(2)
+      expect(lint()).toEqual({ part: 'ui', state: 'red', key: pending.key })
+    } finally {
+      if (held.ok) held.value()
+    }
+  }, 240_000)
+})
+
+describe('the lint lane in a ship gate — final review (row 263)', () => {
+  it('a chat-mode round is judged once the base is linted, and starting drive spends no round (I2)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    patchConfig(repo, { ship: { lint: { ui: '! grep -rq LINTBAD src' } } })
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'a lint part')
+    writeFileSync(join(wt, 'src', 'bad.ts'), 'LINTBAD\n')
+    const scenario = fakeScenario()
+    putVerdict(scenario, { ...CLEAN, coverage: [...CLEAN.coverage, { anchor: 'src/bad.ts', note: 'read' }] })
+    const lint = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'lint')!.parts![0]!
+    const gate = (fresh: boolean) => runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), 'ship', planId, { fresh, manual: false })
+    await gate(true)                                        // chat mode: no drive
+    const first = lint()
+    expect(first).toMatchObject({ part: 'ui', state: 'not-measured', why: 'no drive runs jobs in this repo' })
+    const held = acquireDriveLock(repo.root, {})
+    try {
+      await gate(false)                                     // drive started: the base is still missing
+      expect(runs(repo, planId)).toHaveLength(1)
+      const owed = baseLintKind.owed(repo.root, cfgOf(repo.root), loadCanon(repo.root))
+      expect(owed).toEqual([{ kind: BASE_LINT, key: first.key, shards: 1 }])
+      const r = baseLintKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), owed[0]!, 1)
+      journalShard(repo.root, { kind: BASE_LINT, key: first.key!, shard: 1, of: 1, outcome: 'done', ms: 1, result: (r as { result: unknown }).result })
+    } finally {
+      if (held.ok) held.value()
+    }
+    await gate(false)
+    expect(runs(repo, planId)).toHaveLength(2)
+    expect(lint()).toEqual({ part: 'ui', state: 'red', key: first.key })
+  }, 240_000)
 })

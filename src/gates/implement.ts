@@ -18,7 +18,9 @@ import { diffReviewedSha, effortOf, implementReviewedSha } from '../reviewed.js'
 import { worktreePath } from '../worktree.js'
 import { registerGate, type GateInput, type LensOverride } from '../gate.js'
 import { contentSha } from '../content-sha.js'
-import { timedCheck, type GateCheck } from '../rounds.js'
+import { runChecks, type CheckStep } from '../checks.js'
+import { markersCheck } from '../markers.js'
+import { lintCheck } from '../lint-lane.js'
 import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
 
@@ -139,49 +141,54 @@ registerGate({
 
     // Row 251. Each check is timed with the inputs only it reads; shared inputs (`files`, the
     // canon) stay outside. `present` is read again by the prompt below, so it is assigned inside.
-    const checks: GateCheck[] = []
-    checks.push(await timedCheck(() => ({ name: 'diff', ok: files.length > 0,
-      detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' })))
-
+    // Row 264. The checks are steps the registry orders and times (`runChecks`); a withholding red
+    // ends the round before any lens, and a step it cut leaves its side output empty.
     let present: string[] = []
-    checks.push(await timedCheck(() => {
-      const report = evidenceForDiff(wt, root, plan, base)
-      const missing = report.required.filter((r) => !(r.red && r.green && !r.vacuous))
-      // Row 241 (R10). The deterministic lane cannot tell a behavior already on the base from a test
-      // that asserts nothing, so it says so to the reviewers and in the stop's evidence.
-      present = report.required.filter((r) => r.present === true)
-        .map((r) => `already present: ${r.presentStep ?? r.tag} — its test passed before any change`)
-      const presentNote = present.length > 0 ? ` · ${present.join(' · ')}` : ''
-      return { name: 'evidence', ok: report.satisfied,
-        detail: (report.satisfied
-          ? (report.required.length > 0
-              ? `${String(plan.meta.parent)}: red→green`
-              : `no ${String(plan.meta.parent)} tests in the diff — nothing to witness`)
-          : missing.map((m) => `${m.tag}: red=${m.red} green=${m.green}${m.vacuous ? ' vacuous' : ''}`).join(' · ')) + presentNote }
-    }))
-
-    // Row 97: the obligation created by editing someone's tests is that those tests still
-    // pass — not that their whole spec is satisfied, which is the out-of-band drift sweep's
-    // job. `runCriteria` is deliberately NOT used here: it executes the foreign spec's `cmd`
-    // criteria, arbitrary trust-gated commands, inside an unattended gate.
-    checks.push(await timedCheck(async () => {
-      const foreign = changedTestSpecs(wt, base, String(plan.meta.parent))
-      const regression = await runRegression(wt, ctx, root, foreign, (id) => findById(canon, id) !== undefined)
-      const regressionUntrusted = [...new Set(regression.flatMap((r) => (r.untrusted !== undefined ? [r.untrusted] : [])))]
-      return {
-        name: 'regression',
-        // `unknown` does not fail: witness cannot judge an obligation for a spec it does not
-        // have, and failing it re-creates the unsatisfiable check this row deletes. It is
-        // named in the detail, which is where a typo'd tag surfaces.
-        ok: regression.every((r) => r.state === 'green' || r.state === 'unknown'),
-        detail: regression.length === 0
-          ? 'no foreign spec tests touched'
-          : regression.map((r) => `${r.spec}:${r.state}`).join(' · '),
-        ...(regressionUntrusted.length > 0 ? { untrusted: regressionUntrusted } : {}),
-      }
-    }))
-
-    checks.push(await timedCheck(async () => laneCheck(await runCriteria(wt, ctx, parent, { trustRoot: root }))))
+    const steps: CheckStep[] = [
+      // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
+      // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
+      { name: 'markers', run: () => markersCheck(wt, base, files) },
+      { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
+      { name: 'diff', run: () => ({ name: 'diff', ok: files.length > 0,
+        detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' }) },
+      { name: 'evidence', run: () => {
+        const report = evidenceForDiff(wt, root, plan, base)
+        const missing = report.required.filter((r) => !(r.red && r.green && !r.vacuous))
+        // Row 241 (R10). The deterministic lane cannot tell a behavior already on the base from a test
+        // that asserts nothing, so it says so to the reviewers and in the stop's evidence.
+        present = report.required.filter((r) => r.present === true)
+          .map((r) => `already present: ${r.presentStep ?? r.tag} — its test passed before any change`)
+        const presentNote = present.length > 0 ? ` · ${present.join(' · ')}` : ''
+        return { name: 'evidence', ok: report.satisfied,
+          detail: (report.satisfied
+            ? (report.required.length > 0
+                ? `${String(plan.meta.parent)}: red→green`
+                : `no ${String(plan.meta.parent)} tests in the diff — nothing to witness`)
+            : missing.map((m) => `${m.tag}: red=${m.red} green=${m.green}${m.vacuous ? ' vacuous' : ''}`).join(' · ')) + presentNote }
+      } },
+      // Row 97: the obligation created by editing someone's tests is that those tests still
+      // pass — not that their whole spec is satisfied, which is the out-of-band drift sweep's
+      // job. `runCriteria` is deliberately NOT used here: it executes the foreign spec's `cmd`
+      // criteria, arbitrary trust-gated commands, inside an unattended gate.
+      { name: 'regression', run: async () => {
+        const foreign = changedTestSpecs(wt, base, String(plan.meta.parent))
+        const regression = await runRegression(wt, ctx, root, foreign, (id) => findById(canon, id) !== undefined)
+        const regressionUntrusted = [...new Set(regression.flatMap((r) => (r.untrusted !== undefined ? [r.untrusted] : [])))]
+        return {
+          name: 'regression',
+          // `unknown` does not fail: witness cannot judge an obligation for a spec it does not
+          // have, and failing it re-creates the unsatisfiable check this row deletes. It is
+          // named in the detail, which is where a typo'd tag surfaces.
+          ok: regression.every((r) => r.state === 'green' || r.state === 'unknown'),
+          detail: regression.length === 0
+            ? 'no foreign spec tests touched'
+            : regression.map((r) => `${r.spec}:${r.state}`).join(' · '),
+          ...(regressionUntrusted.length > 0 ? { untrusted: regressionUntrusted } : {}),
+        }
+      } },
+      { name: 'drift-lane', run: async () => laneCheck(await runCriteria(wt, ctx, parent, { trustRoot: root })) },
+    ]
+    const { checks, withheld } = await runChecks(steps)
 
     const effort = effortOf(root, planId)
     const recap = effort ? latestRecap(root, effort) : undefined
@@ -196,12 +203,14 @@ registerGate({
       artifactSha: canonicalSha(plan.meta, plan.body),
       // D151. The primary root is where canon lives; a reviewer may cite the plan it judges.
       reviewed: { kind: 'tree', root: wt, files, canonRoot: root, canonDirs: stateDirs(root) },
-      promptBody: codePromptBody(wt, base, files,
+      // Row 264: with the review withheld no lens reads the prompt, so it is not built.
+      promptBody: withheld !== undefined ? '' : codePromptBody(wt, base, files,
         `### Plan under implementation: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}` +
         (present.length > 0
           ? `\n\n### Evidence notes\n${present.map((p) => `- ${p}: judge whether the test tells the behavior apart from its absence`).join('\n')}`
           : '')),
       checks,
+      ...(withheld !== undefined ? { withheld } : {}),
       stamps: [],
       lensOverrides,
       skipLenses,

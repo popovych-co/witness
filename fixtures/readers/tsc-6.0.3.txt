@@ -1,0 +1,5 @@
+> fewhats@0.0.0 typecheck /repo
+> tsc -p tsconfig.json --noEmit --pretty false
+apps/web/src/app/laptop/release-state.ts(54,14): error TS2322: Type 'string' is not assignable to type 'number'.
+packages/logger/src/index.ts(61,31): error TS2307: Cannot find module '../../../apps/web/src/lib/x' or its corresponding type declarations.
+error TS5083: Cannot read file '/repo/tsconfig.base.json'.

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, reopenRows, runRow, type Act } from './act.js'
-import { grantAct, grantRowsOf } from './allowlist.js'
+import { grantAct, grantRowsOf, repoGrantAct } from './allowlist.js'
+import { JOB_STREAM } from './streams.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import type { Aside } from './drive.js'
@@ -9,11 +10,11 @@ import { handoffLine, resolveDriver } from './harness.js'
 import { readStream } from './journal.js'
 import { unmetNeeds } from './needs.js'
 import type { Decision } from './recommend.js'
-import type { DecisionEntry } from './rounds.js'
+import { liveActs, type DecisionEntry } from './rounds.js'
 import { findById, type Canon } from './scan.js'
 import { cmd, logSafe, shellLine, visible } from './toon.js'
 import { pendingTxn } from './txn.js'
-import { heldPlan, owedDecisions, parkedBy, parkedGates } from './verbs/next.js'
+import { actFacts, heldPlan, owedDecisions, parkedBy, parkedGates } from './verbs/next.js'
 import type { ShipOutcomeEntry } from './ship-outcome.js'
 import { isId } from './dsl.js'
 import { recoverChoice } from './verbs/recover.js'
@@ -43,7 +44,8 @@ export type NeedYou = ItemBase & (
   | { kind: 'design-look'; open: Act; show: Act }
   | { kind: 'trust-grant'; commands?: TrustGrant[]; list: Act }          // no commands: read from the live folder
   | { kind: 'need'; need: string; text: string; holds: string[]; satisfy: Act }
-  | { kind: 'decision'; gate: string; show: Act }
+  // Row 270 (§5): `book`, the live `--book` act where the stop holds a red only a booking clears.
+  | { kind: 'decision'; gate: string; show: Act; book?: Act }
   | { kind: 'conversation'; ask?: string; handoff?: string }
   // Row 242: from the plan's standing merge record — the head the merge is pinned to, the method
   // `ship.merge` names, why it waits, and `witness ship` to re-check. A fix stop never offers a merge;
@@ -114,11 +116,14 @@ export function needsYou(
       add({ kind: 'design-look', target: t, key: `design-look:${t}`,
         open: cliAct('design', t, '--open'), show: cliAct('decide', 'design', t, '--show') })
     } else {
+      // Row 260: drive's jobs serve no artifact, so their wait offers the targetless repo grant.
+      const repo = t === JOB_STREAM
       const commands = (a.trust ?? []).map((c): TrustGrant => {
-        const grant = grantAct(t, c)
+        const grant = repo ? repoGrantAct(c) : grantAct(t, c)
         return { cmd: visible(c.cmd), source: visible(c.source), ...(grant !== undefined ? { grant } : {}) }
       })
-      add({ kind: 'trust-grant', target: t, key: `trust-grant:${t}`, ...(commands.length > 0 ? { commands } : {}), list: cliAct('trust', t) })
+      add({ kind: 'trust-grant', target: t, key: `trust-grant:${t}`, ...(commands.length > 0 ? { commands } : {}),
+        list: repo ? cliAct('trust') : cliAct('trust', t) })
     }
   }
   for (const u of unmetNeeds(canon)) {
@@ -127,8 +132,14 @@ export function needsYou(
   }
   for (const o of owedDecisions(root, canon)) {
     if (named.has(o.target) || drives(o.target)) continue
+    // Row 270 (§5). The stop's `--book`, where its live acts hold one. Read from the journal's facts:
+    // this module cannot reach the gate registry (gate.ts imports next.ts, which imports this), so a
+    // content edit since the stop is not seen here — `decide` then refuses it and names the re-gate.
+    const entries = readStream(root, o.target)
+    const book = liveActs(o.gate, o.target, entries, actFacts(root, cfg, canon, o.gate, o.target, entries, {}))
+      .acts.find((a) => a.argv.includes('--book'))
     add({ kind: 'decision', target: o.target, key: `decision:${o.target}:${o.gate}`, gate: o.gate,
-      show: cliAct('decide', o.gate, o.target, '--show') })
+      show: cliAct('decide', o.gate, o.target, '--show'), ...(book !== undefined ? { book } : {}) })
   }
   // Row 242: a plan's standing merge or fix record, from the journal — so the rows survive a drive
   // restart and agree with `next` and drive, which read the same predicate (`heldPlan`).
@@ -210,7 +221,7 @@ export function needYouRows(item: NeedYou): string[] {
         runRow(item.satisfy),
       ]
     case 'decision':
-      return [`wait: decision · ${item.gate} ${item.target}`, runRow(item.show)]
+      return [`wait: decision · ${item.gate} ${item.target}`, runRow(item.show), ...(item.book !== undefined ? [runRow(item.book, 'book')] : [])]
     case 'conversation': {
       if (item.notice === true) return ['nothing queued — /witness <what to build> in a chat']
       const who = item.target === TARGETLESS ? `brainstorm${item.ask !== undefined ? ` · ask ${item.ask}` : ''}` : item.target

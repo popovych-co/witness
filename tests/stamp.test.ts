@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { pinTree } from '../src/cf-tree.js'
 import { lazyStamp } from '../src/stamp.js'
 import { readStream, type StatusEntry } from '../src/journal.js'
 import { findById, loadCanon } from '../src/scan.js'
@@ -100,5 +101,14 @@ describe('check --drift --deep', () => {
     })
     await seed.repo.cli(['check', '--drift', '--deep', seed.specId], { env: gateEnv(scenario) })
     expect(readFileSync(join(scenario, 'claude-calls/call-1/argv'), 'utf8')).toContain('--tools\nRead,Grep,Glob\n')
+  })
+})
+
+describe('lazyStamp — scratch-run refs (row 258)', () => {
+  it('the merge stamp drops the plan\'s scratch-run refs (row 258)', async () => {
+    const { repo, planId, ctx } = await mergedSeed()
+    expect(pinTree(repo.root, planId, repo.git('rev-parse', 'HEAD^{tree}')).ok).toBe(true)
+    lazyStamp(repo.root, ctx, loadCanon(repo.root))
+    expect(repo.git('for-each-ref', `refs/witness/cf/${planId}/`)).toBe('')
   })
 })

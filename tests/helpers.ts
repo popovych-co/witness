@@ -18,7 +18,7 @@ import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
 import { stateDirs } from '../src/gitio.js'
 import type { Clock } from '../src/usage.js'
-import { parseDocument, stringify } from 'yaml'
+import { isMap as isYamlMap, parseDocument, stringify } from 'yaml'
 import { defaultValues, withValues } from '../src/settings.js'
 
 export interface CliResult { code: number; stdout: string; stderr: string }
@@ -509,7 +509,7 @@ export function copyFixture(repo: TestRepo, name: 'vitest-single' | 'workspace')
   repo.git('commit', '-m', `fixture: ${name}`)
 }
 
-// Row 193. A complete schema-2 file — every setting at the list's default, `patch` over it — with
+// Row 193. A complete newest-schema file — every setting at the list's default, `patch` over it — with
 // no comments. The one way a test writes a whole config; `patchConfig` changes one in place.
 export function configYaml(patch: Record<string, unknown> = {}): string {
   return stringify(withValues(defaultValues({ harness: 'claude-code' }), patch))
@@ -517,14 +517,41 @@ export function configYaml(patch: Record<string, unknown> = {}): string {
 
 const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 
+// Row 263. A lint tool for tests, written as fake-lint.mjs at the repo root (the caller commits it):
+// an error is each line holding BAD in a .ts file under src/. Its four commands: `check` is red when
+// any error exists; `sarif` prints them as SARIF; `garbage` prints no report; `many` prints 2,001
+// distinct errors. It sets `process.exitCode` rather than calling `process.exit`, which cuts a pipe
+// write past 64 KiB (T2a's probe) — `many`'s report is ~400 KB.
+const FAKE_LINT = `// A lint tool for tests: an error is each line holding BAD in a .ts file under src/.
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+const found = []
+if (existsSync('src')) {
+  for (const f of readdirSync('src', { recursive: true }).map(String).filter((n) => n.endsWith('.ts')).sort()) {
+    readFileSync(\`src/\${f}\`, 'utf8').split('\\n').forEach((l, i) => { if (l.includes('BAD')) found.push({ file: \`src/\${f}\`, line: i + 1 }) })
+  }
+}
+const mode = process.argv[2]
+const result = (ruleId, file, line) => ({ ruleId, level: 'error', locations: [{ physicalLocation: { artifactLocation: { uri: \`\${process.cwd()}/\${file}\` }, region: { startLine: line } } }] })
+if (mode === 'sarif') process.stdout.write(JSON.stringify({ version: '2.1.0', runs: [{ results: found.map((x) => result('lint/test/noBad', x.file, x.line)) }] }))
+if (mode === 'many') process.stdout.write(JSON.stringify({ runs: [{ results: Array.from({ length: 2_001 }, (_, i) => result(\`lint/test/r\${i}\`, 'src/many.ts', 1)) }] }))
+if (mode === 'garbage') process.stdout.write('> banner\\nnot a report')
+process.exitCode = mode === 'many' || found.length > 0 ? 1 : 0
+`
+export function fakeLint(repo: TestRepo): { check: string; sarif: string; garbage: string; many: string } {
+  repo.write('fake-lint.mjs', FAKE_LINT)
+  const at = (mode: string) => `node fake-lint.mjs ${mode}`
+  return { check: at('check'), sarif: at('sarif'), garbage: at('garbage'), many: at('many') }
+}
+
 // Sets (or, for undefined, deletes) each leaf of `patch` in the repo's witness.config.yaml, keeping
-// everything else as written. Writes the file and does not commit it.
+// everything else as written. A map in the patch where the file holds no map (a part map over a
+// one-command `ship.lint`, row 261) is set whole. Writes the file and does not commit it.
 export function patchConfig(repo: TestRepo, patch: Record<string, unknown>): void {
   const doc = parseDocument(repo.read('witness.config.yaml'))
   const apply = (obj: Record<string, unknown>, at: string[]) => {
     for (const [k, val] of Object.entries(obj)) {
       if (val === undefined) doc.deleteIn([...at, k])
-      else if (isPatchMap(val)) apply(val, [...at, k])
+      else if (isPatchMap(val) && isYamlMap(doc.getIn([...at, k], true))) apply(val, [...at, k])
       else doc.setIn([...at, k], val)
     }
   }
@@ -736,6 +763,17 @@ export function crashVerifyRed(cwd: string, planId: string, args: string[] = [])
   return new Promise((done) => {
     const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), 'verify-red', planId, ...args],
       { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: 'verify-red-held' }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+    c.on('close', (code) => done(code))
+  })
+}
+
+// Row 270. Any witness command in a process of its own that dies at the crash seam `seam` (exit 9):
+// crashPoint exits the process, so the crashed write never runs in the test's own worker.
+export function crashCli(cwd: string, args: string[], seam: string, env: Record<string, string> = {}): Promise<number | null> {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  return new Promise((done) => {
+    const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), ...args],
+      { cwd, env: fixtureEnv({ ...env, WITNESS_CRASH_AFTER: seam }) as NodeJS.ProcessEnv, stdio: 'ignore' })
     c.on('close', (code) => done(code))
   })
 }

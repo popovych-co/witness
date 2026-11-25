@@ -269,3 +269,15 @@ describe('what needs you is a model (rows 139/203)', () => {
     ])
   })
 })
+
+describe('needs-you: the jobs trust wait (row 260)', () => {
+  it('a jobs trust wait offers the targetless grant for each command (row 260)', async () => {
+    const repo = await seededRepo()
+    const items = needsYou(repo.root, fakeCtx(repo.root), cfgOf(repo.root), loadCanon(repo.root),
+      [{ target: 'jobs', kind: 'kept', stop: 'trust-grant', trust: [{ cmd: 'sh prepare.sh', source: 'scratch.prepare' }] }])
+    expect(needYouRows(items.find((i) => i.kind === 'trust-grant')!)).toEqual([
+      'wait: trust grant · jobs · sh prepare.sh (scratch.prepare)',
+      "  run: witness trust --cmd 'sh prepare.sh'",
+    ])
+  })
+})

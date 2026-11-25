@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { parse as parseYaml } from 'yaml'
 import { EXIT, type Ctx } from '../cli.js'
-import { SCHEMA_VERSION, configPath, keyViolations, resolveSettings, type Resolved } from '../config.js'
+import { SCHEMA_VERSION, configPath, keyViolations, partsOf, resolveSettings, type Resolved } from '../config.js'
 import { inlineValue, readComments, renderConfig, type HumanComments } from '../config-file.js'
 import { commitWithTrailer, primaryRoot, tryGit } from '../gitio.js'
 import { resolveDriver } from '../harness.js'
@@ -14,11 +14,19 @@ import { withScratch } from '../scratch.js'
 import { GATE_NAMES, SETTINGS, getIn, settingAt } from '../settings.js'
 import { execFileSync } from '../spawn.js'
 import { kv } from '../toon.js'
-import { journalRel } from '../journal.js'
+import { appendEntry, entryLine, journalRel } from '../journal.js'
 import { findById, loadCanon } from '../scan.js'
 import { prepareStamp, writeStamp, type PreparedStamp } from '../stamp.js'
 import { crashPoint, withTxn } from '../txn.js'
 import { templateDraft } from '../principles.js'
+import { detectPrepare } from '../prepare.js'
+import { detectReaders, readerUnused, unboundReaders } from '../lint-parts.js'
+import { runRow } from '../act.js'
+import { grantCommands, repoGrantAct, shownCmd, trustedNow, UNGRANTABLE, type RunCommand } from '../allowlist.js'
+import { sessionMarker } from '../drive-presence.js'
+import { TRUST_STREAM } from '../streams.js'
+import { hasControl } from '../toon.js'
+import { repoTrustEntry, trustStreamTaken } from './trust.js'
 
 // Row 193 §4.6, the verb row 23 reserved: bring witness.config.yaml to this CLI's schema and
 // make it complete — every setting with its comment, every value that is a choice kept, every
@@ -34,11 +42,36 @@ function templateStamp(root: string): PreparedStamp | undefined {
 
 const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineValue(val))
 
+// Row 259. The settings whose value is a command witness runs: a `filled` or `added` one is a
+// proposal the human may grant in the same act. Rows 261–262: the lint parts and the readers.
+export const COMMAND_SETTINGS: readonly string[] = [
+  'ship.lint', 'readers.biome', 'readers.eslint', 'readers.clippy', 'readers.tsc', 'scratch.prepare',
+]
+
+// A command setting migrate fills (ambient) or adds (not ambient: the readers). A `ship.lint` is
+// one proposal per part, each under its own source (row 261); `none` is never one.
+export const proposalsOf = (changes: readonly Change[]): RunCommand[] =>
+  changes.filter((c) => (c.kind === 'filled' || c.kind === 'added') && COMMAND_SETTINGS.includes(c.path))
+    .flatMap((c): RunCommand[] => {
+      if (c.path === 'ship.lint') return (partsOf('ship.lint', c.to) ?? []).map((p) => ({ cmd: p.cmd, source: p.source }))
+      return typeof c.to === 'string' && c.to !== 'none' ? [{ cmd: c.to, source: c.path }] : []
+    })
+
+// What stays for the human: each untrusted proposal, and its grant to run (none for a command the
+// verb would not take).
+function untrustedLines(left: readonly RunCommand[]): string[] {
+  return left.flatMap((c) => {
+    const act = repoGrantAct(c)
+    return [`trust: ${shownCmd(c)} untrusted — the human grants it`, act === undefined ? `  note: ${UNGRANTABLE}` : runRow(act)]
+  })
+}
+
 // What an ambient setting meant while it was absent, so a `filled:` line says what it replaces.
 function filledWhy(path: string): string {
   if (path === 'harness') return "was undeclared · the open session's harness judged"
   if (path.endsWith('.model')) return 'was unpinned · the harness default model answered'
   if (path === 'criteria.runner') return 'was unset · criteria could not run'
+  if (path === 'scratch.prepare') return 'was unset · scratch runs were off'
   return `was unset · ship reported ${path === 'ship.test' ? 'tests' : 'lint'} not configured`
 }
 
@@ -84,7 +117,9 @@ const humanLines = (h: HumanComments): string[] => [...h.top, ...[...h.above.val
 export function guardMigration(input: {
   before: Resolved; after: Resolved; changes: readonly Change[]; human: HumanComments; newText: string
 }): Violation[] {
-  const named = new Set(input.changes.filter((c) => c.kind === 'filled' || c.kind === 'moved').map((c) => c.path))
+  // Row 262. An `added` change is named too: a reader is not ambient, so the in-memory read fills
+  // `none` while the write takes what was detected, and the `added:` line names that value.
+  const named = new Set(input.changes.filter((c) => c.kind === 'filled' || c.kind === 'moved' || c.kind === 'added').map((c) => c.path))
   const out: Violation[] = []
   for (const s of SETTINGS) {
     const was = getIn(input.before as unknown as Record<string, unknown>, s.path)
@@ -156,6 +191,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const driver = resolveDriver(ctx.env, undefined)
   const written = migrateValues(raw, schema, {
     mode: 'write', harness: driver.ok ? driver.value.harness.name : undefined,
+    detected: { 'scratch.prepare': detectPrepare(root), ...detectReaders(root) },
   })
   if (!written.ok) return refused(written.violations)
   const { changes } = written.value
@@ -188,33 +224,70 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('config', `schema ${schema} → ${SCHEMA_VERSION}`))
   }
   if (stamp !== undefined) ctx.out(kv('principles', 'draft → approved — the untouched template an older init wrote draft'))
+  // Whole-branch review I2. A reader this file sets beside a ship.lint with no part of its name binds
+  // nothing until the part is named for its tool — said where the reader is written, not only by check.
+  const readers = (getIn(reread, 'readers') ?? {}) as Record<string, unknown>
+  for (const tool of unboundReaders(readers, partsOf('ship.lint', getIn(reread, 'ship.lint')))) ctx.out(`note: ${readerUnused(tool)}`)
   if (current && stamp === undefined) return EXIT.OK
+  // Row 259. The commands this migrate proposes that this machine does not trust yet.
+  const untrusted = proposalsOf(changes).filter((c) => !trustedNow(root, ctx.env, c.cmd))
   if (dryRun) {
     if (!current) {
       ctx.out('diff:')
       diffOf(oldText, newText).forEach((l) => ctx.out(l))
     }
+    untrustedLines(untrusted).forEach((l) => ctx.out(l))
     return EXIT.OK
   }
+  // Asked once per command at a terminal, outside any session, before the write: a grant is the
+  // human's (row 205), and it rides the config's own transaction and commit. A command the verb
+  // would not take is never offered.
+  const asked: string[] = []
+  if (!current && ctx.isTTY && sessionMarker(ctx.env) === undefined) {
+    for (const c of untrusted.filter((x) => !hasControl(x.cmd))) {
+      const answer = await ctx.ask(`trust: ${shownCmd(c)}\ngrant? saves to .witness/allow.json (gitignored) [y/N]`)
+      if (answer.trim().toLowerCase().startsWith('y')) asked.push(c.cmd)
+    }
+  }
 
-  const files = [...(current ? [] : ['witness.config.yaml']), ...(stamp !== undefined ? [stamp.rel, journalRel(stamp.stream)] : [])]
-  const subject = [
-    ...(current ? [] : [`config schema ${schema} → ${SCHEMA_VERSION}`]),
-    ...(stamp !== undefined ? ['principles approved (the untouched template)'] : []),
-  ].join(' · ')
   const lock = acquireLock(root)
   if (!lock.ok) { renderRefusal(lock.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
+  let granted: string[] = []
   try {
-    const marker = { op: 'migrate', files, ...(stamp !== undefined ? { journal: { stream: stamp.stream, line: stamp.line } } : {}) }
+    // A trust stream another history holds skips the grant and never blocks the config.
+    const taken = asked.length > 0 ? trustStreamTaken(root) : undefined
+    if (taken !== undefined) ctx.out(`note: ${taken.rule}: ${taken.got} — ${taken.want}`)
+    granted = taken === undefined ? asked : []
+    const trustEntry = repoTrustEntry(granted, 'migrate')
+    const files = [
+      ...(current ? [] : ['witness.config.yaml']), ...(stamp !== undefined ? [stamp.rel, journalRel(stamp.stream)] : []),
+      ...(granted.length > 0 ? [journalRel(TRUST_STREAM)] : []),
+    ]
+    const subject = [
+      ...(current ? [] : [`config schema ${schema} → ${SCHEMA_VERSION}`]),
+      ...(stamp !== undefined ? ['principles approved (the untouched template)'] : []),
+      ...(granted.length > 0 ? [`trust: ${granted.length} repo command(s)`] : []),
+    ].join(' · ')
+    const lines = [
+      ...(stamp !== undefined ? [{ stream: stamp.stream, line: stamp.line }] : []),
+      ...(granted.length > 0 ? [{ stream: TRUST_STREAM, line: entryLine(trustEntry) }] : []),
+    ]
+    const marker = { op: 'migrate', files, ...(lines.length > 0 ? { journalMulti: lines } : {}) }
     const commit = withTxn(root, marker, () => {
       if (!current) writeFileSync(p, newText)
       if (stamp !== undefined) writeStamp(root, stamp)
+      if (granted.length > 0) appendEntry(root, TRUST_STREAM, trustEntry)
       crashPoint(ctx.env, 'migrate-write')
-      return commitWithTrailer(root, files, `migrate: ${subject}`)
+      const committed = commitWithTrailer(root, files, `migrate: ${subject}`)
+      // D154's order: allow.json takes a grant only once its record is committed.
+      if (committed.ok && granted.length > 0) grantCommands(root, granted)
+      return committed
     })
     if (!commit.ok) return refused(commit.violations)
   } finally {
     lock.value()
   }
+  if (granted.length > 0) ctx.out(kv('trusted', granted.join(' · ')))
+  untrustedLines(untrusted.filter((c) => !granted.includes(c.cmd))).forEach((l) => ctx.out(l))
   return EXIT.OK
 }

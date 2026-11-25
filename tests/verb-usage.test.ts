@@ -22,6 +22,12 @@ function ownUsage(): Map<string, string> {
 // in sync, which is how `decide` came to advertise every flag except `--pin` after that
 // flag shipped: the map is edited in a different file from the verb that grew the flag.
 describe('verb usage strings', () => {
+  it('dismiss names the ledger form (row 269)', () => {
+    expect(ownUsage().get('dismiss')).toContain('witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>"')
+  })
+  it('decide names --book <check> (row 270)', () => {
+    expect(ownUsage().get('decide')).toContain('--approve|--revise|--stop|--book <check>')
+  })
   it('--help agrees with the usage each verb prints for itself', async () => {
     const repo = await seededRepo({ noRecap: true })
     const drift: string[] = []

@@ -7,7 +7,7 @@ import { mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { contained, JOB_HOST_ENV, jobHost, type JobHost } from './contain.js'
 import { withRunnerTurn } from './runner-lock.js'
-import { execFileSync, execSync, system32 } from './spawn.js'
+import { spawnSync, system32 } from './spawn.js'
 import { hasControl } from './toon.js'
 
 export type RunnerConfig =
@@ -56,7 +56,11 @@ export function interrupted(signal: NodeJS.Signals): Violation {
     're-run it where nothing stops it before the suite ends — no outcome was recorded')
 }
 
-export function execCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
+// Row 255: `turn: false` takes no turn of its own and runs at once, passing `ctx.env` unchanged —
+// ship's lint lane (which holds no turn), and a job's command inside the turn its verb already holds,
+// whose WITNESS_RUNNER_TURN must reach the command so a witness it invokes re-enters that turn.
+export function execCommand(runRoot: string, ctx: Ctx, cmd: string, opts: { turn?: boolean } = {}): RunOutcome {
+  if (opts.turn === false) return runCommand(runRoot, ctx, cmd)
   return withRunnerTurn(runRoot, ctx, cmd, (env) => runCommand(runRoot, { ...ctx, env }, cmd))
 }
 
@@ -73,42 +77,47 @@ export function sayNoJob(ctx: Ctx, host: JobHost): void {
 // as a failed lane. 64 MiB: the same bound the reviewer spawn uses.
 const MAX_BUFFER = 64 * 1024 * 1024
 
+// Row 262. A run's whole output, up to MAX_BUFFER each: a reader's report is its stdout, whole.
+// `status` is the exit code (null when a signal ended it); `signal` as row 247 reads it, for a red run.
+export interface Captured { status: number | null; stdout: string; stderr: string; signal?: NodeJS.Signals }
+
 // Row 218. On win32 the run starts in a job (src/contain.ts), so whatever the suite starts —
 // its app detached, an installer that starts it and exits — ends when the run does, and with
 // the turn's holder if that is killed alone: libuv's own job takes the host, the host's job
 // the rest. The shell is System32's cmd.exe with Node's own argv for execSync, never ComSpec,
-// which may name a shell with other syntax (row 164). Elsewhere the run is execSync's.
-function runCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
-  try {
-    let out: Buffer | string
-    if (process.platform === 'win32') {
-      const host = jobHost(ctx.env)
-      sayNoJob(ctx, host)
-      const run = contained({
-        file: system32(ctx.env, 'cmd.exe'),
-        args: ['/d', '/s', '/c', `"${cmd}"`],
-        env: { ...ctx.env, [JOB_HOST_ENV]: host.ok ? 'job' : 'none' },
-        windowsVerbatimArguments: true,
-      }, host)
-      // execFileSync hands its options to spawnSync, which reads windowsVerbatimArguments;
-      // @types/node leaves it off ExecFileSyncOptions, so they travel as a variable
-      const opts = {
-        cwd: runRoot, env: run.env as NodeJS.ProcessEnv, stdio: 'pipe' as const, maxBuffer: MAX_BUFFER,
-        windowsVerbatimArguments: run.windowsVerbatimArguments,
-      }
-      out = execFileSync(run.file, run.args, opts)
-    } else {
-      out = execSync(cmd, { cwd: runRoot, env: ctx.env as NodeJS.ProcessEnv, stdio: 'pipe', maxBuffer: MAX_BUFFER })
-    }
-    return { exitZero: true, output: String(out).slice(-4000) }
-  } catch (e) {
-    const err = e as { stdout?: unknown; stderr?: unknown; signal?: NodeJS.Signals | null; status?: number | null }
-    const signal = err.signal ?? (typeof err.status === 'number' ? SIGNAL_EXIT[err.status] : undefined)
-    return {
-      exitZero: false, output: `${String(err.stdout ?? '')}${String(err.stderr ?? '')}`.slice(-4000),
-      ...(signal ? { signal } : {}),
-    }
+// which may name a shell with other syntax (row 164). Elsewhere the run is a shell's, as
+// execSync's. Row 262: spawnSync is what execSync and execFileSync run underneath, minus the
+// throw, so a green run keeps its stderr too.
+export function captureCommand(runRoot: string, ctx: Ctx, cmd: string): Captured {
+  let ret: ReturnType<typeof spawnSync>
+  if (process.platform === 'win32') {
+    const host = jobHost(ctx.env)
+    sayNoJob(ctx, host)
+    const run = contained({
+      file: system32(ctx.env, 'cmd.exe'),
+      args: ['/d', '/s', '/c', `"${cmd}"`],
+      env: { ...ctx.env, [JOB_HOST_ENV]: host.ok ? 'job' : 'none' },
+      windowsVerbatimArguments: true,
+    }, host)
+    ret = spawnSync(run.file, run.args, {
+      cwd: runRoot, env: run.env as NodeJS.ProcessEnv, stdio: 'pipe', maxBuffer: MAX_BUFFER,
+      windowsVerbatimArguments: run.windowsVerbatimArguments,
+    })
+  } else {
+    ret = spawnSync(cmd, { shell: true, cwd: runRoot, env: ctx.env as NodeJS.ProcessEnv, stdio: 'pipe', maxBuffer: MAX_BUFFER })
   }
+  const stdout = String(ret.stdout ?? '')
+  const stderr = String(ret.stderr ?? '')
+  if (ret.error === undefined && ret.status === 0) return { status: 0, stdout, stderr }
+  const signal = ret.signal ?? (typeof ret.status === 'number' ? SIGNAL_EXIT[ret.status] : undefined)
+  return { status: ret.status, stdout, stderr, ...(signal ? { signal } : {}) }
+}
+
+// The suite's run: its output's last 4000 characters (D158) — stdout when green, stdout and stderr when red.
+function runCommand(runRoot: string, ctx: Ctx, cmd: string): RunOutcome {
+  const c = captureCommand(runRoot, ctx, cmd)
+  if (c.status === 0 && c.signal === undefined) return { exitZero: true, output: c.stdout.slice(-4000) }
+  return { exitZero: false, output: `${c.stdout}${c.stderr}`.slice(-4000), ...(c.signal ? { signal: c.signal } : {}) }
 }
 
 // Row 171. The command a trust refusal names — `got` of the first `untrusted-*` row, which

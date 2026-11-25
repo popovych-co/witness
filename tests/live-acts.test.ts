@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { cliAct, type Act } from '../src/act.js'
 import type { Entry } from '../src/journal.js'
 import {
-  VALUED_FLAGS, actKey, actLive, disposedRun, exitActs, liveActs, reopenActs, standingHandBack,
-  type ActFacts, type GateStateKind,
+  VALUED_FLAGS, actKey, actLive, boundReached, disposedRun, exitActs, liveActs, reopenActs, roundsSinceApprove, standingHandBack,
+  type ActFacts, type GateStateKind, type LiveActs,
 } from '../src/rounds.js'
 import { decisionAct } from '../src/verbs/decide.js'
 
@@ -50,7 +50,7 @@ const j = {
 }
 const BOUND = [run(1), dec('revise'), run(2), dec('revise'), run(3)]
 
-const facts: ActFacts = { upstream: 'e1', stale: false, holdLifted: false, owed: false, upstreamOwed: false }
+const facts: ActFacts = { upstream: 'e1', stale: false, holdLifted: false, owed: false, upstreamOwed: false, checksMoved: false }
 const live = (entries: Entry[], f: Partial<ActFacts> = {}) => liveActs(G, T, entries, { ...facts, ...f })
 // argv holds no `witness`, so the whole argv is the command after it.
 const shown = (acts: readonly Act[]) => acts.map((a) => a.argv.join(' '))
@@ -243,9 +243,13 @@ describe('membership (design §4.2.1)', () => {
 
   // One valued-flags set for decide's parser and for actKey: a word after any of them is its value.
   it.each([...VALUED_FLAGS])('decide\'s parser and actKey both read the word after %s as its value', (flag) => {
-    expect(actKey(['decide', G, T, '--revise', flag, '--approve'])).toBe(actKey(['decide', G, T, '--revise', ...(flag === '--upstream' ? ['--upstream', 'x'] : [])]))
+    const counted = flag === '--upstream' || flag === '--book'
+    expect(actKey(['decide', G, T, '--revise', flag, '--approve'])).toBe(actKey(['decide', G, T, '--revise', ...(counted ? [flag, 'x'] : [])]))
     const parsed = decisionAct([G, T, '--revise', flag, '--approve'])
-    expect(parsed.ok ? parsed.value.decision : parsed.violations[0]!.rule).not.toBe('one-of-required')
+    // Row 270: `--book` is a decision of its own, so beside `--revise` it makes two — never a third
+    // from the word after it.
+    if (flag === '--book') expect(parsed.ok ? '' : parsed.violations[0]!.got).toBe('--revise --book')
+    else expect(parsed.ok ? parsed.value.decision : parsed.violations[0]!.rule).not.toBe('one-of-required')
   })
 
   it('names the verb, the gate and the target, and reads an act as its argv', () => {
@@ -472,5 +476,58 @@ describe('exitActs and reopenActs share liveActs\' own sets', () => {
     const parkedAtBound = [...BOUND, dec('stop')]
     expect(live(parkedAtBound).acts).toEqual(reopenActs(G, T, parkedAtBound, false, 'e1', false))
     expect(live(parkedAtBound, { stale: true }).acts).toEqual(reopenActs(G, T, parkedAtBound, true, 'e1', false))
+  })
+})
+
+// Row 264 (§3.2). A checks-only round: a withholding check was red, so no lens ran.
+const only = (n: number): Entry => ({ ...(run(n) as object), checks_only: true, verdicts: undefined, checks: [{ name: 'lint', ok: false }] } as unknown as Entry)
+
+describe('a checks-only round (row 264)', () => {
+  it('a checks-only round spends none of the human\'s budget, a repair grant included (row 264)', () => {
+    expect(roundsSinceApprove([run(1), run(2), only(3), only(3)], G)).toBe(2)
+    expect(boundReached([run(1), run(2), only(3), only(3)], G)).toBe(false)
+    const granted = [run(1), run(2), run(3), dec('revise', { repair: true }), only(4)]
+    expect(roundsSinceApprove(granted, G)).toBe(3)
+    expect(boundReached(granted, G)).toBe(false)                 // the granted round is still the next judged one
+  })
+  it('no approve is live on a checks-only round, in any state (row 264)', () => {
+    const approves = (l: LiveActs) => [...l.acts, ...(l.slots ?? [])].filter((a) => a.argv.includes('--approve'))
+    expect(approves(liveActs(G, T, [only(1)], facts))).toEqual([])
+    expect(approves(liveActs(G, T, [only(1), dec('revise')], facts))).toEqual([])
+    expect(liveActs(G, T, [only(1)], { ...facts, stale: true }).acts[0]!.line).toBe('witness gate implement p1')
+  })
+})
+
+describe('a booking (row 270)', () => {
+  // A checks-only round whose lint part is not judged: bookable, its waiver the human's.
+  const bk = (n: number): Entry => ({
+    ...(only(n) as object),
+    checks: [{ name: 'markers', ok: true }, { name: 'lint', ok: false, parts: [{ part: 'ui', state: 'not-judged', key: `ui@${'a'.repeat(40)}.000000000000` }] }],
+  } as unknown as Entry)
+  const book = 'witness decide implement p1 --book lint'
+  const lines = (l: LiveActs) => l.acts.map((a) => a.line)
+  it('--book is live on a checks-only anchor with a bookable lint part in pending, revised, handed-back and parked, never on moved content; a booking leaves state booked whose one act is the re-gate (row 270)', () => {
+    for (const es of [[bk(1)], [bk(1), dec('revise')], [bk(1), dec('revise'), back('r1')], [bk(1), dec('stop')]]) {
+      const l = liveActs(G, T, es, facts)
+      expect([l.state, lines(l)]).toEqual([l.state, expect.arrayContaining([book])])
+    }
+    expect(liveActs(G, T, [bk(1)], facts).state).toBe('pending')
+    expect(liveActs(G, T, [bk(1), dec('revise'), back('r1')], facts).state).toBe('handed-back')
+    expect(liveActs(G, T, [bk(1), dec('stop')], facts).state).toBe('parked')
+    expect(lines(liveActs(G, T, [bk(1)], { ...facts, stale: true }))).not.toContain(book)
+    expect(lines(liveActs(G, T, [bk(1)], { ...facts, checksMoved: true }))).not.toContain(book)
+    const markers = { ...(only(1) as object), checks: [{ name: 'markers', ok: false }] } as unknown as Entry
+    expect(lines(liveActs(G, T, [markers], facts)).some((l) => l.includes('--book'))).toBe(false)
+    expect(lines(liveActs(G, T, [only(1)], facts)).some((l) => l.includes('--book'))).toBe(false)   // a lint part-less run
+    const booked = liveActs(G, T, [bk(1), dec('book', { book: { check: 'lint', items: ['l-00000001'] } })], facts)
+    expect([booked.state, lines(booked)]).toEqual(['booked', ['witness gate implement p1']])
+    expect(actLive(liveActs(G, T, [bk(1)], facts), actKey(['decide', G, T, '--book', 'lint']))).toBe(true)
+  })
+})
+
+describe('a base result landed since a checks-only round (row 267)', () => {
+  it('a base result landed since the round leads its stop with the re-gate (row 267)', () => {
+    expect(liveActs(G, T, [only(1)], { ...facts, checksMoved: true }).acts[0]!.line).toBe('witness gate implement p1')
+    expect(liveActs(G, T, [only(1)], facts).acts[0]!.line).toBe('witness decide implement p1 --revise')
   })
 })

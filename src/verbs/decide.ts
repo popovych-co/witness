@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
 import { unsafeLeft, untrustedCmdsFor } from '../allowlist.js'
-import { loadConfig, type Config } from '../config.js'
+import { autonomyAt, loadConfig, type Config } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
@@ -18,12 +18,12 @@ import { effortOf } from '../reviewed.js'
 import { liftedHolds } from '../needs.js'
 import { criteriaOwner, findById, loadCanon, type Canon } from '../scan.js'
 import { actFacts, openStepRow } from './next.js'
-import { driveChild } from '../drive-presence.js'
+import { driveChild, sessionMarker } from '../drive-presence.js'
 import { newRunId } from '../drift.js'
 import { grantTrust } from './trust.js'
 import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
-import { cmd, hasControl, kv, rows, shellWord } from '../toon.js'
+import { cmd, hasControl, kv, rows, shellWord, visible } from '../toon.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
 import {
   REVISE_HUMAN, ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
@@ -31,6 +31,12 @@ import {
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
+import { parseBaseKey } from '../base-lint.js'
+import { CHECKS, checkTier, checkWaiver } from '../checks.js'
+import { bookLines, bookingsOf, ledgerTaken, type Booking, type LedgerOpen } from '../ledger.js'
+import { boundReader } from '../lint-parts.js'
+import { LEDGER_STREAM } from '../streams.js'
+import type { Violation } from '../refusal.js'
 
 
 // D154. The untrusted `cmd:` list for a block, resolved from the ctx alone — `renderBound`
@@ -43,6 +49,7 @@ function trustFor(ctx: Ctx, target: string): string[] {
 }
 
 const asEntry = (e: DecisionEntry) => e as unknown as { t: 'human-decision'; [k: string]: unknown }
+const asLedger = (e: LedgerOpen) => e as unknown as { t: 'ledger-open'; [k: string]: unknown }
 
 // Row 239. argv read left to right, the one way `decide` reads it: each word is a flag, the value
 // of the valued flag before it, or a positional. A flag is read only where a flag stands, so a
@@ -120,7 +127,9 @@ function nothingPending(
 export interface DecisionCore {
   gate: string
   target: string
-  decision: 'approve' | 'revise' | 'stop'
+  decision: 'approve' | 'revise' | 'stop' | 'book'
+  // Row 270: the check a `book` decision books (`--book <check>`).
+  book?: string
   override?: boolean
   repair?: boolean
   note?: string
@@ -157,11 +166,21 @@ export function decisionAct(argv: string[]): Result<DecisionAct> {
   const { positional, flags, values } = decideWords(argv)
   const [gate, target] = positional
   if (!gate || !target) {
-    return refuse([v('decide', 'usage', argv.join(' ') || '(none)', 'witness decide <gate> <target> --approve|--revise|--stop')])
+    return refuse([v('decide', 'usage', argv.join(' ') || '(none)', 'witness decide <gate> <target> --approve|--revise|--stop|--book <check>')])
   }
-  const picked = (['--approve', '--revise', '--stop'] as const).filter((f) => flags.has(f))
+  const picked = (['--approve', '--revise', '--stop', '--book'] as const).filter((f) => flags.has(f))
   if (picked.length !== 1) {
-    return refuse([v('decision', 'one-of-required', picked.join(' ') || '(none)', '--approve | --revise | --stop')])
+    return refuse([v('decision', 'one-of-required', picked.join(' ') || '(none)', '--approve | --revise | --stop | --book <check>')])
+  }
+  // Row 270. A booking names the check it books, and is nothing else: no override, repair, upstream,
+  // pin or trust grant rides it.
+  const book = values.get('--book')?.[0]
+  if (picked[0] === '--book') {
+    if (book === undefined) return refuse([v('--book', 'value-required', '(none)', 'the check to book — witness decide <gate> <target> --book lint')])
+    const extra = (['--override', '--repair', '--upstream', '--pin', '--trust-cmds'] as const).filter((f) => flags.has(f))
+    if (extra.length > 0) {
+      return refuse([v('--book', 'book-scope', `--book with ${extra.join(' ')}`, 'witness decide <gate> <target> --book <check> [--note <t>] — a booking carries a note and nothing else')])
+    }
   }
   const via = values.get('--via')?.[0]
   if (via !== undefined && via !== 'affirmation') {
@@ -179,6 +198,7 @@ export function decisionAct(argv: string[]): Result<DecisionAct> {
   if (unfilled.length > 0) return refuse(unfilled)
   return ok({
     gate, target, decision: picked[0]!.slice(2) as DecisionCore['decision'],
+    ...(picked[0] === '--book' && book !== undefined ? { book } : {}),
     ...(flags.has('--override') ? { override: true } : {}),
     ...(flags.has('--repair') ? { repair: true } : {}),
     ...(note !== undefined ? { note } : {}),
@@ -196,7 +216,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const [gate, target] = positional
   const spec = gate ? gateSpec(gate) : undefined
   if (!gate || !target || !spec) {
-    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
+    ctx.err('usage: witness decide <gate> <target> --approve|--revise|--stop|--book <check> [--override] [--repair] [--note <t>] [--upstream <artifact|effort>] [--pin <policy>]… [--via affirmation] [--show]')
     return EXIT.REFUSED
   }
   if (flags.has('--show')) return show(ctx, spec.gate, target)
@@ -334,6 +354,17 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     return EXIT.REFUSED
   }
 
+  // Row 270 (§3.2's waiver, §3.3, §3.9). A booking's refusals that read no gate state: a registered
+  // check carrying a waiver; never on a nod, never the policy's or the arbiter's (row 172: lint's
+  // waiver is the human's), never inside a session drive started; and nothing lands on a ledger
+  // stream another history holds.
+  const booking = decision === 'book'
+  const bookCheck = act.book ?? ''
+  if (booking) {
+    const refusal = bookRefusal(ctx, root, gate, target, bookCheck, act)
+    if (refusal !== undefined) { renderRefusal([refusal]).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+  }
+
   const atBound = boundReached(entries, gate)
 
   // Row 240 (R2). Before the repair, bound and anchor checks: a settler whose read predates a
@@ -356,7 +387,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   const liveOf = (es: Entry[]): LiveActs => liveActs(gate, target, es, factsOf(es))
   const facts = factsOf(entries)
   const live = liveActs(gate, target, entries, facts)
-  const key = actKey(['decide', gate, target, `--${decision}`, ...(override ? ['--override'] : []),
+  const key = actKey(['decide', gate, target, ...(booking ? ['--book', bookCheck] : [`--${decision}`]), ...(override ? ['--override'] : []),
     ...(repair ? ['--repair'] : []), ...(upstream !== undefined ? ['--upstream', upstream] : [])])
   // A revise that neither sends the work upstream nor buys a round: the un-park, the revise again,
   // the retraction, or the pending stop's revise.
@@ -452,7 +483,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
       const up = live.acts.some((a) => actKey(a) === actKey(['decide', gate, target, '--revise', '--upstream', '_']))
       const fix = live.acts.some((a) => actKey(a) === actKey(['decide', gate, target, '--revise', '--repair']))
       const instead = [...(up ? ['upstream reopens the parent and resets the budget'] : []), ...(fix ? ['--repair buys one more round here'] : [])]
-      return renderBound(ctx, gate, target, entries, facts.stale || facts.holdLifted, upstreamId,
+      return renderBound(ctx, gate, target, entries, facts.stale || facts.holdLifted || facts.checksMoved, upstreamId,
         live.acts, plainRevise && instead.length > 0 ? instead.join('; ') : undefined)
     }
     return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
@@ -468,6 +499,28 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   const blockedCode = guardTxn(ctx, root)
   if (blockedCode !== undefined) return blockedCode
 
+  // Row 270. What the booking books: the anchor's bookable parts of the check it names — none when the
+  // anchor withheld another check. Under committed autonomy a typed booking is a terminal act: the
+  // env marker proves nothing, so a terminal and the human's y are asked for, outside the lock.
+  const bookings = booking ? withTools(cfgR.value, bookingsOf(anchor, bookCheck)) : []
+  if (booking && bookings.length === 0) return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
+  // Slice 2 review I3 (row 171): committed autonomy is HEAD's config — a working-copy `autonomy: off`
+  // edit grants nothing, so it never lifts the terminal either.
+  if (booking && autonomyAt(root, 'HEAD')) {
+    const typed = cliAct('decide', gate, target, '--book', bookCheck).line
+    if (!ctx.isTTY) {
+      renderRefusal([v('decide', 'book-needs-terminal', 'no terminal — autonomy is on',
+        `the human, at their own terminal — ${typed} asks before it books`)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    const answer = (await ctx.ask(bookQuestion(gate, target, bookCheck, anchor, bookings))).trim()
+    if (answer.toLowerCase() !== 'y') {
+      renderRefusal([v('decide', 'book-declined', `answered ${answer === '' ? '(nothing)' : visible(answer)}`,
+        `y — nothing was booked; ${typed} asks again`)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+  }
+
   // Row 111. Every reason an approve cannot happen, in ONE refusal. These used to fire
   // sequentially: `--approve` reported `override-required`, and only the re-run carrying
   // `--override` reported the `stale-verdict` that was the actual blocker — the operator
@@ -475,6 +528,13 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // costs a round of thinking on an exit that was never available.
   if (decision === 'approve') {
     const blockers = []
+    // Row 264 (§3.2, row 172). No lens judged a checks-only round, so nothing approves over it: the
+    // withholding check names the fix, and a round the lenses judge comes after it.
+    if (anchor.checks_only === true) {
+      const name = anchor.checks.at(-1)?.name ?? 'a check'
+      blockers.push(v('gate', 'checks-only', `round ${anchor.round} ran checks only — ${name} is red, so no lens ran`,
+        `a round the lenses judged — fix what ${name} names, then run: ${cliAct('gate', gate, target).line}`))
+    }
     if (atBound && !override) {
       blockers.push(v('decision', 'override-required', 'approve at the round bound',
         'witness decide … --approve --override'))
@@ -540,10 +600,11 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // The truth, not `false`. The hardcode existed because a stale state produced no rule at
     // all and the entry's fields would have been empty; with the stale rule in place it only
     // misattributes — D130's audit was reporting rules that were never rendered.
-    stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0,
+    stale: (nowSha !== undefined && nowSha !== anchor.reviewed_sha) || liftedHolds(criteriaOwner(canon, target), anchor).length > 0 ||
+      facts.checksMoved,
   })
   // Row 239. Read off the act's words, never its printed line.
-  const recommendedVerb = rec?.options[0]?.act?.argv.find((w) => w === '--approve' || w === '--revise' || w === '--stop')?.slice(2)
+  const recommendedVerb = rec?.options[0]?.act?.argv.find((w) => w === '--approve' || w === '--revise' || w === '--stop' || w === '--book')?.slice(2)
   const entry: DecisionEntry = {
     v: 1, t: 'human-decision', gate, artifact: target, round: anchor.round,
     decision: decision === 'revise' && upstream ? 'revise-upstream' : decision,
@@ -555,7 +616,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ...(rec?.anchor ? { anchor: rec.anchor } : {}),
     ...(act.selected !== undefined ? { selected: act.selected } : {}),
     ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
-    ...(unparking ? { unpark: true as const } : {}),
+    // Row 270: a booking of a parked gate lifts the park — a human's act, as row 241's revise is.
+    ...(unparking || (booking && live.state === 'parked') ? { unpark: true as const } : {}),
+    ...(booking ? { book: { check: bookCheck, items: [] } } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per
@@ -676,6 +739,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   for (const s of prepared) { files.push(s.rel, journalRel(s.stream)); journalMulti.push({ stream: s.stream, line: s.line }) }
   for (const m of metaWrites) { files.push(m.rel, journalRel(m.stream)); journalMulti.push({ stream: m.stream, line: m.line }) }
 
+  let bookedLines: Array<{ id: string; booking: Booking }> = []
   const lockR = acquireLock(root)
   if (!lockR.ok) { renderRefusal(lockR.violations).forEach((l) => ctx.err(l)); return EXIT.BLOCKED }
   try {
@@ -702,8 +766,24 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
         `the run the decider judged (${anchor.run_id}) — settle again against the current run`)]).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
+    // Row 270 (§3.3, §3.9's two-stream act). The ledger read again under the lock: an open item with
+    // the booking's key is reused, so a booking killed after its lines landed and run again opens
+    // nothing twice; the decision names every item, and both streams land in one transaction.
+    let ledgerLines: LedgerOpen[] = []
+    if (booking) {
+      const taken = ledgerTaken(root)
+      if (taken !== undefined) { renderRefusal([taken]).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
+      const lines = bookLines(root, target, gate, anchor, bookings, note)
+      entry.book = { check: bookCheck, items: lines.map((l) => l.id) }
+      journalMulti[0]!.line = entryLine(asEntry(entry))
+      ledgerLines = lines.flatMap((l) => (l.entry !== undefined ? [l.entry] : []))
+      for (const e of ledgerLines) journalMulti.push({ stream: LEDGER_STREAM, line: entryLine(asLedger(e)) })
+      if (ledgerLines.length > 0) files.push(journalRel(LEDGER_STREAM))
+      bookedLines = lines.map((l) => ({ id: l.id, booking: bookings[lines.indexOf(l)]! }))
+    }
     const txn = withTxn(root, { op: `decide-${gate}`, files: [...new Set(files)], journalMulti }, () => {
       appendEntry(root, target, asEntry(entry))
+      for (const e of ledgerLines) appendEntry(root, LEDGER_STREAM, asLedger(e))
       for (const p of pinEntries) appendEntry(root, target, p)
       for (const d of deferralEntries) appendEntry(root, target, d)
       if (reopen) appendEntry(root, reopen.stream, asEntry(reopen.entry))
@@ -757,6 +837,10 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ? ` · ${act.selected}${entry.rule ? ` · ${entry.rule}` : ''}` : ''
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}${by}`))
   if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
+  // Row 270: each item the booking holds, and the act that reads it. Printed whole (a value holding a
+  // comma would be quoted by kv), its part name spelled out.
+  for (const b of bookedLines) ctx.out(`booked: ${b.id} — ${visible(b.booking.part)} · ${bookWhat(b.booking)}`)
+  if (booking) ctx.out(`help: the re-gate reads it — ${cliAct('gate', gate, target).line}`)
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   // Row 239. A shape: each foreign word is quoted, and the cause and the note are the human's.
   for (const d of deferralEntries) {
@@ -797,4 +881,59 @@ export function printReviseContext(ctx: Ctx, root: string, r: {
   // Row 239. The draft key is one word through the quoter; the recap's file is the human's.
   if (r.gate === 'decompose') ctx.out(`help: scope itself implicated → witness draft ${shellWord(`amend-${r.target}`)} seeds the amendment from the latest recap · witness recap --amend --file <recap.json> lands it`)
   else if (booked) ctx.out(`help: reopened ${booked.artifact} (${booked.gate} stage) — linked via caused_by`)
+}
+
+// Row 270. The refusals `--book` meets before any state is read, in order; undefined when none does.
+function bookRefusal(ctx: Ctx, root: string, gate: string, target: string, check: string, act: DecisionAct): Violation | undefined {
+  if (checkTier(check) === undefined) {
+    return v('--book', 'unknown-check', visible(check), `a registered check — ${CHECKS.map((c) => c.name).join(' | ')}`)
+  }
+  if (checkWaiver(check) === undefined) {
+    return v('--book', 'no-waiver', `${check} has no waiver — nobody books its red`,
+      `the revise: fix what ${check} names — ${cliAct('decide', gate, target, '--revise').line}`)
+  }
+  if (act.selected === 'affirmation') {
+    return v('--via', 'nod-cannot', 'affirmation with --book', 'a named option — a booking opens a ledger item, and is never taken on a nod (D143)')
+  }
+  if (act.selected === 'policy' || act.selected === 'arbiter') {
+    return v('selected', 'autonomy-cannot', `${act.selected} with --book ${check}`,
+      `a named human selection — only the human books ${check} (row 172)`)
+  }
+  // Any process witness marked as its own — a drive session, a job — is no human (security review).
+  const marker = sessionMarker(ctx.env)
+  if (marker !== undefined) {
+    return v('decide', 'book-human', `${marker} is set — a session witness started`,
+      `the human, in their own chat or terminal — ${cliAct('decide', gate, target, '--book', check).line}`)
+  }
+  return ledgerTaken(root)
+}
+
+// A reader-bound booking names its reader's tool, so the item says whose keys it holds.
+function withTools(cfg: Config, bookings: readonly Booking[]): Booking[] {
+  return bookings.map((b) => {
+    if (!('diagnostics' in b.subject)) return b
+    const part = cfg.ship.lint?.find((p) => p.name === b.part)
+    const tool = part === undefined ? undefined : boundReader(cfg, part)?.tool
+    return tool === undefined ? b : { ...b, tool }
+  })
+}
+
+// What one booking holds, in words: the count it covers, or the whole part at its base.
+function bookWhat(b: Booking): string {
+  if ('diagnostics' in b.subject) {
+    const n = Object.values(b.subject.diagnostics).reduce((a, x) => a + x, 0)
+    return `${n} diagnostic${n === 1 ? '' : 's'}`
+  }
+  const commit = parseBaseKey(b.part_key)?.commit
+  return `the whole part, red against ${commit === undefined ? 'its base' : short(commit)}, until main moves`
+}
+
+// The terminal's question under committed autonomy: each part and what booking it takes.
+function bookQuestion(gate: string, target: string, check: string, anchor: GateRunEntry, bookings: readonly Booking[]): string {
+  const parts = anchor.checks.at(-1)?.parts ?? []
+  const lines = bookings.map((b) => {
+    const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []
+    return `  ${visible(b.part)} — ${bookWhat(b)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
+  })
+  return [`book ${check} for ${gate} ${visible(target)}:`, ...lines, 'book? an item stays open until main no longer holds it [y/N]'].join('\n')
 }

@@ -33,6 +33,8 @@ export type Shape =
   | { kind: 'int'; min: number; max?: number } | { kind: 'bool' } | { kind: 'enum'; values: readonly string[] }
   | { kind: 'text' } | { kind: 'dir' } | { kind: 'files' } | { kind: 'globs' }
   | { kind: 'runner' } | { kind: 'report' } | { kind: 'pin' } | { kind: 'battery' }
+  // Row 261. One command, or a map of part names to commands, each part run on its own.
+  | { kind: 'parts' }
 
 export type Group = 'setup' | 'behavior' | 'tuning'
 
@@ -50,6 +52,9 @@ export interface Setting {
   // be pasted. Not part of what a schema promises (`fingerprint`): it refuses only values no
   // shell-safe line can carry, and `migrate` has nothing to rewrite.
   pattern?: RegExp
+  // Row 261. Up to schema `until` the setting had this shape; `shapeAt` reads it, so a shape
+  // widened at a later schema leaves the older schemas' fingerprints where they were pinned.
+  older?: { until: number; shape: Shape }
   group: Group
   comment: string   // the end-of-line comment in the file
   want: string      // want: of an `invalid` refusal
@@ -64,6 +69,16 @@ export const BRANCH_RE = /^(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*\.lock$)[A-Za-z0-9
 // A setting an older schema knew and the current one does not. Known up to `until`; its
 // refusal in a newer file says what replaced it.
 export interface Retired { path: string; until: number; shape: Shape; instead: string }
+
+// Row 262. The tools whose report witness reads per diagnostic, and the report each reader prints.
+export const READER_TOOLS = ['biome', 'eslint', 'clippy', 'tsc'] as const
+export type ReaderTool = (typeof READER_TOOLS)[number]
+export const READER_FORMATS: Readonly<Record<ReaderTool, string>> = {
+  biome: "biome's SARIF report (--reporter=sarif)",
+  eslint: "ESLint's JSON report (-f json)",
+  clippy: "cargo's JSON messages (--message-format=json)",
+  tsc: "tsc's diagnostic lines (--pretty false)",
+}
 
 const INT1 = { kind: 'int', min: 1 } as const
 const PIN = { kind: 'pin' } as const
@@ -139,8 +154,13 @@ export const SETTINGS: readonly Setting[] = [
     comment: 'the suite command ship runs · full-suite criteria run it too', want: 'a shell command',
   },
   {
-    path: 'ship.lint', shape: { kind: 'text' }, since: 1, defaults: { 1: 'npm run lint' }, ambient: true, group: 'setup',
-    comment: 'the lint command ship runs', want: 'a shell command',
+    // Row 261. One command is one part named lint; a map names each part, and every part runs
+    // whatever an earlier one did. witness never parses `&&`.
+    path: 'ship.lint', shape: { kind: 'parts' }, older: { until: 2, shape: { kind: 'text' } },
+    since: 1, defaults: { 1: 'npm run lint' }, ambient: true, group: 'setup',
+    comment: 'the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic',
+    want: 'a shell command, or a map of part names to shell commands — e.g. {biome: pnpm exec biome check ., tsc: pnpm exec tsc --noEmit}'
+      + ' · a name is a lowercase letter, then up to 39 lowercase letters, digits or -',
   },
   {
     path: 'ship.branch', shape: { kind: 'text' }, pattern: BRANCH_RE, since: 1, defaults: { 1: 'main' }, group: 'setup',
@@ -155,6 +175,23 @@ export const SETTINGS: readonly Setting[] = [
     path: 'ship.ciSettleMs', shape: { kind: 'int', min: 0, max: 1_800_000 }, since: 1, defaults: { 1: 60_000 }, group: 'setup',
     comment: 'ms green CI must hold still before an autonomous merge · 0–1800000',
     want: 'an integer from 0 to 1800000 — milliseconds a green check set must hold before witness merges',
+  },
+  // Row 262. A reader per tool, bound to the ship.lint part of its name. Not ambient: an older file
+  // reads `none`, no reader. Slice 2 review: the base and the plan compare whole, so a reader that
+  // stops at its first failure (cargo without --keep-going, pnpm -r without --no-bail, runs joined
+  // by &&) would hide a plan's new error behind the base's old one; witness cannot see that.
+  ...READER_TOOLS.map((tool): Setting => ({
+    path: `readers.${tool}`, shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, group: 'setup',
+    comment: `reads the ship.lint part named ${tool} per diagnostic · a command printing ${READER_FORMATS[tool]} with every error, or none`,
+    want: `a shell command, or none — run from the repo root, it prints only ${READER_FORMATS[tool]} for what the part named ${tool}`
+      + ' checks, every error, never stopping at the first failure (cargo --keep-going, pnpm -r --no-bail, ; rather than && between runs)',
+  })),
+  {
+    // Row 259. Ambient: an older file never declared it, and absent means scratch runs are off
+    // (check says so, once); `none` means the scratch needs nothing installed.
+    path: 'scratch.prepare', shape: { kind: 'text' }, since: 3, defaults: { 3: 'none' }, ambient: true, group: 'setup',
+    comment: "what makes witness's scratch checkout runnable, run when a lockfile changes · a shell command, or none",
+    want: "a shell command, or none — what witness runs in its scratch checkout when a lockfile or a package manager's config changes",
   },
   {
     path: 'autonomy', shape: { kind: 'enum', values: ['on', 'off'] }, since: 1, defaults: { 1: 'off' }, hookRead: true, group: 'behavior',
@@ -223,7 +260,7 @@ export const RETIRED: readonly Retired[] = [
 ]
 
 export const SECTION_ORDER: readonly string[] = [
-  'harness', 'paths', 'docs', 'criteria', 'ship', 'autonomy', 'arbiter', 'session', 'implement', 'gates', 'drive',
+  'harness', 'paths', 'docs', 'criteria', 'ship', 'readers', 'scratch', 'autonomy', 'arbiter', 'session', 'implement', 'gates', 'drive',
 ]
 
 export const FIRST_LINE = '# witness.config.yaml — every setting witness reads. Change a value in place; `witness migrate` keeps the file current.'
@@ -236,6 +273,11 @@ export const GROUP_HEADINGS: Record<Group, string> = {
 
 export function settingAt(path: string, list: readonly Setting[] = SETTINGS): Setting | undefined {
   return list.find((s) => s.path === path)
+}
+
+// The shape a setting had at `schema` (row 261): its `older` shape up to that one's `until`.
+export function shapeAt(s: Setting, schema: number): Shape {
+  return s.older !== undefined && schema <= s.older.until ? s.older.shape : s.shape
 }
 
 // The default in force at `schema`: the entry under the greatest key ≤ schema. Undefined
@@ -282,12 +324,17 @@ export function withValues(base: Record<string, unknown>, patch: Record<string, 
 }
 
 // Every setting at its default for `schema` (the newest by default), as the nested map a file
-// parses to, `schema` key included. `harness` overrides the list's default judge.
-export function defaultValues(opts: { harness?: string; schema?: number } = {}): Record<string, unknown> {
+// parses to, `schema` key included. `harness` overrides the list's default judge; `detected`
+// replaces a setting's default with what the repo shows (row 259: the setup command its lockfile
+// names), for a setting the schema holds.
+export function defaultValues(opts: {
+  harness?: string; schema?: number; detected?: Readonly<Record<string, unknown>>
+} = {}): Record<string, unknown> {
   const schema = opts.schema ?? Math.max(...Object.keys(SCHEMA_FINGERPRINTS).map(Number))
   let out: Record<string, unknown> = { schema }
   for (const s of SETTINGS) {
-    const d = s.path === 'harness' && opts.harness !== undefined ? opts.harness : defaultAt(s, schema)
+    const found = s.since <= schema ? opts.detected?.[s.path] : undefined
+    const d = s.path === 'harness' && opts.harness !== undefined ? opts.harness : found ?? defaultAt(s, schema)
     if (d !== undefined) out = withValues(out, nest(s.path, d))
   }
   return out
@@ -299,7 +346,7 @@ export function defaultValues(opts: { harness?: string; schema?: number } = {}):
 // refuses only values no shell-safe line can carry.
 export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS): string {
   const live = list.filter((s) => s.since <= schema)
-    .map((s) => [s.path, s.shape, s.since, defaultAt(s, schema) ?? null] as const)
+    .map((s) => [s.path, shapeAt(s, schema), s.since, defaultAt(s, schema) ?? null] as const)
   const retired = RETIRED.filter((r) => r.until >= schema).map((r) => [r.path, r.shape, 'retired', r.until] as const)
   const all = [...live, ...retired].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
   return createHash('sha256').update(JSON.stringify(all)).digest('hex')
@@ -310,6 +357,7 @@ export function fingerprint(schema: number, list: readonly Setting[] = SETTINGS)
 export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
+  3: '51284227f73adb71cf04db675bbcb12ca91ce9c90d74256cff4b5142d1a452e3',
 }
 
 // A value as one line of the file. Quoted only where YAML needs it, except that a one-line

@@ -590,3 +590,21 @@ describe("an old fix's cause is the human's, at an amend too (row 253, slice 2 r
     expect(text).toContain('never pick it yourself')
   })
 })
+
+// Row 264 (final review M-c). A checks-only stop is fixed by the session only once a revise is decided —
+// under autonomy the CLI decides it; with autonomy off or on a `--manual` run the stop is the human's,
+// rendered with its ranked options, and the turn ends. Both code skills name the drive wait's own key.
+describe('the checks-only round in the code skills (rows 264, 267)', () => {
+  const implement = () => readFileSync(skillPath('witness-implement'), 'utf8')
+  const ship = () => readFileSync(skillPath('witness-ship'), 'utf8')
+  it('witness-implement keeps a checks-only stop for the human unless a revise is decided', () => {
+    expect(implement()).toContain('- **Stop** (blocking findings, a `checks-only:` round, or `--manual`) → render the gate output verbatim and in full')
+    expect(implement()).not.toContain('so fix what the check names (its detail names the file and line, or the part) and re-gate')
+  })
+  it('both code skills end the turn at an `awaits-drive:` line, never a `waiting:` one', () => {
+    for (const body of [implement(), ship()]) {
+      expect(body).toContain('`awaits-drive:`')
+      expect(body).not.toMatch(/A `waiting:` line means the round is red only|a `waiting:` line \(drive lints/)
+    }
+  })
+})
