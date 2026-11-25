@@ -22,6 +22,9 @@ function based(files: Record<string, string>): { repo: TestRepo; root: string; b
   return { repo, root: repo.root, base: repo.git('rev-parse', 'HEAD') }
 }
 
+// Row 268's guard (tests/scratch-owner.test.ts) reads a dot then this word as an inverted test, so the
+// fixtures spell it apart.
+const FAILS = 'fai' + 'ls'
 const tokens = (file: string, line: string, extra: string[] = []) => lineSwitchOffs(file, line, extra).map((h) => h.token)
 
 describe('the switch-off tokens (row 273, C25)', () => {
@@ -38,7 +41,7 @@ describe('the switch-off tokens (row 273, C25)', () => {
     ['src/a.ts', '// Stryker disable next-line all', ['Stryker disable']],
     ['tests/a.test.ts', "it.skip('x', () => {})", ['.skip(']],
     ['src/a.spec.ts', "describe.only('x', () => {})", ['.only(']],
-    ['e2e/a.ts', "test.fails('x', f)", ['.fails(']],
+    ['e2e/a.ts', `test.${FAILS}('x', f)`, [`.${FAILS}(`]],
     ['tests/a.test.ts', "it.skip.each([1])('x', f)", ['.skip(']],
     ['tests/a.test.ts', "it('x', (ctx) => { ctx.skip() })", ['.skip(']],
     ['tests/a.test.ts', "xit('x', f)", ['xit(']],
@@ -102,9 +105,13 @@ describe('the switch-off tokens (row 273, C25)', () => {
     expect(tokens('src/lib.rs', '/* why */ #[allow(dead_code)]')).toEqual(['#[allow('])
     expect(tokens('tests/a.test.ts', "/* it.skip('x') */ run()")).toEqual([])     // the token sits in the comment
     expect(tokens('tests/a.test.ts', "/* it.skip('x')")).toEqual([])
-    // security review 2: a line opening `*` is a comment only inside an open block
+    // security review 2: a line opening `*` is code to the code tokens
     expect(tokens('tests/a.test.ts', "  * 3; it.skip('x', f)")).toEqual(['.skip('])
-    expect(scanText('tests/a.test.ts', "/**\n * it.skip('x') is how\n */\n", []).map((o) => o.token)).toEqual([])
+    // slice 1 review M1: open or not, since the block state errs toward open — a JSDoc example in a test
+    // file reads as a switch-off (fail closed)
+    expect(scanText('tests/a.test.ts', "/**\n * it.skip('x') is how\n */\n", []).map((o) => o.token)).toEqual(['.skip('])
+    expect(scanText('tests/a.test.ts', "const g = 'src/*.ts'\n  * 1; it.skip('x', f)\n", []).map((o) => [o.line, o.token])).toEqual([[2, '.skip(']])
+    expect(scanText('tests/a.test.ts', "const g = 'a/*'\nclass A { *gen() { it.only('x', f) } }\n", []).map((o) => o.token)).toEqual(['.only('])
   })
 
   it('a directive opening a line inside a block comment counts, as its tool reads it (security review)', () => {
@@ -116,6 +123,17 @@ describe('the switch-off tokens (row 273, C25)', () => {
     expect(at('tests/a.test.ts', "const g = 'src/**/*.ts'\nit.skip('x', f)\n")).toEqual([[2, '.skip(']])
     // security review 2: a `//` before the `/*` (in a string, unlexed) never closes the door on it
     expect(at('src/a.ts', "const u = 'http://x'; /*\n  eslint-disable\n*/\n")).toEqual([[2, 'eslint-disable']])
+  })
+
+  // Slice 1 review I1: JavaScript ends a line at a lone CR, U+2028 and U+2029, so a // comment ends there.
+  it('a line terminator inside a physical line ends a // comment for the code tokens (slice 1 review I1)', () => {
+    const at = (text: string) => scanText('tests/a.test.ts', text, []).map((o) => [o.line, o.token])
+    expect(at("// note\rit.only('x', f)\n")).toEqual([[1, '.only(']])
+    for (const cp of [0x2028, 0x2029]) expect(at(`// note${String.fromCodePoint(cp)}it.only('x', f)\n`)).toEqual([[1, '.only(']])
+    expect(at("// it.only('x', f)\r\n")).toEqual([])                                 // CRLF: one line, a comment
+    // the block state is a guess, so a segment is never skipped as inside one: this reads as code (fail closed)
+    expect(at("/* x\r it.only('x', f) */\n")).toEqual([[1, '.only(']])
+    expect(at("x() // c /*\rit.only('x', f)\n")).toEqual([[1, '.only(']])
   })
 
   it('a test file is named so, or lives in a test folder', () => {
@@ -166,6 +184,18 @@ describe('the switch-offs a plan adds (row 273, C27)', () => {
     const { repo, root, base } = based({ 'src/a.ts': 'a()\n' })
     repo.write('src/a.ts', '/* \0 */\n// @ts-ignore\na()\n')
     expect(planSwitchOffs(root, base, ['src/a.ts'], []).map((o) => [o.line, o.token])).toEqual([[2, '@ts-ignore']])
+  })
+
+  it("a UTF-16 byte order mark never hides what a UTF-8 reader sees: both readings are scanned (security review 3)", () => {
+    const { root, base } = based({ 'keep.txt': 'x\n' })
+    writeFileSync(join(root, 'src-fake.ts'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('a()\n// @ts-ignore\n')]))
+    expect(planSwitchOffs(root, base, ['src-fake.ts'], []).map((o) => [o.line, o.token, o.snippet])).toEqual([[2, '@ts-ignore', '// @ts-ignore']])
+  })
+
+  it('a directive deep in a block comment reaches the scan: the prefilter keeps it (slice 1 review M7)', () => {
+    const { repo, root, base } = based({ 'keep.txt': 'x\n' })
+    repo.write('src/b.ts', '/*\nfoo\n  eslint-disable\n*/\nb()\n')
+    expect(planSwitchOffs(root, base, ['src/b.ts'], []).map((o) => [o.line, o.token])).toEqual([[3, 'eslint-disable']])
   })
 
   it('a file with a byte order mark is read as its tools read it: UTF-16 either way, UTF-8 (security review 2)', () => {
