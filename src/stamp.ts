@@ -15,6 +15,10 @@ import { crashPoint, withTxn } from './txn.js'
 import { autoSync } from './verbs/sync.js'
 import { removeWorktree, worktreePath } from './worktree.js'
 import { dropCfRefs } from './cf-tree.js'
+import { ledgerTaken, mergeCloses, type LedgerClosed } from './ledger.js'
+import { LEDGER_STREAM } from './streams.js'
+
+const asLine = (c: LedgerClosed) => c as unknown as { t: 'ledger-closed'; [k: string]: unknown }
 
 export interface PreparedStamp {
   doc: CanonDoc
@@ -118,19 +122,26 @@ export function lazyStamp(root: string, ctx: Ctx, canon: Canon): LazyResult {
       // Row 254. The op is the commit's subject, so a stamp `recover` completes keeps its plan and PR
       // in the merge clock (`merge(<plan>): pr #N (recovered)`).
       const subject = `merge(${planId}): pr #${pr}`
+      // Row 269 (C18). The ledger items the shipped tree no longer holds close in the stamp's own
+      // transaction, computed under its lock so a booking or a dismissal racing it is read. A ledger
+      // stream another history holds takes nothing.
+      const closes = ledgerTaken(root) === undefined ? mergeCloses(root, planId, pr) : []
+      const ledgerFiles = closes.length > 0 ? [journalRel(LEDGER_STREAM)] : []
       const txn = withTxn(root, {
-        op: subject, files,
+        op: subject, files: [...files, ...ledgerFiles],
         journalMulti: [
           { stream: planStamp.stream, line: planStamp.line },
           ...(specStamp ? [{ stream: specStamp.stream, line: specStamp.line }] : []),
           ...moves.map((m) => ({ stream: m.stream, line: entryLine(m.entry) })),
+          ...closes.map((c) => ({ stream: LEDGER_STREAM, line: entryLine(asLine(c)) })),
         ],
       }, () => {
         writeStamp(root, planStamp)
         if (specStamp) writeStamp(root, specStamp)
         for (const m of moves) appendEntry(root, m.stream, m.entry)
+        for (const c of closes) appendEntry(root, LEDGER_STREAM, asLine(c))
         crashPoint(ctx.env, 'merge-stamp')
-        return stateCommit(root, [...new Set(files)], subject)
+        return stateCommit(root, [...new Set([...files, ...ledgerFiles])], subject)
       })
       if (txn.ok) {
         // D141. `next`/`check`/`dashboard` all reach here, including the SessionStart

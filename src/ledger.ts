@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { checkWaiver } from './checks.js'
+import { isId } from './dsl.js'
 import { readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
 import type { GateRunEntry, PartState } from './rounds.js'
@@ -171,4 +172,39 @@ Array<{ id: string; entry?: LedgerOpen }> {
     }
     return { id, entry }
   })
+}
+
+// Row 269 (§3.3, the map's C18). What the merge stamp of `plan` observes, read under its lock: from the
+// plan's last ship round that ran lint with parts — the tree that merges — every open item whose plan
+// is this one or merged before it closes when its part reads green there, or the part's `cleared`
+// lists it. No such round observes nothing, and closes nothing: nothing reads gone by absence. An
+// item of a plan still in flight waits for its own merge, since its booking reaches main only then.
+export function mergeCloses(root: string, plan: string, pr: number): LedgerClosed[] {
+  const runs = readStream(root, plan).filter((e) => e.t === 'gate-run' && e.gate === 'ship') as unknown as GateRunEntry[]
+  const observed = [...runs].reverse().find((r) => (r.checks ?? []).some((c) => c.name === 'lint' && c.parts !== undefined))
+  if (observed === undefined) return []
+  const parts = observed.checks.find((c) => c.name === 'lint' && c.parts !== undefined)!.parts!
+  const mergedBefore = new Map<string, boolean>()
+  const merged = (p: string): boolean => {
+    if (p === plan) return true
+    if (!isId(p)) return false
+    if (!mergedBefore.has(p)) {
+      mergedBefore.set(p, readStream(root, p).some((e) => e.t === 'status' && e.to === 'done' && e.cause === 'merge'))
+    }
+    return mergedBefore.get(p)!
+  }
+  return openItems(root).flatMap((i) => {
+    if (!merged(i.plan)) return []
+    const part = parts.find((p) => p.part === i.part)
+    if (part === undefined || !(part.state === 'green' || (part.cleared ?? []).includes(i.id))) return []
+    const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(observed.reviewed_tree !== undefined ? { tree: observed.reviewed_tree } : {}) }
+    return [close]
+  })
+}
+
+// Row 269. An abandoned plan never merges, so nothing it booked reaches main: each of its open items
+// closes in the abandon's own transaction.
+export function abandonCloses(root: string, plans: readonly string[]): LedgerClosed[] {
+  return openItems(root).filter((i) => plans.includes(i.plan))
+    .map((i): LedgerClosed => ({ v: 1, t: 'ledger-closed', id: i.id, by: 'abandon', plan: i.plan }))
 }

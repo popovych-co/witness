@@ -110,7 +110,7 @@ const VERB_USAGE: Record<string, string> = {
   retry: 'witness retry <target>',
   review: 'witness review design <spec-id> [--file <html>]',
   satisfy: 'witness satisfy <doc-id> --need <id | index | text>',
-  dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>"',
+  dismiss: 'witness dismiss <artifact> --deferral <id|index> --cause <superseded|lens-retired|judged-wrong> --note "<why>" | witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>"',
   ship: 'witness ship <plan-id> [--manual]',
   start: 'witness start <plan-id>',
   status: 'witness status [--record] — flows · blocked docs · reconcile rows · pending gates (bare `witness` is the same screen) · --record: the track record in full',

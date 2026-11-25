@@ -15,6 +15,7 @@ import { bookLines, bookingsOf, ledgerItems, openItems } from '../src/ledger.js'
 import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { LEDGER_STREAM } from '../src/streams.js'
 import { applyDecision, run as decide } from '../src/verbs/decide.js'
+import { run as dismiss } from '../src/verbs/dismiss.js'
 import { gateParked } from '../src/verbs/next.js'
 import { loadConfig } from '../src/config.js'
 import { needsYou, needYouRows } from '../src/needs-you.js'
@@ -306,5 +307,18 @@ describe('a booking — slice 2 review (row 270)', () => {
     const r = await b.repo.cli(['decide', 'ship', b.planId, '--book', 'lint'])
     expect([r.code, r.stderr]).toEqual([2, expect.stringContaining('book-needs-terminal')])
     expect(ledgerLen(b.repo)).toBe(0)
+  }, 240_000)
+})
+
+describe('a booking dismissed in flight (row 269)', () => {
+  it('a booking dismissed while its plan is in flight withholds again from the next lint run, never read as a pass (Review Focus 5)', async () => {
+    const b = await notJudged()
+    expect((await b.repo.cli(['decide', 'ship', b.planId, '--book', 'lint'])).code).toBe(0)
+    const ctx: Ctx = { ...fakeCtx(b.repo.root, { tty: true }), ask: async () => 'y' }
+    expect(await dismiss(ctx, ['ledger', '--item', '1', '--cause', 'judged-wrong', '--note', 'the error is ours'])).toBe(0)
+    expect(ledgerItems(b.repo.root)[0]).toMatchObject({ state: 'dismissed', end: { cause: 'judged-wrong', note: 'the error is ours' } })
+    expect(await b.gate('ship')).toBe(1)
+    expect(b.lastRun()).toMatchObject({ checks_only: true })
+    expect(b.lastRun().checks.at(-1)!.parts).toEqual([expect.objectContaining({ part: 'ui', state: 'not-judged' })])
   }, 240_000)
 })

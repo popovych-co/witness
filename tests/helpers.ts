@@ -769,11 +769,11 @@ export function crashVerifyRed(cwd: string, planId: string, args: string[] = [])
 
 // Row 270. Any witness command in a process of its own that dies at the crash seam `seam` (exit 9):
 // crashPoint exits the process, so the crashed write never runs in the test's own worker.
-export function crashCli(cwd: string, args: string[], seam: string): Promise<number | null> {
+export function crashCli(cwd: string, args: string[], seam: string, env: Record<string, string> = {}): Promise<number | null> {
   const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   return new Promise((done) => {
     const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(REPO, 'src', 'bin.ts'), ...args],
-      { cwd, env: fixtureEnv({ WITNESS_CRASH_AFTER: seam }) as NodeJS.ProcessEnv, stdio: 'ignore' })
+      { cwd, env: fixtureEnv({ ...env, WITNESS_CRASH_AFTER: seam }) as NodeJS.ProcessEnv, stdio: 'ignore' })
     c.on('close', (code) => done(code))
   })
 }
