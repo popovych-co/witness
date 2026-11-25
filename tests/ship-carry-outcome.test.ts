@@ -42,7 +42,7 @@ const shipOutcomes = (root: string, planId: string): ShipOutcomeEntry[] =>
 const lastShipOutcome = (root: string, planId: string): ShipOutcomeEntry | undefined => shipOutcomes(root, planId).at(-1)
 
 const CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
 // Every ship run here sees the fake harness first on PATH (claude, gh), with a clean verdict and a

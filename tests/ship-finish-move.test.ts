@@ -50,7 +50,6 @@ const STEP0_SENTENCE = 'its reflog cannot tell'
 
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

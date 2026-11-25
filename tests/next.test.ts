@@ -121,10 +121,9 @@ describe('witness next — the ladder', () => {
     const { repo, planId } = await shippableRepo()
     expect(await nextLine(repo)).toContain(`gate implement ${planId}`)
     const scenario = fakeScenario()
-    // vitest-single fixture lands 4 changed files — coverage-minimum needs an anchor per each
+    // vitest-single fixture lands 3 changed files — coverage-minimum needs an anchor per each
     putVerdict(scenario, {
       coverage: [
-        { anchor: '.gitignore', note: 'read' },
         { anchor: 'package.json', note: 'read' },
         { anchor: 'src/token.ts', note: 'read' },
         { anchor: 'tests/token.test.ts', note: 'read' },

@@ -147,7 +147,7 @@ describe('the ship marker (row 240)', () => {
     autonomyOn(repo)
     const scenario = fakeScenario()
     putVerdict(scenario, {
-      coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+      coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
       findings: [],
     })
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })

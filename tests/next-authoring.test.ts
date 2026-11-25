@@ -254,7 +254,6 @@ describe('a revised implement gate owes authoring', () => {
     // blocking finding the revise is answering.
     putVerdict(scenario, {
       coverage: [
-        { anchor: '.gitignore', note: 'read' },
         { anchor: 'package.json', note: 'read' },
         { anchor: 'src/token.ts', note: 'read' },
         { anchor: 'tests/token.test.ts', note: 'read' },

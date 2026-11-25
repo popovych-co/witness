@@ -11,7 +11,6 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const OLD = '.claude/hooks/guard-state.mjs'
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

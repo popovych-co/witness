@@ -24,10 +24,9 @@ import {
   TOKEN_FIXED, callCount, crashCli, fakeCtx, fakeLint, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, type TestRepo,
 } from './helpers.js'
 
-// vitest-single lands 4 files in the worktree diff — coverage-minimum needs an anchor for each.
+// vitest-single lands 3 files in the worktree diff — coverage-minimum needs an anchor for each.
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

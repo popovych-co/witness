@@ -294,7 +294,7 @@ const shipBack = (runId: string): Entry =>
 const HANDED = [shipRun(1), shipDec('revise'), shipBack('s1')]
 
 const COVERAGE = [
-  { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+  { anchor: 'package.json', note: 'read' },
   { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
 ]
 const CLEAN = { coverage: COVERAGE, findings: [] }

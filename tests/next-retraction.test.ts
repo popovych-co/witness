@@ -228,7 +228,7 @@ describe('a retracted implement approval routes gate implement --fresh (row 244)
   it('next and status route gate implement --fresh, never the edit a plain revise owes', async () => {
     const seed = await shippableRepo()
     const scenario = fakeScenario()
-    const coverage = ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' }))
+    const coverage = ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' }))
     putVerdict(scenario, { coverage, findings: [] })
     const env = gateEnv(scenario)
     expect(await runGate(fakeCtx(seed.repo.root, { env }), 'implement', seed.planId, { fresh: false, manual: false })).toBe(0)

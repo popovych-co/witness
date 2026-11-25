@@ -10,10 +10,10 @@ import type { GateRunEntry } from '../src/rounds.js'
 import { LEDGER_STREAM } from '../src/streams.js'
 import { switchOffKey, switchOffsCheck } from '../src/switch-offs.js'
 import {
-  CLEAN_FOUR, TOKEN_FIXED, callCount, callFor, fakeCtx, fakeScenario, gateEnv, offRed, putVerdict, shippableRepo, tmpRepo, type TestRepo,
+  CLEAN_THREE, TOKEN_FIXED, callCount, callFor, fakeCtx, fakeScenario, gateEnv, offRed, putVerdict, shippableRepo, tmpRepo, type TestRepo,
 } from './helpers.js'
 
-const CLEAN = CLEAN_FOUR
+const CLEAN = CLEAN_THREE
 const PLAIN = { fresh: false, manual: false }
 
 const runs = (repo: TestRepo, id: string) => readStream(repo.root, id).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]

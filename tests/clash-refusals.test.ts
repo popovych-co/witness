@@ -64,7 +64,7 @@ const g = (cwd: string, ...args: string[]): string =>
 const porcelain = (wt: string): string =>
   execFileSync('git', ['status', '--porcelain'], { cwd: wt, encoding: 'utf8' })
 const CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
 const shipRecords = (repo: TestRepo, planId: string) => readStream(repo.root, planId).filter((e) => e.t === 'ship-outcome')

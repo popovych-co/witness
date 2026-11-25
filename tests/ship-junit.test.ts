@@ -12,7 +12,7 @@ import { suiteKey } from '../src/runner.js'
 import { codeTree } from '../src/snapshot.js'
 import { baseCounts } from '../src/tests-effect.js'
 import {
-  CLEAN_FOUR, TOKEN_BROKEN, fakeCtx, fakeScenario, fullSuite, fullSuiteShip, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
+  CLEAN_THREE, TOKEN_BROKEN, fakeCtx, fakeScenario, fullSuite, fullSuiteShip, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
   type TestRepo,
 } from './helpers.js'
 import { scratchDir } from './scratch.js'
@@ -121,7 +121,7 @@ describe('the ship suite (rows 251, 252)', () => {
   it('a filtered runner journals no summary', async () => {
     const { repo, planId } = await shippableRepo()
     const scenario = fakeScenario()
-    putVerdict(scenario, CLEAN_FOUR)
+    putVerdict(scenario, CLEAN_THREE)
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
     await runGate(ctx, 'ship', planId, { fresh: false, manual: false })

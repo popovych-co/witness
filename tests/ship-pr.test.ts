@@ -17,7 +17,6 @@ const TOKEN_CONFLICTING = 'export function rotateDue(elapsed: number, ttl: numbe
 
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

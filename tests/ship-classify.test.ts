@@ -41,7 +41,7 @@ describe('the classifiers (row 242)', () => {
 })
 
 const CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
 const shipConfig = (autonomy: boolean, ciSettleMs = 0) => stringify(withValues(parse(singleConfig('filtered')) as Record<string, unknown>, {

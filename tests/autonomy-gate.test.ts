@@ -138,7 +138,7 @@ it('a command trust blocked is the human\'s to grant (kept stop)', async () => {
   const { repo, planId } = await shippableRepo(); autonomyOn(repo)
   const SHIP_CLEAN = {
     coverage: [
-      { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+      { anchor: 'package.json', note: 'read' },
       { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
     ],
     findings: [],
@@ -236,7 +236,7 @@ it('a granted command that really fails lands a round and is revised, never resu
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-m', 'lint true')
   const SHIP_CLEAN = {
     coverage: [
-      { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+      { anchor: 'package.json', note: 'read' },
       { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
     ],
     findings: [],

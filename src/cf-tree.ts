@@ -51,7 +51,8 @@ export function objectType(root: string, sha: string): 'commit' | 'tree' | undef
 const treeOf = (root: string, sha: string): string | undefined =>
   objectType(root, sha) === undefined ? undefined : git(root, ['rev-parse', '--verify', `${sha}^{tree}`])
 
-export interface CfOverlay { from: string; paths: string[] }
+// Row 277. `blobs` are files no tree holds yet (a spliced package.json), folded after `paths`.
+export interface CfOverlay { from: string; paths: string[]; blobs?: Array<{ path: string; mode: string; sha: string }> }
 
 // A repo-relative file path: no empty, `.` or `..` segment, not absolute, no NUL.
 const pathOk = (p: string): boolean =>
@@ -59,7 +60,7 @@ const pathOk = (p: string): boolean =>
   && p.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
 
 // One entry of `tree` at exactly `path`, read with literal pathspecs so `*` or `[` is a character.
-function entryAt(root: string, tree: string, path: string): { mode: string; type: string; sha: string } | undefined {
+export function entryAt(root: string, tree: string, path: string): { mode: string; type: string; sha: string } | undefined {
   const out = git(root, ['--literal-pathspecs', 'ls-tree', '-z', tree, '--', path])
   for (const rec of out.split('\0')) {
     const m = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]*)$/.exec(rec)
@@ -75,6 +76,11 @@ export function foldOverlay(root: string, base: string, overlay: CfOverlay): Res
   const bad = overlay.paths.find((p) => typeof p !== 'string' || !pathOk(p))
   if (bad !== undefined) {
     return refuse([v('overlay', 'invalid', visible(String(bad)), 'repo-relative file paths without empty, . or .. segments')])
+  }
+  const blobs = overlay.blobs ?? []
+  const badBlob = blobs.find((b) => typeof b.path !== 'string' || !pathOk(b.path) || !/^100(?:644|755)$/.test(b.mode) || !SHA_RE.test(b.sha))
+  if (badBlob !== undefined) {
+    return refuse([v('overlay', 'invalid', visible(String(badBlob.path)), 'blobs at repo-relative file paths, each a regular mode and a full sha')])
   }
   const baseTree = treeOf(root, base)
   if (baseTree === undefined) return refuse([v('tree', 'tree-unknown', visible(base), 'a full commit or tree sha this repo holds')])
@@ -93,6 +99,13 @@ export function foldOverlay(root: string, base: string, overlay: CfOverlay): Res
       }
       removals.push(`0 ${'0'.repeat(baseTree.length)}\t${path}\0`)
       if (theirs !== undefined) adds.push(`${theirs.mode} ${theirs.sha}\t${path}\0`)
+    }
+    for (const b of blobs) {
+      if (entryAt(root, baseTree, b.path)?.type === 'tree') {
+        return refuse([v('overlay', 'overlay-not-a-file', visible(b.path), 'file paths — a directory is overlaid by naming its files')])
+      }
+      removals.push(`0 ${'0'.repeat(baseTree.length)}\t${b.path}\0`)
+      adds.push(`${b.mode} ${b.sha}\t${b.path}\0`)
     }
     return withScratch('witness-cf-', (dir) => {
       const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
