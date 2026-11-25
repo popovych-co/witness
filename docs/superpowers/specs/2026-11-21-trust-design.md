@@ -282,10 +282,11 @@ transition; `check` reports a `ledger` stream another history holds.
 **As built (T3a, row 274).** The second kind, `booked-switch-off`, books a switch-off line: `file`, `token` and
 `subject.lines` (each line key, 16 hex over token, file and the normalized line, with the copies it waives); its key is
 16 hex over (kind, check, plan, file, token, the sorted lines), and the lint formula is unchanged. The check applies the
-plan's own items only (C17). It closes when the line is gone: at the merge stamp of plan M, from M's last ship round
-whose `reviewed_tree` the repo can read, an open switch-off item of M or of a plan merged before it closes when that
-tree's blob at its file holds no line it books (a missing file holds none); no readable tree observes nothing, and the
-observation reads the item's own token, never the config. The lint lane and the lint observation read lint items only
+plan's own items only (C17). It closes when the line is gone: at the merge stamp of plan M, read from M's newest ship
+round alone (what merged), M's own items close when that tree's blob at their file holds no line they book; an item of a
+plan merged before M closes only where the round's base (`reviewed_base`) held such a line and the tree holds none —
+this merge took it out. A missing file holds none; an unreadable tree, a round with no base or a failed read observes
+nothing, and the observation reads the item's own token, never the config. The lint lane and the lint observation read lint items only
 (M-g). `status` lists `booked[n]{item,plan,check,holds,since}` (`check` `lint/<part>` or `switch-offs`).
 
 ### 3.4 Counterfactual runs (CF) — T3
