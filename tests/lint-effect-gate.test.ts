@@ -7,6 +7,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { grantCommands } from '../src/allowlist.js'
+import { baseWait } from '../src/base-lint.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { restorable, restoredName } from '../src/definitions.js'
 import { acquireDriveLock } from '../src/drive-presence.js'
@@ -15,6 +16,8 @@ import { planChangeSet } from '../src/change-set.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { journalShard } from '../src/jobs.js'
+import { loadCanon } from '../src/scan.js'
+import { actFacts } from '../src/verbs/next.js'
 import { readStream } from '../src/journal.js'
 import { LINT_EFFECT, definitionsCheck, lintEffectKind, loosenedOffs, type LintEffectResult } from '../src/lint-effect.js'
 import type { GateCheck, GateRunEntry } from '../src/rounds.js'
@@ -27,12 +30,12 @@ const HIDDEN = 'export const x = "BAD"\n'
 // A shippable plan with the fake lint as `ship.lint`'s biome part and its SARIF reader (committed on
 // main, granted). The plan's worktree carries fake-lint.mjs; `hide` adds a tracked src/hidden.ts holding
 // BAD and lists it in the plan's .gitignore, so the plan's own lint passes and the base's would not.
-async function bench(opts: { hide?: boolean } = {}) {
+async function bench(opts: { hide?: boolean; autonomy?: boolean } = {}) {
   const { repo, wt, planId } = await shippableRepo()
   const cmd = fakeLint(repo)
   writeFileSync(join(wt, 'fake-lint.mjs'), readFileSync(join(repo.root, 'fake-lint.mjs')))
   rmSync(join(repo.root, 'fake-lint.mjs'))
-  patchConfig(repo, { ship: { lint: { biome: cmd.check } }, readers: { biome: cmd.sarif } })
+  patchConfig(repo, { ship: { lint: { biome: cmd.check } }, readers: { biome: cmd.sarif }, ...(opts.autonomy === true ? { autonomy: 'on' } : {}) })
   repo.git('add', 'witness.config.yaml'); repo.git('commit', '-q', '-m', 'lint')
   grantCommands(repo.root, [cmd.check, cmd.sarif])
   const anchors = ['fake-lint.mjs']
@@ -46,7 +49,9 @@ async function bench(opts: { hide?: boolean } = {}) {
   execFileSync('git', ['commit', '-q', '-m', 'the plan'], { cwd: wt })
   const scenario = fakeScenario()
   putVerdict(scenario, { ...CLEAN_THREE, coverage: [...CLEAN_THREE.coverage, ...anchors.map((anchor) => ({ anchor, note: 'read' }))] })
-  const gate = (name = 'implement') => runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), name, planId, PLAIN)
+  const printed: string[] = []
+  const gate = (name = 'implement') =>
+    runGate(fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => printed.push(l) }), name, planId, PLAIN)
   const runs = () => readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
   const lastRun = () => runs().at(-1)!
   const check = (name: string): GateCheck => lastRun().checks.find((c) => c.name === name)!
@@ -66,7 +71,7 @@ async function bench(opts: { hide?: boolean } = {}) {
     const files = planChangeSet(wt, base.value)
     return { cfg, base: base.value, files, restored: restorable(repo.root, wt, base.value, files, cfg.checks.definitions) }
   }
-  return { repo, wt, planId, scenario, gate, runs, lastRun, check, land, inputs }
+  return { repo, wt, planId, scenario, gate, runs, lastRun, check, land, inputs, printed: () => printed.join('\n') }
 }
 
 describe('the definitions check (row 277)', () => {
@@ -167,5 +172,73 @@ describe('the definitions check (row 277)', () => {
       { ok: true, value: [...(restored.ok ? restored.value : []), ...many] })
     expect(check.detail).toMatch(/\(\.gitignore, p0\/\.gitignore, .*p8\/\.gitignore and 3 more\)$/)
     expect(restoredName(many[0]!)).toBe('p0/.gitignore')
+  }, 240_000)
+})
+
+const decided = (root: string, planId: string) => readStream(root, planId).some((e) => e.t === 'human-decision')
+// Holds the drive lock for `fn`, as a running drive would.
+async function underDrive<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const held = acquireDriveLock(root, {})
+  if (!held.ok) throw new Error('drive lock')
+  try { return await fn() } finally { held.value() }
+}
+
+describe('the wait on the lint effect (row 277)', () => {
+  it("a checks-only round red only for a pending effect is drive's: the gate names the wait and no decision is made (row 277)", async () => {
+    const b = await bench({ autonomy: true })
+    await underDrive(b.repo.root, async () => {
+      await b.gate()
+      expect(b.printed()).toContain(`awaits-drive: implement ${b.planId} — drive lints this tree under the base's check definitions first · the gate runs again once it lands`)
+      expect(baseWait(b.repo.root, b.lastRun())).toEqual({ waiting: ['definitions'], landed: [], red: [] })
+      expect(decided(b.repo.root, b.planId)).toBe(false)
+    })
+  }, 240_000)
+
+  it('once the effect lands the stop is stale, and next routes the re-gate (row 277)', async () => {
+    const b = await bench({ autonomy: true })
+    await underDrive(b.repo.root, async () => {
+      await b.gate()
+      b.land()
+      expect(baseWait(b.repo.root, b.lastRun())).toEqual({ waiting: [], landed: ['definitions'], red: [] })
+      const entries = readStream(b.repo.root, b.planId)
+      expect(actFacts(b.repo.root, cfgOf(b.repo.root), loadCanon(b.repo.root), 'implement', b.planId, entries, {}).checksMoved).toBe(true)
+      await b.gate()
+      expect(b.lastRun().checks_only).toBeUndefined()
+      expect(b.check('definitions')).toMatchObject({ ok: true, lint_effect: { read: 'measured' } })
+    })
+  }, 240_000)
+
+  it('a key the config no longer gives, scratch runs turned off, or two strikes end the wait: the re-gate reads it (row 277)', async () => {
+    const b = await bench({ autonomy: true })
+    await underDrive(b.repo.root, async () => {
+      await b.gate()
+      const red = b.lastRun()
+      expect(baseWait(b.repo.root, red).waiting).toEqual(['definitions'])
+      const key = b.check('definitions').owes![0]!.key
+      // the commands changed: the config no longer gives the key
+      const was = b.repo.read('witness.config.yaml')
+      patchConfig(b.repo, { readers: { biome: 'node fake-lint.mjs sarif --other' } })
+      expect(baseWait(b.repo.root, red)).toEqual({ waiting: [], landed: ['definitions'], red: [] })
+      // scratch runs off (an older file that never set scratch.prepare)
+      b.repo.write('witness.config.yaml', was)
+      patchConfig(b.repo, { schema: 3, scratch: undefined, checks: undefined })
+      expect(loadConfig(b.repo.root)).toMatchObject({ ok: true, value: { scratch: { prepare: undefined } } })
+      expect(baseWait(b.repo.root, red).landed).toEqual(['definitions'])
+      // two strikes
+      b.repo.write('witness.config.yaml', was)
+      expect(baseWait(b.repo.root, red).waiting).toEqual(['definitions'])
+      for (const n of [1, 2]) journalShard(b.repo.root, { kind: LINT_EFFECT, key, shard: 1, of: 1, ms: n, outcome: 'failed', why: 'boom' })
+      expect(baseWait(b.repo.root, red).landed).toEqual(['definitions'])
+    })
+  }, 240_000)
+
+  it('a round red for lint and for nothing else still waits as row 267 has it (row 267 unchanged)', async () => {
+    const b = await bench({ hide: false })
+    const run = { ...b.runs()[0] ?? {}, artifact: b.planId, checks_only: true as const,
+      checks: [{ name: 'markers', ok: true }, { name: 'lint', ok: false, parts: [{ part: 'biome', state: 'red' as const }] }] } as unknown as GateRunEntry
+    expect(baseWait(b.repo.root, run)).toEqual({ waiting: [], landed: [], red: ['biome'] })
+    // a definitions check that is not last, or is green, waits on nothing
+    const green = { ...run, checks: [{ name: 'markers', ok: true }, { name: 'definitions', ok: true, owes: [{ kind: LINT_EFFECT, key: 'k' }] }] } as unknown as GateRunEntry
+    expect(baseWait(b.repo.root, green)).toEqual({ waiting: [], landed: [], red: [] })
   }, 240_000)
 })

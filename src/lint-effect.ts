@@ -16,7 +16,7 @@ import { shownCmd, trustedNow, type RunCommand } from './allowlist.js'
 import { objectType, pinTree } from './cf-tree.js'
 import { parentsInTree } from './change-set.js'
 import type { Ctx } from './cli.js'
-import type { Config } from './config.js'
+import { loadConfig, type Config } from './config.js'
 import { effectTree, restoredName, type Restored } from './definitions.js'
 import { keyCounts, loosenedKey, newDiagnostics, normalizeSnippet, readPart, type Diagnostic } from './diagnostics.js'
 import { tryGit } from './gitio.js'
@@ -25,7 +25,7 @@ import { readStream } from './journal.js'
 import { boundReader } from './lint-parts.js'
 import { RULE_RE } from './lint-readers.js'
 import { ok, refuse, type Result } from './refusal.js'
-import { lastGateRun, type GateCheck, type LoosenedOff } from './rounds.js'
+import { lastGateRun, type GateCheck, type GateRunEntry, type LoosenedOff } from './rounds.js'
 import { execCommand, interrupted } from './runner.js'
 import type { Canon } from './scan.js'
 import { inScratch, type CfStep } from './scratch-checkout.js'
@@ -408,4 +408,21 @@ export function definitionsCheck(
     },
     effect: { read: 'measured', changed, offs: loosenedOffs(cfg, result, defs), ...(result.over !== undefined ? { over: result.over } : {}), unread },
   }
+}
+
+// Row 277 (C36, row 267's wait). What a checks-only round whose last check is a red `definitions` waits on:
+// `waiting` while drive will run its key — the result is pending, scratch runs are on, the config gives
+// the key, and the plan's last implement or ship run still owes it — and `landed` otherwise (a result
+// arrived, the commands changed, scratch runs went off, the job was struck twice, or no drive runs): the
+// re-gate reads the effect, never a red. Undefined for any other run, and for a config that does not load.
+export function effectWait(root: string, run: GateRunEntry): 'waiting' | 'landed' | undefined {
+  const last = run.checks_only === true ? run.checks.at(-1) : undefined
+  if (last?.name !== 'definitions' || last.ok) return undefined
+  const cfgR = loadConfig(root)
+  if (!cfgR.ok) return undefined
+  const cfg = cfgR.value
+  const key = last.owes?.find((o) => o.kind === LINT_EFFECT)?.key
+  if (key === undefined || cfg.scratch.prepare === undefined || !currentEffectKey(cfg, key)) return 'landed'
+  if (jobReading(root, { kind: LINT_EFFECT, key, shards: 1 }).state !== 'pending') return 'landed'
+  return effectOwes(root, cfg, run.artifact).includes(key) ? 'waiting' : 'landed'
 }
