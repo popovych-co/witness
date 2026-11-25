@@ -3,8 +3,8 @@
 // tree (the lint-effect job); while it does, the round waits (withholding); with no drive it reads not
 // checked and the key stays owed.
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { grantCommands } from '../src/allowlist.js'
 import { baseWait } from '../src/base-lint.js'
@@ -21,7 +21,12 @@ import { actFacts } from '../src/verbs/next.js'
 import { readStream } from '../src/journal.js'
 import { LINT_EFFECT, definitionsCheck, lintEffectKind, loosenedOffs, type LintEffectResult } from '../src/lint-effect.js'
 import type { GateCheck, GateRunEntry } from '../src/rounds.js'
-import { CLEAN_THREE, fakeCtx, fakeLint, fakeScenario, fixtureEnv, gateEnv, patchConfig, putVerdict, shippableRepo } from './helpers.js'
+import {
+  CLEAN_THREE, approve, callFor, fakeCtx, fakeLint, fakeScenario, fixtureEnv, gateEnv, patchConfig, putVerdict, runScript, seededRepo,
+  shippableRepo, stampLive, trustConfig, writePlan, writeSpec,
+} from './helpers.js'
+import { DEFAULT_DEFINITIONS } from '../src/definitions.js'
+import { worktreePath } from '../src/worktree.js'
 
 const PLAIN = { fresh: false, manual: false }
 const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
@@ -252,5 +257,119 @@ describe('the wait on the lint effect (row 277)', () => {
     // a definitions check that is not last, or is green, waits on nothing
     const green = { ...run, checks: [{ name: 'markers', ok: true }, { name: 'definitions', ok: true, owes: [{ kind: LINT_EFFECT, key: 'k' }] }] } as unknown as GateRunEntry
     expect(baseWait(b.repo.root, green)).toEqual({ waiting: [], landed: [], red: [] })
+  }, 240_000)
+})
+
+// A plan on a seeded repo whose main holds `main` (beside fake-lint.mjs and run-script.mjs), with `ship.lint`
+// from `lint`, the biome reader when `reader`, and `extra` definitions beside the default list. The plan's
+// worktree writes `plan` (a `force` path added past its .gitignore) and commits.
+async function planRepo(o: {
+  main: Record<string, string>; plan: Record<string, string>; force?: string[]; reader?: boolean; extra?: string[]
+  lint: (cmd: ReturnType<typeof fakeLint>, script: string) => Record<string, string>
+}) {
+  const repo = await seededRepo()
+  const cmd = fakeLint(repo)
+  const script = runScript(repo)
+  for (const [f, text] of Object.entries(o.main)) repo.write(f, text)
+  patchConfig(repo, { autonomy: 'on', ship: { test: 'true', lint: o.lint(cmd, script) }, ...(o.reader === true ? { readers: { biome: cmd.sarif } } : {}),
+    checks: { definitions: [...DEFAULT_DEFINITIONS, ...(o.extra ?? [])] } })
+  repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
+  trustConfig(repo)
+  await writeSpec(repo, 'auth-refresh')
+  approve(repo, 'auth-refresh')
+  // scaffoldingPlan's shape: the spec's first plan done and the spec live, then a plan of one scaffolding
+  // step, closed at once — the gate judges the tree, not evidence.
+  await writePlan(repo, 'auth-refresh-plan-1')
+  repo.flipStatus('auth-refresh-plan-1', 'done')
+  stampLive(repo, 'auth-refresh')
+  const planId = 'auth-refresh-plan-2'
+  const w = await writePlan(repo, planId, { steps: [{ id: 's1', title: 'tidy', scaffolding: true }] }, '## Step: s1\nTidy.\n')
+  if (w.code !== 0) throw new Error(`write: ${w.stdout}${w.stderr}`)
+  repo.flipStatus(planId, 'approved')
+  const started = await repo.cli(['start', planId])
+  if (started.code !== 0) throw new Error(`start: ${started.stdout}${started.stderr}`)
+  const wt = worktreePath(repo.root, planId)
+  const closed = await repo.cli(['step-close', planId, '--step', 's1'], { cwd: wt })
+  if (closed.code !== 0) throw new Error(`step-close: ${closed.stdout}${closed.stderr}`)
+  for (const [f, text] of Object.entries(o.plan)) {
+    mkdirSync(dirname(join(wt, f)), { recursive: true })
+    writeFileSync(join(wt, f), text === '.gitignore+' ? `${readFileSync(join(wt, '.gitignore'), 'utf8')}src/hidden.ts\n` : text)
+  }
+  execFileSync('git', ['add', '-A'], { cwd: wt })
+  if ((o.force ?? []).length > 0) execFileSync('git', ['add', '-f', ...o.force!], { cwd: wt })
+  execFileSync('git', ['commit', '-q', '-m', 'the plan'], { cwd: wt })
+  const scenario = fakeScenario()
+  putVerdict(scenario, { coverage: Object.keys(o.plan).map((anchor) => ({ anchor, note: 'read' })), findings: [] })
+  const said: string[] = []
+  const gate = (name = 'implement') =>
+    runGate(fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => said.push(l), err: (l) => said.push(l) }), name, planId, PLAIN)
+  const lastRun = () => {
+    const run = (readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]).at(-1)
+    if (run === undefined) throw new Error(`no gate-run: ${said.join('\n')}`)
+    return run
+  }
+  const check = (name: string): GateCheck => lastRun().checks.find((c) => c.name === name)!
+  const land = () => {
+    const key = check('definitions').owes![0]!.key
+    const done = lintEffectKind.run(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), cfgOf(repo.root), { kind: LINT_EFFECT, key, shards: 1 }, 1)
+    if (done.outcome !== 'done') throw new Error(`job failed: ${done.why}`)
+    const r = journalShard(repo.root, { kind: LINT_EFFECT, key, shard: 1, of: 1, ms: 1, ...done })
+    if (!r.ok) throw new Error(JSON.stringify(r.violations))
+  }
+  // Under drive: the checks-only round, the job landed, the judged round.
+  const measure = (name = 'implement') => underDrive(repo.root, async () => { await gate(name); land(); await gate(name) })
+  return { repo, wt, planId, scenario, gate, lastRun, check, measure }
+}
+
+describe('what a plan\'s check definitions hide is a switch-off (row 277)', () => {
+  it('`.gitignore`-hiding a file is caught (§4 T3)', async () => {
+    const b = await bench({ autonomy: true })
+    await underDrive(b.repo.root, async () => { await b.gate(); b.land(); await b.gate() })
+    const off = b.check('switch-offs')
+    expect(off.ok).toBe(false)
+    expect(off.offs).toContainEqual(expect.objectContaining({ kind: 'loosened', tool: 'biome', rule: 'lint/test/noBad', file: 'src/hidden.ts', line: 1, count: 1 }))
+    expect(off.detail).toContain('loosened: src/hidden.ts:1 biome lint/test/noBad')
+    // the reviewers are told each loosened hit and the definitions the plan changed
+    const asked = readFileSync(join(callFor(b.scenario, 'code-reviewer')!, 'stdin'), 'utf8')
+    expect(asked).toContain("- src/hidden.ts:1 — biome lint/test/noBad, hidden by the plan's check definitions")
+    expect(asked).toContain('- check definitions the plan changed: .gitignore')
+    // ship reads the same: its trees key alike, so the landed result serves it at once
+    await b.gate('ship')
+    expect(b.lastRun().gate).toBe('ship')
+    expect(b.check('definitions')).toMatchObject({ ok: true, lint_effect: { read: 'measured' } })
+    expect(b.check('switch-offs').offs).toContainEqual(expect.objectContaining({ kind: 'loosened', file: 'src/hidden.ts' }))
+  }, 240_000)
+
+  it('a lint script neutered in package.json is caught as its part (row 277)', async () => {
+    const b = await planRepo({
+      main: { 'package.json': '{\n  "name": "x",\n  "scripts": {\n    "lint": "node fake-lint.mjs check"\n  }\n}\n' },
+      plan: { 'package.json': '{\n  "name": "x",\n  "scripts": {\n    "lint": "true"\n  }\n}\n', 'src/bad.ts': 'export const y = "BAD"\n' },
+      lint: (_cmd, script) => ({ lint: `${script} lint` }),
+    })
+    await b.measure()
+    expect(b.check('switch-offs').offs).toContainEqual(expect.objectContaining({ kind: 'loosened', part: 'lint', count: 1,
+      defs: { 'package.json#scripts': expect.stringMatching(/^json:[0-9a-f]{16}$/) } }))
+    expect(b.check('switch-offs').detail).toContain("lint passes only under the plan's check definitions")
+  }, 240_000)
+
+  it("a rule the plan's config turns off hides its new spot (row 277)", async () => {
+    const b = await planRepo({
+      main: { 'fake-lint.json': '{}\n' }, extra: ['fake-lint.json'], reader: true,
+      plan: { 'fake-lint.json': '{"skip": ["src/new.ts"]}\n', 'src/new.ts': 'export const z = "BAD"\n' },
+      lint: (cmd) => ({ biome: cmd.check }),
+    })
+    await b.measure()
+    expect(b.check('switch-offs').offs).toEqual([expect.objectContaining({ kind: 'loosened', tool: 'biome', file: 'src/new.ts', line: 1 })])
+  }, 240_000)
+
+  it('the definitions check names an unread reader, and its flipped part stands (Review Focus 5)', async () => {
+    const b = await planRepo({
+      main: { 'fake-lint.json': '{"report": "garbage"}\n' }, extra: ['fake-lint.json'], reader: true,
+      plan: { 'fake-lint.json': '{}\n', 'src/hidden.ts': 'export const x = "BAD"\n', '.gitignore': '.gitignore+' }, force: ['src/hidden.ts'],
+      lint: (cmd) => ({ biome: cmd.check }),
+    })
+    await b.measure()
+    expect(b.check('definitions').detail).toContain(" · biome could not be read under the base's definitions — reader-unread")
+    expect(b.check('switch-offs').offs).toEqual([expect.objectContaining({ kind: 'loosened', part: 'biome', count: 1 })])
   }, 240_000)
 })

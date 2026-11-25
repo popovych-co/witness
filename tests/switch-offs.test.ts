@@ -4,7 +4,9 @@
 import { rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { copiesInTree, isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey } from '../src/switch-offs.js'
+import type { LintEffect } from '../src/lint-effect.js'
+import type { LoosenedOff } from '../src/rounds.js'
+import { MAX_OFFS, copiesInTree, isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey, switchOffNotes, switchOffsCheck } from '../src/switch-offs.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
 
 // The base reads planSwitchOffs makes, counted (tmpRepo runs git itself, uncounted).
@@ -243,5 +245,62 @@ describe("a tree's copies of a booked line (row 274)", () => {
       gitBlobs.fail.delete('src/a.ts')
     }
     expect(copiesInTree(root, 'b'.repeat(40), 'src/a.ts', '@ts-ignore', keys)).toBeUndefined()
+  })
+})
+
+// Row 277. Hand-built loosened hits on a plan that adds no line: what the switch-offs check makes of them.
+describe('loosened hits in the switch-offs check (row 277)', () => {
+  const bench = () => {
+    const repo = tmpRepo()
+    repo.write('a.txt', 'a\n'); repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
+    const base = repo.git('rev-parse', 'HEAD')
+    const check = (lint?: LintEffect) => switchOffsCheck(repo.root, repo.root, { checks: { switchOffs: [] } } as never, base, 'p1', [], undefined, lint)
+    return { check }
+  }
+  const hidden = (file: string, line?: number, rule = 'lint/test/noBad'): LoosenedOff =>
+    ({ kind: 'loosened', key: `${file}${line ?? ''}`.padEnd(16, '0').slice(0, 16), count: 1, tool: 'biome', rule, file,
+      ...(line !== undefined ? { line } : { lineless: true as const }) })
+  const part = (name: string): LoosenedOff => ({ kind: 'loosened', key: `${name}`.padEnd(16, '1'), count: 1, part: name, defs: { '.gitignore': 'a'.repeat(40) } })
+  const measured = (offs: LoosenedOff[], over?: number): LintEffect => ({ read: 'measured', changed: ['.gitignore'], offs, unread: [], ...(over !== undefined ? { over } : {}) })
+
+  it('the loosened segment follows the heads: each hit, the line omitted when none, parts by name (row 277)', () => {
+    const r = bench().check(measured([part('lint'), hidden('src/b.ts', 3), hidden('src/a.ts'), hidden('src/a.ts', 2, '')]))
+    expect(r.ok).toBe(false)
+    expect(r.detail).toBe("no switch-off in the lines the plan adds (0 files) · loosened: src/a.ts biome lint/test/noBad · src/a.ts:2 biome (no rule) · "
+      + "src/b.ts:3 biome lint/test/noBad · lint passes only under the plan's check definitions")
+    expect(r.offs!.map((o) => (o.kind === 'loosened' ? o.part ?? `${o.file}:${o.line ?? ''}` : ''))).toEqual(['src/a.ts:', 'src/a.ts:2', 'src/b.ts:3', 'lint'])
+  })
+
+  it('past ten the segment counts the rest (row 277)', () => {
+    const offs = Array.from({ length: 12 }, (_, i) => hidden(`src/f${String(i).padStart(2, '0')}.ts`, 1))
+    expect(bench().check(measured(offs)).detail).toMatch(/src\/f09\.ts:1 biome lint\/test\/noBad · and 2 more loosened$/)
+  })
+
+  it('past MAX_OFFS, or an effect with over, nothing is bookable (row 277)', () => {
+    const { check } = bench()
+    const over = check(measured([hidden('src/a.ts', 1)], 3))
+    expect(over).toMatchObject({ ok: false, detail: "4 diagnostics the plan's check definitions hide — more than the result holds: nothing is bookable, restore the definitions" })
+    expect(over.offs).toBeUndefined()
+    const many = check(measured(Array.from({ length: MAX_OFFS + 1 }, (_, i) => hidden(`src/f${i}.ts`, 1))))
+    expect(many).toMatchObject({ ok: false, detail: `${MAX_OFFS + 1} hits of the plan's check definitions — more than ${MAX_OFFS}: nothing is bookable, restore the definitions` })
+    expect(many.offs).toBeUndefined()
+  })
+
+  it("an effect not checked, pending or none adds nothing: the check reads as T3b's (row 277)", () => {
+    const { check } = bench()
+    const plain = check()
+    for (const lint of [{ read: 'not-checked', changed: ['.gitignore'], why: 'w' }, { read: 'pending', changed: ['.gitignore'] }, { read: 'none' }] as LintEffect[]) {
+      expect(check(lint)).toEqual(plain)
+    }
+    expect(check(measured([]))).toEqual(plain)
+  })
+
+  it("the reviewers' rows: each hidden spot, each loosened part, then the definitions the plan changed, once (row 277)", () => {
+    const notes = switchOffNotes([hidden('src/a.ts', 2), hidden('src/z.ts'), part('lint')], [], ['.gitignore', 'package.json#scripts'])
+    expect(notes).toContain("- src/a.ts:2 — biome lint/test/noBad, hidden by the plan's check definitions\n"
+      + "- src/z.ts — biome lint/test/noBad, hidden by the plan's check definitions\n"
+      + "- the lint lint part passes only under the plan's check definitions\n"
+      + '- check definitions the plan changed: .gitignore, package.json#scripts\n')
+    expect(switchOffNotes([], [], ['.gitignore'])).toBe('')
   })
 })

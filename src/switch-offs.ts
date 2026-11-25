@@ -19,7 +19,8 @@ import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
 import { gitBlob, tryGitC } from './gitio.js'
 import { openItems, type DroppedItem, type SwitchOffItem } from './ledger.js'
-import { offUnbooked, type DroppedOff, type GateCheck, type LineOff, type OffVerdict } from './rounds.js'
+import type { LintEffect } from './lint-effect.js'
+import { offUnbooked, type DroppedOff, type GateCheck, type LineOff, type LoosenedOff, type OffVerdict } from './rounds.js'
 import type { TestsEffect } from './tests-effect.js'
 import { visible } from './toon.js'
 
@@ -343,33 +344,80 @@ function applyLossBookings(losses: readonly DroppedOff[], mine: readonly Dropped
   })
 }
 
+// Row 277. A loosened hit as the detail reads it: a hidden spot (`<file>:<line> <tool> <rule>`, the line
+// omitted when it has none; a rule-less diagnostic says so) or a loosened part.
+const ruleShown = (rule: string): string => (rule === '' ? '(no rule)' : visible(rule))
+const loosePlace = (o: LoosenedOff): string => (o.part !== undefined
+  ? `${visible(o.part)} passes only under the plan's check definitions`
+  : `${visible(o.file)}${o.line !== undefined ? `:${o.line}` : ''} ${o.tool} ${ruleShown(o.rule)}`)
+
+// Row 277. Hidden spots by file and line (a whole-file one first), then loosened parts by name.
+const looseOrder = (a: LoosenedOff, b: LoosenedOff): number => {
+  if (a.part !== undefined || b.part !== undefined) {
+    if (a.part === undefined) return -1
+    if (b.part === undefined) return 1
+    return a.part < b.part ? -1 : a.part > b.part ? 1 : 0
+  }
+  return a.file !== b.file ? (a.file < b.file ? -1 : 1) : (a.line ?? 0) - (b.line ?? 0)
+}
+
+// Row 277. The loosened segment the detail appends after the tests segment: each hit (ten, then a count),
+// with the copies its bookings cover.
+function loosenedSegment(loosened: readonly LoosenedOff[]): string {
+  const more = loosened.length > MAX_LISTED ? [`and ${loosened.length - MAX_LISTED} more loosened`] : []
+  const named = loosened.slice(0, MAX_LISTED).map((o) => `${loosePlace(o)}${(o.booked ?? 0) > 0 ? `, ${o.booked} booked` : ''}`)
+  return `loosened: ${[...named, ...more].join(' · ')}`
+}
+
+// Row 278 (C17). The plan's own open booked-loosened items applied to each hit; until the ledger books
+// them, none applies.
+function applyLoosenedBookings(loosened: readonly LoosenedOff[], _mine: readonly unknown[]): LoosenedOff[] {
+  return [...loosened]
+}
+
 // Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line its
 // own bookings (row 274, read from `root`'s ledger) leave uncovered.
 // Row 275: and while the round lost a spec's passing tests (`tests`, the round's tests effect) — a loss
 // is a hit beside the lines, after them. A not-checked effect never makes it red: it says so in the
 // detail and `tests_effect`, and owes the base suite (`owes`). Called without `tests` (T3a's direct
 // callers), the check reads lines alone, as T3a built it.
+// Row 277: and while the plan's check definitions hide a diagnostic or loosen a part (`lint`, the round's lint
+// effect, measured): the hits follow the lines and the losses. An effect with `over` journals none and
+// reads red — nothing is bookable; an effect not measured adds nothing.
 export function switchOffsCheck(
-  root: string, wt: string, cfg: Config, base: string, plan: string, files: readonly string[], tests?: TestsEffect,
+  root: string, wt: string, cfg: Config, base: string, plan: string, files: readonly string[], tests?: TestsEffect, lint?: LintEffect,
 ): GateCheck {
   const found = foldOffs(planSwitchOffs(wt, base, files, cfg.checks.switchOffs))
+  const measured = lint?.read === 'measured' ? lint : undefined
   const extras: Partial<GateCheck> = tests === undefined ? {} : {
     tests_effect: tests.read === 'compared' ? { read: 'compared', specs: tests.specs ?? 0 } : { read: 'not-checked', why: tests.why ?? '' },
     ...(tests.owes !== undefined ? { owes: [tests.owes] } : {}),
   }
-  const mineAll = tests !== undefined && tests.offs.length > 0 || found.length > 0 ? openItems(root, { plan }) : []
+  const loose = [...(measured?.offs ?? [])].sort(looseOrder)
+  const mineAll = tests !== undefined && tests.offs.length > 0 || found.length > 0 || loose.length > 0 ? openItems(root, { plan }) : []
   const losses = applyLossBookings(tests?.offs ?? [], mineAll.filter((i): i is DroppedItem => i.kind === 'booked-dropped'))
-  const segment = tests !== undefined ? ` · ${testsSegment(tests, losses)}` : ''
-  if (found.length + losses.length > MAX_OFFS) {
-    const what = losses.length === 0 ? `${found.length} switch-off lines the plan adds`
-      : `${found.length} switch-off lines and ${losses.length} lost specs the plan adds`
-    return { name: 'switch-offs', ok: false, ...extras, detail: `${what} — more than ${MAX_OFFS}: nothing is bookable, remove them` }
+  const loosened = applyLoosenedBookings(loose, mineAll)
+  const segment = `${tests !== undefined ? ` · ${testsSegment(tests, losses)}` : ''}${loosened.length > 0 ? ` · ${loosenedSegment(loosened)}` : ''}`
+  if (measured?.over !== undefined) {
+    const hidden = measured.offs.filter((o) => o.part === undefined).length + measured.over
+    return { name: 'switch-offs', ok: false, ...extras,
+      detail: `${hidden} diagnostics the plan's check definitions hide — more than the result holds: nothing is bookable, restore the definitions` }
   }
-  if (found.length === 0 && losses.length === 0) {
+  if (found.length + losses.length + loosened.length > MAX_OFFS) {
+    const named = [
+      ...(found.length > 0 || losses.length > 0
+        ? [losses.length === 0 ? `${found.length} switch-off lines the plan adds` : `${found.length} switch-off lines and ${losses.length} lost specs the plan adds`]
+        : []),
+      ...(loosened.length > 0 ? [`${loosened.length} hits of the plan's check definitions`] : []),
+    ]
+    const remedy = [...(found.length > 0 || losses.length > 0 ? ['remove them'] : []), ...(loosened.length > 0 ? ['restore the definitions'] : [])]
+    return { name: 'switch-offs', ok: false, ...extras, detail: `${named.join(', and ')} — more than ${MAX_OFFS}: nothing is bookable, ${remedy.join(' and ')}` }
+  }
+  if (found.length === 0 && losses.length === 0 && loosened.length === 0) {
     return { name: 'switch-offs', ok: true, ...extras, detail: `no switch-off in the lines the plan adds (${files.length} files)${segment}` }
   }
   const lines = applyBookings(found, mineAll.filter((i): i is SwitchOffItem => i.kind === 'booked-switch-off'))
-  const offs: OffVerdict[] = [...lines, ...losses]
+  const offs: OffVerdict[] = [...lines, ...losses, ...loosened]
   const open = lines.filter((o) => offUnbooked(o) > 0)
   const bookedCopies = offs.reduce((a, o) => a + (o.booked ?? 0), 0)
   const ids = [...new Set(offs.flatMap((o) => o.items ?? []))].map(visible)
@@ -389,13 +437,22 @@ export function switchOffsCheck(
 // Row 273. What the reviewers are told: each line the plan adds, from the tree — never from the ledger
 // (§3.3: an item never reaches a reviewer), so a booked line is listed as any other.
 // Row 275: each spec's lost tests and each licensed loss, from the round's counts — never a test name.
-export function switchOffNotes(offs: readonly OffVerdict[], licensed: ReadonlyArray<{ spec: string; lost: number }> = []): string {
+// Row 277: each spot the plan's check definitions hide and each loosened part, then once the definitions the
+// plan changed (`changed`, the restored names) — never a snippet.
+export function switchOffNotes(
+  offs: readonly OffVerdict[], licensed: ReadonlyArray<{ spec: string; lost: number }> = [], changed: readonly string[] = [],
+): string {
   if (offs.length === 0 && licensed.length === 0) return ''
+  const loose = offs.filter((o): o is LoosenedOff => o.kind === 'loosened')
   const rows = [
     ...offs.flatMap((o) => o.kind === 'loosened' ? [] : [o.kind === 'dropped'
       ? `- tests of ${visible(o.spec)} — ${o.base.passed} passing on the base, ${o.plan.passed} here; skipped ${o.base.skipped} → ${o.plan.skipped}`
       : `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`]),
     ...licensed.map((l) => `- tests of ${visible(l.spec)} — ${l.lost} passing case${l.lost === 1 ? '' : 's'} gone: licensed — its spec was amended since its last plan`),
+    ...loose.map((o) => (o.part !== undefined
+      ? `- the ${visible(o.part)} lint part passes only under the plan's check definitions`
+      : `- ${visible(o.file)}${o.line !== undefined ? `:${o.line}` : ''} — ${o.tool} ${ruleShown(o.rule)}, hidden by the plan's check definitions`)),
+    ...(loose.length > 0 && changed.length > 0 ? [`- check definitions the plan changed: ${changed.map(visible).join(', ')}`] : []),
   ]
   return `### Switch-offs this plan adds\n\n${rows.join('\n')}\n\nJudge whether each is right as it stands; a finding on one says why it must go.`
 }

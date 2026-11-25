@@ -94,7 +94,7 @@ registerGate({
     // Row 277. The check definitions the plan's change set takes back from the base; the definitions check
     // runs only where it takes one (or cannot read them), so every other plan's round carries no term.
     const restored = cfg.checks.definitions.length > 0 ? restorable(root, wt, base, files, cfg.checks.definitions) : ok([])
-    let lintEffect: LintEffect = { read: 'none' }
+    let lintEffect = { read: 'none' } as LintEffect
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
@@ -153,7 +153,7 @@ registerGate({
       // Row 275: and so is a spec's lost passing tests, read from the tests lane's run (C33).
       { name: 'switch-offs', run: () => {
         effect = testsEffect(root, canon, cfg, plan, base, suite)
-        const check = switchOffsCheck(root, wt, cfg, base, planId, files, effect)
+        const check = switchOffsCheck(root, wt, cfg, base, planId, files, effect, lintEffect)
         offs = check.offs ?? []
         licensed = effect.licensed
         return check
@@ -198,7 +198,7 @@ registerGate({
       // Row 264: with the review withheld no lens reads the prompt, so it is not built.
       promptBody: withheld !== undefined ? '' : codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}` +
-        (offs.length > 0 || licensed.length > 0 ? `\n\n${switchOffNotes(offs, licensed)}` : '')),
+        (offs.length > 0 || licensed.length > 0 ? `\n\n${switchOffNotes(offs, licensed, lintEffect.read === 'none' ? [] : lintEffect.changed)}` : '')),
       checks,
       ...(withheld !== undefined ? { withheld } : {}),
       ...(junit !== undefined ? { junit } : {}),
