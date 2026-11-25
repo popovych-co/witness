@@ -4,7 +4,7 @@
 import { rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { isTestPath, lineSwitchOffs, planSwitchOffs, switchOffKey } from '../src/switch-offs.js'
+import { isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey } from '../src/switch-offs.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
 
 // The base reads planSwitchOffs makes, counted (tmpRepo runs git itself, uncounted).
@@ -95,6 +95,25 @@ describe('the switch-off tokens (row 273, C25)', () => {
     expect(tokens('src/a.ts', 'preskipTest()', ['skipTest'])).toEqual([])
   })
 
+  // Security review (2026-11-24): a closed comment before the code no longer makes the line a comment.
+  it('a line opening with a closed block comment is code after it; a comment line stays one (security review)', () => {
+    expect(tokens('tests/a.test.ts', "/**/ it.skip('x', f)")).toEqual(['.skip('])
+    expect(tokens('tests/a.test.ts', "*/ it.only('x', f)")).toEqual(['.only('])
+    expect(tokens('src/lib.rs', '/* why */ #[allow(dead_code)]')).toEqual(['#[allow('])
+    expect(tokens('tests/a.test.ts', "/* it.skip('x') */ run()")).toEqual([])     // the token sits in the comment
+    expect(tokens('tests/a.test.ts', "/* it.skip('x')")).toEqual([])
+    expect(tokens('tests/a.test.ts', " * it.skip('x') is how")).toEqual([])
+  })
+
+  it('a directive opening a line inside a block comment counts, as its tool reads it (security review)', () => {
+    const at = (file: string, text: string) => scanText(file, text, []).map((s) => [s.line, s.token])
+    expect(at('src/a.ts', 'a()\n/*\n  eslint-disable\n*/\nb()\n')).toEqual([[3, 'eslint-disable']])
+    expect(at('src/a.ts', '/*\n @ts-ignore */\nb()\n')).toEqual([[2, '@ts-ignore']])
+    expect(at('src/a.ts', '/**\n * eslint-disable is prose here\n */\n')).toEqual([])
+    // a block that never closes in code never hides a code token: the state only adds directives
+    expect(at('tests/a.test.ts', "const g = 'src/**/*.ts'\nit.skip('x', f)\n")).toEqual([[2, '.skip(']])
+  })
+
   it('a test file is named so, or lives in a test folder', () => {
     expect(['a.test.ts', 'src/a.spec.tsx', 'tests/helpers.ts', 'apps/web/e2e/support/harness.ts', 'pkg/__tests__/x.js', 'spec/x.rb'].every(isTestPath)).toBe(true)
     expect(['src/a.ts', 'src/testing.ts', 'src/latest/a.ts', 'specs/x.md'].some(isTestPath)).toBe(false)
@@ -137,5 +156,11 @@ describe('the switch-offs a plan adds (row 273, C27)', () => {
     gitBlobs.n = 0
     expect(planSwitchOffs(root, base, ['src/a.ts', 'src/c.ts'], [])).toEqual([])
     expect(gitBlobs.n).toBe(0)
+  })
+
+  it('a NUL byte never hides a source file: one in a known language is scanned (security review)', () => {
+    const { repo, root, base } = based({ 'src/a.ts': 'a()\n' })
+    repo.write('src/a.ts', '/* \0 */\n// @ts-ignore\na()\n')
+    expect(planSwitchOffs(root, base, ['src/a.ts'], []).map((o) => [o.line, o.token])).toEqual([[2, '@ts-ignore']])
   })
 })

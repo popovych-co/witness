@@ -9,7 +9,8 @@
 // A switch-off is a line: keyed over (token, file, normalized line), so a moved, re-indented or CRLF
 // line keeps its key. The plan adds the copies of a key beyond the base's count — base-red's per-key
 // multiset (row 263) — so a duplicated line is new and a new file counts whole. An unreadable base
-// reads empty: every copy is new (fail closed).
+// reads empty: every copy is new (fail closed). A symlink is skipped, and a binary file unless it is
+// named in one of the four languages.
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -95,8 +96,40 @@ export const TOKENS: readonly TokenDef[] = [
   { lang: 'go', where: 'comment', tests: false, re: /\/\/\s*nolint\b/, id: () => 'nolint', rules: nolintRules },
 ]
 
-const commentLine = (line: string, lang: SwitchOffLang): boolean =>
-  (lang === 'python' ? /^\s*#/ : /^\s*(?:\/\/|\/\*|\*)/).test(line)
+// The code a line holds after any closed block comments it opens with, or undefined where the line is
+// a comment: it opens `//`, or `/*` or `*` with no close (security review: `/**/ it.skip(` is code).
+function codeOf(line: string, lang: SwitchOffLang): string | undefined {
+  if (lang === 'python') return /^\s*#/.test(line) ? undefined : line
+  let rest = line
+  for (;;) {
+    const t = rest.trimStart()
+    if (t.startsWith('//')) return undefined
+    if (!t.startsWith('/*') && !t.startsWith('*')) return rest
+    const close = t.indexOf('*/', t.startsWith('/*') ? 2 : 0)
+    if (close === -1) return undefined
+    rest = t.slice(close + 2)
+  }
+}
+
+// Whether a block comment is open at the end of `line`, given whether one was open at its start.
+// Strings are not lexed, so this only ever adds directives (`lineHits`), never hides a code token.
+function openAfter(line: string, open: boolean): boolean {
+  let i = 0
+  for (;;) {
+    if (open) {
+      const c = line.indexOf('*/', i)
+      if (c === -1) return true
+      open = false
+      i = c + 2
+    } else {
+      const b = line.indexOf('/*', i)
+      const l = line.indexOf('//', i)
+      if (b === -1 || (l !== -1 && l < b)) return false
+      open = true
+      i = b + 2
+    }
+  }
+}
 
 // The table's tokens that apply to `file`: its language's, the test-only ones in test files.
 const tokensFor = (file: string): TokenDef[] => {
@@ -123,14 +156,22 @@ function holdsLiteral(line: string, token: string): boolean {
   return false
 }
 
-function lineHits(defs: readonly TokenDef[], lang: SwitchOffLang | undefined, line: string, extra: readonly string[]): LineHit[] {
+// A code token reads the line's code (`codeOf`); a directive reads the whole line and, on a line that
+// starts inside a block comment, the line as if the comment opened there — ESLint and TypeScript read a
+// directive that opens a block comment's text on a later line (security review).
+function lineHits(defs: readonly TokenDef[], lang: SwitchOffLang | undefined, line: string, extra: readonly string[], inBlock = false): LineHit[] {
   const out: LineHit[] = []
-  const comment = lang !== undefined && commentLine(line, lang)
+  const code = lang === undefined ? line : codeOf(line, lang)
   for (const t of defs) {
-    if (t.where === 'code' && comment) continue
-    if (t.unless?.test(line) === true) continue
-    const m = t.re.exec(line)
-    if (m !== null) out.push({ token: t.id(m), rules: ruleIds(t.rules?.(line, m) ?? []) })
+    const text = t.where === 'code' ? code : line
+    if (text === undefined || t.unless?.test(text) === true) continue
+    let at = text
+    let m = t.re.exec(at)
+    if (m === null && inBlock && t.where === 'comment') {
+      at = `/*${line}`
+      m = t.re.exec(at)
+    }
+    if (m !== null) out.push({ token: t.id(m), rules: ruleIds(t.rules?.(at, m) ?? []) })
   }
   for (const x of extra) if (holdsLiteral(line, x)) out.push({ token: `extra:${x}`, rules: [] })
   return out
@@ -151,12 +192,19 @@ export function scanText(file: string, text: string, extra: readonly string[]): 
   const defs = tokensFor(file)
   const lang = langOf(file)
   const test = isTestPath(file)
-  return text.split('\n').flatMap((line, i) => lineHits(defs, lang, line, extra).map((h) =>
-    ({ token: h.token, file, line: i + 1, snippet: normalizeSnippet(line), rules: h.rules, test })))
+  let open = false                                  // only JS and TS directives sit in block comments
+  return text.split('\n').flatMap((line, i) => {
+    const hits = lineHits(defs, lang, line, extra, open)
+    if (lang === 'ts') open = openAfter(line, open)
+    return hits.map((h) => ({ token: h.token, file, line: i + 1, snippet: normalizeSnippet(line), rules: h.rules, test }))
+  })
 }
 
 const BINARY_PROBE = 8_000
 const binary = (b: Buffer): boolean => b.subarray(0, BINARY_PROBE).includes(0)
+// A binary file is skipped (a NUL in its first 8,000 bytes, git's own test) — unless it is named in a
+// language witness reads: a NUL never hides a source file's switch-offs (security review).
+const skipped = (file: string, b: Buffer): boolean => langOf(file) === undefined && binary(b)
 
 const read = (abs: string): Buffer | undefined => {
   try {
@@ -168,20 +216,23 @@ const read = (abs: string): Buffer | undefined => {
 
 // Whether any token that applies to `file` appears anywhere in it. No pattern hangs on a line anchor, so
 // a miss on the whole text is a miss on every line: such a file costs no git call.
+// A directive inside a block comment holds one of these words, so they keep the prefilter whole.
+const BLOCK_WORDS = /eslint|@ts-(?:ignore|expect-error|nocheck)|biome-ignore|Stryker disable/
 const mayHold = (file: string, text: string, extra: readonly string[]): boolean =>
-  tokensFor(file).some((t) => t.re.test(text)) || extra.some((x) => x.length > 0 && text.includes(x))
+  tokensFor(file).some((t) => t.re.test(text)) || (langOf(file) === 'ts' && BLOCK_WORDS.test(text))
+  || extra.some((x) => x.length > 0 && text.includes(x))
 
 // One file's switch-offs beyond the base's, or none where it is no regular text file.
 function fileOffs(wt: string, base: string, file: string, extra: readonly string[]): SwitchOff[] {
   const abs = join(wt, file)
   if (lstatListed(abs)?.isFile() !== true) return []
   const bytes = read(abs)
-  if (bytes === undefined || binary(bytes)) return []
+  if (bytes === undefined || skipped(file, bytes)) return []
   const text = bytes.toString('utf8')
   if (!mayHold(file, text, extra)) return []
   const was = gitBlob(wt, base, file)
   const held = new Map<string, number>()
-  for (const s of scanText(file, was === undefined || binary(was) ? '' : was.toString('utf8'), extra)) {
+  for (const s of scanText(file, was === undefined || skipped(file, was) ? '' : was.toString('utf8'), extra)) {
     const k = switchOffKey(s)
     held.set(k, (held.get(k) ?? 0) + 1)
   }
