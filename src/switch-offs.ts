@@ -18,8 +18,9 @@ import { lstatListed } from './change-set.js'
 import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
 import { gitBlob, tryGitC } from './gitio.js'
-import { openItems, type SwitchOffItem } from './ledger.js'
-import { offUnbooked, type GateCheck, type OffVerdict } from './rounds.js'
+import { openItems, type DroppedItem, type SwitchOffItem } from './ledger.js'
+import { offUnbooked, type DroppedOff, type GateCheck, type LineOff, type OffVerdict } from './rounds.js'
+import type { TestsEffect } from './tests-effect.js'
 import { visible } from './toon.js'
 
 export type SwitchOffLang = 'ts' | 'rust' | 'python' | 'go'
@@ -74,7 +75,8 @@ interface TokenDef {
 }
 
 const C = String.raw`(?:\/\/|\/\*)` // a comment opens here
-const CFG_ATTR = /#!?\[\s*cfg_attr\s*\(.*\b(?:allow|expect)\s*\(/
+// Rust allows whitespace between `#`, `!` and `[` (push security review), so the patterns do too.
+const CFG_ATTR = /#\s*!?\s*\[\s*cfg_attr\s*\(.*\b(?:allow|expect)\s*\(/
 
 // The table (C25; the plan's probe `t3a-tokens.mjs`), in the order a line's hits are listed.
 export const TOKENS: readonly TokenDef[] = [
@@ -89,12 +91,12 @@ export const TOKENS: readonly TokenDef[] = [
   { lang: 'ts', where: 'code', tests: true, re: /(?<![\w$.])x(it|test|describe)\s*\(/, id: (m) => `x${m[1]!}(` },
   { lang: 'ts', where: 'code', tests: true, re: /(?<![\w$])(skip|only|todo|fails)\s*:\s*true\b/, id: (m) => `${m[1]!}: true` },
   { lang: 'ts', where: 'code', tests: true, re: /(?<![\w$])retry\s*:\s*[1-9]\d*\b/, id: () => 'retry:' },
-  { lang: 'rust', where: 'code', tests: false, re: /#(!?)\[\s*(allow|expect)\s*\(/, id: (m) => `#${m[1]!}[${m[2]!}(`,
+  { lang: 'rust', where: 'code', tests: false, re: /#\s*(!?)\s*\[\s*(allow|expect)\s*\(/, id: (m) => `#${m[1]!}[${m[2]!}(`,
     rules: rustListRules, unless: CFG_ATTR },
   { lang: 'rust', where: 'code', tests: false, re: CFG_ATTR, id: () => 'cfg_attr allow', rules: cfgAttrRules },
-  { lang: 'rust', where: 'code', tests: false, re: /#\[\s*ignore\b/, id: () => '#[ignore]' },
+  { lang: 'rust', where: 'code', tests: false, re: /#\s*\[\s*ignore\b/, id: () => '#[ignore]' },
   { lang: 'rust', where: 'code', tests: false, re: /\bmutants::skip\b/, id: () => 'mutants::skip' },
-  { lang: 'python', where: 'comment', tests: false, re: /#\s*noqa\b/i, id: () => 'noqa', rules: noqaRules },
+  { lang: 'python', where: 'comment', tests: false, re: /#\s*(?:(?:ruff|flake8)\s*:\s*)?noqa\b/i, id: () => 'noqa', rules: noqaRules },
   { lang: 'python', where: 'comment', tests: false, re: /#\s*type:\s*ignore\b/, id: () => 'type: ignore', rules: typeIgnoreRules },
   { lang: 'python', where: 'comment', tests: false, re: /#\s*pylint:\s*disable\b/, id: () => 'pylint: disable', rules: pylintRules },
   { lang: 'go', where: 'comment', tests: false, re: /\/\/\s*nolint\b/, id: () => 'nolint', rules: nolintRules },
@@ -286,12 +288,12 @@ export function planSwitchOffs(wt: string, base: string, files: readonly string[
 export const MAX_OFFS = 500
 const MAX_LISTED = 10
 
-const place = (o: OffVerdict): string =>
+const place = (o: LineOff): string =>
   `${visible(o.file)}:${o.line} ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`
 
 // The plan's switch-offs folded by key: the first new copy's line, `count` the copies beyond the base's.
-function foldOffs(found: readonly SwitchOff[]): OffVerdict[] {
-  const byKey = new Map<string, OffVerdict>()
+function foldOffs(found: readonly SwitchOff[]): LineOff[] {
+  const byKey = new Map<string, LineOff>()
   for (const s of found) {
     const key = switchOffKey(s)
     const o = byKey.get(key)
@@ -304,7 +306,7 @@ function foldOffs(found: readonly SwitchOff[]): OffVerdict[] {
 
 // Row 274 (C17). The plan's own open bookings applied to each line: `booked` the copies they hold for its
 // key (at most its count), `items` their ids. Another plan's, a closed and a dismissed item cover nothing.
-function applyBookings(offs: readonly OffVerdict[], mine: readonly SwitchOffItem[]): OffVerdict[] {
+function applyBookings(offs: readonly LineOff[], mine: readonly SwitchOffItem[]): LineOff[] {
   return offs.map((o) => {
     const holding = mine.filter((i) => Object.hasOwn(i.subject.lines, o.key))
     if (holding.length === 0) return o
@@ -313,33 +315,88 @@ function applyBookings(offs: readonly OffVerdict[], mine: readonly SwitchOffItem
   })
 }
 
+// Row 275. A loss as the detail reads it: its spec spelled out, both sides' counts.
+const lossPlace = (o: DroppedOff): string =>
+  `tests: ${visible(o.spec)} lost ${o.count} (passed ${o.base.passed}→${o.plan.passed}, skipped ${o.base.skipped}→${o.plan.skipped})`
+const licensedPlace = (l: { spec: string; lost: number }): string =>
+  `tests: ${visible(l.spec)} lost ${l.lost} — licensed: its spec was amended since its last plan`
+
+// Row 275 (settled point 7). The tests segment the detail appends: each loss (ten, then a count) — row
+// 276: with the cases its bookings cover — and each licensed one; or that no spec lost a passing case; or
+// why the effect was not checked.
+function testsSegment(tests: TestsEffect, losses: readonly DroppedOff[]): string {
+  if (tests.read === 'not-checked') return `tests not checked — ${tests.why ?? ''}`
+  const more = losses.length > MAX_LISTED ? [`and ${losses.length - MAX_LISTED} more lost`] : []
+  const named = losses.slice(0, MAX_LISTED).map((o) => `${lossPlace(o)}${(o.booked ?? 0) > 0 ? `, ${o.booked} booked` : ''}`)
+  const parts = [...named, ...more, ...tests.licensed.map(licensedPlace)]
+  return parts.length > 0 ? parts.join(' · ') : `tests: no spec lost a passing case (${tests.specs ?? 0} compared)`
+}
+
+// Row 276 (C17). The plan's own open loss bookings applied to each loss by spec: `booked` the cases they
+// hold (at most its count), `items` their ids.
+function applyLossBookings(losses: readonly DroppedOff[], mine: readonly DroppedItem[]): DroppedOff[] {
+  return losses.map((o) => {
+    const holding = mine.filter((i) => i.spec === o.spec)
+    if (holding.length === 0) return o
+    const held = holding.reduce((a, i) => a + i.subject.cases, 0)
+    return { ...o, booked: Math.min(o.count, held), items: holding.map((i) => i.id) }
+  })
+}
+
 // Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line its
 // own bookings (row 274, read from `root`'s ledger) leave uncovered.
-export function switchOffsCheck(root: string, wt: string, cfg: Config, base: string, plan: string, files: readonly string[]): GateCheck {
+// Row 275: and while the round lost a spec's passing tests (`tests`, the round's tests effect) — a loss
+// is a hit beside the lines, after them. A not-checked effect never makes it red: it says so in the
+// detail and `tests_effect`, and owes the base suite (`owes`). Called without `tests` (T3a's direct
+// callers), the check reads lines alone, as T3a built it.
+export function switchOffsCheck(
+  root: string, wt: string, cfg: Config, base: string, plan: string, files: readonly string[], tests?: TestsEffect,
+): GateCheck {
   const found = foldOffs(planSwitchOffs(wt, base, files, cfg.checks.switchOffs))
-  if (found.length === 0) return { name: 'switch-offs', ok: true, detail: `no switch-off in the lines the plan adds (${files.length} files)` }
-  if (found.length > MAX_OFFS) {
-    return { name: 'switch-offs', ok: false,
-      detail: `${found.length} switch-off lines the plan adds — more than ${MAX_OFFS}: nothing is bookable, remove them` }
+  const extras: Partial<GateCheck> = tests === undefined ? {} : {
+    tests_effect: tests.read === 'compared' ? { read: 'compared', specs: tests.specs ?? 0 } : { read: 'not-checked', why: tests.why ?? '' },
+    ...(tests.owes !== undefined ? { owes: [tests.owes] } : {}),
   }
-  const mine = openItems(root, { plan }).filter((i): i is SwitchOffItem => i.kind === 'booked-switch-off')
-  const offs = applyBookings(found, mine)
-  const open = offs.filter((o) => offUnbooked(o) > 0)
+  const mineAll = tests !== undefined && tests.offs.length > 0 || found.length > 0 ? openItems(root, { plan }) : []
+  const losses = applyLossBookings(tests?.offs ?? [], mineAll.filter((i): i is DroppedItem => i.kind === 'booked-dropped'))
+  const segment = tests !== undefined ? ` · ${testsSegment(tests, losses)}` : ''
+  if (found.length + losses.length > MAX_OFFS) {
+    const what = losses.length === 0 ? `${found.length} switch-off lines the plan adds`
+      : `${found.length} switch-off lines and ${losses.length} lost specs the plan adds`
+    return { name: 'switch-offs', ok: false, ...extras, detail: `${what} — more than ${MAX_OFFS}: nothing is bookable, remove them` }
+  }
+  if (found.length === 0 && losses.length === 0) {
+    return { name: 'switch-offs', ok: true, ...extras, detail: `no switch-off in the lines the plan adds (${files.length} files)${segment}` }
+  }
+  const lines = applyBookings(found, mineAll.filter((i): i is SwitchOffItem => i.kind === 'booked-switch-off'))
+  const offs: OffVerdict[] = [...lines, ...losses]
+  const open = lines.filter((o) => offUnbooked(o) > 0)
   const bookedCopies = offs.reduce((a, o) => a + (o.booked ?? 0), 0)
   const ids = [...new Set(offs.flatMap((o) => o.items ?? []))].map(visible)
   const booked = bookedCopies > 0 ? `${bookedCopies} booked (${ids.join(', ')})` : ''
-  if (open.length === 0) return { name: 'switch-offs', ok: true, offs, detail: `no unbooked switch-off in the lines the plan adds — ${booked}` }
+  const ok = offs.every((o) => offUnbooked(o) === 0)
+  if (open.length === 0) {
+    const head = found.length === 0 ? `no switch-off in the lines the plan adds (${files.length} files)` : 'no unbooked switch-off in the lines the plan adds'
+    return { name: 'switch-offs', ok, offs, ...extras,
+      detail: `${head}${booked !== '' ? ` — ${booked}` : ''}${segment}` }
+  }
   const more = open.length > MAX_LISTED ? ` · and ${open.length - MAX_LISTED} more` : ''
-  return { name: 'switch-offs', ok: false, offs,
+  return { name: 'switch-offs', ok, offs, ...extras,
     detail: `${open.length} switch-off line${open.length === 1 ? '' : 's'} the plan adds — ${open.slice(0, MAX_LISTED).map(place).join(' · ')}${more}${
-      booked !== '' ? ` · ${booked}` : ''}` }
+      booked !== '' ? ` · ${booked}` : ''}${segment}` }
 }
 
 // Row 273. What the reviewers are told: each line the plan adds, from the tree — never from the ledger
 // (§3.3: an item never reaches a reviewer), so a booked line is listed as any other.
-export function switchOffNotes(offs: readonly OffVerdict[]): string {
-  if (offs.length === 0) return ''
-  const rows = offs.map((o) => `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`)
+// Row 275: each spec's lost tests and each licensed loss, from the round's counts — never a test name.
+export function switchOffNotes(offs: readonly OffVerdict[], licensed: ReadonlyArray<{ spec: string; lost: number }> = []): string {
+  if (offs.length === 0 && licensed.length === 0) return ''
+  const rows = [
+    ...offs.map((o) => o.kind === 'dropped'
+      ? `- tests of ${visible(o.spec)} — ${o.base.passed} passing on the base, ${o.plan.passed} here; skipped ${o.base.skipped} → ${o.plan.skipped}`
+      : `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`),
+    ...licensed.map((l) => `- tests of ${visible(l.spec)} — ${l.lost} passing case${l.lost === 1 ? '' : 's'} gone: licensed — its spec was amended since its last plan`),
+  ]
   return `### Switch-offs this plan adds\n\n${rows.join('\n')}\n\nJudge whether each is right as it stands; a finding on one says why it must go.`
 }
 

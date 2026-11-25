@@ -56,7 +56,8 @@ export function outcomesOf(tests: readonly TestOutcome[], specId: string): Testc
 }
 
 export async function runCriteria(
-  runRoot: string, ctx: Ctx, doc: CanonDoc, opts: { trustRoot?: string; suite?: TestOutcome[] } = {},
+  runRoot: string, ctx: Ctx, doc: CanonDoc,
+  opts: { trustRoot?: string; suite?: TestOutcome[]; onSuite?: (tests: TestOutcome[]) => void } = {},
 ): Promise<Result<CriteriaResult>> {
   const trustRoot = opts.trustRoot ?? runRoot
   // D154 root unification. The trust list and the runner config are two halves of one
@@ -82,6 +83,8 @@ export async function runCriteria(
       suiteUntrusted = untrustedOf(res.violations)
     }
   }
+  // Row 275 (C33): the round's one parsed suite, handed on — the switch-offs check reads it.
+  if (rc.mode === 'full-suite' && suite !== undefined) opts.onSuite?.(suite)
   const src: SourceTags | undefined = rc.mode === 'filtered'
     ? sourceTags(runRoot, criteriaExcludes(cfg.value))
     : undefined

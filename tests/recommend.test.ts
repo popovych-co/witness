@@ -1208,10 +1208,20 @@ describe('the waivable rule (row 274)', () => {
     ])
     expect(d.options[0]!.why).toMatch(/^2 switch-off lines the plan adds \(eslint-disable-next-line, \.skip\(\) — no finding blocks · remove them, or book what is right as it stands; round 1 of \d+$/)
     expect(d.options[1]).toMatchObject({ when: 'the switch-off is right as it stands — say why in the note',
-      tradeoff: 'opens a ledger item per line, which waives that line for this plan; each closes once main no longer holds the line (the discharge), or by witness dismiss ledger' })
+      tradeoff: "opens a ledger item per line or spec, which waives it for this plan; each closes once main no longer holds the line, or has the spec's passing cases back (the discharge), or by witness dismiss ledger" })
     expect(d.options[3]).toMatchObject({ when: 'the switch-off is right and you take it without booking it',
       tradeoff: 'stamps the artifact over the red check — nothing books it, so the next gate meets it again' })
     expect(BOOK_TRADEOFF).toContain('per part')                                    // lint's words stand
+  })
+
+  it("rule waivable names a round's lost specs beside its lines (row 276)", () => {
+    const loss = { kind: 'dropped', key: 'd'.repeat(16), spec: 'auth-refresh', count: 1, base: { passed: 2, failed: 0, skipped: 0 }, plan: { passed: 1, failed: 0, skipped: 1 } }
+    const lossOnly = block([{ name: 'switch-offs', ok: false, offs: [loss] }])
+    expect(lossOnly.rule).toBe('waivable')
+    expect(lossOnly.options[0]!.why).toMatch(/^1 spec lost passing cases \(auth-refresh\) — no finding blocks · remove or restore them, or book what is right as it stands; round 1 of \d+$/)
+    expect(lossOnly.options[1]!.command).toBe('witness decide implement p1 --book switch-offs')
+    const both = block([{ ...OFF, offs: [...OFF.offs, loss, { ...loss, key: 'e'.repeat(16), spec: 'b' }] }])
+    expect(both.options[0]!.why).toMatch(/^2 switch-off lines the plan adds \(eslint-disable-next-line, \.skip\(\) · 2 specs lost passing cases \(auth-refresh, b\) — no finding blocks · remove or restore them/)
   })
 
   it('a red check nobody may book beside it keeps checks-failed (row 170)', () => {

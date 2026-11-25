@@ -8,8 +8,11 @@ import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import { junitSummary } from '../src/junit.js'
 import type { GateRunEntry } from '../src/rounds.js'
+import { suiteKey } from '../src/runner.js'
+import { codeTree } from '../src/snapshot.js'
+import { baseCounts } from '../src/tests-effect.js'
 import {
-  TOKEN_BROKEN, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
+  CLEAN_FOUR, TOKEN_BROKEN, fakeCtx, fakeScenario, fullSuite, fullSuiteShip, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
   type TestRepo,
 } from './helpers.js'
 import { scratchDir } from './scratch.js'
@@ -17,45 +20,10 @@ import { scratchDir } from './scratch.js'
 // Rows 251, 252. In full-suite mode the ship gate runs the suite once — the tests lane is the run
 // the criteria lane reads — and journals that run's junit summary on the tree the gate reviewed.
 
-// vitest-single fixture lands 4 files in the worktree diff — coverage-minimum needs an anchor per each.
-const CLEAN = {
-  coverage: [
-    { anchor: '.gitignore', note: 'read' },
-    { anchor: 'package.json', note: 'read' },
-    { anchor: 'src/token.ts', note: 'read' },
-    { anchor: 'tests/token.test.ts', note: 'read' },
-  ],
-  findings: [],
-}
-
 const shipRuns = (repo: TestRepo, id: string) =>
   (readStream(repo.root, id).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]).filter((r) => r.gate === 'ship')
 const lastShipRun = (repo: TestRepo, id: string) => shipRuns(repo, id).at(-1)!
 const check = (r: GateRunEntry, name: string) => r.checks.find((c) => c.name === name)!
-
-// A full-suite ship whose suite counts its own runs in a file outside the repo (an untracked
-// file in the worktree would join the plan change set). The fixture ignores only node_modules/,
-// so the worktree ignores reports/ too, committed on the branch before any gate runs.
-async function fullSuiteShip(suite?: (dir: string) => string) {
-  const seed = await shippableRepo()
-  appendFileSync(join(seed.wt, '.gitignore'), 'reports/\n')
-  execFileSync('git', ['commit', '-am', 'ignore reports'], { cwd: seed.wt })
-  const dir = scratchDir('witness-runs-')
-  const counter = join(dir, 'count.cjs')
-  writeFileSync(counter, `require('fs').appendFileSync(${JSON.stringify(join(dir, 'runs'))}, 'x')`)
-  const suiteCmd = suite?.(dir) ?? `node "${counter}" && node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml`
-  patchConfig(seed.repo, {
-    criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' },
-    ship: { test: suiteCmd, lint: 'true' },
-  })
-  seed.repo.git('add', 'witness.config.yaml'); seed.repo.git('commit', '-m', 'full-suite')
-  trustConfig(seed.repo)
-  const count = () => (existsSync(join(dir, 'runs')) ? readFileSync(join(dir, 'runs'), 'utf8').length : 0)
-  const scenario = fakeScenario()
-  putVerdict(scenario, CLEAN)
-  const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario) })
-  return { ...seed, count, scenario, ctx, suiteCmd }
-}
 
 describe('the ship suite (rows 251, 252)', () => {
   it('runs once, and the criteria lane reads that run', async () => {
@@ -76,7 +44,35 @@ describe('the ship suite (rows 251, 252)', () => {
     const ship = lastShipRun(repo, planId)
     expect(ship.reviewed_tree).toMatch(/^[0-9a-f]{40,64}$/)
     expect(ship.junit).toEqual({ passed: 3, failed: 0, skipped: 0,
-      specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } }, tree: ship.reviewed_tree })
+      specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } }, tree: ship.reviewed_tree,
+      code: expect.stringMatching(/^[0-9a-f]{40}$/), suite: suiteKey(fullSuite(repo.root)) })
+    expect(ship.junit!.code).toBe(codeTree(repo.root, ship.reviewed_tree!))
+  }, 240_000)
+
+  it("the plan's merge holds the summary's code, so the next plan's base reads it (row 275, Review Focus 4)", async () => {
+    const { repo, wt, planId, ctx } = await fullSuiteShip()
+    execFileSync('git', ['rebase', '-q', 'main'], { cwd: wt })        // the plan takes main's config commit, as ship's rebase does
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
+    const ship = lastShipRun(repo, planId)
+    expect(ship.junit?.code).toMatch(/^[0-9a-f]{40}$/)
+    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()
+    repo.git('add', '-A', '-f'); repo.git('commit', '-q', '--allow-empty', '-m', "witness's state")
+    repo.git('merge', '--no-ff', '-q', '-m', `merge ${planId}`, branch)
+    const merge = repo.git('rev-parse', 'HEAD')
+    expect(codeTree(repo.root, merge)).toBe(ship.junit!.code)
+    expect(baseCounts(repo.root, fullSuite(repo.root), merge)).toEqual({ read: 'found', from: 'ship', code: ship.junit!.code,
+      specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } } })
+  }, 240_000)
+
+  it('a round whose suite failed to load a file journals no code, so it never serves as a base (row 275, unit review)', async () => {
+    const { repo, wt, planId, ctx } = await fullSuiteShip()
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    writeFileSync(join(wt, 'tests/broken.test.ts'), "import { gone } from '../src/missing'\nimport { it } from 'vitest'\nit('uses gone @spec:auth-refresh', () => { gone() })\n")
+    await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
+    const ship = lastShipRun(repo, planId)
+    expect(ship.junit).toBeDefined()
+    expect(ship.junit).not.toHaveProperty('code')
   }, 240_000)
 
   it('a failing suite is a red tests check, and its summary counts the failures', async () => {
@@ -125,7 +121,7 @@ describe('the ship suite (rows 251, 252)', () => {
   it('a filtered runner journals no summary', async () => {
     const { repo, planId } = await shippableRepo()
     const scenario = fakeScenario()
-    putVerdict(scenario, CLEAN)
+    putVerdict(scenario, CLEAN_FOUR)
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
     await runGate(ctx, 'ship', planId, { fresh: false, manual: false })

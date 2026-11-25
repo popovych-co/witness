@@ -206,7 +206,9 @@ waives its own plan only (C17), at both gates; a booked part reads `booked`, pas
 `book-owed` sends a round whose every non-passing part is `not-judged` to the human (C23); a part the author may own
 keeps `checks-only`, the revise first and the booking after it.
 
-**As built (T3a, rows 273–274).** `switch-offs` is a judged check right after `diff`, whose waiver is the judge's
+**As built (T3b, row 275).** `switch-offs` moved to the end of the registry (C33), so it reads the round's one suite run
+at both gates; a loss of passing tests is its second kind of hit. **As built (T3a, rows 273–274).** `switch-offs` was a
+judged check right after `diff`, whose waiver is the judge's
 (`CheckWaiver` `'judge'`): the AI judge or the human may book its red. `--book switch-offs` is offered on a round the
 lenses ran whose every failed check carries the judge's waiver and holds a line a booking takes, with no blocking finding,
 on unmoved content below the bound (the map's C26); its re-gate replays the round's verdicts (row 112's `cached`), so it
@@ -289,6 +291,15 @@ this merge took it out. A missing file holds none; an unreadable tree, a round w
 nothing, and the observation reads the item's own token, never the config. The lint lane and the lint observation read lint items only
 (M-g). `status` lists `booked[n]{item,plan,check,holds,since}` (`check` `lint/<part>` or `switch-offs`).
 
+**As built (T3b, row 276).** The third kind, `booked-dropped`, books a spec's lost passing tests: `spec`, `base` (the
+booked round's base passed and skipped counts) and `subject.cases`; its key is 16 hex over (kind, check, plan, spec, base
+passed, base skipped, cases), and the other formulas are unchanged. The check applies the plan's own items by spec (C17).
+It closes once main has the cases back: at the merge stamp of plan M, from M's newest ship round's junit summary, short is
+fewer passing or more skipped than the item's base; M's own items close when the summary is not short of the higher of
+that base and the round's `junit.base` for the spec, and an item of a
+plan merged before M only where the round's `junit.base` (the base counts it compared against, per spec) was short and
+the summary is not. A round with no summary observes nothing.
+
 ### 3.4 Counterfactual runs (CF) — T3
 
 **Where.** One persistent, provisioned scratch worktree per repo, at a short fixed path, under the scratch lock.
@@ -346,6 +357,11 @@ command. In chat mode no jobs run, and results that depend on them read "not mea
 - Mutation: the `mutation-pending` precondition at ship, bounded by the job's time box. A timed-out job reads "not
   measured" and ship proceeds.
 - T3's test half: "not checked" for that round.
+  **As built (T3b, row 275; C32).** A round with no base counts — a filtered runner, no full-suite run, an unreadable
+  base, a file that failed to load, or a base not measured yet — reads not checked: the check stays green and says so in
+  its detail, `tests_effect` and the arbiter's facts. A missing base is owed through the check's `owes` to the
+  `base-tests` job (ungated, under the turn, in the scratch, boxed at `drive.sessionTimeoutMs`); a result that lands
+  never moves a stop, and the next round reads it.
 
 Jobs register in the UI run registry (roadmap 1a.5).
 
@@ -632,6 +648,15 @@ any line of any text file. A switch-off is a line (C27): the plan adds the copie
 key beyond the base's count, so a moved or re-indented line is not new and a duplicated one is. The reviewers are told
 each line from the tree. What the token layer reads by lines and cannot see — strings, evasive spellings, files outside
 the four languages — is in DESIGN.md's Open / deferred.
+
+**As built (T3b, rows 275–276; T3b splits at planning, the map's C28).** T3b builds the tests effect and takes the
+acceptance "`{skip: true}` drops the passing count and is caught"; T3c builds `checks.definitions` and the lint effect
+and takes "`.gitignore`-hiding a file is caught". The base is ship's summary when the **code** trees match (C29): the
+tree minus canon, `.witness` and witness's payload, under the same suite command (`suiteKey`); otherwise a `base-tests`
+job runs the base's suite in the scratch. Per spec canon still holds, new skips always count and passing cases lost
+beyond new failures and new skips count, unless the plan's own parent was amended since its previous plan, which licenses
+removals only (C30, C31). A loss is a judged red in `switch-offs`, booked by the judge or the human like a line, and a
+booked loss closes once main's shipped summary has the spec's cases back.
 
 ### T4 — Fixes add checks
 
@@ -1070,3 +1095,23 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   multiset of (token, file, normalized line) keys on the plan's version minus the base's, since a `-U0` diff calls a
   moved or re-indented line added; a booked item is one line (file, token, keys) and closes when the merging plan's
   shipped tree holds none of its keys.
+- **C28 (T3b, rows 275–276).** T3b as mapped (`checks.definitions`, the lint effect, the tests effect) was more than L:
+  two job kinds, a new withholding wait and two ledger kinds. It split at planning: T3b the tests effect, T3c
+  `checks.definitions` and the lint effect; T4a and T5 wait on T3c. The tests effect went first: it catches the test-API
+  spellings a line scan misses and lays the path every effect hit takes (an `OffVerdict` variant, a ledger kind, a
+  merge-stamp observation).
+- **C29 (T3b, row 275).** "When the trees match" became the code trees: every journal line and stamp is a commit on main,
+  so main's whole tree moves without any code moving (fewhats: 7 of 22 merge trees equal their PR head's, 21 of 22 code
+  trees do). The summary journals `code` and `suite`; a `base-tests` result serves every base commit of its code.
+- **C30 (T3b, row 275).** "Passing tagged cases per @spec never drop" became: per spec, new skips always count; passing
+  cases lost beyond new failures and new skips count; counts net out (the summary keeps no names); a base spec gone from
+  canon is not compared; a round whose suite failed to load a file reads not checked (slice 2 review).
+- **C31 (T3b, row 275).** "Without a spec amendment" became row 160's one derivation: the plan's own parent is licensed
+  when its content moved past its previous plan's pin (`baseForSpec`), or no other plan exists; the license covers
+  removals only, never skips; a licensed loss is named, never red.
+- **C32 (T3b, row 275).** "The base's DJ job; not checked for that round" became: a missing base reads not checked and
+  owes the `base-tests` job through the check's `owes` (C13's on-demand rule); the kind is ungated, under the turn, in the
+  scratch, boxed at `drive.sessionTimeoutMs`; a landing never moves a stop.
+- **C33 (T3b, row 275).** `switch-offs` sat right after `diff`; it moved to the end of the registry so it reads the round's
+  one suite run (implement's criteria lane hands it on; ship's tests lane holds it). Judged checks all run whenever any
+  does and the signature sorts its terms, so the move changes no judgment.

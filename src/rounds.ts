@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { cliAct, exitsLine, type Act } from './act.js'
 import type { Entry, ReviseReturnedEntry } from './journal.js'
 import type { HeldRow } from './needs.js'
-import type { JunitSummary } from './junit.js'
+import type { JunitCounts, JunitSummary } from './junit.js'
 import { bookingsOf } from './ledger.js'
 import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
@@ -23,17 +23,34 @@ export interface GateCheck {
   // Row 273. The switch-off lines the plan adds (src/switch-offs.ts), one per key; absent where none
   // is, or past MAX_OFFS distinct lines. Each line's unbooked copies join the resume signature.
   offs?: OffVerdict[]
+  // Row 275 (C32). The job units this check's verdict lacked (`base-tests`: the base suite), which the
+  // kind's `owed` reads (C13's on-demand rule). Present only when non-empty; never in the signature.
+  owes?: Array<{ kind: string; key: string }>
+  // Row 275 (C32). Whether the switch-offs check compared the round's suite with the base's counts (how
+  // many base specs), or why not: never green by silence. Never in the signature.
+  tests_effect?: { read: 'compared'; specs: number } | { read: 'not-checked'; why: string }
 }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
 // first new copy's line number, `count` the copies beyond the base's, the rule ids it names, whether a
 // test file holds it. Row 274: `booked` the copies the plan's open bookings cover, `items` their ids.
-export interface OffVerdict {
+export interface LineOff {
+  kind?: undefined
   key: string; token: string; file: string; line: number; count: number
   rules?: string[]; test?: true; booked?: number; items?: string[]
 }
 
-// The copies of a line no booking covers.
+// Row 275 (C30). One spec's passing cases a round lost against its base: the key is 16 hex over
+// ['dropped', spec], a key space of its own beside a line's. `base` and `plan` are the spec's counts on
+// each side; `count` the cases lost. Row 276: `booked` the cases the plan's open bookings cover.
+export interface DroppedOff {
+  kind: 'dropped'; key: string; spec: string; count: number; base: JunitCounts; plan: JunitCounts; booked?: number; items?: string[]
+}
+
+// Row 275: a hit of the `switch-offs` check — a line the plan adds, or a spec's lost tests.
+export type OffVerdict = LineOff | DroppedOff
+
+// The copies of a line, or the cases of a loss, no booking covers.
 export const offUnbooked = (o: OffVerdict): number => Math.max(0, o.count - (o.booked ?? 0))
 
 // Row 263 (§3.2 base-red). A lint part's verdict: `green` (exit 0) · `untrusted` (its command, or its

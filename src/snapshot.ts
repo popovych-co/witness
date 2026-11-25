@@ -1,7 +1,7 @@
 import { existsSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { foreignRetired, lstatListed, witnessExcludes } from './change-set.js'
-import { gitBlob, tryGit } from './gitio.js'
+import { foreignRetired, lstatListed, witnessExcludes, witnessPaths } from './change-set.js'
+import { gitBlob, stateDirs, tryGit } from './gitio.js'
 import { withScratch } from './scratch.js'
 import { execFileSync } from './spawn.js'
 
@@ -57,6 +57,28 @@ export function snapshotTree(runRoot: string, base: string, files: readonly stri
       run(runRoot, ['read-tree', baseTree], { env })
       if (lines.length > 0) run(runRoot, ['update-index', '-z', '--index-info'], { env, input: lines.join('') })
       return run(runRoot, ['write-tree'], { env })
+    })
+  } catch {
+    return undefined
+  }
+}
+
+// Row 275 (C29). The code a commit or tree holds: the tree with every path under `stateDirs` (the canon
+// folders and `.witness`) and every witness payload path taken out — what a suite's outcome rests on.
+// Every journal line, stamp and canon write is a commit on main, so main's whole tree moves without
+// any code moving; two commits with one code tree measure the same suite. Undefined on any git failure.
+export function codeTree(root: string, treeish: string): string | undefined {
+  try {
+    const tree = run(root, ['rev-parse', '--verify', `${treeish}^{tree}`])
+    const out = [...stateDirs(root), ...witnessPaths()]
+    return withScratch('witness-code-', (dir) => {
+      const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
+      run(root, ['read-tree', tree], { env })
+      // Plumbing only (slice 1 review C1): porcelain `rm --cached` checks each entry against the root's
+      // HEAD and working tree even under a throwaway index, and refuses once main has moved a state file.
+      const listed = run(root, ['--literal-pathspecs', 'ls-files', '-z', '--', ...out], { env })
+      if (listed !== '') run(root, ['update-index', '-z', '--force-remove', '--stdin'], { env, input: listed })
+      return run(root, ['write-tree'], { env })
     })
   } catch {
     return undefined

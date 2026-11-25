@@ -42,7 +42,9 @@ describe('the switch-offs check (row 273)', () => {
     const gate = (name: string) => runGate(fakeCtx(repo.root, { env: gateEnv(scenario) }), name, planId, PLAIN)
     const offsOf = () => runs(repo, planId).at(-1)!.checks.find((c) => c.name === 'switch-offs')
     expect(await gate('implement')).toBe(0)
-    expect(offsOf()).toMatchObject({ ok: true, detail: expect.stringMatching(/^no switch-off in the lines the plan adds \(\d+ files\)$/) })
+    // Row 275: the gate appends the tests segment (a filtered runner never compares).
+    expect(offsOf()).toMatchObject({ ok: true, detail: expect.stringMatching(
+      /^no switch-off in the lines the plan adds \(\d+ files\) · tests not checked — the runner is filtered — the tests effect reads a full-suite junit report$/) })
     expect(offsOf()!.offs).toBeUndefined()
     const asked = readFileSync(join(callFor(scenario, 'code-reviewer')!, 'stdin'), 'utf8')
     expect(asked).not.toContain('### Switch-offs this plan adds')

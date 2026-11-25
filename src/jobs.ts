@@ -12,6 +12,7 @@ import { ok, type Result as Res } from './refusal.js'
 import { execCommand } from './runner.js'
 import { inScratch } from './scratch-checkout.js'
 import { baseLintKind } from './base-lint.js'
+import { baseTestsKind } from './base-tests.js'
 import type { Canon } from './scan.js'
 import { logSafe, visible } from './toon.js'
 import { JOB_STREAM } from './streams.js'
@@ -258,8 +259,8 @@ function fixtureKind(raw: string | undefined): JobKind | undefined {
 }
 
 // The registered kinds: the test-only fixture first when its env is set, then base-lint (row 263),
-// the first production kind.
+// the first production kind, then base-tests (row 275).
 export function jobKinds(env: Record<string, string | undefined>): JobKind[] {
   const fixture = fixtureKind(env[FIXTURE_JOB_ENV])
-  return [...(fixture !== undefined ? [fixture] : []), baseLintKind]
+  return [...(fixture !== undefined ? [fixture] : []), baseLintKind, baseTestsKind]
 }

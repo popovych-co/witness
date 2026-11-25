@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { ensureTrusted, UNGRANTABLE } from './allowlist.js'
@@ -33,6 +34,12 @@ export function runnerConfig(cfg: Config): Result<RunnerConfig> {
   return report === undefined
     ? ok({ mode: 'filtered', template: runner })
     : ok({ mode: 'filtered', template: runner, reportGlob: report.slice('junit:'.length) })
+}
+
+// Row 275 (C29). Which suite a summary measured: 12 hex over the suite command and the report glob, so a
+// summary from another suite command never serves as a later plan's base.
+export function suiteKey(rc: Extract<RunnerConfig, { mode: 'full-suite' }>): string {
+  return createHash('sha256').update(JSON.stringify([rc.suiteCmd, rc.reportGlob])).digest('hex').slice(0, 12)
 }
 
 export function criteriaExcludes(cfg: Config): string[] {

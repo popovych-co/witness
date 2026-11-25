@@ -21,6 +21,8 @@ import { contentSha } from '../content-sha.js'
 import { runChecks, type CheckStep } from '../checks.js'
 import { markersCheck } from '../markers.js'
 import type { OffVerdict } from '../rounds.js'
+import type { TestOutcome } from '../junit.js'
+import { testsEffect } from '../tests-effect.js'
 import { switchOffNotes, switchOffsCheck } from '../switch-offs.js'
 import { lintCheck } from '../lint-lane.js'
 import { logSafe, offeredLine } from '../toon.js'
@@ -147,6 +149,9 @@ registerGate({
     // ends the round before any lens, and a step it cut leaves its side output empty.
     let present: string[] = []
     let offs: OffVerdict[] = []
+    let licensed: Array<{ spec: string; lost: number }> = []
+    // Row 275 (C33): the criteria lane's parsed suite, handed on to the switch-offs check (last).
+    let suite: TestOutcome[] | undefined
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
       // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
@@ -155,9 +160,12 @@ registerGate({
       { name: 'diff', run: () => ({ name: 'diff', ok: files.length > 0,
         detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' }) },
       // Row 273. A switch-off the plan adds is a judged red; its lines reach the reviewers below.
+      // Row 275: and so is a spec's lost passing tests, read against the base's counts (the tests effect).
       { name: 'switch-offs', run: () => {
-        const check = switchOffsCheck(root, wt, cfg, base, planId, files)
+        const effect = testsEffect(root, canon, cfg, plan, base, suite)
+        const check = switchOffsCheck(root, wt, cfg, base, planId, files, effect)
         offs = check.offs ?? []
+        licensed = effect.licensed
         return check
       } },
       { name: 'evidence', run: () => {
@@ -195,7 +203,7 @@ registerGate({
           ...(regressionUntrusted.length > 0 ? { untrusted: regressionUntrusted } : {}),
         }
       } },
-      { name: 'drift-lane', run: async () => laneCheck(await runCriteria(wt, ctx, parent, { trustRoot: root })) },
+      { name: 'drift-lane', run: async () => laneCheck(await runCriteria(wt, ctx, parent, { trustRoot: root, onSuite: (t) => { suite = t } })) },
     ]
     const { checks, withheld } = await runChecks(steps)
 
@@ -218,7 +226,7 @@ registerGate({
         (present.length > 0
           ? `\n\n### Evidence notes\n${present.map((p) => `- ${p}: judge whether the test tells the behavior apart from its absence`).join('\n')}`
           : '') +
-        (offs.length > 0 ? `\n\n${switchOffNotes(offs)}` : '')),
+        (offs.length > 0 || licensed.length > 0 ? `\n\n${switchOffNotes(offs, licensed)}` : '')),
       checks,
       ...(withheld !== undefined ? { withheld } : {}),
       stamps: [],

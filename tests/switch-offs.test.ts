@@ -60,6 +60,13 @@ describe('the switch-off tokens (row 273, C25)', () => {
     ['a.py', 'y = f()  # type: ignore[attr-defined]', ['type: ignore']],
     ['a.py', '# pylint: disable=invalid-name', ['pylint: disable']],
     ['a.go', 'f() //nolint:errcheck', ['nolint']],
+    // push security review: Rust allows whitespace between `#`, `!` and `[`; a file-level noqa is a noqa
+    ['src/lib.rs', '# [allow(dead_code)]', ['#[allow(']],
+    ['src/lib.rs', '# ! [allow(dead_code)]', ['#![allow(']],
+    ['src/lib.rs', '# [ignore]', ['#[ignore]']],
+    ['src/lib.rs', '# [cfg_attr(test, allow(unused))]', ['cfg_attr allow']],
+    ['a.py', '# ruff: noqa', ['noqa']],
+    ['a.py', '# flake8: noqa: E501', ['noqa']],
   ])('%s: %s is a switch-off', (file, line, want) => {
     expect(tokens(file, line)).toEqual(want)
   })

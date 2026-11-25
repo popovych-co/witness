@@ -126,3 +126,36 @@ describe('booked switch-offs (row 274)', () => {
     expect(entryDetail({ v: 1, ...offOpen('l-00000001', { file: odd }) } as never)).toContain('eslint-disable-next-line in src/we\\u{202e}ird.ts')
   })
 })
+
+const dropOpen = (id: string, over: Record<string, unknown> = {}) => ({
+  t: 'ledger-open' as const, id, key: '0'.repeat(16), kind: 'booked-dropped', check: 'switch-offs', plan: 'p1', gate: 'implement',
+  round: 2, run_id: 'r-1', spec: 'auth-refresh', base: { passed: 2, skipped: 0 }, subject: { cases: 1 }, ...over,
+})
+describe('booked lost tests (row 276)', () => {
+  it('folds a booked loss; one missing its spec, base or cases is skipped (row 276)', () => {
+    const repo = tmpRepo()
+    for (const e of [dropOpen('l-00000001'), dropOpen('l-00000002', { spec: 'Bad Id' }), dropOpen('l-00000003', { base: { passed: -1, skipped: 0 } }),
+      dropOpen('l-00000004', { subject: { cases: 0 } }), dropOpen('l-00000005', { base: { passed: 2 } })]) appendEntry(repo.root, LEDGER_STREAM, e as never)
+    expect(ledgerItems(repo.root)).toEqual([expect.objectContaining({ id: 'l-00000001', kind: 'booked-dropped', spec: 'auth-refresh',
+      base: { passed: 2, skipped: 0 }, subject: { cases: 1 }, state: 'open' })])
+  })
+  it("a loss's key names its plan, spec, base and cases; the other kinds' keys are what they were (row 276)", () => {
+    expect(itemKey(open('x') as never)).toBe('4be5507e7e9c3d22')
+    expect(itemKey(offOpen('x') as never)).toBe('4367487ea42fc1c0')                // today's switch-off key, computed at RED
+    const k = (o: Record<string, unknown>) => itemKey(dropOpen('x', o) as never)
+    expect(k({})).toMatch(/^[0-9a-f]{16}$/)
+    expect(k({})).not.toBe(k({ spec: 'other' })); expect(k({})).not.toBe(k({ subject: { cases: 2 } }))
+    expect(k({})).not.toBe(k({ plan: 'p2' })); expect(k({})).not.toBe(k({ base: { passed: 3, skipped: 0 } }))
+    expect(k({})).not.toBe(k({ base: { passed: 2, skipped: 1 } }))
+  })
+  it('a judged round books each loss its bookings leave uncovered, with its base counts (row 276)', () => {
+    const loss = { kind: 'dropped', key: 'd'.repeat(16), spec: 'auth-refresh', count: 2, base: { passed: 3, failed: 0, skipped: 1 }, plan: { passed: 1, failed: 0, skipped: 1 } }
+    const run = { checks_only: undefined, outcome: 'stopped', round: 1, run_id: 'r', checks: [
+      { name: 'switch-offs', ok: false, offs: [loss, { ...loss, key: 'e'.repeat(16), spec: 'b', count: 1, booked: 1, items: ['l-00000009'] }] }] }
+    expect(bookingsOf(run as never, 'switch-offs')).toEqual([
+      { kind: 'booked-dropped', spec: 'auth-refresh', base: { passed: 3, skipped: 1 }, subject: { cases: 2 } }])
+  })
+  it('log names a booked loss by its spec, with its cases (row 276)', () => {
+    expect(entryDetail({ v: 1, ...dropOpen('l-00000001') } as never)).toBe('l-00000001 booked switch-offs · tests of auth-refresh · p1 implement r2 · 1 case')
+  })
+})

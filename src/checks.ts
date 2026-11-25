@@ -24,12 +24,15 @@ export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: Che
   { name: 'lint', tier: 'withholding', waiver: 'human' },
   { name: 'implement-gate', tier: 'judged' },
   { name: 'diff', tier: 'judged' },
-  // Row 273. A switch-off a plan adds: judged, so the battery runs and the reviewers are told.
-  { name: 'switch-offs', tier: 'judged', waiver: 'judge' },
   { name: 'evidence', tier: 'judged' },
   { name: 'regression', tier: 'judged' },
   { name: 'tests', tier: 'judged' },
   { name: 'drift-lane', tier: 'judged' },
+  // Row 273. A switch-off a plan adds: judged, so the battery runs and the reviewers are told.
+  // Row 275 (C33): last, so it reads the round's one suite run (the criteria lane's at implement, the
+  // tests lane's at ship). Judged checks all run whenever any does and the signature sorts its terms,
+  // so the place changes no judgment.
+  { name: 'switch-offs', tier: 'judged', waiver: 'judge' },
 ]
 
 export function checkTier(name: string): CheckTier | undefined {

@@ -311,10 +311,18 @@ the copies beyond the base's are the plan's, so a moved line is not new. The rev
 told every such line. The way on is the revise that removes it, or
 `witness decide <gate> <plan> --book switch-offs` when it is right as it stands: one ledger item per
 line, which waives that line for this plan. You or, under autonomy, the AI judge may book it — the
-judge reading only facts (the token, its rules, whether a test file holds it) — never the policy, and
+judge reading only facts (the token, how many rules it names, whether a test file holds it) — never the policy, and
 never beside a blocking finding or another red check, or at the round bound; approving over the red
 books nothing, so the next gate meets it again. A booked line closes once a merged tree no longer
 holds it. `checks.switchOffs` adds your repo's own literal tokens (e.g. `['istanbul ignore']`).
+
+**Lost tests.** In full-suite mode the same check compares each spec's tagged tests with the base's: a
+new skip, in any spelling, always counts, and so do passing cases that disappear beyond new failures
+(removed, untagged, excluded). A plan whose own spec was amended since its last plan may remove that
+spec's cases — the reviewers are told, but it is not red — never skip them. The base comes from a shipped
+summary of the same code, else drive runs the base's suite in the scratch; until it has one the check reads
+`tests not checked` and stays green. A lost spec is booked like a line (`tests of <spec>`) and closes once
+main's shipped summary has its cases back.
 
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
