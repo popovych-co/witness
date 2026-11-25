@@ -59,8 +59,8 @@ async function bench(opts: { hide?: boolean; autonomy?: boolean } = {}) {
   const scenario = fakeScenario()
   putVerdict(scenario, { ...CLEAN_THREE, coverage: [...CLEAN_THREE.coverage, ...anchors.map((anchor) => ({ anchor, note: 'read' }))] })
   const printed: string[] = []
-  const gate = (name = 'implement') =>
-    runGate(fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => printed.push(l) }), name, planId, PLAIN)
+  const gate = (name = 'implement', env: Record<string, string> = {}) =>
+    runGate(fakeCtx(repo.root, { env: gateEnv(scenario, env), out: (l) => printed.push(l) }), name, planId, PLAIN)
   const runs = () => readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
   const lastRun = () => runs().at(-1)!
   const check = (name: string): GateCheck => lastRun().checks.find((c) => c.name === name)!
@@ -423,5 +423,25 @@ describe('what a plan\'s check definitions hide is booked (row 278)', () => {
     const id = openItems(b.repo.root, { plan: b.planId })[0]!.id
     expect(await dismiss(at('n'), ['ledger', '--item', id, '--cause', 'rule-retired', '--note', 'the rule went'])).toBe(2)
     expect(asked[1]).toContain(`dismiss ${id} — switch-offs · biome lint/test/noBad hidden by check definitions · ${b.planId}: rule-retired`)
+  }, 300_000)
+})
+
+describe('the judge books what a plan\'s check definitions hide (row 278)', () => {
+  it('under autonomy the arbiter books a loosening-only stop in-process, from facts alone (row 278)', async () => {
+    const b = await bench({ autonomy: true })
+    putVerdict(b.scenario, { choice: 2, reason: 'the hidden file is generated and the ignore entry is the plan\'s scope' }, 'arbiter')
+    await underDrive(b.repo.root, async () => {
+      await b.gate('implement', { WITNESS_DRIVE: b.planId })
+      b.land()
+      await b.gate('implement', { WITNESS_DRIVE: b.planId })
+    })
+    const decided = readStream(b.repo.root, b.planId).filter((e) => e.t === 'human-decision').at(-1)
+    expect(decided).toMatchObject({ decision: 'book', selected: 'arbiter', rule: 'waivable', book: { check: 'switch-offs' } })
+    expect(openItems(b.repo.root, { plan: b.planId })).toEqual([expect.objectContaining({ kind: 'booked-loosened', tool: 'biome', rule: 'lint/test/noBad' })])
+    const asked = readFileSync(join(callFor(b.scenario, 'arbiter')!, 'stdin'), 'utf8')
+    expect(asked).toContain(`2. witness decide implement ${b.planId} --book switch-offs`)
+    expect(asked).toContain("switch-offs: FAILED · biome: 1 diagnostic the plan's check definitions hide (1 rule)")
+    expect(asked).not.toContain('src/hidden.ts')
+    expect(asked).not.toContain('noBad')
   }, 300_000)
 })

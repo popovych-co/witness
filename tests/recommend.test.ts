@@ -1208,7 +1208,7 @@ describe('the waivable rule (row 274)', () => {
     ])
     expect(d.options[0]!.why).toMatch(/^2 switch-off lines the plan adds \(eslint-disable-next-line, \.skip\(\) — no finding blocks · remove them, or book what is right as it stands; round 1 of \d+$/)
     expect(d.options[1]).toMatchObject({ when: 'the switch-off is right as it stands — say why in the note',
-      tradeoff: "opens a ledger item per line or spec, which waives it for this plan; each closes once main no longer holds the line, or has the spec's passing cases back (the discharge), or by witness dismiss ledger" })
+      tradeoff: "opens a ledger item per line, spec, hidden rule or loosened part, which waives it for this plan; each closes once main no longer holds the line or the hidden spots, has the spec's passing cases back, or holds the base's check definitions again (the discharge), or by witness dismiss ledger" })
     expect(d.options[3]).toMatchObject({ when: 'the switch-off is right and you take it without booking it',
       tradeoff: 'stamps the artifact over the red check — nothing books it, so the next gate meets it again' })
     expect(BOOK_TRADEOFF).toContain('per part')                                    // lint's words stand
@@ -1222,6 +1222,19 @@ describe('the waivable rule (row 274)', () => {
     expect(lossOnly.options[1]!.command).toBe('witness decide implement p1 --book switch-offs')
     const both = block([{ ...OFF, offs: [...OFF.offs, loss, { ...loss, key: 'e'.repeat(16), spec: 'b' }] }])
     expect(both.options[0]!.why).toMatch(/^2 switch-off lines the plan adds \(eslint-disable-next-line, \.skip\(\) · 2 specs lost passing cases \(auth-refresh, b\) — no finding blocks · remove or restore them/)
+  })
+
+  it('rule waivable names loosened hits and offers restoring the check definitions (row 278)', () => {
+    const hid = { kind: 'loosened', key: 'h'.repeat(16), count: 1, tool: 'biome', rule: 'lint/test/noBad', file: 'src/a.ts', line: 1 }
+    const part = { kind: 'loosened', key: 'p'.repeat(16), count: 1, part: 'lint', defs: { '.gitignore': 'a'.repeat(40) } }
+    const loose = block([{ name: 'switch-offs', ok: false, offs: [hid, part] }])
+    expect(loose.rule).toBe('waivable')
+    expect(loose.options[0]!.why).toMatch(/^1 diagnostic the plan's check definitions hide · 1 lint part passes only under the plan's check definitions — no finding blocks · restore the check definitions, or book what is right as it stands; round 1 of \d+$/)
+    expect(loose.options[1]!.command).toBe('witness decide implement p1 --book switch-offs')
+    const two = block([{ name: 'switch-offs', ok: false, offs: [hid, { ...hid, key: 'i'.repeat(16), count: 2 }, part, { ...part, key: 'q'.repeat(16), part: 'types' }] }])
+    expect(two.options[0]!.why).toMatch(/^3 diagnostics the plan's check definitions hide · 2 lint parts pass only under the plan's check definitions — /)
+    const mixed = block([{ ...OFF, offs: [...OFF.offs, hid] }])
+    expect(mixed.options[0]!.why).toMatch(/^2 switch-off lines the plan adds \(eslint-disable-next-line, \.skip\(\) · 1 diagnostic the plan's check definitions hide — no finding blocks · remove them and restore the check definitions, or book/)
   })
 
   it('a red check nobody may book beside it keeps checks-failed (row 170)', () => {
