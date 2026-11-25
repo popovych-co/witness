@@ -281,10 +281,12 @@ and never fails for it.
 — and ship runs every part on its own, whatever an earlier one did, so a red first part never hides
 the others. A part named after a tool witness reads (`biome`, `eslint`, `clippy`, `tsc`) has a reader,
 `readers.<tool>`: a command printing that tool's report with every error (`init` and `migrate` write
-Biome's and ESLint's when your root has their configs). When such a part is red on the plan's base
-too, it is judged per diagnostic: only the errors the plan added are red, and drive lints the base in
-the scratch when a gate asks (`pending` until then). A part with no reader that is red on the base
-reads "not judged", never green.
+Biome's and ESLint's when your root has their configs, and say so when no part bears the tool's name
+yet — a one-command `ship.lint` is one part named `lint`, which no reader binds). When such a part is
+red on the plan's base too, it is judged per diagnostic: only the errors the plan added are red, and
+drive lints the base in the scratch when a gate asks (`pending` until then). Without drive the base
+reads "not measured" and the red part withholds; starting drive once lints the base for it. A part with
+no reader that is red on the base reads "not judged", never green.
 
 **Checks before reviewers.** The implement and ship gates run the conflict-marker check (an opener
 like `<<<<<<< HEAD` on a line the plan adds) and every `ship.lint` part before any reviewer. A red
@@ -296,7 +298,8 @@ round whose red lint parts all wait on the base's lint result waits for drive's 
 When a lint part is red on the base too, or red in a way only you can accept,
 `witness decide <gate> <plan> --book lint` books it — exactly the errors witness can read, or the
 whole part until main moves — and the gate runs again. Under autonomy it is yours alone, typed at your
-own terminal, and drive leaves such a stop for you. `witness status` lists every open booking; each
+own terminal, and drive leaves a stop for you when no author could clear it (every red part red on
+the base too and not judgeable); otherwise the author is sent to fix it first. `witness status` lists every open booking; each
 closes once main no longer holds it, and `witness dismiss ledger` ends one at your terminal.
 
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it

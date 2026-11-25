@@ -821,7 +821,10 @@ trusted login command. `check` names each feature that is off for lack of a sett
 ## 7. Rollout, upgrade effects and machine time
 
 **Trains.**
-- A = T0–T2: one migrate for the named parts; one re-review.
+- A = T0–T2: one migrate for the named parts; one re-review. As built: migrate writes `scratch.prepare` and the
+  detected readers and grants them; it keeps a one-command `ship.lint` one part named `lint`, so a reader binds only
+  once the human names the part for its tool — migrate and init say so (`note: readers.<tool> is set, but no ship.lint
+  part is named <tool>`), as `check` does.
 - B = T3–T6: one migrate.
 - C = T7–T8: one migrate; map stops begin.
 

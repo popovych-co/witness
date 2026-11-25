@@ -49,3 +49,13 @@ export function detectReaders(root: string): Record<string, string> {
   if (ESLINT_CONFIGS.some((f) => existsSync(join(root, f)))) out['readers.eslint'] = `${exec} eslint -f json .`
   return out
 }
+
+// Row 262 (whole-branch review I2). A reader binds the part of its tool's name, so a reader set beside a
+// `ship.lint` with no such part reads nothing — said once wherever a reader is written or checked.
+export function unboundReaders(readers: Readonly<Partial<Record<ReaderTool, unknown>>>, parts: readonly LintPart[] | undefined): ReaderTool[] {
+  return READER_TOOLS.filter((t) => typeof readers[t] === 'string' && readers[t] !== 'none' && readers[t] !== ''
+    && !(parts ?? []).some((p) => p.name === t))
+}
+
+export const readerUnused = (tool: ReaderTool): string =>
+  `readers.${tool} is set, but no ship.lint part is named ${tool} — name the part that runs ${tool} "${tool}" and a red base is judged per diagnostic`

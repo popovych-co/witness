@@ -13,7 +13,7 @@ import { latestPublished } from '../registry.js'
 import { NPX_LATEST, compareTriple } from '../version.js'
 import { probe } from '../probe.js'
 import { canonPaths, loadConfig, loadLocalConfig, localConfigPath } from '../config.js'
-import { READER_TOOLS } from '../settings.js'
+import { readerUnused, unboundReaders } from '../lint-parts.js'
 import { openDeferrals } from '../deferral.js'
 import { canonExit } from '../departure.js'
 import { designPending } from '../design.js'
@@ -184,10 +184,8 @@ export async function run(ctx: Ctx, argv: string[] = []): Promise<number> {
         'scratch runs are off — scratch.prepare is not set · witness migrate proposes one'))
     }
     // Row 262. A reader no part bears the name of reads nothing: said once per tool.
-    for (const tool of READER_TOOLS) {
-      if (cfg.value.readers[tool] === undefined || (cfg.value.ship.lint ?? []).some((p) => p.name === tool)) continue
-      findings.push(f('warn', 'config', `readers.${tool}`, 'reader-unused',
-        `readers.${tool} is set, but no ship.lint part is named ${tool} — name the part that runs ${tool} "${tool}" and a red base is judged per diagnostic`))
+    for (const tool of unboundReaders(cfg.value.readers, cfg.value.ship.lint)) {
+      findings.push(f('warn', 'config', `readers.${tool}`, 'reader-unused', readerUnused(tool)))
     }
   }
 

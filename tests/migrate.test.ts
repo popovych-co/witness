@@ -333,6 +333,8 @@ describe('migrate proposes lint parts and readers (rows 261–262)', () => {
     expect(r.stdout).toContain('added: readers.biome pnpm exec biome check --reporter=sarif .')
     expect(loaded(repo).readers).toEqual({ biome: 'pnpm exec biome check --reporter=sarif .' })
     expect(trustedCommands(repo.root)).toContain('pnpm exec biome check --reporter=sarif .')
+    // whole-branch review I2: ship.lint is still one part named lint, so the reader binds nothing yet
+    expect(r.stdout).toContain('note: readers.biome is set, but no ship.lint part is named biome — name the part that runs biome "biome" and a red base is judged per diagnostic')
   })
 
   it('a ship.lint it fills proposes each part; a string it finds stays a string (row 261)', async () => {

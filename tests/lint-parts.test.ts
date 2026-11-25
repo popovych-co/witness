@@ -43,3 +43,15 @@ describe('readers bound by name (row 262)', () => {
     expect(detectReaders(repo.root)).toEqual(want)
   })
 })
+
+describe('a reader that binds nothing is said where it is written (row 262, whole-branch review I2)', () => {
+  it('init writes a detected reader beside one ship.lint part named lint, and says the part must be named for its tool', async () => {
+    const repo = tmpRepo()
+    repo.write('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")
+    repo.write('biome.json', '{}\n')
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'tools')
+    const r = await repo.cli(['init'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('note: readers.biome is set, but no ship.lint part is named biome — name the part that runs biome "biome" and a red base is judged per diagnostic')
+  }, 60_000)
+})

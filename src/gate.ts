@@ -43,7 +43,7 @@ import { reportHandover, slicesLine } from './slice.js'
 
 import type { ChangeClass, GateName } from './settings.js'
 import type { JunitSummary } from './junit.js'
-import { sessionMarker } from './drive-presence.js'
+import { driveHolder, sessionMarker } from './drive-presence.js'
 export type { ChangeClass, GateName } from './settings.js'
 
 export interface Stamp { artifact: string; to: string }
@@ -343,8 +343,15 @@ export async function runGate(
   // drive started — or any process witness marked as its own (a job; a reviewer is refused at
   // dispatch) — is no human, so it never keeps one for itself: refused before anything is read or
   // journaled, `--unchanged --manual` included.
+  // Whole-branch review C1: a session of a `drive --manual` run is the one session that types `--manual`
+  // (`/witness --manual` arms it) — the human asked that run for every stop, and its lock says so.
   const marker = flags.manual ? sessionMarker(ctx.env) : undefined
-  if (marker !== undefined) {
+  const manualDrive = (): boolean => {
+    if (marker !== 'WITNESS_DRIVE') return false
+    const r = primaryRoot(ctx.cwd)
+    return r.ok && driveHolder(r.value)?.manual === true
+  }
+  if (marker !== undefined && !manualDrive()) {
     renderRefusal([v('--manual', 'manual-in-session', `${marker} is set — a session witness started`,
       `the human, in their own chat or terminal — ${cliAct('gate', gateName, target, '--manual').line} keeps a stop for them`)])
       .forEach((l) => ctx.err(l))

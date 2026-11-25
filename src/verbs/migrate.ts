@@ -20,7 +20,7 @@ import { prepareStamp, writeStamp, type PreparedStamp } from '../stamp.js'
 import { crashPoint, withTxn } from '../txn.js'
 import { templateDraft } from '../principles.js'
 import { detectPrepare } from '../prepare.js'
-import { detectReaders } from '../lint-parts.js'
+import { detectReaders, readerUnused, unboundReaders } from '../lint-parts.js'
 import { runRow } from '../act.js'
 import { grantCommands, repoGrantAct, shownCmd, trustedNow, UNGRANTABLE, type RunCommand } from '../allowlist.js'
 import { sessionMarker } from '../drive-presence.js'
@@ -224,6 +224,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     ctx.out(kv('config', `schema ${schema} → ${SCHEMA_VERSION}`))
   }
   if (stamp !== undefined) ctx.out(kv('principles', 'draft → approved — the untouched template an older init wrote draft'))
+  // Whole-branch review I2. A reader this file sets beside a ship.lint with no part of its name binds
+  // nothing until the part is named for its tool — said where the reader is written, not only by check.
+  const readers = (getIn(reread, 'readers') ?? {}) as Record<string, unknown>
+  for (const tool of unboundReaders(readers, partsOf('ship.lint', getIn(reread, 'ship.lint')))) ctx.out(`note: ${readerUnused(tool)}`)
   if (current && stamp === undefined) return EXIT.OK
   // Row 259. The commands this migrate proposes that this machine does not trust yet.
   const untrusted = proposalsOf(changes).filter((c) => !trustedNow(root, ctx.env, c.cmd))
