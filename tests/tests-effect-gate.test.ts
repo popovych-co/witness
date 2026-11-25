@@ -9,12 +9,12 @@ import '../src/gates/index.js'
 import { journalShard } from '../src/jobs.js'
 import { openItems } from '../src/ledger.js'
 import { readStream } from '../src/journal.js'
-import type { GateRunEntry } from '../src/rounds.js'
+import type { DecisionEntry, GateRunEntry } from '../src/rounds.js'
 import { suiteKey } from '../src/runner.js'
 import { codeTree } from '../src/snapshot.js'
 import { droppedKey } from '../src/tests-effect.js'
 import {
-  SKIP_SECOND, TOKEN_TESTS_TAGGED, callFor, fullSuite, fullSuiteShip, offRed, unwrap, writeSpec, type TestRepo,
+  SKIP_SECOND, TOKEN_TESTS_TAGGED, callFor, fakeCtx, fullSuite, fullSuiteShip, gateEnv, offRed, patchConfig, putVerdict, unwrap, writeSpec, type TestRepo,
 } from './helpers.js'
 
 // Row 275 (§4 T3's tests half; C30–C33). The switch-offs check reads the round's suite run against the
@@ -149,4 +149,20 @@ describe('the tests effect in the switch-offs check (row 275)', () => {
     expect((await s.repo.cli(['decide', 'implement', s.planId, '--book', 'switch-offs'])).code).toBe(0)
     expect(dropped().map((i) => i.id)).toEqual([first, expect.not.stringMatching(first)])     // a fresh item, never the applied one
   }, 400_000)
+
+  it('under autonomy the arbiter books a loss-only stop, reading it as facts (row 276)', async () => {
+    const s = await fullSuiteShip(); measuredBase(s, { 'auth-refresh': c(2) })
+    patchConfig(s.repo, { autonomy: 'on' }); s.repo.git('add', 'witness.config.yaml'); s.repo.git('commit', '-q', '-m', 'autonomy')
+    writeFileSync(join(s.wt, 'tests/token.test.ts'), BRACKET_SECOND)
+    putVerdict(s.scenario, { choice: 2, reason: 'the bracket skip waits on the fake clock this plan adds' }, 'arbiter')
+    const ctx = fakeCtx(s.repo.root, { env: gateEnv(s.scenario, { WITNESS_DRIVE: s.planId }) })
+    expect(await runGate(ctx, 'implement', s.planId, PLAIN)).toBe(1)
+    const decisions = readStream(s.repo.root, s.planId).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
+    expect(decisions.at(-1)).toMatchObject({ decision: 'book', selected: 'arbiter', rule: 'waivable', book: { check: 'switch-offs' } })
+    expect(openItems(s.repo.root, { plan: s.planId })).toEqual([expect.objectContaining({ kind: 'booked-dropped', spec: 'auth-refresh', subject: { cases: 1 } })])
+    const asked = readFileSync(join(callFor(s.scenario, 'arbiter')!, 'stdin'), 'utf8')
+    expect(asked).toContain('switch-offs: FAILED · tests of auth-refresh: 1 passing case lost (skipped 0→1)')
+    expect(asked).toContain(`2. witness decide implement ${s.planId} --book switch-offs`)
+    expect(asked).not.toContain('issues a fresh token')                 // never a test name
+  }, 300_000)
 })

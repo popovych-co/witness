@@ -2,7 +2,7 @@ import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
   actKey, actLive, anchorRecurrence, boundReached, decisionOwed, ladderSpent, lastGateRun, liveActs, partPasses, repairsOnRegate,
-  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type GateStateKind, type LineOff, type LiveActs,
+  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type DroppedOff, type GateStateKind, type LineOff, type LiveActs,
 } from './rounds.js'
 import { checkWaiver } from './checks.js'
 import { bookingsOf } from './ledger.js'
@@ -17,9 +17,10 @@ export function bookWhen(check: string): string {
   return check === 'switch-offs' ? 'the switch-off is right as it stands — say why in the note'
     : 'the red is not this plan\'s to fix — red on the base too, or one only you accept'
 }
+// Row 276: a switch-offs booking opens an item per line or lost spec.
 export function bookTradeoff(check: string): string {
   return check === 'switch-offs'
-    ? 'opens a ledger item per line, which waives that line for this plan; each closes once main no longer holds the line (the discharge), or by witness dismiss ledger'
+    ? "opens a ledger item per line or spec, which waives it for this plan; each closes once main no longer holds the line, or has the spec's passing cases back (the discharge), or by witness dismiss ledger"
     : BOOK_TRADEOFF
 }
 
@@ -562,11 +563,18 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
   if (checksFailed.length > 0 && checksFailed.every((c) => checkWaiver(c.name) === 'judge' && bookingsOf(last, c.name).length > 0)) {
     const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is LineOff => o.kind !== 'dropped' && o.count - (o.booked ?? 0) > 0))
     const tokens = [...new Set(lines.map((o) => visible(o.token)))]
+    // Row 276: and each spec whose lost passing cases its bookings leave uncovered.
+    const lost = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is DroppedOff => o.kind === 'dropped' && o.count - (o.booked ?? 0) > 0))
+    const specs = [...new Set(lost.map((o) => visible(o.spec)))]
+    const what = [
+      ...(lines.length > 0 ? [`${lines.length} switch-off line${lines.length === 1 ? '' : 's'} the plan adds (${tokens.join(', ')})`] : []),
+      ...(specs.length > 0 ? [`${specs.length} spec${specs.length === 1 ? '' : 's'} lost passing cases (${specs.join(', ')})`] : []),
+    ].join(' · ')
     return {
       key: 'decide', rule: 'waivable',
       options: [
         option(note, 'root', {
-          why: `${lines.length} switch-off line${lines.length === 1 ? '' : 's'} the plan adds (${tokens.join(', ')}) — no finding blocks · remove them, or book what is right as it stands; ${rounds}`,
+          why: `${what} — no finding blocks · ${specs.length > 0 ? 'remove or restore them' : 'remove them'}, or book what is right as it stands; ${rounds}`,
         }),
         ...checksFailed.map((c) => option(d('--book', c.name), 'deferral', { when: bookWhen(c.name), tradeoff: bookTradeoff(c.name) })),
         ...upAlt('the switch-off is there because of what the stage above asked for',

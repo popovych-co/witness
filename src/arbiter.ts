@@ -185,17 +185,23 @@ function partFact(p: PartVerdict): string {
 // copies the plan's bookings cover. Never a file, a line number or a line's text — nor a rule id's name,
 // which the author typed into the comment (push security review; slice 2 review M5): the reviewers read
 // the line itself, the judge the facts.
+// Row 276: a spec's lost tests read as its canon id spelled out and counts — never a test name or output.
 function offFacts(offs: readonly OffVerdict[]): string[] {
   const groups = new Map<string, number>()
+  const losses: string[] = []
   for (const o of offs) {
     const n = offUnbooked(o)
-    if (n === 0 || o.kind === 'dropped') continue
+    if (n === 0) continue
+    if (o.kind === 'dropped') {
+      losses.push(`tests of ${visible(o.spec)}: ${n} passing case${n === 1 ? '' : 's'} lost (skipped ${o.base.skipped}→${o.plan.skipped})`)
+      continue
+    }
     const rules = o.rules?.length ?? 0
     const label = `${visible(o.token)}${rules > 0 ? ` (${rules} rule${rules === 1 ? '' : 's'})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
     groups.set(label, (groups.get(label) ?? 0) + n)
   }
   const booked = offs.reduce((a, o) => a + Math.min(o.count, o.booked ?? 0), 0)
-  return [...[...groups].map(([label, n]) => `${label}${n > 1 ? ` ×${n}` : ''}`), ...(booked > 0 ? [`${booked} booked`] : [])]
+  return [...[...groups].map(([label, n]) => `${label}${n > 1 ? ` ×${n}` : ''}`), ...losses, ...(booked > 0 ? [`${booked} booked`] : [])]
 }
 
 // Row 266 (§3.9). A check as the arbiter reads it: CLI-structured facts only — its name and verdict,
@@ -207,6 +213,8 @@ export function checkFacts(c: GateCheck): string {
   const facts = [
     ...(c.parts ?? []).map(partFact),
     ...offFacts(c.offs ?? []),
+    // Row 276: a round whose tests effect was not checked says so, never why (the why may name paths).
+    ...(c.tests_effect?.read === 'not-checked' ? ['tests not checked'] : []),
     ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
     ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
   ]
