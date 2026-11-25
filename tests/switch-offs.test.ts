@@ -1,7 +1,7 @@
 // Row 273 (§4 T3, C25, C27). The switch-off token layer: each token where its tool reads it — a
 // directive where it opens a comment, a code token never on a comment line, the test API only in test
 // files — and the copies of each switch-off line a plan adds beyond its base's.
-import { rmSync, symlinkSync } from 'node:fs'
+import { rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey } from '../src/switch-offs.js'
@@ -102,7 +102,9 @@ describe('the switch-off tokens (row 273, C25)', () => {
     expect(tokens('src/lib.rs', '/* why */ #[allow(dead_code)]')).toEqual(['#[allow('])
     expect(tokens('tests/a.test.ts', "/* it.skip('x') */ run()")).toEqual([])     // the token sits in the comment
     expect(tokens('tests/a.test.ts', "/* it.skip('x')")).toEqual([])
-    expect(tokens('tests/a.test.ts', " * it.skip('x') is how")).toEqual([])
+    // security review 2: a line opening `*` is a comment only inside an open block
+    expect(tokens('tests/a.test.ts', "  * 3; it.skip('x', f)")).toEqual(['.skip('])
+    expect(scanText('tests/a.test.ts', "/**\n * it.skip('x') is how\n */\n", []).map((o) => o.token)).toEqual([])
   })
 
   it('a directive opening a line inside a block comment counts, as its tool reads it (security review)', () => {
@@ -112,6 +114,8 @@ describe('the switch-off tokens (row 273, C25)', () => {
     expect(at('src/a.ts', '/**\n * eslint-disable is prose here\n */\n')).toEqual([])
     // a block that never closes in code never hides a code token: the state only adds directives
     expect(at('tests/a.test.ts', "const g = 'src/**/*.ts'\nit.skip('x', f)\n")).toEqual([[2, '.skip(']])
+    // security review 2: a `//` before the `/*` (in a string, unlexed) never closes the door on it
+    expect(at('src/a.ts', "const u = 'http://x'; /*\n  eslint-disable\n*/\n")).toEqual([[2, 'eslint-disable']])
   })
 
   it('a test file is named so, or lives in a test folder', () => {
@@ -162,5 +166,16 @@ describe('the switch-offs a plan adds (row 273, C27)', () => {
     const { repo, root, base } = based({ 'src/a.ts': 'a()\n' })
     repo.write('src/a.ts', '/* \0 */\n// @ts-ignore\na()\n')
     expect(planSwitchOffs(root, base, ['src/a.ts'], []).map((o) => [o.line, o.token])).toEqual([[2, '@ts-ignore']])
+  })
+
+  it('a file with a byte order mark is read as its tools read it: UTF-16 either way, UTF-8 (security review 2)', () => {
+    const { root, base } = based({ 'keep.txt': 'x\n' })
+    const le = Buffer.from('a()\n// @ts-ignore\n', 'utf16le')
+    const be = Buffer.from(le).swap16()
+    writeFileSync(join(root, 'src-le.ts'), Buffer.concat([Buffer.from([0xff, 0xfe]), le]))
+    writeFileSync(join(root, 'src-be.ts'), Buffer.concat([Buffer.from([0xfe, 0xff]), be]))
+    writeFileSync(join(root, 'src-u8.ts'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("it.skip('x', f)\n// @ts-ignore\n")]))
+    expect(planSwitchOffs(root, base, ['src-be.ts', 'src-le.ts', 'src-u8.ts'], []).map((o) => [o.file, o.line, o.token, o.snippet])).toEqual([
+      ['src-be.ts', 2, '@ts-ignore', '// @ts-ignore'], ['src-le.ts', 2, '@ts-ignore', '// @ts-ignore'], ['src-u8.ts', 2, '@ts-ignore', '// @ts-ignore']])
   })
 })

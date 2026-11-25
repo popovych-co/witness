@@ -100,37 +100,34 @@ export const TOKENS: readonly TokenDef[] = [
 ]
 
 // The code a line holds after any closed block comments it opens with, or undefined where the line is
-// a comment: it opens `//`, or `/*` or `*` with no close (security review: `/**/ it.skip(` is code).
-function codeOf(line: string, lang: SwitchOffLang): string | undefined {
+// a comment: it opens `//`, or `/*` with no close, or — inside an open block comment — `*` with no
+// close (security review: `/**/ it.skip(` is code, and so is a line opening `* 3;` outside a block).
+function codeOf(line: string, lang: SwitchOffLang, inBlock: boolean): string | undefined {
   if (lang === 'python') return /^\s*#/.test(line) ? undefined : line
   let rest = line
+  let star = inBlock
   for (;;) {
     const t = rest.trimStart()
     if (t.startsWith('//')) return undefined
-    if (!t.startsWith('/*') && !t.startsWith('*')) return rest
-    const close = t.indexOf('*/', t.startsWith('/*') ? 2 : 0)
+    const opens = t.startsWith('/*')
+    if (!opens && !(star && t.startsWith('*'))) return rest
+    const close = t.indexOf('*/', opens ? 2 : 0)
     if (close === -1) return undefined
     rest = t.slice(close + 2)
+    star = false
   }
 }
 
-// Whether a block comment is open at the end of `line`, given whether one was open at its start.
-// Strings are not lexed, so this only ever adds directives (`lineHits`), never hides a code token.
+// Whether a block comment may be open at the end of `line`, given whether one was at its start. Strings
+// are not lexed, so a `//` never closes the door on a later `/*` (security review 2): the state errs
+// toward open, and an open state only adds directives and reads a line opening `*` as a comment.
 function openAfter(line: string, open: boolean): boolean {
   let i = 0
   for (;;) {
-    if (open) {
-      const c = line.indexOf('*/', i)
-      if (c === -1) return true
-      open = false
-      i = c + 2
-    } else {
-      const b = line.indexOf('/*', i)
-      const l = line.indexOf('//', i)
-      if (b === -1 || (l !== -1 && l < b)) return false
-      open = true
-      i = b + 2
-    }
+    const next = line.indexOf(open ? '*/' : '/*', i)
+    if (next === -1) return open
+    open = !open
+    i = next + 2
   }
 }
 
@@ -164,7 +161,7 @@ function holdsLiteral(line: string, token: string): boolean {
 // directive that opens a block comment's text on a later line (security review).
 function lineHits(defs: readonly TokenDef[], lang: SwitchOffLang | undefined, line: string, extra: readonly string[], inBlock = false): LineHit[] {
   const out: LineHit[] = []
-  const code = lang === undefined ? line : codeOf(line, lang)
+  const code = lang === undefined ? line : codeOf(line, lang, inBlock)
   for (const t of defs) {
     const text = t.where === 'code' ? code : line
     if (text === undefined || t.unless?.test(text) === true) continue
@@ -205,9 +202,20 @@ export function scanText(file: string, text: string, extra: readonly string[]): 
 
 const BINARY_PROBE = 8_000
 const binary = (b: Buffer): boolean => b.subarray(0, BINARY_PROBE).includes(0)
-// A binary file is skipped (a NUL in its first 8,000 bytes, git's own test) — unless it is named in a
-// language witness reads: a NUL never hides a source file's switch-offs (security review).
-const skipped = (file: string, b: Buffer): boolean => langOf(file) === undefined && binary(b)
+
+// A file's text as its tools read it: a byte order mark names UTF-16 (either order) or UTF-8, as tsc
+// reads one (security review 2); otherwise UTF-8. Undefined for a binary file (a NUL in its first
+// 8,000 bytes, git's own test) — unless it is named in a language witness reads: a NUL never hides a
+// source file's switch-offs (security review).
+function textOf(file: string, b: Buffer): string | undefined {
+  if (b.length >= 2 && b[0] === 0xff && b[1] === 0xfe) return b.subarray(2).toString('utf16le')
+  if (b.length >= 2 && b[0] === 0xfe && b[1] === 0xff) {
+    const body = Buffer.from(b.subarray(2, 2 + ((b.length - 2) & ~1)))
+    return body.swap16().toString('utf16le')
+  }
+  if (b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return b.subarray(3).toString('utf8')
+  return langOf(file) === undefined && binary(b) ? undefined : b.toString('utf8')
+}
 
 const read = (abs: string): Buffer | undefined => {
   try {
@@ -230,12 +238,11 @@ function fileOffs(wt: string, base: string, file: string, extra: readonly string
   const abs = join(wt, file)
   if (lstatListed(abs)?.isFile() !== true) return []
   const bytes = read(abs)
-  if (bytes === undefined || skipped(file, bytes)) return []
-  const text = bytes.toString('utf8')
-  if (!mayHold(file, text, extra)) return []
+  const text = bytes === undefined ? undefined : textOf(file, bytes)
+  if (text === undefined || !mayHold(file, text, extra)) return []
   const was = gitBlob(wt, base, file)
   const held = new Map<string, number>()
-  for (const s of scanText(file, was === undefined || skipped(file, was) ? '' : was.toString('utf8'), extra)) {
+  for (const s of scanText(file, was === undefined ? '' : textOf(file, was) ?? '', extra)) {
     const k = switchOffKey(s)
     held.set(k, (held.get(k) ?? 0) + 1)
   }
