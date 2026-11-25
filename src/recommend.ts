@@ -399,7 +399,7 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
       key: 'decide', rule: 'book-owed',
       options: [
         option(d('--book', name), 'deferral', {
-          why: `${owedParts.map(visible).join(', ')} ${owedParts.length === 1 ? 'is' : 'are'} red on the base too, and witness cannot judge which errors are this plan's — no author can clear it, so only you book ${name}`,
+          why: `${owedParts.map(visible).join(', ')} ${owedParts.length === 1 ? 'is' : 'are'} red on the base too, and which of its errors are this plan's cannot be judged — no author can clear it, so only you book ${name}`,
           tradeoff: BOOK_TRADEOFF,
         }),
         option(note, 'root', {

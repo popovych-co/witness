@@ -18,7 +18,7 @@ import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows, visible } from '../toon.js'
-import { LEDGER_CAUSES, openItems } from '../ledger.js'
+import { openItems } from '../ledger.js'
 import { parseBaseKey } from '../base-lint.js'
 import { isId } from '../dsl.js'
 import { decidedBy } from '../autonomy.js'
@@ -319,7 +319,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const booked = bookedRows(root)
   if (booked.length > 0) {
     rows('booked', ['item', 'plan', 'part', 'holds', 'since'], booked).forEach(ctx.out)
-    ctx.out(`help: witness dismiss ledger --item <id|index> --cause <${LEDGER_CAUSES.join('|')}> --note "<why>" — at your own terminal`)
+    ctx.out('help: witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>" — at your own terminal')
   }
   const demoted = demotedRows(root, canon)
   if (demoted.length > 0) {

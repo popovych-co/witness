@@ -5,7 +5,7 @@ import { primaryRoot, stateCommit } from '../gitio.js'
 import { appendEntry, entryLine, journalRel, readStream, streamExists } from '../journal.js'
 import { acquireLock } from '../lock.js'
 import { renderRefusal, v } from '../refusal.js'
-import { kv, logSafe, visible } from '../toon.js'
+import { kv, logSafe, shellWord, visible } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { sessionMarker } from '../drive-presence.js'
 import { LEDGER_CAUSES, ledgerItems, ledgerTaken, type LedgerCause, type LedgerDismissed, type LedgerItem } from '../ledger.js'
@@ -102,7 +102,8 @@ async function dismissLedger(ctx: Ctx, which: string, cause: string | undefined,
     renderRefusal([v(field, rule, got, want)]).forEach((l) => ctx.err(l))
     return EXIT.REFUSED
   }
-  const typed = `witness dismiss ledger --item ${visible(which)} --cause <${LEDGER_CAUSES.join('|')}> --note "<why>"`
+  // The act to paste, the item through the quoter; the cause slot is witness's own list (LEDGER_CAUSES).
+  const typed = `witness dismiss ledger --item ${shellWord(which)} --cause <rule-retired|declined|judged-wrong> --note "<why>"`
   const marker = sessionMarker(ctx.env)
   if (marker !== undefined) return refuse('dismiss', 'dismiss-in-session', `${marker} is set`, `the human, at their own terminal — ${typed}`)
   if (!ctx.isTTY) return refuse('dismiss', 'dismiss-needs-terminal', 'no terminal', `the human, at their own terminal — ${typed}`)
