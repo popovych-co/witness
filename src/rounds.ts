@@ -23,6 +23,9 @@ export interface GateCheck {
   // Row 273. The switch-off lines the plan adds (src/switch-offs.ts), one per key; absent where none
   // is, or past MAX_OFFS distinct lines. Each line's unbooked copies join the resume signature.
   offs?: OffVerdict[]
+  // Row 275 (C32). The job units this check's verdict lacked (`base-tests`: the base suite), which the
+  // kind's `owed` reads (C13's on-demand rule). Present only when non-empty; never in the signature.
+  owes?: Array<{ kind: string; key: string }>
 }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the

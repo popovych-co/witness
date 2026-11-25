@@ -11,6 +11,8 @@ import { main, type Ctx } from '../src/cli.js'
 import { loadConfig } from '../src/config.js'
 import { diffBase } from '../src/evidence.js'
 import type { Result } from '../src/refusal.js'
+import { runnerConfig } from '../src/runner.js'
+import type { FullSuite } from '../src/tests-effect.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
 import { appendEntry, journalRel, readStream, type EntryType } from '../src/journal.js'
 import { runGate } from '../src/gate.js'
@@ -592,6 +594,17 @@ export const TOKEN_FIXED = 'export function rotateDue(elapsed: number, ttl: numb
 export const TOKEN_BROKEN = 'export function rotateDue(): boolean {\n  return false\n}\n\nexport function nextToken(prev: string): string {\n  return prev\n}\n'
 
 export const TOKEN_TESTS_TAGGED = "import { expect, it } from 'vitest'\nimport { nextToken, rotateDue } from '../src/token'\n\nit('rotates token before expiry @spec:auth-refresh', () => {\n  expect(rotateDue(90, 100)).toBe(true)\n})\n\nit('issues a fresh token on rotation @spec:auth-refresh', () => {\n  expect(nextToken('a1')).not.toBe('a1')\n})\n"
+
+// Row 275. TOKEN_TESTS_TAGGED with its second case skipped (`{ skip: true }`): the junit report reads it skipped.
+export const SKIP_SECOND = TOKEN_TESTS_TAGGED.replace("it('issues a fresh token on rotation @spec:auth-refresh', () => {",
+  "it('issues a fresh token on rotation @spec:auth-refresh', { skip: true }, () => {")
+
+// Row 275. The repo's runner as it stands, in full-suite mode (throws otherwise).
+export function fullSuite(root: string): FullSuite {
+  const rc = unwrap(runnerConfig(unwrap(loadConfig(root))))
+  if (rc.mode !== 'full-suite') throw new Error('the runner is not full-suite')
+  return rc
+}
 
 export const TOKEN_TESTS_UNTAGGED = "import { expect, it } from 'vitest'\n\nit('plain untagged unit test', () => {\n  expect(1 + 1).toBe(2)\n})\n"
 

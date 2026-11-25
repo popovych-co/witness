@@ -106,13 +106,13 @@ describe('job reading and the next shard (row 257)', () => {
     expect(next()).toEqual(['idle', 'i1', 1])
   })
 
-  it('production registers base-lint; the test-only fixture registers from its env, first (row 263)', () => {
-    expect(jobKinds({}).map((k) => k.kind)).toEqual(['base-lint'])
+  it('production registers base-lint, then base-tests; the test-only fixture registers from its env, first (rows 263, 275)', () => {
+    expect(jobKinds({}).map((k) => k.kind)).toEqual(['base-lint', 'base-tests'])
     const env = { WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'k1', shards: 2, turn: true, gated: false, boxMs: 1_000, cmd: 'true' }) }
-    expect(jobKinds(env).map((k) => k.kind)).toEqual(['fixture', 'base-lint'])
+    expect(jobKinds(env).map((k) => k.kind)).toEqual(['fixture', 'base-lint', 'base-tests'])
     expect(jobKinds(env).slice(0, 1).map((k) => [k.kind, k.turn, k.gated, k.boxMs({} as Config)])).toEqual([['fixture', true, false, 1_000]])
-    expect(jobKinds({ WITNESS_FIXTURE_JOB: '{' }).map((k) => k.kind)).toEqual(['base-lint'])
-    expect(jobKinds({ WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'K!', shards: 2 }) }).map((k) => k.kind)).toEqual(['base-lint'])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: '{' }).map((k) => k.kind)).toEqual(['base-lint', 'base-tests'])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: JSON.stringify({ key: 'K!', shards: 2 }) }).map((k) => k.kind)).toEqual(['base-lint', 'base-tests'])
   })
 
   it('base-lint is registered in production: no turn, gated, in the scratch, its commands the lint parts and readers (row 263)', async () => {
@@ -132,7 +132,7 @@ describe('jobs in the scratch (row 258)', () => {
     expect(kind).toMatchObject({ kind: 'fixture', scratch: true })
     expect(kind!.commands(cfgOf(repo.root))).toEqual([])
     expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture() })[0]).toMatchObject({ scratch: false })
-    expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: 'yes' }) }).map((k) => k.kind)).toEqual(['base-lint'])
+    expect(jobKinds({ WITNESS_FIXTURE_JOB: fixture({ scratch: 'yes' }) }).map((k) => k.kind)).toEqual(['base-lint', 'base-tests'])
   })
 })
 
