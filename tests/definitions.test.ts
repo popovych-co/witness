@@ -53,8 +53,19 @@ describe('the member splice (row 277)', () => {
     expect(spliceMember('{"a": "}{\\"", "scripts": {"b": "1"}}', '{"scripts": {"b": "2"}}', 'scripts')).toBe('{"a": "}{\\"", "scripts": {"b": "2"}}')
     expect(spliceMember('{"scripts": "x", "z": 1}', '{"scripts": ["a", {"b": "]"}]}', 'scripts')).toBe('{"scripts": ["a", {"b": "]"}], "z": 1}')
     expect(spliceMember('[1]', PKG_BASE, 'scripts')).toBeUndefined()
-    expect(spliceMember('{"name": "a"}', PKG_BASE, 'scripts')).toBeUndefined()
     expect(spliceMember('{"scripts": {', PKG_BASE, 'scripts')).toBeUndefined()
+    expect(spliceMember('{"scripts": {}}', '{"name": "a"}', 'scripts')).toBeUndefined()
+  })
+
+  it("a member the plan's file lacks is inserted first, in the plan's own spacing (slice 1 review I3)", () => {
+    const body = '{\n    "lint": "biome check ."\n  }'
+    expect(spliceMember('{\n  "name": "a",\n  "dependencies": { "x": "2" }\n}\n', PKG_BASE, 'scripts'))
+      .toBe(`{\n  "scripts": ${body},\n  "name": "a",\n  "dependencies": { "x": "2" }\n}\n`)
+    expect(spliceMember('{"name": "a"}', PKG_BASE, 'scripts')).toBe(`{"scripts": ${body}, "name": "a"}`)
+    expect(spliceMember('{ }', PKG_BASE, 'scripts')).toBe(`{"scripts": ${body} }`)
+    for (const t of [spliceMember('{"name": "a"}', PKG_BASE, 'scripts')!, spliceMember('{ }', PKG_BASE, 'scripts')!]) {
+      expect(JSON.parse(t).scripts).toEqual({ lint: 'biome check .' })
+    }
   })
 })
 
@@ -114,12 +125,50 @@ describe('what a plan restores (row 277)', () => {
     expect(unwrap(restoredOf(repo, base))).toEqual([{ path: 'infra/.gitignore', how: 'removed', held: null }])
   })
 
-  it('a member file that does not parse refuses with its path (row 277)', () => {
+  it("a member file either side cannot read as a JSON object is restored whole, and never voids the others (slice 1 review I1)", () => {
     const repo = tmpRepo()
-    repo.write('package.json', PKG_BASE)
+    repo.write('.gitignore', 'dist/\n'); repo.write('tests/fixtures/bad/package.json', PKG_BASE)
+    repo.write('package.json', `\uFEFF${PKG_BASE}`); repo.write('tsconfig.json', '{\n  // strict\n  "compilerOptions": { "strict": true }\n}\n')
     const base = commitAll(repo, 'base')
-    repo.write('package.json', '{ "scripts": ')
-    expect(restoredOf(repo, base)).toMatchObject({ ok: false, violations: [{ field: 'package.json', rule: 'definition-unreadable' }] })
+    repo.write('.gitignore', 'dist/\nsrc/a.ts\n'); repo.write('tests/fixtures/bad/package.json', '{ "scripts": ')
+    repo.write('package.json', `\uFEFF${PKG_BASE.replace('biome check .', 'true')}`)
+    repo.write('tsconfig.json', '{\n  // loose\n  "compilerOptions": { "strict": false }\n}\n')
+    const entries = ['.gitignore', 'package.json#scripts', 'tsconfig.json#compilerOptions'].map((x) => definitionEntry(x)!)
+    expect(unwrap(restoredOf(repo, base, entries))).toEqual([
+      { path: '.gitignore', how: 'base', held: blobAt(repo, base, '.gitignore') },
+      { path: 'package.json', how: 'base', held: blobAt(repo, base, 'package.json') },
+      { path: 'tests/fixtures/bad/package.json', how: 'base', held: blobAt(repo, base, 'tests/fixtures/bad/package.json') },
+      { path: 'tsconfig.json', how: 'base', held: blobAt(repo, base, 'tsconfig.json') },
+    ])
+  })
+
+  it("a symlink the plan puts over a base definition restores the base's file (slice 1 review I2)", () => {
+    const repo = tmpRepo()
+    repo.write('.gitignore', 'dist/\n'); repo.write('package.json', PKG_BASE); repo.write('loose/ignore', '*\n'); repo.write('loose/package.json', '{}\n')
+    const base = commitAll(repo, 'base')
+    rmSync(join(repo.root, '.gitignore')); symlinkSync('loose/ignore', join(repo.root, '.gitignore'))
+    rmSync(join(repo.root, 'package.json')); symlinkSync('loose/package.json', join(repo.root, 'package.json'))
+    expect(unwrap(restoredOf(repo, base))).toEqual([
+      { path: '.gitignore', how: 'base', held: blobAt(repo, base, '.gitignore') },
+      { path: 'package.json', how: 'base', held: blobAt(repo, base, 'package.json') },
+    ])
+  })
+
+  it("a member the plan deleted is restored, and a deleted member file whose folder stays tracked comes back whole (slice 1 review I3)", () => {
+    const repo = tmpRepo()
+    repo.write('package.json', PKG_BASE); repo.write('packages/x/package.json', PKG_BASE); repo.write('packages/x/src/a.ts', 'a\n')
+    repo.write('packages/y/package.json', PKG_BASE); repo.write('packages/y/src/b.ts', 'b\n')
+    const base = commitAll(repo, 'base')
+    repo.write('package.json', '{\n  "name": "a",\n  "dependencies": { "x": "1" }\n}\n')
+    rmSync(join(repo.root, 'packages/x/package.json')); rmSync(join(repo.root, 'packages/y'), { recursive: true })
+    const restored = unwrap(restoredOf(repo, base))
+    expect(restored).toEqual([
+      { path: 'package.json', how: 'member', member: 'scripts', held: jsonId({ lint: 'biome check .' }) },
+      { path: 'packages/x/package.json', how: 'base', held: blobAt(repo, base, 'packages/x/package.json') },
+    ])
+    const files = planChangeSet(repo.root, base)
+    const tree = unwrap(effectTree(repo.root, base, snapshotTree(repo.root, base, files)!, restored))
+    expect(JSON.parse(repo.git('cat-file', 'blob', `${tree}:package.json`))).toEqual({ scripts: { lint: 'biome check .' }, name: 'a', dependencies: { x: '1' } })
   })
 
   it('a path no entry names is never restored, and [] restores nothing (row 277)', () => {

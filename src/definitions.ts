@@ -126,16 +126,27 @@ const jsonObject = (text: string): Record<string, unknown> | undefined => {
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
 
-// The plan's file with the base's text of `member` in place of its own; every other byte stays the
-// plan's. Undefined unless both parse as JSON objects holding the member.
+// The plan's file with the base's text of `member` in place of its own, or inserted first in the
+// plan's own spacing where the plan's object lacks it (slice 1 review I3: a script removed with its
+// member is as hidden as one rewritten); every other byte stays the plan's. Undefined unless both
+// parse as JSON objects and the base holds the member.
 export function spliceMember(plan: string, base: string, member: string): string | undefined {
   const p = jsonObject(plan)
   const b = jsonObject(base)
-  if (p === undefined || b === undefined || !hasOwn(p, member) || !hasOwn(b, member)) return undefined
-  const ps = memberSpan(plan, member)
+  if (p === undefined || b === undefined || !hasOwn(b, member)) return undefined
   const bs = memberSpan(base, member)
-  if (ps === undefined || bs === undefined) return undefined
-  return plan.slice(0, ps[0]) + base.slice(bs[0], bs[1]) + plan.slice(ps[1])
+  if (bs === undefined) return undefined
+  const value = base.slice(bs[0], bs[1])
+  if (!hasOwn(p, member)) {
+    const open = plan.indexOf('{')
+    const ws = /^\s*/.exec(plan.slice(open + 1))![0]
+    const rest = plan.slice(open + 1 + ws.length)
+    const entry = `${JSON.stringify(member)}: ${value}`
+    return rest.startsWith('}') ? `${plan.slice(0, open + 1)}${entry}${plan.slice(open + 1)}` : `${plan.slice(0, open + 1)}${ws}${entry},${ws || ' '}${rest}`
+  }
+  const ps = memberSpan(plan, member)
+  if (ps === undefined) return undefined
+  return plan.slice(0, ps[0]) + value + plan.slice(ps[1])
 }
 
 // A member value's identity: what a part's booking remembers of the base's definition.
@@ -175,17 +186,19 @@ const regularAt = (root: string, tree: string, path: string) => {
   return e !== undefined && e.type === 'blob' && REGULAR.test(e.mode) ? e : undefined
 }
 
-const unreadable = (path: string, got: string) =>
-  refuse<Restored[]>([v(path, 'definition-unreadable', got, 'a JSON object on both sides, so its member can be restored on its own')])
-
 // The definitions a plan's change set takes back from the base, sorted by name. Per changed path,
-// the first entry naming it decides:
-// - a whole-file entry restores the base's regular file where the plan modified it, or deleted it
-//   while its tree still tracks a path in the file's folder (a package removed whole hides nothing);
-// - an ignore file the base lacks is removed (it can only hide);
-// - a member entry restores the base's member where both sides hold it and the values differ;
-// - an added definition stays as the plan wrote it, and a symlink or submodule on either side is
-//   never restored.
+// the first entry naming it decides, and only a base path holding a regular file is ever restored
+// (a base symlink or submodule never is):
+// - a whole-file entry restores the base's file where the plan modified it, replaced it with a
+//   symlink, or deleted it while its tree still tracks a path in the file's folder (a package removed
+//   whole hides nothing);
+// - a member entry restores the base's member where the plan's value differs or the plan's object
+//   lacks it; a member file either side cannot read as a JSON object (a BOM, comments, a plan's
+//   broken copy) falls back to the whole-file rule, so it never voids the other restores (slice 1
+//   review I1); a member only the plan holds is the plan's own;
+// - an ignore file the base lacks is removed (it can only hide); any other added definition stays
+//   as the plan wrote it. A directory at a definition path is never folded.
+// Refuses only when git itself cannot read the base or a file.
 export function restorable(
   root: string, wt: string, base: string, files: readonly string[], entries: readonly DefinitionEntry[],
 ): Result<Restored[]> {
@@ -197,32 +210,27 @@ export function restorable(
       const entry = definitionFor(entries, path)
       if (entry === undefined) continue
       const st = lstatAt(join(wt, path))
-      const planFile = st?.isFile() === true
-      if (st !== undefined && !planFile) continue
+      if (st?.isDirectory() === true) continue
       const theirs = entryAt(root, base, path)
-      if (theirs !== undefined && (theirs.type !== 'blob' || !REGULAR.test(theirs.mode))) continue
-      if (entry.member !== undefined) {
-        if (theirs === undefined || !planFile) continue
-        const planText = readFileSync(join(wt, path), 'utf8')
-        const baseText = blobText(root, theirs.sha)
-        const p = jsonObject(planText)
-        const b = jsonObject(baseText)
-        if (p === undefined || b === undefined) return unreadable(path, `${p === undefined ? 'the plan\'s' : 'the base\'s'} copy is no JSON object`)
-        if (!hasOwn(p, entry.member) || !hasOwn(b, entry.member)) continue
-        if (JSON.stringify(p[entry.member]) === JSON.stringify(b[entry.member])) continue
-        if (spliceMember(planText, baseText, entry.member) === undefined) return unreadable(path, 'its member could not be found in the text')
-        out.push({ path, how: 'member', member: entry.member, held: memberId(b[entry.member]) })
-        continue
-      }
       if (theirs === undefined) {
-        if (planFile && isIgnoreFile(path)) out.push({ path, how: 'removed', held: null })
+        if (st !== undefined && entry.member === undefined && isIgnoreFile(path)) out.push({ path, how: 'removed', held: null })
         continue
       }
-      if (planFile) {
-        if (gitOut(wt, ['hash-object', '--', path]).trim() !== theirs.sha) out.push({ path, how: 'base', held: theirs.sha })
-        continue
-      }
-      if (folderTracked(root, wt, base, path, changed)) out.push({ path, how: 'base', held: theirs.sha })
+      if (theirs.type !== 'blob' || !REGULAR.test(theirs.mode)) continue
+      const whole: Restored = { path, how: 'base', held: theirs.sha }
+      if (st === undefined) { if (folderTracked(root, wt, base, path, changed)) out.push(whole); continue }
+      if (!st.isFile()) { out.push(whole); continue }
+      const modified = () => gitOut(wt, ['hash-object', '--', path]).trim() !== theirs.sha
+      if (entry.member === undefined) { if (modified()) out.push(whole); continue }
+      const planText = readFileSync(join(wt, path), 'utf8')
+      const baseText = blobText(root, theirs.sha)
+      const p = jsonObject(planText)
+      const b = jsonObject(baseText)
+      if (p === undefined || b === undefined) { if (modified()) out.push(whole); continue }
+      if (!hasOwn(b, entry.member)) continue
+      if (hasOwn(p, entry.member) && JSON.stringify(p[entry.member]) === JSON.stringify(b[entry.member])) continue
+      if (spliceMember(planText, baseText, entry.member) === undefined) { out.push(whole); continue }
+      out.push({ path, how: 'member', member: entry.member, held: memberId(b[entry.member]) })
     }
   } catch (e) {
     return refuse([v('definitions', 'definition-unreadable', visible(String((e as Error).message ?? e)).slice(0, 200), 'definition files git can read')])
