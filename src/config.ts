@@ -12,7 +12,7 @@ import {
 import { execFileSync } from './spawn.js'
 
 // Row 193 §4.2: every setting present, nothing unknown. Always the list's newest schema.
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 export interface CanonPaths {
   specs: string
@@ -121,6 +121,8 @@ export interface Config {
   ship: ShipConfig
   // Row 262. The reader per tool; a tool set to `none`, or an older file's, is absent.
   readers: Partial<Record<ReaderTool, string>>
+  // Row 273. The repo's own switch-off tokens; an older file's read [].
+  checks: { switchOffs: string[] }
   scratch: ScratchConfig
   harness?: string
   // Rows 171-175. Whether the CLI settles its own stops is a REPO fact — committed, read by
@@ -155,6 +157,8 @@ function relPath(field: string, val: string, what: 'directory' | 'file path'): R
   }
   return ok(norm)
 }
+
+const TOKEN_RE = /^[ -~]{1,100}$/
 
 const isNameList = (val: unknown): val is string[] =>
   Array.isArray(val) && val.length > 0 && val.every((x) => typeof x === 'string' && x !== '')
@@ -213,6 +217,11 @@ export function checkValue(s: Setting, val: unknown): Result<unknown> {
       const parts = partsOf(field, val)
       return parts !== undefined ? ok(parts) : invalid()
     }
+    // Row 273. Literal tokens: printable ASCII (no control or bidi character can reach a line), 1–100
+    // characters, no space at either end.
+    case 'tokens':
+      return Array.isArray(val) && val.every((x) => typeof x === 'string' && TOKEN_RE.test(x) && x === x.trim())
+        ? ok(val) : invalid()
   }
 }
 
@@ -359,6 +368,7 @@ export function resolveSettings(raw: Raw, mode: 'strict' | 'lenient'): Result<Re
       merge: at('ship.merge'), ciSettleMs: at('ship.ciSettleMs'),
     },
     readers,
+    checks: { switchOffs: at('checks.switchOffs') },
     scratch: { prepare: at('scratch.prepare') },
     harness: at('harness'),
     autonomy: at<string>('autonomy') === 'on',
