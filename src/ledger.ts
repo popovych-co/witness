@@ -18,8 +18,10 @@ import { visible } from './toon.js'
 // Row 274. Two kinds: `booked-check` (a lint part, row 270) and `booked-switch-off` (a switch-off line
 // a judged round booked: `file`, `token`, and the copies of each line key it waives). A switch-off
 // item closes when the merging tree no longer holds its line (`mergeCloses`).
+// Row 276. A third: `booked-dropped` (a spec's lost passing tests a judged round booked: `spec`, the
+// round's base counts, and the cases it waives). It closes once main has the cases back (`mergeCloses`).
 
-export type LedgerKind = 'booked-check' | 'booked-switch-off'
+export type LedgerKind = 'booked-check' | 'booked-switch-off' | 'booked-dropped'
 
 // What an item books: the whole part (held at the part's base key: the base commit and its
 // commands, the map's C19), or the multiset of diagnostic keys (16 hex) it covers.
@@ -66,14 +68,33 @@ export interface SwitchOffOpen {
   note?: string
 }
 
-export type LedgerOpen = CheckOpen | SwitchOffOpen
+// Row 276. A spec's lost tests booked: `base` the booked round's base counts for the spec, `subject.cases`
+// the cases it waives; its key is 16 hex over (kind, check, plan, spec, base passed, base skipped, cases).
+export interface DroppedOpen {
+  v: 1
+  t: 'ledger-open'
+  id: string
+  key: string
+  kind: 'booked-dropped'
+  check: string
+  plan: string
+  gate: string
+  round: number
+  run_id: string
+  spec: string
+  base: { passed: number; skipped: number }
+  subject: { cases: number }
+  note?: string
+}
+
+export type LedgerOpen = CheckOpen | SwitchOffOpen | DroppedOpen
 
 // `plan` is the observer: the merging plan, or the abandoned one.
 export interface LedgerClosed { v: 1; t: 'ledger-closed'; id: string; by: 'merge' | 'abandon'; plan: string; pr?: number; tree?: string }
 
 export interface LedgerDismissed { v: 1; t: 'ledger-dismissed'; id: string; cause: LedgerCause; note: string }
 
-export type LedgerItem = (Omit<CheckOpen, 'v' | 't'> | Omit<SwitchOffOpen, 'v' | 't'>) & {
+export type LedgerItem = (Omit<CheckOpen, 'v' | 't'> | Omit<SwitchOffOpen, 'v' | 't'> | Omit<DroppedOpen, 'v' | 't'>) & {
   state: 'open' | 'closed' | 'dismissed'
   end?: LedgerClosed | LedgerDismissed
 }
@@ -83,6 +104,13 @@ export const offWhere = (token: string, file: string): string => `${visible(toke
 
 export type CheckItem = Extract<LedgerItem, { kind: 'booked-check' }>
 export type SwitchOffItem = Extract<LedgerItem, { kind: 'booked-switch-off' }>
+export type DroppedItem = Extract<LedgerItem, { kind: 'booked-dropped' }>
+
+// Row 276. Where a switch-offs item or booking is, as a human reads it: a line's token in its file, or a
+// spec's tests — spelled out.
+export function bookedWhere(x: { kind: 'booked-switch-off'; token: string; file: string } | { kind: 'booked-dropped'; spec: string }): string {
+  return x.kind === 'booked-switch-off' ? offWhere(x.token, x.file) : `tests of ${visible(x.spec)}`
+}
 
 const str = (x: unknown): x is string => typeof x === 'string' && x !== ''
 
@@ -120,6 +148,14 @@ function openOf(e: Entry): LedgerOpen | undefined {
     const subject = linesOf(e.subject)
     if (!str(e.file) || !str(e.token) || subject === undefined) return undefined
     return { ...(e as unknown as SwitchOffOpen), subject }
+  }
+  if (e.kind === 'booked-dropped') {
+    const b = e.base as Record<string, unknown> | undefined
+    const s = e.subject as Record<string, unknown> | undefined
+    const count = (n: unknown, min: number) => Number.isInteger(n) && (n as number) >= min
+    if (!isId(e.spec) || typeof b !== 'object' || b === null || !count(b.passed, 0) || !count(b.skipped, 0)) return undefined
+    if (typeof s !== 'object' || s === null || !count(s.cases, 1)) return undefined
+    return { ...(e as unknown as DroppedOpen), base: { passed: b.passed as number, skipped: b.skipped as number }, subject: { cases: s.cases as number } }
   }
   return undefined
 }
@@ -164,11 +200,18 @@ const sorted = (counts: Record<string, number>): Array<[string, number]> =>
 export type KeyFields =
   | Pick<CheckOpen, 'kind' | 'check' | 'plan' | 'part' | 'part_key' | 'subject'>
   | Pick<SwitchOffOpen, 'kind' | 'check' | 'plan' | 'file' | 'token' | 'subject'>
+  | Pick<DroppedOpen, 'kind' | 'check' | 'plan' | 'spec' | 'base' | 'subject'>
 
 // The idempotence key: a whole part's names the base it was booked against (its part key), a
 // per-diagnostic one names its exact multiset and holds across bases. Row 274: a switch-off item's
 // names its file, token and exact lines; the lint formula is unchanged, so no open item's key moves.
+// Row 276: a loss's names its spec, the base counts it was booked against and its cases; the other two
+// formulas are unchanged, so no open item's key moves.
 export function itemKey(o: KeyFields): string {
+  if (o.kind === 'booked-dropped') {
+    return createHash('sha256').update(JSON.stringify([o.kind, o.check, o.plan, o.spec, o.base.passed, o.base.skipped, o.subject.cases]))
+      .digest('hex').slice(0, 16)
+  }
   if (o.kind === 'booked-switch-off') {
     return createHash('sha256').update(JSON.stringify([o.kind, o.check, o.plan, o.file, o.token, sorted(o.subject.lines)])).digest('hex').slice(0, 16)
   }
@@ -192,6 +235,7 @@ export function ledgerTaken(root: string): Violation | undefined {
 export type Booking =
   | { kind: 'booked-check'; part: string; part_key: string; tool?: ReaderTool; subject: LedgerSubject }
   | { kind: 'booked-switch-off'; file: string; token: string; subject: { lines: Record<string, number> } }
+  | { kind: 'booked-dropped'; spec: string; base: { passed: number; skipped: number }; subject: { cases: number } }
 
 // Never `pending` (drive is measuring the base: book once it lands), `untrusted` (a trust grant comes
 // first) or a passing state.
@@ -210,9 +254,14 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
     if (waiver !== 'judge' || run.outcome === 'malformed') return []
     const c = run.checks.find((x) => x.name === check)
     if (c === undefined || c.ok || c.offs === undefined) return []
-    return c.offs.flatMap((o) => (o.kind !== 'dropped' && unbooked(o) > 0
-      ? [{ kind: 'booked-switch-off' as const, file: o.file, token: o.token, subject: { lines: { [o.key]: unbooked(o) } } }]
-      : []))
+    return c.offs.flatMap((o): Booking[] => {
+      if (unbooked(o) === 0) return []
+      // Row 276: a spec's lost tests book the cases its bookings leave uncovered, against the round's base.
+      if (o.kind === 'dropped') {
+        return [{ kind: 'booked-dropped', spec: o.spec, base: { passed: o.base.passed, skipped: o.base.skipped }, subject: { cases: unbooked(o) } }]
+      }
+      return [{ kind: 'booked-switch-off', file: o.file, token: o.token, subject: { lines: { [o.key]: unbooked(o) } } }]
+    })
   }
   const last = run.checks.at(-1)
   if (last === undefined || last.name !== check) return []
@@ -242,6 +291,20 @@ Array<{ id: string; entry?: LedgerOpen }> {
   }
   const common = { gate, round: run.round, run_id: run.run_id, ...(note !== undefined ? { note } : {}) }
   return bookings.map((b) => {
+    // Row 276: a loss's item is its spec's (the run's dropped hit for it); an item the hit already applies
+    // is never the match, as for a line.
+    if (b.kind === 'booked-dropped') {
+      const holds = (o: OffVerdict) => o.kind === 'dropped' && o.spec === b.spec
+      const holder = run.checks.find((c) => c.offs?.some(holds) === true)
+      const check = holder?.name ?? ''
+      const key = itemKey({ kind: b.kind, check, plan, spec: b.spec, base: b.base, subject: b.subject })
+      const applied = new Set((holder?.offs ?? []).filter(holds).flatMap((o) => o.items ?? []))
+      const same = open.find((i) => itemKey(i) === key && !applied.has(i.id))
+      if (same !== undefined) return { id: same.id }
+      const id = mint()
+      const entry: DroppedOpen = { v: 1, t: 'ledger-open', id, key, kind: b.kind, check, plan, ...common, spec: b.spec, base: b.base, subject: b.subject }
+      return { id, entry }
+    }
     if (b.kind === 'booked-switch-off') {
       const holds = (o: OffVerdict) => o.kind !== 'dropped' && Object.hasOwn(b.subject.lines, o.key)
       const holder = run.checks.find((c) => c.offs?.some(holds) === true)

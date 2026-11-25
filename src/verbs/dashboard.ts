@@ -18,7 +18,7 @@ import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows, visible } from '../toon.js'
-import { offWhere, openItems } from '../ledger.js'
+import { bookedWhere, offWhere, openItems } from '../ledger.js'
 import { parseBaseKey } from '../base-lint.js'
 import { isId } from '../dsl.js'
 import { decidedBy } from '../autonomy.js'
@@ -106,6 +106,11 @@ export function bookedRows(root: string): Array<Record<string, unknown>> {
     if (i.kind === 'booked-switch-off') {
       const copies = Object.values(i.subject.lines).reduce((a, n) => a + n, 0)
       return { ...head, check: visible(i.check), holds: `${offWhere(i.token, i.file)}${copies > 1 ? ` ×${copies}` : ''}`, since }
+    }
+    // Row 276: a booked loss holds its spec's tests, with the cases it waives.
+    if (i.kind === 'booked-dropped') {
+      const n = i.subject.cases
+      return { ...head, check: visible(i.check), holds: `${bookedWhere(i)}, ${n} case${n === 1 ? '' : 's'}`, since }
     }
     const base = parseBaseKey(i.part_key)?.commit
     const holds = 'whole' in i.subject

@@ -9,7 +9,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
-import { kv, logSafe, rows } from '../toon.js'
+import { kv, logSafe, rows, visible } from '../toon.js'
 import { offWhere } from '../ledger.js'
 import { decidedBy } from '../autonomy.js'
 import { duration } from '../usage.js'
@@ -78,6 +78,11 @@ function detailOf(e: Entry): string {
       // Row 274: a switch-off item names its token in its file, spelled out.
       if (e.kind === 'booked-switch-off') {
         return `${String(e.id)} booked ${String(e.check)} · ${offWhere(String(e.token), String(e.file))} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)}`
+      }
+      // Row 276: a booked loss names its spec's tests and the cases it waives.
+      if (e.kind === 'booked-dropped') {
+        const n = Number((e.subject as { cases?: unknown } | undefined)?.cases)
+        return `${String(e.id)} booked ${String(e.check)} · tests of ${visible(String(e.spec))} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)} · ${n} case${n === 1 ? '' : 's'}`
       }
       const s = e.subject as { whole?: boolean; diagnostics?: Record<string, number> } | undefined
       const what = s?.whole === true ? 'whole part'

@@ -371,3 +371,25 @@ describe('a booked switch-off ends by observation (row 274)', () => {
     expect(byId(repo.root, mine)).toMatchObject({ state: 'closed', end: { by: 'abandon', plan: planId } })
   }, 120_000)
 })
+
+const lossItem = (repo: TestRepo, over: Record<string, unknown> = {}): string => {
+  const id = newItemId()
+  line(repo, LEDGER_STREAM, { t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-dropped', check: 'switch-offs', plan: 'p1',
+    gate: 'implement', round: 2, run_id: 'r-1', spec: 'auth-refresh', base: { passed: 2, skipped: 0 }, subject: { cases: 1 }, ...over })
+  return id
+}
+describe('a booked loss where a human reads it (row 276)', () => {
+  it('status and the dismissal name a booked loss by its spec (row 276)', async () => {
+    const repo = await seededRepo()
+    const one = lossItem(repo)
+    const two = lossItem(repo, { subject: { cases: 2 } })
+    expect(bookedRows(repo.root)).toEqual([
+      { item: one, plan: 'p1', check: 'switch-offs', holds: 'tests of auth-refresh, 1 case', since: 'implement r2' },
+      { item: two, plan: 'p1', check: 'switch-offs', holds: 'tests of auth-refresh, 2 cases', since: 'implement r2' },
+    ])
+    const asked: string[] = []
+    const ctx = { ...fakeCtx(repo.root, { tty: true }), ask: async (q: string) => { asked.push(q); return 'n' } } as Ctx
+    await dismiss(ctx, ['ledger', '--item', one, '--cause', 'declined', '--note', 'restore them'])
+    expect(asked[0]).toBe(`dismiss ${one} — switch-offs · tests of auth-refresh · p1: declined\ndismiss? the booking stops waiving from the next gate run [y/N]`)
+  }, 120_000)
+})

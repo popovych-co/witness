@@ -27,13 +27,13 @@ import { cmd, hasControl, kv, rows, shellWord, visible } from '../toon.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
 import {
   REVISE_HUMAN, ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
-  repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LineOff, type LiveActs,
+  repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type DroppedOff, type LineOff, type LiveActs,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
 import { parseBaseKey } from '../base-lint.js'
 import { CHECKS, checkTier, checkWaiver } from '../checks.js'
-import { bookLines, bookingsOf, ledgerTaken, offWhere, type Booking, type LedgerOpen } from '../ledger.js'
+import { bookLines, bookedWhere, bookingsOf, ledgerTaken, offWhere, type Booking, type LedgerOpen } from '../ledger.js'
 import { boundReader } from '../lint-parts.js'
 import { LEDGER_STREAM } from '../streams.js'
 import type { Violation } from '../refusal.js'
@@ -933,8 +933,9 @@ function withTools(cfg: Config, bookings: readonly Booking[]): Booking[] {
 }
 
 // One booking, named: a lint part and what it holds, or a switch-off's check and its token in its file.
+// Row 276: a loss's check and its spec's tests.
 function bookName(check: string, b: Booking): string {
-  return b.kind === 'booked-switch-off' ? `${visible(check)} · ${offWhere(b.token, b.file)}` : `${visible(b.part)} · ${bookWhat(b)}`
+  return b.kind === 'booked-check' ? `${visible(b.part)} · ${bookWhat(b)}` : `${visible(check)} · ${bookedWhere(b)}`
 }
 
 // What one lint booking holds, in words: the count it covers, or the whole part at its base.
@@ -956,6 +957,12 @@ function bookQuestion(gate: string, target: string, check: string, anchor: GateR
     if (b.kind === 'booked-switch-off') {
       const rules = offs.find((o): o is LineOff => o.kind !== 'dropped' && Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
       return `  ${offWhere(b.token, b.file)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
+    }
+    // Row 276: a loss — its spec's tests, the cases it books, and the skips either side.
+    if (b.kind === 'booked-dropped') {
+      const hit = offs.find((o): o is DroppedOff => o.kind === 'dropped' && o.spec === b.spec)
+      const n = b.subject.cases
+      return `  ${bookedWhere(b)}: ${n} case${n === 1 ? '' : 's'}, skipped ${b.base.skipped} → ${hit?.plan.skipped ?? '?'}`
     }
     const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []
     return `  ${visible(b.part)} — ${bookWhat(b)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`

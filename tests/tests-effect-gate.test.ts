@@ -7,6 +7,7 @@ import { diffBase } from '../src/evidence.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
 import { journalShard } from '../src/jobs.js'
+import { openItems } from '../src/ledger.js'
 import { readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { suiteKey } from '../src/runner.js'
@@ -125,4 +126,27 @@ describe('the tests effect in the switch-offs check (row 275)', () => {
     const ship = runs(s.repo, s.planId).filter((r) => r.gate === 'ship').at(-1)!
     expect(ship.junit?.base).toEqual({ 'auth-refresh': { passed: 2, skipped: 0 } })
   }, 300_000)
+
+  it('a typed booking books each lost spec; the re-gate passes; a further loss reads red and books a fresh item (row 276)', async () => {
+    const s = await fullSuiteShip(); measuredBase(s, { 'auth-refresh': c(2) })
+    writeFileSync(join(s.wt, 'tests/token.test.ts'), SKIP_SECOND)
+    expect(await runGate(s.ctx, 'implement', s.planId, PLAIN)).toBe(1)
+    const r = await s.repo.cli(['decide', 'implement', s.planId, '--book', 'switch-offs', '--note', 'the rotation case waits on the fake clock'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/^booked: l-[0-9a-f]{8} — switch-offs · tests of auth-refresh$/m)
+    const dropped = () => openItems(s.repo.root, { plan: s.planId }).filter((i) => i.kind === 'booked-dropped')
+    expect(dropped()).toEqual([expect.objectContaining({ spec: 'auth-refresh', base: { passed: 2, skipped: 0 }, subject: { cases: 1 } })])
+    const first = dropped()[0]!.id
+    expect(await runGate(s.ctx, 'implement', s.planId, PLAIN)).toBe(0)
+    const check = offsCheck(s.repo, s.planId, 'implement')
+    expect(check.ok).toBe(true)
+    expect(check.offs).toContainEqual(expect.objectContaining({ kind: 'dropped', spec: 'auth-refresh', count: 1, booked: 1, items: [first] }))
+    expect(check.detail).toContain('tests: auth-refresh lost 1 (passed 2→1, skipped 0→1), 1 booked')   // slice 2 review M3
+    // one more case skipped (a third, so the spec keeps a passing case and drift-lane stays green): red again
+    writeFileSync(join(s.wt, 'tests/token.test.ts'), `${SKIP_SECOND}\nit('rotates at most once per window @spec:auth-refresh', { skip: true }, () => {\n  expect(1).toBe(1)\n})\n`)
+    expect(await runGate(s.ctx, 'implement', s.planId, PLAIN)).toBe(1)
+    expect(offsCheck(s.repo, s.planId, 'implement').offs).toContainEqual(expect.objectContaining({ kind: 'dropped', count: 2, booked: 1 }))
+    expect((await s.repo.cli(['decide', 'implement', s.planId, '--book', 'switch-offs'])).code).toBe(0)
+    expect(dropped().map((i) => i.id)).toEqual([first, expect.not.stringMatching(first)])     // a fresh item, never the applied one
+  }, 400_000)
 })

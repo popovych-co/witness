@@ -18,7 +18,7 @@ import { lstatListed } from './change-set.js'
 import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
 import { gitBlob, tryGitC } from './gitio.js'
-import { openItems, type SwitchOffItem } from './ledger.js'
+import { openItems, type DroppedItem, type SwitchOffItem } from './ledger.js'
 import { offUnbooked, type DroppedOff, type GateCheck, type LineOff, type OffVerdict } from './rounds.js'
 import type { TestsEffect } from './tests-effect.js'
 import { visible } from './toon.js'
@@ -321,14 +321,26 @@ const lossPlace = (o: DroppedOff): string =>
 const licensedPlace = (l: { spec: string; lost: number }): string =>
   `tests: ${visible(l.spec)} lost ${l.lost} — licensed: its spec was amended since its last plan`
 
-// Row 275 (settled point 7). The tests segment the detail appends: each unbooked loss (ten, then a count)
-// and each licensed one; or that no spec lost a passing case; or why the effect was not checked.
+// Row 275 (settled point 7). The tests segment the detail appends: each loss (ten, then a count) — row
+// 276: with the cases its bookings cover — and each licensed one; or that no spec lost a passing case; or
+// why the effect was not checked.
 function testsSegment(tests: TestsEffect, losses: readonly DroppedOff[]): string {
   if (tests.read === 'not-checked') return `tests not checked — ${tests.why ?? ''}`
-  const open = losses.filter((o) => offUnbooked(o) > 0)
-  const more = open.length > MAX_LISTED ? [`and ${open.length - MAX_LISTED} more lost`] : []
-  const parts = [...open.slice(0, MAX_LISTED).map(lossPlace), ...more, ...tests.licensed.map(licensedPlace)]
+  const more = losses.length > MAX_LISTED ? [`and ${losses.length - MAX_LISTED} more lost`] : []
+  const named = losses.slice(0, MAX_LISTED).map((o) => `${lossPlace(o)}${(o.booked ?? 0) > 0 ? `, ${o.booked} booked` : ''}`)
+  const parts = [...named, ...more, ...tests.licensed.map(licensedPlace)]
   return parts.length > 0 ? parts.join(' · ') : `tests: no spec lost a passing case (${tests.specs ?? 0} compared)`
+}
+
+// Row 276 (C17). The plan's own open loss bookings applied to each loss by spec: `booked` the cases they
+// hold (at most its count), `items` their ids.
+function applyLossBookings(losses: readonly DroppedOff[], mine: readonly DroppedItem[]): DroppedOff[] {
+  return losses.map((o) => {
+    const holding = mine.filter((i) => i.spec === o.spec)
+    if (holding.length === 0) return o
+    const held = holding.reduce((a, i) => a + i.subject.cases, 0)
+    return { ...o, booked: Math.min(o.count, held), items: holding.map((i) => i.id) }
+  })
 }
 
 // Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line its
@@ -345,7 +357,8 @@ export function switchOffsCheck(
     tests_effect: tests.read === 'compared' ? { read: 'compared', specs: tests.specs ?? 0 } : { read: 'not-checked', why: tests.why ?? '' },
     ...(tests.owes !== undefined ? { owes: [tests.owes] } : {}),
   }
-  const losses: DroppedOff[] = tests?.offs ?? []
+  const mineAll = tests !== undefined && tests.offs.length > 0 || found.length > 0 ? openItems(root, { plan }) : []
+  const losses = applyLossBookings(tests?.offs ?? [], mineAll.filter((i): i is DroppedItem => i.kind === 'booked-dropped'))
   const segment = tests !== undefined ? ` · ${testsSegment(tests, losses)}` : ''
   if (found.length + losses.length > MAX_OFFS) {
     const what = losses.length === 0 ? `${found.length} switch-off lines the plan adds`
@@ -355,8 +368,7 @@ export function switchOffsCheck(
   if (found.length === 0 && losses.length === 0) {
     return { name: 'switch-offs', ok: true, ...extras, detail: `no switch-off in the lines the plan adds (${files.length} files)${segment}` }
   }
-  const mine = openItems(root, { plan }).filter((i): i is SwitchOffItem => i.kind === 'booked-switch-off')
-  const lines = applyBookings(found, mine)
+  const lines = applyBookings(found, mineAll.filter((i): i is SwitchOffItem => i.kind === 'booked-switch-off'))
   const offs: OffVerdict[] = [...lines, ...losses]
   const open = lines.filter((o) => offUnbooked(o) > 0)
   const bookedCopies = offs.reduce((a, o) => a + (o.booked ?? 0), 0)
