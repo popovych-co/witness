@@ -399,6 +399,13 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // inside a session drive started (rows 205, 207, 225), and never the policy's or the arbiter's,
   // since a settler that parked a gate must not be the one to un-park it.
   const unparking = plainRevise && live.state === 'parked' && !atBound
+  // Row 274: a booking of a parked gate un-parks it as well, so it stays the human's (row 241).
+  if (booking && live.state === 'parked' && (act.selected === 'policy' || act.selected === 'arbiter')) {
+    renderRefusal([v('decide', 'unpark-human', `${act.selected} booking on a parked gate`,
+      `the human, in their own chat or terminal — ${cliAct('decide', gate, target, '--book', bookCheck).line} books a parked gate's red`)])
+      .forEach((l) => ctx.err(l))
+    return EXIT.REFUSED
+  }
   if (unparking && notHuman) {
     renderRefusal([v('decide', 'unpark-human',
       act.selected === 'policy' || act.selected === 'arbiter' ? `${act.selected} revise on a parked gate` : 'a session drive started',
@@ -505,8 +512,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   const bookings = booking ? withTools(cfgR.value, bookingsOf(anchor, bookCheck)) : []
   if (booking && bookings.length === 0) return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
   // Slice 2 review I3 (row 171): committed autonomy is HEAD's config — a working-copy `autonomy: off`
-  // edit grants nothing, so it never lifts the terminal either.
-  if (booking && autonomyAt(root, 'HEAD')) {
+  // edit grants nothing, so it never lifts the terminal either. Row 274: a typed booking only — the
+  // arbiter decides in-process inside the gate and needs neither a terminal nor a y (§3.9).
+  if (booking && act.selected === undefined && autonomyAt(root, 'HEAD')) {
     const typed = cliAct('decide', gate, target, '--book', bookCheck).line
     if (!ctx.isTTY) {
       renderRefusal([v('decide', 'book-needs-terminal', 'no terminal — autonomy is on',
@@ -896,11 +904,16 @@ function bookRefusal(ctx: Ctx, root: string, gate: string, target: string, check
   if (act.selected === 'affirmation') {
     return v('--via', 'nod-cannot', 'affirmation with --book', 'a named option — a booking opens a ledger item, and is never taken on a nod (D143)')
   }
-  if (act.selected === 'policy' || act.selected === 'arbiter') {
+  // Row 274 (§3.2's waiver, §3.9). The policy takes rules, never judgments, so it books nothing; the
+  // arbiter books a check whose waiver is the judge's, in-process inside the gate a drive session ran.
+  const judge = checkWaiver(check) === 'judge'
+  if (act.selected === 'policy' || (act.selected === 'arbiter' && !judge)) {
     return v('selected', 'autonomy-cannot', `${act.selected} with --book ${check}`,
-      `a named human selection — only the human books ${check} (row 172)`)
+      `a named ${judge ? 'selection' : 'human selection'} — ${judge ? `the arbiter or the human books ${check}` : `only the human books ${check} (row 172)`}`)
   }
-  // Any process witness marked as its own — a drive session, a job — is no human (security review).
+  if (act.selected === 'arbiter') return ledgerTaken(root)
+  // A typed booking: any process witness marked as its own — a drive session, a job — is no human
+  // (security review).
   const marker = sessionMarker(ctx.env)
   if (marker !== undefined) {
     return v('decide', 'book-human', `${marker} is set — a session witness started`,

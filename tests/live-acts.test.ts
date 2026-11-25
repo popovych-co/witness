@@ -531,3 +531,23 @@ describe('a base result landed since a checks-only round (row 267)', () => {
     expect(liveActs(G, T, [only(1)], facts).acts[0]!.line).toBe('witness decide implement p1 --revise')
   })
 })
+
+// Row 274 (C26). A round the lenses ran whose only reds are the judge's to book offers the booking.
+describe('a switch-off booking is live (row 274)', () => {
+  const OFF = { name: 'switch-offs', ok: false, offs: [{ key: 'k1', token: '@ts-ignore', file: 'src/a.ts', line: 1, count: 1 }] }
+  const judgedRun = (n: number, checks: unknown[], blocking = false): Entry => ({
+    ...(run(n, 'stopped', blocking) as object), checks,
+  } as unknown as Entry)
+  const book = key('--book', 'switch-offs')
+  it('a judged anchor whose only red is switch-offs offers --book switch-offs; pending and revised alike', () => {
+    expect(actLive(live([judgedRun(1, [{ name: 'diff', ok: true }, OFF])]), book)).toBe(true)
+    expect(actLive(live([judgedRun(1, [OFF]), dec('revise')]), book)).toBe(true)
+  })
+  it('not beside a blocking finding, a second red check, on moved content, at the bound, or once all is booked', () => {
+    expect(actLive(live([judgedRun(1, [OFF], true)]), book)).toBe(false)
+    expect(actLive(live([judgedRun(1, [OFF, { name: 'evidence', ok: false }])]), book)).toBe(false)
+    expect(actLive(live([judgedRun(1, [OFF])], { stale: true }), book)).toBe(false)
+    expect(actLive(live([...BOUND.slice(0, -1), judgedRun(3, [OFF])]), book)).toBe(false)
+    expect(actLive(live([judgedRun(1, [{ ...OFF, offs: [{ ...OFF.offs[0], booked: 1, items: ['l-00000001'] }] }])]), book)).toBe(false)
+  })
+})

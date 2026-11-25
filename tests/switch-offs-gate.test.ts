@@ -10,34 +10,13 @@ import type { GateRunEntry } from '../src/rounds.js'
 import { LEDGER_STREAM } from '../src/streams.js'
 import { switchOffKey, switchOffsCheck } from '../src/switch-offs.js'
 import {
-  TOKEN_FIXED, callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, tmpRepo, type TestRepo,
+  CLEAN_FOUR, TOKEN_FIXED, callCount, callFor, fakeCtx, fakeScenario, gateEnv, offRed, putVerdict, shippableRepo, tmpRepo, type TestRepo,
 } from './helpers.js'
 
-// vitest-single lands 4 files in the worktree diff — coverage-minimum needs an anchor for each.
-const CLEAN = {
-  coverage: [
-    { anchor: '.gitignore', note: 'read' },
-    { anchor: 'package.json', note: 'read' },
-    { anchor: 'src/token.ts', note: 'read' },
-    { anchor: 'tests/token.test.ts', note: 'read' },
-  ],
-  findings: [],
-}
+const CLEAN = CLEAN_FOUR
 const PLAIN = { fresh: false, manual: false }
 
 const runs = (repo: TestRepo, id: string) => readStream(repo.root, id).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
-
-// A shippable plan whose worktree adds `line` to `file` (src/token.ts keeps its seven lines first).
-async function offRed(line = '// eslint-disable-next-line no-console', file = 'src/token.ts') {
-  const { repo, wt, planId } = await shippableRepo()
-  const scenario = fakeScenario(); putVerdict(scenario, CLEAN)
-  writeFileSync(join(wt, file), `${file === 'src/token.ts' ? TOKEN_FIXED : ''}${line}\n`)
-  const gate = (name = 'implement', env: Record<string, string> = {}) =>
-    runGate(fakeCtx(repo.root, { env: gateEnv(scenario, env) }), name, planId, PLAIN)
-  const lastRun = () => runs(repo, planId).at(-1)!
-  const offsCheck = () => lastRun().checks.find((c) => c.name === 'switch-offs')
-  return { repo, wt, planId, scenario, gate, lastRun, offsCheck }
-}
 
 describe('the switch-offs check (row 273)', () => {
   it('a switch-off the plan adds is a judged red: the lenses run, the round stops, the line is journaled', async () => {

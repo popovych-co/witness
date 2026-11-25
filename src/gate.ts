@@ -683,8 +683,12 @@ async function judge(
     const same = (kind.kind === 'resume' || kind.kind === 'changed-nothing') && kind.entry.checks_only === true && sameChecks(kind.entry) &&
       !bookedSince(kind.entry)
     if (!same) kind = { kind: 'checks-only' }
-  } else if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') && !sameChecks(kind.entry) &&
+  } else if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') && (!sameChecks(kind.entry) || bookedSince(kind.entry)) &&
       kind.entry.outcome !== 'malformed') {
+    // Row 274: a round a booking disposed of is never resumed on a judged round either — one dismissed
+    // before its re-gate leaves the checks as the booked round read them, and resuming would leave the
+    // gate booked on an item that waives nothing (T2e's slice 3 I1). It is journaled anew, as row 112's
+    // flip is.
     if (kind.entry.checks_only === true) kind = { kind: 'fresh' as const }
     else if ((kind.entry.verdicts?.length ?? 0) > 0) kind = { kind: 'cached' as const, from: kind.entry }
   }

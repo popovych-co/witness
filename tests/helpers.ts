@@ -12,7 +12,10 @@ import { loadConfig } from '../src/config.js'
 import { diffBase } from '../src/evidence.js'
 import type { Result } from '../src/refusal.js'
 import { splitDoc, serializeDoc } from '../src/fm.js'
-import { appendEntry, journalRel, type EntryType } from '../src/journal.js'
+import { appendEntry, journalRel, readStream, type EntryType } from '../src/journal.js'
+import { runGate } from '../src/gate.js'
+import '../src/gates/index.js'
+import type { GateRunEntry } from '../src/rounds.js'
 import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
@@ -1145,4 +1148,30 @@ export function plantHolder(repo: TestRepo, shipped: string, writer?: string): s
   repo.git('add', rel, ...(writer === undefined ? [] : [journalRel(writer)]))
   repo.git('commit', '-m', 'a doc a pre-167 write left on the old path', '-m', 'Witness-State: 1')
   return planted
+}
+
+// Row 273. A clean verdict for vitest-single's four files in the worktree diff (coverage-minimum wants
+// an anchor for each), the switch-off benches' default.
+export const CLEAN_FOUR = {
+  coverage: [
+    { anchor: '.gitignore', note: 'read' },
+    { anchor: 'package.json', note: 'read' },
+    { anchor: 'src/token.ts', note: 'read' },
+    { anchor: 'tests/token.test.ts', note: 'read' },
+  ],
+  findings: [] as unknown[],
+}
+
+// Row 273. A shippable plan whose worktree adds `line` to `file` (src/token.ts keeps its seven lines
+// first, so the line is its eighth); `gate` runs a gate round on it, plain.
+export async function offRed(line = '// eslint-disable-next-line no-console', file = 'src/token.ts') {
+  const { repo, wt, planId } = await shippableRepo()
+  const scenario = fakeScenario(); putVerdict(scenario, CLEAN_FOUR)
+  writeFileSync(join(wt, file), `${file === 'src/token.ts' ? TOKEN_FIXED : ''}${line}\n`)
+  const gate = (name = 'implement', env: Record<string, string> = {}, opts: { tty?: boolean; answers?: string[] } = {}) =>
+    runGate(fakeCtx(repo.root, { env: gateEnv(scenario, env), ...opts }), name, planId, { fresh: false, manual: false })
+  const runs = () => readStream(repo.root, planId).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]
+  const lastRun = () => runs().at(-1)!
+  const offsCheck = () => lastRun().checks.find((c) => c.name === 'switch-offs')
+  return { repo, wt, planId, scenario, gate, runs, lastRun, offsCheck }
 }

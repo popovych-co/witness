@@ -737,6 +737,16 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   if (withheld !== undefined && !moved && !atBound && BOOKS.has(state) && bookingsOf(anchor, withheld).length > 0) {
     acts = [...acts, d('--book', withheld)]
   }
+  // Row 274 (§3.2's waiver, the map's C26). A round the lenses ran whose every failed check holds a line
+  // a booking takes — which only a check carrying the judge's waiver does (`bookingsOf`) — with no
+  // blocking finding standing, offers each check's booking, on unmoved content below the bound. Anywhere
+  // else the revise comes first: a blocking finding or another red is the author's. Its re-gate replays
+  // the round's verdicts (row 112's `cached`), so it spends a round, never a battery.
+  const failed = lensesRan(anchor) ? anchor.checks.filter((c) => !c.ok) : []
+  if (failed.length > 0 && !moved && !atBound && BOOKS.has(state) && blockingAnchorsOf(anchor).length === 0 &&
+      failed.every((c) => bookingsOf(anchor, c.name).length > 0)) {
+    acts = [...acts, ...failed.map((c) => d('--book', c.name))]
+  }
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
   const unnamed = (a: Act) => a.inputs.some((i) => i.name === 'effort')
   const listed = acts.filter((a) => !unnamed(a))

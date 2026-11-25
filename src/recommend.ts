@@ -11,6 +11,18 @@ import { hasControl, visible } from './toon.js'
 // Row 270 (§3.3). What a booking costs and how it ends, in one spelling for every block that offers it.
 export const BOOK_TRADEOFF = 'opens a ledger item per part, which waives exactly what it books for this plan; each closes once the part is green on main (the discharge), or by witness dismiss ledger'
 
+// Row 274. When a check's booking is the act, and what it costs, by check: lint's words (row 270), and a
+// switch-off's — one item per line, closing once main no longer holds the line.
+export function bookWhen(check: string): string {
+  return check === 'switch-offs' ? 'the switch-off is right as it stands — say why in the note'
+    : 'the red is not this plan\'s to fix — red on the base too, or one only you accept'
+}
+export function bookTradeoff(check: string): string {
+  return check === 'switch-offs'
+    ? 'opens a ledger item per line, which waives that line for this plan; each closes once main no longer holds the line (the discharge), or by witness dismiss ledger'
+    : BOOK_TRADEOFF
+}
+
 // Row 270 (§5, the map's C23). The parts of a checks-only round's withheld check no author can clear:
 // every part that does not pass is red on the base too and unjudgeable, the check's waiver is the
 // human's, and the round holds a part a booking takes. Empty otherwise — one part the author may own
@@ -120,7 +132,7 @@ export function option(
 // rather than to a weighting — and each rule is testable from one journal state.
 // Order: malformed · stale-below-bound · ladder-spent · bound+recurrence · bound ·
 //        recurrence · pin-contradiction · blocking-parent · blocking-here ·
-//        checks-failed · non-blocking-only · reserved-stop-clean · manual-stop
+//        waivable · checks-failed · non-blocking-only · reserved-stop-clean · manual-stop
 // Row 244 (design §4.2.6). A revise the author handed back is decided by `revise-returned`
 // (`revisedBlock`): after stale-below-bound, whose moved row it is once the content or a hold moved
 // since, and before malformed-rerun when the revise follows the malformed run (§4.2.3).
@@ -254,7 +266,8 @@ function revisedBlock(ctx: GateContext, live: LiveActs, last: GateRunEntry): Dec
       })
     }
     if (w.includes('--book')) {
-      return option(a, 'deferral', { when: 'the red is not this plan\'s to fix — red on the base too, or one only you accept', tradeoff: BOOK_TRADEOFF })
+      const check = w[w.indexOf('--book') + 1] ?? ''
+      return option(a, 'deferral', { when: bookWhen(check), tradeoff: bookTradeoff(check) })
     }
     if (w.includes('--upstream')) {
       return option(a, 'root', {
@@ -540,6 +553,32 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
 
   const checksFailed = last.checks.filter((c) => !c.ok)
   const nonBlocking = (last.verdicts ?? []).flatMap((rv) => rv.findings).length
+
+  // 9a — waivable (row 274, the map's C26). Every failed check is the judge's to book and no finding
+  // blocks: the revise removes the switch-off and leads; each check's booking keeps it on record for this
+  // plan; the approve takes it over the red and books nothing (row 93), so ship meets it again. The
+  // policy hands the rule to the arbiter (`policyFor`): whether a switch-off is right as it stands is a
+  // judgment, not a rule.
+  if (checksFailed.length > 0 && checksFailed.every((c) => checkWaiver(c.name) === 'judge' && bookingsOf(last, c.name).length > 0)) {
+    const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o) => o.count - (o.booked ?? 0) > 0))
+    const tokens = [...new Set(lines.map((o) => visible(o.token)))]
+    return {
+      key: 'decide', rule: 'waivable',
+      options: [
+        option(note, 'root', {
+          why: `${lines.length} switch-off line${lines.length === 1 ? '' : 's'} the plan adds (${tokens.join(', ')}) — no finding blocks · remove them, or book what is right as it stands; ${rounds}`,
+        }),
+        ...checksFailed.map((c) => option(d('--book', c.name), 'deferral', { when: bookWhen(c.name), tradeoff: bookTradeoff(c.name) })),
+        ...upAlt('the switch-off is there because of what the stage above asked for',
+          'reopens the parent stage and resets this budget'),
+        option(d('--approve'), 'deferral', {
+          when: 'the switch-off is right and you take it without booking it',
+          tradeoff: 'stamps the artifact over the red check — nothing books it, so the next gate meets it again',
+        }),
+        stopOpt,
+      ],
+    }
+  }
 
   // 9b — a deterministic check failed and no finding blocks (row 170). Before this rule such a
   // run fell to manual-stop, which recommended approve and blamed a --manual flag nobody set:
