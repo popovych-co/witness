@@ -392,9 +392,9 @@ export function switchOffsCheck(
 export function switchOffNotes(offs: readonly OffVerdict[], licensed: ReadonlyArray<{ spec: string; lost: number }> = []): string {
   if (offs.length === 0 && licensed.length === 0) return ''
   const rows = [
-    ...offs.map((o) => o.kind === 'dropped'
+    ...offs.flatMap((o) => o.kind === 'loosened' ? [] : [o.kind === 'dropped'
       ? `- tests of ${visible(o.spec)} — ${o.base.passed} passing on the base, ${o.plan.passed} here; skipped ${o.base.skipped} → ${o.plan.skipped}`
-      : `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`),
+      : `- ${visible(o.file)}:${o.line} — ${visible(o.token)}${o.rules !== undefined ? ` (${o.rules.map(visible).join(', ')})` : ''}`]),
     ...licensed.map((l) => `- tests of ${visible(l.spec)} — ${l.lost} passing case${l.lost === 1 ? '' : 's'} gone: licensed — its spec was amended since its last plan`),
   ]
   return `### Switch-offs this plan adds\n\n${rows.join('\n')}\n\nJudge whether each is right as it stands; a finding on one says why it must go.`

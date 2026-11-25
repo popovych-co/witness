@@ -24,6 +24,8 @@ import type { OffVerdict } from '../rounds.js'
 import type { TestOutcome } from '../junit.js'
 import { testsEffect } from '../tests-effect.js'
 import { switchOffNotes, switchOffsCheck } from '../switch-offs.js'
+import { restorable } from '../definitions.js'
+import { definitionsCheck, type LintEffect } from '../lint-effect.js'
 import { lintCheck } from '../lint-lane.js'
 import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
@@ -152,11 +154,20 @@ registerGate({
     let licensed: Array<{ spec: string; lost: number }> = []
     // Row 275 (C33): the criteria lane's parsed suite, handed on to the switch-offs check (last).
     let suite: TestOutcome[] | undefined
+    // Row 277. The check definitions the plan's change set takes back from the base; the definitions check
+    // runs only where it takes one (or cannot read them), so every other plan's round carries no term.
+    const restored = cfg.checks.definitions.length > 0 ? restorable(root, wt, base, files, cfg.checks.definitions) : ok([])
+    let lintEffect: LintEffect = { read: 'none' }
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
       // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
       { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
+      ...(restored.ok && restored.value.length === 0 ? [] : [{ name: 'definitions', run: () => {
+        const r = definitionsCheck(root, wt, cfg, base, planId, files, restored)
+        lintEffect = r.effect
+        return r.check
+      } }]),
       { name: 'diff', run: () => ({ name: 'diff', ok: files.length > 0,
         detail: files.length ? `${files.length} files changed vs ${base.slice(0, 7)}` : 'nothing changed vs base' }) },
       // Row 273. A switch-off the plan adds is a judged red; its lines reach the reviewers below.

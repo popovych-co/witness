@@ -196,6 +196,7 @@ function offFacts(offs: readonly OffVerdict[]): string[] {
       losses.push(`tests of ${visible(o.spec)}: ${n} passing case${n === 1 ? '' : 's'} lost (skipped ${o.base.skipped}→${o.plan.skipped})`)
       continue
     }
+    if (o.kind === 'loosened') continue
     const rules = o.rules?.length ?? 0
     const label = `${visible(o.token)}${rules > 0 ? ` (${rules} rule${rules === 1 ? '' : 's'})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
     groups.set(label, (groups.get(label) ?? 0) + n)

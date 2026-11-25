@@ -13,23 +13,26 @@ import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { shownCmd, trustedNow, type RunCommand } from './allowlist.js'
-import { objectType } from './cf-tree.js'
+import { objectType, pinTree } from './cf-tree.js'
 import { parentsInTree } from './change-set.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
+import { effectTree, restoredName, type Restored } from './definitions.js'
 import { keyCounts, loosenedKey, newDiagnostics, normalizeSnippet, readPart, type Diagnostic } from './diagnostics.js'
 import { tryGit } from './gitio.js'
-import type { JobKind, JobResult, JobUnit } from './jobs.js'
+import { jobReading, type JobKind, type JobResult, type JobUnit } from './jobs.js'
 import { readStream } from './journal.js'
+import { boundReader } from './lint-parts.js'
 import { RULE_RE } from './lint-readers.js'
 import { ok, refuse, type Result } from './refusal.js'
-import { lastGateRun } from './rounds.js'
+import { lastGateRun, type GateCheck, type LoosenedOff } from './rounds.js'
 import { execCommand, interrupted } from './runner.js'
 import type { Canon } from './scan.js'
 import { inScratch, type CfStep } from './scratch-checkout.js'
 import { withScratchLock } from './scratch-lock.js'
 import { READER_TOOLS, type ReaderTool } from './settings.js'
-import { treePaths } from './snapshot.js'
+import { snapshotTree, treePaths } from './snapshot.js'
+import { visible } from './toon.js'
 
 export const LINT_EFFECT = 'lint-effect'
 // Two resets, two prepares at most, every part and every reader twice.
@@ -305,4 +308,104 @@ export const lintEffectKind: JobKind = {
   boxMs: () => LINT_EFFECT_BOX_MS,
   owed,
   run: (root, ctx, cfg, unit) => run(root, ctx, cfg, unit),
+}
+
+// ── The definitions check (implement and ship) ───────────────────────────────────────────────
+
+// What the gate's definitions check read, handed to the switch-offs check: nothing to measure (`none`:
+// the plan changes no definition the base holds), the measured hits, or why not (`changed` the restored
+// definitions' names; `unread` the readers the job could not read).
+export type LintEffect =
+  | { read: 'none' }
+  | { read: 'measured'; changed: string[]; offs: LoosenedOff[]; over?: number; unread: Array<{ tool: ReaderTool; why: string }> }
+  | { read: 'pending' | 'not-checked'; changed: string[]; why?: string }
+
+const sortedDefs = (defs: Readonly<Record<string, string | null>>): Array<[string, string | null]> =>
+  Object.entries(defs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+
+// A loosened part's key: 16 hex over its name, its command and the restored definitions' base sides, so
+// a further definition edit mints a fresh hit.
+export function loosenedPartKey(name: string, cmd: string, defs: Readonly<Record<string, string | null>>): string {
+  return createHash('sha256').update(JSON.stringify(['loosened-part', name, cmd, sortedDefs(defs)])).digest('hex').slice(0, 16)
+}
+
+// The hits a measured effect hands the switch-offs check: each hidden diagnostic, and each part that
+// passes only under the plan's definitions whose own bound reader named nothing hidden (C34: that
+// reader's diagnostics already say what the part hides).
+export function loosenedOffs(cfg: Config, result: LintEffectResult, defs: Readonly<Record<string, string | null>>): LoosenedOff[] {
+  const out: LoosenedOff[] = result.hits.map((h): LoosenedOff => ({
+    kind: 'loosened', key: h.key, count: h.count, tool: h.tool, rule: h.rule, file: h.file,
+    ...(h.line !== undefined ? { line: h.line } : {}), ...(h.lineless === true ? { lineless: true as const } : {}),
+  }))
+  const hitTools = new Set(result.hits.map((h) => h.tool))
+  for (const p of result.parts) {
+    if (p.plan !== 0 || p.effect !== 1) continue
+    const part = cfg.ship.lint?.find((x) => x.name === p.part)
+    if (part === undefined) continue
+    const reader = boundReader(cfg, part)
+    if (reader !== undefined && hitTools.has(reader.tool)) continue
+    out.push({ kind: 'loosened', key: loosenedPartKey(part.name, part.cmd, defs), count: 1, part: part.name, defs: { ...defs } })
+  }
+  return out
+}
+
+// The restored names as a detail shows them: ten, through visible(), then how many more.
+function namesShown(names: readonly string[]): string {
+  const shown = names.slice(0, 10).map(visible).join(', ')
+  return names.length > 10 ? `${shown} and ${names.length - 10} more` : shown
+}
+
+// Row 277 (C36). The withholding `definitions` check, added only where the plan changes a definition the
+// base holds (`restored` refused, or not empty). It builds the plan's tree and the effect tree, pins both
+// (refs/witness/cf/<plan>/, dropped at the merge stamp), and reads the lint-effect job's result for their
+// key: measured (green; the hits go on to switch-offs), pending under a drive (red: the round waits, the
+// key owed), or not checked (green, said, and still owed so a drive started later measures it — C13's
+// rule). A result that does not validate reads not checked for good, owing nothing.
+export function definitionsCheck(
+  root: string, wt: string, cfg: Config, base: string, plan: string, files: readonly string[], restored: Result<Restored[]>,
+): { check: GateCheck; effect: LintEffect } {
+  const notChecked = (why: string, changed: string[], key?: string) => ({
+    check: {
+      name: 'definitions', ok: true, detail: `not checked — ${why}${changed.length > 0 ? ` (${namesShown(changed)})` : ''}`,
+      ...(key !== undefined ? { owes: [{ kind: LINT_EFFECT, key }] } : {}), lint_effect: { read: 'not-checked' as const, changed, why },
+    },
+    effect: { read: 'not-checked' as const, changed, why },
+  })
+  if (!restored.ok) {
+    const first = restored.violations[0]!
+    return notChecked(`the check definitions could not be read — ${first.got}`, [])
+  }
+  const changed = restored.value.map(restoredName)
+  const planTree = snapshotTree(wt, base, files)
+  if (planTree === undefined) return notChecked("the plan's tree could not be read", changed)
+  const effect = effectTree(root, base, planTree, restored.value)
+  const P = pinTree(root, plan, planTree)
+  const E = effect.ok ? pinTree(root, plan, effect.value) : effect
+  if (!P.ok || !E.ok) {
+    const got = (!P.ok ? P : E as { ok: false; violations: Array<{ got: string }> }).violations[0]!.got
+    return notChecked(`the tree under the base's definitions could not be built — ${got}`, changed)
+  }
+  const key = lintEffectKey(cfg, P.value, E.value)
+  if (cfg.scratch.prepare === undefined) return notChecked('scratch runs are off — scratch.prepare is not set', changed, key)
+  const reading = jobReading(root, { kind: LINT_EFFECT, key, shards: 1 })
+  if (reading.state === 'pending') {
+    return {
+      check: { name: 'definitions', ok: false, owes: [{ kind: LINT_EFFECT, key }],
+        detail: `drive lints this tree under the base's check definitions (${namesShown(changed)}) — the gate runs again once it lands` },
+      effect: { read: 'pending', changed },
+    }
+  }
+  if (reading.state === 'not-measured') return notChecked(reading.why, changed, key)
+  const result = lintEffectResult(reading.results[0])
+  if (result === undefined) return notChecked('the result could not be read', changed)
+  const unread = result.readers.flatMap((r) => (r.unread !== undefined ? [{ tool: r.tool, why: r.unread }] : []))
+  const defs = Object.fromEntries(restored.value.map((r) => [restoredName(r), r.held]))
+  return {
+    check: {
+      name: 'definitions', ok: true, lint_effect: { read: 'measured', changed },
+      detail: `the base's check definitions measured over this tree: ${namesShown(changed)}${
+        unread.map((u) => ` · ${u.tool} could not be read under the base's definitions — ${visible(u.why)}`).join('')}`,
+    },
+    effect: { read: 'measured', changed, offs: loosenedOffs(cfg, result, defs), ...(result.over !== undefined ? { over: result.over } : {}), unread },
+  }
 }

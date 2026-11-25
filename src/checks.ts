@@ -22,6 +22,9 @@ export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: Che
   // Row 265. A file scan before the repo's tools: an unresolved conflict is read before it is linted.
   { name: 'markers', tier: 'withholding' },
   { name: 'lint', tier: 'withholding', waiver: 'human' },
+  // Row 277. A plan that changes a check definition the base holds waits while drive measures the base's
+  // definitions over its tree (C36): red only then, never booked; what it finds is a switch-off.
+  { name: 'definitions', tier: 'withholding' },
   { name: 'implement-gate', tier: 'judged' },
   { name: 'diff', tier: 'judged' },
   { name: 'evidence', tier: 'judged' },
@@ -81,7 +84,8 @@ export async function runChecks(steps: readonly CheckStep[]): Promise<CheckRun> 
 // over a key no job owes. `pending` and `not-measured` are one term, `missing`: they differ only by
 // whether a drive runs, not by the tree or the base, so starting or stopping drive spends no round.
 // Row 273: each switch-off line with copies no booking covers, with that count — a booking or a
-// dismissal since a round moves it.
+// dismissal since a round moves it. Row 277: a withholding check's owed job keys (the definitions
+// check's lint effect), so a round never resumes over a key no job owes; a judged check's never join.
 export function checksSignature(checks: readonly GateCheck[]): string {
   const partTerm = (s: string) => (s === 'pending' || s === 'not-measured' ? 'missing' : s)
   return checks.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}:${
@@ -91,5 +95,8 @@ export function checksSignature(checks: readonly GateCheck[]): string {
       : ''}${
     c.offs !== undefined
       ? `:offs=${c.offs.filter((o) => offUnbooked(o) > 0).map((o) => `${o.key}x${offUnbooked(o)}`).sort().join('+')}`
+      : ''}${
+    c.owes !== undefined && checkTier(c.name) === 'withholding'
+      ? `:owes=${c.owes.map((o) => `${o.kind}@${o.key}`).sort().join('+')}`
       : ''}`).sort().join('|')
 }

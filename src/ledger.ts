@@ -260,6 +260,7 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
       if (o.kind === 'dropped') {
         return [{ kind: 'booked-dropped', spec: o.spec, base: { passed: o.base.passed, skipped: o.base.skipped }, subject: { cases: unbooked(o) } }]
       }
+      if (o.kind === 'loosened') return []
       return [{ kind: 'booked-switch-off', file: o.file, token: o.token, subject: { lines: { [o.key]: unbooked(o) } } }]
     })
   }

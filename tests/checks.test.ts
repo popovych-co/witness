@@ -76,3 +76,16 @@ describe('the switch-offs check in the registry (row 273)', () => {
     expect(checksSignature([{ name: 'diff', ok: true }])).toBe('diff:true:')
   })
 })
+
+describe('the definitions check in the registry (row 277)', () => {
+  it("definitions is withholding, right after lint, with no waiver; a withholding check's owed key joins the signature (row 277)", () => {
+    expect(CHECKS.findIndex((c) => c.name === 'definitions')).toBe(CHECKS.findIndex((c) => c.name === 'lint') + 1)
+    expect([checkTier('definitions'), checkWaiver('definitions')]).toEqual(['withholding', undefined])
+    const d = (key: string, ok = false): GateCheck[] => [{ name: 'definitions', ok, owes: [{ kind: 'lint-effect', key }] }]
+    expect(checksSignature(d('k1'))).not.toBe(checksSignature(d('k2')))
+    expect(checksSignature(d('k1'))).toBe('definitions:false::owes=lint-effect@k1')
+    expect(checksSignature(d('k1', true))).toBe(checksSignature([{ name: 'definitions', ok: true, owes: [{ kind: 'lint-effect', key: 'k1' }], lint_effect: { read: 'not-checked', changed: [], why: 'w' }, detail: 'd' }]))
+    // the switch-offs check's owes (judged) never joins it: T3b's pin above stands
+    expect(checksSignature([{ name: 'switch-offs', ok: true, owes: [{ kind: 'base-tests', key: 'k' }] }])).toBe('switch-offs:true:')
+  })
+})
