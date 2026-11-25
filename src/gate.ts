@@ -31,7 +31,7 @@ import {
 import {
   actKey, appendKind, boundReached, disposedRun, fellBack, keyOf, lastGateRun, lensesRan, liveActs,
   roundsSinceApprove, runsSinceReset, sameKey, settledSinceViolation, settledToken, standingHandBack,
-  type ActFacts, type AppendKind, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
+  type ActFacts, type AppendKind, type DecisionEntry, type GateCheck, type GateKey, type GateRunEntry, type LiveActs, type ReviewerVerdict,
 } from './rounds.js'
 export { liveExits } from './rounds.js'
 import { actFacts, openStepRow, settlerOwed, stepsOpenViolation } from './verbs/next.js'
@@ -664,8 +664,17 @@ async function judge(
   // new checks-only round. With none, a checks-only round red otherwise is not replayed — there are
   // no verdicts — so the round runs fresh: a fix or a trust grant on the same tree re-runs fresh.
   const sameChecks = (e: GateRunEntry) => checksSignature(e.checks) === checksSignature(input.checks)
+  // Row 270 (slice 3 review I1). A booking disposed of its round, and the re-gate is its one act: a
+  // round red as before — the booking dismissed meanwhile — is journaled anew, never resumed, or the
+  // `booked` state would stand on an item that no longer waives anything.
+  const bookedSince = (e: GateRunEntry): boolean => {
+    const at = entries.findIndex((x) => x.t === 'gate-run' && (x as unknown as GateRunEntry).run_id === e.run_id)
+    return at >= 0 && entries.slice(at + 1).some((x) => x.t === 'human-decision' &&
+      (x as unknown as DecisionEntry).gate === spec.gate && (x as unknown as DecisionEntry).decision === 'book')
+  }
   if (input.withheld !== undefined) {
-    const same = (kind.kind === 'resume' || kind.kind === 'changed-nothing') && kind.entry.checks_only === true && sameChecks(kind.entry)
+    const same = (kind.kind === 'resume' || kind.kind === 'changed-nothing') && kind.entry.checks_only === true && sameChecks(kind.entry) &&
+      !bookedSince(kind.entry)
     if (!same) kind = { kind: 'checks-only' }
   } else if ((kind.kind === 'resume' || kind.kind === 'changed-nothing') && !sameChecks(kind.entry) &&
       kind.entry.outcome !== 'malformed') {

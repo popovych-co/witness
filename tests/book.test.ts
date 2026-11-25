@@ -317,9 +317,16 @@ describe('a booking dismissed in flight (row 269)', () => {
     const ctx: Ctx = { ...fakeCtx(b.repo.root, { tty: true }), ask: async () => 'y' }
     expect(await dismiss(ctx, ['ledger', '--item', '1', '--cause', 'judged-wrong', '--note', 'the error is ours'])).toBe(0)
     expect(ledgerItems(b.repo.root)[0]).toMatchObject({ state: 'dismissed', end: { cause: 'judged-wrong', note: 'the error is ours' } })
+    const before = runs(b.repo, b.planId)
     expect(await b.gate('ship')).toBe(1)
+    // slice 3 review I1: a new checks-only round, never a resume of the one the booking disposed of
+    expect(runs(b.repo, b.planId)).toHaveLength(before.length + 1)
+    expect(b.lastRun().run_id).not.toBe(before.at(-1)!.run_id)
     expect(b.lastRun()).toMatchObject({ checks_only: true })
     expect(b.lastRun().checks.at(-1)!.parts).toEqual([expect.objectContaining({ part: 'ui', state: 'not-judged' })])
+    const shown = (await b.repo.cli(['decide', 'ship', b.planId, '--show'])).stdout
+    expect(shown).not.toContain('state: booked')
+    expect(shown).toContain(`witness decide ship ${b.planId} --book lint`)
   }, 240_000)
 })
 
