@@ -303,6 +303,19 @@ own terminal, and drive leaves a stop for you when no author could clear it (eve
 the base too and not judgeable); otherwise the author is sent to fix it first. `witness status` lists every open booking; each
 closes once main no longer holds it, and `witness dismiss ledger` ends one at your terminal.
 
+**Switch-offs.** A line a plan adds that turns a check off — an `eslint-disable` or `@ts-ignore`
+comment, a `biome-ignore`, an `it.skip(` or `.only(` in a test file, a `{ retry: 3 }`, a Rust
+`#[allow(`, a `# noqa` — makes the implement and ship gates' `switch-offs` check red. Each token counts
+where its tool reads it (`process.exit(` is never `xit(`, and `retry: false` is no switch-off), and only
+the copies beyond the base's are the plan's, so a moved line is not new. The reviewers still run and are
+told every such line. The way on is the revise that removes it, or
+`witness decide <gate> <plan> --book switch-offs` when it is right as it stands: one ledger item per
+line, which waives that line for this plan. You or, under autonomy, the AI judge may book it — the
+judge reading only facts (the token, its rules, whether a test file holds it) — never the policy, and
+never beside a blocking finding or another red check, or at the round bound; approving over the red
+books nothing, so the next gate meets it again. A booked line closes once a merged tree no longer
+holds it. `checks.switchOffs` adds your repo's own literal tokens (e.g. `['istanbul ignore']`).
+
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
 pinned to the approved commit (`gh pr merge N --<ship.merge> --match-head-commit <sha>`), or

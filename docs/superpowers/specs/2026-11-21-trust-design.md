@@ -206,6 +206,14 @@ waives its own plan only (C17), at both gates; a booked part reads `booked`, pas
 `book-owed` sends a round whose every non-passing part is `not-judged` to the human (C23); a part the author may own
 keeps `checks-only`, the revise first and the booking after it.
 
+**As built (T3a, rows 273–274).** `switch-offs` is a judged check right after `diff`, whose waiver is the judge's
+(`CheckWaiver` `'judge'`): the AI judge or the human may book its red. `--book switch-offs` is offered on a round the
+lenses ran whose every failed check carries the judge's waiver and holds a line a booking takes, with no blocking finding,
+on unmoved content below the bound (the map's C26); its re-gate replays the round's verdicts (row 112's `cached`), so it
+spends a round and is never offered at the bound. Rule `waivable` (after the blocking-finding rules, before
+`checks-failed`) leads with the revise, then the booking, the upstream, an approve that books nothing, and the stop; the
+policy hands it to the arbiter, which books in-process and never approves over the red.
+
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
 - decide refuses `--approve` on it.
@@ -270,6 +278,15 @@ did not happen closes nothing. Dismissal is `witness dismiss ledger --item <id|i
 transaction under the repo lock, re-reading the ledger there; the gate's state is then `booked`, whose one act is the
 re-gate. `status` lists open items (`booked[n]{item,plan,part,holds,since}`) with the dismissal; `log` names each
 transition; `check` reports a `ledger` stream another history holds.
+
+**As built (T3a, row 274).** The second kind, `booked-switch-off`, books a switch-off line: `file`, `token` and
+`subject.lines` (each line key, 16 hex over token, file and the normalized line, with the copies it waives); its key is
+16 hex over (kind, check, plan, file, token, the sorted lines), and the lint formula is unchanged. The check applies the
+plan's own items only (C17). It closes when the line is gone: at the merge stamp of plan M, from M's last ship round
+whose `reviewed_tree` the repo can read, an open switch-off item of M or of a plan merged before it closes when that
+tree's blob at its file holds no line it books (a missing file holds none); no readable tree observes nothing, and the
+observation reads the item's own token, never the config. The lint lane and the lint observation read lint items only
+(M-g). `status` lists `booked[n]{item,plan,check,holds,since}` (`check` `lint/<part>` or `switch-offs`).
 
 ### 3.4 Counterfactual runs (CF) — T3
 
@@ -603,6 +620,18 @@ A new switch-off is a judged red (the battery runs and reviewers see it): revise
 - `{skip: true}` drops the passing count and is caught.
 - `process.exit(` is not a match.
 
+**As built (T3a, rows 273–274; T3 splits at planning, the map's C24).** T3a builds the token layer, the `switch-offs`
+judged check at implement and ship, `--book switch-offs` for the judge and the human, booked lines closing on main, and
+the repo's own tokens; T3b builds the effect layer (`checks.definitions`, the lint effect, the tests effect) feeding the
+same check and booking, and takes the first two acceptances. Each token counts where its tool reads it (C25): a directive
+only where it opens a comment; a code token never on a comment line; the test API only in test files, its options only
+with their turning-on literal (`{ skip: true }`, `retry: 3`; never `retry: false`), and `xit(` never inside
+`process.exit(`. The repo's extra patterns are `checks.switchOffs` (schema 4): literal tokens, never regexes, matched on
+any line of any text file. A switch-off is a line (C27): the plan adds the copies of each (token, file, normalized line)
+key beyond the base's count, so a moved or re-indented line is not new and a duplicated one is. The reviewers are told
+each line from the tree. What the token layer reads by lines and cannot see — strings, evasive spellings, files outside
+the four languages — is in DESIGN.md's Open / deferred.
+
 ### T4 — Fixes add checks
 
 **Builds:** MB (§3.6), TR writers.
@@ -804,7 +833,7 @@ decision item names its act on a `book:` row (`witness decide <gate> <plan> --bo
 | Train | Settings |
 |---|---|
 | A (T0–T2) | ship.lint named parts; readers.{biome,eslint,clippy,tsc}; scratch.prepare (as built, T2b–T2c: all schema 3; the map's C5) |
-| B (T3–T6) | switch-off extra patterns; reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths |
+| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
 **migrate** detects and proposes values:
@@ -1021,3 +1050,22 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   tell whose such a red is.
 - **Any session marker (T2e, rows 270–271; security review).** §3.9 refused `gate --manual` inside a drive session; it
   and `--book` refuse under any marker witness sets (a drive job's too), as `dismiss ledger` does.
+- **C24 (T3a, rows 273–274).** T3 was one item and more than L: the token layer, the first check the AI judge books, and
+  an effect layer needing two job-backed runs. It split at planning into T3a (the token layer, the judged check, the
+  judge's `--book`, booked lines closing, `checks.switchOffs`, schema 4 opening) and T3b (`checks.definitions`, the lint
+  effect and the tests effect, feeding T3a's check and booking); one branch, one PR at T3b's close.
+- **C25 (T3a, row 273).** "Token-aware matching on the spec's lists, plus a repo setting for extra patterns" became each
+  token where its tool reads it: naive matching flagged 13 `retry:` lines in fewhats' code and none was a switch-off.
+  Directives only where they open a comment; code tokens never on a comment line; the test API only in test files, its
+  options with their turning-on literal; extra patterns literal tokens, never regexes. Two automated security reviews
+  and the slice review widened what counts (a closed leading comment, a `*`-led line, a lone CR or line separator, a
+  directive opening a block comment's later line, a NUL in a source file, a byte order mark), each toward reporting.
+- **C26 (T3a, row 274).** "Revise, or `--book` it (AI judge or human)" became: `--book switch-offs` is live only on a
+  round the lenses ran whose every failed check carries the judge's waiver, with no blocking finding, unmoved, below the
+  bound; the policy hands rule `waivable` to the arbiter; a typed booking keeps T2e's terminal and session rules. A
+  blocking finding or another red is the author's first, and a booking's re-gate spends a round, so it is never offered
+  at the bound.
+- **C27 (T3a, rows 273–274).** "Scans added PC lines" and "the line" became copies beyond the base's: per file, the
+  multiset of (token, file, normalized line) keys on the plan's version minus the base's, since a `-U0` diff calls a
+  moved or re-indented line added; a booked item is one line (file, token, keys) and closes when the merging plan's
+  shipped tree holds none of its keys.
