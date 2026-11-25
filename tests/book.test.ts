@@ -297,3 +297,14 @@ describe('the human gets the booking; nobody else takes it (row 270)', () => {
     expect(openItems(c.repo.root, { plan: c.planId }).map((i) => i.part)).toEqual(['ui', 'fx'])
   }, 480_000)
 })
+
+describe('a booking — slice 2 review (row 270)', () => {
+  it('under committed autonomy an uncommitted autonomy: off edit never skips the terminal (I3, row 171)', async () => {
+    const b = await redForShip('on')
+    expect(await b.gate('ship')).toBe(1)                                  // checks only: the policy revises
+    patchConfig(b.repo, { autonomy: 'off' })                              // the working copy only — HEAD still says on
+    const r = await b.repo.cli(['decide', 'ship', b.planId, '--book', 'lint'])
+    expect([r.code, r.stderr]).toEqual([2, expect.stringContaining('book-needs-terminal')])
+    expect(ledgerLen(b.repo)).toBe(0)
+  }, 240_000)
+})

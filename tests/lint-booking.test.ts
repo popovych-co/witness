@@ -4,7 +4,8 @@ import { loadConfig, type Config } from '../src/config.js'
 import { diagnosticKey } from '../src/diagnostics.js'
 import { journalShard } from '../src/jobs.js'
 import { appendEntry } from '../src/journal.js'
-import { newItemId } from '../src/ledger.js'
+import { bookLines, bookingsOf, newItemId } from '../src/ledger.js'
+import type { GateRunEntry } from '../src/rounds.js'
 import { lintCheck } from '../src/lint-lane.js'
 import { boundReader } from '../src/lint-parts.js'
 import { LEDGER_STREAM } from '../src/streams.js'
@@ -143,4 +144,22 @@ describe('the lint lane reads bookings (row 270)', () => {
     expect(p).toMatchObject({ state: 'red', new: 2_001 })
     expect(p.book).toBeUndefined()
   }, 120_000)
+})
+
+describe('the lint lane reads bookings — slice 2 review (row 270)', () => {
+  it('a booked line duplicated is booked again as a new item, never by reusing the one the part already applies (I1)', async () => {
+    const b = await baseRed(); b.lintBase('biome')
+    const first = newItemId(); item(b.repo, { id: first, subject: { diagnostics: { [KEY_NEW]: 1 } } })
+    b.repo.write('src/new.ts', 'BAD\nBAD\n')                                 // the same key, twice
+    const c = await b.check()
+    const part = c.parts!.find((x) => x.part === 'biome')!
+    expect(part).toMatchObject({ state: 'new', book: { [KEY_NEW]: 1 }, booked: 1, items: [first] })
+    const run = { v: 1, t: 'gate-run', gate: 'implement', artifact: PLAN, round: 2, run_id: 'r-2', checks_only: true, checks: [c] } as unknown as GateRunEntry
+    const lines = bookLines(b.repo.root, PLAN, 'implement', run, bookingsOf(run, 'lint').filter((x) => x.part === 'biome'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]!.id).not.toBe(first)
+    expect(lines[0]!.entry).toMatchObject({ subject: { diagnostics: { [KEY_NEW]: 1 } } })
+    ledgerLine(b.repo, lines[0]!.entry as unknown as Record<string, unknown>)
+    expect((await b.check()).parts!.find((x) => x.part === 'biome')).toMatchObject({ state: 'booked', booked: 2, items: [first, lines[0]!.id] })
+  }, 60_000)
 })

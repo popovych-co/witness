@@ -146,7 +146,9 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
 
 // Read under the caller's repo lock: per booking, the open item whose key it matches (reused, no
 // entry: the idempotence key) or a fresh id and its `ledger-open`. An id the ledger ever held is
-// minted again, never reused.
+// minted again, never reused. Slice 2 review I1: an item the anchor's part already applies is never
+// the match — what is left to book is beyond it (a booked line duplicated has the booked key again),
+// so reusing it would book nothing and offer the booking again forever.
 export function bookLines(root: string, plan: string, gate: string, run: GateRunEntry, bookings: readonly Booking[], note?: string):
 Array<{ id: string; entry?: LedgerOpen }> {
   const check = run.checks.at(-1)?.name ?? ''
@@ -156,7 +158,8 @@ Array<{ id: string; entry?: LedgerOpen }> {
   return bookings.map((b) => {
     const kind: LedgerKind = 'booked-check'
     const key = itemKey({ kind, check, plan, part: b.part, part_key: b.part_key, subject: b.subject })
-    const same = open.find((i) => itemKey(i) === key)
+    const applied = new Set(run.checks.at(-1)?.parts?.find((p) => p.part === b.part)?.items ?? [])
+    const same = open.find((i) => itemKey(i) === key && !applied.has(i.id))
     if (same !== undefined) return { id: same.id }
     let id = newItemId()
     while (taken.has(id)) id = newItemId()

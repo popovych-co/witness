@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { EXIT, type Ctx } from '../cli.js'
 import { unsafeLeft, untrustedCmdsFor } from '../allowlist.js'
-import { loadConfig, type Config } from '../config.js'
+import { autonomyAt, loadConfig, type Config } from '../config.js'
 import { designUnseen } from '../design.js'
 import { dropDraft } from '../drafts.js'
 import '../gates/index.js'
@@ -504,7 +504,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // env marker proves nothing, so a terminal and the human's y are asked for, outside the lock.
   const bookings = booking ? withTools(cfgR.value, bookingsOf(anchor, bookCheck)) : []
   if (booking && bookings.length === 0) return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
-  if (booking && cfgR.value.autonomy) {
+  // Slice 2 review I3 (row 171): committed autonomy is HEAD's config — a working-copy `autonomy: off`
+  // edit grants nothing, so it never lifts the terminal either.
+  if (booking && autonomyAt(root, 'HEAD')) {
     const typed = cliAct('decide', gate, target, '--book', bookCheck).line
     if (!ctx.isTTY) {
       renderRefusal([v('decide', 'book-needs-terminal', 'no terminal — autonomy is on',

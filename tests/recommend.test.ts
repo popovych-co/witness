@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { actOn } from '../src/act.js'
-import { AFTER_EDIT, option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
-import { anchorRecurrence, ladderSpent, liveExits, notePrefill } from '../src/rounds.js'
+import { AFTER_EDIT, BOOK_TRADEOFF, option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
+import { menuFor } from '../src/arbiter.js'
+import { anchorRecurrence, ladderSpent, lastGateRun, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
 import { loadCanon } from '../src/scan.js'
 import { readyChoice } from '../src/verbs/next.js'
@@ -1165,5 +1166,20 @@ describe('the checks-only rule (row 264)', () => {
     expect(d.options.some((o) => o.command.includes('--approve'))).toBe(false)
     expect(policyFor({ at: 'gate', gate: 'ship', target: 'p1', entries: [onlyShip(1)], run: onlyShip(1) as never, block: d, untrusted: [] }))
       .toMatchObject({ kind: 'take' })
+  })
+})
+
+describe('a booking in the blocks a revise leaves — slice 2 review (row 270)', () => {
+  const bookable = { ...(onlyShip(1) as object), checks: [{ name: 'markers', ok: true }, { name: 'lint', ok: false, parts: [{ part: 'ui', state: 'not-judged', key: `ui@${'a'.repeat(40)}.000000000000` }] }] } as unknown as Entry
+  const rev = { v: 1, t: 'human-decision', gate: 'ship', artifact: 'p1', round: 1, decision: 'revise', selected: 'policy' } as unknown as Entry
+  const back = { v: 1, t: 'revise-returned', gate: 'ship', artifact: 'p1', run_id: 'r-only-1', sha: 'a' } as unknown as Entry
+  it('a booking in the revised and handed-back blocks reads as a booking, never as a revise; the arbiter\'s menu never holds it (I2)', () => {
+    for (const entries of [[bookable, rev], [bookable, rev, back]]) {
+      const d = recommend({ gate: 'ship', target: 'p1', entries, upstream: undefined, stale: false })!
+      const book = d.options.find((o) => o.command === 'witness decide ship p1 --book lint')!
+      expect(book).toMatchObject({ depth: 'deferral', tradeoff: BOOK_TRADEOFF })
+      expect(book.when).not.toContain('the author did not find')
+      expect(menuFor(d, lastGateRun(entries, 'ship')!).some((o) => o.command.includes('--book'))).toBe(false)
+    }
   })
 })
