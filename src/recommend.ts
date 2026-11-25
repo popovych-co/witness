@@ -561,7 +561,7 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
   // policy hands the rule to the arbiter (`policyFor`): whether a switch-off is right as it stands is a
   // judgment, not a rule.
   if (checksFailed.length > 0 && checksFailed.every((c) => checkWaiver(c.name) === 'judge' && bookingsOf(last, c.name).length > 0)) {
-    const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is LineOff => o.kind !== 'dropped' && o.count - (o.booked ?? 0) > 0))
+    const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is LineOff => o.kind === undefined && o.count - (o.booked ?? 0) > 0))
     const tokens = [...new Set(lines.map((o) => visible(o.token)))]
     // Row 276: and each spec whose lost passing cases its bookings leave uncovered.
     const lost = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is DroppedOff => o.kind === 'dropped' && o.count - (o.booked ?? 0) > 0))

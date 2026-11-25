@@ -5,6 +5,8 @@ import { rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { LintEffect } from '../src/lint-effect.js'
+import { appendEntry } from '../src/journal.js'
+import { LEDGER_STREAM } from '../src/streams.js'
 import type { LoosenedOff } from '../src/rounds.js'
 import { MAX_OFFS, copiesInTree, isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey, switchOffNotes, switchOffsCheck } from '../src/switch-offs.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
@@ -293,6 +295,27 @@ describe('loosened hits in the switch-offs check (row 277)', () => {
       expect(check(lint)).toEqual(plain)
     }
     expect(check(measured([]))).toEqual(plain)
+  })
+
+  it("the plan's own booked-loosened items cover its hits; another plan's cover nothing (row 278, C17)", () => {
+    const repo = tmpRepo()
+    repo.write('a.txt', 'a\n'); repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
+    const base = repo.git('rev-parse', 'HEAD')
+    const item = (id: string, plan: string, subject: unknown, extra: Record<string, unknown>) => appendEntry(repo.root, LEDGER_STREAM, {
+      t: 'ledger-open', id, key: id.padEnd(16, '0').slice(0, 16), kind: 'booked-loosened', check: 'switch-offs', plan, gate: 'implement', round: 1, run_id: 'r', subject, ...extra } as never)
+    const h = hidden('src/a.ts', 1)
+    const p = part('lint')
+    item('l-00000001', 'other', { hidden: { [h.key]: { file: 'src/a.ts', copies: 1 } } }, { tool: 'biome', rule: 'lint/test/noBad' })
+    item('l-00000002', 'other', { defs: { '.gitignore': 'a'.repeat(40) } }, { part: 'lint' })
+    const check = () => switchOffsCheck(repo.root, repo.root, { checks: { switchOffs: [] } } as never, base, 'p1', [], undefined, measured([h, { ...h, key: 'f'.repeat(16), count: 2 }, p]))
+    expect(check().offs!.every((o) => o.booked === undefined)).toBe(true)
+    item('l-00000003', 'p1', { hidden: { [h.key]: { file: 'src/a.ts', copies: 1 }, ['f'.repeat(16)]: { file: 'src/a.ts', copies: 1 } } }, { tool: 'biome', rule: 'lint/test/noBad' })
+    item('l-00000004', 'p1', { defs: { '.gitignore': 'b'.repeat(40) } }, { part: 'lint' })
+    expect(check().offs!.map((o) => [o.booked, o.items])).toEqual([[1, ['l-00000003']], [1, ['l-00000003']], [undefined, undefined]])
+    expect(check().ok).toBe(false)
+    item('l-00000005', 'p1', { defs: { '.gitignore': 'a'.repeat(40) } }, { part: 'lint' })
+    expect(check().offs!.at(-1)).toMatchObject({ booked: 1, items: ['l-00000005'] })
+    expect(check().detail).toContain("lint passes only under the plan's check definitions, 1 booked")
   })
 
   it("the reviewers' rows: each hidden spot, each loosened part, then the definitions the plan changed, once (row 277)", () => {

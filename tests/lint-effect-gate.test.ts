@@ -7,6 +7,10 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { grantCommands } from '../src/allowlist.js'
+import type { Ctx } from '../src/cli.js'
+import { openItems } from '../src/ledger.js'
+import { run as decide } from '../src/verbs/decide.js'
+import { run as dismiss } from '../src/verbs/dismiss.js'
 import { baseWait } from '../src/base-lint.js'
 import { loadConfig, type Config } from '../src/config.js'
 import { restorable, restoredName } from '../src/definitions.js'
@@ -372,4 +376,52 @@ describe('what a plan\'s check definitions hide is a switch-off (row 277)', () =
     expect(b.check('definitions').detail).toContain(" · biome could not be read under the base's definitions — reader-unread")
     expect(b.check('switch-offs').offs).toEqual([expect.objectContaining({ kind: 'loosened', part: 'biome', count: 1 })])
   }, 240_000)
+})
+
+describe('what a plan\'s check definitions hide is booked (row 278)', () => {
+  // The hiding plan measured: a judged implement round red only for its hidden spot.
+  async function hiddenStop() {
+    const b = await bench()
+    await underDrive(b.repo.root, async () => { await b.gate(); b.land(); await b.gate() })
+    expect(b.check('switch-offs')).toMatchObject({ ok: false })
+    return b
+  }
+
+  it('--book switch-offs books a loosened round: one item per hidden rule; the re-gate applies it and passes (row 278)', async () => {
+    const b = await hiddenStop()
+    const hitKey = b.check('switch-offs').offs![0]!.key
+    const r = await b.repo.cli(['decide', 'implement', b.planId, '--book', 'switch-offs'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/^booked: l-[0-9a-f]{8} — switch-offs · biome lint\/test\/noBad hidden by check definitions$/m)
+    expect(openItems(b.repo.root, { plan: b.planId })).toEqual([expect.objectContaining({ kind: 'booked-loosened', check: 'switch-offs',
+      tool: 'biome', rule: 'lint/test/noBad', subject: { hidden: { [hitKey]: { file: 'src/hidden.ts', copies: 1 } } } })])
+    expect(await b.gate()).toBe(0)
+    expect(b.check('switch-offs')).toMatchObject({ ok: true, offs: [expect.objectContaining({ kind: 'loosened', booked: 1 })] })
+    // status names the fourth kind
+    expect((await b.repo.cli(['status'])).stdout).toContain('biome lint/test/noBad hidden, 1 spot')
+  }, 300_000)
+
+  it('a further hidden spot beyond the booked copies stays red, and books a fresh item (row 278)', async () => {
+    const b = await hiddenStop()
+    expect((await b.repo.cli(['decide', 'implement', b.planId, '--book', 'switch-offs'])).code).toBe(0)
+    writeFileSync(join(b.wt, 'src/hidden.ts'), `${HIDDEN}export const y = "BAD too"\n`)
+    await underDrive(b.repo.root, async () => { await b.gate(); b.land(); await b.gate() })
+    const offs = b.check('switch-offs').offs!
+    expect(b.check('switch-offs').ok).toBe(false)
+    expect(offs.map((o) => [o.kind === 'loosened' ? o.line : 0, o.booked ?? 0])).toEqual([[1, 1], [2, 0]])
+    expect((await b.repo.cli(['decide', 'implement', b.planId, '--book', 'switch-offs'])).code).toBe(0)
+    expect(openItems(b.repo.root, { plan: b.planId })).toHaveLength(2)
+  }, 300_000)
+
+  it('the terminal question and the dismissal name the fourth kind (row 278)', async () => {
+    const b = await hiddenStop()
+    patchConfig(b.repo, { autonomy: 'on' }); b.repo.git('add', 'witness.config.yaml'); b.repo.git('commit', '-q', '-m', 'autonomy')
+    const asked: string[] = []
+    const at = (answer: string): Ctx => ({ ...fakeCtx(b.repo.root, { tty: true }), ask: async (q) => { asked.push(q); return answer } })
+    expect(await decide(at('y'), ['implement', b.planId, '--book', 'switch-offs'])).toBe(0)
+    expect(asked[0]).toBe(`book switch-offs for implement ${b.planId}:\n  biome lint/test/noBad: 1 spot in src/hidden.ts\nbook? an item stays open until main no longer holds it [y/N]`)
+    const id = openItems(b.repo.root, { plan: b.planId })[0]!.id
+    expect(await dismiss(at('n'), ['ledger', '--item', id, '--cause', 'rule-retired', '--note', 'the rule went'])).toBe(2)
+    expect(asked[1]).toContain(`dismiss ${id} — switch-offs · biome lint/test/noBad hidden by check definitions · ${b.planId}: rule-retired`)
+  }, 300_000)
 })

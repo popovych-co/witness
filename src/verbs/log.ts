@@ -10,7 +10,8 @@ import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
 import { kv, logSafe, rows, visible } from '../toon.js'
-import { offWhere } from '../ledger.js'
+import { bookedWhere, looseHeld, offWhere } from '../ledger.js'
+import type { ReaderTool } from '../settings.js'
 import { decidedBy } from '../autonomy.js'
 import { duration } from '../usage.js'
 import type { DecisionEntry, GateRunEntry } from '../rounds.js'
@@ -83,6 +84,15 @@ function detailOf(e: Entry): string {
       if (e.kind === 'booked-dropped') {
         const n = Number((e.subject as { cases?: unknown } | undefined)?.cases)
         return `${String(e.id)} booked ${String(e.check)} · tests of ${visible(String(e.spec))} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)} · ${n} case${n === 1 ? '' : 's'}`
+      }
+      // Row 278: a booked hidden rule or loosened part names it, with the spots or definitions it holds.
+      if (e.kind === 'booked-loosened') {
+        const sub = e.subject as { hidden?: Record<string, { copies?: unknown }>; defs?: Record<string, unknown> } | undefined
+        const held = sub?.hidden !== undefined
+          ? looseHeld({ hidden: Object.fromEntries(Object.entries(sub.hidden).map(([k, h]) => [k, { file: '', copies: Number(h?.copies) }])) })
+          : looseHeld({ defs: (sub?.defs ?? {}) as Record<string, string | null> })
+        const where = bookedWhere({ kind: 'booked-loosened', ...(typeof e.part === 'string' ? { part: e.part } : { tool: e.tool as ReaderTool, rule: String(e.rule ?? '') }) })
+        return `${String(e.id)} booked ${String(e.check)} · ${where} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)} · ${held}`
       }
       const s = e.subject as { whole?: boolean; diagnostics?: Record<string, number> } | undefined
       const what = s?.whole === true ? 'whole part'

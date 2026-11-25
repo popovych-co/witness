@@ -159,3 +159,66 @@ describe('booked lost tests (row 276)', () => {
     expect(entryDetail({ v: 1, ...dropOpen('l-00000001') } as never)).toBe('l-00000001 booked switch-offs · tests of auth-refresh · p1 implement r2 · 1 case')
   })
 })
+
+// Row 278. A loosened hit booked: per (tool, rule) the hidden spots it waives, or a part's restored definitions.
+const looseOpen = (id: string, over: Record<string, unknown> = {}) => ({
+  t: 'ledger-open' as const, id, key: '0'.repeat(16), kind: 'booked-loosened', check: 'switch-offs', plan: 'p1', gate: 'implement',
+  round: 2, run_id: 'r-1', tool: 'biome', rule: 'lint/test/noBad', subject: { hidden: { [`${'a'.repeat(16)}`]: { file: 'src/a.ts', copies: 1 } } }, ...over,
+})
+const partOpen = (id: string, over: Record<string, unknown> = {}) => ({
+  t: 'ledger-open' as const, id, key: '0'.repeat(16), kind: 'booked-loosened', check: 'switch-offs', plan: 'p1', gate: 'implement',
+  round: 2, run_id: 'r-1', part: 'lint', subject: { defs: { 'package.json#scripts': `json:${'b'.repeat(16)}`, '.gitignore': null } }, ...over,
+})
+const hid = (key: string, over: Record<string, unknown> = {}) =>
+  ({ kind: 'loosened', key, count: 1, tool: 'biome', rule: 'lint/test/noBad', file: 'src/a.ts', line: 1, ...over })
+describe('booked loosened hits (row 278)', () => {
+  it('folds a booked hidden rule and a booked part; one with a bad tool, rule, spot or definition is skipped (row 278)', () => {
+    const repo = tmpRepo()
+    for (const e of [looseOpen('l-00000001'), partOpen('l-00000002'), looseOpen('l-00000003', { tool: 'pylint' }),
+      looseOpen('l-00000004', { rule: 'has space' }), looseOpen('l-00000005', { subject: { hidden: { k: { file: '', copies: 1 } } } }),
+      looseOpen('l-00000006', { subject: { hidden: { k: { file: 'a', copies: 0 } } } }), looseOpen('l-00000007', { subject: { hidden: {} } }),
+      partOpen('l-00000008', { subject: { defs: {} } }), partOpen('l-00000009', { subject: { defs: { a: 'nope' } } }),
+      looseOpen('l-0000000a', { part: 'lint' }), looseOpen('l-0000000b', { rule: '' }),
+      looseOpen('l-0000000c', { subject: { hidden: { k: { file: 'a', copies: 1, lineless: false } } } })]) appendEntry(repo.root, LEDGER_STREAM, e as never)
+    expect(ledgerItems(repo.root).map((i) => i.id)).toEqual(['l-00000001', 'l-00000002', 'l-0000000b'])
+    expect(ledgerItems(repo.root)[1]).toMatchObject({ kind: 'booked-loosened', part: 'lint', subject: { defs: { '.gitignore': null } } })
+  })
+  it('the fourth key formula; the other three never move (row 278)', () => {
+    expect(itemKey(open('x') as never)).toBe('4be5507e7e9c3d22')
+    expect(itemKey(offOpen('x') as never)).toBe('4367487ea42fc1c0')
+    expect(itemKey(dropOpen('x') as never)).toBe('379a201944dc7b85')                // today's loss key, computed at RED
+    const k = (o: Record<string, unknown>) => itemKey(looseOpen('x', o) as never)
+    expect(k({})).toMatch(/^[0-9a-f]{16}$/)
+    expect(k({})).not.toBe(k({ tool: 'eslint' })); expect(k({})).not.toBe(k({ rule: 'other' })); expect(k({})).not.toBe(k({ plan: 'p2' }))
+    expect(k({})).not.toBe(k({ subject: { hidden: { [`${'a'.repeat(16)}`]: { file: 'src/a.ts', copies: 2 } } } }))
+    const p = (o: Record<string, unknown>) => itemKey(partOpen('x', o) as never)
+    expect(p({})).not.toBe(p({ part: 'other' })); expect(p({})).not.toBe(p({ subject: { defs: { '.gitignore': null } } }))
+    expect(p({ subject: { defs: { a: null, b: null } } })).toBe(p({ subject: { defs: { b: null, a: null } } }))
+  })
+  it('a judged round books its unbooked hidden spots one booking per (tool, rule), and each loosened part its own (row 278)', () => {
+    const part = { kind: 'loosened', key: 'p'.repeat(16), count: 1, part: 'lint', defs: { '.gitignore': 'c'.repeat(40) } }
+    const run = { checks_only: undefined, outcome: 'stopped', round: 1, run_id: 'r', checks: [{ name: 'switch-offs', ok: false, offs: [
+      hid('k1'), hid('k2', { file: 'src/b.ts', line: undefined, lineless: true }), hid('k3', { rule: 'other' }),
+      hid('k4', { count: 2, booked: 1, items: ['l-00000009'] }), hid('k5', { booked: 1, items: ['l-00000009'] }), part] }] }
+    expect(bookingsOf(run as never, 'switch-offs')).toEqual([
+      { kind: 'booked-loosened', tool: 'biome', rule: 'lint/test/noBad',
+        subject: { hidden: { k1: { file: 'src/a.ts', copies: 1 }, k2: { file: 'src/b.ts', copies: 1, lineless: true }, k4: { file: 'src/a.ts', copies: 1 } } } },
+      { kind: 'booked-loosened', tool: 'biome', rule: 'other', subject: { hidden: { k3: { file: 'src/a.ts', copies: 1 } } } },
+      { kind: 'booked-loosened', part: 'lint', subject: { defs: { '.gitignore': 'c'.repeat(40) } } },
+    ])
+  })
+  it('an item the hit already applies is never reused; with none applied the open one is (row 278)', () => {
+    const repo = tmpRepo()
+    appendEntry(repo.root, LEDGER_STREAM, { ...looseOpen('l-00000001', { subject: { hidden: { k1: { file: 'src/a.ts', copies: 1 } } } }),
+      key: itemKey(looseOpen('x', { subject: { hidden: { k1: { file: 'src/a.ts', copies: 1 } } } }) as never) } as never)
+    const run = (applied: boolean) => ({ checks_only: undefined, outcome: 'stopped', round: 3, run_id: 'r', checks: [{ name: 'switch-offs', ok: false, offs: [
+      hid('k1', applied ? { count: 2, booked: 1, items: ['l-00000001'] } : {})] }] }) as never
+    expect(bookLines(repo.root, 'p1', 'implement', run(true), bookingsOf(run(true), 'switch-offs'))).toEqual([{ id: expect.not.stringMatching(/^l-00000001$/),
+      entry: expect.objectContaining({ kind: 'booked-loosened', check: 'switch-offs', tool: 'biome', rule: 'lint/test/noBad', subject: { hidden: { k1: { file: 'src/a.ts', copies: 1 } } } }) }])
+    expect(bookLines(repo.root, 'p1', 'implement', run(false), bookingsOf(run(false), 'switch-offs'))).toEqual([{ id: 'l-00000001' }])
+  })
+  it('log names a booked hidden rule and a booked part (row 278)', () => {
+    expect(entryDetail({ v: 1, ...looseOpen('l-00000001') } as never)).toBe('l-00000001 booked switch-offs · biome lint/test/noBad hidden by check definitions · p1 implement r2 · 1 spot')
+    expect(entryDetail({ v: 1, ...partOpen('l-00000002') } as never)).toBe('l-00000002 booked switch-offs · lint part lint loosened · p1 implement r2 · 2 definitions')
+  })
+})

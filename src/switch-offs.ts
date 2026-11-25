@@ -18,7 +18,7 @@ import { lstatListed } from './change-set.js'
 import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
 import { gitBlob, tryGitC } from './gitio.js'
-import { openItems, type DroppedItem, type SwitchOffItem } from './ledger.js'
+import { openItems, sameDefs, type DroppedItem, type LoosenedItem, type SwitchOffItem } from './ledger.js'
 import type { LintEffect } from './lint-effect.js'
 import { offUnbooked, type DroppedOff, type GateCheck, type LineOff, type LoosenedOff, type OffVerdict } from './rounds.js'
 import type { TestsEffect } from './tests-effect.js'
@@ -369,10 +369,19 @@ function loosenedSegment(loosened: readonly LoosenedOff[]): string {
   return `loosened: ${[...named, ...more].join(' · ')}`
 }
 
-// Row 278 (C17). The plan's own open booked-loosened items applied to each hit; until the ledger books
-// them, none applies.
-function applyLoosenedBookings(loosened: readonly LoosenedOff[], _mine: readonly unknown[]): LoosenedOff[] {
-  return [...loosened]
+// Row 278 (C17). The plan's own open booked-loosened items applied to each hit: a hidden spot takes the
+// copies every item holding its key books (at most its count), a loosened part an item of its part with
+// the same restored definitions. Another plan's, a closed and a dismissed item cover nothing.
+function applyLoosenedBookings(loosened: readonly LoosenedOff[], mine: readonly LoosenedItem[]): LoosenedOff[] {
+  return loosened.map((o) => {
+    const holding = o.part !== undefined
+      ? mine.filter((i) => i.part === o.part && 'defs' in i.subject && sameDefs(i.subject.defs, o.defs))
+      : mine.filter((i) => i.part === undefined && 'hidden' in i.subject && Object.hasOwn(i.subject.hidden, o.key))
+    if (holding.length === 0) return o
+    const held = o.part !== undefined ? o.count
+      : holding.reduce((a, i) => a + ('hidden' in i.subject ? i.subject.hidden[o.key]!.copies : 0), 0)
+    return { ...o, booked: Math.min(o.count, held), items: holding.map((i) => i.id) }
+  })
 }
 
 // Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line its
@@ -396,7 +405,7 @@ export function switchOffsCheck(
   const loose = [...(measured?.offs ?? [])].sort(looseOrder)
   const mineAll = tests !== undefined && tests.offs.length > 0 || found.length > 0 || loose.length > 0 ? openItems(root, { plan }) : []
   const losses = applyLossBookings(tests?.offs ?? [], mineAll.filter((i): i is DroppedItem => i.kind === 'booked-dropped'))
-  const loosened = applyLoosenedBookings(loose, mineAll)
+  const loosened = applyLoosenedBookings(loose, mineAll.filter((i): i is LoosenedItem => i.kind === 'booked-loosened'))
   const segment = `${tests !== undefined ? ` · ${testsSegment(tests, losses)}` : ''}${loosened.length > 0 ? ` · ${loosenedSegment(loosened)}` : ''}`
   if (measured?.over !== undefined) {
     const hidden = measured.offs.filter((o) => o.part === undefined).length + measured.over

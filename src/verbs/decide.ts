@@ -33,7 +33,7 @@ import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
 import { parseBaseKey } from '../base-lint.js'
 import { CHECKS, checkTier, checkWaiver } from '../checks.js'
-import { bookLines, bookedWhere, bookingsOf, ledgerTaken, offWhere, type Booking, type LedgerOpen } from '../ledger.js'
+import { bookLines, bookedWhere, bookingsOf, ledgerTaken, looseHeld, offWhere, ruleShown, type Booking, type LedgerOpen } from '../ledger.js'
 import { boundReader } from '../lint-parts.js'
 import { LEDGER_STREAM } from '../streams.js'
 import type { Violation } from '../refusal.js'
@@ -955,7 +955,7 @@ function bookQuestion(gate: string, target: string, check: string, anchor: GateR
   const offs = anchor.checks.find((c) => c.name === check)?.offs ?? []
   const lines = bookings.map((b) => {
     if (b.kind === 'booked-switch-off') {
-      const rules = offs.find((o): o is LineOff => o.kind !== 'dropped' && Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
+      const rules = offs.find((o): o is LineOff => o.kind === undefined && Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
       return `  ${offWhere(b.token, b.file)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
     }
     // Row 276: a loss — its spec's tests, the cases it books, and the skips either side.
@@ -963,6 +963,14 @@ function bookQuestion(gate: string, target: string, check: string, anchor: GateR
       const hit = offs.find((o): o is DroppedOff => o.kind === 'dropped' && o.spec === b.spec)
       const n = b.subject.cases
       return `  ${bookedWhere(b)}: ${n} case${n === 1 ? '' : 's'}, skipped ${b.base.skipped} → ${hit?.plan.skipped ?? '?'}`
+    }
+    // Row 278: a hidden rule — its spots and their files; a loosened part — what it passes only under.
+    if (b.kind === 'booked-loosened') {
+      if (!('hidden' in b.subject)) {
+        return `  lint part ${visible(b.part ?? '')}: passes only under the plan's check definitions (${looseHeld(b.subject)})`
+      }
+      const files = [...new Set(Object.values(b.subject.hidden).map((h) => visible(h.file)))]
+      return `  ${b.tool} ${ruleShown(b.rule ?? '')}: ${looseHeld(b.subject)} in ${files.slice(0, 3).join(', ')}${files.length > 3 ? ` and ${files.length - 3} more` : ''}`
     }
     const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []
     return `  ${visible(b.part)} — ${bookWhat(b)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
