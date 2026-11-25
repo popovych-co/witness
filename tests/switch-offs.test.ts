@@ -4,14 +4,14 @@
 import { rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey } from '../src/switch-offs.js'
+import { copiesInTree, isTestPath, lineSwitchOffs, planSwitchOffs, scanText, switchOffKey } from '../src/switch-offs.js'
 import { tmpRepo, type TestRepo } from './helpers.js'
 
 // The base reads planSwitchOffs makes, counted (tmpRepo runs git itself, uncounted).
-const gitBlobs = vi.hoisted(() => ({ n: 0 }))
+const gitBlobs = vi.hoisted(() => ({ n: 0, fail: new Set<string>() }))
 vi.mock('../src/gitio.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/gitio.js')>()
-  return { ...real, gitBlob: (...a: Parameters<typeof real.gitBlob>) => { gitBlobs.n += 1; return real.gitBlob(...a) } }
+  return { ...real, gitBlob: (...a: Parameters<typeof real.gitBlob>) => { gitBlobs.n += 1; return gitBlobs.fail.has(a[2]) ? undefined : real.gitBlob(...a) } }
 })
 
 // A repo whose base commit holds `files`; the change is made after it, uncommitted.
@@ -219,5 +219,22 @@ describe('the switch-offs a plan adds (row 273, C27)', () => {
     writeFileSync(join(root, 'src-u8.ts'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("it.skip('x', f)\n// @ts-ignore\n")]))
     expect(planSwitchOffs(root, base, ['src-be.ts', 'src-le.ts', 'src-u8.ts'], []).map((o) => [o.file, o.line, o.token, o.snippet])).toEqual([
       ['src-be.ts', 2, '@ts-ignore', '// @ts-ignore'], ['src-le.ts', 2, '@ts-ignore', '// @ts-ignore'], ['src-u8.ts', 2, '@ts-ignore', '// @ts-ignore']])
+  })
+})
+
+describe("a tree's copies of a booked line (row 274)", () => {
+  it('a missing file holds none; a file git fails to read is not observed (unit review M-b)', () => {
+    const { repo, root } = based({ 'src/a.ts': 'a()\n// @ts-ignore\n' })
+    const tree = repo.git('rev-parse', 'HEAD^{tree}')
+    const keys = new Set([switchOffKey({ token: '@ts-ignore', file: 'src/a.ts', snippet: '// @ts-ignore' })])
+    expect(copiesInTree(root, tree, 'src/a.ts', '@ts-ignore', keys)).toBe(1)
+    expect(copiesInTree(root, tree, 'src/gone.ts', '@ts-ignore', keys)).toBe(0)
+    gitBlobs.fail.add('src/a.ts')
+    try {
+      expect(copiesInTree(root, tree, 'src/a.ts', '@ts-ignore', keys)).toBeUndefined()
+    } finally {
+      gitBlobs.fail.delete('src/a.ts')
+    }
+    expect(copiesInTree(root, 'b'.repeat(40), 'src/a.ts', '@ts-ignore', keys)).toBeUndefined()
   })
 })

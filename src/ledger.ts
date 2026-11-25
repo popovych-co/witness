@@ -274,10 +274,12 @@ Array<{ id: string; entry?: LedgerOpen }> {
 // lists it. No such round observes nothing, and closes nothing: nothing reads gone by absence. An
 // item of a plan still in flight waits for its own merge, since its booking reaches main only then.
 //
-// Row 274 (§3.3). A booked switch-off closes when the line is gone: from the plan's last ship round whose
-// `reviewed_tree` the repo can read, every open switch-off item of this plan or of one merged before it
-// closes when that tree's blob at its file holds no line it books (`copiesInTree`; a missing file holds
-// none). No readable tree observes nothing.
+// Row 274 (§3.3). A booked switch-off closes when the line is gone, read from the plan's newest ship round
+// alone (unit review M-a): its `reviewed_tree` is what merged. The plan's own items close when that tree
+// holds no line they book. Another merged plan's close only where the round's base (`reviewed_base`)
+// held a line it books and the tree holds none — this merge took it out; a tree cut before that plan
+// merged says nothing about its line (unit review I1). A missing file holds none; an unreadable tree or
+// base, a round with no base, or a read git fails observes nothing (`copiesInTree` undefined).
 export function mergeCloses(root: string, plan: string, pr: number): LedgerClosed[] {
   const runs = readStream(root, plan).filter((e) => e.t === 'gate-run' && e.gate === 'ship') as unknown as GateRunEntry[]
   const mergedBefore = new Map<string, boolean>()
@@ -300,10 +302,14 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(observed.reviewed_tree !== undefined ? { tree: observed.reviewed_tree } : {}) }
     return [close]
   })
-  const tree = [...runs].reverse().map((r) => r.reviewed_tree).find((t): t is string => t !== undefined && treeReadable(root, t))
+  const newest = runs.at(-1)
+  const tree = newest?.reviewed_tree !== undefined && treeReadable(root, newest.reviewed_tree) ? newest.reviewed_tree : undefined
+  const base = newest?.reviewed_base !== undefined && treeReadable(root, newest.reviewed_base) ? newest.reviewed_base : undefined
   const offs = tree === undefined ? [] : open.flatMap((i) => {
     if (i.kind !== 'booked-switch-off' || !merged(i.plan)) return []
-    if (copiesInTree(root, tree, i.file, i.token, new Set(Object.keys(i.subject.lines))) > 0) return []
+    const keys = new Set(Object.keys(i.subject.lines))
+    if (copiesInTree(root, tree, i.file, i.token, keys) !== 0) return []
+    if (i.plan !== plan && (base === undefined || (copiesInTree(root, base, i.file, i.token, keys) ?? 0) === 0)) return []
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
     return [close]
   })

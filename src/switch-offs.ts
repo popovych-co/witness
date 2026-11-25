@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { lstatListed } from './change-set.js'
 import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
-import { gitBlob } from './gitio.js'
+import { gitBlob, tryGitC } from './gitio.js'
 import { openItems, type SwitchOffItem } from './ledger.js'
 import { offUnbooked, type GateCheck, type OffVerdict } from './rounds.js'
 import { visible } from './toon.js'
@@ -343,13 +343,17 @@ export function switchOffNotes(offs: readonly OffVerdict[]): string {
   return `### Switch-offs this plan adds\n\n${rows.join('\n')}\n\nJudge whether each is right as it stands; a finding on one says why it must go.`
 }
 
-// Row 274 (§3.3). How many lines of `tree`'s blob at `file` a booked switch-off item still finds: those
-// whose key — the item's own token and file, the line normalized — is one it books. It reads the item's
-// token, never the config, so a token the repo dropped since still waits for its line. A file the tree
-// lacks holds none; a file read two ways counts by its fullest reading.
-export function copiesInTree(root: string, tree: string, file: string, token: string, keys: ReadonlySet<string>): number {
+// Row 274 (§3.3). How many lines of `tree`'s blob at `file` (a tree or a commit) a booked switch-off item
+// still finds: those whose key — the item's own token and file, the line normalized — is one it books. It
+// reads the item's token, never the config, so a token the repo dropped since still waits for its line. A
+// file the tree lacks holds none — confirmed by `ls-tree`, so a read git fails reads undefined, not
+// observed, and closes nothing (unit review M-b); a file read two ways counts by its fullest reading.
+export function copiesInTree(root: string, tree: string, file: string, token: string, keys: ReadonlySet<string>): number | undefined {
   const blob = gitBlob(root, tree, file)
-  if (blob === undefined) return 0
+  if (blob === undefined) {
+    const listed = tryGitC(root, '--literal-pathspecs', 'ls-tree', '-z', tree, '--', file)
+    return listed.ok && listed.out.trim() === '' ? 0 : undefined
+  }
   return Math.max(0, ...textsOf(file, blob).map((t) =>
     t.split('\n').filter((line) => keys.has(switchOffKey({ token, file, snippet: normalizeSnippet(line) }))).length))
 }

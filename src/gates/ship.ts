@@ -162,6 +162,8 @@ registerGate({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
       reviewedSha: diffReviewedSha(wt, base),
       ...(tree ? { snapshot: { tree, context } } : {}),
+      // Row 274: the base the tree was cut from, for the merge stamp's switch-off observation.
+      base,
       artifactSha: canonicalSha(plan.meta, plan.body),
       // D151. The primary root is where canon lives; a reviewer may cite the plan it judges.
       reviewed: { kind: 'tree', root: wt, files, canonRoot: root, canonDirs: stateDirs(root) },

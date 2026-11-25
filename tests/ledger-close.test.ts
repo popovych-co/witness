@@ -279,11 +279,17 @@ const treeWith = (repo: TestRepo, files: Record<string, string>): string => {
   }
   return git(['write-tree'])
 }
-// The plan's last ship round, reviewed on `tree`, no lint parts.
-const shipRunAt = (repo: TestRepo, planId: string, tree: string) => line(repo, planId, {
-  t: 'gate-run', gate: 'ship', artifact: planId, round: 9, run_id: `r-ship-${tree.slice(0, 6)}`, reviewed_sha: 'c'.repeat(40), reviewed_tree: tree,
+// The plan's last ship round, reviewed on `tree` cut from `base` (a commit; absent as on a round before
+// unit review I1), no lint parts.
+const shipRunAt = (repo: TestRepo, planId: string, tree: string | undefined, base?: string) => line(repo, planId, {
+  t: 'gate-run', gate: 'ship', artifact: planId, round: 9, run_id: `r-ship-${Math.random().toString(16).slice(2, 8)}`, reviewed_sha: 'c'.repeat(40),
+  ...(tree !== undefined ? { reviewed_tree: tree } : {}), ...(base !== undefined ? { reviewed_base: base } : {}),
   prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks: [{ name: 'switch-offs', ok: true }],
 })
+// A commit whose tree holds `files`: the base a ship round's tree was cut from.
+const baseWith = (repo: TestRepo, files: Record<string, string>): string =>
+  execFileSync('git', ['commit-tree', treeWith(repo, files), '-m', 'base'], { cwd: repo.root, encoding: 'utf8' }).trim()
+const HELD = { 'src/a.ts': '// @ts-ignore\nclean()\n', 'src/c.ts': '// @ts-ignore\n' }
 
 describe('a booked switch-off ends by observation (row 274)', () => {
   it("closes at the first merge whose tree no longer holds the line (§3.3; the map's Done-when)", async () => {
@@ -291,7 +297,7 @@ describe('a booked switch-off ends by observation (row 274)', () => {
     mergedPlan(s.repo, 'old-plan')
     const id = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
     const tree = treeWith(s.repo, { 'src/a.ts': 'clean()\n' })
-    shipRunAt(s.repo, s.planId, tree)
+    shipRunAt(s.repo, s.planId, tree, baseWith(s.repo, HELD))
     expect(s.stamp().stamped).toHaveLength(1)
     expect(byId(s.repo.root, id)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: s.planId, pr: 7, tree } })
   }, 120_000)
@@ -301,7 +307,7 @@ describe('a booked switch-off ends by observation (row 274)', () => {
     mergedPlan(s.repo, 'old-plan')
     const old = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
     const own = offLine(s.repo, { plan: s.planId, file: 'src/b.ts', token: 'eslint-disable-next-line', snippet: '// eslint-disable-next-line no-console' })
-    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'x()\n    // @ts-ignore\n', 'src/b.ts': '// eslint-disable-next-line no-console\nlog()\n' }))
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'x()\n    // @ts-ignore\n', 'src/b.ts': '// eslint-disable-next-line no-console\nlog()\n' }), baseWith(s.repo, HELD))
     s.stamp()
     expect([byId(s.repo.root, old).state, byId(s.repo.root, own).state]).toEqual(['open', 'open'])
   }, 120_000)
@@ -311,9 +317,9 @@ describe('a booked switch-off ends by observation (row 274)', () => {
     const flying = offLine(s.repo, { plan: 'other-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
     mergedPlan(s.repo, 'old-plan')
     const gone = offLine(s.repo, { plan: 'old-plan', file: 'src/c.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
-    shipRunAt(s.repo, s.planId, 'b'.repeat(40))                    // a tree the repo cannot read
+    shipRunAt(s.repo, s.planId, 'b'.repeat(40), baseWith(s.repo, HELD))    // a tree the repo cannot read
     expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
-    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/z.ts': 'z()\n' }))
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/z.ts': 'z()\n' }), baseWith(s.repo, HELD))
     expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([gone])
     expect(byId(s.repo.root, flying).state).toBe('open')
     expect(closes(s.repo.root)).toEqual([])                         // mergeCloses reads; only the stamp writes
@@ -324,11 +330,38 @@ describe('a booked switch-off ends by observation (row 274)', () => {
     mergedPlan(s.repo, 'old-plan')
     // the config names no checks.switchOffs: the observation reads the item's own token and key
     const id = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: 'extra:istanbul ignore', snippet: '/* istanbul ignore next */' })
-    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': '/* istanbul ignore next */\nf()\n' }))
+    const held = baseWith(s.repo, { 'src/a.ts': '/* istanbul ignore next */\nf()\n' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': '/* istanbul ignore next */\nf()\n' }), held)
     expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
-    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'f()\n' }))
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'f()\n' }), held)
     expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([id])
   }, 240_000)
+
+  it("another plan's item closes only where the merging round's base held its line (unit review I1)", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const old = offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const own = offLine(s.repo, { plan: s.planId, file: 'src/b.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    const lacking = treeWith(s.repo, { 'src/a.ts': 'clean()\n', 'src/b.ts': 'b()\n' })
+    // the merging tree lacks old-plan's line, but its base never held it (merged after the fork): no word on it
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, { 'src/a.ts': 'clean()\n' }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([own])
+    // a round from before the base was journaled observes the merging plan's own items only
+    shipRunAt(s.repo, s.planId, lacking)
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([own])
+    // the base held it and the merging tree does not: this merge took it out
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, HELD))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id).sort()).toEqual([old, own].sort())
+  }, 120_000)
+
+  it('reads the newest ship round only: one with no readable tree observes nothing (unit review M-a)', async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    offLine(s.repo, { plan: 'old-plan', file: 'src/a.ts', token: '@ts-ignore', snippet: '// @ts-ignore' })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'clean()\n' }), baseWith(s.repo, HELD))
+    shipRunAt(s.repo, s.planId, undefined, baseWith(s.repo, HELD))       // what merged: no tree written
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+  }, 120_000)
 
   it("an abandoned plan's switch-off items close in the abandon", async () => {
     const { repo, planId } = await shippableRepo()

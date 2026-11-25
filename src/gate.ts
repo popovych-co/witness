@@ -77,6 +77,8 @@ export interface GateInput {
   // Row 186. The artifact as a git tree, and a digest of everything else the prompt carries.
   // Undefined when the tree could not be written; that run is then never a delta base.
   snapshot?: { tree: string; context: string }
+  // Row 274. The commit the plan's change set is cut from, journaled `reviewed_base` beside the tree.
+  base?: string
   // Row 251. Ship's one suite run, counted (full-suite mode only), journaled on the gate-run.
   junit?: JunitSummary
   // Row 264. The withholding check that is red (`runChecks`, src/checks.ts) — the last of `checks`:
@@ -881,6 +883,7 @@ async function judge(
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
       ...(input.snapshot ? { reviewed_tree: input.snapshot.tree, basis_sha: basis } : {}),
+      ...(input.snapshot && input.base !== undefined ? { reviewed_base: input.base } : {}),
       ...(delta ? { setup_sha: setupSha } : {}),
       ...(deltaMark ? { delta: deltaMark } : {}),
       checks: input.checks,
@@ -991,6 +994,7 @@ function checksOnlyRound(
       ...(input.artifactSha ? { artifact_sha: input.artifactSha } : {}),
       ...(input.diffSha ? { diff_sha: input.diffSha } : {}),
       ...(input.snapshot ? { reviewed_tree: input.snapshot.tree, basis_sha: opts.basis } : {}),
+      ...(input.snapshot && input.base !== undefined ? { reviewed_base: input.base } : {}),
       checks: input.checks,
       checks_only: true,
       outcome: 'stopped',

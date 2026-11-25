@@ -122,6 +122,10 @@ export interface GateRunEntry {
   // Optional because every entry before C3 lacks them — such a round is never a delta base.
   reviewed_tree?: string
   basis_sha?: string
+  // Row 274 (unit review I1). The commit the round's change set was cut from (ship): the merge stamp
+  // closes another plan's switch-off item only where this base held its line and the tree does not.
+  // Absent on every round before it, and on gates that cut no change set.
+  reviewed_base?: string
   // Row 185. `prompts_sha` without the delta block, written only when the two differ — the
   // malformed-streak brake compares setups, and two delta rounds over changing content carry
   // different blocks under one setup. `delta` names the round this one was judged against.
