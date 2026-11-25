@@ -630,7 +630,7 @@ The rationale trail (ADR-lite; captured here since `adr/` is cut). Rows changed 
 - **A moved file's switch-offs read new at its new path**; its old items close once the old path is gone (rows 273–274).
 - **The booking is never offered at the bound**: its re-gate spends a round, so at the bound a switch-off is revised or approved (row 274).
 - **The token table is a closed list**: other tools' suppressions — `# pyright: ignore`, `# mypy: ignore-errors`, staticcheck's `//lint:ignore` and `//lint:file-ignore` — are not in it; `checks.switchOffs` can add them as literals meanwhile (row 273).
-- **A test API call split across lines** (`it\n  .skip(`), bracket access (`it['skip'](`) and a constant condition (`it.skipIf(true)(`) are missed by the line scan; T3b's tests effect is the catch (row 273).
+- **A token split across lines or around a comment is missed by the line scan**: a test API call (`it\n  .skip(`), bracket access (`it['skip'](`), a constant condition (`it.skipIf(true)(`), a Rust attribute whose `#` and `[` sit on different lines or around a `/* … */`; T3b's effect layer is the catch for tests and lint (row 273).
 - **Row 269's lint observation can close another plan's item on a tree cut before that plan merged** (stamp order is not merge order, and a human may merge a PR whose base moved); row 274's switch-off observation reads the round's base for this, the lint one does not yet (rows 269, 274).
 - **A switch-off item closes only once every copy of its line in the file is gone**, the base's too: one over a line the base already held copies of may stay open until those go (row 274).
 - **Why the judge booked reaches no human screen**: its `reason` is on the decision entry, while decide's booked view and the item show neither (row 274).
