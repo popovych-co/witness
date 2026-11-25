@@ -293,6 +293,12 @@ is offered to approve — fix what the check names and re-run the gate. Under dr
 round whose red lint parts all wait on the base's lint result waits for drive's base lint
 (`awaits-drive:`), then runs again.
 
+When a lint part is red on the base too, or red in a way only you can accept,
+`witness decide <gate> <plan> --book lint` books it — exactly the errors witness can read, or the
+whole part until main moves — and the gate runs again. Under autonomy it is yours alone, typed at your
+own terminal, and drive leaves such a stop for you. `witness status` lists every open booking; each
+closes once main no longer holds it, and `witness dismiss ledger` ends one at your terminal.
+
 A ship that ends on a hold only you can clear is a stop of yours, remembered in the journal, so it
 survives a drive restart: `waiting: merge` (no CI checks, or none passed) with the merge command
 pinned to the approved commit (`gh pr merge N --<ship.merge> --match-head-commit <sha>`), or

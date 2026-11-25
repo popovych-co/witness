@@ -196,6 +196,16 @@ bars approve. Markers test `OPENS` on the lines the plan adds (C16). Implement r
 owes them. A round red only for base results a drive will lint — keys the job owes, on unmoved content — is left to drive
 (`Settled.waiting`); the landing makes the stop stale (`ActFacts.checksMoved`), so the policy routes the re-gate.
 
+**As built (T2e, row 270).** The waiver is `CHECKS.waiver` (`checkWaiver`): `lint` is the human's; no other check has
+one yet (T3 and T4a add the judge's). A checks-only round's withheld check with a waiver offers `--book <check>`, which
+books each part `red`, `new`, `not-measured` or `not-judged` — never `pending` or `untrusted` — per diagnostic where the
+lane gave it a `book`, whole otherwise, held at the part's base key until main moves (the map's C19). Base-red's
+readers widen (C20): a red part with a bound, trusted reader reads the plan's tree whatever its base, but `pending`, so a
+whole booking is left for parts witness cannot read (no reader, an unreadable report, past 500 distinct keys). A booking
+waives its own plan only (C17), at both gates; a booked part reads `booked`, passes, and moves `checksSignature`. Rule
+`book-owed` sends a round whose every non-passing part is `not-judged` to the human (C23); a part the author may own
+keeps `checks-only`, the revise first and the booking after it.
+
 **Acceptance.**
 - A checks-only round spawns no reviewer and discharges no deferral.
 - decide refuses `--approve` on it.
@@ -245,6 +255,21 @@ subject) and never move between streams.
 - Every transition is journaled once, even across a kill.
 - Owed work drops when an item is declined.
 - A booked switch-off closes on the first merged tree without the line.
+
+**As built (T2e, rows 269–270).** The stream is `ledger` (`src/ledger.ts`): `ledger-open` (an act), `ledger-closed`
+(bookkeeping), `ledger-dismissed` (an act); ids `l-<8 hex>`, each open carrying `key` (16 hex over kind, check, plan,
+part and subject), so an item's identity names its plan (C17) and a booking reuses an open item by it — unless the
+round's part already applies that item. `born` and owed work wait for the first kind with a birth: a booked check is
+never owed work (C21). Closing is by observation at two acts that already write a transaction (C18): the merge stamp of
+plan M, from M's last ship round that ran lint with parts (the tree that merges, its `reviewed_tree` on the close), for
+M's open items and merged plans' — a part green there, or the lane's `cleared` (per-diagnostic items whose every key the
+tree lacks); and the abandon, for the abandoned plans' items. No base-lint job is owed for an item; an observation that
+did not happen closes nothing. Dismissal is `witness dismiss ledger --item <id|index> --cause
+<rule-retired|declined|judged-wrong> --note "<why>"` (C22), at a terminal, never under a session marker, after a y/N.
+`decide … --book <check>` writes its decision (`decision: 'book'`, `book: {check, items}`) and its new opens in one
+transaction under the repo lock, re-reading the ledger there; the gate's state is then `booked`, whose one act is the
+re-gate. `status` lists open items (`booked[n]{item,plan,part,holds,since}`) with the dismissal; `log` names each
+transition; `check` reports a `ledger` stream another history holds.
 
 ### 3.4 Counterfactual runs (CF) — T3
 
@@ -438,6 +463,14 @@ idempotence key.
 
 **Arbiter input** gets only CLI-structured facts about checks (names, counts, rule ids), never tool output, diff
 text or finding prose written by the agent.
+
+**As built (T2e, rows 270–271).** A typed `--book` under committed autonomy — HEAD's config, which a working-copy edit
+cannot lift — needs `isTTY` and a y/N listing each part; it is refused for the policy and the arbiter, on a nod, and
+under any session marker witness set (`WITNESS_DRIVE`, `WITNESS_JOB`; a reviewer is refused every acting verb at
+dispatch). `witness dismiss ledger` is always a terminal act, autonomy or not. `gate --manual` refuses
+`manual-in-session` under any session marker, before anything is read or journaled. The two-stream acts built here —
+`--book`, the merge stamp's and the abandon's closes, the dismissal — each run in one transaction with the ledger read
+again under its lock.
 
 **As built (T2d, row 266).** `checkFacts` prints each check's name and verdict, each lint part's state with its counts
 and rule ids, how many commands trust kept from running, and the held criteria's ids — never a check's `detail`, a part's
@@ -760,6 +793,10 @@ grant.
 Booked switch-offs and waived guards are decisions the AI judge may take, and they show in the PR's top block.
 Human-only waivers (lint bookings) arrive as decisions in needs-you.
 
+**As built (T2e, row 270).** The policy leaves a `book-owed` stop to the human (`autonomy: left for a human — only the
+human books lint — <parts> red on the base too`), with no model call; drive sets it aside as a decision, and needs-you's
+decision item names its act on a `book:` row (`witness decide <gate> <plan> --book lint`), read from the journal's facts.
+
 ---
 
 ## 6. Settings and migrate
@@ -955,3 +992,29 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   so under autonomy such a round was revised; it is now `waiting` to the settle — drive's work in flight — and the
   landed result makes the stop stale, so the policy routes the re-gate. With jobs off for the run, drive sets it aside
   for the human.
+- **The scratch checkout's names (T2e, row 258).** Main's row 268 (#99) took `src/scratch.ts` and `withScratch` for its
+  temp-directory owner; T2b's unreleased checkout moved to `src/scratch-checkout.ts` and its lock holder to
+  `withScratchLock` before the merge, and the scratch run's temp index goes through main's `withScratch`.
+- **C17 (T2e, row 270).** §3.3 keys items (kind, check, subject); a booked check's subject names its plan, so a booking
+  waives its own plan's lint at both gates and reaches main only through its plan's merge. Ids are minted; the 16-hex
+  key is the idempotence key.
+- **C18 (T2e, row 269).** "Closes when they are gone", observed by the owning check on the merged tree, is the merge
+  stamp of the merging plan reading that plan's last ship lint (a green part, or the lane's `cleared` ids) for its own
+  items and merged plans'; an abandoned plan's items close in the abandon's transaction; no base-lint job is owed for
+  an item.
+- **C19 (T2e, row 270).** A base-red part's human-only booking, extent unsaid, holds whole at the part's base key (base
+  commit and commands): asked again once main moves (the user's call of 2026-11-24).
+- **C20 (T2e, row 270).** Readers diffed (tool, rule, file, snippet) only when the base was red; a reader-bound red part
+  reads the plan's own diagnostics whatever its base (green, not measured, unreadable), so bookings are exact wherever
+  witness can read the plan's tree, whole only for opaque or unreadable parts or past 500 distinct keys.
+- **C21 (T2e, row 269).** Owed work is "open and not born"; a booked check (and T3's booked switch-off) has no birth, so
+  it is never owed work: it closes by observation or dismissal, and nothing routes it.
+- **C22 (T2e, row 269).** `witness dismiss <item> --cause <cause>` is `witness dismiss ledger --item <id|index> --cause
+  <rule-retired|declined|judged-wrong> --note "<why>"`, row 122's verb shape with the reserved stream as its artifact,
+  always at a terminal (isTTY and a prompt), never in a session.
+- **C23 (T2e, row 270).** Human-only waivers arrive in needs-you as decisions where no author could clear the red: the
+  policy leaves a lint stop to the human (`book-owed`) only when every part that does not pass is `not-judged`; a part
+  the author may fix (`new`, `red`, `not-measured`) is revised first, the booking offered beside it — a machine cannot
+  tell whose such a red is.
+- **Any session marker (T2e, rows 270–271; security review).** §3.9 refused `gate --manual` inside a drive session; it
+  and `--book` refuse under any marker witness sets (a drive job's too), as `dismiss ledger` does.
