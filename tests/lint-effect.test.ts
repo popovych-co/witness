@@ -5,8 +5,8 @@ import { loosenedKey } from '../src/diagnostics.js'
 import { isJobKey, jobKinds } from '../src/jobs.js'
 import { appendEntry } from '../src/journal.js'
 import {
-  EFFECT_RESULT_BYTES, LINT_EFFECT, LINT_EFFECT_BOX_MS, effectCommands, lintEffectKey, lintEffectKind, lintEffectResult,
-  parseLintEffectKey, type LintEffectResult,
+  EFFECT_RESULT_BYTES, LINT_EFFECT, LINT_EFFECT_BOX_MS, MAX_HIT_FILE, effectCommands, fitResult, lintEffectKey, lintEffectKind,
+  lintEffectResult, parseLintEffectKey, type LintEffectResult,
 } from '../src/lint-effect.js'
 import type { Result } from '../src/refusal.js'
 import { loadCanon } from '../src/scan.js'
@@ -180,6 +180,16 @@ describe('the lint-effect job (row 277)', () => {
     expect(lintEffectKind.boxMs({} as Config)).toBe(LINT_EFFECT_BOX_MS)
     const kinds = jobKinds({}).map((k) => k.kind)
     expect(kinds.indexOf(LINT_EFFECT)).toBe(kinds.indexOf('base-lint') + 1)
+  })
+
+  it('a hit on a path past MAX_HIT_FILE counts into over, so the result still validates and nothing is bookable (push security review)', () => {
+    const head = { plan: 'a'.repeat(40), effect: 'b'.repeat(40), parts: [], readers: [{ tool: 'biome' as const }] }
+    const hit = (file: string) => ({ tool: 'biome' as const, rule: 'lint/test/noBad', file, line: 1, key: 'c'.repeat(16), count: 1 })
+    const r = fitResult(head, [hit('src/a.ts'), hit(`src/${'d/'.repeat(MAX_HIT_FILE)}x.ts`)])
+    expect(r.hits.map((h) => h.file)).toEqual(['src/a.ts'])
+    expect(r.over).toBe(1)
+    expect(lintEffectResult(r)).toEqual(r)
+    expect(lintEffectResult({ ...r, hits: [hit('x'.repeat(MAX_HIT_FILE + 1))] })).toBeUndefined()
   })
 
   it('the result validator takes only its own shape (row 277)', () => {

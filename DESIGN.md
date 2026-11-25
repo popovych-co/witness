@@ -635,6 +635,7 @@ The rationale trail (ADR-lite; captured here since `adr/` is cut). Rows changed 
 - **The booking is never offered at the bound**: its re-gate spends a round, so at the bound a switch-off is revised or approved (row 274).
 - **The token table is a closed list**: other tools' suppressions — `# pyright: ignore`, `# mypy: ignore-errors`, staticcheck's `//lint:ignore` and `//lint:file-ignore` — are not in it; `checks.switchOffs` can add them as literals meanwhile (row 273).
 - **An added definition other than an ignore file** — a nested `biome.json` or `tsconfig.json` in an existing folder — can loosen its subtree unseen: an added definition stays as the plan wrote it, since 33 of 83 real touches were new packages (row 277).
+- **A definition the plan turns into a directory is not restored** (the fold cannot put a file over a tree): the plan's own tool then fails to read its config; a definition git cannot read for the plan (`chmod 000`) reads the lint effect not checked, said to the arbiter, while the plan's own tools fail on it too (row 277; push security review).
 - **TOML sections** (`Cargo.toml [lints]`, `pyproject.toml [tool.ruff]`) are not definitions until a Rust or Python consumer is probed; whole TOML files in the default list are (row 277).
 - **A tool upgraded together with its config** reads the base's config through the new tool; a part that crashes there stands as a loosened part the judge books (row 277).
 - **The lint effect runs both trees in the scratch**, so a difference only the plan's worktree environment shows is not seen (row 277).
