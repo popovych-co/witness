@@ -8,6 +8,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parentsInTree, witnessPaths } from './change-set.js'
+import { gitBlob, tryGitC } from './gitio.js'
 import type { Ctx } from './cli.js'
 import { parseReport, type RawDiagnostic } from './lint-readers.js'
 import { ok, refuse, v, type Result } from './refusal.js'
@@ -128,6 +129,23 @@ export function diagnosticKey(d: Diagnostic): string {
 // over the normalized line the effect tree holds, so the merge stamp finds it again in a merged tree.
 export function loosenedKey(d: Pick<Diagnostic, 'tool' | 'rule' | 'file' | 'snippet'>): string {
   return createHash('sha256').update(JSON.stringify(['loosened', d.tool, d.rule, d.file, d.snippet])).digest('hex').slice(0, 16)
+}
+
+// Row 278 (§3.3). How many of `tree`'s lines of `file` (a tree or a commit) a booked hidden rule still
+// finds: those whose `loosenedKey` — the item's tool and rule, the file, the line normalized — it books;
+// a lineless (whole-file) key reads 1 while the tree holds the file. A file the tree lacks holds none —
+// confirmed by `ls-tree` — and a read git fails reads undefined: observed nothing.
+export function hiddenInTree(
+  root: string, tree: string, file: string, tool: ReaderTool, rule: string, keys: ReadonlySet<string>, lineless: boolean,
+): number | undefined {
+  const listed = tryGitC(root, '--literal-pathspecs', 'ls-tree', '-z', tree, '--', file)
+  if (!listed.ok) return undefined
+  if (listed.out.trim() === '') return 0
+  if (lineless) return 1
+  const blob = gitBlob(root, tree, file)
+  if (blob === undefined) return undefined
+  return blob.toString('utf8').split(/\r?\n/)
+    .filter((line) => keys.has(loosenedKey({ tool, rule, file, snippet: normalizeSnippet(line) }))).length
 }
 
 export function keyCounts(ds: readonly Diagnostic[]): Map<string, number> {

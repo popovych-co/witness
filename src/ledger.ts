@@ -9,6 +9,8 @@ import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { treeReadable } from './snapshot.js'
 import { LEDGER_STREAM } from './streams.js'
 import { copiesInTree } from './switch-offs.js'
+import { defsHeld } from './definitions.js'
+import { hiddenInTree } from './diagnostics.js'
 import { visible } from './toon.js'
 
 // Row 269 (the trust design §3.3, LD). The repo ledger: what a human booked, kept on witness's own
@@ -535,7 +537,38 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(newest?.reviewed_tree !== undefined ? { tree: newest.reviewed_tree } : {}) }
     return [close]
   })
-  return [...lint, ...offs, ...drops]
+  // Row 278 (§3.3). A booked loosening closes once main no longer holds what was hidden, read from the same
+  // newest round's tree and base: a hidden rule when no key it books is held by its file (a lineless key
+  // while its file is there), a loosened part when the tree holds every base side of its definitions again.
+  // The plan's own items read the tree alone; another merged plan's only where the base still held them and
+  // the tree does not — this merge did it. A read git fails observes nothing.
+  const holds = (at: string, i: LoosenedItem): boolean | undefined => {
+    if ('defs' in i.subject) {
+      const back = defsHeld(root, at, i.subject.defs)
+      return back === undefined ? undefined : !back
+    }
+    const byFile = new Map<string, { keys: Set<string>; lineless: boolean }>()
+    for (const [key, spot] of Object.entries(i.subject.hidden)) {
+      const f = byFile.get(`${spot.lineless === true}:${spot.file}`) ?? { keys: new Set<string>(), lineless: spot.lineless === true }
+      f.keys.add(key)
+      byFile.set(`${spot.lineless === true}:${spot.file}`, f)
+    }
+    let any = false
+    for (const [at2, f] of byFile) {
+      const n = hiddenInTree(root, at, at2.slice(at2.indexOf(':') + 1), i.tool!, i.rule ?? '', f.keys, f.lineless)
+      if (n === undefined) return undefined
+      if (n > 0) any = true
+    }
+    return any
+  }
+  const loose = tree === undefined ? [] : open.flatMap((i) => {
+    if (i.kind !== 'booked-loosened' || !merged(i.plan) || (!('defs' in i.subject) && i.tool === undefined)) return []
+    if (holds(tree, i) !== false) return []
+    if (i.plan !== plan && (base === undefined || holds(base, i) !== true)) return []
+    const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
+    return [close]
+  })
+  return [...lint, ...offs, ...drops, ...loose]
 }
 
 // Row 269. An abandoned plan never merges, so nothing it booked reaches main: each of its open items
