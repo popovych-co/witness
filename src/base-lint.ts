@@ -18,6 +18,7 @@ import { partPasses } from './lint-lane.js'
 import { execCommand, interrupted } from './runner.js'
 import type { Canon } from './scan.js'
 import { inScratch, type CfStep } from './scratch-checkout.js'
+import { effectWait } from './lint-effect.js'
 
 export const BASE_LINT = 'base-lint'
 // One reset, one prepare (and a re-prepare's worth of slack), a part and its reader.
@@ -118,9 +119,16 @@ function pendingKeys(root: string, plan: string): string[] {
 //   red     struck twice, no drive runs (nothing reads pending without one), or no job owes it.
 // Every other part that did not pass is red, and so is a missing part with no key. All empty for any
 // run but a checks-only round whose last check is lint, and for a config file that does not load.
+// Row 277: a checks-only round whose last check is a red `definitions` waits on the lint effect alone
+// (`effectWait`): `waiting` or `landed`, never `red`.
 export interface BaseWait { waiting: string[]; landed: string[]; red: string[] }
 export function baseWait(root: string, run: GateRunEntry): BaseWait {
   const out: BaseWait = { waiting: [], landed: [], red: [] }
+  const effect = effectWait(root, run)
+  if (effect !== undefined) {
+    out[effect].push('definitions')
+    return out
+  }
   const lint = run.checks_only === true ? run.checks.at(-1) : undefined
   if (lint?.name !== 'lint' || lint.parts === undefined) return out
   const cfgR = loadConfig(root)

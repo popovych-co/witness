@@ -10,7 +10,7 @@ import { ledgerItems, openItems } from '../src/ledger.js'
 import type { DecisionEntry } from '../src/rounds.js'
 import { applyDecision, run as decide } from '../src/verbs/decide.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
-import { CLEAN_FOUR, TOKEN_BROKEN, TOKEN_FIXED, callCount, callFor, fakeCtx, offRed, patchConfig, putVerdict } from './helpers.js'
+import { CLEAN_THREE, TOKEN_BROKEN, TOKEN_FIXED, callCount, callFor, fakeCtx, offRed, patchConfig, putVerdict } from './helpers.js'
 
 const decisions = (b: Awaited<ReturnType<typeof offRed>>) =>
   readStream(b.repo.root, b.planId).filter((e) => e.t === 'human-decision') as unknown as DecisionEntry[]
@@ -53,7 +53,7 @@ describe('a switch-off red offers the booking (row 274)', () => {
   it('not live beside a blocking finding or another failed check; the approve stays live after the booking (C26, row 93)', async () => {
     // a blocking finding: the revise is the author's first
     const b = await offRed()
-    putVerdict(b.scenario, { ...CLEAN_FOUR, findings: [{ blocking: true, anchor: 'src/token.ts#rotateDue', claim: 'no expiry bound' }] })
+    putVerdict(b.scenario, { ...CLEAN_THREE, findings: [{ blocking: true, anchor: 'src/token.ts#rotateDue', claim: 'no expiry bound' }] })
     expect(await b.gate()).toBe(1)
     expect(await show(b)).not.toContain('--book')
     const r = await b.repo.cli(['decide', 'implement', b.planId, '--book', 'switch-offs'])

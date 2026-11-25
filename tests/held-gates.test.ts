@@ -15,7 +15,7 @@ const HELD_META = (cmd = 'false') => ({
   criteria: [{ id: 'ac-rotate', test: '@spec:auth-refresh' }, { id: 'ac-prod', cmd }],
   needs: [{ id: 'prod', manual: 'production access granted', satisfied: false, holds: ['ac-prod'] }],
 })
-const CLEAN = { coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })), findings: [] }
+const CLEAN = { coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })), findings: [] }
 async function heldFlow(cmd?: string) {
   const seed = await shippableRepo()
   seed.repo.setMeta('auth-refresh', HELD_META(cmd))

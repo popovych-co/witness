@@ -10,6 +10,8 @@ import { loadCanon } from '../src/scan.js'
 import { lazyStamp } from '../src/stamp.js'
 import { LEDGER_STREAM } from '../src/streams.js'
 import { switchOffKey } from '../src/switch-offs.js'
+import { createHash } from 'node:crypto'
+import { hiddenInTree, loosenedKey } from '../src/diagnostics.js'
 import { bookedRows } from '../src/verbs/dashboard.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
 import {
@@ -474,5 +476,95 @@ describe('a booked loss ends by observation (row 276)', () => {
     shipSummary(s.repo, s.planId, { ...counts(2), specs: { 'auth-refresh': counts(2) }, base: { 'auth-refresh': { passed: 1, skipped: 0 } } })
     s.stamp()
     expect(byId(s.repo.root, inFlight).state).toBe('open')
+  }, 120_000)
+})
+
+// Row 278. A booked hidden rule (one spot per entry) and a booked loosened part, as the booking writes them.
+const looseItem = (repo: TestRepo, o: { plan: string; spots: Array<{ file: string; snippet: string; lineless?: true }> }): string => {
+  const id = newItemId()
+  const hidden = Object.fromEntries(o.spots.map((x) => [loosenedKey({ tool: 'biome', rule: 'lint/test/noBad', file: x.file, snippet: x.snippet }),
+    { file: x.file, copies: 1, ...(x.lineless ? { lineless: true } : {}) }]))
+  line(repo, LEDGER_STREAM, { t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-loosened', check: 'switch-offs', plan: o.plan, gate: 'ship',
+    round: 1, run_id: 'r-1', tool: 'biome', rule: 'lint/test/noBad', subject: { hidden } })
+  return id
+}
+const SCRIPTS = { lint: 'node fake-lint.mjs check' }
+const jsonId = (v: unknown) => `json:${createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16)}`
+const partItem = (repo: TestRepo, plan: string): string => {
+  const id = newItemId()
+  line(repo, LEDGER_STREAM, { t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-loosened', check: 'switch-offs', plan, gate: 'ship',
+    round: 1, run_id: 'r-1', part: 'lint', subject: { defs: { 'package.json#scripts': jsonId(SCRIPTS) } } })
+  return id
+}
+const BADLINE = 'export const x = "BAD"'
+const pkg = (scripts: unknown) => `${JSON.stringify({ name: 'x', scripts }, null, 2)}\n`
+
+describe('a booked loosening ends by observation (row 278)', () => {
+  it("the plan's own hidden item stays open at its merge while the merged tree holds the line, and closes once it does not (row 278)", async () => {
+    const s = await mergedSeed()
+    const id = looseItem(s.repo, { plan: s.planId, spots: [{ file: 'src/hidden.ts', snippet: BADLINE }] })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/hidden.ts': `  ${BADLINE}\n` }), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)
+    const tree = treeWith(s.repo, { 'src/hidden.ts': 'export const x = "fine"\n' })
+    shipRunAt(s.repo, s.planId, tree, baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toContainEqual(expect.objectContaining({ id, by: 'merge', plan: s.planId, pr: 7, tree }))
+  }, 120_000)
+
+  it('a later merge that rewrites the line closes it — only where its base held the line (row 278)', async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const id = looseItem(s.repo, { plan: 'old-plan', spots: [{ file: 'src/hidden.ts', snippet: BADLINE }, { file: 'src/b.ts', snippet: BADLINE }] })
+    const lacking = treeWith(s.repo, { 'src/hidden.ts': 'x\n', 'src/b.ts': 'y\n' })
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, { 'src/z.ts': 'z\n' }))          // a base that never held it: no word on it
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/hidden.ts': 'x\n', 'src/b.ts': `${BADLINE}\n` }), baseWith(s.repo, { 'src/hidden.ts': `${BADLINE}\n` }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)    // one spot still held
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, { 'src/b.ts': `${BADLINE}\n` }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toContain(id)
+  }, 120_000)
+
+  it('a lineless hidden item closes only once its file is gone (row 278)', async () => {
+    const s = await mergedSeed()
+    const id = looseItem(s.repo, { plan: s.planId, spots: [{ file: 'src/fmt.ts', snippet: '', lineless: true }] })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/fmt.ts': '\n\n' }), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/other.ts': 'o\n' }), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toContain(id)
+  }, 120_000)
+
+  it("a part item closes once a merged tree holds the base's check definitions again (row 278)", async () => {
+    const s = await mergedSeed()
+    const own = partItem(s.repo, s.planId)
+    mergedPlan(s.repo, 'old-plan')
+    const old = partItem(s.repo, 'old-plan')
+    // a merge that edits the scripts again: both stay open
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'package.json': pkg({ lint: 'true' }) }), baseWith(s.repo, { 'package.json': pkg({ lint: 'true' }) }))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    // the scripts restored: the plan's own closes; another plan's only where the base did not hold them
+    const restored = treeWith(s.repo, { 'package.json': pkg(SCRIPTS) })
+    shipRunAt(s.repo, s.planId, restored, baseWith(s.repo, { 'package.json': pkg(SCRIPTS) }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toEqual([own])
+    shipRunAt(s.repo, s.planId, restored, baseWith(s.repo, { 'package.json': pkg({ lint: 'true' }) }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id).sort()).toEqual([own, old].sort())
+  }, 120_000)
+
+  it('an unreadable tree, or a round with no tree, observes nothing (row 278)', async () => {
+    const s = await mergedSeed()
+    looseItem(s.repo, { plan: s.planId, spots: [{ file: 'src/hidden.ts', snippet: BADLINE }] })
+    partItem(s.repo, s.planId)
+    shipRunAt(s.repo, s.planId, 'b'.repeat(40), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    shipRunAt(s.repo, s.planId, undefined, baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+    expect(hiddenInTree(s.repo.root, 'b'.repeat(40), 'src/hidden.ts', 'biome', 'lint/test/noBad', new Set(['k']), false)).toBeUndefined()
+  }, 120_000)
+
+  it("the abandon closes the plan's loosened items (row 278)", async () => {
+    const { repo, planId } = await shippableRepo()
+    const mine = looseItem(repo, { plan: planId, spots: [{ file: 'src/hidden.ts', snippet: BADLINE }] })
+    const part = partItem(repo, planId)
+    const r = await repo.cli(['abandon', planId])
+    expect(r.code, r.stderr).toBe(0)
+    expect([byId(repo.root, mine).state, byId(repo.root, part).state]).toEqual(['closed', 'closed'])
   }, 120_000)
 })

@@ -7,6 +7,7 @@ import {
 } from '../src/config.js'
 import { defaultValues, fingerprint, SCHEMA_FINGERPRINTS, settingAt, withValues } from '../src/settings.js'
 import { configYaml, seededRepo, tmpRepo, writeLocalConfig, patchConfig } from './helpers.js'
+import { DEFAULT_DEFINITIONS, definitionEntry } from '../src/definitions.js'
 import { scratchDir } from './scratch.js'
 
 describe('loadConfig', () => {
@@ -466,9 +467,29 @@ describe('checks.switchOffs (row 273)', () => {
     const repo = tmpRepo()
     repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 3 })))
     const old = loadConfig(repo.root)
-    expect(old.ok && old.value.checks).toEqual({ switchOffs: [] })
+    expect(old.ok && old.value.checks.switchOffs).toEqual([])
     expect(old.ok && old.value.warning).toMatch(/schema 3 is older than this witness \(4\)/)
     repo.write('witness.config.yaml', configYaml({ checks: { switchOffs: ['istanbul ignore'] } }))
     expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { checks: { switchOffs: ['istanbul ignore'] } } })
+  })
+})
+
+describe('checks.definitions (row 277)', () => {
+  it('checks.definitions holds repo paths or globs, each with at most one #member (row 277)', () => {
+    const s = settingAt('checks.definitions')!
+    expect(checkValue(s, ['.gitignore', 'tsconfig*.json', 'package.json#scripts', 'apps/web/biome.json', '**/x.json'])).toMatchObject({ ok: true })
+    expect(checkValue(s, [])).toMatchObject({ ok: true })
+    for (const bad of [['/abs'], ['a/../b'], ['a//b'], ['./a'], ['a/'], ['x#'], ['#y'], ['a#b#c'], ['has space'], [''], ['é'], ['x'.repeat(201)], [`x#${'m'.repeat(101)}`], 'one', [1]]) {
+      expect(checkValue(s, bad), JSON.stringify(bad)).toMatchObject({ ok: false, violations: [expect.objectContaining({ field: 'checks.definitions', rule: 'invalid' })] })
+    }
+  })
+
+  it('a schema 3 file reads checks.definitions as the default list in memory (row 193)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 3 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.checks.definitions).toEqual(DEFAULT_DEFINITIONS.map((x) => definitionEntry(x)))
+    repo.write('witness.config.yaml', configYaml({ checks: { definitions: ['.gitignore', 'package.json#scripts'] } }))
+    expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { checks: { definitions: [{ glob: '.gitignore' }, { glob: 'package.json', member: 'scripts' }] } } })
   })
 })

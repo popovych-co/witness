@@ -99,6 +99,10 @@ export function tmpRepo(): TestRepo {
   git('config', 'user.name', 'test')
   git('config', 'user.email', 'test@example.com')
   git('config', 'commit.gpgsign', 'false')
+  // Row 277 (settled point 9). A runner's cache lands under node_modules/; ignored in every checkout of
+  // the repo (worktrees and the scratch share info/exclude), never by a tracked .gitignore a fixture
+  // plan would change: a plan that changes a check definition owes the lint effect.
+  appendFileSync(join(root, '.git', 'info', 'exclude'), 'node_modules/\n')
 
   const write = (rel: string, content: string) => {
     const p = join(root, rel)
@@ -527,15 +531,23 @@ const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'o
 // any error exists; `sarif` prints them as SARIF; `garbage` prints no report; `many` prints 2,001
 // distinct errors. It sets `process.exitCode` rather than calling `process.exit`, which cuts a pipe
 // write past 64 KiB (T2a's probe) — `many`'s report is ~400 KB.
+// Row 277. Its own check definitions, read in `check` and `sarif` alike: a file is skipped when the root
+// .gitignore holds its path, `/` plus its path, or a folder of it ending in `/`, or when fake-lint.json's
+// `skip` lists it; fake-lint.json's `"report": "garbage"` makes `sarif` print no report.
 const FAKE_LINT = `// A lint tool for tests: an error is each line holding BAD in a .ts file under src/.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+const ignored = existsSync('.gitignore') ? readFileSync('.gitignore', 'utf8').split('\\n').map((l) => l.trim()).filter(Boolean) : []
+const conf = existsSync('fake-lint.json') ? JSON.parse(readFileSync('fake-lint.json', 'utf8')) : {}
+const skip = (file) => (conf.skip ?? []).includes(file)
+  || ignored.some((l) => l === file || l === \`/\${file}\` || (l.endsWith('/') && file.startsWith(l.replace(/^\\//, ''))))
 const found = []
 if (existsSync('src')) {
   for (const f of readdirSync('src', { recursive: true }).map(String).filter((n) => n.endsWith('.ts')).sort()) {
+    if (skip(\`src/\${f}\`)) continue
     readFileSync(\`src/\${f}\`, 'utf8').split('\\n').forEach((l, i) => { if (l.includes('BAD')) found.push({ file: \`src/\${f}\`, line: i + 1 }) })
   }
 }
-const mode = process.argv[2]
+const mode = process.argv[2] === 'sarif' && conf.report === 'garbage' ? 'garbage' : process.argv[2]
 const result = (ruleId, file, line) => ({ ruleId, level: 'error', locations: [{ physicalLocation: { artifactLocation: { uri: \`\${process.cwd()}/\${file}\` }, region: { startLine: line } } }] })
 if (mode === 'sarif') process.stdout.write(JSON.stringify({ version: '2.1.0', runs: [{ results: found.map((x) => result('lint/test/noBad', x.file, x.line)) }] }))
 if (mode === 'many') process.stdout.write(JSON.stringify({ runs: [{ results: Array.from({ length: 2_001 }, (_, i) => result(\`lint/test/r\${i}\`, 'src/many.ts', 1)) }] }))
@@ -546,6 +558,19 @@ export function fakeLint(repo: TestRepo): { check: string; sarif: string; garbag
   repo.write('fake-lint.mjs', FAKE_LINT)
   const at = (mode: string) => `node fake-lint.mjs ${mode}`
   return { check: at('check'), sarif: at('sarif'), garbage: at('garbage'), many: at('many') }
+}
+
+// Row 277. `pnpm lint`'s shape for tests: run-script.mjs runs package.json's `scripts[argv[2]]` through
+// the shell, stdio inherited, its exit code passed on. Returns the command; the caller commits the file.
+const RUN_SCRIPT = `import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+const script = JSON.parse(readFileSync('package.json', 'utf8')).scripts?.[process.argv[2]]
+if (typeof script !== 'string') { console.error(\`missing script: \${process.argv[2]}\`); process.exit(1) }
+process.exitCode = spawnSync(script, { shell: true, stdio: 'inherit' }).status ?? 1
+`
+export function runScript(repo: TestRepo): string {
+  repo.write('run-script.mjs', RUN_SCRIPT)
+  return 'node run-script.mjs'
 }
 
 // Sets (or, for undefined, deletes) each leaf of `patch` in the repo's witness.config.yaml, keeping
@@ -924,8 +949,8 @@ export async function behaviorOnMain(extra: Record<string, unknown> = {}): Promi
   repo.write('package.json', readFileSync(join(fixturePath('vitest-single'), 'package.json'), 'utf8'))
   repo.write('src/token.ts', TOKEN_FIXED)
   repo.write('tests/token.test.ts', TOKEN_TESTS_UNTAGGED)
-  // The runner's cache lands under node_modules/ in the worktree; ignored, as the fixture's own
-  // .gitignore has it, so verify-red's stash never holds a file the red run writes again.
+  // The runner's cache lands under node_modules/ in the worktree; ignored (tmpRepo's info/exclude
+  // has it too), so verify-red's stash never holds a file the red run writes again.
   repo.write('.gitignore', `${repo.read('.gitignore')}node_modules/\n`)
   repo.git('add', 'package.json', 'src/token.ts', 'tests/token.test.ts', '.gitignore')
   repo.git('commit', '-m', 'existing behavior')
@@ -1163,11 +1188,10 @@ export function plantHolder(repo: TestRepo, shipped: string, writer?: string): s
   return planted
 }
 
-// Row 273. A clean verdict for vitest-single's four files in the worktree diff (coverage-minimum wants
+// Row 273. A clean verdict for vitest-single's three files in the worktree diff (coverage-minimum wants
 // an anchor for each), the switch-off benches' default.
-export const CLEAN_FOUR = {
+export const CLEAN_THREE = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },
@@ -1176,12 +1200,12 @@ export const CLEAN_FOUR = {
 }
 
 // Rows 251, 252, 275. A full-suite ship whose suite counts its own runs in a file outside the repo (an untracked
-// file in the worktree would join the plan change set). The fixture ignores only node_modules/,
-// so the worktree ignores reports/ too, committed on the branch before any gate runs.
+// file in the worktree would join the plan change set). The repo ignores only node_modules/, so it
+// ignores reports/ too, in info/exclude: a .gitignore edit on the branch would change a check
+// definition (row 277).
 export async function fullSuiteShip(suite?: (dir: string) => string) {
   const seed = await shippableRepo()
-  appendFileSync(join(seed.wt, '.gitignore'), 'reports/\n')
-  execFileSync('git', ['commit', '-am', 'ignore reports'], { cwd: seed.wt })
+  appendFileSync(join(seed.repo.root, '.git', 'info', 'exclude'), 'reports/\n')
   const dir = scratchDir('witness-runs-')
   const counter = join(dir, 'count.cjs')
   writeFileSync(counter, `require('fs').appendFileSync(${JSON.stringify(join(dir, 'runs'))}, 'x')`)
@@ -1194,7 +1218,7 @@ export async function fullSuiteShip(suite?: (dir: string) => string) {
   trustConfig(seed.repo)
   const count = () => (existsSync(join(dir, 'runs')) ? readFileSync(join(dir, 'runs'), 'utf8').length : 0)
   const scenario = fakeScenario()
-  putVerdict(scenario, CLEAN_FOUR)
+  putVerdict(scenario, CLEAN_THREE)
   const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario) })
   return { ...seed, count, scenario, ctx, suiteCmd }
 }
@@ -1203,7 +1227,7 @@ export async function fullSuiteShip(suite?: (dir: string) => string) {
 // first, so the line is its eighth); `gate` runs a gate round on it, plain.
 export async function offRed(line = '// eslint-disable-next-line no-console', file = 'src/token.ts') {
   const { repo, wt, planId } = await shippableRepo()
-  const scenario = fakeScenario(); putVerdict(scenario, CLEAN_FOUR)
+  const scenario = fakeScenario(); putVerdict(scenario, CLEAN_THREE)
   writeFileSync(join(wt, file), `${file === 'src/token.ts' ? TOKEN_FIXED : ''}${line}\n`)
   const gate = (name = 'implement', env: Record<string, string> = {}, opts: { tty?: boolean; answers?: string[] } = {}) =>
     runGate(fakeCtx(repo.root, { env: gateEnv(scenario, env), ...opts }), name, planId, { fresh: false, manual: false })

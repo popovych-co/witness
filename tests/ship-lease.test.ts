@@ -55,7 +55,6 @@ const BRANCH_GONE = 'the PR branch is gone from the remote — recreate or reope
 
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

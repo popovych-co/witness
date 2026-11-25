@@ -8,13 +8,14 @@ import {
 } from '../src/settings.js'
 import { SCHEMA_VERSION } from '../src/config.js'
 import { RELEASED_COMMENTS } from '../src/released-comments.js'
+import { DEFAULT_DEFINITIONS } from '../src/definitions.js'
 
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
 
 describe('the settings list (row 193)', () => {
-  it('holds 42 settings, each path once, each section in SECTION_ORDER', () => {
-    expect(SETTINGS).toHaveLength(42)
-    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(42)
+  it('holds 43 settings, each path once, each section in SECTION_ORDER', () => {
+    expect(SETTINGS).toHaveLength(43)
+    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(43)
     for (const s of SETTINGS) expect(SECTION_ORDER, s.path).toContain(s.path.split('.')[0])
     // the list is the file's order: sections appear in SECTION_ORDER, never interleaved
     const sections = SETTINGS.map((s) => s.path.split('.')[0]!).filter((x, i, a) => a[i - 1] !== x)
@@ -131,5 +132,16 @@ describe('checks.switchOffs (row 273)', () => {
     expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 4, checks: { switchOffs: [] } })
     expect(defaultValues({ schema: 3 })).not.toHaveProperty('checks')
     expect(SECTION_ORDER.indexOf('checks')).toBe(SECTION_ORDER.indexOf('readers') + 1)
+  })
+})
+
+describe('checks.definitions (row 277)', () => {
+  it('schema 4 adds checks.definitions with the default list; fingerprints 1–3 hold (row 277)', () => {
+    expect(settingAt('checks.definitions')).toMatchObject({ since: 4, shape: { kind: 'definitions' }, defaults: { 4: DEFAULT_DEFINITIONS }, group: 'setup' })
+    expect(settingAt('checks.definitions')!.ambient).toBeUndefined()
+    expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 4, checks: { switchOffs: [], definitions: [...DEFAULT_DEFINITIONS] } })
+    expect(fingerprint(4)).toBe(SCHEMA_FINGERPRINTS[4])
+    expect([1, 2, 3].map((n) => fingerprint(n))).toEqual([1, 2, 3].map((n) => SCHEMA_FINGERPRINTS[n]))
+    expect(SETTINGS.findIndex((s) => s.path === 'checks.definitions')).toBe(SETTINGS.findIndex((s) => s.path === 'checks.switchOffs') + 1)
   })
 })

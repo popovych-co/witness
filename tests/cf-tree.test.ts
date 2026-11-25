@@ -26,6 +26,20 @@ describe('trees for scratch runs (row 258)', () => {
     expect(repo.git('show', `${tree}:README.md`)).toBe('r')
   })
 
+  it('folds explicit blobs after the overlay paths, in their mode; a bad blob refuses (row 277)', () => {
+    const repo = tmpRepo()
+    repo.write('a.json', 'a\n'); repo.write('b.txt', 'b\n')
+    commitAll(repo, 'base')
+    const tree = repo.git('rev-parse', 'HEAD^{tree}')
+    const sha = gitIn(repo, ['hash-object', '-w', '--stdin'], 'spliced\n')
+    const folded = value(foldOverlay(repo.root, tree, { from: tree, paths: ['b.txt'], blobs: [{ path: 'a.json', mode: '100755', sha }] }))
+    expect(repo.git('ls-tree', folded, '--', 'a.json')).toBe(`100755 blob ${sha}\ta.json`)
+    expect(repo.git('show', `${folded}:b.txt`)).toBe('b')
+    expect(rule(foldOverlay(repo.root, tree, { from: tree, paths: [], blobs: [{ path: '../x', mode: '100644', sha }] }))).toBe('invalid')
+    expect(rule(foldOverlay(repo.root, tree, { from: tree, paths: [], blobs: [{ path: 'a.json', mode: '120000', sha }] }))).toBe('invalid')
+    expect(rule(foldOverlay(repo.root, tree, { from: tree, paths: [], blobs: [{ path: 'a.json', mode: '100644', sha: 'abc' }] }))).toBe('invalid')
+  })
+
   it('refuses a directory, an absolute path or a climb, and reads a glob character literally', () => {
     const repo = tmpRepo()
     repo.write('src/[ab].ts', 'odd\n'); repo.write('src/a.ts', 'a\n')

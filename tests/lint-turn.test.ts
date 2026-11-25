@@ -10,9 +10,9 @@ import { execCommand } from '../src/runner.js'
 import { runnerLockPath } from '../src/runner-lock.js'
 import { fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, tmpRepo, trustConfig } from './helpers.js'
 
-// The four files the vitest-single fixture lands in the worktree diff (tests/ship-junit.test.ts).
+// The three files the vitest-single fixture lands in the worktree diff (tests/ship-junit.test.ts).
 const CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
 

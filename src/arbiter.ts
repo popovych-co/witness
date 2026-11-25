@@ -186,9 +186,13 @@ function partFact(p: PartVerdict): string {
 // which the author typed into the comment (push security review; slice 2 review M5): the reviewers read
 // the line itself, the judge the facts.
 // Row 276: a spec's lost tests read as its canon id spelled out and counts — never a test name or output.
+// Row 278: what the plan's check definitions hide reads per tool, its unbooked diagnostics and how many
+// rules they name — never a path, a line or a rule id — and each loosened part by its name.
 function offFacts(offs: readonly OffVerdict[]): string[] {
   const groups = new Map<string, number>()
   const losses: string[] = []
+  const hiddenBy = new Map<string, { n: number; rules: Set<string> }>()
+  const loose: string[] = []
   for (const o of offs) {
     const n = offUnbooked(o)
     if (n === 0) continue
@@ -196,12 +200,22 @@ function offFacts(offs: readonly OffVerdict[]): string[] {
       losses.push(`tests of ${visible(o.spec)}: ${n} passing case${n === 1 ? '' : 's'} lost (skipped ${o.base.skipped}→${o.plan.skipped})`)
       continue
     }
+    if (o.kind === 'loosened') {
+      if (o.part !== undefined) { loose.push(`part ${visible(o.part)} passes only under the plan's check definitions`); continue }
+      const t = hiddenBy.get(o.tool) ?? { n: 0, rules: new Set<string>() }
+      t.n += n
+      t.rules.add(o.rule)
+      hiddenBy.set(o.tool, t)
+      continue
+    }
     const rules = o.rules?.length ?? 0
     const label = `${visible(o.token)}${rules > 0 ? ` (${rules} rule${rules === 1 ? '' : 's'})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
     groups.set(label, (groups.get(label) ?? 0) + n)
   }
   const booked = offs.reduce((a, o) => a + Math.min(o.count, o.booked ?? 0), 0)
-  return [...[...groups].map(([label, n]) => `${label}${n > 1 ? ` ×${n}` : ''}`), ...losses, ...(booked > 0 ? [`${booked} booked`] : [])]
+  const hidden = [...hiddenBy].map(([tool, t]) =>
+    `${tool}: ${t.n} diagnostic${t.n === 1 ? '' : 's'} the plan's check definitions hide (${t.rules.size} rule${t.rules.size === 1 ? '' : 's'})`)
+  return [...[...groups].map(([label, n]) => `${label}${n > 1 ? ` ×${n}` : ''}`), ...losses, ...hidden, ...loose, ...(booked > 0 ? [`${booked} booked`] : [])]
 }
 
 // Row 266 (§3.9). A check as the arbiter reads it: CLI-structured facts only — its name and verdict,
@@ -215,6 +229,10 @@ export function checkFacts(c: GateCheck): string {
     ...offFacts(c.offs ?? []),
     // Row 276: a round whose tests effect was not checked says so, never why (the why may name paths).
     ...(c.tests_effect?.read === 'not-checked' ? ['tests not checked'] : []),
+    // Row 278: and a definitions check whose lint effect was not checked, never why.
+    ...(c.lint_effect?.read === 'not-checked' ? ['lint effect not checked'] : []),
+    // Final review I1: and each reader a measured effect could not read, never why.
+    ...(c.lint_effect?.read === 'measured' ? (c.lint_effect.unread ?? []).map((t) => `${t} not read under the base's definitions`) : []),
     ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
     ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
   ]

@@ -450,7 +450,7 @@ describe("drive prints a session's journaled acts (row 214)", () => {
 describe('a gate trust stop is taken back once its commands are trusted (row 259)', () => {
   const CLEAN = {
     coverage: [
-      { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+      { anchor: 'package.json', note: 'read' },
       { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
     ],
     findings: [],

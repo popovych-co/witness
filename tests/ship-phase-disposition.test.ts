@@ -71,7 +71,7 @@ describe('shipPhase reads the ship gate\'s last disposition (design §4.2.3)', (
 // P9 on a real plan: `witness ship` after a revise and an approve on unchanged content opens the PR
 
 const COVERAGE = [
-  { anchor: '.gitignore', note: 'read' }, { anchor: 'package.json', note: 'read' },
+  { anchor: 'package.json', note: 'read' },
   { anchor: 'src/token.ts', note: 'read' }, { anchor: 'tests/token.test.ts', note: 'read' },
 ]
 const CLEAN = { coverage: COVERAGE, findings: [] }

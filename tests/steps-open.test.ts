@@ -28,7 +28,7 @@ const TWO = {
 }
 const TWO_BODY = '## Step: s1\nImplement rotation with TDD.\n\n## Step: s2\nAdded after the gate.\n'
 const CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
 const S2 = (planId: string) => `witness test-evidence ${planId} --phase red --step s2`

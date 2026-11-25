@@ -78,7 +78,7 @@ describe('delta review at the code gates (C3)', () => {
 
   it('a delta lens covering only files the change left alone is malformed, and told which count', async () => {
     const { repo, planId } = await implementTwice('src/token.ts', (s) => putVerdict(s, {
-      coverage: ['.gitignore', 'package.json', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })), findings: [] }))
+      coverage: ['package.json', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })), findings: [] }))
     const r2 = of(repo.root, planId, 'implement')[1]!
     expect(r2.outcome).toBe('malformed')
     expect(r2.malformed![0]!.violations[0]).toMatchObject({ rule: 'coverage-minimum',

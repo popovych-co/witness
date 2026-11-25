@@ -149,7 +149,12 @@ async function judgeStop(
   // unmoved content (slice 3 review I1): where the content or a hold moved, the re-gate is owed now,
   // and it keys the base anew.
   const wait = baseWait(root, owed)
-  if (!moved && awaitsDrive(wait)) return { kind: 'waiting', why: `drive lints the base of ${wait.waiting.join(' · ')} first` }
+  // Row 277: a definitions round waits on the base's check definitions measured over the plan's tree.
+  if (!moved && awaitsDrive(wait)) {
+    return { kind: 'waiting', why: wait.waiting.includes('definitions')
+      ? "drive lints this tree under the base's check definitions first"
+      : `drive lints the base of ${wait.waiting.join(' · ')} first` }
+  }
   const stale = moved || wait.landed.length > 0
   const block = recommend({
     gate, target, entries, upstream: spec.upstreamOf?.(root, canon, target), stale,

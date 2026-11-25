@@ -16,11 +16,10 @@ import { journalShard } from '../src/jobs.js'
 
 const cfgOf = (root: string): Config => { const r = loadConfig(root); if (!r.ok) throw new Error('config'); return r.value }
 
-// vitest-single fixture lands 4 files in the worktree diff (.gitignore, package.json,
+// vitest-single fixture lands 3 files in the worktree diff (package.json,
 // src/token.ts, tests/token.test.ts) — coverage-minimum needs an anchor per each.
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

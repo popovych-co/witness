@@ -208,10 +208,10 @@ async function stoppedPlanGate(): Promise<TestRepo> {
   return repo
 }
 
-// The vitest-single fixture lands four files in the worktree diff, and coverage-minimum wants an
+// The vitest-single fixture lands three files in the worktree diff, and coverage-minimum wants an
 // anchor for each.
 const SHIP_CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [] as unknown[],
 }
 

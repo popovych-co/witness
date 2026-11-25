@@ -253,6 +253,34 @@ describe('switch-off facts (row 274)', () => {
     expect(checkFacts({ name: 'switch-offs', ok: false, offs: [{ key: 'd', token: odd, file: 'f', line: 1, count: 1 }] } as never))
       .toBe('switch-offs: FAILED · extra:a\\u{202e}b in code')
   })
+  it('the arbiter reads loosened hits as facts: tools, counts, rule counts, part names — never a path, a line or a rule id (row 278)', () => {
+    const hidden = (tool: string, rule: string, file: string, over: Record<string, unknown> = {}) =>
+      ({ kind: 'loosened', key: `${file}${rule}`.padEnd(16, '0').slice(0, 16), count: 1, tool, rule, file, line: 3, ...over })
+    const part = (name: string) => ({ kind: 'loosened', key: name.padEnd(16, '1'), count: 1, part: name, defs: { '.gitignore': 'a'.repeat(40) } })
+    const f = checkFacts({ name: 'switch-offs', ok: false, offs: [hidden('biome', 'lint/test/noBad', 'src/secret-name.ts'), part('lint')] } as never)
+    expect(f).toBe("switch-offs: FAILED · biome: 1 diagnostic the plan's check definitions hide (1 rule) · part lint passes only under the plan's check definitions")
+    expect(f).not.toContain('secret-name'); expect(f).not.toContain('noBad'); expect(f).not.toContain(':3')
+    expect(checkFacts({ name: 'switch-offs', ok: false, offs: [hidden('biome', 'a', 'x'), hidden('biome', 'b', 'y', { count: 2 }), hidden('eslint', 'a', 'x'),
+      hidden('eslint', 'c', 'z', { booked: 1, items: ['l-00000001'] })] } as never))
+      .toBe("switch-offs: FAILED · biome: 3 diagnostics the plan's check definitions hide (2 rules) · eslint: 1 diagnostic the plan's check definitions hide (1 rule) · 1 booked")
+    const odd = `li${String.fromCodePoint(0x202e)}nt`
+    expect(checkFacts({ name: 'switch-offs', ok: false, offs: [part(odd)] } as never)).toContain('part li\\u{202e}nt passes only')
+  })
+
+  it('lint effect not checked is a fact; its why is not (row 278)', () => {
+    expect(checkFacts({ name: 'definitions', ok: true, detail: 'not checked — no drive runs jobs in this repo (.gitignore)',
+      lint_effect: { read: 'not-checked', changed: ['.gitignore'], why: 'no drive runs jobs in this repo' } } as never)).toBe('definitions: ok · lint effect not checked')
+    expect(checkFacts({ name: 'definitions', ok: true, lint_effect: { read: 'measured', changed: ['.gitignore'] } } as never)).toBe('definitions: ok')
+    // final review I1: a reader the job could not read under the base's definitions is a fact too — never its why
+    expect(checkFacts({ name: 'definitions', ok: true, detail: ' · eslint could not be read under the base\'s definitions — reader-unread: x',
+      lint_effect: { read: 'measured', changed: ['.gitignore'], unread: ['eslint'] } } as never)).toBe("definitions: ok · eslint not read under the base's definitions")
+    expect(checkFacts({ name: 'definitions', ok: false, owes: [{ kind: 'lint-effect', key: 'k' }] } as never)).toBe('definitions: FAILED')
+  })
+
+  it("the arbiter's prompt books a loosening on a switch-off's terms (row 278)", () => {
+    expect(readFileSync(join(__dirname, '..', 'prompts', 'arbiter.md'), 'utf8')).toContain("A diagnostic the plan's check definitions hide, or a lint part that passes only under them, is a switch-off on the same terms: book it only when a reviewer judged the definition change right or the scope needs it.")
+  })
+
   it("the arbiter's prompt gains its switch-off rule (row 274)", () => {
     expect(readFileSync(join(__dirname, '..', 'prompts', 'arbiter.md'), 'utf8')).toContain('A switch-off — a suppression comment, a skipped or focused test, a loosened option — is booked only when the evidence shows it is right as it stands')
   })

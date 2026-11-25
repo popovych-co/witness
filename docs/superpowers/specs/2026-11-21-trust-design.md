@@ -300,6 +300,15 @@ that base and the round's `junit.base` for the spec, and an item of a
 plan merged before M only where the round's `junit.base` (the base counts it compared against, per spec) was short and
 the summary is not. A round with no summary observes nothing.
 
+**As built (T3c, row 278; the map's C37).** The fourth kind, `booked-loosened`, books what a plan's check definitions
+hide: hidden diagnostics one item per (tool, rule), `subject.hidden` mapping each key (16 hex over tool, rule, file and
+the normalized line) to its file and copies, and a loosened part one item per part, `subject.defs` the restored
+definitions' base sides; its key is 16 hex over (kind, check, plan, tool, rule, part, the sorted subject), the other
+formulas unchanged. The check applies the plan's own items (C17). At the merge stamp of plan M, from M's newest ship
+round, a hidden item closes when no key it books is held by its file in the round's tree (a whole-file one when the file
+is gone), a part item when the tree holds the base's definitions again; another merged plan's only where the round's
+base still held them and the tree does not.
+
 ### 3.4 Counterfactual runs (CF) — T3
 
 **Where.** One persistent, provisioned scratch worktree per repo, at a short fixed path, under the scratch lock.
@@ -455,6 +464,17 @@ reserved `trust` stream, since a job or a scratch prepare serves no artifact; a 
 `migrate` at a terminal asks once per command it proposes and grants each yes in the config's own commit. A job kind
 declares its commands; one whose commands (with `scratch.prepare` for a scratch kind) are untrusted is skipped, never
 struck, and drive sets aside one `jobs` trust wait naming the targetless grant.
+
+**As built (T3c, row 277; the map's C35).** Check-definition paths are `checks.definitions` (schema 4, required, not
+ambient: an older file reads the default list): repo paths or globs, each optionally `#<member>` for one top-level key
+of a JSON object; an entry without `/` matches the basename at any depth, the first match wins, and `[]` turns the lint
+effect off (`check` names it). The default holds 26 entries — ignore files, lint and format configs, `tsconfig*.json`,
+`jsconfig*.json`, `package.json#scripts`, test-runner and mutation configs, `clippy.toml`, `rustfmt.toml`, `ruff.toml`,
+`.golangci.*`. "Cargo `[lints]`" waits for a Rust consumer to probe: TOML sections are not definitions yet, and setup
+files (`vitest.setup.ts`) are code. A plan's change set restores only a definition the base holds as a regular file:
+modified, deleted while its folder stays tracked, replaced by a symlink, or — for a member — its value changed or
+removed; a member file either side cannot read as a JSON object restores whole; an added definition stays as the plan
+wrote it, but an added ignore file is removed.
 
 ### 3.8 Proof and record models (PM) — record in T1, proof in T6
 
@@ -658,6 +678,17 @@ beyond new failures and new skips count, unless the plan's own parent was amende
 removals only (C30, C31). A loss is a judged red in `switch-offs`, booked by the judge or the human like a line, and a
 booked loss closes once main's shipped summary has the spec's cases back.
 
+**As built (T3c, rows 277–278; the map's C34–C38).** The effect layer's lint half takes "`.gitignore`-hiding a file is
+caught". When a plan changes a definition the base holds, the gate builds the effect tree — the plan's tree with the
+base's definitions folded back in — pins both, and a gated drive job (`lint-effect`) runs every `ship.lint` part and
+every set reader on each in the scratch. A diagnostic a reader reports on the effect tree beyond its count on the plan's
+tree, on any tracked file but the restored definitions, is a hidden diagnostic; a part that passes only under the plan's
+definitions, where its own reader named nothing hidden, is a loosened part (C34: a reader sees `.gitignore` hiding, only
+the part's exit sees a neutered script or a loosened tsconfig under an opaque part). A withholding `definitions` check
+waits while drive measures (T2d's checks-only wait) and reads not checked otherwise, its key still owed (C36). The hits
+are judged reds in `switch-offs`, booked by the judge or the human like a line, and close once main no longer holds what
+was hidden (C37). Inline disables stay the token layer's (C38): the base's definitions hold none.
+
 ### T4 — Fixes add checks
 
 **Builds:** MB (§3.6), TR writers.
@@ -859,7 +890,7 @@ decision item names its act on a `book:` row (`witness decide <gate> <plan> --bo
 | Train | Settings |
 |---|---|
 | A (T0–T2) | ship.lint named parts; readers.{biome,eslint,clippy,tsc}; scratch.prepare (as built, T2b–T2c: all schema 3; the map's C5) |
-| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths |
+| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths (as built, T3c: `checks.definitions`, schema 4, the default list in memory for an older file) |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
 **migrate** detects and proposes values:
@@ -1115,3 +1146,20 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
 - **C33 (T3b, row 275).** `switch-offs` sat right after `diff`; it moved to the end of the registry so it reads the round's
   one suite run (implement's criteria lane hands it on; ship's tests lane holds it). Judged checks all run whenever any
   does and the signature sorts its terms, so the move changes no judgment.
+- **C34 (T3c, row 277).** "A diagnostic on a PC line that the plan's own definitions do not report" became two
+  instruments: every set reader, bound or not, diffed per key on every tracked file but the restored definitions (C12's
+  rule: a definition change hides diagnostics in files the plan never touched), and every `ship.lint` part's exit — a part
+  green under the plan's definitions and red under the base's is loosened unless its own bound reader named a hidden
+  diagnostic.
+- **C35 (T3c, row 277).** "The base's check definitions" became: the effect tree restores modified and deleted
+  definitions (a deleted one only where the plan still tracks a file in its folder) and removes an added ignore file; other
+  added definitions stay (33 of fewhats' 83 touches were new packages); `<glob>#<member>` splices one top-level JSON member
+  byte-exact; TOML sections wait for a Rust consumer.
+- **C36 (T3c, row 277).** The base's DJ job is `lint-effect` (gated, no turn, scratch), keyed by the two wrapper commits
+  the gate pins and 12 hex over the commands; a withholding `definitions` check after `lint` is red only while drive
+  measures it, not checked otherwise and still owed; T2d's wait reads it; its owed key joins the resume signature.
+- **C37 (T3c, row 278).** A booked loosening is a fourth ledger kind, `booked-loosened`: hidden diagnostics one item per
+  (tool, rule), a loosened part one item per part; hidden items close when no booked key is held by its file in the merged
+  tree, part items when the tree holds the base's definitions again.
+- **C38 (T3c, row 277).** The effect layer does not cover inline disables: the base's definitions hold none, and a
+  reader cannot be told to ignore them without a flag witness does not own. They stay the token layer's (T3a).

@@ -930,6 +930,22 @@ describe('witness check — scratch runs (row 259)', () => {
   })
 })
 
+describe('witness check — the lint effect (row 277)', () => {
+  it('check names the lint effect off when checks.definitions is empty (row 277)', async () => {
+    const repo = await seededRepo()
+    repo.write('witness.config.yaml', configYaml({ checks: { definitions: [] } }))
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'no definitions')
+    const out = (await repo.cli(['check'])).stdout
+    expect(out).toContain('feature-off')
+    expect(out).toContain('the lint effect is off — checks.definitions is empty')
+    repo.write('witness.config.yaml', configYaml())
+    repo.git('add', '-A')
+    repo.git('commit', '-m', 'the default list')
+    expect((await repo.cli(['check'])).stdout).not.toContain('the lint effect is off')
+  })
+})
+
 describe('reader-unused (row 262)', () => {
   it('names a reader no part bears the name of, once each (row 262)', async () => {
     const repo = await seededRepo()

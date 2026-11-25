@@ -24,6 +24,8 @@ import { contentSha } from '../content-sha.js'
 import { gateSettled, openStepRow } from '../verbs/next.js'
 import { lastGateRun, type GateCheck, type OffVerdict } from '../rounds.js'
 import { switchOffNotes, switchOffsCheck } from '../switch-offs.js'
+import { restorable } from '../definitions.js'
+import { definitionsCheck, type LintEffect } from '../lint-effect.js'
 import { runChecks, type CheckStep } from '../checks.js'
 import { markersCheck } from '../markers.js'
 import { serializeDoc } from '../fm.js'
@@ -89,6 +91,10 @@ registerGate({
     let offs: OffVerdict[] = []
     let licensed: Array<{ spec: string; lost: number }> = []
     let effect: TestsEffect | undefined
+    // Row 277. The check definitions the plan's change set takes back from the base; the definitions check
+    // runs only where it takes one (or cannot read them), so every other plan's round carries no term.
+    const restored = cfg.checks.definitions.length > 0 ? restorable(root, wt, base, files, cfg.checks.definitions) : ok([])
+    let lintEffect = { read: 'none' } as LintEffect
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
@@ -137,11 +143,17 @@ registerGate({
       } },
       // Row 261. Every part runs on its own; the lane stays one check named lint.
       { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
+      // Row 277. What the plan's check-definition changes hide, measured by drive (withholding while it runs).
+      ...(restored.ok && restored.value.length === 0 ? [] : [{ name: 'definitions', run: () => {
+        const r = definitionsCheck(root, wt, cfg, base, planId, files, restored)
+        lintEffect = r.effect
+        return r.check
+      } }]),
       // Row 273. A switch-off the plan adds is a judged red; its lines reach the reviewers below.
       // Row 275: and so is a spec's lost passing tests, read from the tests lane's run (C33).
       { name: 'switch-offs', run: () => {
         effect = testsEffect(root, canon, cfg, plan, base, suite)
-        const check = switchOffsCheck(root, wt, cfg, base, planId, files, effect)
+        const check = switchOffsCheck(root, wt, cfg, base, planId, files, effect, lintEffect)
         offs = check.offs ?? []
         licensed = effect.licensed
         return check
@@ -186,7 +198,7 @@ registerGate({
       // Row 264: with the review withheld no lens reads the prompt, so it is not built.
       promptBody: withheld !== undefined ? '' : codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}` +
-        (offs.length > 0 || licensed.length > 0 ? `\n\n${switchOffNotes(offs, licensed)}` : '')),
+        (offs.length > 0 || licensed.length > 0 ? `\n\n${switchOffNotes(offs, licensed, lintEffect.read === 'none' ? [] : lintEffect.changed)}` : '')),
       checks,
       ...(withheld !== undefined ? { withheld } : {}),
       ...(junit !== undefined ? { junit } : {}),

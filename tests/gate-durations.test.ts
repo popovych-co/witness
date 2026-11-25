@@ -11,10 +11,9 @@ import { fakeCtx, fakeScenario, gateEnv, putVerdict, seededRepo, shippableRepo, 
 // Row 251. Every check a gate journals carries how long it took, so a later item (T2d) can read
 // the median per check name. The field never reaches an identity or a printed line.
 
-// vitest-single fixture lands 4 files in the worktree diff — coverage-minimum needs an anchor per each.
+// vitest-single fixture lands 3 files in the worktree diff — coverage-minimum needs an anchor per each.
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

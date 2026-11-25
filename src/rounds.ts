@@ -6,6 +6,7 @@ import type { JunitCounts, JunitSummary } from './junit.js'
 import { bookingsOf } from './ledger.js'
 import { v, type Violation } from './refusal.js'
 import type { CoverageItem, Finding } from './verdict.js'
+import type { ReaderTool } from './settings.js'
 
 // `untrusted` (row 171): the commands the trust list kept this check from running, so the
 // trust stop is read from the run's own record rather than inferred from a detail string.
@@ -29,6 +30,11 @@ export interface GateCheck {
   // Row 275 (C32). Whether the switch-offs check compared the round's suite with the base's counts (how
   // many base specs), or why not: never green by silence. Never in the signature.
   tests_effect?: { read: 'compared'; specs: number } | { read: 'not-checked'; why: string }
+  // Row 277. Whether the definitions check measured the base's check definitions over the plan's tree,
+  // or why not (`changed` the restored definitions' names). Absent while the result is pending (the
+  // check is red then). Never in the signature. Final review I1: `unread` the readers a measured effect could not
+  // read on a side — what the arbiter is told was not measured.
+  lint_effect?: { read: 'measured' | 'not-checked'; changed: string[]; why?: string; unread?: ReaderTool[] }
 }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
@@ -47,8 +53,18 @@ export interface DroppedOff {
   kind: 'dropped'; key: string; spec: string; count: number; base: JunitCounts; plan: JunitCounts; booked?: number; items?: string[]
 }
 
-// Row 275: a hit of the `switch-offs` check — a line the plan adds, or a spec's lost tests.
-export type OffVerdict = LineOff | DroppedOff
+// Row 277 (C34). What the plan's check definitions hide: a hidden diagnostic (a reader's key the base's
+// definitions see beyond the plan's, keyed 16 hex over ['loosened', tool, rule, file, line]; `line` the
+// first copy's, `lineless` a whole-file diagnostic) or a loosened part (one that passes only under the
+// plan's definitions, its own reader naming nothing hidden; keyed over ['loosened-part', name, cmd, defs],
+// `defs` each restored definition's base-side identity). Row 278: `booked`, `items` as a line's.
+export type LoosenedOff = { kind: 'loosened'; key: string; count: number; booked?: number; items?: string[] } & (
+  | { tool: ReaderTool; rule: string; file: string; line?: number; lineless?: true; part?: undefined }
+  | { part: string; defs: Record<string, string | null>; tool?: undefined })
+
+// Row 275: a hit of the `switch-offs` check — a line the plan adds, or a spec's lost tests. Row 277: or
+// what the plan's check definitions hide.
+export type OffVerdict = LineOff | DroppedOff | LoosenedOff
 
 // The copies of a line, or the cases of a loss, no booking covers.
 export const offUnbooked = (o: OffVerdict): number => Math.max(0, o.count - (o.booked ?? 0))

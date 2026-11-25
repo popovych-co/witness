@@ -20,7 +20,7 @@ import {
 // and carries `already present: <step>` to the reviewers, who judge whether the test tells anything.
 
 const CLEAN = {
-  coverage: ['.gitignore', 'package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
+  coverage: ['package.json', 'src/token.ts', 'tests/token.test.ts'].map((anchor) => ({ anchor, note: 'read' })),
   findings: [],
 }
 const closes = (repo: TestRepo, planId: string) =>

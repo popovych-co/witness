@@ -374,6 +374,15 @@ describe('checks.switchOffs at migrate (row 273)', () => {
     expect(r.stdout).toContain('config: schema 3 → 4')
     expect(r.stdout).toMatch(/^added: checks\.switchOffs \[\] — extra switch-off tokens/m)
     expect(repo.read('witness.config.yaml')).toMatch(/^checks:\n {2}switchOffs: \[\] +# extra switch-off tokens the implement and ship gates flag/m)
-    expect(loaded(repo).checks).toEqual({ switchOffs: [] })
+    expect(loaded(repo).checks.switchOffs).toEqual([])
+  })
+
+  it('migrate raises a schema 3 file and writes checks.definitions with the default list and its comment (row 277)', async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 3 })))
+    const r = await repo.cli(['migrate'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/^added: checks\.definitions \[\.gitignore, .*package\.json#scripts, .*\.golangci\.\*\] — files whose base copy/m)
+    expect(repo.read('witness.config.yaml')).toMatch(/^ {2}definitions: \[\.gitignore,.*\.golangci\.\*\] +# files whose base copy the implement and ship gates restore/m)
+    expect(loaded(repo).checks.definitions).toHaveLength(26)
   })
 })

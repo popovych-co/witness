@@ -16,7 +16,6 @@ import { addOrigin, fakeScenario, gateEnv, putVerdict, shippableRepo } from './h
 // A clean verdict, so a `witness ship` that gets past the move meets a fake reviewer, never a real one.
 const CLEAN = {
   coverage: [
-    { anchor: '.gitignore', note: 'read' },
     { anchor: 'package.json', note: 'read' },
     { anchor: 'src/token.ts', note: 'read' },
     { anchor: 'tests/token.test.ts', note: 'read' },

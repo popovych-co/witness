@@ -4,10 +4,13 @@ import { isId } from './dsl.js'
 import { readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
 import type { GateRunEntry, OffVerdict, PartState } from './rounds.js'
-import type { ReaderTool } from './settings.js'
+import { RULE_RE } from './lint-readers.js'
+import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { treeReadable } from './snapshot.js'
 import { LEDGER_STREAM } from './streams.js'
 import { copiesInTree } from './switch-offs.js'
+import { defsHeld } from './definitions.js'
+import { hiddenInTree } from './diagnostics.js'
 import { visible } from './toon.js'
 
 // Row 269 (the trust design §3.3, LD). The repo ledger: what a human booked, kept on witness's own
@@ -21,7 +24,11 @@ import { visible } from './toon.js'
 // Row 276. A third: `booked-dropped` (a spec's lost passing tests a judged round booked: `spec`, the
 // round's base counts, and the cases it waives). It closes once main has the cases back (`mergeCloses`).
 
-export type LedgerKind = 'booked-check' | 'booked-switch-off' | 'booked-dropped'
+// Row 278. A fourth: `booked-loosened` (what a plan's check definitions hide, a judged round booked: per
+// (tool, rule) the hidden spots it waives, or one loosened part with its restored definitions' base sides).
+// It closes once main no longer holds what was hidden, or holds the base's definitions again (`mergeCloses`).
+
+export type LedgerKind = 'booked-check' | 'booked-switch-off' | 'booked-dropped' | 'booked-loosened'
 
 // What an item books: the whole part (held at the part's base key: the base commit and its
 // commands, the map's C19), or the multiset of diagnostic keys (16 hex) it covers.
@@ -87,14 +94,40 @@ export interface DroppedOpen {
   note?: string
 }
 
-export type LedgerOpen = CheckOpen | SwitchOffOpen | DroppedOpen
+// Row 278. One hidden spot a booking waives: its file, the copies of its key, and whether it is a whole-file
+// diagnostic (no line).
+export interface HiddenSpot { file: string; copies: number; lineless?: true }
+export type LoosenedSubject = { hidden: Record<string, HiddenSpot> } | { defs: Record<string, string | null> }
+
+// Row 278. A loosened hit booked: a hidden rule (`tool`, `rule`, `subject.hidden` its keys — 16 hex over
+// tool, rule, file and line) or a loosened part (`part`, `subject.defs` each restored definition's base
+// side). Its key is 16 hex over (kind, check, plan, tool, rule, part, the sorted subject).
+export interface LoosenedOpen {
+  v: 1
+  t: 'ledger-open'
+  id: string
+  key: string
+  kind: 'booked-loosened'
+  check: string
+  plan: string
+  gate: string
+  round: number
+  run_id: string
+  tool?: ReaderTool
+  rule?: string
+  part?: string
+  subject: LoosenedSubject
+  note?: string
+}
+
+export type LedgerOpen = CheckOpen | SwitchOffOpen | DroppedOpen | LoosenedOpen
 
 // `plan` is the observer: the merging plan, or the abandoned one.
 export interface LedgerClosed { v: 1; t: 'ledger-closed'; id: string; by: 'merge' | 'abandon'; plan: string; pr?: number; tree?: string }
 
 export interface LedgerDismissed { v: 1; t: 'ledger-dismissed'; id: string; cause: LedgerCause; note: string }
 
-export type LedgerItem = (Omit<CheckOpen, 'v' | 't'> | Omit<SwitchOffOpen, 'v' | 't'> | Omit<DroppedOpen, 'v' | 't'>) & {
+export type LedgerItem = (Omit<CheckOpen, 'v' | 't'> | Omit<SwitchOffOpen, 'v' | 't'> | Omit<DroppedOpen, 'v' | 't'> | Omit<LoosenedOpen, 'v' | 't'>) & {
   state: 'open' | 'closed' | 'dismissed'
   end?: LedgerClosed | LedgerDismissed
 }
@@ -105,11 +138,29 @@ export const offWhere = (token: string, file: string): string => `${visible(toke
 export type CheckItem = Extract<LedgerItem, { kind: 'booked-check' }>
 export type SwitchOffItem = Extract<LedgerItem, { kind: 'booked-switch-off' }>
 export type DroppedItem = Extract<LedgerItem, { kind: 'booked-dropped' }>
+export type LoosenedItem = Extract<LedgerItem, { kind: 'booked-loosened' }>
+
+// Row 278. A rule id as a human reads it: a rule-less diagnostic says so.
+export const ruleShown = (rule: string): string => (rule === '' ? '(no rule)' : visible(rule))
 
 // Row 276. Where a switch-offs item or booking is, as a human reads it: a line's token in its file, or a
-// spec's tests — spelled out.
-export function bookedWhere(x: { kind: 'booked-switch-off'; token: string; file: string } | { kind: 'booked-dropped'; spec: string }): string {
-  return x.kind === 'booked-switch-off' ? offWhere(x.token, x.file) : `tests of ${visible(x.spec)}`
+// spec's tests — spelled out. Row 278: a hidden rule, or a loosened part.
+export function bookedWhere(x:
+  | { kind: 'booked-switch-off'; token: string; file: string } | { kind: 'booked-dropped'; spec: string }
+  | { kind: 'booked-loosened'; tool?: ReaderTool; rule?: string; part?: string }): string {
+  if (x.kind === 'booked-switch-off') return offWhere(x.token, x.file)
+  if (x.kind === 'booked-dropped') return `tests of ${visible(x.spec)}`
+  return x.part !== undefined ? `lint part ${visible(x.part)} loosened` : `${x.tool ?? '?'} ${ruleShown(x.rule ?? '')} hidden by check definitions`
+}
+
+// Row 278. What a loosened item or booking holds, counted: its hidden spots' copies, or its definitions.
+export function looseHeld(subject: LoosenedSubject): string {
+  if ('hidden' in subject) {
+    const n = Object.values(subject.hidden).reduce((a, h) => a + h.copies, 0)
+    return `${n} spot${n === 1 ? '' : 's'}`
+  }
+  const n = Object.keys(subject.defs).length
+  return `${n} definition${n === 1 ? '' : 's'}`
 }
 
 const str = (x: unknown): x is string => typeof x === 'string' && x !== ''
@@ -149,6 +200,10 @@ function openOf(e: Entry): LedgerOpen | undefined {
     if (!str(e.file) || !str(e.token) || subject === undefined) return undefined
     return { ...(e as unknown as SwitchOffOpen), subject }
   }
+  if (e.kind === 'booked-loosened') {
+    const subject = looseSubjectOf(e)
+    return subject === undefined ? undefined : { ...(e as unknown as LoosenedOpen), subject }
+  }
   if (e.kind === 'booked-dropped') {
     const b = e.base as Record<string, unknown> | undefined
     const s = e.subject as Record<string, unknown> | undefined
@@ -158,6 +213,38 @@ function openOf(e: Entry): LedgerOpen | undefined {
     return { ...(e as unknown as DroppedOpen), base: { passed: b.passed as number, skipped: b.skipped as number }, subject: { cases: s.cases as number } }
   }
   return undefined
+}
+
+// Row 278. A loosened item's subject, checked against its fields: a hidden rule (a reader tool, a rule id —
+// '' or '?' as readers give them — and at least one spot, each with a file and positive copies) or a part
+// (a name and at least one definition, each held as a sha, `json:<16 hex>` or null), never both.
+const isRuleId = (r: unknown): r is string => typeof r === 'string' && (r === '' || r === '?' || RULE_RE.test(r))
+const HELD_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|json:[0-9a-f]{16})$/
+function looseSubjectOf(e: Entry): LoosenedSubject | undefined {
+  const s = e.subject
+  if (typeof s !== 'object' || s === null || Array.isArray(s)) return undefined
+  const sub = s as Record<string, unknown>
+  if (e.part === undefined) {
+    if (!(READER_TOOLS as readonly unknown[]).includes(e.tool) || !isRuleId(e.rule)) return undefined
+    const h = sub.hidden
+    if (typeof h !== 'object' || h === null || Array.isArray(h)) return undefined
+    const spots = Object.entries(h as Record<string, unknown>)
+    if (spots.length === 0) return undefined
+    const hidden: Record<string, HiddenSpot> = {}
+    for (const [k, x] of spots) {
+      const spot = x as Record<string, unknown> | null
+      if (k === '' || typeof spot !== 'object' || spot === null || !str(spot.file) || !Number.isInteger(spot.copies) || (spot.copies as number) < 1) return undefined
+      if (spot.lineless !== undefined && spot.lineless !== true) return undefined
+      hidden[k] = { file: spot.file, copies: spot.copies as number, ...(spot.lineless === true ? { lineless: true as const } : {}) }
+    }
+    return { hidden }
+  }
+  if (!str(e.part) || e.tool !== undefined || e.rule !== undefined) return undefined
+  const d = sub.defs
+  if (typeof d !== 'object' || d === null || Array.isArray(d)) return undefined
+  const defs = Object.entries(d as Record<string, unknown>)
+  if (defs.length === 0 || !defs.every(([k, held]) => k !== '' && (held === null || (typeof held === 'string' && HELD_RE.test(held))))) return undefined
+  return { defs: Object.fromEntries(defs) as Record<string, string | null> }
 }
 
 function endOf(e: Entry): LedgerClosed | LedgerDismissed | undefined {
@@ -201,13 +288,23 @@ export type KeyFields =
   | Pick<CheckOpen, 'kind' | 'check' | 'plan' | 'part' | 'part_key' | 'subject'>
   | Pick<SwitchOffOpen, 'kind' | 'check' | 'plan' | 'file' | 'token' | 'subject'>
   | Pick<DroppedOpen, 'kind' | 'check' | 'plan' | 'spec' | 'base' | 'subject'>
+  | Pick<LoosenedOpen, 'kind' | 'check' | 'plan' | 'tool' | 'rule' | 'part' | 'subject'>
 
 // The idempotence key: a whole part's names the base it was booked against (its part key), a
 // per-diagnostic one names its exact multiset and holds across bases. Row 274: a switch-off item's
 // names its file, token and exact lines; the lint formula is unchanged, so no open item's key moves.
 // Row 276: a loss's names its spec, the base counts it was booked against and its cases; the other two
 // formulas are unchanged, so no open item's key moves.
+// Row 278: a loosened item's names its tool, rule or part and its exact subject; the other three formulas
+// are unchanged.
 export function itemKey(o: KeyFields): string {
+  if (o.kind === 'booked-loosened') {
+    const subject = 'hidden' in o.subject
+      ? Object.entries(o.subject.hidden).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, h]) => [k, h.file, h.copies, h.lineless === true])
+      : Object.entries(o.subject.defs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    return createHash('sha256').update(JSON.stringify([o.kind, o.check, o.plan, o.tool ?? null, o.rule ?? null, o.part ?? null, subject]))
+      .digest('hex').slice(0, 16)
+  }
   if (o.kind === 'booked-dropped') {
     return createHash('sha256').update(JSON.stringify([o.kind, o.check, o.plan, o.spec, o.base.passed, o.base.skipped, o.subject.cases]))
       .digest('hex').slice(0, 16)
@@ -220,6 +317,12 @@ export function itemKey(o: KeyFields): string {
 }
 
 export const newItemId = (): string => `l-${randomBytes(4).toString('hex')}`
+
+// Row 278. Two restored-definition maps, equal by every name and base side.
+export function sameDefs(a: Readonly<Record<string, string | null>>, b: Readonly<Record<string, string | null>>): boolean {
+  const ka = Object.keys(a)
+  return ka.length === Object.keys(b).length && ka.every((k) => Object.hasOwn(b, k) && b[k] === a[k])
+}
 
 // F7: a stream an older witness wrote under this name is another artifact's history.
 export function ledgerTaken(root: string): Violation | undefined {
@@ -236,6 +339,8 @@ export type Booking =
   | { kind: 'booked-check'; part: string; part_key: string; tool?: ReaderTool; subject: LedgerSubject }
   | { kind: 'booked-switch-off'; file: string; token: string; subject: { lines: Record<string, number> } }
   | { kind: 'booked-dropped'; spec: string; base: { passed: number; skipped: number }; subject: { cases: number } }
+  | { kind: 'booked-loosened'; tool: ReaderTool; rule: string; part?: undefined; subject: { hidden: Record<string, HiddenSpot> } }
+  | { kind: 'booked-loosened'; part: string; tool?: undefined; rule?: undefined; subject: { defs: Record<string, string | null> } }
 
 // Never `pending` (drive is measuring the base: book once it lands), `untrusted` (a trust grant comes
 // first) or a passing state.
@@ -254,14 +359,27 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
     if (waiver !== 'judge' || run.outcome === 'malformed') return []
     const c = run.checks.find((x) => x.name === check)
     if (c === undefined || c.ok || c.offs === undefined) return []
-    return c.offs.flatMap((o): Booking[] => {
+    // Row 278: the hidden spots its bookings leave uncovered, one booking per (tool, rule), after the lines
+    // and losses; each loosened part its own.
+    const byRule = new Map<string, Extract<Booking, { kind: 'booked-loosened'; tool: ReaderTool }>>()
+    const parts: Booking[] = []
+    for (const o of c.offs) {
+      if (o.kind !== 'loosened' || unbooked(o) === 0) continue
+      if (o.part !== undefined) { parts.push({ kind: 'booked-loosened', part: o.part, subject: { defs: { ...o.defs } } }); continue }
+      const at = JSON.stringify([o.tool, o.rule])
+      const b = byRule.get(at) ?? { kind: 'booked-loosened' as const, tool: o.tool, rule: o.rule, subject: { hidden: {} } }
+      b.subject.hidden[o.key] = { file: o.file, copies: unbooked(o), ...(o.lineless === true ? { lineless: true as const } : {}) }
+      byRule.set(at, b)
+    }
+    return [...c.offs.flatMap((o): Booking[] => {
       if (unbooked(o) === 0) return []
       // Row 276: a spec's lost tests book the cases its bookings leave uncovered, against the round's base.
       if (o.kind === 'dropped') {
         return [{ kind: 'booked-dropped', spec: o.spec, base: { passed: o.base.passed, skipped: o.base.skipped }, subject: { cases: unbooked(o) } }]
       }
+      if (o.kind === 'loosened') return []
       return [{ kind: 'booked-switch-off', file: o.file, token: o.token, subject: { lines: { [o.key]: unbooked(o) } } }]
-    })
+    }), ...byRule.values(), ...parts]
   }
   const last = run.checks.at(-1)
   if (last === undefined || last.name !== check) return []
@@ -306,7 +424,7 @@ Array<{ id: string; entry?: LedgerOpen }> {
       return { id, entry }
     }
     if (b.kind === 'booked-switch-off') {
-      const holds = (o: OffVerdict) => o.kind !== 'dropped' && Object.hasOwn(b.subject.lines, o.key)
+      const holds = (o: OffVerdict) => o.kind === undefined && Object.hasOwn(b.subject.lines, o.key)
       const holder = run.checks.find((c) => c.offs?.some(holds) === true)
       const check = holder?.name ?? ''
       const key = itemKey({ kind: b.kind, check, plan, file: b.file, token: b.token, subject: b.subject })
@@ -315,6 +433,25 @@ Array<{ id: string; entry?: LedgerOpen }> {
       if (same !== undefined) return { id: same.id }
       const id = mint()
       const entry: SwitchOffOpen = { v: 1, t: 'ledger-open', id, key, kind: b.kind, check, plan, ...common, file: b.file, token: b.token, subject: b.subject }
+      return { id, entry }
+    }
+    // Row 278: a loosened booking's item is its hits' (a hidden key the subject holds, or the part with the
+    // same definitions); an item the hit already applies is never the match, as for a line.
+    if (b.kind === 'booked-loosened') {
+      const holds = (o: OffVerdict) => o.kind === 'loosened' && ('hidden' in b.subject
+        ? o.part === undefined && Object.hasOwn(b.subject.hidden, o.key)
+        : o.part !== undefined && o.part === b.part && sameDefs(o.defs, b.subject.defs))
+      const holder = run.checks.find((c) => c.offs?.some(holds) === true)
+      const check = holder?.name ?? ''
+      const key = itemKey({ kind: b.kind, check, plan, tool: b.tool, rule: b.rule, part: b.part, subject: b.subject })
+      const applied = new Set((holder?.offs ?? []).filter(holds).flatMap((o) => o.items ?? []))
+      const same = open.find((i) => itemKey(i) === key && !applied.has(i.id))
+      if (same !== undefined) return { id: same.id }
+      const id = mint()
+      const entry: LoosenedOpen = {
+        v: 1, t: 'ledger-open', id, key, kind: b.kind, check, plan, ...common,
+        ...(b.part !== undefined ? { part: b.part } : { tool: b.tool, rule: b.rule }), subject: b.subject,
+      }
       return { id, entry }
     }
     const check = run.checks.at(-1)?.name ?? ''
@@ -400,7 +537,38 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(newest?.reviewed_tree !== undefined ? { tree: newest.reviewed_tree } : {}) }
     return [close]
   })
-  return [...lint, ...offs, ...drops]
+  // Row 278 (§3.3). A booked loosening closes once main no longer holds what was hidden, read from the same
+  // newest round's tree and base: a hidden rule when no key it books is held by its file (a lineless key
+  // while its file is there), a loosened part when the tree holds every base side of its definitions again.
+  // The plan's own items read the tree alone; another merged plan's only where the base still held them and
+  // the tree does not — this merge did it. A read git fails observes nothing.
+  const holds = (at: string, i: LoosenedItem): boolean | undefined => {
+    if ('defs' in i.subject) {
+      const back = defsHeld(root, at, i.subject.defs)
+      return back === undefined ? undefined : !back
+    }
+    const byFile = new Map<string, { keys: Set<string>; lineless: boolean }>()
+    for (const [key, spot] of Object.entries(i.subject.hidden)) {
+      const f = byFile.get(`${spot.lineless === true}:${spot.file}`) ?? { keys: new Set<string>(), lineless: spot.lineless === true }
+      f.keys.add(key)
+      byFile.set(`${spot.lineless === true}:${spot.file}`, f)
+    }
+    let any = false
+    for (const [at2, f] of byFile) {
+      const n = hiddenInTree(root, at, at2.slice(at2.indexOf(':') + 1), i.tool!, i.rule ?? '', f.keys, f.lineless)
+      if (n === undefined) return undefined
+      if (n > 0) any = true
+    }
+    return any
+  }
+  const loose = tree === undefined ? [] : open.flatMap((i) => {
+    if (i.kind !== 'booked-loosened' || !merged(i.plan) || (!('defs' in i.subject) && i.tool === undefined)) return []
+    if (holds(tree, i) !== false) return []
+    if (i.plan !== plan && (base === undefined || holds(base, i) !== true)) return []
+    const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
+    return [close]
+  })
+  return [...lint, ...offs, ...drops, ...loose]
 }
 
 // Row 269. An abandoned plan never merges, so nothing it booked reaches main: each of its open items

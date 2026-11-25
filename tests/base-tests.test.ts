@@ -108,7 +108,7 @@ describe('the base suite job (row 275)', () => {
   })
 
   it('is registered after base-lint: it takes the turn, runs in the scratch, and yields the turn to plan work', () => {
-    expect(jobKinds({}).map((k) => k.kind)).toEqual(['base-lint', 'base-tests'])
+    expect(jobKinds({}).map((k) => k.kind)).toEqual(['base-lint', 'lint-effect', 'base-tests'])
     expect(baseTestsKind).toMatchObject({ turn: true, gated: false, scratch: true })
   })
 })
