@@ -1,3 +1,4 @@
+import { appendFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BASE_TESTS, baseTestsKey } from '../src/base-tests.js'
@@ -29,17 +30,21 @@ describe("the base's passing counts (row 275, C29)", () => {
     shipped(repo, 'old-plan', { ...c(2), specs: { 'auth-refresh': c(2) }, code, suite: suiteKey(rc) })
     expect(baseCounts(repo.root, rc, base)).toEqual({ read: 'found', from: 'ship', code, specs: { 'auth-refresh': c(2) } })
   })
-  it("main moved only by witness's own commits still finds it (Review Focus 4)", async () => {
+  it("main moved only by witness's own commits still finds it, for the old base and the new (Review Focus 4)", async () => {
     const { repo, rc, base } = await suiteConfigRepo()
     const code = codeTree(repo.root, base)!
+    const found = { read: 'found', from: 'ship', code, specs: { 'auth-refresh': c(2) } }
+    const stream = readdirSync(join(repo.root, '.witness', 'journal')).find((f) => f.endsWith('.jsonl'))!
+    repo.git('cat-file', '-e', `${base}:.witness/journal/${stream}`)                  // a stream the base holds
     shipped(repo, 'old-plan', { ...c(2), specs: { 'auth-refresh': c(2) }, code, suite: suiteKey(rc) })
+    appendFileSync(join(repo.root, '.witness', 'journal', stream), '{"v":1,"t":"status"}\n')
     repo.write(join(stateDirs(repo.root)[0]!, 'extra.md'), '# extra\n')
     repo.write(witnessPaths()[0]!, 'payload\n')
-    repo.git('add', '-A', '-f'); repo.git('commit', '-q', '-m', 'a journal line, a canon doc and a payload file')
+    repo.git('add', '-A', '-f'); repo.git('commit', '-q', '-m', 'journal lines, a canon doc and a payload file')
     const base2 = repo.git('rev-parse', 'HEAD')
-    expect(base2).not.toBe(base)
     expect(repo.git('rev-parse', `${base2}^{tree}`)).not.toBe(repo.git('rev-parse', `${base}^{tree}`))
-    expect(baseCounts(repo.root, rc, base2)).toEqual({ read: 'found', from: 'ship', code, specs: { 'auth-refresh': c(2) } })
+    expect(baseCounts(repo.root, rc, base2)).toEqual(found)
+    expect(baseCounts(repo.root, rc, base)).toEqual(found)                              // read after main moved (slice 1 review I2)
   })
   it("a summary of another suite or other code is never the base: the base suite is owed under today's suite (Review Focus 3)", async () => {
     const { repo, rc, base } = await suiteConfigRepo()

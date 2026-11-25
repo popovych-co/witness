@@ -74,7 +74,10 @@ export function codeTree(root: string, treeish: string): string | undefined {
     return withScratch('witness-code-', (dir) => {
       const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
       run(root, ['read-tree', tree], { env })
-      run(root, ['--literal-pathspecs', 'rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', ...out], { env })
+      // Plumbing only (slice 1 review C1): porcelain `rm --cached` checks each entry against the root's
+      // HEAD and working tree even under a throwaway index, and refuses once main has moved a state file.
+      const listed = run(root, ['--literal-pathspecs', 'ls-files', '-z', '--', ...out], { env })
+      if (listed !== '') run(root, ['update-index', '-z', '--force-remove', '--stdin'], { env, input: listed })
       return run(root, ['write-tree'], { env })
     })
   } catch {

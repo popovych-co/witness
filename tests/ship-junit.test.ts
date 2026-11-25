@@ -8,9 +8,11 @@ import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import { junitSummary } from '../src/junit.js'
 import type { GateRunEntry } from '../src/rounds.js'
+import { suiteKey } from '../src/runner.js'
 import { codeTree } from '../src/snapshot.js'
+import { baseCounts } from '../src/tests-effect.js'
 import {
-  TOKEN_BROKEN, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
+  TOKEN_BROKEN, fakeCtx, fakeScenario, fullSuite, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
   type TestRepo,
 } from './helpers.js'
 import { scratchDir } from './scratch.js'
@@ -78,7 +80,24 @@ describe('the ship suite (rows 251, 252)', () => {
     expect(ship.reviewed_tree).toMatch(/^[0-9a-f]{40,64}$/)
     expect(ship.junit).toEqual({ passed: 3, failed: 0, skipped: 0,
       specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } }, tree: ship.reviewed_tree,
-      code: codeTree(repo.root, ship.reviewed_tree!), suite: expect.stringMatching(/^[0-9a-f]{12}$/) })
+      code: expect.stringMatching(/^[0-9a-f]{40}$/), suite: suiteKey(fullSuite(repo.root)) })
+    expect(ship.junit!.code).toBe(codeTree(repo.root, ship.reviewed_tree!))
+  }, 240_000)
+
+  it("the plan's merge holds the summary's code, so the next plan's base reads it (row 275, Review Focus 4)", async () => {
+    const { repo, wt, planId, ctx } = await fullSuiteShip()
+    execFileSync('git', ['rebase', '-q', 'main'], { cwd: wt })        // the plan takes main's config commit, as ship's rebase does
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
+    const ship = lastShipRun(repo, planId)
+    expect(ship.junit?.code).toMatch(/^[0-9a-f]{40}$/)
+    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim()
+    repo.git('add', '-A', '-f'); repo.git('commit', '-q', '--allow-empty', '-m', "witness's state")
+    repo.git('merge', '--no-ff', '-q', '-m', `merge ${planId}`, branch)
+    const merge = repo.git('rev-parse', 'HEAD')
+    expect(codeTree(repo.root, merge)).toBe(ship.junit!.code)
+    expect(baseCounts(repo.root, fullSuite(repo.root), merge)).toEqual({ read: 'found', from: 'ship', code: ship.junit!.code,
+      specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } } })
   }, 240_000)
 
   it('a failing suite is a red tests check, and its summary counts the failures', async () => {

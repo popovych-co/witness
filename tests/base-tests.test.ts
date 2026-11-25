@@ -1,8 +1,9 @@
-import { cpSync, rmSync } from 'node:fs'
+import { appendFileSync, cpSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BASE_TESTS, baseTestsKey, baseTestsKind, baseTestsResult } from '../src/base-tests.js'
 import { loadConfig } from '../src/config.js'
+import { stateDirs } from '../src/gitio.js'
 import { jobKinds } from '../src/jobs.js'
 import { appendEntry } from '../src/journal.js'
 import { suiteKey } from '../src/runner.js'
@@ -43,6 +44,11 @@ const owing = (gate: string, owes: unknown[]) => ({
 describe('the base suite job (row 275)', () => {
   it("runs the base commit's suite in the scratch and counts each spec's cases", async () => {
     const { repo, commit, run } = await suiteRepo()
+    // main moves on before drive runs it: an existing stream and the spec's doc (slice 1 review I2)
+    const stream = readdirSync(join(repo.root, '.witness', 'journal')).find((f) => f.endsWith('.jsonl'))!
+    appendFileSync(join(repo.root, '.witness', 'journal', stream), '{"v":1,"t":"status"}\n')
+    appendFileSync(join(repo.root, stateDirs(repo.root)[0]!, 'auth-refresh.md'), '\nstamped\n')
+    repo.git('add', '-A', '-f'); repo.git('commit', '-q', '-m', 'witness moves main')
     expect(run()).toEqual({ outcome: 'done', result: {
       passed: 2, failed: 0, skipped: 0, specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } },
       commit, code: codeTree(repo.root, commit), tree: repo.git('rev-parse', `${commit}^{tree}`) } })
