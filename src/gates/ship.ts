@@ -4,13 +4,13 @@ import { stateDirs } from '../gitio.js'
 import { ok, refuse, v, type Result } from '../refusal.js'
 import { canonicalSha, planContentSha } from '../sha.js'
 import { contextDigest } from '../delta.js'
-import { snapshotTree } from '../snapshot.js'
+import { codeTree, snapshotTree } from '../snapshot.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
 import { findById } from '../scan.js'
 import { diffBase } from '../evidence.js'
 import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
-import { execCommand, runnerConfig, runSuite } from '../runner.js'
+import { execCommand, runnerConfig, runSuite, suiteKey } from '../runner.js'
 import { junitSummary, type JunitSummary, type TestOutcome } from '../junit.js'
 import { ensureTrusted } from '../allowlist.js'
 import { diffReviewedSha, effortOf } from '../reviewed.js'
@@ -155,8 +155,12 @@ registerGate({
     const tree = snapshotTree(wt, base, files)
     const context = contextDigest(base, canonicalSha(parent.meta, parent.body), planContentSha(plan.meta, plan.body))
     // Row 251. That one run's counts, on the tree this gate reviewed (T3 reads it).
-    const junit: JunitSummary | undefined = suite === undefined ? undefined
-      : junitSummary(suite, canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)), tree)
+    // Row 275: with that tree's code tree and the suite it ran, so a later plan whose base holds the same
+    // code under the same suite reads these counts as its base.
+    const code = tree !== undefined ? codeTree(root, tree) : undefined
+    const junit: JunitSummary | undefined = suite === undefined || rc === undefined ? undefined
+      : { ...junitSummary(suite, canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)), tree),
+          ...(code !== undefined ? { code } : {}), suite: suiteKey(rc) }
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),

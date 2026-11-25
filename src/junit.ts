@@ -96,8 +96,18 @@ export function mergeReports(root: string, glob: string): Result<TestOutcome[]> 
 
 // Row 251. One suite run's counts, whole and per spec — ship journals it on its gate-run in
 // full-suite mode, with the tree the gate reviewed (T3 reads it as the base summary).
+// Row 275: `code` is that tree's code tree (`codeTree`) and `suite` the suite it ran (`suiteKey`) — a
+// later plan whose base holds the same code under the same suite reads these counts as its base.
+// Row 276: `base` holds the base counts the round's tests effect compared against, per spec, for the
+// merge stamp's observation of a booked loss.
 export interface JunitCounts { passed: number; failed: number; skipped: number }
-export interface JunitSummary extends JunitCounts { tree?: string; specs: Record<string, JunitCounts> }
+export interface JunitSummary extends JunitCounts {
+  tree?: string
+  specs: Record<string, JunitCounts>
+  code?: string
+  suite?: string
+  base?: Record<string, { passed: number; skipped: number }>
+}
 
 const countsOf = (tests: readonly TestOutcome[]): JunitCounts => ({
   passed: tests.filter((t) => t.status === 'passed').length,

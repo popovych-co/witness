@@ -8,6 +8,7 @@ import '../src/gates/index.js'
 import { readStream } from '../src/journal.js'
 import { junitSummary } from '../src/junit.js'
 import type { GateRunEntry } from '../src/rounds.js'
+import { codeTree } from '../src/snapshot.js'
 import {
   TOKEN_BROKEN, fakeCtx, fakeScenario, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
   type TestRepo,
@@ -76,7 +77,8 @@ describe('the ship suite (rows 251, 252)', () => {
     const ship = lastShipRun(repo, planId)
     expect(ship.reviewed_tree).toMatch(/^[0-9a-f]{40,64}$/)
     expect(ship.junit).toEqual({ passed: 3, failed: 0, skipped: 0,
-      specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } }, tree: ship.reviewed_tree })
+      specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } }, tree: ship.reviewed_tree,
+      code: codeTree(repo.root, ship.reviewed_tree!), suite: expect.stringMatching(/^[0-9a-f]{12}$/) })
   }, 240_000)
 
   it('a failing suite is a red tests check, and its summary counts the failures', async () => {

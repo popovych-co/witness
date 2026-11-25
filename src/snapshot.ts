@@ -1,7 +1,7 @@
 import { existsSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { foreignRetired, lstatListed, witnessExcludes } from './change-set.js'
-import { gitBlob, tryGit } from './gitio.js'
+import { foreignRetired, lstatListed, witnessExcludes, witnessPaths } from './change-set.js'
+import { gitBlob, stateDirs, tryGit } from './gitio.js'
 import { withScratch } from './scratch.js'
 import { execFileSync } from './spawn.js'
 
@@ -57,6 +57,25 @@ export function snapshotTree(runRoot: string, base: string, files: readonly stri
       run(runRoot, ['read-tree', baseTree], { env })
       if (lines.length > 0) run(runRoot, ['update-index', '-z', '--index-info'], { env, input: lines.join('') })
       return run(runRoot, ['write-tree'], { env })
+    })
+  } catch {
+    return undefined
+  }
+}
+
+// Row 275 (C29). The code a commit or tree holds: the tree with every path under `stateDirs` (the canon
+// folders and `.witness`) and every witness payload path taken out — what a suite's outcome rests on.
+// Every journal line, stamp and canon write is a commit on main, so main's whole tree moves without
+// any code moving; two commits with one code tree measure the same suite. Undefined on any git failure.
+export function codeTree(root: string, treeish: string): string | undefined {
+  try {
+    const tree = run(root, ['rev-parse', '--verify', `${treeish}^{tree}`])
+    const out = [...stateDirs(root), ...witnessPaths()]
+    return withScratch('witness-code-', (dir) => {
+      const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
+      run(root, ['read-tree', tree], { env })
+      run(root, ['--literal-pathspecs', 'rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', ...out], { env })
+      return run(root, ['write-tree'], { env })
     })
   } catch {
     return undefined
