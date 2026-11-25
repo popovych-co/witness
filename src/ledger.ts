@@ -388,7 +388,13 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     c === undefined || typeof c !== 'object' || !count(c.passed) || !count(c.skipped) ? undefined : c.passed < b.passed || c.skipped > b.skipped
   const drops = summary === undefined ? [] : open.flatMap((i) => {
     if (i.kind !== 'booked-dropped' || !merged(i.plan)) return []
-    const now = short(summary.specs?.[i.spec] ?? { passed: 0, skipped: 0 }, i.base)
+    // Unit review I1: the plan's own item reads against the higher of its booking's base and the merged
+    // round's base, so a round rebased onto more cases that still lost them closes nothing.
+    const roundBase = summary.base?.[i.spec]
+    const ref = i.plan === plan && roundBase !== undefined && count(roundBase.passed) && count(roundBase.skipped)
+      ? { passed: Math.max(i.base.passed, roundBase.passed), skipped: Math.min(i.base.skipped, roundBase.skipped) }
+      : i.base
+    const now = short(summary.specs?.[i.spec] ?? { passed: 0, skipped: 0 }, ref)
     if (now !== false) return []
     if (i.plan !== plan && short(summary.base?.[i.spec], i.base) !== true) return []
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(newest?.reviewed_tree !== undefined ? { tree: newest.reviewed_tree } : {}) }

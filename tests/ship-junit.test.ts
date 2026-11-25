@@ -65,6 +65,16 @@ describe('the ship suite (rows 251, 252)', () => {
       specs: { 'auth-refresh': { passed: 2, failed: 0, skipped: 0 } } })
   }, 240_000)
 
+  it('a round whose suite failed to load a file journals no code, so it never serves as a base (row 275, unit review)', async () => {
+    const { repo, wt, planId, ctx } = await fullSuiteShip()
+    await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
+    writeFileSync(join(wt, 'tests/broken.test.ts'), "import { gone } from '../src/missing'\nimport { it } from 'vitest'\nit('uses gone @spec:auth-refresh', () => { gone() })\n")
+    await runGate(ctx, 'ship', planId, { fresh: false, manual: false })
+    const ship = lastShipRun(repo, planId)
+    expect(ship.junit).toBeDefined()
+    expect(ship.junit).not.toHaveProperty('code')
+  }, 240_000)
+
   it('a failing suite is a red tests check, and its summary counts the failures', async () => {
     const { repo, wt, planId, ctx } = await fullSuiteShip()
     await runGate(ctx, 'implement', planId, { fresh: false, manual: false })

@@ -295,7 +295,8 @@ nothing, and the observation reads the item's own token, never the config. The l
 booked round's base passed and skipped counts) and `subject.cases`; its key is 16 hex over (kind, check, plan, spec, base
 passed, base skipped, cases), and the other formulas are unchanged. The check applies the plan's own items by spec (C17).
 It closes once main has the cases back: at the merge stamp of plan M, from M's newest ship round's junit summary, short is
-fewer passing or more skipped than the item's base; M's own items close when the summary is not short, and an item of a
+fewer passing or more skipped than the item's base; M's own items close when the summary is not short of the higher of
+that base and the round's `junit.base` for the spec, and an item of a
 plan merged before M only where the round's `junit.base` (the base counts it compared against, per spec) was short and
 the summary is not. A round with no summary observes nothing.
 

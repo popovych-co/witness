@@ -409,6 +409,19 @@ describe('a booked loss ends by observation (row 276)', () => {
     expect(byId(s.repo.root, id)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: s.planId, pr: 7, tree: T } })
   }, 120_000)
 
+  it("a plan's own loss stays open where the merged round, rebased onto more cases, still lost them (unit review I1)", async () => {
+    const s = await mergedSeed()
+    const id = lossItem(s.repo, { plan: s.planId })                        // booked against {2, 0} at implement
+    shipSummary(s.repo, s.planId, { ...counts(4), specs: { 'auth-refresh': counts(4) }, base: { 'auth-refresh': { passed: 5, skipped: 0 } } })
+    s.stamp()
+    expect(byId(s.repo.root, id).state).toBe('open')
+    const t = await mergedSeed()
+    const back = lossItem(t.repo, { plan: t.planId })
+    shipSummary(t.repo, t.planId, { ...counts(5), specs: { 'auth-refresh': counts(5) }, base: { 'auth-refresh': { passed: 5, skipped: 0 } } })
+    t.stamp()
+    expect(byId(t.repo.root, back)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: t.planId } })
+  }, 240_000)
+
   it('stays open while the shipped summary is still short — fewer passing, or more skipped', async () => {
     const s = await mergedSeed()
     const fewer = lossItem(s.repo, { plan: s.planId })

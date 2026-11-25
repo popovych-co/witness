@@ -12,7 +12,7 @@ import { diffBase } from '../evidence.js'
 import { planChangeSet } from '../change-set.js'
 import { laneCheck, runCriteria } from '../criteria.js'
 import { execCommand, runnerConfig, runSuite, suiteKey } from '../runner.js'
-import { junitSummary, type JunitSummary, type TestOutcome } from '../junit.js'
+import { junitSummary, loadFailures, type JunitSummary, type TestOutcome } from '../junit.js'
 import { ensureTrusted } from '../allowlist.js'
 import { diffReviewedSha, effortOf } from '../reviewed.js'
 import { refreshSparse, worktreePath } from '../worktree.js'
@@ -163,7 +163,9 @@ registerGate({
     // Row 251. That one run's counts, on the tree this gate reviewed (T3 reads it).
     // Row 275: with that tree's code tree and the suite it ran, so a later plan whose base holds the same
     // code under the same suite reads these counts as its base.
-    const code = tree !== undefined ? codeTree(root, tree) : undefined
+    // Unit review: a round whose suite failed to load a file never serves as a base — its missing cases would
+    // read as a later plan's new skips — so it journals no `code`.
+    const code = tree !== undefined && (suite === undefined || loadFailures(suite).length === 0) ? codeTree(root, tree) : undefined
     const junit: JunitSummary | undefined = suite === undefined || rc === undefined ? undefined
       : { ...junitSummary(suite, canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)), tree),
           ...(code !== undefined ? { code } : {}), suite: suiteKey(rc),
