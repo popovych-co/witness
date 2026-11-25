@@ -1,6 +1,6 @@
 import { expect } from 'vitest'
 import { execFileSync, spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1173,6 +1173,30 @@ export const CLEAN_FOUR = {
     { anchor: 'tests/token.test.ts', note: 'read' },
   ],
   findings: [] as unknown[],
+}
+
+// Rows 251, 252, 275. A full-suite ship whose suite counts its own runs in a file outside the repo (an untracked
+// file in the worktree would join the plan change set). The fixture ignores only node_modules/,
+// so the worktree ignores reports/ too, committed on the branch before any gate runs.
+export async function fullSuiteShip(suite?: (dir: string) => string) {
+  const seed = await shippableRepo()
+  appendFileSync(join(seed.wt, '.gitignore'), 'reports/\n')
+  execFileSync('git', ['commit', '-am', 'ignore reports'], { cwd: seed.wt })
+  const dir = scratchDir('witness-runs-')
+  const counter = join(dir, 'count.cjs')
+  writeFileSync(counter, `require('fs').appendFileSync(${JSON.stringify(join(dir, 'runs'))}, 'x')`)
+  const suiteCmd = suite?.(dir) ?? `node "${counter}" && node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml`
+  patchConfig(seed.repo, {
+    criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' },
+    ship: { test: suiteCmd, lint: 'true' },
+  })
+  seed.repo.git('add', 'witness.config.yaml'); seed.repo.git('commit', '-m', 'full-suite')
+  trustConfig(seed.repo)
+  const count = () => (existsSync(join(dir, 'runs')) ? readFileSync(join(dir, 'runs'), 'utf8').length : 0)
+  const scenario = fakeScenario()
+  putVerdict(scenario, CLEAN_FOUR)
+  const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario) })
+  return { ...seed, count, scenario, ctx, suiteCmd }
 }
 
 // Row 273. A shippable plan whose worktree adds `line` to `file` (src/token.ts keeps its seven lines

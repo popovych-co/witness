@@ -210,7 +210,7 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
     if (waiver !== 'judge' || run.outcome === 'malformed') return []
     const c = run.checks.find((x) => x.name === check)
     if (c === undefined || c.ok || c.offs === undefined) return []
-    return c.offs.flatMap((o) => (unbooked(o) > 0
+    return c.offs.flatMap((o) => (o.kind !== 'dropped' && unbooked(o) > 0
       ? [{ kind: 'booked-switch-off' as const, file: o.file, token: o.token, subject: { lines: { [o.key]: unbooked(o) } } }]
       : []))
   }
@@ -243,7 +243,7 @@ Array<{ id: string; entry?: LedgerOpen }> {
   const common = { gate, round: run.round, run_id: run.run_id, ...(note !== undefined ? { note } : {}) }
   return bookings.map((b) => {
     if (b.kind === 'booked-switch-off') {
-      const holds = (o: OffVerdict) => Object.hasOwn(b.subject.lines, o.key)
+      const holds = (o: OffVerdict) => o.kind !== 'dropped' && Object.hasOwn(b.subject.lines, o.key)
       const holder = run.checks.find((c) => c.offs?.some(holds) === true)
       const check = holder?.name ?? ''
       const key = itemKey({ kind: b.kind, check, plan, file: b.file, token: b.token, subject: b.subject })

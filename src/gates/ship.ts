@@ -5,6 +5,7 @@ import { ok, refuse, v, type Result } from '../refusal.js'
 import { canonicalSha, planContentSha } from '../sha.js'
 import { contextDigest } from '../delta.js'
 import { codeTree, snapshotTree } from '../snapshot.js'
+import { testsEffect, type TestsEffect } from '../tests-effect.js'
 import { latestRecap, readStream, type Entry } from '../journal.js'
 import { findById } from '../scan.js'
 import { diffBase } from '../evidence.js'
@@ -86,6 +87,8 @@ registerGate({
     // signal, or left no report — the lane runs as before, and re-running reports the same reason.
     let lane: Awaited<ReturnType<typeof runCriteria>> | undefined
     let offs: OffVerdict[] = []
+    let licensed: Array<{ spec: string; lost: number }> = []
+    let effect: TestsEffect | undefined
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
@@ -135,9 +138,12 @@ registerGate({
       // Row 261. Every part runs on its own; the lane stays one check named lint.
       { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
       // Row 273. A switch-off the plan adds is a judged red; its lines reach the reviewers below.
+      // Row 275: and so is a spec's lost passing tests, read from the tests lane's run (C33).
       { name: 'switch-offs', run: () => {
-        const check = switchOffsCheck(root, wt, cfg, base, planId, files)
+        effect = testsEffect(root, canon, cfg, plan, base, suite)
+        const check = switchOffsCheck(root, wt, cfg, base, planId, files, effect)
         offs = check.offs ?? []
+        licensed = effect.licensed
         return check
       } },
       { name: 'drift-lane', run: async () => laneCheck(lane = await runCriteria(wt, ctx, parent,
@@ -160,7 +166,11 @@ registerGate({
     const code = tree !== undefined ? codeTree(root, tree) : undefined
     const junit: JunitSummary | undefined = suite === undefined || rc === undefined ? undefined
       : { ...junitSummary(suite, canon.docs.filter((d) => d.meta.type === 'spec').map((d) => String(d.meta.id)), tree),
-          ...(code !== undefined ? { code } : {}), suite: suiteKey(rc) }
+          ...(code !== undefined ? { code } : {}), suite: suiteKey(rc),
+          // Row 276: the base counts the tests effect compared against, for the merge stamp's observation.
+          ...(effect?.read === 'compared' && effect.base !== undefined
+            ? { base: Object.fromEntries(Object.entries(effect.base).map(([id, b]) => [id, { passed: b.passed, skipped: b.skipped }])) }
+            : {}) }
 
     return ok<GateInput>({
       class: ((recap?.class as GateInput['class']) ?? 'feature'),
@@ -174,7 +184,7 @@ registerGate({
       // Row 264: with the review withheld no lens reads the prompt, so it is not built.
       promptBody: withheld !== undefined ? '' : codePromptBody(wt, base, files,
         `### Parent spec (from main): ${String(parent.meta.id)}\n${serializeDoc({ meta: parent.meta, body: parent.body })}\n\n### Plan: ${planId}\n${serializeDoc({ meta: plan.meta, body: plan.body })}` +
-        (offs.length > 0 ? `\n\n${switchOffNotes(offs)}` : '')),
+        (offs.length > 0 || licensed.length > 0 ? `\n\n${switchOffNotes(offs, licensed)}` : '')),
       checks,
       ...(withheld !== undefined ? { withheld } : {}),
       ...(junit !== undefined ? { junit } : {}),

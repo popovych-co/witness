@@ -12,7 +12,7 @@ import { suiteKey } from '../src/runner.js'
 import { codeTree } from '../src/snapshot.js'
 import { baseCounts } from '../src/tests-effect.js'
 import {
-  TOKEN_BROKEN, fakeCtx, fakeScenario, fullSuite, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
+  CLEAN_FOUR, TOKEN_BROKEN, fakeCtx, fakeScenario, fullSuite, fullSuiteShip, gateEnv, patchConfig, putVerdict, shippableRepo, trustConfig, vitestBin,
   type TestRepo,
 } from './helpers.js'
 import { scratchDir } from './scratch.js'
@@ -20,45 +20,10 @@ import { scratchDir } from './scratch.js'
 // Rows 251, 252. In full-suite mode the ship gate runs the suite once — the tests lane is the run
 // the criteria lane reads — and journals that run's junit summary on the tree the gate reviewed.
 
-// vitest-single fixture lands 4 files in the worktree diff — coverage-minimum needs an anchor per each.
-const CLEAN = {
-  coverage: [
-    { anchor: '.gitignore', note: 'read' },
-    { anchor: 'package.json', note: 'read' },
-    { anchor: 'src/token.ts', note: 'read' },
-    { anchor: 'tests/token.test.ts', note: 'read' },
-  ],
-  findings: [],
-}
-
 const shipRuns = (repo: TestRepo, id: string) =>
   (readStream(repo.root, id).filter((e) => e.t === 'gate-run') as unknown as GateRunEntry[]).filter((r) => r.gate === 'ship')
 const lastShipRun = (repo: TestRepo, id: string) => shipRuns(repo, id).at(-1)!
 const check = (r: GateRunEntry, name: string) => r.checks.find((c) => c.name === name)!
-
-// A full-suite ship whose suite counts its own runs in a file outside the repo (an untracked
-// file in the worktree would join the plan change set). The fixture ignores only node_modules/,
-// so the worktree ignores reports/ too, committed on the branch before any gate runs.
-async function fullSuiteShip(suite?: (dir: string) => string) {
-  const seed = await shippableRepo()
-  appendFileSync(join(seed.wt, '.gitignore'), 'reports/\n')
-  execFileSync('git', ['commit', '-am', 'ignore reports'], { cwd: seed.wt })
-  const dir = scratchDir('witness-runs-')
-  const counter = join(dir, 'count.cjs')
-  writeFileSync(counter, `require('fs').appendFileSync(${JSON.stringify(join(dir, 'runs'))}, 'x')`)
-  const suiteCmd = suite?.(dir) ?? `node "${counter}" && node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml`
-  patchConfig(seed.repo, {
-    criteria: { runner: 'full-suite', report: 'junit:**/reports/junit.xml' },
-    ship: { test: suiteCmd, lint: 'true' },
-  })
-  seed.repo.git('add', 'witness.config.yaml'); seed.repo.git('commit', '-m', 'full-suite')
-  trustConfig(seed.repo)
-  const count = () => (existsSync(join(dir, 'runs')) ? readFileSync(join(dir, 'runs'), 'utf8').length : 0)
-  const scenario = fakeScenario()
-  putVerdict(scenario, CLEAN)
-  const ctx = fakeCtx(seed.repo.root, { env: gateEnv(scenario) })
-  return { ...seed, count, scenario, ctx, suiteCmd }
-}
 
 describe('the ship suite (rows 251, 252)', () => {
   it('runs once, and the criteria lane reads that run', async () => {
@@ -146,7 +111,7 @@ describe('the ship suite (rows 251, 252)', () => {
   it('a filtered runner journals no summary', async () => {
     const { repo, planId } = await shippableRepo()
     const scenario = fakeScenario()
-    putVerdict(scenario, CLEAN)
+    putVerdict(scenario, CLEAN_FOUR)
     const ctx = fakeCtx(repo.root, { env: gateEnv(scenario) })
     await runGate(ctx, 'implement', planId, { fresh: false, manual: false })
     await runGate(ctx, 'ship', planId, { fresh: false, manual: false })

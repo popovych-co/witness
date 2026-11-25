@@ -54,10 +54,17 @@ describe('the check registry (row 264)', () => {
 })
 
 describe('the switch-offs check in the registry (row 273)', () => {
-  it("switch-offs is judged and the judge's to waive, right after diff (row 273)", () => {
+  it("switch-offs is judged and the judge's to waive, last in the registry (rows 273, 275)", () => {
     expect([checkTier('switch-offs'), checkWaiver('switch-offs')]).toEqual(['judged', 'judge'])
-    const names = CHECKS.map((c) => c.name)
-    expect(names.indexOf('switch-offs')).toBe(names.indexOf('diff') + 1)
+    expect(CHECKS.at(-1)!.name).toBe('switch-offs')
+  })
+  it('the signature never reads owes or the tests effect (row 275)', () => {
+    expect(checksSignature([{ name: 'switch-offs', ok: true, owes: [{ kind: 'base-tests', key: 'k' }], tests_effect: { read: 'not-checked', why: 'w' } } as never]))
+      .toBe(checksSignature([{ name: 'switch-offs', ok: true }]))
+  })
+  it("the signature reads a lost spec by its key and unbooked cases (row 275)", () => {
+    const loss = { kind: 'dropped', key: 'd'.repeat(16), spec: 'a', count: 2, base: { passed: 2, failed: 0, skipped: 0 }, plan: { passed: 0, failed: 0, skipped: 0 } }
+    expect(checksSignature([{ name: 'switch-offs', ok: false, offs: [loss] } as never])).toBe(`switch-offs:false::offs=${'d'.repeat(16)}x2`)
   })
   it('the signature reads each unbooked switch-off line with its copies; a check without offs reads as before (row 273)', () => {
     const sig = (offs: unknown[]) => checksSignature([{ name: 'switch-offs', ok: false, offs } as never])

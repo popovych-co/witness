@@ -27,7 +27,7 @@ import { cmd, hasControl, kv, rows, shellWord, visible } from '../toon.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
 import {
   REVISE_HUMAN, ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
-  repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LiveActs,
+  repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type LineOff, type LiveActs,
 } from '../rounds.js'
 import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
@@ -954,7 +954,7 @@ function bookQuestion(gate: string, target: string, check: string, anchor: GateR
   const offs = anchor.checks.find((c) => c.name === check)?.offs ?? []
   const lines = bookings.map((b) => {
     if (b.kind === 'booked-switch-off') {
-      const rules = offs.find((o) => Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
+      const rules = offs.find((o): o is LineOff => o.kind !== 'dropped' && Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
       return `  ${offWhere(b.token, b.file)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
     }
     const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []

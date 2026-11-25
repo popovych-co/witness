@@ -7,6 +7,7 @@ import { readStream, streamIds } from './journal.js'
 import type { JunitCounts, TestOutcome } from './junit.js'
 import { matchesTag } from './matcher.js'
 import { runnerConfig, suiteKey, type RunnerConfig } from './runner.js'
+import type { DroppedOff } from './rounds.js'
 import type { Canon, CanonDoc } from './scan.js'
 import { codeTree } from './snapshot.js'
 import { JOB_STREAM } from './streams.js'
@@ -55,12 +56,8 @@ export function baseCounts(root: string, rc: FullSuite, base: string): BaseCount
   return { read: 'missing', code, key: baseTestsKey(base, suite) }
 }
 
-// Row 275 (C30). One spec's passing cases a round lost against its base: the key is 16 hex over
-// ['dropped', spec], a key space of its own beside a switch-off line's. `base` and `plan` are the spec's
-// counts on each side; row 276 adds `booked` and `items` (the plan's own bookings of it).
-export interface DroppedOff {
-  kind: 'dropped'; key: string; spec: string; count: number; base: JunitCounts; plan: JunitCounts; booked?: number; items?: string[]
-}
+// Row 275 (C30). One spec's passing cases a round lost: an `OffVerdict` variant, declared in rounds.ts.
+export type { DroppedOff }
 
 export function droppedKey(spec: string): string {
   return createHash('sha256').update(JSON.stringify(['dropped', spec])).digest('hex').slice(0, 16)

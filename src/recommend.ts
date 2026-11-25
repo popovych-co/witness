@@ -2,7 +2,7 @@ import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
 import {
   actKey, actLive, anchorRecurrence, boundReached, decisionOwed, ladderSpent, lastGateRun, liveActs, partPasses, repairsOnRegate,
-  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type GateStateKind, type LiveActs,
+  repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type GateStateKind, type LineOff, type LiveActs,
 } from './rounds.js'
 import { checkWaiver } from './checks.js'
 import { bookingsOf } from './ledger.js'
@@ -560,7 +560,7 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
   // policy hands the rule to the arbiter (`policyFor`): whether a switch-off is right as it stands is a
   // judgment, not a rule.
   if (checksFailed.length > 0 && checksFailed.every((c) => checkWaiver(c.name) === 'judge' && bookingsOf(last, c.name).length > 0)) {
-    const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o) => o.count - (o.booked ?? 0) > 0))
+    const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is LineOff => o.kind !== 'dropped' && o.count - (o.booked ?? 0) > 0))
     const tokens = [...new Set(lines.map((o) => visible(o.token)))]
     return {
       key: 'decide', rule: 'waivable',

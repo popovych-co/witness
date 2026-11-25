@@ -189,7 +189,7 @@ function offFacts(offs: readonly OffVerdict[]): string[] {
   const groups = new Map<string, number>()
   for (const o of offs) {
     const n = offUnbooked(o)
-    if (n === 0) continue
+    if (n === 0 || o.kind === 'dropped') continue
     const rules = o.rules?.length ?? 0
     const label = `${visible(o.token)}${rules > 0 ? ` (${rules} rule${rules === 1 ? '' : 's'})` : ''} ${o.test === true ? 'in a test file' : 'in code'}`
     groups.set(label, (groups.get(label) ?? 0) + n)
