@@ -18,7 +18,8 @@ import { lstatListed } from './change-set.js'
 import type { Config } from './config.js'
 import { normalizeSnippet } from './diagnostics.js'
 import { gitBlob } from './gitio.js'
-import type { GateCheck, OffVerdict } from './rounds.js'
+import { openItems, type SwitchOffItem } from './ledger.js'
+import { offUnbooked, type GateCheck, type OffVerdict } from './rounds.js'
 import { visible } from './toon.js'
 
 export type SwitchOffLang = 'ts' | 'rust' | 'python' | 'go'
@@ -298,18 +299,37 @@ function foldOffs(found: readonly SwitchOff[]): OffVerdict[] {
   return [...byKey.values()]
 }
 
-// Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line.
-// `root` and `plan` name whose bookings apply (row 274).
-export function switchOffsCheck(_root: string, wt: string, cfg: Config, base: string, _plan: string, files: readonly string[]): GateCheck {
-  const offs = foldOffs(planSwitchOffs(wt, base, files, cfg.checks.switchOffs))
-  if (offs.length === 0) return { name: 'switch-offs', ok: true, detail: `no switch-off in the lines the plan adds (${files.length} files)` }
-  if (offs.length > MAX_OFFS) {
+// Row 274 (C17). The plan's own open bookings applied to each line: `booked` the copies they hold for its
+// key (at most its count), `items` their ids. Another plan's, a closed and a dismissed item cover nothing.
+function applyBookings(offs: readonly OffVerdict[], mine: readonly SwitchOffItem[]): OffVerdict[] {
+  return offs.map((o) => {
+    const holding = mine.filter((i) => Object.hasOwn(i.subject.lines, o.key))
+    if (holding.length === 0) return o
+    const held = holding.reduce((a, i) => a + i.subject.lines[o.key]!, 0)
+    return { ...o, booked: Math.min(o.count, held), items: holding.map((i) => i.id) }
+  })
+}
+
+// Row 273 (§4 T3, §3.2). The `switch-offs` judged check: red while the plan adds a switch-off line its
+// own bookings (row 274, read from `root`'s ledger) leave uncovered.
+export function switchOffsCheck(root: string, wt: string, cfg: Config, base: string, plan: string, files: readonly string[]): GateCheck {
+  const found = foldOffs(planSwitchOffs(wt, base, files, cfg.checks.switchOffs))
+  if (found.length === 0) return { name: 'switch-offs', ok: true, detail: `no switch-off in the lines the plan adds (${files.length} files)` }
+  if (found.length > MAX_OFFS) {
     return { name: 'switch-offs', ok: false,
-      detail: `${offs.length} switch-off lines the plan adds — more than ${MAX_OFFS}: nothing is bookable, remove them` }
+      detail: `${found.length} switch-off lines the plan adds — more than ${MAX_OFFS}: nothing is bookable, remove them` }
   }
-  const more = offs.length > MAX_LISTED ? ` · and ${offs.length - MAX_LISTED} more` : ''
+  const mine = openItems(root, { plan }).filter((i): i is SwitchOffItem => i.kind === 'booked-switch-off')
+  const offs = applyBookings(found, mine)
+  const open = offs.filter((o) => offUnbooked(o) > 0)
+  const bookedCopies = offs.reduce((a, o) => a + (o.booked ?? 0), 0)
+  const ids = [...new Set(offs.flatMap((o) => o.items ?? []))].map(visible)
+  const booked = bookedCopies > 0 ? `${bookedCopies} booked (${ids.join(', ')})` : ''
+  if (open.length === 0) return { name: 'switch-offs', ok: true, offs, detail: `no unbooked switch-off in the lines the plan adds — ${booked}` }
+  const more = open.length > MAX_LISTED ? ` · and ${open.length - MAX_LISTED} more` : ''
   return { name: 'switch-offs', ok: false, offs,
-    detail: `${offs.length} switch-off line${offs.length === 1 ? '' : 's'} the plan adds — ${offs.slice(0, MAX_LISTED).map(place).join(' · ')}${more}` }
+    detail: `${open.length} switch-off line${open.length === 1 ? '' : 's'} the plan adds — ${open.slice(0, MAX_LISTED).map(place).join(' · ')}${more}${
+      booked !== '' ? ` · ${booked}` : ''}` }
 }
 
 // Row 273. What the reviewers are told: each line the plan adds, from the tree — never from the ledger

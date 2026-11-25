@@ -18,7 +18,7 @@ import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows, visible } from '../toon.js'
-import { openItems } from '../ledger.js'
+import { offWhere, openItems } from '../ledger.js'
 import { parseBaseKey } from '../base-lint.js'
 import { isId } from '../dsl.js'
 import { decidedBy } from '../autonomy.js'
@@ -96,15 +96,22 @@ export function demotedRows(
 // gate-run entry carries none — so "61 rounds" is derivable and "3 weeks" is not.
 // Row 269. The open ledger items as status lists them — the order `dismiss ledger --item <index>`
 // counts in. `holds`: the whole part at the base it was booked against, or the diagnostics it covers.
-// `since`: the gate and round it was booked at, or `merged` once its plan has.
+// `since`: the gate and round it was booked at, or `merged` once its plan has. Row 274: `check` reads
+// `lint/<part>` or `switch-offs`; a switch-off item holds its token in its file, ×N past one copy.
 export function bookedRows(root: string): Array<Record<string, unknown>> {
   return openItems(root).map((i) => {
+    const merged = isId(i.plan) && readStream(root, i.plan).some((e) => e.t === 'status' && e.to === 'done' && e.cause === 'merge')
+    const head = { item: visible(i.id), plan: visible(i.plan) }
+    const since = merged ? 'merged' : `${visible(i.gate)} r${i.round}`
+    if (i.kind === 'booked-switch-off') {
+      const copies = Object.values(i.subject.lines).reduce((a, n) => a + n, 0)
+      return { ...head, check: visible(i.check), holds: `${offWhere(i.token, i.file)}${copies > 1 ? ` ×${copies}` : ''}`, since }
+    }
     const base = parseBaseKey(i.part_key)?.commit
     const holds = 'whole' in i.subject
       ? `whole part at ${base === undefined ? 'its base' : base.slice(0, 7)}`
       : `${Object.values(i.subject.diagnostics).reduce((a, n) => a + n, 0)} diagnostics`
-    const merged = isId(i.plan) && readStream(root, i.plan).some((e) => e.t === 'status' && e.to === 'done' && e.cause === 'merge')
-    return { item: visible(i.id), plan: visible(i.plan), part: visible(i.part), holds, since: merged ? 'merged' : `${visible(i.gate)} r${i.round}` }
+    return { ...head, check: `${visible(i.check)}/${visible(i.part)}`, holds, since }
   })
 }
 
@@ -318,7 +325,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // where a human sees what the repo carries, and the one act that ends one early.
   const booked = bookedRows(root)
   if (booked.length > 0) {
-    rows('booked', ['item', 'plan', 'part', 'holds', 'since'], booked).forEach(ctx.out)
+    rows('booked', ['item', 'plan', 'check', 'holds', 'since'], booked).forEach(ctx.out)
     ctx.out('help: witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>" — at your own terminal')
   }
   const demoted = demotedRows(root, canon)

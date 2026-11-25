@@ -33,7 +33,7 @@ import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
 import { parseBaseKey } from '../base-lint.js'
 import { CHECKS, checkTier, checkWaiver } from '../checks.js'
-import { bookLines, bookingsOf, ledgerTaken, type Booking, type LedgerOpen } from '../ledger.js'
+import { bookLines, bookingsOf, ledgerTaken, offWhere, type Booking, type LedgerOpen } from '../ledger.js'
 import { boundReader } from '../lint-parts.js'
 import { LEDGER_STREAM } from '../streams.js'
 import type { Violation } from '../refusal.js'
@@ -838,8 +838,9 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   ctx.out(kv('decided', `${gate} ${target} → ${entry.decision}${override ? ' (override)' : ''}${by}`))
   if (act.selected === 'arbiter') ctx.out(kv('reason', act.reason))
   // Row 270: each item the booking holds, and the act that reads it. Printed whole (a value holding a
-  // comma would be quoted by kv), its part name spelled out.
-  for (const b of bookedLines) ctx.out(`booked: ${b.id} — ${visible(b.booking.part)} · ${bookWhat(b.booking)}`)
+  // comma would be quoted by kv), its part name spelled out. Row 274: a switch-off item by its check,
+  // then its token in its file.
+  for (const b of bookedLines) ctx.out(`booked: ${b.id} — ${bookName(bookCheck, b.booking)}`)
   if (booking) ctx.out(`help: the re-gate reads it — ${cliAct('gate', gate, target).line}`)
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   // Row 239. A shape: each foreign word is quoted, and the cause and the note are the human's.
@@ -908,18 +909,23 @@ function bookRefusal(ctx: Ctx, root: string, gate: string, target: string, check
   return ledgerTaken(root)
 }
 
-// A reader-bound booking names its reader's tool, so the item says whose keys it holds.
+// A reader-bound booking names its reader's tool, so the item says whose keys it holds. Lint's alone.
 function withTools(cfg: Config, bookings: readonly Booking[]): Booking[] {
   return bookings.map((b) => {
-    if (!('diagnostics' in b.subject)) return b
+    if (b.kind !== 'booked-check' || !('diagnostics' in b.subject)) return b
     const part = cfg.ship.lint?.find((p) => p.name === b.part)
     const tool = part === undefined ? undefined : boundReader(cfg, part)?.tool
     return tool === undefined ? b : { ...b, tool }
   })
 }
 
-// What one booking holds, in words: the count it covers, or the whole part at its base.
-function bookWhat(b: Booking): string {
+// One booking, named: a lint part and what it holds, or a switch-off's check and its token in its file.
+function bookName(check: string, b: Booking): string {
+  return b.kind === 'booked-switch-off' ? `${visible(check)} · ${offWhere(b.token, b.file)}` : `${visible(b.part)} · ${bookWhat(b)}`
+}
+
+// What one lint booking holds, in words: the count it covers, or the whole part at its base.
+function bookWhat(b: Extract<Booking, { kind: 'booked-check' }>): string {
   if ('diagnostics' in b.subject) {
     const n = Object.values(b.subject.diagnostics).reduce((a, x) => a + x, 0)
     return `${n} diagnostic${n === 1 ? '' : 's'}`
@@ -928,10 +934,16 @@ function bookWhat(b: Booking): string {
   return `the whole part, red against ${commit === undefined ? 'its base' : short(commit)}, until main moves`
 }
 
-// The terminal's question under committed autonomy: each part and what booking it takes.
+// The terminal's question under committed autonomy: each part and what booking it takes. Row 274: each
+// switch-off line, its token in its file and the rules it names.
 function bookQuestion(gate: string, target: string, check: string, anchor: GateRunEntry, bookings: readonly Booking[]): string {
   const parts = anchor.checks.at(-1)?.parts ?? []
+  const offs = anchor.checks.find((c) => c.name === check)?.offs ?? []
   const lines = bookings.map((b) => {
+    if (b.kind === 'booked-switch-off') {
+      const rules = offs.find((o) => Object.hasOwn(b.subject.lines, o.key))?.rules ?? []
+      return `  ${offWhere(b.token, b.file)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
+    }
     const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []
     return `  ${visible(b.part)} — ${bookWhat(b)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`
   })

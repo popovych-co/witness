@@ -4,10 +4,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Ctx } from '../src/cli.js'
 import { appendEntry, readStream } from '../src/journal.js'
-import { ledgerItems, newItemId } from '../src/ledger.js'
+import { ledgerItems, mergeCloses, newItemId } from '../src/ledger.js'
 import { loadCanon } from '../src/scan.js'
 import { lazyStamp } from '../src/stamp.js'
 import { LEDGER_STREAM } from '../src/streams.js'
+import { bookedRows } from '../src/verbs/dashboard.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
 import {
   crashCli, fakeCtx, fakeScenario, gateEnv, ghState, seededRepo, shippableRepo, type TestRepo,
@@ -201,17 +202,58 @@ describe('witness dismiss ledger (row 269)', () => {
 })
 
 describe('status lists open bookings (row 269)', () => {
-  it('status lists open bookings with their plan, part and what they hold, and the dismissal (row 269)', async () => {
+  it('status lists open bookings with their plan, check and what they hold, and the dismissal (rows 269, 274)', async () => {
     const repo = await seededRepo()
     item(repo, {})
     item(repo, { part: 'tsc', subject: { diagnostics: { ['a'.repeat(16)]: 2, ['b'.repeat(16)]: 1 } } })
     const gone = item(repo, { part: 'ui' })
     line(repo, LEDGER_STREAM, { t: 'ledger-dismissed', id: gone, cause: 'declined', note: 'x' })
     const out = (await repo.cli(['status'])).stdout
-    expect(out).toMatch(/^booked\[2\]\{item,plan,part,holds,since\}:$/m)
-    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,biome,whole part at aaaaaaa,ship r1$/m)
-    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,tsc,3 diagnostics,ship r1$/m)
+    expect(out).toMatch(/^booked\[2\]\{item,plan,check,holds,since\}:$/m)
+    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,lint\/biome,whole part at aaaaaaa,ship r1$/m)
+    expect(out).toMatch(/^ {2}l-[0-9a-f]{8},p1,lint\/tsc,3 diagnostics,ship r1$/m)
     expect(out).not.toContain(gone)
     expect(out).toContain('help: witness dismiss ledger --item <id|index> --cause <rule-retired|declined|judged-wrong> --note "<why>" — at your own terminal')
+  }, 120_000)
+})
+
+// Row 274 (§3.3). The second kind, wherever a human reads the ledger.
+const offItem = (repo: TestRepo, over: Record<string, unknown> = {}): string => {
+  const id = newItemId()
+  line(repo, LEDGER_STREAM, {
+    t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-switch-off', check: 'switch-offs', plan: 'p1', gate: 'implement',
+    round: 2, run_id: 'r-1', file: 'src/a.ts', token: 'eslint-disable-next-line', subject: { lines: { ['1'.repeat(16)]: 1 } }, ...over,
+  })
+  return id
+}
+
+describe('a switch-off item where a human reads it (row 274)', () => {
+  it('status names a switch-off item by its token and file, spelled out, its copies past one (Review Focus 3)', async () => {
+    const repo = await seededRepo()
+    const lint = item(repo, {})
+    const a = offItem(repo)
+    const odd = offItem(repo, { file: `src/we${String.fromCodePoint(0x202e)}ird.ts`, subject: { lines: { ['1'.repeat(16)]: 1, ['2'.repeat(16)]: 2 } } })
+    expect(bookedRows(repo.root)).toEqual([
+      { item: lint, plan: 'p1', check: 'lint/biome', holds: 'whole part at aaaaaaa', since: 'ship r1' },
+      { item: a, plan: 'p1', check: 'switch-offs', holds: 'eslint-disable-next-line in src/a.ts', since: 'implement r2' },
+      { item: odd, plan: 'p1', check: 'switch-offs', holds: 'eslint-disable-next-line in src/we\\u{202e}ird.ts ×3', since: 'implement r2' },
+    ])
+  }, 120_000)
+
+  it("the dismissal's question names a switch-off item and says it stops waiving from the next gate run", async () => {
+    const repo = await seededRepo()
+    const id = offItem(repo)
+    const asked: string[] = []
+    const ctx = { ...fakeCtx(repo.root, { tty: true }), ask: async (q: string) => { asked.push(q); return 'n' } } as Ctx
+    await dismiss(ctx, ['ledger', '--item', id, '--cause', 'judged-wrong', '--note', 'remove it'])
+    expect(asked[0]).toBe(`dismiss ${id} — switch-offs · eslint-disable-next-line in src/a.ts · p1: judged-wrong\ndismiss? the booking stops waiving from the next gate run [y/N]`)
+  }, 120_000)
+
+  it('the lint observation reads lint items only; a switch-off item of the plan stays open (M-g)', async () => {
+    const repo = await seededRepo()
+    const lintId = item(repo, { plan: 'p1' })
+    offItem(repo, { plan: 'p1' })
+    shipRun(repo, 'p1', [{ part: 'biome', state: 'green' }])
+    expect(mergeCloses(repo.root, 'p1', 7).map((c) => c.id)).toEqual([lintId])
   }, 120_000)
 })

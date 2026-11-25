@@ -17,7 +17,7 @@ import type { Ctx } from './cli.js'
 import type { Config, LintPart } from './config.js'
 import { diagnosticKey, keyCounts, newDiagnostics, readPart, type Diagnostic } from './diagnostics.js'
 import { jobReading } from './jobs.js'
-import { openItems, type LedgerItem } from './ledger.js'
+import { openItems, type CheckItem } from './ledger.js'
 import { boundReader } from './lint-parts.js'
 import { partPasses, type GateCheck, type PartVerdict } from './rounds.js'
 import { execCommand, type RunOutcome } from './runner.js'
@@ -142,20 +142,20 @@ function less(ds: readonly Diagnostic[], drop: ReadonlyMap<string, number>): Dia
   })
 }
 
-const subjectKeys = (i: LedgerItem): string[] => ('diagnostics' in i.subject ? Object.keys(i.subject.diagnostics) : [])
+const subjectKeys = (i: CheckItem): string[] => ('diagnostics' in i.subject ? Object.keys(i.subject.diagnostics) : [])
 
 // Row 270 (C17, C19). `onPart` is every open item on this part. `cleared` names the per-diagnostic
 // ones, of any plan, whose every key this tree lacks: the merge stamp's observation. The plan's own
 // items then apply: a whole one at the part's key makes any state but a passing one or `untrusted`
 // read `booked`; per-diagnostic ones take their keys out of `book`, and nothing left reads `booked`.
-function applyBookings(j: Judged, onPart: readonly LedgerItem[], plan: string): Judged {
+function applyBookings(j: Judged, onPart: readonly CheckItem[], plan: string): Judged {
   const tree = j.treeKeys
   const cleared = tree === undefined ? []
     : onPart.filter((i) => 'diagnostics' in i.subject && subjectKeys(i).every((k) => !tree.has(k))).map((i) => i.id)
   const seen = (x: Judged): Judged => (cleared.length > 0 ? { ...x, verdict: { ...x.verdict, cleared } } : x)
   const v = j.verdict
   if (partPasses(v) || v.state === 'untrusted') return seen(j)
-  const mine = onPart.filter((i) => i.plan === plan && i.kind === 'booked-check' && i.check === 'lint')
+  const mine = onPart.filter((i) => i.plan === plan)
   const booked = { part: v.part, state: 'booked' as const, ...(v.key !== undefined ? { key: v.key } : {}) }
   const whole = mine.find((i) => 'whole' in i.subject && v.key !== undefined && i.part_key === v.key)
   if (whole !== undefined) return seen({ verdict: { ...booked, items: [whole.id] } })
@@ -221,7 +221,9 @@ export async function lintCheck(root: string, wt: string, ctx: Ctx, cfg: Config,
   const open = openItems(root)
   const judged: Judged[] = []
   for (const r of runs) {
-    judged.push(applyBookings(await judge(root, wt, ctx, cfg, base, r), open.filter((i) => i.part === r.part.name), plan))
+    // M-g (T2e slice 3): a part reads lint's own items alone, never another kind or check.
+    judged.push(applyBookings(await judge(root, wt, ctx, cfg, base, r),
+      open.filter((i): i is CheckItem => i.kind === 'booked-check' && i.check === 'lint' && i.part === r.part.name), plan))
   }
   const untrusted = judged.flatMap((j) => (j.untrusted !== undefined ? [j.untrusted.cmd] : []))
   return {

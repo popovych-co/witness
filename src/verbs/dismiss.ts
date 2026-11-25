@@ -8,7 +8,7 @@ import { renderRefusal, v } from '../refusal.js'
 import { kv, logSafe, shellWord, visible } from '../toon.js'
 import { crashPoint, guardTxn, withTxn } from '../txn.js'
 import { sessionMarker } from '../drive-presence.js'
-import { LEDGER_CAUSES, ledgerItems, ledgerTaken, type LedgerCause, type LedgerDismissed, type LedgerItem } from '../ledger.js'
+import { LEDGER_CAUSES, ledgerItems, ledgerTaken, offWhere, type LedgerCause, type LedgerDismissed, type LedgerItem } from '../ledger.js'
 import { LEDGER_STREAM } from '../streams.js'
 
 
@@ -137,8 +137,12 @@ async function dismissLedger(ctx: Ctx, which: string, cause: string | undefined,
     return refuse('--note', 'note-required', '(empty)', 'why the item ends without the observation that closes it — the cause names the class, the note names the case')
   }
   const item = target!
-  const what = 'whole' in item.subject ? 'the whole part' : `${Object.values(item.subject.diagnostics).reduce((a, n) => a + n, 0)} diagnostics`
-  const answer = (await ctx.ask(`dismiss ${visible(item.id)} — ${visible(item.check)} · ${visible(item.part)} · ${visible(item.plan)} · ${what}: ${cause}\ndismiss? the booking stops waiving from the next lint run [y/N]`)).trim()
+  // Row 274: a switch-off item is named by its token in its file; it stops waiving at the next gate run.
+  const question = item.kind === 'booked-switch-off'
+    ? `dismiss ${visible(item.id)} — ${visible(item.check)} · ${offWhere(item.token, item.file)} · ${visible(item.plan)}: ${cause}\ndismiss? the booking stops waiving from the next gate run [y/N]`
+    : `dismiss ${visible(item.id)} — ${visible(item.check)} · ${visible(item.part)} · ${visible(item.plan)} · ${
+      'whole' in item.subject ? 'the whole part' : `${Object.values(item.subject.diagnostics).reduce((a, n) => a + n, 0)} diagnostics`}: ${cause}\ndismiss? the booking stops waiving from the next lint run [y/N]`
+  const answer = (await ctx.ask(question)).trim()
   if (answer.toLowerCase() !== 'y') return refuse('dismiss', 'dismiss-declined', `answered ${answer === '' ? '(nothing)' : visible(answer)}`, `y — nothing was dismissed; ${typed} asks again`)
   const entry: LedgerDismissed = { v: 1, t: 'ledger-dismissed', id: item.id, cause: cause as LedgerCause, note: note.trim() }
   const asLine = entry as unknown as { t: 'ledger-dismissed'; [k: string]: unknown }

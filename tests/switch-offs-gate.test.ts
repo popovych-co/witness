@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { readStream } from '../src/journal.js'
+import { appendEntry, readStream } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
+import { LEDGER_STREAM } from '../src/streams.js'
+import { switchOffKey, switchOffsCheck } from '../src/switch-offs.js'
 import {
-  TOKEN_FIXED, callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, type TestRepo,
+  TOKEN_FIXED, callCount, callFor, fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, tmpRepo, type TestRepo,
 } from './helpers.js'
 
 // vitest-single lands 4 files in the worktree diff — coverage-minimum needs an anchor for each.
@@ -95,4 +97,44 @@ describe('the switch-offs check (row 273)', () => {
     expect(detail).not.toContain(String.fromCodePoint(0x202e))
     expect(readFileSync(join(callFor(b.scenario, 'code-reviewer')!, 'stdin'), 'utf8')).toContain('- src/we\\u{202e}ird.ts:1 — @ts-ignore')
   }, 240_000)
+})
+
+describe("the plan's own booking covers its line (row 274, C17)", () => {
+  // A repo whose plan adds one switch-off line twice over its base's none.
+  function twice() {
+    const repo = tmpRepo()
+    repo.write('src/a.ts', 'a()\n'); repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
+    const base = repo.git('rev-parse', 'HEAD')
+    repo.write('src/a.ts', 'a()\n// @ts-ignore\nb()\n// @ts-ignore\n')
+    const key = switchOffKey({ token: '@ts-ignore', file: 'src/a.ts', snippet: '// @ts-ignore' })
+    const book = (id: string, over: Record<string, unknown> = {}) => appendEntry(repo.root, LEDGER_STREAM, {
+      t: 'ledger-open', id, key: '0'.repeat(16), kind: 'booked-switch-off', check: 'switch-offs', plan: 'p1', gate: 'implement',
+      round: 1, run_id: 'r-1', file: 'src/a.ts', token: '@ts-ignore', subject: { lines: { [key]: 1 } }, ...over } as never)
+    const check = () => switchOffsCheck(repo.root, repo.root, { checks: { switchOffs: [] } } as never, base, 'p1', ['src/a.ts'])
+    return { repo, key, book, check }
+  }
+
+  it('a booking of one copy leaves the other red; a second covers it and the check passes', () => {
+    const t = twice()
+    expect(t.check()).toMatchObject({ ok: false, offs: [{ key: t.key, count: 2 }] })
+    t.book('l-00000001')
+    expect(t.check()).toMatchObject({ ok: false, offs: [{ key: t.key, count: 2, booked: 1, items: ['l-00000001'] }],
+      detail: '1 switch-off line the plan adds — src/a.ts:2 @ts-ignore · 1 booked (l-00000001)' })
+    t.book('l-00000002')
+    expect(t.check()).toMatchObject({ ok: true, offs: [{ key: t.key, count: 2, booked: 2, items: ['l-00000001', 'l-00000002'] }],
+      detail: 'no unbooked switch-off in the lines the plan adds — 2 booked (l-00000001, l-00000002)' })
+  })
+
+  it("another plan's booking, a closed one and a dismissed one cover nothing", () => {
+    const t = twice()
+    t.book('l-00000001', { plan: 'p9' })
+    t.book('l-00000002')
+    appendEntry(t.repo.root, LEDGER_STREAM, { t: 'ledger-closed', id: 'l-00000002', by: 'merge', plan: 'p8' } as never)
+    t.book('l-00000003', { subject: { lines: { [t.key]: 2 } } })
+    appendEntry(t.repo.root, LEDGER_STREAM, { t: 'ledger-dismissed', id: 'l-00000003', cause: 'judged-wrong', note: 'x' } as never)
+    const c = t.check()
+    expect(c.ok).toBe(false)
+    expect(c.offs![0]!.booked).toBeUndefined()
+    expect(c.offs![0]!.items).toBeUndefined()
+  })
 })
