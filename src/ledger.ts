@@ -343,6 +343,12 @@ Array<{ id: string; entry?: LedgerOpen }> {
 // held a line it books and the tree holds none — this merge took it out; a tree cut before that plan
 // merged says nothing about its line (unit review I1). A missing file holds none; an unreadable tree or
 // base, a round with no base, or a read git fails observes nothing (`copiesInTree` undefined).
+//
+// Row 276 (§3.3). A booked loss closes once main has the spec's cases back, read from the same newest ship
+// round's junit summary: short is fewer passing or more skipped than the item's base. The plan's own items
+// close when the summary is not short; another merged plan's only where the round's base counts
+// (`junit.base`) were short and the summary is not — this merge restored them (unit review I1, applied to
+// counts). A round with no summary, or no base counts for the spec, observes nothing.
 export function mergeCloses(root: string, plan: string, pr: number): LedgerClosed[] {
   const runs = readStream(root, plan).filter((e) => e.t === 'gate-run' && e.gate === 'ship') as unknown as GateRunEntry[]
   const mergedBefore = new Map<string, boolean>()
@@ -376,7 +382,19 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
     return [close]
   })
-  return [...lint, ...offs]
+  const summary = newest?.junit
+  const count = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0
+  const short = (c: { passed?: unknown; skipped?: unknown } | undefined, b: { passed: number; skipped: number }): boolean | undefined =>
+    c === undefined || typeof c !== 'object' || !count(c.passed) || !count(c.skipped) ? undefined : c.passed < b.passed || c.skipped > b.skipped
+  const drops = summary === undefined ? [] : open.flatMap((i) => {
+    if (i.kind !== 'booked-dropped' || !merged(i.plan)) return []
+    const now = short(summary.specs?.[i.spec] ?? { passed: 0, skipped: 0 }, i.base)
+    if (now !== false) return []
+    if (i.plan !== plan && short(summary.base?.[i.spec], i.base) !== true) return []
+    const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, ...(newest?.reviewed_tree !== undefined ? { tree: newest.reviewed_tree } : {}) }
+    return [close]
+  })
+  return [...lint, ...offs, ...drops]
 }
 
 // Row 269. An abandoned plan never merges, so nothing it booked reaches main: each of its open items

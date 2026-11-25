@@ -393,3 +393,73 @@ describe('a booked loss where a human reads it (row 276)', () => {
     expect(asked[0]).toBe(`dismiss ${one} — switch-offs · tests of auth-refresh · p1: declined\ndismiss? the booking stops waiving from the next gate run [y/N]`)
   }, 120_000)
 })
+
+// The merging plan's ship round, its summary as given (none when undefined).
+const shipSummary = (repo: TestRepo, planId: string, junit: Record<string, unknown> | undefined) => line(repo, planId, {
+  t: 'gate-run', gate: 'ship', artifact: planId, round: 9, run_id: 'r-ship', reviewed_sha: 'c'.repeat(40), reviewed_tree: T,
+  prompts_sha: 'p', witness: '0', model: 'm', pin: 'm', outcome: 'stopped', checks: [], ...(junit !== undefined ? { junit } : {}) })
+const counts = (passed: number, skipped = 0) => ({ passed, failed: 0, skipped })
+
+describe('a booked loss ends by observation (row 276)', () => {
+  it("closes at its own plan's merge when the shipped summary has the cases back", async () => {
+    const s = await mergedSeed()
+    const id = lossItem(s.repo, { plan: s.planId })
+    shipSummary(s.repo, s.planId, { ...counts(2), specs: { 'auth-refresh': counts(2) } })
+    s.stamp()
+    expect(byId(s.repo.root, id)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: s.planId, pr: 7, tree: T } })
+  }, 120_000)
+
+  it('stays open while the shipped summary is still short — fewer passing, or more skipped', async () => {
+    const s = await mergedSeed()
+    const fewer = lossItem(s.repo, { plan: s.planId })
+    const skips = lossItem(s.repo, { plan: s.planId, spec: 'other-spec', base: { passed: 2, skipped: 0 } })
+    shipSummary(s.repo, s.planId, { ...counts(4, 2), specs: { 'auth-refresh': counts(1, 1), 'other-spec': counts(3, 1) } })
+    s.stamp()
+    expect(byId(s.repo.root, fewer).state).toBe('open')
+    expect(byId(s.repo.root, skips).state).toBe('open')                    // more passing, but one skip more than the base
+    expect(closes(s.repo.root)).toEqual([])
+  }, 120_000)
+
+  it("another merged plan's loss closes only where this round's base was short and the summary is not (Review Focus 5)", async () => {
+    const a = await mergedSeed()
+    mergedPlan(a.repo, 'old-plan')
+    const restored = lossItem(a.repo, { plan: 'old-plan' })
+    shipSummary(a.repo, a.planId, { ...counts(2), specs: { 'auth-refresh': counts(2) }, base: { 'auth-refresh': { passed: 1, skipped: 1 } } })
+    a.stamp()
+    expect(byId(a.repo.root, restored)).toMatchObject({ state: 'closed', end: { by: 'merge', plan: a.planId, pr: 7, tree: T } })
+    const b = await mergedSeed()
+    mergedPlan(b.repo, 'old-plan')
+    const cutBefore = lossItem(b.repo, { plan: 'old-plan' })
+    shipSummary(b.repo, b.planId, { ...counts(2), specs: { 'auth-refresh': counts(2) }, base: { 'auth-refresh': { passed: 2, skipped: 0 } } })
+    b.stamp()
+    expect(byId(b.repo.root, cutBefore).state).toBe('open')                // the base was not short: this merge restored nothing
+    const c = await mergedSeed()
+    mergedPlan(c.repo, 'old-plan')
+    const noBase = lossItem(c.repo, { plan: 'old-plan' })
+    shipSummary(c.repo, c.planId, { ...counts(2), specs: { 'auth-refresh': counts(2) } })
+    c.stamp()
+    expect(byId(c.repo.root, noBase).state).toBe('open')                   // no base counts for the spec: nothing observed
+  }, 360_000)
+
+  it('a ship round with no summary observes nothing; the abandon closes it', async () => {
+    const s = await mergedSeed()
+    const id = lossItem(s.repo, { plan: s.planId })
+    shipSummary(s.repo, s.planId, undefined)
+    s.stamp()
+    expect(byId(s.repo.root, id).state).toBe('open')
+    expect(closes(s.repo.root)).toEqual([])
+    const { repo, planId } = await shippableRepo()
+    const mine = lossItem(repo, { plan: planId })
+    const r = await repo.cli(['abandon', planId])
+    expect(r.code, r.stderr).toBe(0)
+    expect(byId(repo.root, mine)).toMatchObject({ state: 'closed', end: { by: 'abandon', plan: planId } })
+  }, 240_000)
+
+  it("another plan still in flight waits for its own merge", async () => {
+    const s = await mergedSeed()
+    const inFlight = lossItem(s.repo, { plan: 'still-going' })
+    shipSummary(s.repo, s.planId, { ...counts(2), specs: { 'auth-refresh': counts(2) }, base: { 'auth-refresh': { passed: 1, skipped: 0 } } })
+    s.stamp()
+    expect(byId(s.repo.root, inFlight).state).toBe('open')
+  }, 120_000)
+})
