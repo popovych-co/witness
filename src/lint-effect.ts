@@ -376,6 +376,8 @@ export function definitionsCheck(
     return notChecked(`the check definitions could not be read — ${first.got}`, [])
   }
   const changed = restored.value.map(restoredName)
+  // Slice 2 review I2: with no part and no reader there is nothing to run, so nothing is measured or owed.
+  if (effectCommands(cfg).length === 0) return notChecked('no lint part or reader is set', changed)
   const planTree = snapshotTree(wt, base, files)
   if (planTree === undefined) return notChecked("the plan's tree could not be read", changed)
   const effect = effectTree(root, base, planTree, restored.value)

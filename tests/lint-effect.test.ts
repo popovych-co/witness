@@ -81,6 +81,11 @@ describe('the lint-effect job (row 277)', () => {
     expect(r.over).toBeUndefined()
   }, 60_000)
 
+  it("a diagnostic both trees report is never a hit: the effect's count beyond the plan's, per key (slice 2 review I1)", async () => {
+    const { result } = await effectRepo({ ...HIDING, base: { 'src/old.ts': 'const BAD = 1\n' }, plan: { ...HIDING.plan, 'src/hidden.ts': 'const BAD = 1\n' } })
+    expect(result().hits.map((h) => [h.file, h.line, h.count])).toEqual([['src/hidden.ts', 1, 1]])
+  }, 60_000)
+
   it('a diagnostic on a definition file the effect restored is never a hit (row 277)', async () => {
     const { result } = await effectRepo({ base: { 'src/conf.ts': 'BAD conf\n' }, plan: { 'src/conf.ts': 'fine conf\n' }, restore: ['src/conf.ts'] })
     const r = result()

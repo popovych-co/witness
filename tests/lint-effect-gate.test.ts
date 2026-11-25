@@ -134,6 +134,18 @@ describe('the definitions check (row 277)', () => {
     expect(effect).toMatchObject({ read: 'not-checked', changed: ['.gitignore'] })
   }, 240_000)
 
+  it('with no lint part and no reader set, nothing is measured: not checked, nothing owed or pinned (slice 2 review I2)', async () => {
+    const b = await bench()
+    const { cfg, base, files, restored } = b.inputs()
+    const before = b.repo.git('for-each-ref', 'refs/witness/cf/')
+    const { check, effect } = definitionsCheck(b.repo.root, b.wt, { ...cfg, ship: { ...cfg.ship, lint: undefined }, readers: {} }, base, b.planId, files, restored)
+    expect(check).toMatchObject({ ok: true, lint_effect: { read: 'not-checked', changed: ['.gitignore'], why: 'no lint part or reader is set' },
+      detail: 'not checked — no lint part or reader is set (.gitignore)' })
+    expect(check.owes).toBeUndefined()
+    expect(effect).toMatchObject({ read: 'not-checked' })
+    expect(b.repo.git('for-each-ref', 'refs/witness/cf/')).toBe(before)
+  }, 240_000)
+
   it('a definition git cannot read reads not checked, saying so, with nothing owed (row 277)', async () => {
     const b = await bench()
     const { cfg, base, files } = b.inputs()
