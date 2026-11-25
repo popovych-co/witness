@@ -258,10 +258,13 @@ function fileOffs(wt: string, base: string, file: string, extra: readonly string
   const texts = bytes === undefined ? [] : textsOf(file, bytes)
   if (!texts.some((t) => mayHold(file, t, extra))) return []
   const was = gitBlob(wt, base, file)
+  // Per key, the copies the base reading that sees most of them holds — never the readings' sum, which
+  // a file read two ways could inflate past what any one tool sees (security review 4).
   const held = new Map<string, number>()
-  for (const s of (was === undefined ? [] : textsOf(file, was)).flatMap((t) => scanText(file, t, extra))) {
-    const k = switchOffKey(s)
-    held.set(k, (held.get(k) ?? 0) + 1)
+  for (const t of was === undefined ? [] : textsOf(file, was)) {
+    const counts = new Map<string, number>()
+    for (const s of scanText(file, t, extra)) counts.set(switchOffKey(s), (counts.get(switchOffKey(s)) ?? 0) + 1)
+    for (const [k, n] of counts) held.set(k, Math.max(held.get(k) ?? 0, n))
   }
   const seen = new Map<string, number>()
   return texts.flatMap((t) => scanText(file, t, extra)).filter((s) => {

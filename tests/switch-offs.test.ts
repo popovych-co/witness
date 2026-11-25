@@ -192,6 +192,18 @@ describe('the switch-offs a plan adds (row 273, C27)', () => {
     expect(planSwitchOffs(root, base, ['src-fake.ts'], []).map((o) => [o.line, o.token, o.snippet])).toEqual([[2, '@ts-ignore', '// @ts-ignore']])
   })
 
+  it("a base read two ways counts a line by the reading that sees most of it, never their sum (security review 4)", () => {
+    const repo = tmpRepo()
+    const u16 = (t: string) => Buffer.from(t, 'utf16le')
+    // the base: one copy tsc reads (UTF-16) and one a UTF-8 reader reads, in one file
+    writeFileSync(join(repo.root, 'src-p.ts'), Buffer.concat([Buffer.from([0xff, 0xfe]), u16('// @ts-ignore\n'), Buffer.from('\n// @ts-ignore\n')]))
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
+    const base = repo.git('rev-parse', 'HEAD')
+    // the plan: two copies tsc reads — one beyond the base's one
+    writeFileSync(join(repo.root, 'src-p.ts'), Buffer.concat([Buffer.from([0xff, 0xfe]), u16('// @ts-ignore\n// @ts-ignore\n')]))
+    expect(planSwitchOffs(repo.root, base, ['src-p.ts'], []).map((o) => [o.line, o.token])).toEqual([[2, '@ts-ignore']])
+  })
+
   it('a directive deep in a block comment reaches the scan: the prefilter keeps it (slice 1 review M7)', () => {
     const { repo, root, base } = based({ 'keep.txt': 'x\n' })
     repo.write('src/b.ts', '/*\nfoo\n  eslint-disable\n*/\nb()\n')
