@@ -228,7 +228,7 @@ describe('the effect tree (row 277)', () => {
 })
 
 describe("a guard's trees take the base's scripts (row 280)", () => {
-  it('withBaseScripts splices the base member into each changed member file; an unchanged or unreadable one stays', () => {
+  it('withBaseScripts splices the base member into each changed member file; an unchanged tree stays itself', () => {
     const repo = tmpRepo()
     const defs = [{ glob: 'package.json', member: 'scripts' }]
     repo.write('package.json', '{\n  "scripts": { "lint": "x" },\n  "deps": 1\n}\n')
@@ -241,7 +241,24 @@ describe("a guard's trees take the base's scripts (row 280)", () => {
     repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'plan')
     const t = unwrap(withBaseScripts(repo.root, base, repo.git('rev-parse', 'HEAD^{tree}'), defs))
     expect(repo.git('show', `${t}:package.json`)).toBe('{\n  "scripts": { "lint": "x" },\n  "deps": 2\n}')
-    expect(repo.git('show', `${t}:apps/a/package.json`)).toBe('{ not json')
+    expect(repo.git('show', `${t}:apps/a/package.json`)).toBe('{ "scripts": { "t": "y" } }')
     expect(unwrap(withBaseScripts(repo.root, base, repo.git('rev-parse', 'HEAD^{tree}'), []))).toBe(repo.git('rev-parse', 'HEAD^{tree}'))
+  })
+
+  it('a member file the plan made unreadable as JSON (a BOM npm strips) or turned into a link takes the base\'s whole file (security review)', () => {
+    const repo = tmpRepo()
+    const defs = [{ glob: 'package.json', member: 'scripts' }]
+    const basePkg = '{ "scripts": { "test": "vitest run" } }\n'
+    repo.write('package.json', basePkg)
+    repo.write('apps/a/package.json', basePkg)
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
+    const base = repo.git('rev-parse', 'HEAD')
+    repo.write('package.json', '\u{feff}{ "scripts": { "test": "node fake.js" } }\n')
+    rmSync(join(repo.root, 'apps/a/package.json')); symlinkSync('../../package.json', join(repo.root, 'apps/a/package.json'))
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'plan')
+    const t = unwrap(withBaseScripts(repo.root, base, repo.git('rev-parse', 'HEAD^{tree}'), defs))
+    expect(repo.git('show', `${t}:package.json`)).toBe(basePkg.trimEnd())
+    expect(repo.git('ls-tree', t, '--', 'apps/a/package.json')).toMatch(/^100644 blob /)
+    expect(repo.git('show', `${t}:apps/a/package.json`)).toBe(basePkg.trimEnd())
   })
 })
