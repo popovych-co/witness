@@ -1,7 +1,7 @@
-import { closeSync, constants, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, constants, lstatSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Ctx } from './cli.js'
-import { liveFolder } from './deadline.js'
+import { liveFolder, sessionToken } from './deadline.js'
 import { isAlive, pause, takeStale } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
 
@@ -27,6 +27,11 @@ import { refuse, v, type Result } from './refusal.js'
 
 export const SCRATCH_LOCK = '.witness/live/scratch/lock.json'
 export interface ScratchHolder { pid: number; since: number; until?: number; job?: string }
+// Row 279. A process waiting for the scratch: `.witness/live/scratch/wait-<pid>.json`, written once
+// before its first pause and removed when it takes the lock or returns. `session` is drive's token
+// for the session it runs in (`sessionToken`), so drive can see that session waiting behind a job
+// (`behindJob`) and leave the wait out of its clock, as it does a wait for the turn (row 256).
+export interface ScratchWaiter { pid: number; since: number; session?: string }
 
 const SCRATCH_SUB = 'scratch'
 const POLL_MS = 200
@@ -42,6 +47,7 @@ const RETRY_PAUSE_MS = 50
 const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES'])
 
 const lockFile = (root: string) => join(root, SCRATCH_LOCK)
+const WAIT_RE = /^wait-([1-9][0-9]*)\.json$/
 
 // This process's holds, by the root's real path: a depth, so a re-entered hold releases once.
 const holds = new Map<string, number>()
@@ -129,14 +135,98 @@ function releaseIf(p: string, text: string): void {
   }
 }
 
+function parseWaiter(text: string, pid: number): ScratchWaiter | undefined {
+  let r: Partial<Record<keyof ScratchWaiter, unknown>>
+  try { r = JSON.parse(text) as typeof r } catch { return undefined }
+  if (r?.pid !== pid || typeof r.since !== 'number' || !Number.isFinite(r.since) || r.since < 0) return undefined
+  if (r.session !== undefined && typeof r.session !== 'string') return undefined
+  return { pid, since: r.since, ...(r.session !== undefined ? { session: r.session } : {}) }
+}
+
+// Every marker file in the folder, by name: its path, the pid its name gives, its text (undefined
+// for a link or one that cannot be read).
+function markerFiles(root: string): Array<{ p: string; pid: number; text: string | undefined }> {
+  const dir = liveFolder(root, SCRATCH_SUB, false)
+  if (dir === undefined) return []
+  let names: string[]
+  try { names = readdirSync(dir) } catch { return [] }
+  return names.flatMap((name) => {
+    const m = WAIT_RE.exec(name)
+    if (!m) return []
+    const p = join(dir, name)
+    return [{ p, pid: Number(m[1]), text: readText(p) }]
+  })
+}
+
+// Row 279. The live waiters: a marker whose pid is alive and whose `since` is not in the future.
+export function scratchWaiters(root: string, now: number = Date.now()): ScratchWaiter[] {
+  return markerFiles(root).flatMap(({ pid, text }) => {
+    const w = text === undefined ? undefined : parseWaiter(text, pid)
+    return w !== undefined && w.since <= now + SINCE_SLACK_MS && isAlive(w.pid) ? [w] : []
+  })
+}
+
+// Row 279. Drive's sweep: the markers of dead pids, and any a link or a broken write left past the
+// grace. How many it removed.
+export function sweepScratchWaiters(root: string): number {
+  const now = Date.now()
+  let n = 0
+  for (const { p, pid, text } of markerFiles(root)) {
+    const w = text === undefined ? undefined : parseWaiter(text, pid)
+    const gone = w !== undefined ? !isAlive(w.pid) : olderThanGrace(p, now)
+    if (!gone) continue
+    try { if (takeStale(p, (t) => t === text) === 'taken') n++ } catch { /* left to the next sweep */ }
+  }
+  return n
+}
+
+// This waiter's own marker, best effort: a marker it cannot write leaves the wait unheld, as before
+// row 279. A leftover at its name is a dead process's whose pid this one reuses: replaced once.
+function writeMarker(dir: string, ctx: Ctx): { p: string; text: string } | undefined {
+  const session = sessionToken(ctx.env)
+  const p = join(dir, `wait-${process.pid}.json`)
+  const text = JSON.stringify({ pid: process.pid, since: Date.now(), ...(session !== undefined ? { session } : {}) })
+  for (let i = 0; i < 2; i++) {
+    try {
+      create(p, text)
+      return { p, text }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || i > 0) return undefined
+      try { if (!lstatSync(p).isSymbolicLink()) unlinkSync(p) } catch { return undefined }
+    }
+  }
+  return undefined
+}
+
 // Runs `fn` holding the scratch while this process lives. Re-entered by a process that holds it
 // (nothing taken, nothing released); a live holder is waited for, said once on stderr; a dead
 // holder's lock, or a leftover naming this process, is taken over. `who` names a job's kind on the
-// lock. The lock goes in a `finally`, so a throw in `fn` releases it too.
+// lock. The lock goes in a `finally`, so a throw in `fn` releases it too. A waiter's marker (row
+// 279) is written before its first pause and goes when it takes the lock, and in a `finally`.
 export function withScratchLock<T>(root: string, ctx: Ctx, fn: () => Result<T>, who?: { job: string }): Result<T> {
   if (holdsScratch(root)) return fn()
   const dir = liveFolder(root, SCRATCH_SUB, true)
   if (dir === undefined) return unusable('a link, or a folder that could not be made')
+  let marker: { p: string; text: string } | undefined
+  let tried = false
+  const unmark = () => {
+    if (marker !== undefined) releaseIf(marker.p, marker.text)
+    marker = undefined
+  }
+  try {
+    return holding(root, ctx, fn, who, {
+      waiting: () => { if (!tried) { tried = true; marker = writeMarker(dir, ctx) } },
+      took: unmark,
+    })
+  } finally {
+    unmark()
+  }
+}
+
+function holding<T>(
+  root: string, ctx: Ctx, fn: () => Result<T>, who: { job: string } | undefined,
+  on: { waiting: () => void; took: () => void },
+): Result<T> {
   const p = lockFile(root)
   const key = holdKey(root)
   let said = false
@@ -156,6 +246,7 @@ export function withScratchLock<T>(root: string, ctx: Ctx, fn: () => Result<T>, 
       }
     }
     if (created) {
+      on.took()
       holds.set(key, (holds.get(key) ?? 0) + 1)
       try {
         return fn()
@@ -171,6 +262,7 @@ export function withScratchLock<T>(root: string, ctx: Ctx, fn: () => Result<T>, 
     const parsed = held === undefined ? undefined : parse(held)
     if (typeof parsed === 'object' && parsed.pid !== process.pid && live(parsed, Date.now())) {
       if (!said) { ctx.err(`scratch: waiting for pid ${parsed.pid}`); said = true }
+      on.waiting()
       pause(POLL_MS)
       continue
     }
