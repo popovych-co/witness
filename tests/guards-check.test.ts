@@ -64,6 +64,16 @@ describe('the guards check (row 281)', () => {
     expect(b.check()).toMatchObject({ ok: false, guards: [{ state: 'stale', moved: ['tests/guard.test.ts'] }] })
   })
 
+  it('a stale guard the judge or the human books reads waived (final review I1)', async () => {
+    const b = await checkBench()
+    b.marked(); b.proven()
+    writeFileSync(join(b.wt, 'tests/guard.test.ts'), "it('rotates', () => { throw 1 })\n")
+    expect(b.check()).toMatchObject({ ok: false, guards: [{ state: 'stale' }] })
+    appendEntry(b.repo.root, b.planId, { v: 1, t: 'human-decision', gate: 'implement', artifact: b.planId, round: 1, decision: 'book',
+      book: { check: 'guards', items: [], findings: ['src/token.ts'] } } as unknown as Entry)
+    expect(b.check()).toMatchObject({ ok: true, guards: [{ anchor: 'src/token.ts', state: 'waived' }] })
+  })
+
   it('a guard proven at implement does not answer a mark at ship', async () => {
     const b = await checkBench()
     b.marked('implement'); b.proven('implement'); b.marked('ship')

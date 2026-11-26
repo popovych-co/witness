@@ -441,14 +441,14 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
   const proofs = window.filter((e) => e.t === 'guard' && e.gate === gate) as unknown as GuardEntry[]
   const waived = waivedAnchors(window, gate)
   const verdicts: GuardVerdict[] = marks.map((m) => {
+    // A fresh proof reads proven; otherwise a booking reads waived (final review I1: a stale guard the
+    // judge or the human books must not stay stale); otherwise stale, or owed.
     const g = proofs.filter((p) => p.anchor === m.anchor).at(-1)
-    if (g !== undefined) {
-      const moved = Object.entries(g.files ?? {}).filter(([p, sha]) => blobNow(wt, p) !== sha).map(([p]) => p).sort()
-      return moved.length === 0
-        ? { anchor: m.anchor, mark: m.mark, state: 'proven', kind: g.kind }
-        : { anchor: m.anchor, mark: m.mark, state: 'stale', kind: g.kind, moved }
-    }
-    return waived.has(m.anchor) ? { anchor: m.anchor, mark: m.mark, state: 'waived' } : { anchor: m.anchor, mark: m.mark, state: 'owed' }
+    const moved = g === undefined ? [] : Object.entries(g.files ?? {}).filter(([p, sha]) => blobNow(wt, p) !== sha).map(([p]) => p).sort()
+    if (g !== undefined && moved.length === 0) return { anchor: m.anchor, mark: m.mark, state: 'proven', kind: g.kind }
+    if (waived.has(m.anchor)) return { anchor: m.anchor, mark: m.mark, state: 'waived' }
+    if (g !== undefined) return { anchor: m.anchor, mark: m.mark, state: 'stale', kind: g.kind, moved }
+    return { anchor: m.anchor, mark: m.mark, state: 'owed' }
   })
   const ok = verdicts.every((x) => x.state === 'proven' || x.state === 'waived')
   const seg = (x: GuardVerdict): string => {
