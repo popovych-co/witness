@@ -137,7 +137,7 @@ export function guardTrees(
   const pinned = mark.run.reviewed_tree
   if (pinned === undefined || objectType(root, pinned) !== 'tree') {
     return refuse([v('finding', 'tree-unknown', visible(pinned ?? 'none journaled'),
-      `the reviewed tree of round ${mark.run.round} — git no longer holds it, so the guard cannot be proven; the judge or a human may book it (witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards)`)])
+      `the reviewed tree of round ${mark.run.round} — git no longer holds it, so the guard cannot be proven; the judge or a human may book it (witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards --finding ${shellWord(mark.anchor)})`)])
   }
   const current = snapshotTree(wt, base, planChangeSet(wt, base))
   if (current === undefined) {

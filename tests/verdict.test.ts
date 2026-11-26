@@ -33,8 +33,12 @@ describe('parseVerdict', () => {
   it('any other guard value refuses the verdict (guard-shape)', () => {
     expect(parseVerdict({ coverage: [], findings: [{ anchor: 'a', claim: 'c', blocking: true, guard: 'maybe' }] }))
       .toMatchObject({ ok: false, violations: [{ field: 'findings[0].guard', rule: 'guard-shape' }] })
-    expect(parseVerdict({ coverage: [], findings: [{ anchor: 'a', claim: 'c', blocking: true, guard: null }] }))
-      .toMatchObject({ ok: false, violations: [{ field: 'findings[0].guard', rule: 'guard-shape' }] })
+  })
+
+  it('a null guard reads as no mark, not a malformed verdict (slice 2 review M12)', () => {
+    const r = parseVerdict({ coverage: [], findings: [{ anchor: 'a', claim: 'c', blocking: true, guard: null }] })
+    expect(r.ok).toBe(true)
+    expect(r.ok && 'guard' in r.value.findings[0]!).toBe(false)
   })
 
   it('keeps only the schema fields of a finding, so a model never writes demoted', () => {

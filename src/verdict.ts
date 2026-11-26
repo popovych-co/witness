@@ -72,8 +72,9 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
       if (cp !== undefined && (!Number.isInteger(cp) || (cp as number) < 1)) {
         violations.push(v(`findings[${i}].contradicts_pin`, 'contradicts-pin-shape', String(cp), 'a pin ordinal (integer ≥1), or omit'))
       }
+      // Slice 2 review M12: `null` is a model's habit for an optional field, read as no mark.
       const guard = (item as { guard?: unknown }).guard
-      if (guard !== undefined && !GUARD_KINDS.includes(guard as GuardKind)) {
+      if (guard !== undefined && guard !== null && !GUARD_KINDS.includes(guard as GuardKind)) {
         violations.push(v(`findings[${i}].guard`, 'guard-shape', String(guard), "'lint' | 'test', or omit"))
       }
     })
@@ -84,7 +85,7 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
   const findings = (obj.findings as Finding[]).map((f) => ({
     blocking: f.blocking, anchor: f.anchor, claim: f.claim,
     ...(f.contradicts_pin !== undefined ? { contradicts_pin: f.contradicts_pin } : {}),
-    ...(f.guard !== undefined ? { guard: f.guard } : {}),
+    ...(f.guard !== undefined && f.guard !== null ? { guard: f.guard } : {}),
   }))
   return ok({ coverage: obj.coverage as CoverageItem[], findings })
 }

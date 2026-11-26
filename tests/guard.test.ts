@@ -104,8 +104,10 @@ describe("a guard's overlay and trees (row 280)", () => {
 
   it('a marking round whose tree git does not hold refuses tree-unknown', async () => {
     const { repo, wt, base, cfg, m } = await guardRepo()
-    expect(guardTrees(repo.root, wt, base, cfg, { ...m, run: { ...m.run, reviewed_tree: '0'.repeat(40) } }, ['tests/guard.test.ts']))
-      .toMatchObject({ ok: false, violations: [{ field: 'finding', rule: 'tree-unknown' }] })
+    const gone = guardTrees(repo.root, wt, base, cfg, { ...m, run: { ...m.run, reviewed_tree: '0'.repeat(40) } }, ['tests/guard.test.ts'])
+    expect(gone).toMatchObject({ ok: false, violations: [{ field: 'finding', rule: 'tree-unknown' }] })
+    // the remedy books this finding only (slice 2 review M5)
+    expect(gone.ok ? '' : gone.violations[0]!.want).toContain('--book guards --finding src/token.ts')
     const { reviewed_tree: _, ...none } = m.run
     expect(guardTrees(repo.root, wt, base, cfg, { ...m, run: none as GateRunEntry }, ['tests/guard.test.ts']))
       .toMatchObject({ ok: false, violations: [{ field: 'finding', rule: 'tree-unknown' }] })
