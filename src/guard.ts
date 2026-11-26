@@ -467,7 +467,13 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
     const held = tree !== undefined && objectType(root, tree) === 'tree'
     if (rule === 'breadth-unprobed') return file !== undefined && langOf(file) !== 'ts'
     if (rule === 'tree-unknown') return !held
-    if (rule === 'guard-unattributed') return file !== undefined && held && entryAt(root, tree!, file)?.sha === blobNow(wt, file)
+    if (rule === 'guard-unattributed') {
+      // both sides must hold the file: a file in neither is no "unchanged" (security review)
+      if (file === undefined || !held) return false
+      const then = entryAt(root, tree!, file)
+      const now = blobNow(wt, file)
+      return then?.type === 'blob' && now !== undefined && then.sha === now
+    }
     return false
   }
   const verdicts: GuardVerdict[] = marks.map((m) => {

@@ -11,6 +11,7 @@ import '../src/gates/index.js'
 import { guardsCheck, noteUnmeasured } from '../src/guard.js'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
+import { snapshotTree } from '../src/snapshot.js'
 import { fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, unwrap } from './helpers.js'
 
 // A shippable plan whose stream the test writes: marking rounds, guards and decisions as entries.
@@ -83,6 +84,19 @@ describe('the guards check (row 281)', () => {
     expect(b.check().guards![0]!.unmeasured).toBeUndefined()
     noteUnmeasured(b.repo.root, b.planId, 'src/token.ts', 'tree-unknown')                // the bench round's tree is 'a'×40, held by none
     expect(b.check().guards![0]!.unmeasured).toBe('tree-unknown')
+  })
+
+  it('an anchored file in neither the round\'s tree nor the worktree never verifies guard-unattributed (security review)', async () => {
+    const { repo, wt, planId } = await shippableRepo()
+    const cfg = unwrap(loadConfig(repo.root))
+    const tree = snapshotTree(wt, unwrap(diffBase(wt, cfg)), planChangeSet(wt, unwrap(diffBase(wt, cfg))))!
+    appendEntry(repo.root, planId, {
+      v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round: 1, run_id: 'r1', reviewed_sha: 's', prompts_sha: 'p', witness: '0',
+      model: 'm', pin: 'm', harness: 'claude-code', checks: [], reviewed_tree: tree,
+      verdicts: [{ reviewer: 'code-reviewer', coverage: [], findings: [{ anchor: 'src/ghost.ts', claim: 'c', blocking: true, guard: 'test' }] }], outcome: 'stopped',
+    } as unknown as Entry)
+    noteUnmeasured(repo.root, planId, 'src/ghost.ts', 'guard-unattributed')
+    expect(guardsCheck(repo.root, wt, planId, 'implement').guards![0]!.unmeasured).toBeUndefined()
   })
 
   it('a guard proven at implement does not answer a mark at ship', async () => {
