@@ -29,7 +29,7 @@ const MAX_NAME = 500
 
 // A guard that ran and did not prove is a finding about the check (exit 1); anything that kept it
 // from being measured is a refusal (exit 2); the repo lock held is a retry (exit 3).
-const FINDING_RULES = new Set(['guard-not-red', 'guard-not-green', 'guard-too-narrow'])
+const FINDING_RULES = new Set(['guard-not-red', 'guard-not-green', 'guard-too-narrow', 'guard-not-attributable'])
 const exitOf = (rows: readonly Violation[]): number =>
   rows.some((x) => x.rule === 'locked') ? EXIT.BLOCKED
     : rows.some((x) => FINDING_RULES.has(x.rule)) ? EXIT.FINDINGS : EXIT.REFUSED
@@ -147,12 +147,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
         ? (hasControl(planned.value.template) ? UNGRANTABLE : 'a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation')
         : 'trust was declined')])
   }
-  const trees = guardTrees(root, wt, base, cfg, mark, args.files)
+  // Slice 2 review I3 (b): with criteria.byFile, the attribution tree too, for a finding at a file.
+  const attribute = cfg.criteria.byFile !== undefined ? anchorFile(mark.anchor) : undefined
+  const trees = guardTrees(root, wt, base, cfg, mark, args.files, undefined, attribute)
   if (!trees.ok) return refused(trees.violations)
   const proof = proveTest(root, ctx, cfg, args.plan, mark, trees.value, args.tests, args.files)
   if (!proof.ok) return refused(proof.violations)
   const journaled = journalGuard(root, args.plan, {
     ...markOf(mark), kind: 'test', tests: [...args.tests], ...treesOf(root, base, trees.value, args.files), ms: proof.value.ms,
+    ...(proof.value.attributed !== undefined ? { attributed: proof.value.attributed } : {}),
   })
   if (!journaled.ok) return refused(journaled.violations)
   ctx.out(`guard: proven ${visible(mark.anchor)} · test ${args.tests.length} named — red on round ${mark.run.round}'s tree, green now`)

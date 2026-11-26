@@ -128,11 +128,13 @@ export function overlayRefusal(root: string, wt: string, cfg: Config, anchor: st
 // current tree. Both run trees take the base's members for every member definition
 // (`package.json#scripts`, `withBaseScripts`): a guard's command goes through the base's script
 // indirection, never the plan's or the overlay's.
-export interface GuardTrees { pinned: string; current: string; red: string; green: string }
+// Slice 2 review I3: `attrib`, when asked for, the current tree with only the anchored file as the
+// marking round held it (through the base's scripts too): a test guard's attribution run.
+export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string }
 
 export function guardTrees(
   root: string, wt: string, base: string, cfg: Config, mark: GuardMark, overlay: readonly string[],
-  extra?: Array<{ path: string; mode: string; sha: string }>,
+  extra?: Array<{ path: string; mode: string; sha: string }>, attribute?: string,
 ): Result<GuardTrees> {
   const pinned = mark.run.reviewed_tree
   if (pinned === undefined || objectType(root, pinned) !== 'tree') {
@@ -149,7 +151,12 @@ export function guardTrees(
   if (!red.ok) return red
   const green = withBaseScripts(root, base, current, cfg.checks.definitions)
   if (!green.ok) return green
-  return ok({ pinned, current, red: red.value, green: green.value })
+  if (attribute === undefined) return ok({ pinned, current, red: red.value, green: green.value })
+  const back = foldOverlay(root, current, { from: pinned, paths: [attribute] })
+  if (!back.ok) return back
+  const attrib = withBaseScripts(root, base, back.value, cfg.checks.definitions)
+  if (!attrib.ok) return attrib
+  return ok({ pinned, current, red: red.value, green: green.value, attrib: attrib.value })
 }
 
 // ── The proof's record ───────────────────────────────────────────────────────────────────────
@@ -164,6 +171,10 @@ export interface GuardEntry {
   v: 1; t: 'guard'; gate: GuardGate; anchor: string; round: number; run: string; kind: GuardKind
   rule?: { tool: ReaderTool; rule: string }; tests?: string[]; files: Record<string, string>
   base: string; red: string; green: string; breadth?: string; spots?: number; ms: number
+  // Slice 2 review I3: a test guard's attribution run — true when the named cases failed with only the
+  // anchored file put back, false when that tree could not be read (a load failure, no report); absent
+  // when it did not run (full-suite mode, an omission anchor).
+  attributed?: boolean
 }
 
 // One `guard` entry under the repo lock, in one transaction with its state commit.
@@ -197,10 +208,26 @@ const junitGlob = (cfg: Config): string | undefined =>
 
 const namesGot = (names: readonly string[]): string => visible(names.join(' · ')).slice(0, 400)
 
+// A report whose classnames are file paths (vitest's) names each case's file; jest-junit's defaults do
+// not, and then a case's file cannot be read.
+const PATHY = /[/\\]|\.[cm]?[jt]sx?$/
+const inFiles = (classname: string, files: readonly string[]): boolean =>
+  files.some((f) => classname === f || classname.endsWith(`/${f}`))
+
 // Whether every named case is present (and loaded) and ended as `want`. A name the run never
 // reported is not measured — a wrong name, or the environment emptying the run — never a red.
-function judgeCases(tests: readonly TestOutcome[], names: readonly string[], want: 'failed' | 'passed', round: number): Violation | undefined {
-  const cases = (n: string) => tests.filter((t) => t.name === n && t.load !== true)
+// Slice 2 review I3 (a): where the report names files, a named case must come from the guard's own
+// test files: a case elsewhere is red on the round's version of a file the guard never proves.
+function judgeCases(
+  tests: readonly TestOutcome[], names: readonly string[], want: 'failed' | 'passed', round: number, files: readonly string[],
+): Violation | undefined {
+  const named = (n: string) => tests.filter((t) => t.name === n && t.load !== true)
+  const pathy = tests.some((t) => PATHY.test(t.classname))
+  const stray = pathy ? names.filter((n) => named(n).length > 0 && !named(n).some((t) => inFiles(t.classname, files))) : []
+  if (stray.length > 0) {
+    return v('--test', 'guard-not-attributable', namesGot(stray), `cases in the guard's own test files (${files.map(visible).join(', ')}) — these live elsewhere`)
+  }
+  const cases = (n: string) => named(n).filter((t) => !pathy || inFiles(t.classname, files))
   const absent = names.filter((n) => cases(n).length === 0)
   if (absent.length > 0) {
     return v('--test', 'guard-not-run', namesGot(absent), `a run that reports every named case (${want === 'failed' ? `on round ${round}'s tree` : 'now'}) — a wrong name, or the environment emptied the run (a service down, an empty report); never a red`)
@@ -241,10 +268,10 @@ export function testRun(cfg: Config, files: readonly string[]): Result<{ glob: s
 export function proveTest(
   root: string, ctx: Ctx, cfg: Config, plan: string, mark: GuardMark, trees: GuardTrees,
   names: readonly string[], files: readonly string[],
-): Result<{ ms: number }> {
+): Result<{ ms: number; attributed?: boolean }> {
   const planned = testRun(cfg, files)
   if (!planned.ok) return planned
-  const { glob, cmd } = planned.value
+  const { glob, cmd, tests } = planned.value
   const t0 = Date.now()
   return withRunnerTurn(root, ctx, `guard ${plan}`, (env) => {
     const here = { ...ctx, env }
@@ -260,13 +287,30 @@ export function proveTest(
     })
     const red = run(trees.red)
     if (!red.ok) return red
-    const notRed = judgeCases(red.value.value, names, 'failed', mark.run.round)
+    const notRed = judgeCases(red.value.value, names, 'failed', mark.run.round, tests)
     if (notRed !== undefined) return refuse([notRed])
     const green = run(trees.green)
     if (!green.ok) return green
-    const notGreen = judgeCases(green.value.value, names, 'passed', mark.run.round)
+    const notGreen = judgeCases(green.value.value, names, 'passed', mark.run.round, tests)
     if (notGreen !== undefined) return refuse([notGreen])
-    return ok({ ms: Date.now() - t0 })
+    // Slice 2 review I3 (b). With criteria.byFile, one more run: the current tree with only the
+    // anchored file put back as the round held it. Named cases all passing there were red for another
+    // reason (code the plan changed since) — no guard of this finding. A tree that cannot be read is
+    // said in the entry (`attributed: false`), never a refusal: a fix spanning files may not load there.
+    if (trees.attrib === undefined || cfg.criteria.byFile === undefined) return ok({ ms: Date.now() - t0 })
+    const back = run(trees.attrib)
+    if (!back.ok) {
+      if (back.violations.some((x) => x.rule === 'run-interrupted')) return back
+      return ok({ ms: Date.now() - t0, attributed: false })
+    }
+    const cases = back.value.value.filter((t) => t.load !== true && inFiles(t.classname, tests))
+    const seen = (n: string) => cases.filter((t) => t.name === n)
+    if (names.some((n) => seen(n).length === 0)) return ok({ ms: Date.now() - t0, attributed: false })
+    if (names.every((n) => seen(n).every((t) => t.status === 'passed'))) {
+      return refuse([v('--test', 'guard-not-attributable', namesGot(names),
+        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so their red on that round came from other changes`)])
+    }
+    return ok({ ms: Date.now() - t0, attributed: true })
   })
 }
 

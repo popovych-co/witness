@@ -27,16 +27,20 @@ const CATCHES = guardTest('expect(rotateDue(80, 100)).toBe(true)')
 
 // A shippable plan whose round 1 (implement) reviewed TOKEN_BROKEN and marked src/token.ts for a guard;
 // the worktree now holds TOKEN_FIXED and tests/guard.test.ts.
-async function bench(opts: { byFile?: string; test?: string; mark?: GuardKind; anchor?: string } = {}) {
+async function bench(opts: {
+  byFile?: string; test?: string; mark?: GuardKind; anchor?: string; before?: Record<string, string>; after?: Record<string, string>
+} = {}) {
   const { repo, wt, planId } = await shippableRepo()
   patchConfig(repo, { criteria: { report: 'junit:reports/junit.xml', byFile: opts.byFile ?? BY_FILE } })
   trustConfig(repo)
   const cfg = unwrap(loadConfig(repo.root))
   const base = unwrap(diffBase(wt, cfg))
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_BROKEN)
+  for (const [path, text] of Object.entries(opts.before ?? {})) { mkdirSync(join(wt, path, '..'), { recursive: true }); writeFileSync(join(wt, path), text) }
   const tree = snapshotTree(wt, base, planChangeSet(wt, base))!
   unwrap(pinTree(repo.root, planId, tree))
   writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  for (const [path, text] of Object.entries(opts.after ?? {})) writeFileSync(join(wt, path), text)
   appendEntry(repo.root, planId, {
     v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round: 1, run_id: 'r-guard-1', reviewed_sha: 's', prompts_sha: 'p',
     witness: '0', model: 'm', pin: 'm', harness: 'claude-code', checks: [], reviewed_tree: tree,
@@ -62,7 +66,7 @@ describe('witness guard — a test guard (row 280)', () => {
     expect(b.guards()).toHaveLength(1)
     expect(b.guards()[0]).toMatchObject({
       t: 'guard', gate: 'implement', anchor: 'src/token.ts', round: 1, run: 'r-guard-1', kind: 'test', tests: [NAME],
-      files: { 'tests/guard.test.ts': b.blobOf('tests/guard.test.ts') },
+      files: { 'tests/guard.test.ts': b.blobOf('tests/guard.test.ts') }, attributed: true,
     })
     expect(ENTRY_PROGRESS.guard).toBe('act')
     expect(ACT_KINDS.has('guard')).toBe(true)
@@ -319,3 +323,29 @@ describe('witness guard — the breadth copy (row 280)', () => {
     expect(b.guards()).toEqual([])
   }, 240_000)
 })
+
+describe('witness guard — attribution (row 280, slice 2 review I3)', () => {
+  it('a test whose red the flagged file does not cause is no guard: green with only the anchored file put back (guard-not-attributable)', async () => {
+    const b = await bench({
+      before: { 'src/clock.ts': 'export const now = () => 0\n' },
+      after: { 'src/clock.ts': 'export const now = () => 0\nexport const later = () => 1\n' },
+      test: `import { expect, it } from 'vitest'\nimport { later } from '../src/clock'\nit('${NAME}', () => { expect(later()).toBe(1) })\n`,
+    })
+    const r = await b.guard(TEST_ARGS)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('guard-not-attributable')
+    expect(b.guards()).toEqual([])
+  }, 240_000)
+
+  it("a named case from a test file outside the guard's own files refuses guard-not-attributable (full suite)", async () => {
+    const other = `import { expect, it } from 'vitest'\nimport { rotateDue } from '../src/token'\nit('elsewhere rotates', () => { expect(rotateDue(80, 100)).toBe(true) })\n`
+    const b = await bench({ byFile: 'none', before: { 'tests/other.test.ts': other } })
+    patchConfig(b.repo, { ship: { test: `node "${vitestBin()}" run --reporter=junit --outputFile=reports/junit.xml` } })
+    trustConfig(b.repo)
+    const r = await b.guard(['--finding', 'src/token.ts', '--files', 'tests/guard.test.ts', '--test', 'elsewhere rotates'])
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('guard-not-attributable')
+    expect(b.guards()).toEqual([])
+  }, 240_000)
+})
+
