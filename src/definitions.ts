@@ -273,6 +273,36 @@ export function effectTree(root: string, base: string, planTree: string, restore
   return foldOverlay(root, planTree, { from: base, paths, blobs })
 }
 
+// Row 280 (§4 T4). `tree` with the base's member in place for every member definition
+// (`package.json#scripts`): each file a member entry names that differs between `base` and `tree`,
+// a regular JSON object on both sides with the base holding the member, takes the base's member
+// (`spliceMember`, inserted where the tree's object lacks it); every other byte stays the tree's. A
+// guard's command (`ship.test`, a reader) runs through the base's script indirection this way, never
+// one the plan or the guard's overlay rewrote. An unchanged tree returns itself.
+export function withBaseScripts(root: string, base: string, tree: string, entries: readonly DefinitionEntry[]): Result<string> {
+  const members = entries.filter((e) => e.member !== undefined)
+  if (members.length === 0) return ok(tree)
+  const blobs: Array<{ path: string; mode: string; sha: string }> = []
+  try {
+    const changed = gitOut(root, ['diff-tree', '-r', '--no-renames', '--name-only', '-z', base, tree]).split('\0').filter((p) => p !== '')
+    for (const path of changed) {
+      const e = definitionFor(members, path)
+      if (e === undefined) continue
+      const mine = regularAt(root, tree, path)
+      const theirs = regularAt(root, base, path)
+      if (mine === undefined || theirs === undefined) continue
+      const spliced = spliceMember(blobText(root, mine.sha), blobText(root, theirs.sha), e.member!)
+      if (spliced === undefined) continue
+      const sha = gitOut(root, ['hash-object', '-w', '--stdin'], spliced).trim()
+      if (sha !== mine.sha) blobs.push({ path, mode: mine.mode, sha })
+    }
+  } catch (e) {
+    return refuse([v('definitions', 'definition-unreadable', visible(String((e as Error).message ?? e)).slice(0, 200), 'definition files git can read')])
+  }
+  if (blobs.length === 0) return ok(tree)
+  return foldOverlay(root, tree, { from: tree, paths: [], blobs })
+}
+
 // Whether `tree` holds every base-side identity in `defs` (restored names → `held`): the merge stamp
 // reads a loosened part's booking closed once main holds the base's definitions again. Undefined
 // when git cannot read the tree.
