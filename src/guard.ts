@@ -457,7 +457,19 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
   const window = entries.slice(lastResetIndex(entries, gate) + 1)
   const proofs = window.filter((e) => e.t === 'guard' && e.gate === gate) as unknown as GuardEntry[]
   const waived = waivedAnchors(window, gate)
-  const unmeasured = unmeasuredOf(root, plan)
+  const noted = unmeasuredOf(root, plan)
+  // Push security review: the note is a machine-local file an agent can write, so a rule reaches the
+  // judge only where the check verifies it now — a non-JS anchor (breadth-unprobed), a round's tree git
+  // does not hold (tree-unknown), an anchored file unchanged since the round (guard-unattributed).
+  const verified = (m: GuardMark, rule: string | undefined): boolean => {
+    const file = anchorFile(m.anchor)
+    const tree = m.run.reviewed_tree
+    const held = tree !== undefined && objectType(root, tree) === 'tree'
+    if (rule === 'breadth-unprobed') return file !== undefined && langOf(file) !== 'ts'
+    if (rule === 'tree-unknown') return !held
+    if (rule === 'guard-unattributed') return file !== undefined && held && entryAt(root, tree!, file)?.sha === blobNow(wt, file)
+    return false
+  }
   const verdicts: GuardVerdict[] = marks.map((m) => {
     // A fresh proof reads proven; otherwise a booking reads waived (final review I1: a stale guard the
     // judge or the human books must not stay stale); otherwise stale, or owed.
@@ -465,7 +477,7 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
     const moved = g === undefined ? [] : Object.entries(g.files ?? {}).filter(([p, sha]) => blobNow(wt, p) !== sha).map(([p]) => p).sort()
     if (g !== undefined && moved.length === 0) return { anchor: m.anchor, mark: m.mark, state: 'proven', kind: g.kind }
     if (waived.has(m.anchor)) return { anchor: m.anchor, mark: m.mark, state: 'waived' }
-    const why = unmeasured[m.anchor] !== undefined ? { unmeasured: unmeasured[m.anchor] } : {}
+    const why = verified(m, noted[m.anchor]) ? { unmeasured: noted[m.anchor]! } : {}
     if (g !== undefined) return { anchor: m.anchor, mark: m.mark, state: 'stale', kind: g.kind, moved, ...why }
     return { anchor: m.anchor, mark: m.mark, state: 'owed', ...why }
   })

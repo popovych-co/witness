@@ -541,7 +541,8 @@ and rule ids, how many commands trust kept from running, and the held criteria's
 round line, as `model: no reviewer was asked`, and in the round history.
 
 **As built (T4a, row 279; C40).** The scratch lock is held by a live pid, as the test turn is: no wall-clock lease
-(`until` is written for older readers only), and drive's sweep never frees a live holder. A session waiting on a job's
+(`until` is written for older readers only; a `since` more than a week from now either way reads stale), and drive's
+sweep never frees a live holder. A session waiting on a job's
 scratch writes a marker naming its session and is held, as one waiting behind a job for the turn.
 
 ---
@@ -754,7 +755,7 @@ says them (C39).
   round held it refuses `guard-unattributed` — not measured, naming the booking — when the cases pass there or the
   anchored file is unchanged since the round (`attributed: false` when that tree cannot load). A name a run
   never reports is the environment (`guard-not-run`), never a red. Every not-measured refusal is kept per anchor
-  (machine-local) and reaches the guards check and the judge's facts.
+  (machine-local); the guards check passes one to the judge's facts only where it can verify it now.
 - **Lint attribution:** the declared rule at error severity at the anchored file on the round's bytes, none there
   now, and the breadth copy: the anchored file beside itself under a stem drawn each run, every local binding and
   declared method name renamed to drawn names, indentation doubled; JS/TS only, any other file refuses

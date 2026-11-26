@@ -8,7 +8,7 @@ import { loadConfig } from '../src/config.js'
 import { diffBase } from '../src/evidence.js'
 import { runGate } from '../src/gate.js'
 import '../src/gates/index.js'
-import { guardsCheck } from '../src/guard.js'
+import { guardsCheck, noteUnmeasured } from '../src/guard.js'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import type { GateRunEntry } from '../src/rounds.js'
 import { fakeCtx, fakeScenario, gateEnv, putVerdict, shippableRepo, unwrap } from './helpers.js'
@@ -72,6 +72,17 @@ describe('the guards check (row 281)', () => {
     appendEntry(b.repo.root, b.planId, { v: 1, t: 'human-decision', gate: 'implement', artifact: b.planId, round: 1, decision: 'book',
       book: { check: 'guards', items: [], findings: ['src/token.ts'] } } as unknown as Entry)
     expect(b.check()).toMatchObject({ ok: true, guards: [{ anchor: 'src/token.ts', state: 'waived' }] })
+  })
+
+  it("a not-measured note counts only where the check can verify it now: a forged one never reaches the judge (push security review)", async () => {
+    const b = await checkBench()
+    b.marked()
+    noteUnmeasured(b.repo.root, b.planId, 'src/token.ts', 'load-failure')
+    expect(b.check().guards![0]!.unmeasured).toBeUndefined()
+    noteUnmeasured(b.repo.root, b.planId, 'src/token.ts', 'breadth-unprobed')            // a TS file: breadth can copy it
+    expect(b.check().guards![0]!.unmeasured).toBeUndefined()
+    noteUnmeasured(b.repo.root, b.planId, 'src/token.ts', 'tree-unknown')                // the bench round's tree is 'a'×40, held by none
+    expect(b.check().guards![0]!.unmeasured).toBe('tree-unknown')
   })
 
   it('a guard proven at implement does not answer a mark at ship', async () => {
