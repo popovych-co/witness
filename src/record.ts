@@ -2,7 +2,8 @@ import type { TestcaseOutcomes } from './criteria.js'
 import { effortAbandoned, effortCause, effortStreams, readStream, type Entry, type FixCause, type RecapEntry } from './journal.js'
 import { mergeClock, mergesBetween, type MergeClock } from './merge-clock.js'
 import type { Canon } from './scan.js'
-import { kv, rows } from './toon.js'
+import type { ReaderTool } from './settings.js'
+import { kv, rows, visible } from './toon.js'
 
 // Row 254. The track record: a measured baseline for the human, computed from the journal, canon and
 // the merge clock, never inferred — a fold with no data reads "not measured". Decision 8: no gate,
@@ -161,18 +162,55 @@ export function liveFold(root: string, canon: Canon): LiveFold {
   return out
 }
 
+// Row 282. The checks fixes added: the guards merged plans journaled (`guard` entries, row 280) — lint
+// guards by (tool, rule) with the plans that added them, test guards counted. A plan still in flight
+// adds none. Not measured until a merged plan journals one. Tolerated spots wait for T4b.
+export type ChecksFold =
+  | { measured: false }
+  | { measured: true; lint: Array<{ tool: ReaderTool; rule: string; plans: string[] }>; tests: number }
+
+export function checksFold(root: string, canon: Canon): ChecksFold {
+  const lint = new Map<string, { tool: ReaderTool; rule: string; plans: Set<string> }>()
+  let tests = 0
+  let any = false
+  for (const d of canon.docs) {
+    if (d.meta.type !== 'plan') continue
+    const id = String(d.meta.id)
+    const stream = readStream(root, id)
+    if (!stream.some((e) => e.t === 'status' && e.cause === 'merge')) continue
+    for (const e of stream) {
+      if (e.t !== 'guard') continue
+      any = true
+      const rule = e.rule as { tool?: unknown; rule?: unknown } | undefined
+      if (e.kind === 'lint' && typeof rule?.tool === 'string' && typeof rule.rule === 'string') {
+        const key = JSON.stringify([rule.tool, rule.rule])
+        const row = lint.get(key) ?? lint.set(key, { tool: rule.tool as ReaderTool, rule: rule.rule, plans: new Set() }).get(key)!
+        row.plans.add(id)
+      } else if (e.kind === 'test') tests++
+    }
+  }
+  if (!any) return { measured: false }
+  const rowsOut = [...lint.values()].map((r) => ({ tool: r.tool, rule: r.rule, plans: [...r.plans].sort() }))
+    .sort((a, b) => (a.tool + a.rule < b.tool + b.rule ? -1 : a.tool + a.rule > b.tool + b.rule ? 1 : 0))
+  return { measured: true, lint: rowsOut, tests }
+}
+
 // Row 254. The track record: its four folds, each "not measured" until it has data. `checks` (checks
-// added, tolerated spots) lands with T4a, `repairs` with T8b. Plain data: the models entry exports it.
+// added) lands with T4a (row 282) — tolerated spots with T4b — and `repairs` with T8b. Plain data: the
+// models entry exports it.
 export interface TrackRecord {
   escapes: EscapesFold
   live: LiveFold
-  checks: { measured: false }
+  checks: ChecksFold
   repairs: { measured: false }
 }
 
 export function record(root: string, canon: Canon): TrackRecord {
-  return { escapes: escapesFold(root, canon), live: liveFold(root, canon), checks: { measured: false }, repairs: { measured: false } }
+  return { escapes: escapesFold(root, canon), live: liveFold(root, canon), checks: checksFold(root, canon), repairs: { measured: false } }
 }
+
+// Row 282: lint guards count once per plan that added each (tool, rule).
+const lintAdded = (c: Extract<ChecksFold, { measured: true }>) => c.lint.reduce((n, r) => n + r.plans.length, 0)
 
 const owing = (r: TrackRecord) => r.escapes.fixes.filter((f) => f.cause === undefined).map((f) => f.effort)
 
@@ -185,7 +223,11 @@ export function recordLine(r: TrackRecord): string {
   const live = r.live.measured
     ? `live specs failing ${r.live.failing.length} · could not verify ${r.live.couldNotVerify.length} of ${r.live.specs}`
     : 'live specs failing not measured'
-  return [escapes, live, 'checks added not measured · repairs not measured'].join(' · ')
+  const c = r.checks
+  const checks = c.measured
+    ? `checks added ${lintAdded(c) + c.tests} (lint ${lintAdded(c)} · test ${c.tests}) · tolerated spots not measured`
+    : 'checks added not measured'
+  return [escapes, live, checks, 'repairs not measured'].join(' · ')
 }
 
 // The open work: fixes still owing a cause, a list that shrinks to nothing as the human names them.
@@ -218,6 +260,10 @@ export function recordTables(r: TrackRecord): string[] {
       kv('note', 'a charge is approximate — the last plan of the amended spec that shipped before the fix'),
     ]),
     ...(e.measured ? rows('escapes-by-version', ['version', 'escapes', 'plans'], e.byVersion as unknown as Array<Record<string, unknown>>) : []),
+    // Row 282: each lint check a fix added, by tool and rule (spelled out), with the plans that added it.
+    ...(r.checks.measured && r.checks.lint.length > 0
+      ? rows('checks-added', ['check', 'plans'], r.checks.lint.map((x) => ({ check: `${x.tool} ${visible(x.rule)}`, plans: x.plans.join(' · ') })))
+      : []),
     ...owedRows(r),
   ]
 }
