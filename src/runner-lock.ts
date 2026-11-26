@@ -206,9 +206,9 @@ export function sweepTurnQueue(root: string, now = Date.now()): number {
 export function behindJob(root: string, session: string, now = Date.now()): string | undefined {
   const holder = turnHolder(root)
   if (holder?.job !== undefined && turnTickets(root, now).some((t) => t.session === session)) return holder.job
-  const scratch = scratchHolder(root, now)
+  const scratch = scratchHolder(root)
   if (scratch?.job === undefined) return undefined
-  return scratchWaiters(root, now).some((w) => w.session === session) ? scratch.job : undefined
+  return scratchWaiters(root).some((w) => w.session === session) ? scratch.job : undefined
 }
 
 // One waiter's own ticket: written with O_CREAT | O_EXCL | O_NOFOLLOW (busy.ts's flags), put back

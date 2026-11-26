@@ -6,14 +6,15 @@ import { isAlive, pause, takeStale } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
 
 // Row 258. The scratch checkout has one user at a time, and its lock says who. Row 279 (correction
-// C40): held while its holder lives, as the test turn is (row 218) — live = the pid is alive and
-// `since` is not in the future. Row 258 leased it in wall time instead (`until`, written once at the
-// take), so a host that slept past the lease's slack read a live holder as stale and a waiter took
-// the scratch from under it; on a sleeping host nothing else runs, so sleep never lapses a holder.
-// Drive's sweep frees a dead holder's lock before Windows can hand its pid on. A written lock keeps
-// `until = since + MAX_LEASE_MS` only so an older witness, which reads the lease, still reads a live
-// holder as live; nothing here reads it. A job's hold names its kind (`job`, as the turn's lock
-// does, row 256). A live holder is waited for, never refused (the test turn's rule, row 181). Lock order is test turn → scratch → repo lock: a turn is never taken
+// C40): held while its holder lives, as the test turn is (row 218) — live = the pid is alive.
+// Row 258 leased it in wall time instead (`until`, written once at the take), so a host that slept
+// past the lease's slack read a live holder as stale and a waiter took the scratch from under it; on
+// a sleeping host nothing else runs, so sleep never lapses a holder. Drive's sweep frees a dead
+// holder's lock before Windows can hand its pid on. A written lock keeps `until = since +
+// MAX_LEASE_MS` only so an older witness, which reads the lease, still reads a live holder as live;
+// nothing here reads it, nor `since` (slice 1 review M1). A job's hold names its kind (`job`, as the
+// turn's lock does, row 256). A live holder is waited for, never refused (the test turn's rule, row
+// 181). Lock order is test turn → scratch → repo lock: a turn is never taken
 // while this process holds the scratch (`takeTurn` throws), since a step that took the turn inside
 // the scratch could deadlock against a session holding the turn and waiting for the scratch.
 //
@@ -35,8 +36,6 @@ export interface ScratchWaiter { pid: number; since: number; session?: string }
 
 const SCRATCH_SUB = 'scratch'
 const POLL_MS = 200
-// A `since` this far ahead of now is a tampered lock or a clock set wrong, never a live holder.
-const SINCE_SLACK_MS = 60_000
 // The `until` a written lock carries, for older readers only (row 279).
 const MAX_LEASE_MS = 7 * 86_400_000
 // An empty or unparseable file is a write in progress for this long (lock.ts's grace).
@@ -83,7 +82,9 @@ function readText(p: string): string | undefined {
 }
 
 // Row 279: the pid rule, as the turn's. `until` is never read.
-const live = (l: ScratchHolder, now: number): boolean => l.since <= now + SINCE_SLACK_MS && isAlive(l.pid)
+// Neither `since` (slice 1 review M1): with no lease it bounds nothing, and a clock stepped back
+// would read a live holder's `since` as the future and hand its scratch to a second user.
+const live = (l: ScratchHolder): boolean => isAlive(l.pid)
 
 const olderThanGrace = (p: string, now: number): boolean => {
   try { return now - lstatSync(p).mtimeMs >= UNREADABLE_GRACE_MS } catch { return true }
@@ -100,14 +101,14 @@ function stale(p: string, text: string | undefined, now: number): boolean {
   const parsed = parse(text)
   if (parsed === 'unreadable') return olderThanGrace(p, now)
   if (parsed === 'malformed') return true
-  return parsed.pid === process.pid || !live(parsed, now)
+  return parsed.pid === process.pid || !live(parsed)
 }
 
 // The live holder, by the pid rule.
-export function scratchHolder(root: string, now: number = Date.now()): ScratchHolder | undefined {
+export function scratchHolder(root: string): ScratchHolder | undefined {
   const text = readText(lockFile(root))
   const parsed = text === undefined ? undefined : parse(text)
-  return typeof parsed === 'object' && live(parsed, now) ? parsed : undefined
+  return typeof parsed === 'object' && live(parsed) ? parsed : undefined
 }
 
 const unusable = (got: string) => refuse<never>([v('.witness/live/scratch', 'scratch-unusable', got,
@@ -158,11 +159,11 @@ function markerFiles(root: string): Array<{ p: string; pid: number; text: string
   })
 }
 
-// Row 279. The live waiters: a marker whose pid is alive and whose `since` is not in the future.
-export function scratchWaiters(root: string, now: number = Date.now()): ScratchWaiter[] {
+// Row 279. The live waiters: a marker whose pid is alive.
+export function scratchWaiters(root: string): ScratchWaiter[] {
   return markerFiles(root).flatMap(({ pid, text }) => {
     const w = text === undefined ? undefined : parseWaiter(text, pid)
-    return w !== undefined && w.since <= now + SINCE_SLACK_MS && isAlive(w.pid) ? [w] : []
+    return w !== undefined && isAlive(w.pid) ? [w] : []
   })
 }
 
@@ -260,7 +261,7 @@ function holding<T>(
     t0 = Date.now()
     const held = readText(p)
     const parsed = held === undefined ? undefined : parse(held)
-    if (typeof parsed === 'object' && parsed.pid !== process.pid && live(parsed, Date.now())) {
+    if (typeof parsed === 'object' && parsed.pid !== process.pid && live(parsed)) {
       if (!said) { ctx.err(`scratch: waiting for pid ${parsed.pid}`); said = true }
       on.waiting()
       pause(POLL_MS)
@@ -284,7 +285,7 @@ export function releaseDeadScratch(root: string): boolean {
   const text = readText(p)
   if (text === undefined) return false
   const parsed = parse(text)
-  if (typeof parsed !== 'object' || (live(parsed, Date.now()) && !(parsed.pid === process.pid && !holdsScratch(root)))) return false
+  if (typeof parsed !== 'object' || (live(parsed) && !(parsed.pid === process.pid && !holdsScratch(root)))) return false
   try {
     return takeStale(p, (t) => t === text) === 'taken'
   } catch {

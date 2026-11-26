@@ -202,4 +202,20 @@ describe('the scratch runs no git hook (row 279)', () => {
     expect(existsSync(mark)).toBe(false)
     expect(git(dir, 'config', '--worktree', 'core.hooksPath').stdout.trim()).toMatch(/witness-no-hooks$/)
   })
+
+  it('a scratch opened first after the upgrade runs no hook of its last tree either (slice 1 review M3)', async () => {
+    const repo = await seededRepo()
+    const mark = join(repo.root, '.git', 'hook-ran')
+    repo.write('.hooks/post-index-change', `#!/bin/sh\ntouch '${mark}'\n`)
+    spawnSync('chmod', ['+x', join(repo.root, '.hooks', 'post-index-change')])
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'hooks')
+    const dir = value(openScratch(repo.root))
+    expect(rule(resetScratch(dir, repo.git('rev-parse', 'HEAD')))).toBe('ok')
+    // the scratch as 0.31 left it: no hooks path of its own, the repo's pointing into the tree
+    git(dir, 'config', '--worktree', '--unset', 'core.hooksPath')
+    repo.git('config', 'core.hooksPath', '.hooks')
+    rmSync(mark, { force: true })
+    expect(value(openScratch(repo.root))).toBe(dir)
+    expect(existsSync(mark)).toBe(false)
+  })
 })

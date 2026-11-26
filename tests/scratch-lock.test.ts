@@ -79,12 +79,14 @@ describe('the scratch is held while its holder lives (row 279)', () => {
     expect(plain.job).toBeUndefined()
   })
 
-  it('a lock whose since is in the future is stale', async () => {
+  it('a live holder whose since reads in the future after the clock stepped back keeps the scratch (slice 1 review M1)', async () => {
     const repo = tmpRepo()
-    const pid = await sleeper()
+    const pid = await sleeper(); const waiter = await sleeper()
     writeLock(repo.root, { pid, since: Date.now() + 3_600_000, until: Date.now() + 7_200_000 })
-    expect(scratchHolder(repo.root)).toBeUndefined()
-    expect(releaseDeadScratch(repo.root)).toBe(true)
+    writeWaiter(repo.root, { pid: waiter, since: Date.now() + 3_600_000 })
+    expect(scratchHolder(repo.root)?.pid).toBe(pid)
+    expect(releaseDeadScratch(repo.root)).toBe(false)
+    expect(scratchWaiters(repo.root).map((w) => w.pid)).toEqual([waiter])
   })
 
   it('a lock an older witness wrote, or one with no until, reads by its pid; a job name must be a string', async () => {
