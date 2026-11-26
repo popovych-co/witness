@@ -21,7 +21,9 @@ import { langOf } from './switch-offs.js'
 const KEYWORDS = new Set(('break case catch class const continue debugger default delete do else enum export extends false finally '
   + 'for function if import in instanceof new null return super switch this throw true try typeof var void while with yield let '
   + 'static implements interface package private protected public await async as from of get set type declare namespace module '
-  + 'abstract readonly keyof infer is asserts satisfies override accessor unique never unknown any').split(' '))
+  + 'abstract readonly keyof infer is asserts satisfies override accessor unique never unknown any '
+  // Final review I2: the primitive type names, never a local's.
+  + 'string number boolean object symbol bigint undefined constructor').split(' '))
 // The words after which a `/` opens a regex literal rather than dividing.
 const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'])
 // The characters after which a `/` opens a regex literal.
@@ -89,7 +91,8 @@ function maskCode(text: string): string {
         blank(i, j); i = j; value(); continue
       }
     }
-    if (c === "'" || c === '"') {
+    // Final review I2: a quote right after a word character is JSX text (`Don't`), never a string's opener.
+    if ((c === "'" || c === '"') && !/[\w$]/.test(text[i - 1] ?? '')) {
       let j = i + 1
       while (j < text.length && text[j] !== c && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1
       j = Math.min(j + 1, text.length)
@@ -140,16 +143,29 @@ function closing(m: string, at: number): number {
   return -1
 }
 
+// Final review I2. How the character at `k` moves the nesting depth: brackets always; `<` only as a
+// type argument's opener (right after a word character) and `>` only as its closer while one is open
+// (never `=>`, `>=` or a comparison), so `Map<string, Date>` and `(x: number) => void` hold no comma or
+// close at depth 0 that is not one.
+function depthStep(m: string, k: number, angles: { n: number }): number {
+  const c = m[k]!
+  if ('([{'.includes(c)) return 1
+  if (')]}'.includes(c)) return -1
+  if (c === '<' && /[\w$]/.test(m[k - 1] ?? '')) { angles.n++; return 1 }
+  if (c === '>' && angles.n > 0 && m[k - 1] !== '=' && m[k + 1] !== '=') { angles.n--; return -1 }
+  return 0
+}
+
 // The comma-separated elements of a bracket's inside at depth 0, as [start, end) offsets.
 function elements(m: string, open: number, close: number): Array<[number, number]> {
   const out: Array<[number, number]> = []
+  const angles = { n: 0 }
   let depth = 0
   let start = open + 1
   for (let k = open + 1; k < close; k++) {
-    const ch = m[k]!
-    if ('([{<'.includes(ch)) depth++
-    else if (')]}>'.includes(ch)) depth--
-    else if (ch === ',' && depth === 0) { out.push([start, k]); start = k + 1 }
+    const step = depthStep(m, k, angles)
+    depth += step
+    if (step === 0 && m[k] === ',' && depth === 0) { out.push([start, k]); start = k + 1 }
   }
   out.push([start, close])
   return out
@@ -157,17 +173,18 @@ function elements(m: string, open: number, close: number): Array<[number, number
 
 // The first depth-0 `ch` in [a, b), or -1.
 function depthZero(m: string, a: number, b: number, ch: string): number {
+  const angles = { n: 0 }
   let depth = 0
   for (let k = a; k < b; k++) {
-    const c = m[k]!
-    if ('([{'.includes(c)) depth++
-    else if (')]}'.includes(c)) depth--
-    else if (c === ch && depth === 0 && !(ch === '=' && (m[k + 1] === '>' || m[k + 1] === '='))) return k
+    const step = depthStep(m, k, angles)
+    depth += step
+    if (step === 0 && m[k] === ch && depth === 0 && !(ch === '=' && (m[k + 1] === '>' || m[k + 1] === '='))) return k
   }
   return -1
 }
 
-interface Binding { name: string; at: number; shorthand: boolean }
+// `member`: a method name the file declares (final review I3), renamed with its `this.` uses only.
+interface Binding { name: string; at: number; shorthand: boolean; member?: true }
 
 // The bindings one target declares: an identifier, or a `{…}` / `[…]` pattern, read up to `end`.
 function target(m: string, at: number, end: number, out: Binding[]): void {
@@ -220,6 +237,8 @@ function params(m: string, open: number, out: Binding[]): void {
 function bindings(m: string): Binding[] {
   const out: Binding[] = []
   for (const x of m.matchAll(/\b(?:const|let|var)\b/g)) {
+    // `as const` and `<const>` assert, never declare (final review I2)
+    if (/\bas\s*$|<\s*$/.test(m.slice(Math.max(0, x.index - 10), x.index))) continue
     // each declarator of the statement: `a = …, { b } = …` up to its end at depth 0
     let at = x.index + x[0].length
     for (;;) {
@@ -231,11 +250,13 @@ function bindings(m: string): Binding[] {
       let depth = 0
       let k = Math.max(at, start)
       let next = -1
+      const angles = { n: 0 }
       for (; k < m.length; k++) {
         const c = m[k]!
-        if ('([{'.includes(c)) depth++
-        else if (')]}'.includes(c)) { if (depth === 0) break; depth-- }
-        else if (c === ';' && depth === 0) break
+        if (')]}'.includes(c) && depth === 0) break
+        const step = depthStep(m, k, angles)
+        if (step !== 0) { depth += step; continue }
+        if (c === ';' && depth === 0) break
         else if (c === '\n' && depth === 0 && !/^[\s]*[,=.?:+\-*/&|]/.test(m.slice(k + 1, k + 40)) && !/[,=(+\-*/&|?:]\s*$/.test(m.slice(Math.max(0, k - 40), k))) break
         else if (c === ',' && depth === 0) { next = k + 1; break }
       }
@@ -261,8 +282,13 @@ function bindings(m: string): Binding[] {
     const arrow = /^\s*(?::[^=;{}()]*)?=>/.test(after)
     const method = head !== null && !NOT_METHOD.has(head[1]!) && /^\s*(?::[^;{}()]*)?\{/.test(after) && !/\bfunction\s*\*?\s*[\w$]*\s*(?:<[^<>()]*>)?$/.test(before)
     if (arrow || method) params(m, k, out)
+    // Final review I3: a method's name the file declares (a class's or an object literal's).
+    if (method && !KEYWORDS.has(head[1]!)) out.push({ name: head[1]!, at: head.index, shorthand: false, member: true })
   }
   for (const x of m.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) {
+    // a return type or a type's member before `=>` is no parameter (final review I2)
+    const before = m.slice(Math.max(0, x.index - 200), x.index)
+    if (/\)\s*:\s*$|[|&]\s*$/.test(before)) continue
     if (!KEYWORDS.has(x[1]!)) out.push({ name: x[1]!, at: x.index, shorthand: false })
   }
   return out.sort((a, b) => a.at - b.at)
@@ -282,6 +308,7 @@ export function breadthCopy(path: string, text: string, seed: BreadthSeed): { pa
   const fresh = new Map<string, string>()
   for (const b of found) if (!fresh.has(b.name)) fresh.set(b.name, `${prefix}${fresh.size}`)
   const shorthand = new Set(found.filter((b) => b.shorthand).map((b) => b.at))
+  const members = new Set(found.filter((b) => b.member === true).map((b) => b.name))
   let out = ''
   let at = 0
   for (const x of masked.matchAll(/(?<![\w$])[A-Za-z_$][\w$]*/g)) {
@@ -289,7 +316,8 @@ export function breadthCopy(path: string, text: string, seed: BreadthSeed): { pa
     const name = fresh.get(x[0])
     if (name === undefined) continue
     const property = text[p - 1] === '.' && !(text[p - 2] === '.' && text[p - 3] === '.')
-    if (property) continue
+    // a member's `this.` use is renamed with it; any other property keeps its name
+    if (property && !(members.has(x[0]) && /\bthis\s*\.$/.test(text.slice(Math.max(0, p - 8), p)))) continue
     out += text.slice(at, p) + (shorthand.has(p) ? `${x[0]}: ${name}` : name)
     at = p + x[0].length
   }

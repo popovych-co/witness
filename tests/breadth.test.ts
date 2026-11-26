@@ -42,13 +42,34 @@ describe('the breadth copy (row 280)', () => {
       .toBe('const { storedRow: $wb0, ttl: $wb1 = 1, deep: { k: $wb2 } } = o\nuse($wb0, $wb1, $wb2)\n')
     expect(copy('const [first, , [second]] = xs\n')).toBe('const [$wb0, , [$wb1]] = xs\n')
     expect(copy('class C {\n  rotateDue(elapsed: number): boolean {\n    return elapsed > 1\n  }\n}\n'))
-      .toBe('class $wb0 {\n    rotateDue($wb1: number): boolean {\n        return $wb1 > 1\n    }\n}\n')
+      .toBe('class $wb0 {\n    $wb1($wb2: number): boolean {\n        return $wb2 > 1\n    }\n}\n')
   })
 
   it("reads a regex literal as one, so a quote or a comment opener inside it never shifts what is code (security review)", () => {
     expect(copy("const re = /'/g\nconst name = 'x'\n")).toBe("const $wb0 = /'/g\nconst $wb1 = 'x'\n")
     expect(copy('const re = /\\/*/\nconst later = 1\n')).toBe('const $wb0 = /\\/*/\nconst $wb1 = 1\n')
     expect(copy('const a = 4\nconst half = a / 2 / 1\n')).toBe('const $wb0 = 4\nconst $wb1 = $wb0 / 2 / 1\n')
+  })
+
+  it('never renames a type or a global a comma inside type arguments, an `as const` or a return type precedes (final review I2)', () => {
+    expect(copy('const seen = new Map<string, Date>()\nconst d = new Date()\n')).toBe('const $wb0 = new Map<string, Date>()\nconst $wb1 = new Date()\n')
+    expect(copy('const x: Map<string, Set<number>> = new Map(), y = 2\n')).toBe('const $wb0: Map<string, Set<number>> = new Map(), $wb1 = 2\n')
+    expect(copy("const v = { kind: 'ok' as const, console }\n")).toBe("const $wb0 = { kind: 'ok' as const, console }\n")
+    expect(copy('const f = (n: number): string => `${n}`\n')).toBe('const $wb0 = ($wb1: number): string => `${$wb1}`\n')
+  })
+
+  it('reads an arrow inside a parameter list or a default, and an apostrophe in JSX text, as neither a bracket nor a string (final review I2)', () => {
+    expect(copy('function run(cb: (x: number) => void, retries: number, done: boolean) { return retries && done }\n'))
+      .toBe('function $wb0($wb1: ($wb2: number) => void, $wb3: number, $wb4: boolean) { return $wb3 && $wb4 }\n')
+    expect(copy('const { retries = () => 3, timeout } = o\nuse(retries, timeout)\n'))
+      .toBe('const { retries: $wb0 = () => 3, timeout: $wb1 } = o\nuse($wb0, $wb1)\n')
+    expect(copy("const count = 1\nconst el = <p>Don't {count}</p>\n", 'src/a.tsx')).toBe("const $wb0 = 1\nconst $wb1 = <p>Don't {$wb0}</p>\n")
+  })
+
+  it("renames the member names the file declares and their this. uses, never another object's (final review I3)", () => {
+    expect(copy('class Repo {\n  storedRow(id) {\n    return this.storedRow(id) ?? other.storedRow(id)\n  }\n}\n'))
+      .toBe('class $wb0 {\n    $wb1($wb2) {\n        return this.$wb1($wb2) ?? other.storedRow($wb2)\n    }\n}\n')
+    expect(copy('const api = {\n  load(key) { return key },\n}\n')).toBe('const $wb0 = {\n    $wb1($wb2) { return $wb2 },\n}\n')
   })
 
   it('a fresh-name prefix that a name in the file already starts with is lengthened', () => {
