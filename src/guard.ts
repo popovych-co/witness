@@ -310,7 +310,7 @@ export function proveTest(
     // red to it — never a silent proof, never a finding: not measured, the judge's to book.
     if (trees.attributable === false) {
       return refuse([v('--test', 'guard-unattributed', namesGot(names),
-        `a red witness can tie to ${visible(mark.anchor)} — it is unchanged since round ${mark.run.round}, so the fix lies elsewhere; if the guard is right, the judge or a human may book it: ${book}`)])
+        `a red tied to ${visible(mark.anchor)} — it is unchanged since round ${mark.run.round}, so the fix lies elsewhere; if the guard is right, the judge or a human may book it: ${book}`)])
     }
     if (trees.attrib === undefined) return ok({ ms: Date.now() - t0 })
     const back = run(trees.attrib)
@@ -325,7 +325,7 @@ export function proveTest(
       // Final review I4: not measured, never a finding — a fix that spans files reads the same way as a red
       // from unrelated changes, so the judge decides.
       return refuse([v('--test', 'guard-unattributed', namesGot(names),
-        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so witness cannot tie their red to that file; if the guard is right, the judge or a human may book it: ${book}`)])
+        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so their red cannot be tied to that file; if the guard is right, the judge or a human may book it: ${book}`)])
     }
     return ok({ ms: Date.now() - t0, attributed: true })
   })
