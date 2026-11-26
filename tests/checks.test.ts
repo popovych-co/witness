@@ -28,8 +28,8 @@ describe('the check registry (row 264)', () => {
     await expect(runChecks([{ name: 'nope', run: () => ({ name: 'nope', ok: true }) }])).rejects.toThrow(/nope/)
     await expect(runChecks([{ name: 'lint', run: () => ({ name: 'tests', ok: true }) }])).rejects.toThrow(/lint/)
   })
-  it("lint's waiver is the human's, switch-offs' the judge's, and no other check has one (rows 270, 273)", () => {
-    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human'], ['switch-offs', 'judge']])
+  it("lint's waiver is the human's, guards' and switch-offs' the judge's, and no other check has one (rows 270, 273, 281)", () => {
+    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human'], ['guards', 'judge'], ['switch-offs', 'judge']])
     expect(checkWaiver('lint')).toBe('human')
     expect(checkWaiver('markers')).toBeUndefined()
   })
@@ -87,5 +87,14 @@ describe('the definitions check in the registry (row 277)', () => {
     expect(checksSignature(d('k1', true))).toBe(checksSignature([{ name: 'definitions', ok: true, owes: [{ kind: 'lint-effect', key: 'k1' }], lint_effect: { read: 'not-checked', changed: [], why: 'w' }, detail: 'd' }]))
     // the switch-offs check's owes (judged) never joins it: T3b's pin above stands
     expect(checksSignature([{ name: 'switch-offs', ok: true, owes: [{ kind: 'base-tests', key: 'k' }] }])).toBe('switch-offs:true:')
+  })
+})
+
+describe('the guards check in the registry (row 281)', () => {
+  it('guards is judged and the judge\'s to waive, after drift-lane and before switch-offs', () => {
+    expect([checkTier('guards'), checkWaiver('guards')]).toEqual(['judged', 'judge'])
+    const names = CHECKS.map((c) => c.name)
+    expect(names.indexOf('guards')).toBe(names.indexOf('drift-lane') + 1)
+    expect(names.indexOf('switch-offs')).toBe(names.indexOf('guards') + 1)
   })
 })

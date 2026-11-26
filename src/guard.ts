@@ -7,14 +7,15 @@ import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { definitionFor, withBaseScripts } from './definitions.js'
 import { stateCommit, stateDirs } from './gitio.js'
-import { appendEntry, entryLine, journalRel, type Entry } from './journal.js'
+import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { loadFailures, mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { trustedNow } from './allowlist.js'
 import { readPart, type Diagnostic } from './diagnostics.js'
 import { RULE_RE } from './lint-readers.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
-import { lensesRan, runsSinceReset, type GateRunEntry } from './rounds.js'
+import { lastResetIndex, lensesRan, runsSinceReset, type GateCheck, type GateRunEntry, type GuardVerdict } from './rounds.js'
+export type { GuardState, GuardVerdict } from './rounds.js'
 import { execCommand, interrupted } from './runner.js'
 import { withRunnerTurn } from './runner-lock.js'
 import { inScratch, type CfStep } from './scratch-checkout.js'
@@ -22,7 +23,7 @@ import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { blobText, snapshotTree } from './snapshot.js'
 import { execFileSync } from './spawn.js'
 import { isTestPath, langOf } from './switch-offs.js'
-import { shellWord, visible } from './toon.js'
+import { quotedWord, shellWord, visible } from './toon.js'
 import { withTxn } from './txn.js'
 import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
 
@@ -362,4 +363,60 @@ export function breadthBlob(root: string, mark: GuardMark, anchored: string): Re
   } catch {
     return refuse([v('--finding', 'breadth-unwritten', visible(path), 'a blob git can write for the breadth copy')])
   }
+}
+
+// ── The guards check (row 281) ───────────────────────────────────────────────────────────────
+
+// The blob a worktree path holds now, as snapshotTree hashes it; undefined for a missing path, a
+// folder or a link (never the file the guard proved).
+function blobNow(wt: string, path: string): string | undefined {
+  const st = parentsInTree(wt, path) ? lstatListed(join(wt, path)) : undefined
+  if (st === undefined || !st.isFile()) return undefined
+  try {
+    return execFileSync('git', ['hash-object', '--', path], { cwd: wt, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+  } catch {
+    return undefined
+  }
+}
+
+const guardAct = (plan: string, anchor: string): string =>
+  `witness guard ${shellWord(plan)} --finding ${quotedWord(visible(anchor))} --files <path> --rule <tool>:<rule> | --test '<name>'`
+
+// Row 281 (§4 T4). Judged; at implement and ship. Every anchor a blocking finding marked in the gate's
+// rounds since its last reset needs a guard proven at that gate since that reset whose overlay files
+// the worktree still holds as proven; a booking of the gate since the reset waives it (Task 9's
+// decisions). Red while any is owed or stale. The first round that marks a finding reads it at the
+// next round: the check runs before the battery.
+export function guardsCheck(root: string, wt: string, plan: string, gate: GuardGate): GateCheck {
+  const entries = readStream(root, plan)
+  const marks = guardMarks(entries, gate)
+  if (marks.length === 0) return { name: 'guards', ok: true, detail: "no marked finding since the gate's last reset" }
+  const window = entries.slice(lastResetIndex(entries, gate) + 1)
+  const proofs = window.filter((e) => e.t === 'guard' && e.gate === gate) as unknown as GuardEntry[]
+  const waived = waivedAnchors(window, gate)
+  const verdicts: GuardVerdict[] = marks.map((m) => {
+    const g = proofs.filter((p) => p.anchor === m.anchor).at(-1)
+    if (g !== undefined) {
+      const moved = Object.entries(g.files ?? {}).filter(([p, sha]) => blobNow(wt, p) !== sha).map(([p]) => p).sort()
+      return moved.length === 0
+        ? { anchor: m.anchor, mark: m.mark, state: 'proven', kind: g.kind }
+        : { anchor: m.anchor, mark: m.mark, state: 'stale', kind: g.kind, moved }
+    }
+    return waived.has(m.anchor) ? { anchor: m.anchor, mark: m.mark, state: 'waived' } : { anchor: m.anchor, mark: m.mark, state: 'owed' }
+  })
+  const ok = verdicts.every((x) => x.state === 'proven' || x.state === 'waived')
+  const seg = (x: GuardVerdict): string => {
+    const a = visible(x.anchor)
+    if (x.state === 'proven') return `proven: ${a} (${x.kind})`
+    if (x.state === 'waived') return `waived: ${a}`
+    if (x.state === 'stale') return `stale: ${a} (${x.kind} guard; ${x.moved!.map(visible).join(', ')} changed since its proof) — ${guardAct(plan, x.anchor)}`
+    return `owed: ${a} (${x.mark}) — ${guardAct(plan, x.anchor)}`
+  }
+  return { name: 'guards', ok, detail: verdicts.map(seg).join(' · '), guards: verdicts }
+}
+
+// The anchors a booking of the gate since its reset waived (row 281, C41): none until Task 9.
+function waivedAnchors(window: readonly Entry[], gate: GuardGate): Set<string> {
+  void window; void gate
+  return new Set()
 }

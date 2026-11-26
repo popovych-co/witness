@@ -35,7 +35,17 @@ export interface GateCheck {
   // check is red then). Never in the signature. Final review I1: `unread` the readers a measured effect could not
   // read on a side — what the arbiter is told was not measured.
   lint_effect?: { read: 'measured' | 'not-checked'; changed: string[]; why?: string; unread?: ReaderTool[] }
+  // Row 281. The guards check's verdict per marked anchor (src/guard.ts); present when non-empty. Each
+  // owed or stale anchor joins the resume signature, so a proof or a waiver since a round moves it.
+  guards?: GuardVerdict[]
 }
+
+// Row 281 (§4 T4). One marked anchor as the guards check reads it: `mark` the reviewer's ask; `state`
+// proven (a guard of this gate journaled since the reset, its files unchanged), stale (such a guard,
+// `moved` naming the overlay files changed or gone since), waived (a booking), or owed; `kind` the
+// proven or stale guard's own kind.
+export type GuardState = 'proven' | 'stale' | 'waived' | 'owed'
+export interface GuardVerdict { anchor: string; mark: 'lint' | 'test'; state: GuardState; kind?: 'lint' | 'test'; moved?: string[] }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
 // first new copy's line number, `count` the copies beyond the base's, the rule ids it names, whether a
@@ -308,7 +318,7 @@ export const ROUND_BOUND = 3
 // a "reset" opens a fresh round budget: human approve, a passed run, or a
 // revise-upstream (the plan itself changes — a new plan version is a new game;
 // upstream churn is bounded by the upstream gate's own bound)
-function lastResetIndex(entries: Entry[], gate: string): number {
+export function lastResetIndex(entries: readonly Entry[], gate: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]
     if (isDecision(e, gate)) {

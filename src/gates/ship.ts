@@ -30,6 +30,7 @@ import { runChecks, type CheckStep } from '../checks.js'
 import { markersCheck } from '../markers.js'
 import { serializeDoc } from '../fm.js'
 import { lintCheck } from '../lint-lane.js'
+import { guardsCheck } from '../guard.js'
 
 // The tests lane in filtered mode: `ship.test` under the test turn. Lint is its own lane (row 261).
 async function testsLane(wt: string, root: string, ctx: Parameters<typeof ensureTrusted>[1], cmd: string | undefined): Promise<GateCheck> {
@@ -160,6 +161,8 @@ registerGate({
       } },
       { name: 'drift-lane', run: async () => laneCheck(lane = await runCriteria(wt, ctx, parent,
         { trustRoot: root, ...(suite !== undefined ? { suite } : {}) })) },
+      // Row 281. A marked finding without a proven guard: a judged red.
+      { name: 'guards', run: () => guardsCheck(root, wt, planId, 'ship') },
     ]
     const { checks, withheld } = await runChecks(steps)
 

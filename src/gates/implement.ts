@@ -29,6 +29,7 @@ import { definitionsCheck, type LintEffect } from '../lint-effect.js'
 import { lintCheck } from '../lint-lane.js'
 import { logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
+import { guardsCheck } from '../guard.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
   // Row 246: the diff text is the plan change set's — witness's payload files never reach a reviewer.
@@ -215,6 +216,8 @@ registerGate({
         }
       } },
       { name: 'drift-lane', run: async () => laneCheck(await runCriteria(wt, ctx, parent, { trustRoot: root, onSuite: (t) => { suite = t } })) },
+      // Row 281. A marked finding without a proven guard: a judged red.
+      { name: 'guards', run: () => guardsCheck(root, wt, planId, 'implement') },
     ]
     const { checks, withheld } = await runChecks(steps)
 
