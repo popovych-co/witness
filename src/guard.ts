@@ -1,6 +1,7 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { foldOverlay, objectType } from './cf-tree.js'
+import { breadthCopy, breadthPath } from './breadth.js'
+import { entryAt, foldOverlay, objectType } from './cf-tree.js'
 import { lstatListed, parentsInTree, planChangeSet, witnessPaths } from './change-set.js'
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
@@ -18,8 +19,9 @@ import { execCommand, interrupted } from './runner.js'
 import { withRunnerTurn } from './runner-lock.js'
 import { inScratch, type CfStep } from './scratch-checkout.js'
 import { READER_TOOLS, type ReaderTool } from './settings.js'
-import { snapshotTree } from './snapshot.js'
-import { isTestPath } from './switch-offs.js'
+import { blobText, snapshotTree } from './snapshot.js'
+import { execFileSync } from './spawn.js'
+import { isTestPath, langOf } from './switch-offs.js'
 import { shellWord, visible } from './toon.js'
 import { withTxn } from './txn.js'
 import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
@@ -330,4 +332,34 @@ export function proveLint(
   }
   const spots = green.value.filter((d) => d.tool === rule.tool && d.rule === rule.rule && d.file !== anchored).length
   return ok({ spots, ms: Date.now() - t0 })
+}
+
+// ── The breadth copy (C45) ───────────────────────────────────────────────────────────────────
+
+// The blob a lint guard's red tree also holds: the breadth copy of the anchored file as the marking
+// round's tree held it (src/breadth.ts), beside it. Refuses `breadth-unprobed` outside the JS/TS
+// family (the judge books it) and `breadth-name-taken` where that tree already holds a file at the
+// copy's name. Undefined where nothing can be copied — the round's tree unknown (guardTrees refuses
+// it next) or lacking the anchored file (the red then finds nothing there).
+export function breadthBlob(root: string, mark: GuardMark, anchored: string): Result<{ path: string; mode: string; sha: string } | undefined> {
+  if (langOf(anchored) !== 'ts') {
+    return refuse([v('--finding', 'breadth-unprobed', visible(anchored),
+      `a lint guard on a JS or TS file — witness copies only those with renamed locals; book this one: witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards --finding ${shellWord(mark.anchor)}`)])
+  }
+  const tree = mark.run.reviewed_tree
+  if (tree === undefined || objectType(root, tree) !== 'tree') return ok(undefined)
+  const path = breadthPath(anchored)
+  if (entryAt(root, tree, path) !== undefined) {
+    return refuse([v('--finding', 'breadth-name-taken', visible(path), `no file at ${visible(path)} in round ${mark.run.round}'s tree — the breadth copy goes there`)])
+  }
+  const held = entryAt(root, tree, anchored)
+  const text = held?.type === 'blob' ? blobText(root, tree, anchored) : undefined
+  const copy = text === undefined ? undefined : breadthCopy(anchored, text)
+  if (copy === undefined) return ok(undefined)
+  try {
+    const sha = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: copy.text, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+    return ok({ path: copy.path, mode: '100644', sha })
+  } catch {
+    return refuse([v('--finding', 'breadth-unwritten', visible(path), 'a blob git can write for the breadth copy')])
+  }
 }

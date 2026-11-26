@@ -7,7 +7,7 @@ import { loadConfig } from '../config.js'
 import { diffBase } from '../evidence.js'
 import { primaryRoot } from '../gitio.js'
 import {
-  anchorFile, findMark, guardTrees, journalGuard, overlayRefusal, parseRule, proveLint, proveTest, testRun, type GuardEntry,
+  anchorFile, breadthBlob, findMark, guardTrees, journalGuard, overlayRefusal, parseRule, proveLint, proveTest, testRun, type GuardEntry,
   type GuardMark, type GuardTrees,
 } from '../guard.js'
 import { refuseHeld } from '../held.js'
@@ -116,12 +116,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
       return refused([v('--finding', 'guard-anchor-not-a-file', visible(mark.anchor),
         "a finding anchored at a file — a lint guard's rule is read at the anchored file; an omission is answered by a test guard")])
     }
-    const lintTrees = guardTrees(root, wt, base, cfg, mark, args.files)
+    const copy = breadthBlob(root, mark, anchored)
+    if (!copy.ok) return refused(copy.violations)
+    const lintTrees = guardTrees(root, wt, base, cfg, mark, args.files, copy.value !== undefined ? [copy.value] : undefined)
     if (!lintTrees.ok) return refused(lintTrees.violations)
-    const proof = proveLint(root, ctx, cfg, args.plan, mark, lintTrees.value, rule, anchored)
+    const proof = proveLint(root, ctx, cfg, args.plan, mark, lintTrees.value, rule, anchored, copy.value?.path)
     if (!proof.ok) return refused(proof.violations)
     const journaled = journalGuard(root, args.plan, {
-      ...markOf(mark), kind: 'lint', rule, ...treesOf(root, base, lintTrees.value, args.files), spots: proof.value.spots, ms: proof.value.ms,
+      ...markOf(mark), kind: 'lint', rule, ...treesOf(root, base, lintTrees.value, args.files),
+      ...(copy.value !== undefined ? { breadth: copy.value.path } : {}), spots: proof.value.spots, ms: proof.value.ms,
     })
     if (!journaled.ok) return refused(journaled.violations)
     ctx.out(`guard: proven ${visible(mark.anchor)} · lint ${rule.tool}:${rule.rule} — red on round ${mark.run.round}'s tree, green now`)

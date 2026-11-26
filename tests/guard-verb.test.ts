@@ -218,7 +218,7 @@ describe('witness guard — a lint guard (row 280)', () => {
   }, 180_000)
 
   it('a rule that still fires on the anchored file now is no guard (guard-not-green)', async () => {
-    const b = await lintBench({ rule: { word: 'rotateDue' } })
+    const b = await lintBench({ rule: { word: 'prev' } })   // a parameter: the breadth copy keeps it
     const r = await b.guard(LINT_ARGS)
     expect(r.code).toBe(1)
     expect(r.stderr).toContain('guard-not-green')
@@ -269,5 +269,44 @@ describe('witness guard — a lint guard (row 280)', () => {
       expect(r.stderr, rule).toContain('rule-shape')
     }
     expect(b.guards()).toEqual([])
+  }, 240_000)
+})
+
+describe('witness guard — the breadth copy (row 280)', () => {
+  it("a rule scoped to the anchored file's path is too narrow (guard-too-narrow)", async () => {
+    const b = await lintBench({ rule: { files: ['src/token.ts'] } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('guard-too-narrow')
+    expect(r.stderr).toContain('src/token-witness-breadth.ts')
+    expect(b.guards()).toEqual([])
+  }, 180_000)
+
+  it("a rule matching a local's name is too narrow", async () => {
+    const b = await lintBench({ rule: { word: 'rotateDue' } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('guard-too-narrow')
+    expect(b.guards()).toEqual([])
+  }, 180_000)
+
+  it('a guard that holds on its breadth copy journals the copy', async () => {
+    const b = await lintBench()
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    expect(b.guards()[0]).toMatchObject({ breadth: 'src/token-witness-breadth.ts' })
+  }, 180_000)
+
+  it('a lint guard on a file outside the JS/TS family refuses breadth-unprobed; a file at the copy\'s name refuses breadth-name-taken', async () => {
+    const b = await lintBench({ anchor: 'src/lib.rs' })
+    const r = await b.guard(['--finding', 'src/lib.rs', '--files', 'fake-lint.json', '--rule', 'biome:lint/test/noSwallow'])
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('breadth-unprobed')
+    expect(r.stderr).toContain('--book guards')
+    const c = await lintBench({ main: { 'src/token-witness-breadth.ts': 'export {}\n' } })
+    const taken = await c.guard(LINT_ARGS)
+    expect(taken.code).toBe(2)
+    expect(taken.stderr).toContain('breadth-name-taken')
+    expect([...b.guards(), ...c.guards()]).toEqual([])
   }, 240_000)
 })
