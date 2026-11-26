@@ -286,7 +286,7 @@ function run(root: string, ctx: Ctx, cfg: Config, unit: JobUnit): JobResult {
     return r.ok ? ok(r.value.value) : r
   }
   // Both sides under one scratch hold (re-entrant: the job verb already holds it).
-  const both = withScratchLock(root, ctx, cfg.drive.sessionTimeoutMs, () => {
+  const both = withScratchLock(root, ctx, () => {
     const p = side(parsed.plan)
     if (!p.ok) return p
     const e = side(parsed.effect)

@@ -54,9 +54,10 @@ const treeOf = (root: string, sha: string): string | undefined =>
 // Row 277. `blobs` are files no tree holds yet (a spliced package.json), folded after `paths`.
 export interface CfOverlay { from: string; paths: string[]; blobs?: Array<{ path: string; mode: string; sha: string }> }
 
-// A repo-relative file path: no empty, `.` or `..` segment, not absolute, no NUL.
+// A repo-relative file path: no empty, `.` or `..` segment, not absolute, no NUL. A drive letter is
+// only `C:/` or `C:\` (row 279, T2b M3): a POSIX file `a:b.txt` is a path like any other.
 const pathOk = (p: string): boolean =>
-  p !== '' && !p.includes('\0') && !p.startsWith('/') && !/^[A-Za-z]:/.test(p)
+  p !== '' && !p.includes('\0') && !p.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(p)
   && p.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
 
 // One entry of `tree` at exactly `path`, read with literal pathspecs so `*` or `[` is a character.
@@ -94,8 +95,14 @@ export function foldOverlay(root: string, base: string, overlay: CfOverlay): Res
     for (const path of [...new Set(overlay.paths)]) {
       const theirs = entryAt(root, fromTree, path)
       const ours = entryAt(root, baseTree, path)
-      if (theirs?.type === 'tree' || ours?.type === 'tree') {
+      if (theirs?.type === 'tree') {
         return refuse([v('overlay', 'overlay-not-a-file', visible(path), 'file paths — a directory is overlaid by naming its files')])
+      }
+      // Row 279 (T2b M4): a folder in the base the overlay holds as a file — every base entry
+      // under it goes first, so the file can take its place.
+      if (ours?.type === 'tree') {
+        const under = git(root, ['--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', baseTree, '--', path])
+        for (const sub of under.split('\0')) if (sub !== '') removals.push(`0 ${'0'.repeat(baseTree.length)}\t${sub}\0`)
       }
       removals.push(`0 ${'0'.repeat(baseTree.length)}\t${path}\0`)
       if (theirs !== undefined) adds.push(`${theirs.mode} ${theirs.sha}\t${path}\0`)

@@ -6,7 +6,6 @@ import { JOB_ENV, RESULT_MAX_BYTES, isJobKey, jobKinds, type JobResult } from '.
 import { ok, renderRefusal, v, type Result, type Violation } from '../refusal.js'
 import { withRunnerTurn } from '../runner-lock.js'
 import { withScratchLock } from '../scratch-lock.js'
-import { TERM_GRACE_MS } from '../self.js'
 import { crashPoint } from '../txn.js'
 
 // Row 257. One shard of a drive job, run as drive's child: `witness job <kind> <key> <shard>/<of>`.
@@ -21,9 +20,6 @@ import { crashPoint } from '../txn.js'
 const USAGE = 'usage: witness job <kind> <key> <shard>/<of>'
 const MAX_SHARDS = 1_000
 const SHARD_RE = /^([1-9][0-9]*)\/([1-9][0-9]*)$/
-// Row 258. A scratch kind's lease outlasts its box, drive's grace before the kill, and this slack;
-// the lease is written once, at the take, and the box starts only after it.
-export const SCRATCH_LEASE_SLACK_MS = 600_000
 
 const refused = (ctx: Ctx, rows: Violation[]): number => {
   renderRefusal(rows).forEach((l) => ctx.err(l))
@@ -67,9 +63,9 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   // Row 258. Lock order turn → scratch: a scratch kind takes the scratch inside its turn and before
   // `running`, so neither wait is boxed. A scratch it cannot take ends the shard failed, unstarted.
-  const lease = kind.boxMs(cfgR.value) + TERM_GRACE_MS + SCRATCH_LEASE_SLACK_MS
+  // Row 279: held while this child lives (no lease), naming its kind for a session that waits.
   const held = (env: Ctx['env']): Result<JobResult> =>
-    kind.scratch ? withScratchLock(root, { ...ctx, env }, lease, () => ok(work(env))) : ok(work(env))
+    kind.scratch ? withScratchLock(root, { ...ctx, env }, () => ok(work(env)), { job: kind.kind }) : ok(work(env))
   const r = kind.turn
     ? withRunnerTurn(root, ctx, `job ${kind.kind} ${key} ${shard}/${of}`, held, { job: kind.kind, gated: kind.gated })
     : held(ctx.env)
