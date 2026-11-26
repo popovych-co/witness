@@ -341,15 +341,19 @@ describe('witness guard — attribution (row 280, slice 2 review I3)', () => {
     expect(b.guards()).toEqual([])
   }, 240_000)
 
-  it('a fix outside the anchored file proves: with the anchored file unchanged since the round, attribution is skipped and said (final review I4)', async () => {
+  it('a fix outside the anchored file is not measured, never proven silently or refused as a finding: the judge may book it (final review I4, security review)', async () => {
     const via = (ratio: string) => ({
       'src/clock.ts': `export const ratio = () => ${ratio}\n`,
       'src/token.ts': "import { ratio } from './clock'\nexport function rotateDue(elapsed: number, ttl: number): boolean {\n  return elapsed >= ttl * ratio()\n}\nexport function nextToken(prev: string): string {\n  return prev\n}\n",
     })
     const b = await bench({ before: via('2'), after: via('0.8') })
     const r = await b.guard(TEST_ARGS)
-    expect(r.code, r.stderr).toBe(0)
-    expect(b.guards()[0]).toMatchObject({ kind: 'test', attributed: false })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('guard-unattributed')
+    expect(r.stderr).toContain('unchanged since round 1')
+    expect(r.stderr).toContain('--book guards --finding src/token.ts')
+    expect(b.guards()).toEqual([])
+    expect(guardsCheck(b.repo.root, b.wt, b.planId, 'implement')).toMatchObject({ guards: [{ state: 'owed', unmeasured: 'guard-unattributed' }] })
   }, 240_000)
 
   it("a named case from a test file outside the guard's own files refuses guard-not-attributable (full suite)", async () => {

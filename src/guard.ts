@@ -132,7 +132,8 @@ export function overlayRefusal(root: string, wt: string, cfg: Config, anchor: st
 // Slice 2 review I3: `attrib`, when asked for, the current tree with only the anchored file as the
 // marking round held it (through the base's scripts too): a test guard's attribution run.
 // Final review I4: `attributable: false` when attribution was asked for but the anchored file is the
-// same in the round's tree and now — the attribution tree would be the green tree, attributing nothing.
+// same in the round's tree and now — the attribution tree would be the green tree, attributing nothing,
+// so the proof refuses `guard-unattributed` (not measured).
 export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string; attributable?: false }
 
 export function guardTrees(
@@ -304,7 +305,14 @@ export function proveTest(
     // reason (code the plan changed since) — no guard of this finding. A tree that cannot be read is
     // said in the entry (`attributed: false`), never a refusal: a fix spanning files may not load there.
     if (cfg.criteria.byFile === undefined) return ok({ ms: Date.now() - t0 })
-    if (trees.attrib === undefined) return ok({ ms: Date.now() - t0, ...(trees.attributable === false ? { attributed: false } : {}) })
+    const book = `witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards --finding ${shellWord(mark.anchor)}`
+    // Final review I4 with the security review: an anchored file unchanged since the round cannot tie the
+    // red to it — never a silent proof, never a finding: not measured, the judge's to book.
+    if (trees.attributable === false) {
+      return refuse([v('--test', 'guard-unattributed', namesGot(names),
+        `a red witness can tie to ${visible(mark.anchor)} — it is unchanged since round ${mark.run.round}, so the fix lies elsewhere; if the guard is right, the judge or a human may book it: ${book}`)])
+    }
+    if (trees.attrib === undefined) return ok({ ms: Date.now() - t0 })
     const back = run(trees.attrib)
     if (!back.ok) {
       if (back.violations.some((x) => x.rule === 'run-interrupted')) return back
@@ -317,7 +325,7 @@ export function proveTest(
       // Final review I4: not measured, never a finding — a fix that spans files reads the same way as a red
       // from unrelated changes, so the judge decides.
       return refuse([v('--test', 'guard-unattributed', namesGot(names),
-        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so witness cannot tie their red to that file; if the guard is right, the judge or a human may book it: witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards --finding ${shellWord(mark.anchor)}`)])
+        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so witness cannot tie their red to that file; if the guard is right, the judge or a human may book it: ${book}`)])
     }
     return ok({ ms: Date.now() - t0, attributed: true })
   })
