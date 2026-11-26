@@ -27,6 +27,7 @@ criteria:
   # example prose: the exclusion costs nothing and is correct the moment a
   # prose folder appears.
   exclude: [docs/superpowers/**]  # extra globs never scanned for criteria tags · [] = none
+  byFile: none                 # a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite
 # example prose: lint runs the typecheck sweep too.
 ship:
   test: pnpm test              # the suite command ship runs · full-suite criteria run it too

@@ -1,15 +1,24 @@
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { foldOverlay, objectType } from './cf-tree.js'
 import { lstatListed, parentsInTree, planChangeSet, witnessPaths } from './change-set.js'
+import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { definitionFor, withBaseScripts } from './definitions.js'
-import { stateDirs } from './gitio.js'
-import type { Entry } from './journal.js'
+import { stateCommit, stateDirs } from './gitio.js'
+import { appendEntry, entryLine, journalRel, type Entry } from './journal.js'
+import { loadFailures, mergeReports, reportFiles, type TestOutcome } from './junit.js'
+import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { lensesRan, runsSinceReset, type GateRunEntry } from './rounds.js'
+import { execCommand, interrupted } from './runner.js'
+import { withRunnerTurn } from './runner-lock.js'
+import { inScratch, type CfStep } from './scratch-checkout.js'
+import type { ReaderTool } from './settings.js'
 import { snapshotTree } from './snapshot.js'
 import { isTestPath } from './switch-offs.js'
 import { visible } from './toon.js'
+import { withTxn } from './txn.js'
 import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
 
 // Row 280 (§4 T4). A fix adds a check. A reviewer marks a blocking finding a machine could catch
@@ -135,4 +144,122 @@ export function guardTrees(
   const green = withBaseScripts(root, base, current, cfg.checks.definitions)
   if (!green.ok) return green
   return ok({ pinned, current, red: red.value, green: green.value })
+}
+
+// ── The proof's record ───────────────────────────────────────────────────────────────────────
+
+// Row 280. A proven guard, journaled on the plan's stream. `gate`, `anchor`, `round` and `run` name
+// the mark it answers; `kind` the guard's own (a mark asks, it does not choose); `rule` a lint
+// guard's tool and rule, `tests` a test guard's case names; `files` each overlay path → its blob sha
+// in the current tree (the `guards` check reads a changed one as stale); `base` the plan's base;
+// `red`, `green` the trees run; `breadth` the copy a lint guard also caught; `spots` the rule's
+// diagnostics on other files of the current tree; `ms` the proof's wall time.
+export interface GuardEntry {
+  v: 1; t: 'guard'; gate: GuardGate; anchor: string; round: number; run: string; kind: GuardKind
+  rule?: { tool: ReaderTool; rule: string }; tests?: string[]; files: Record<string, string>
+  base: string; red: string; green: string; breadth?: string; spots?: number; ms: number
+}
+
+// One `guard` entry under the repo lock, in one transaction with its state commit.
+export function journalGuard(root: string, plan: string, entry: Omit<GuardEntry, 'v' | 't'>): Result<{ sha: string }> {
+  const line: GuardEntry = { v: 1, t: 'guard', ...entry }
+  const lock = acquireLock(root)
+  if (!lock.ok) return lock
+  try {
+    const marker = { op: `guard(${plan})`, files: [journalRel(plan)], journalMulti: [{ stream: plan, line: entryLine(line as unknown as { t: 'guard'; [k: string]: unknown }) }] }
+    return withTxn(root, marker, () => {
+      appendEntry(root, plan, line as unknown as Entry)
+      return stateCommit(root, marker.files, marker.op)
+    })
+  } finally {
+    lock.value()
+  }
+}
+
+// ── The test proof (C42) ─────────────────────────────────────────────────────────────────────
+
+// The command a test guard runs: `criteria.byFile` with the guard's test paths (typed, §3.7) for
+// `{files}`, space-separated — the only tokens witness appends to a command; else `ship.test`, the
+// full suite (undefined when that is unset). A test name never reaches it: names are agent text,
+// matched in junit only.
+export function testCommand(cfg: Config, files: readonly string[]): string | undefined {
+  return cfg.criteria.byFile !== undefined ? cfg.criteria.byFile.replaceAll('{files}', files.join(' ')) : cfg.ship.test
+}
+
+const junitGlob = (cfg: Config): string | undefined =>
+  cfg.criteria.report?.startsWith('junit:') ? cfg.criteria.report.slice('junit:'.length) : undefined
+
+const namesGot = (names: readonly string[]): string => visible(names.join(' · ')).slice(0, 400)
+
+// Whether every named case is present (and loaded) and ended as `want`. A name the run never
+// reported is not measured — a wrong name, or the environment emptying the run — never a red.
+function judgeCases(tests: readonly TestOutcome[], names: readonly string[], want: 'failed' | 'passed', round: number): Violation | undefined {
+  const cases = (n: string) => tests.filter((t) => t.name === n && t.load !== true)
+  const absent = names.filter((n) => cases(n).length === 0)
+  if (absent.length > 0) {
+    return v('--test', 'guard-not-run', namesGot(absent), `a run that reports every named case (${want === 'failed' ? `on round ${round}'s tree` : 'now'}) — a wrong name, or the environment emptied the run (a service down, an empty report); never a red`)
+  }
+  const off = names.filter((n) => !cases(n).every((t) => t.status === want))
+  if (off.length === 0) return undefined
+  return want === 'failed'
+    ? v('--test', 'guard-not-red', namesGot(off), `tests that fail on round ${round}'s tree, the code the reviewer flagged — these pass there, so they do not catch it`)
+    : v('--test', 'guard-not-green', namesGot(off), 'tests that pass on the worktree now — the fix does not satisfy them yet')
+}
+
+// Row 280. Red then green, each in the scratch under the verb's test turn (lock order turn →
+// scratch, C43). A run's step deletes its reports first (reset keeps `target/`), runs the command
+// with no turn of its own (the verb holds it), refuses a run a signal ended (row 247), and returns
+// its load failures: inScratch prepares again once and then refuses `load-failure` — a load error is
+// never a red. No report at all is not measured (`guard-not-run`). The command is the caller's to
+// have trusted.
+// What a test guard runs, checked before anything does: the junit glob it reads, the overlay's test
+// files, the template granted (`criteria.byFile` or `ship.test`, with its setting's name) and the
+// command with the paths substituted.
+export function testRun(cfg: Config, files: readonly string[]): Result<{ glob: string; tests: string[]; template: string; source: string; cmd: string }> {
+  const glob = junitGlob(cfg)
+  if (glob === undefined) {
+    return refuse([v('criteria.report', 'guard-no-report', cfg.criteria.report ?? 'none', 'junit:<glob> — a test guard reads its named cases from the junit report')])
+  }
+  const tests = files.filter(isTestPath)
+  if (tests.length === 0) {
+    return refuse([v('--files', 'guard-no-test-file', visible(files.join(' ')), 'a test file among --files — the guard\'s test runs from it')])
+  }
+  const template = cfg.criteria.byFile ?? cfg.ship.test
+  const cmd = testCommand(cfg, tests)
+  if (template === undefined || cmd === undefined) {
+    return refuse([v('ship.test', 'guard-no-command', 'not set', 'a suite command, or criteria.byFile — witness migrate proposes them')])
+  }
+  return ok({ glob, tests, template, source: cfg.criteria.byFile !== undefined ? 'criteria.byFile' : 'ship.test', cmd })
+}
+
+export function proveTest(
+  root: string, ctx: Ctx, cfg: Config, plan: string, mark: GuardMark, trees: GuardTrees,
+  names: readonly string[], files: readonly string[],
+): Result<{ ms: number }> {
+  const planned = testRun(cfg, files)
+  if (!planned.ok) return planned
+  const { glob, cmd } = planned.value
+  const t0 = Date.now()
+  return withRunnerTurn(root, ctx, `guard ${plan}`, (env) => {
+    const here = { ...ctx, env }
+    const run = (tree: string) => inScratch(root, here, cfg, { tree, plan }, (dir): Result<CfStep<TestOutcome[]>> => {
+      for (const f of reportFiles(dir, glob)) rmSync(join(dir, f), { force: true })
+      const out = execCommand(dir, here, cmd, { turn: false })
+      if (out.signal !== undefined) return refuse([interrupted(out.signal)])
+      const read = mergeReports(dir, glob)
+      if (!read.ok) {
+        return refuse([v('--test', 'guard-not-run', namesGot(names), `a run that writes junit:${glob} — none was written; the environment, never a red`)])
+      }
+      return ok({ value: read.value, load: loadFailures(read.value) })
+    })
+    const red = run(trees.red)
+    if (!red.ok) return red
+    const notRed = judgeCases(red.value.value, names, 'failed', mark.run.round)
+    if (notRed !== undefined) return refuse([notRed])
+    const green = run(trees.green)
+    if (!green.ok) return green
+    const notGreen = judgeCases(green.value.value, names, 'passed', mark.run.round)
+    if (notGreen !== undefined) return refuse([notGreen])
+    return ok({ ms: Date.now() - t0 })
+  })
 }

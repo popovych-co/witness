@@ -493,3 +493,23 @@ describe('checks.definitions (row 277)', () => {
     expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { checks: { definitions: [{ glob: '.gitignore' }, { glob: 'package.json', member: 'scripts' }] } } })
   })
 })
+
+describe('criteria.byFile (row 280)', () => {
+  it('criteria.byFile is a command holding {files}, or none (row 280)', () => {
+    const s = settingAt('criteria.byFile')!
+    expect(checkValue(s, 'none')).toEqual({ ok: true, value: undefined })
+    expect(checkValue(s, 'pnpm vitest run --reporter=junit {files}')).toEqual({ ok: true, value: 'pnpm vitest run --reporter=junit {files}' })
+    for (const bad of ['pnpm vitest run', '', 7, ['{files}']]) {
+      expect(checkValue(s, bad), JSON.stringify(bad)).toMatchObject({ ok: false, violations: [expect.objectContaining({ field: 'criteria.byFile' })] })
+    }
+  })
+
+  it('a schema 3 file reads criteria.byFile as none in memory; a set one is the command (row 193)', () => {
+    const repo = tmpRepo()
+    repo.write('witness.config.yaml', stringify(defaultValues({ harness: 'claude-code', schema: 3 })))
+    const old = loadConfig(repo.root)
+    expect(old.ok && old.value.criteria.byFile).toBeUndefined()
+    repo.write('witness.config.yaml', configYaml({ criteria: { byFile: 'npx vitest run {files}' } }))
+    expect(loadConfig(repo.root)).toMatchObject({ ok: true, value: { criteria: { byFile: 'npx vitest run {files}' } } })
+  })
+})

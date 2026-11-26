@@ -189,6 +189,7 @@ the list the CLI reads (`src/settings.ts`).
 | `criteria.runner` | how a spec's criteria run · a command with {id}, or full-suite — accepts: a filtered template containing {id}, or full-suite | `'npm test -- -t "@spec:{id}"'` |
 | `criteria.report` | the junit report witness reads · junit:<glob>, or none · full-suite needs one — accepts: none, or junit:<glob> (only junit is supported) | `none` |
 | `criteria.exclude` | extra globs never scanned for criteria tags · [] = none — accepts: a list of globs ([] = none) | `[]` |
+| `criteria.byFile` | a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite — accepts: a command containing {files}, or none — e.g. pnpm vitest run --reporter=junit --outputFile=reports/junit.xml {files} | `none` |
 | `ship.test` | the suite command ship runs · full-suite criteria run it too — accepts: a shell command | `npm test` |
 | `ship.lint` | the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic — accepts: a shell command, or a map of part names to shell commands — e.g. {biome: pnpm exec biome check ., tsc: pnpm exec tsc --noEmit} · a name is a lowercase letter, then up to 39 lowercase letters, digits or - | `npm run lint` |
 | `ship.branch` | the branch witness ships into — accepts: a branch name: letters, digits and . _ / + -, as git allows them — it is printed into git commands | `main` |

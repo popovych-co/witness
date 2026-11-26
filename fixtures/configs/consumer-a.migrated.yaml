@@ -28,6 +28,7 @@ criteria:
   # example prose: a prose folder quotes criteria blocks verbatim, so it is
   # kept out of the tag scan.
   exclude: [docs/superpowers/**]  # extra globs never scanned for criteria tags · [] = none
+  byFile: none                 # a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite
 # example prose: lint runs the typecheck too — a criterion no lane runs is a
 # criterion nothing enforces.
 ship:

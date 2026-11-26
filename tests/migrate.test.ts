@@ -385,4 +385,13 @@ describe('checks.switchOffs at migrate (row 273)', () => {
     expect(repo.read('witness.config.yaml')).toMatch(/^ {2}definitions: \[\.gitignore,.*\.golangci\.\*\] +# files whose base copy the implement and ship gates restore/m)
     expect(loaded(repo).checks.definitions).toHaveLength(26)
   })
+
+  it('migrate writes criteria.byFile none to a schema 3 file, with its comment (row 280)', async () => {
+    const repo = committed(stringify(defaultValues({ harness: 'claude-code', schema: 3 })))
+    const r = await repo.cli(['migrate'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/^added: criteria\.byFile none — a command running the given test files/m)
+    expect(repo.read('witness.config.yaml')).toMatch(/^ {2}byFile: none +# a command running the given test files, \{files\} = their paths/m)
+    expect(loaded(repo).criteria.byFile).toBeUndefined()
+  })
 })

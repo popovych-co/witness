@@ -14,6 +14,7 @@ criteria:
   runner: 'npm test -- -t "@spec:{id}"'  # how a spec's criteria run · a command with {id}, or full-suite
   report: none                 # the junit report witness reads · junit:<glob>, or none · full-suite needs one
   exclude: []                  # extra globs never scanned for criteria tags · [] = none
+  byFile: none                 # a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite
 ship:
   test: npm test               # the suite command ship runs · full-suite criteria run it too
   lint: npm run lint           # the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic

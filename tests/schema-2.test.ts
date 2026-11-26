@@ -77,8 +77,8 @@ describe('schema 2 (row 193)', () => {
     repo.git('add', '-A')
     repo.git('commit', '-m', 'consumer config')
     const r = loadConfig(repo.root)
-    expect(r.ok && r.value.warning).toBe('schema 1 is older than this witness (4) — witness migrate adds 18 settings '
-      + '(ship.merge · ship.ciSettleMs · readers.biome · …) · expands gates.model · refreshes comments')
+    expect(r.ok && r.value.warning).toBe('schema 1 is older than this witness (4) — witness migrate adds 19 settings '
+      + '(criteria.byFile · ship.merge · ship.ciSettleMs · …) · expands gates.model · refreshes comments')
     const check = await repo.cli(['check'])
     expect(check.stdout).toContain('older-schema')
     expect(check.stdout).toContain('schema 1 is older than this witness (4)')

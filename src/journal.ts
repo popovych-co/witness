@@ -46,6 +46,9 @@ export type EntryType =
   // recap is hashed into the decompose identity and read by the arbiter, and a cause must reach
   // neither (decision 8). Read only by the track record.
   | 'cause'
+  // Row 280 (§4 T4). A proven guard: a check that fails on the code a reviewer marked and passes
+  // on the fix, on the plan's stream (src/guard.ts). Only a proof is journaled, never a refusal.
+  | 'guard'
 
 export interface Entry {
   v: 1
