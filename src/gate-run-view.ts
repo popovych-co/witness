@@ -1,7 +1,7 @@
 import type { Entry } from './journal.js'
 import { heldSatisfy } from './needs.js'
 import { ROUND_BOUND, boundReached, roundBudget, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
-import { kv, logSafe, rows } from './toon.js'
+import { kv, logSafe, rows, shellWord } from './toon.js'
 import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
 
 // Rows 139/203. A gate run as a model: the value of every line `renderGateRun` prints, read off
@@ -120,7 +120,7 @@ export function gateRunLines(view: GateRunView): string[] {
     // Row 280. A marked finding asks for a guard: the verb's shape, the plan id filled (an id), the
     // anchor left for the author to copy from the row above.
     if (view.findings.some((f) => f.guard !== undefined)) {
-      out.push(`help: a guard-marked finding asks for a check that fails on the code it names — witness guard ${view.target} --finding '<anchor>' --files <path> --rule <tool>:<rule> | --test '<name>'`)
+      out.push(`help: a guard-marked finding asks for a check that fails on the code it names — witness guard ${shellWord(view.target)} --finding '<anchor>' --files <path> --rule <tool>:<rule> | --test '<name>'`)
     }
   }
   for (const d of view.demoted) out.push(kv('demoted', `${d.anchor} — unchanged since round ${d.round}`))

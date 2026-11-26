@@ -14,7 +14,7 @@ import { refuseHeld } from '../held.js'
 import { readStream } from '../journal.js'
 import { renderRefusal, v, type Violation } from '../refusal.js'
 import { findById, loadCanon } from '../scan.js'
-import { hasControl, visible } from '../toon.js'
+import { hasControl, shellWord, visible } from '../toon.js'
 import { guardTxn } from '../txn.js'
 import { worktreePath } from '../worktree.js'
 
@@ -91,7 +91,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   if (!plan || plan.meta.type !== 'plan') return refused([v('plan-id', 'unknown-plan', visible(args.plan), 'an existing plan id')])
   // The plan's own worktree, never the caller's cwd: the guard proves what the plan holds.
   const wt = worktreePath(root, args.plan)
-  if (!existsSync(wt)) return refused([v('plan-id', 'not-started', args.plan, `a started plan — witness start ${args.plan}`)])
+  if (!existsSync(wt)) return refused([v('plan-id', 'not-started', args.plan, `a started plan — witness start ${shellWord(args.plan)}`)])
   const clashed = refuseClash(ctx, root, args.plan, wt)
   if (clashed !== undefined) return clashed
   const held = refuseHeld(ctx, root, args.plan, wt)
@@ -106,7 +106,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   const mark = findMark(readStream(root, args.plan), args.finding)
   if (mark === undefined) {
     return refused([v('--finding', 'finding-unknown', visible(args.finding),
-      `a blocking finding a reviewer marked guard since the gate's last reset — witness gate implement ${args.plan} (or ship) prints them`)])
+      `a blocking finding a reviewer marked guard since the gate's last reset — witness gate implement ${shellWord(args.plan)} (or ship) prints them`)])
   }
   const overlay = overlayRefusal(root, wt, cfg, mark.anchor, args.files)
   if (overlay !== undefined) return refused([overlay])

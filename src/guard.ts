@@ -20,7 +20,7 @@ import { inScratch, type CfStep } from './scratch-checkout.js'
 import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { snapshotTree } from './snapshot.js'
 import { isTestPath } from './switch-offs.js'
-import { visible } from './toon.js'
+import { shellWord, visible } from './toon.js'
 import { withTxn } from './txn.js'
 import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
 
@@ -134,7 +134,7 @@ export function guardTrees(
   const pinned = mark.run.reviewed_tree
   if (pinned === undefined || objectType(root, pinned) !== 'tree') {
     return refuse([v('finding', 'tree-unknown', visible(pinned ?? 'none journaled'),
-      `the reviewed tree of round ${mark.run.round} — git no longer holds it, so the guard cannot be proven; the judge or a human may book it (witness decide ${mark.gate} ${mark.run.artifact} --book guards)`)])
+      `the reviewed tree of round ${mark.run.round} — git no longer holds it, so the guard cannot be proven; the judge or a human may book it (witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards)`)])
   }
   const current = snapshotTree(wt, base, planChangeSet(wt, base))
   if (current === undefined) {
