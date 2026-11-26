@@ -2,7 +2,7 @@ import type { TestcaseOutcomes } from './criteria.js'
 import { effortAbandoned, effortCause, effortStreams, readStream, type Entry, type FixCause, type RecapEntry } from './journal.js'
 import { mergeClock, mergesBetween, type MergeClock } from './merge-clock.js'
 import type { Canon } from './scan.js'
-import type { ReaderTool } from './settings.js'
+import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { kv, rows, visible } from './toon.js'
 
 // Row 254. The track record: a measured baseline for the human, computed from the journal, canon and
@@ -182,9 +182,10 @@ export function checksFold(root: string, canon: Canon): ChecksFold {
       if (e.t !== 'guard') continue
       any = true
       const rule = e.rule as { tool?: unknown; rule?: unknown } | undefined
-      if (e.kind === 'lint' && typeof rule?.tool === 'string' && typeof rule.rule === 'string') {
-        const key = JSON.stringify([rule.tool, rule.rule])
-        const row = lint.get(key) ?? lint.set(key, { tool: rule.tool as ReaderTool, rule: rule.rule, plans: new Set() }).get(key)!
+      // Security review: journal text from any branch — only a reader tool counts; the rule is spelled out when printed.
+      if (e.kind === 'lint' && (READER_TOOLS as readonly unknown[]).includes(rule?.tool) && typeof rule?.rule === 'string') {
+        const key = JSON.stringify([rule!.tool, rule!.rule])
+        const row = lint.get(key) ?? lint.set(key, { tool: rule!.tool as ReaderTool, rule: rule!.rule as string, plans: new Set() }).get(key)!
         row.plans.add(id)
       } else if (e.kind === 'test') tests++
     }

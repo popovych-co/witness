@@ -45,4 +45,17 @@ describe('the record counts the checks fixes added (row 282)', () => {
     expect(checksFold(repo.root, loadCanon(repo.root))).toEqual({ measured: false })
     expect(recordLine(record(repo.root, loadCanon(repo.root)))).toContain('checks added not measured')
   })
+
+  it('a journaled lint guard naming no reader tool is not counted, and a rule is spelled out (security review)', async () => {
+    const repo = await base()
+    await plans(repo, ['p-one']); merged(repo, 'p-one')
+    guard(repo, 'p-one', 'lint', { tool: '\u001b[2Jbiome', rule: 'x' })
+    guard(repo, 'p-one', 'lint', { tool: 'eslint', rule: 'no-x\u202e' })
+    const r = record(repo.root, loadCanon(repo.root))
+    expect(r.checks).toMatchObject({ measured: true, lint: [{ tool: 'eslint', rule: 'no-x\u202e', plans: ['p-one'] }] })
+    const out = recordTables(r).join('\n')
+    expect(out).toContain('eslint no-x\\u{202e}')
+    expect(out).not.toContain('\u001b')
+  })
 })
+
