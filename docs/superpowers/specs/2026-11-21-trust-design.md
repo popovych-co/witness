@@ -751,8 +751,8 @@ says them (C39).
 - **Test attribution:** names never reach a command — `criteria.byFile` (schema 4) fills `{files}` with the overlay's
   test paths, else the full suite runs (C42). A named case must come from the guard's own test files where the
   report names files, and with `criteria.byFile` an added run on the current tree with only the anchored file as the
-  round held it refuses `guard-unattributed` — not measured, naming the booking — when the cases pass there
-  (`attributed: false` when that tree cannot load, or the anchored file is unchanged since the round). A name a run
+  round held it refuses `guard-unattributed` — not measured, naming the booking — when the cases pass there or the
+  anchored file is unchanged since the round (`attributed: false` when that tree cannot load). A name a run
   never reports is the environment (`guard-not-run`), never a red. Every not-measured refusal is kept per anchor
   (machine-local) and reaches the guards check and the judge's facts.
 - **Lint attribution:** the declared rule at error severity at the anchored file on the round's bytes, none there
