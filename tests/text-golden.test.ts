@@ -204,8 +204,8 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       checks[1]{name,ok,detail}:
         tests,false,ac-rotate:fail
       held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod
-      findings[1]{reviewer,blocking,pin,anchor,claim}:
-        code-reviewer,true,,src/token.ts,expiry\\x1b[2J\\u{202e}unbounded
+      findings[1]{reviewer,blocking,guard,pin,anchor,claim}:
+        code-reviewer,true,,,src/token.ts,expiry\\x1b[2J\\u{202e}unbounded
       outcome: stopped
       pins[1]{ordinal,text}:
         1,render the service in full
@@ -251,8 +251,8 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       reviewed: <sha>
       model: m
       checks[0]{name,ok,detail}:
-      findings[1]{reviewer,blocking,pin,anchor,claim}:
-        plan-critic,false,,auth-refresh-plan-1 > ## Steps,hairline missing
+      findings[1]{reviewer,blocking,guard,pin,anchor,claim}:
+        plan-critic,false,,,auth-refresh-plan-1 > ## Steps,hairline missing
       outcome: stopped
       decide: 5 options · 1 is recommended
       1 · recommended · root
@@ -289,8 +289,8 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
       reviewed: deadbee
       model: m
       checks[0]{name,ok,detail}:
-      findings[1]{reviewer,blocking,pin,anchor,claim}:
-        slicing-critic,true,,auth-refresh > ## Behavior,expiry unbounded
+      findings[1]{reviewer,blocking,guard,pin,anchor,claim}:
+        slicing-critic,true,,,auth-refresh > ## Behavior,expiry unbounded
       outcome: stopped
       decision: revise
       decided-by: human
@@ -419,10 +419,10 @@ describe("today's text, byte for byte (roadmap 1a.1 golden)", () => {
         tests,false,ac-rotate:fail
         lint,true,
       held: ac-prod — prod unmet · witness satisfy auth-refresh --need prod
-      findings[3]{reviewer,blocking,pin,anchor,claim}:
-        code-reviewer,true,#1,src/token.ts,collapses the service the pin renders in full
-        code-reviewer,true,,omission:tests/,no test covers rotation before expiry
-        code-reviewer,false,,omission:src/session.ts,expiry unbounded
+      findings[3]{reviewer,blocking,guard,pin,anchor,claim}:
+        code-reviewer,true,,#1,src/token.ts,collapses the service the pin renders in full
+        code-reviewer,true,,,omission:tests/,no test covers rotation before expiry
+        code-reviewer,false,,,omission:src/session.ts,expiry unbounded
       demoted: omission:src/session.ts — unchanged since round 1
       malformed[1]{reviewer,field,rule}:
         x,f,r

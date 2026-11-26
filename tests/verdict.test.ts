@@ -21,6 +21,22 @@ function tree(): Reviewed {
 }
 
 describe('parseVerdict', () => {
+  it('a finding keeps its guard mark, lint or test (row 280)', () => {
+    const r = parseVerdict({ coverage: [], findings: [{ anchor: 'src/a.ts', claim: 'swallows', blocking: true, guard: 'lint' }] })
+    expect(r).toMatchObject({ ok: true, value: { findings: [{ guard: 'lint' }] } })
+    const t = parseVerdict({ coverage: [], findings: [{ anchor: 'src/a.ts', claim: 'swallows', blocking: true, guard: 'test' }] })
+    expect(t).toMatchObject({ ok: true, value: { findings: [{ guard: 'test' }] } })
+    const none = parseVerdict({ coverage: [], findings: [{ anchor: 'src/a.ts', claim: 'swallows', blocking: true }] })
+    expect(none.ok && 'guard' in none.value.findings[0]!).toBe(false)
+  })
+
+  it('any other guard value refuses the verdict (guard-shape)', () => {
+    expect(parseVerdict({ coverage: [], findings: [{ anchor: 'a', claim: 'c', blocking: true, guard: 'maybe' }] }))
+      .toMatchObject({ ok: false, violations: [{ field: 'findings[0].guard', rule: 'guard-shape' }] })
+    expect(parseVerdict({ coverage: [], findings: [{ anchor: 'a', claim: 'c', blocking: true, guard: null }] }))
+      .toMatchObject({ ok: false, violations: [{ field: 'findings[0].guard', rule: 'guard-shape' }] })
+  })
+
   it('keeps only the schema fields of a finding, so a model never writes demoted', () => {
     const r = parseVerdict({ coverage: [], findings: [
       { blocking: true, anchor: 'a', claim: 'c', demoted: 1, extra: 'x' },

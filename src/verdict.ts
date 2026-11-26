@@ -3,12 +3,20 @@ import { isAbsolute, join, normalize } from 'node:path'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 
 export type AnchorInput = string | { kind: 'omission'; scope: string }
+// Row 280 (§4 T4). A reviewer's mark on a blocking finding a machine could catch from now on: a lint
+// rule (`lint`) or a test (`test`). It asks for a guard; it does not choose the guard's kind.
+export type GuardKind = 'lint' | 'test'
+export const GUARD_KINDS: readonly GuardKind[] = ['lint', 'test']
 export interface Finding {
   blocking: boolean; anchor: AnchorInput; claim: string; contradicts_pin?: number
+  guard?: GuardKind
   // Row 187. CLI-written only: the base round this finding's unit is unchanged since. A finding
   // carrying it is non-blocking. parseVerdict drops a model's, with every other unknown field.
   demoted?: number
 }
+// Row 280. A mark that counts: on a blocking finding the CLI did not demote (row 187).
+export const guardMarked = (f: Finding): f is Finding & { guard: GuardKind } =>
+  f.blocking === true && f.demoted === undefined && f.guard !== undefined
 export interface CoverageItem { anchor: AnchorInput; note: string }
 export interface Verdict { coverage: CoverageItem[]; findings: Finding[] }
 
@@ -64,6 +72,10 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
       if (cp !== undefined && (!Number.isInteger(cp) || (cp as number) < 1)) {
         violations.push(v(`findings[${i}].contradicts_pin`, 'contradicts-pin-shape', String(cp), 'a pin ordinal (integer ≥1), or omit'))
       }
+      const guard = (item as { guard?: unknown }).guard
+      if (guard !== undefined && !GUARD_KINDS.includes(guard as GuardKind)) {
+        violations.push(v(`findings[${i}].guard`, 'guard-shape', String(guard), "'lint' | 'test', or omit"))
+      }
     })
   }
   if (violations.length > 0) return refuse(violations)
@@ -72,6 +84,7 @@ export function parseVerdict(raw: unknown): Result<Verdict> {
   const findings = (obj.findings as Finding[]).map((f) => ({
     blocking: f.blocking, anchor: f.anchor, claim: f.claim,
     ...(f.contradicts_pin !== undefined ? { contradicts_pin: f.contradicts_pin } : {}),
+    ...(f.guard !== undefined ? { guard: f.guard } : {}),
   }))
   return ok({ coverage: obj.coverage as CoverageItem[], findings })
 }

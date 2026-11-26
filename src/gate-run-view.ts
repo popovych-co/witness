@@ -2,14 +2,15 @@ import type { Entry } from './journal.js'
 import { heldSatisfy } from './needs.js'
 import { ROUND_BOUND, boundReached, roundBudget, type GateRunEntry, type ReviewerVerdict } from './rounds.js'
 import { kv, logSafe, rows } from './toon.js'
-import { anchorKey } from './verdict.js'
+import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
 
 // Rows 139/203. A gate run as a model: the value of every line `renderGateRun` prints, read off
 // the journaled entry once, so the gate's own screen and `decide --show` render one run from one
 // derivation, and a reader of the view is handed what the text says. `gateRunLines` lays it out.
 
 // Rows 139/203. One finding as its row prints it.
-export interface FindingView { reviewer: string; blocking: boolean; pin?: number; anchor: string; claim: string } // anchor, claim: logSafe
+// Row 280: `guard` the reviewer's mark, when it counts (a blocking, undemoted finding).
+export interface FindingView { reviewer: string; blocking: boolean; guard?: GuardKind; pin?: number; anchor: string; claim: string } // anchor, claim: logSafe
 
 // A finding's anchor and claim are a reviewer's free text, printed on a human's terminal: spelled
 // out (`logSafe`) so an escape sequence or bidi override cannot paint over the row (row 215).
@@ -17,13 +18,14 @@ export function findingViews(verdicts: ReviewerVerdict[]): FindingView[] {
   return verdicts.flatMap((rv) =>
     rv.findings.map((f) => ({
       reviewer: rv.reviewer, blocking: f.blocking,
+      ...(guardMarked(f) ? { guard: f.guard } : {}),
       ...(f.contradicts_pin !== undefined ? { pin: f.contradicts_pin } : {}),
       anchor: logSafe(typeof f.anchor === 'string' ? f.anchor : `omission:${f.anchor.scope}`), claim: logSafe(f.claim),
     })))
 }
 
 const findingRow = (f: FindingView): Record<string, string> => ({
-  reviewer: f.reviewer, blocking: String(f.blocking), pin: f.pin !== undefined ? `#${f.pin}` : '',
+  reviewer: f.reviewer, blocking: String(f.blocking), guard: f.guard ?? '', pin: f.pin !== undefined ? `#${f.pin}` : '',
   anchor: f.anchor, claim: f.claim,
 })
 
@@ -114,7 +116,12 @@ export function gateRunLines(view: GateRunView): string[] {
   // Row 179: what the lane did not run, beside the row that passed without it.
   for (const h of view.held) out.push(`held: ${h.criterion} — ${h.need} unmet${h.satisfy ? ` · ${h.satisfy}` : ''}`)
   if (view.findings.length > 0) {
-    out.push(rows('findings', ['reviewer', 'blocking', 'pin', 'anchor', 'claim'], view.findings.map(findingRow)).join('\n'))
+    out.push(rows('findings', ['reviewer', 'blocking', 'guard', 'pin', 'anchor', 'claim'], view.findings.map(findingRow)).join('\n'))
+    // Row 280. A marked finding asks for a guard: the verb's shape, the plan id filled (an id), the
+    // anchor left for the author to copy from the row above.
+    if (view.findings.some((f) => f.guard !== undefined)) {
+      out.push(`help: a guard-marked finding asks for a check that fails on the code it names — witness guard ${view.target} --finding '<anchor>' --files <path> --rule <tool>:<rule> | --test '<name>'`)
+    }
   }
   for (const d of view.demoted) out.push(kv('demoted', `${d.anchor} — unchanged since round ${d.round}`))
   if (view.malformed.length > 0) out.push(rows('malformed', ['reviewer', 'field', 'rule'], malformedRows(view.malformed)).join('\n'))
