@@ -39,6 +39,9 @@ export const LINT_EFFECT = 'lint-effect'
 export const LINT_EFFECT_BOX_MS = 1_800_000
 // The verb's result pipe holds 48 KiB (row 257): the hits stop where the result's JSON would pass this.
 export const EFFECT_RESULT_BYTES = 40_000
+// The longest hit path a result lists (Linux's PATH_MAX): a hit on a longer path counts into `over`, so one
+// such tracked file can never make the result malformed and the effect read not checked (push security review).
+export const MAX_HIT_FILE = 4096
 
 // Every part under its own source, in file order, then every set reader — bound to a part or not (C34):
 // each is an instrument of the effect.
@@ -100,7 +103,7 @@ const isPositive = (n: unknown): n is number => Number.isInteger(n) && (n as num
 
 function effectHit(x: unknown): EffectHit | undefined {
   if (!isObj(x) || !exactKeys(x, ['tool', 'rule', 'file', 'key', 'count'], ['line', 'lineless'])) return undefined
-  if (!isTool(x.tool) || !isRule(x.rule) || typeof x.file !== 'string' || x.file === '' || x.file.length > 1000) return undefined
+  if (!isTool(x.tool) || !isRule(x.rule) || typeof x.file !== 'string' || x.file === '' || x.file.length > MAX_HIT_FILE) return undefined
   if (typeof x.key !== 'string' || !HIT_KEY_RE.test(x.key) || !isPositive(x.count)) return undefined
   if (x.line !== undefined && !isPositive(x.line)) return undefined
   if (x.lineless !== undefined && (x.lineless !== true || x.line !== undefined)) return undefined
@@ -249,10 +252,13 @@ function hidden(plan: Side, effect: Side, changed: ReadonlySet<string>): EffectH
   return out.sort(order)
 }
 
-// The hits that fit within EFFECT_RESULT_BYTES of result JSON, in order; `over` the rest.
-function trimmed(head: Omit<LintEffectResult, 'hits' | 'over'>, hits: readonly EffectHit[]): LintEffectResult {
+// The hits that fit within EFFECT_RESULT_BYTES of result JSON, in order; `over` the rest, and every hit on a
+// path past MAX_HIT_FILE — counted, never listed, so the switch-offs check reads red with nothing bookable.
+export function fitResult(head: Omit<LintEffectResult, 'hits' | 'over'>, all: readonly EffectHit[]): LintEffectResult {
+  const hits = all.filter((h) => h.file.length <= MAX_HIT_FILE)
+  const long = all.length - hits.length
   // `,"over":<n>` and the commas between hits are counted against the cap too.
-  let size = Buffer.byteLength(JSON.stringify({ ...head, hits: [] })) + `,"over":${hits.length}`.length
+  let size = Buffer.byteLength(JSON.stringify({ ...head, hits: [] })) + `,"over":${all.length}`.length
   const kept: EffectHit[] = []
   for (const h of hits) {
     const add = Buffer.byteLength(JSON.stringify(h)) + (kept.length > 0 ? 1 : 0)
@@ -260,7 +266,7 @@ function trimmed(head: Omit<LintEffectResult, 'hits' | 'over'>, hits: readonly E
     size += add
     kept.push(h)
   }
-  const over = hits.length - kept.length
+  const over = hits.length - kept.length + long
   return { ...head, hits: kept, ...(over > 0 ? { over } : {}) }
 }
 
@@ -280,7 +286,7 @@ function run(root: string, ctx: Ctx, cfg: Config, unit: JobUnit): JobResult {
     return r.ok ? ok(r.value.value) : r
   }
   // Both sides under one scratch hold (re-entrant: the job verb already holds it).
-  const both = withScratchLock(root, ctx, cfg.drive.sessionTimeoutMs, () => {
+  const both = withScratchLock(root, ctx, () => {
     const p = side(parsed.plan)
     if (!p.ok) return p
     const e = side(parsed.effect)
@@ -299,7 +305,7 @@ function run(root: string, ctx: Ctx, cfg: Config, unit: JobUnit): JobResult {
       return { tool, ...(unread !== undefined ? { unread } : {}) }
     }),
   }
-  return { outcome: 'done', result: trimmed(head, hidden(p, e, changed)) }
+  return { outcome: 'done', result: fitResult(head, hidden(p, e, changed)) }
 }
 
 export const lintEffectKind: JobKind = {

@@ -222,6 +222,20 @@ function offFacts(offs: readonly OffVerdict[]): string[] {
 // each lint part's state with its counts and rule ids, how many commands trust kept from running, and
 // the held criteria's ids. Never `detail` (tool output on some checks, foreign paths on others), never
 // a part's `why`, never a command. Foreign names (parts, rule ids, criterion ids) are spelled out.
+// Row 281. The guards check as counts by state and mark, then each owed (or stale) anchor spelled out —
+// as the evidence already names findings — never a claim, a path list or a command.
+function guardFacts(c: GateCheck): string[] {
+  const gs = c.guards ?? []
+  if (gs.length === 0) return []
+  const owed = gs.filter((g) => g.state === 'owed' || g.state === 'stale')
+  const count = (s: string) => gs.filter((g) => g.state === s).length
+  return [
+    `${gs.length} marked`, `${count('proven')} proven`, `${count('waived')} waived`,
+    `${owed.length} owed (lint ${owed.filter((g) => g.mark === 'lint').length}, test ${owed.filter((g) => g.mark === 'test').length})`,
+    ...owed.map((g) => `owed ${visible(g.anchor)}${g.unmeasured !== undefined ? ` (not measured: ${g.unmeasured})` : ''}`),
+  ]
+}
+
 export function checkFacts(c: GateCheck): string {
   const n = c.untrusted?.length ?? 0
   const facts = [
@@ -233,6 +247,7 @@ export function checkFacts(c: GateCheck): string {
     ...(c.lint_effect?.read === 'not-checked' ? ['lint effect not checked'] : []),
     // Final review I1: and each reader a measured effect could not read, never why.
     ...(c.lint_effect?.read === 'measured' ? (c.lint_effect.unread ?? []).map((t) => `${t} not read under the base's definitions`) : []),
+    ...guardFacts(c),
     ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
     ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
   ]

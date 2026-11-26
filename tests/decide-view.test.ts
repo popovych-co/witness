@@ -221,8 +221,8 @@ describe('a gate run is a view (rows 139/203)', () => {
       { reviewer: 'code-reviewer', blocking: false, anchor: 'omission:tests/\\u{2028}', claim: 'no test' },
     ])
     expect(findingRows(verdicts)).toStrictEqual([
-      { reviewer: 'code-reviewer', blocking: 'true', pin: '#2', anchor: 'src/\\x1b[2Jtoken.ts', claim: 'expiry\\u{202e}unbounded' },
-      { reviewer: 'code-reviewer', blocking: 'false', pin: '', anchor: 'omission:tests/\\u{2028}', claim: 'no test' },
+      { reviewer: 'code-reviewer', blocking: 'true', guard: '', pin: '#2', anchor: 'src/\\x1b[2Jtoken.ts', claim: 'expiry\\u{202e}unbounded' },
+      { reviewer: 'code-reviewer', blocking: 'false', guard: '', pin: '', anchor: 'omission:tests/\\u{2028}', claim: 'no test' },
     ])
   })
 })

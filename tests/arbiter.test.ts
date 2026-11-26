@@ -285,3 +285,17 @@ describe('switch-off facts (row 274)', () => {
     expect(readFileSync(join(__dirname, '..', 'prompts', 'arbiter.md'), 'utf8')).toContain('A switch-off — a suppression comment, a skipped or focused test, a loosened option — is booked only when the evidence shows it is right as it stands')
   })
 })
+
+describe("the arbiter's guards facts (row 281)", () => {
+  it('the arbiter reads guards as counts and owed anchors, never a claim or a command', () => {
+    const c = { name: 'guards', ok: false, detail: "owed: src/token.ts (lint) — witness guard p --finding 'src/token.ts'",
+      guards: [{ anchor: 'src/token.ts', mark: 'lint' as const, state: 'owed' as const }] }
+    expect(checkFacts(c)).toBe('guards: FAILED · 1 marked · 0 proven · 0 waived · 1 owed (lint 1, test 0) · owed src/token.ts')
+    const mixed = { name: 'guards', ok: false, guards: [
+      { anchor: 'a.ts', mark: 'lint' as const, state: 'proven' as const, kind: 'lint' as const },
+      { anchor: 'b.ts\u202e', mark: 'test' as const, state: 'stale' as const, kind: 'test' as const, moved: ['tests/b.test.ts'] },
+      { anchor: 'c.ts', mark: 'test' as const, state: 'waived' as const },
+    ] }
+    expect(checkFacts(mixed)).toBe('guards: FAILED · 3 marked · 1 proven · 1 waived · 1 owed (lint 0, test 1) · owed b.ts\\u{202e}')
+  })
+})

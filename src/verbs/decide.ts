@@ -25,7 +25,7 @@ import { ok, refuse, renderRefusal, v, type Result } from '../refusal.js'
 import { short } from '../sha.js'
 import { cmd, hasControl, kv, rows, shellWord, visible } from '../toon.js'
 import { cliAct, exitsLine, type Act } from '../act.js'
-import {
+import { guardsOwed,
   REVISE_HUMAN, ROUND_BOUND, VALUED_FLAGS, actKey, actLive, anchorRecurrence, boundReached, lastGateRun, liveActs, notePrefill, pendingDecision,
   repairGranted, roundsSinceApprove, settledSinceViolation, settledToken, type DecisionEntry, type GateRunEntry, type GateStateKind, type DroppedOff, type LineOff, type LiveActs,
 } from '../rounds.js'
@@ -130,6 +130,8 @@ export interface DecisionCore {
   decision: 'approve' | 'revise' | 'stop' | 'book'
   // Row 270: the check a `book` decision books (`--book <check>`).
   book?: string
+  // Row 281: a guards booking's anchors (`--finding`, repeatable); absent, every owed one.
+  findings?: readonly string[]
   override?: boolean
   repair?: boolean
   note?: string
@@ -182,6 +184,12 @@ export function decisionAct(argv: string[]): Result<DecisionAct> {
       return refuse([v('--book', 'book-scope', `--book with ${extra.join(' ')}`, 'witness decide <gate> <target> --book <check> [--note <t>] — a booking carries a note and nothing else')])
     }
   }
+  // Row 281. `--finding` narrows a guards booking and rides nothing else.
+  const findings = values.get('--finding') ?? []
+  if ((flags.has('--finding') || findings.length > 0) && !(picked[0] === '--book' && book === 'guards')) {
+    return refuse([v('--finding', 'book-scope', `--finding with ${picked[0] === '--book' ? `--book ${visible(book ?? '')}` : picked[0]}`,
+      'witness decide <gate> <target> --book guards [--finding <anchor>]… — --finding names the marked findings a guards booking waives')])
+  }
   const via = values.get('--via')?.[0]
   if (via !== undefined && via !== 'affirmation') {
     return refuse([v('--via', 'unknown-via', via, 'affirmation — the only selection source the CLI defines')])
@@ -199,6 +207,7 @@ export function decisionAct(argv: string[]): Result<DecisionAct> {
   return ok({
     gate, target, decision: picked[0]!.slice(2) as DecisionCore['decision'],
     ...(picked[0] === '--book' && book !== undefined ? { book } : {}),
+    ...(findings.length > 0 ? { findings } : {}),
     ...(flags.has('--override') ? { override: true } : {}),
     ...(flags.has('--repair') ? { repair: true } : {}),
     ...(note !== undefined ? { note } : {}),
@@ -509,8 +518,25 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // Row 270. What the booking books: the anchor's bookable parts of the check it names — none when the
   // anchor withheld another check. Under committed autonomy a typed booking is a terminal act: the
   // env marker proves nothing, so a terminal and the human's y are asked for, outside the lock.
-  const bookings = booking ? withTools(cfgR.value, bookingsOf(anchor, bookCheck)) : []
-  if (booking && bookings.length === 0) return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
+  // Row 281 (C41). A guards booking holds no ledger item: it waives the anchors the round's guards check
+  // owes — the named ones, each owed, or every one — and the decision names them.
+  const guardBook = booking && bookCheck === 'guards'
+  let guardFindings: string[] = []
+  if (guardBook) {
+    const owed = guardsOwed(anchor)
+    const named = [...new Set(act.findings ?? [])]
+    const stray = named.find((f) => !owed.includes(f))
+    if (stray !== undefined) {
+      renderRefusal([v('--finding', 'finding-not-owed', visible(stray),
+        `a marked finding round ${anchor.round} owes a guard${owed.length > 0 ? ` — ${owed.map(visible).join(', ')}` : ' — it owes none'}`)]).forEach((l) => ctx.err(l))
+      return EXIT.REFUSED
+    }
+    guardFindings = named.length > 0 ? named : owed
+  }
+  const bookings = booking && !guardBook ? withTools(cfgR.value, bookingsOf(anchor, bookCheck)) : []
+  if (booking && (guardBook ? guardFindings.length === 0 : bookings.length === 0)) {
+    return nothingPending(ctx, root, cfgR.value, canon, gate, target, live, last !== undefined)
+  }
   // Slice 2 review I3 (row 171): committed autonomy is HEAD's config — a working-copy `autonomy: off`
   // edit grants nothing, so it never lifts the terminal either. Row 274: a typed booking only — the
   // arbiter decides in-process inside the gate and needs neither a terminal nor a y (§3.9).
@@ -521,7 +547,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
         `the human, at their own terminal — ${typed} asks before it books`)]).forEach((l) => ctx.err(l))
       return EXIT.REFUSED
     }
-    const answer = (await ctx.ask(bookQuestion(gate, target, bookCheck, anchor, bookings))).trim()
+    const answer = (await ctx.ask(guardBook ? guardQuestion(gate, target, guardFindings) : bookQuestion(gate, target, bookCheck, anchor, bookings))).trim()
     if (answer.toLowerCase() !== 'y') {
       renderRefusal([v('decide', 'book-declined', `answered ${answer === '' ? '(nothing)' : visible(answer)}`,
         `y — nothing was booked; ${typed} asks again`)]).forEach((l) => ctx.err(l))
@@ -626,7 +652,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     ...(act.selected === 'arbiter' ? { reason: act.reason, arbiter: act.arbiter } : {}),
     // Row 270: a booking of a parked gate lifts the park — a human's act, as row 241's revise is.
     ...(unparking || (booking && live.state === 'parked') ? { unpark: true as const } : {}),
-    ...(booking ? { book: { check: bookCheck, items: [] } } : {}),
+    ...(booking ? { book: { check: bookCheck, items: [], ...(guardBook ? { findings: guardFindings } : {}) } } : {}),
   }
   // D122. A deferral is `--approve --override` (ships with the cause alive) or
   // `--revise --repair` (buys a round without answering anything). One obligation per
@@ -778,7 +804,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
     // the booking's key is reused, so a booking killed after its lines landed and run again opens
     // nothing twice; the decision names every item, and both streams land in one transaction.
     let ledgerLines: LedgerOpen[] = []
-    if (booking) {
+    if (booking && !guardBook) {
       const taken = ledgerTaken(root)
       if (taken !== undefined) { renderRefusal([taken]).forEach((l) => ctx.err(l)); return EXIT.REFUSED }
       const lines = bookLines(root, target, gate, anchor, bookings, note)
@@ -849,6 +875,7 @@ export async function applyDecision(ctx: Ctx, act: DecisionAct): Promise<number>
   // comma would be quoted by kv), its part name spelled out. Row 274: a switch-off item by its check,
   // then its token in its file.
   for (const b of bookedLines) ctx.out(`booked: ${b.id} — ${bookName(bookCheck, b.booking)}`)
+  for (const f of guardFindings) ctx.out(`booked: guards · ${visible(f)}`)
   if (booking) ctx.out(`help: the re-gate reads it — ${cliAct('gate', gate, target).line}`)
   for (const p of pinEntries) ctx.out(kv('pinned', `#${p.ordinal} ${p.text}`))
   // Row 239. A shape: each foreign word is quoted, and the cause and the note are the human's.
@@ -946,6 +973,12 @@ function bookWhat(b: Extract<Booking, { kind: 'booked-check' }>): string {
   }
   const commit = parseBaseKey(b.part_key)?.commit
   return `the whole part, red against ${commit === undefined ? 'its base' : short(commit)}, until main moves`
+}
+
+// Row 281. The terminal's question for a guards booking: each anchor it waives.
+function guardQuestion(gate: string, target: string, findings: readonly string[]): string {
+  return [`book guards for ${gate} ${visible(target)}:`, ...findings.map((f) => `  guards · ${visible(f)}`),
+    "book? the guard is waived for this plan, and the PR's proof lists it [y/N]"].join('\n')
 }
 
 // The terminal's question under committed autonomy: each part and what booking it takes. Row 274: each

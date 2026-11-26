@@ -53,6 +53,33 @@ describe('trees for scratch runs (row 258)', () => {
     expect(rule(foldOverlay(repo.root, tree, { from: 'f'.repeat(40), paths: ['src/a.ts'] }))).toBe('tree-unknown')
   })
 
+  it('an overlay path a:b.txt folds; a drive-letter path refuses (T2b M3, row 279)', () => {
+    const repo = tmpRepo()
+    repo.write('a.txt', 'a\n')
+    commitAll(repo, 'base')
+    const base = repo.git('rev-parse', 'HEAD^{tree}')
+    repo.write('a:b.txt', 'colon\n')
+    commitAll(repo, 'next')
+    const from = repo.git('rev-parse', 'HEAD')
+    const folded = value(foldOverlay(repo.root, base, { from, paths: ['a:b.txt'] }))
+    expect(repo.git('show', `${folded}:a:b.txt`)).toBe('colon')
+    for (const p of ['C:/x', 'c:\\x']) expect(rule(foldOverlay(repo.root, base, { from, paths: [p] }))).toBe('invalid')
+  })
+
+  it('a folder the overlay turns into a file folds, its base entries gone (T2b M4, row 279)', () => {
+    const repo = tmpRepo()
+    repo.write('lib/x.ts', 'x\n'); repo.write('lib/deep/y.ts', 'y\n'); repo.write('keep.ts', 'k\n')
+    commitAll(repo, 'base')
+    const base = repo.git('rev-parse', 'HEAD^{tree}')
+    repo.git('rm', '-rq', 'lib'); repo.write('lib', 'now a file\n')
+    commitAll(repo, 'next')
+    const folded = value(foldOverlay(repo.root, base, { from: repo.git('rev-parse', 'HEAD'), paths: ['lib'] }))
+    expect(repo.git('ls-tree', '-r', '--name-only', folded).split('\n')).toEqual(['keep.ts', 'lib'])
+    expect(repo.git('show', `${folded}:lib`)).toBe('now a file')
+    // the overlay's own entry a folder still refuses
+    expect(rule(foldOverlay(repo.root, repo.git('rev-parse', 'HEAD^{tree}'), { from: base, paths: ['lib'] }))).toBe('overlay-not-a-file')
+  })
+
   it('wraps a tree in the same unsigned commit every time and pins it under its plan (Review Focus 5)', () => {
     const repo = tmpRepo()
     repo.git('config', 'commit.gpgsign', 'true')

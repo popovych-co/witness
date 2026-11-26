@@ -273,6 +273,43 @@ export function effectTree(root: string, base: string, planTree: string, restore
   return foldOverlay(root, planTree, { from: base, paths, blobs })
 }
 
+// Row 280 (§4 T4). `tree` with the base's member in place for every member definition
+// (`package.json#scripts`): each file a member entry names that differs between `base` and `tree`,
+// a regular JSON object on both sides with the base holding the member, takes the base's member
+// (`spliceMember`, inserted where the tree's object lacks it); every other byte stays the tree's.
+// One the splice cannot read takes the base's whole file. A
+// guard's command (`ship.test`, a reader) runs through the base's script indirection this way, never
+// one the plan or the guard's overlay rewrote. An unchanged tree returns itself.
+export function withBaseScripts(root: string, base: string, tree: string, entries: readonly DefinitionEntry[]): Result<string> {
+  const members = entries.filter((e) => e.member !== undefined)
+  if (members.length === 0) return ok(tree)
+  const blobs: Array<{ path: string; mode: string; sha: string }> = []
+  try {
+    const changed = gitOut(root, ['diff-tree', '-r', '--no-renames', '--name-only', '-z', base, tree]).split('\0').filter((p) => p !== '')
+    for (const path of changed) {
+      const e = definitionFor(members, path)
+      if (e === undefined) continue
+      const theirs = regularAt(root, base, path)
+      if (theirs === undefined) continue
+      const mine = regularAt(root, tree, path)
+      const spliced = mine !== undefined ? spliceMember(blobText(root, mine.sha), blobText(root, theirs.sha), e.member!) : undefined
+      // Security review: a file the splice cannot read (a BOM, comments, a link or a deletion in
+      // the tree) takes the base's whole file, as `restorable` falls back — a package manager may
+      // read what JSON.parse refuses, so the tree's bytes would hand the command the plan's scripts.
+      if (spliced === undefined) {
+        if (mine?.sha !== theirs.sha) blobs.push({ path, mode: theirs.mode, sha: theirs.sha })
+        continue
+      }
+      const sha = gitOut(root, ['hash-object', '-w', '--stdin'], spliced).trim()
+      if (sha !== mine!.sha) blobs.push({ path, mode: mine!.mode, sha })
+    }
+  } catch (e) {
+    return refuse([v('definitions', 'definition-unreadable', visible(String((e as Error).message ?? e)).slice(0, 200), 'definition files git can read')])
+  }
+  if (blobs.length === 0) return ok(tree)
+  return foldOverlay(root, tree, { from: tree, paths: [], blobs })
+}
+
 // Whether `tree` holds every base-side identity in `defs` (restored names → `held`): the merge stamp
 // reads a loosened part's booking closed once main holds the base's definitions again. Undefined
 // when git cannot read the tree.

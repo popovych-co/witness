@@ -45,7 +45,7 @@ const shown = (val: unknown): string => (val === undefined ? 'absent' : inlineVa
 // Row 259. The settings whose value is a command witness runs: a `filled` or `added` one is a
 // proposal the human may grant in the same act. Rows 261–262: the lint parts and the readers.
 export const COMMAND_SETTINGS: readonly string[] = [
-  'ship.lint', 'readers.biome', 'readers.eslint', 'readers.clippy', 'readers.tsc', 'scratch.prepare',
+  'ship.lint', 'readers.biome', 'readers.eslint', 'readers.clippy', 'readers.tsc', 'scratch.prepare', 'criteria.byFile',
 ]
 
 // A command setting migrate fills (ambient) or adds (not ambient: the readers). A `ship.lint` is

@@ -73,6 +73,13 @@ function detailOf(e: Entry): string {
       return `${s.from} → ${s.to} (${s.cause})`
     }
     case 'cause': return `cause=${String(e.cause)}`   // row 253
+    // Row 280: a proven guard names its gate's round, the anchor it answers and the check.
+    case 'guard': {
+      const rule = e.rule as { tool?: unknown; rule?: unknown } | undefined
+      const n = Array.isArray(e.tests) ? e.tests.length : 0
+      const what = e.kind === 'lint' ? `lint ${String(rule?.tool)}:${String(rule?.rule)}` : `test ${n} named`
+      return `${String(e.gate)} r${String(e.round)} ${String(e.anchor)} · ${what}`
+    }
     case 'job-shard': return `${String(e.kind)} ${String(e.key)} ${String(e.shard)}/${String(e.of)} ${String(e.outcome)} ${duration(Number(e.ms))}`   // row 257
     // Row 269: each ledger transition, named — the item, then what happened to it.
     case 'ledger-open': {

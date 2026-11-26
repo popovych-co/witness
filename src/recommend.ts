@@ -1,6 +1,6 @@
 import { cliAct, type Act } from './act.js'
 import type { Entry } from './journal.js'
-import {
+import { guardsOwed,
   actKey, actLive, anchorRecurrence, boundReached, decisionOwed, ladderSpent, lastGateRun, liveActs, partPasses, repairsOnRegate,
   repairGranted, reviseAct, roundBudget, roundsSinceApprove, type GateRunEntry, type DroppedOff, type GateStateKind, type LineOff, type LiveActs, type LoosenedOff,
 } from './rounds.js'
@@ -15,11 +15,14 @@ export const BOOK_TRADEOFF = 'opens a ledger item per part, which waives exactly
 // switch-off's — one item per line, closing once main no longer holds the line.
 export function bookWhen(check: string): string {
   return check === 'switch-offs' ? 'the switch-off is right as it stands — say why in the note'
+    // Row 281: a guard's waiver.
+    : check === 'guards' ? 'the finding is not one a machine can catch — say why in the note'
     : 'the red is not this plan\'s to fix — red on the base too, or one only you accept'
 }
 // Row 276: a switch-offs booking opens an item per line or lost spec. Row 278: or hidden rule or loosened
 // part, closing once main holds the base's check definitions again.
 export function bookTradeoff(check: string): string {
+  if (check === 'guards') return "waives the guard for this plan; the PR's proof lists it; nothing reopens it"
   return check === 'switch-offs'
     ? "opens a ledger item per line, spec, hidden rule or loosened part, which waives it for this plan; each closes once main no longer holds the line or the hidden spots, has the spec's passing cases back, or holds the base's check definitions again (the discharge), or by witness dismiss ledger"
     : BOOK_TRADEOFF
@@ -561,7 +564,9 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
   // plan; the approve takes it over the red and books nothing (row 93), so ship meets it again. The
   // policy hands the rule to the arbiter (`policyFor`): whether a switch-off is right as it stands is a
   // judgment, not a rule.
-  if (checksFailed.length > 0 && checksFailed.every((c) => checkWaiver(c.name) === 'judge' && bookingsOf(last, c.name).length > 0)) {
+  // Row 281: a guards red is bookable while its round owes a guard (a decision, no ledger item).
+  const bookable = (check: string): boolean => (check === 'guards' ? guardsOwed(last).length > 0 : bookingsOf(last, check).length > 0)
+  if (checksFailed.length > 0 && checksFailed.every((c) => checkWaiver(c.name) === 'judge' && bookable(c.name))) {
     const lines = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is LineOff => o.kind === undefined && o.count - (o.booked ?? 0) > 0))
     const tokens = [...new Set(lines.map((o) => visible(o.token)))]
     // Row 276: and each spec whose lost passing cases its bookings leave uncovered.
@@ -571,15 +576,18 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
     const loose = checksFailed.flatMap((c) => (c.offs ?? []).filter((o): o is LoosenedOff => o.kind === 'loosened' && o.count - (o.booked ?? 0) > 0))
     const hiddenN = loose.filter((o) => o.part === undefined).reduce((a, o) => a + o.count - (o.booked ?? 0), 0)
     const partsN = loose.filter((o) => o.part !== undefined).length
+    const owedGuards = checksFailed.some((c) => c.name === 'guards') ? guardsOwed(last).map(visible) : []
     const what = [
       ...(lines.length > 0 ? [`${lines.length} switch-off line${lines.length === 1 ? '' : 's'} the plan adds (${tokens.join(', ')})`] : []),
       ...(specs.length > 0 ? [`${specs.length} spec${specs.length === 1 ? '' : 's'} lost passing cases (${specs.join(', ')})`] : []),
       ...(hiddenN > 0 ? [`${hiddenN} diagnostic${hiddenN === 1 ? '' : 's'} the plan's check definitions hide`] : []),
       ...(partsN > 0 ? [`${partsN} lint part${partsN === 1 ? ' passes' : 's pass'} only under the plan's check definitions`] : []),
+      ...(owedGuards.length > 0 ? [`${owedGuards.length} marked finding${owedGuards.length === 1 ? ' has' : 's have'} no proven guard (${owedGuards.join(', ')})`] : []),
     ].join(' · ')
     const remedy = [
       ...(lines.length > 0 || specs.length > 0 ? [specs.length > 0 ? 'remove or restore them' : 'remove them'] : []),
       ...(loose.length > 0 ? ['restore the check definitions'] : []),
+      ...(owedGuards.length > 0 ? ['prove a guard'] : []),
     ].join(' and ')
     return {
       key: 'decide', rule: 'waivable',

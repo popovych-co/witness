@@ -80,7 +80,9 @@ export function openScratch(root: string): Result<string> {
     const add = tryGit(root, 'worktree', 'add', '--no-checkout', '--detach', path, 'HEAD')
     if (!add.ok) return refuse([v(SCRATCH_DIR, 'scratch-create-failed', lastLine(add.out), 'git worktree add to succeed')])
   }
-  const ex = excludeCanon(root, path)
+  // Row 279: hooks go off before excludeCanon's reapply, which runs `post-index-change` (slice 1
+  // review M3: a scratch 0.31 left, opened first by this version, ran its last tree's hook).
+  const ex = excludeCanon(root, path, { beforeApply: () => hooksOff(path) })
   if (!ex.ok) return refuse(ex.violations)
   // excludeCanon turned extensions.worktreeConfig on, so this setting is the scratch's alone.
   const logs = tryGit(path, 'config', '--worktree', 'core.logAllRefUpdates', 'false')
@@ -88,6 +90,29 @@ export function openScratch(root: string): Result<string> {
   if (!logs.ok || !gitDir.ok) return refuse([v(SCRATCH_DIR, 'scratch-create-failed', lastLine(logs.ok ? gitDir.out : logs.out), 'git config to succeed')])
   rmSync(join(gitDir.out, 'logs', 'HEAD'), { force: true })
   return ok(path)
+}
+
+// Row 279 (T2b final M-c): no git hook runs in the scratch. A reset checks out agent-authored trees,
+// and a hook it carries (husky's `core.hooksPath=.husky` included) would run their code on checkout.
+// Worktree config outranks the repo's (worktreeConfig is on: excludeCanon turned it on before calling
+// this), and the folder is emptied on every open, so nothing a run left there is ever a hook. Written
+// only when it differs (row 263: no config rewrite per open).
+function hooksOff(path: string): Result<void> {
+  const gitDir = tryGit(path, 'rev-parse', '--path-format=absolute', '--git-dir')
+  if (!gitDir.ok) return refuse([v(SCRATCH_DIR, 'scratch-create-failed', lastLine(gitDir.out), 'git rev-parse to succeed')])
+  const noHooks = join(gitDir.out, 'witness-no-hooks')
+  try {
+    rmSync(noHooks, { recursive: true, force: true })
+    mkdirSync(noHooks)
+  } catch (e) {
+    return refuse([v(SCRATCH_DIR, 'scratch-create-failed', visible((e as NodeJS.ErrnoException).code ?? String(e)), 'an empty hooks folder in the scratch\'s git dir')])
+  }
+  const hooks = tryGit(path, 'config', '--worktree', '--get', 'core.hooksPath')
+  if (!hooks.ok || hooks.out !== noHooks) {
+    const set = tryGit(path, 'config', '--worktree', 'core.hooksPath', noHooks)
+    if (!set.ok) return refuse([v(SCRATCH_DIR, 'scratch-create-failed', lastLine(set.out), 'git config to succeed')])
+  }
+  return ok(undefined)
 }
 
 // A killed git's leftover locks in the scratch's own git dir: index.lock, and HEAD.lock (a reset
@@ -146,7 +171,7 @@ export interface CfStep<T> { value: T; load: string[] }
 // run that needs the test turn takes it before `inScratch` (lock order turn → scratch: `takeTurn`
 // throws inside the scratch); it returns its junit's `loadFailures`, or [] when it reads no junit.
 export function inScratch<T>(
-  root: string, ctx: Ctx, cfg: Config, at: CfAt, step: (dir: string) => Result<CfStep<T>>, opts: { leaseMs?: number } = {},
+  root: string, ctx: Ctx, cfg: Config, at: CfAt, step: (dir: string) => Result<CfStep<T>>,
 ): Result<{ value: T; record: CfRecord }> {
   const t0 = Date.now()
   if (cfg.scratch.prepare === undefined) {
@@ -176,7 +201,7 @@ export function inScratch<T>(
     if (!pinned.ok) return pinned
     commit = pinned.value
   }
-  return withScratchLock(root, ctx, opts.leaseMs ?? cfg.drive.sessionTimeoutMs, () => {
+  return withScratchLock(root, ctx, () => {
     const dir = openScratch(root)
     if (!dir.ok) return dir
     const fresh = () => resetScratch(dir.value, commit)

@@ -36,6 +36,7 @@ export const RELEASED_COMMENTS: ReadonlySet<string> = new Set([
   // `for a …` lines, the schema line, the first line and the group headings, in every release.
   // Collected from the published tarballs 0.21.0, 0.21.1, 0.22.0, 0.23.0 and 0.24.0.
   "% of the context window at which a session hands over to a fresh one · 1–100",
+  "a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite",
   "code docs handed to code-reviewer at implement and ship · file list, [] = none",
   "design docs handed to design-critic and design-reviewer · file list, [] = none",
   "extra globs never scanned for criteria tags · [] = none",

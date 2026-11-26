@@ -22,6 +22,7 @@ criteria:
   # example prose: a prose folder quotes criteria blocks verbatim, so it is
   # kept out of the tag scan.
   exclude: [docs/superpowers/**]  # extra globs never scanned for criteria tags · [] = none
+  byFile: none                 # a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite
 ship:
   test: pnpm test              # the suite command ship runs · full-suite criteria run it too
   lint: pnpm lint              # the lint the implement and ship gates run · one command, or name: command parts, each run on its own · a part named biome, eslint, clippy or tsc is read per diagnostic

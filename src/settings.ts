@@ -40,6 +40,8 @@ export type Shape =
   | { kind: 'tokens' }
   // Row 277. A list of repo paths or globs, each optionally `#member` (src/definitions.ts).
   | { kind: 'definitions' }
+  // Row 280. A command holding `{files}`, or `none`.
+  | { kind: 'byFile' }
 
 export type Group = 'setup' | 'behavior' | 'tuning'
 
@@ -153,6 +155,14 @@ export const SETTINGS: readonly Setting[] = [
   {
     path: 'criteria.exclude', shape: { kind: 'globs' }, since: 1, defaults: { 1: [] }, group: 'setup',
     comment: 'extra globs never scanned for criteria tags · [] = none', want: 'a list of globs ([] = none)',
+  },
+  {
+    // Row 280 (C42). The command `witness guard` runs a test guard's files with: witness substitutes
+    // the guard's test paths (typed, §3.7) for `{files}` — never a test name, which is agent text. Not
+    // ambient: an older file reads `none`, the full suite (ship.test).
+    path: 'criteria.byFile', shape: { kind: 'byFile' }, since: 4, defaults: { 4: 'none' }, group: 'setup',
+    comment: "a command running the given test files, {files} = their paths — witness guard runs a test guard's files with it · none = the full suite",
+    want: 'a command containing {files}, or none — e.g. pnpm vitest run --reporter=junit --outputFile=reports/junit.xml {files}',
   },
   {
     path: 'ship.test', shape: { kind: 'text' }, since: 1, defaults: { 1: 'npm test' }, ambient: true, group: 'setup',
@@ -377,7 +387,7 @@ export const SCHEMA_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: 'eb9dc2e9b1e2bf2a35db862bf57185f717e21f8446c473b7da67e645100fa7ed',
   2: '8e75dcbd5e9af13e7846fc5b954f082812e50f9c4807607235e47489bcabeeae',
   3: '51284227f73adb71cf04db675bbcb12ca91ce9c90d74256cff4b5142d1a452e3',
-  4: '6ea6543ded5fc9342d52522ac42be6dcf13a8e6f6342fc5fe7db4bb032035fce',
+  4: '19ac7e83392628277b2758934b0e1522bc9800d22da2a05e39dbed13d757bb3b',
 }
 
 // A value as one line of the file. Quoted only where YAML needs it, except that a one-line

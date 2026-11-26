@@ -65,26 +65,21 @@ describe('the scratch (row 258)', () => {
     expect(rule(resetScratch(dir, repo.git('rev-parse', 'HEAD')))).toBe('ok')
   })
 
-  it('holds the scratch: re-entry runs at once; a dead holder or a lapsed lease is taken; a live holder is waited for', () => {
+  it('holds the scratch: re-entry runs at once; a dead holder is taken; a live holder is waited for, past its old lease too (row 279)', () => {
     const repo = tmpRepo()
     const ctx = fakeCtx(repo.root)
-    const run = () => withScratchLock(repo.root, ctx, 60_000, () => ok(process.pid))
+    const run = () => withScratchLock(repo.root, ctx, () => ok(process.pid))
     lockAt(repo.root, { pid: deadPid(), since: Date.now(), until: Date.now() + 60_000 })
     expect(value(run())).toBe(process.pid)
     expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
-    const lapsed = orphan(30)
-    try {
-      lockAt(repo.root, { pid: lapsed, since: Date.now() - 2_000, until: Date.now() - 1_000 })
-      expect(value(run())).toBe(process.pid)
-    } finally { process.kill(lapsed) }
-    expect(value(withScratchLock(repo.root, ctx, 60_000, () => run()))).toBe(process.pid)
-    lockAt(repo.root, { pid: orphan(2), since: Date.now(), until: Date.now() + 60_000 })
+    expect(value(withScratchLock(repo.root, ctx, () => run()))).toBe(process.pid)
+    lockAt(repo.root, { pid: orphan(2), since: Date.now() - 2_000, until: Date.now() - 1_000 })
     const t0 = Date.now()
     expect(value(run())).toBe(process.pid)
     expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
   })
 
-  it('releaseDeadScratch drops a dead or lapsed holder\'s lock and never a live one; a turn taken inside the scratch throws (lock order)', () => {
+  it('releaseDeadScratch drops a dead holder\'s lock and never a live one; a turn taken inside the scratch throws (lock order)', () => {
     const repo = tmpRepo()
     const ctx = fakeCtx(repo.root)
     lockAt(repo.root, { pid: deadPid(), since: Date.now(), until: Date.now() + 60_000 })
@@ -94,9 +89,9 @@ describe('the scratch (row 258)', () => {
       lockAt(repo.root, { pid: live, since: Date.now(), until: Date.now() + 60_000 })
       expect(releaseDeadScratch(repo.root)).toBe(false)
     } finally { process.kill(live); rmSync(join(repo.root, SCRATCH_LOCK), { force: true }) }
-    expect(() => withScratchLock(repo.root, ctx, 60_000, () => ok(withRunnerTurn(repo.root, ctx, 'x', () => 1)))).toThrow(/lock order/)
+    expect(() => withScratchLock(repo.root, ctx, () => ok(withRunnerTurn(repo.root, ctx, 'x', () => 1)))).toThrow(/lock order/)
     expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
-    expect(withRunnerTurn(repo.root, ctx, 'x', () => withScratchLock(repo.root, ctx, 60_000, () => ok(1)))).toEqual({ ok: true, value: 1 })
+    expect(withRunnerTurn(repo.root, ctx, 'x', () => withScratchLock(repo.root, ctx, () => ok(1)))).toEqual({ ok: true, value: 1 })
   })
 
   it('check never takes the scratch for a stray worktree, canon residue or a hand edit (Review Focus 3)', async () => {
@@ -136,7 +131,7 @@ describe('the scratch — slice 1 review (row 258)', () => {
     rmSync(lock, { recursive: true })
   })
 
-  it('a leftover lock naming this process is no hold it took: taken with a fresh lease, and no lock-order throw (I2)', () => {
+  it('a leftover lock naming this process is no hold it took: taken afresh, and no lock-order throw (I2)', () => {
     const repo = tmpRepo()
     const ctx = fakeCtx(repo.root)
     const leaseOf = () => (JSON.parse(readFileSync(join(repo.root, SCRATCH_LOCK), 'utf8')) as { since: number; until: number })
@@ -144,9 +139,9 @@ describe('the scratch — slice 1 review (row 258)', () => {
       lockAt(repo.root, { pid: process.pid, since: Date.now() - 5_000, until })
       expect(withRunnerTurn(repo.root, ctx, 'x', () => 1)).toBe(1)
       const t0 = Date.now()
-      const lease = value(withScratchLock(repo.root, ctx, 60_000, () => ok(leaseOf())))
+      const lease = value(withScratchLock(repo.root, ctx, () => ok(leaseOf())))
       expect(lease.since).toBeGreaterThanOrEqual(t0)
-      expect(lease.until).toBe(lease.since + 60_000)
+      expect(lease.until).toBe(lease.since + 7 * 86_400_000)
       expect(existsSync(join(repo.root, SCRATCH_LOCK))).toBe(false)
     }
   })
@@ -186,5 +181,41 @@ describe('the scratch in production (row 263)', () => {
     const before = statSync(config).ino
     value(openScratch(repo.root))
     expect(statSync(config).ino).toBe(before)
+  })
+})
+
+describe('the scratch runs no git hook (row 279)', () => {
+  it('no git hook runs in the scratch: a repo core.hooksPath post-checkout writes nothing (row 279)', async () => {
+    const repo = await seededRepo()
+    const mark = join(repo.root, '.git', 'hook-ran')
+    repo.write('.hooks/post-checkout', `#!/bin/sh\ntouch '${mark}'\n`)
+    spawnSync('chmod', ['+x', join(repo.root, '.hooks', 'post-checkout')])
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'hooks')
+    repo.git('config', 'core.hooksPath', '.hooks')
+    const commit = repo.git('rev-parse', 'HEAD')
+    repo.git('checkout', '-q', '--detach', commit)
+    expect(existsSync(mark)).toBe(true)   // the hook runs in the repo itself
+    rmSync(mark)
+    const dir = value(openScratch(repo.root))
+    expect(rule(resetScratch(dir, commit))).toBe('ok')
+    expect(existsSync(join(dir, '.hooks', 'post-checkout'))).toBe(true)
+    expect(existsSync(mark)).toBe(false)
+    expect(git(dir, 'config', '--worktree', 'core.hooksPath').stdout.trim()).toMatch(/witness-no-hooks$/)
+  })
+
+  it('a scratch opened first after the upgrade runs no hook of its last tree either (slice 1 review M3)', async () => {
+    const repo = await seededRepo()
+    const mark = join(repo.root, '.git', 'hook-ran')
+    repo.write('.hooks/post-index-change', `#!/bin/sh\ntouch '${mark}'\n`)
+    spawnSync('chmod', ['+x', join(repo.root, '.hooks', 'post-index-change')])
+    repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'hooks')
+    const dir = value(openScratch(repo.root))
+    expect(rule(resetScratch(dir, repo.git('rev-parse', 'HEAD')))).toBe('ok')
+    // the scratch as 0.31 left it: no hooks path of its own, the repo's pointing into the tree
+    git(dir, 'config', '--worktree', '--unset', 'core.hooksPath')
+    repo.git('config', 'core.hooksPath', '.hooks')
+    rmSync(mark, { force: true })
+    expect(value(openScratch(repo.root))).toBe(dir)
+    expect(existsSync(mark)).toBe(false)
   })
 })

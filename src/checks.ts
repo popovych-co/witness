@@ -11,7 +11,8 @@
 //
 // Row 270 (§3.2's waiver). `waiver` names who may book a check's red: lint's is the human's alone
 // (row 172: the AI judge never books lint). A check with none is never booked. Row 273: a switch-off's
-// is the judge's — the AI judge or the human (§3.2); T4a adds a guard's.
+// is the judge's — the AI judge or the human (§3.2); row 281: so is a guard's.
+import { createHash } from 'node:crypto'
 import { offUnbooked, timedCheck, type GateCheck } from './rounds.js'
 
 export type CheckTier = 'withholding' | 'judged'
@@ -31,6 +32,8 @@ export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: Che
   { name: 'regression', tier: 'judged' },
   { name: 'tests', tier: 'judged' },
   { name: 'drift-lane', tier: 'judged' },
+  // Row 281. A marked finding without a proven guard: judged, so the battery runs; the judge may waive it.
+  { name: 'guards', tier: 'judged', waiver: 'judge' },
   // Row 273. A switch-off a plan adds: judged, so the battery runs and the reviewers are told.
   // Row 275 (C33): last, so it reads the round's one suite run (the criteria lane's at implement, the
   // tests lane's at ship). Judged checks all run whenever any does and the signature sorts its terms,
@@ -86,6 +89,9 @@ export async function runChecks(steps: readonly CheckStep[]): Promise<CheckRun> 
 // Row 273: each switch-off line with copies no booking covers, with that count — a booking or a
 // dismissal since a round moves it. Row 277: a withholding check's owed job keys (the definitions
 // check's lint effect), so a round never resumes over a key no job owes; a judged check's never join.
+// Row 281: each owed or stale guard anchor (16 hex of its journal spelling) — a proof or a waiver since
+// a round moves it.
+const anchorHash = (a: string): string => createHash('sha256').update(a).digest('hex').slice(0, 16)
 export function checksSignature(checks: readonly GateCheck[]): string {
   const partTerm = (s: string) => (s === 'pending' || s === 'not-measured' ? 'missing' : s)
   return checks.map((c) => `${c.name}:${c.ok}${(c.untrusted?.length ?? 0) > 0 ? ':blocked' : ''}:${
@@ -98,5 +104,8 @@ export function checksSignature(checks: readonly GateCheck[]): string {
       : ''}${
     c.owes !== undefined && checkTier(c.name) === 'withholding'
       ? `:owes=${c.owes.map((o) => `${o.kind}@${o.key}`).sort().join('+')}`
+      : ''}${
+    c.guards !== undefined
+      ? `:guards=${c.guards.filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => `${anchorHash(g.anchor)}${g.unmeasured !== undefined ? `!${g.unmeasured}` : ''}`).sort().join('+')}`
       : ''}`).sort().join('|')
 }

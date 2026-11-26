@@ -10,7 +10,7 @@ import { liveFolder, liveIo, sessionToken } from './deadline.js'
 import { isId } from './dsl.js'
 import { primaryRoot } from './gitio.js'
 import { isAlive, pause, pidOf, releaseIfMine, takeStale } from './lock.js'
-import { holdsScratch } from './scratch-lock.js'
+import { holdsScratch, scratchHolder, scratchWaiters } from './scratch-lock.js'
 import { ensureExcluded } from './worktree.js'
 
 // Row 181 (Task 3b). Every command witness runs takes turns across the worktrees of one
@@ -200,11 +200,15 @@ export function sweepTurnQueue(root: string, now = Date.now()): number {
 }
 
 // The job holding the turn while a live ticket names `session` as waiting — undefined when the
-// session is not queued, or the holder is a session's run or an older CLI's lock (row 256).
+// session is not queued, or the holder is a session's run or an older CLI's lock (row 256). Row
+// 279: else the job holding the scratch while a live waiter's marker names `session` (a lint guard
+// waits for the scratch with no turn, C43).
 export function behindJob(root: string, session: string, now = Date.now()): string | undefined {
   const holder = turnHolder(root)
-  if (holder?.job === undefined) return undefined
-  return turnTickets(root, now).some((t) => t.session === session) ? holder.job : undefined
+  if (holder?.job !== undefined && turnTickets(root, now).some((t) => t.session === session)) return holder.job
+  const scratch = scratchHolder(root)
+  if (scratch?.job === undefined) return undefined
+  return scratchWaiters(root).some((w) => w.session === session) ? scratch.job : undefined
 }
 
 // One waiter's own ticket: written with O_CREAT | O_EXCL | O_NOFOLLOW (busy.ts's flags), put back

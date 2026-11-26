@@ -1,15 +1,20 @@
-import { closeSync, constants, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, constants, lstatSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Ctx } from './cli.js'
-import { liveFolder } from './deadline.js'
+import { liveFolder, sessionToken } from './deadline.js'
 import { isAlive, pause, takeStale } from './lock.js'
 import { refuse, v, type Result } from './refusal.js'
 
-// Row 258. The scratch checkout has one user at a time, and its lock says who. Leased, as busy.ts's
-// locks are: the taker writes `until` once, at the take, and a lock past it is stale whatever its
-// pid — so a holder whose pid Windows handed on, or that slept past its lease, stops counting. A
-// live holder is waited for, never refused (the test turn's rule, row 181): it is one process
-// running one bounded run. Lock order is test turn → scratch → repo lock: a turn is never taken
+// Row 258. The scratch checkout has one user at a time, and its lock says who. Row 279 (correction
+// C40): held while its holder lives, as the test turn is (row 218) — live = the pid is alive.
+// Row 258 leased it in wall time instead (`until`, written once at the take), so a host that slept
+// past the lease's slack read a live holder as stale and a waiter took the scratch from under it; on
+// a sleeping host nothing else runs, so sleep never lapses a holder. Drive's sweep frees a dead
+// holder's lock before Windows can hand its pid on. A written lock keeps `until = since +
+// MAX_LEASE_MS` only so an older witness, which reads the lease, still reads a live holder as live;
+// nothing here reads it, nor `since` (slice 1 review M1). A job's hold names its kind (`job`, as the
+// turn's lock does, row 256). A live holder is waited for, never refused (the test turn's rule, row
+// 181). Lock order is test turn → scratch → repo lock: a turn is never taken
 // while this process holds the scratch (`takeTurn` throws), since a step that took the turn inside
 // the scratch could deadlock against a session holding the turn and waiting for the scratch.
 //
@@ -22,13 +27,16 @@ import { refuse, v, type Result } from './refusal.js'
 // `takeTurn`'s lock-order check ask `holdsScratch`; the file is only the signal to other processes.
 
 export const SCRATCH_LOCK = '.witness/live/scratch/lock.json'
-export interface ScratchHolder { pid: number; since: number; until: number }
+export interface ScratchHolder { pid: number; since: number; until?: number; job?: string }
+// Row 279. A process waiting for the scratch: `.witness/live/scratch/wait-<pid>.json`, written once
+// before its first pause and removed when it takes the lock or returns. `session` is drive's token
+// for the session it runs in (`sessionToken`), so drive can see that session waiting behind a job
+// (`behindJob`) and leave the wait out of its clock, as it does a wait for the turn (row 256).
+export interface ScratchWaiter { pid: number; since: number; session?: string }
 
 const SCRATCH_SUB = 'scratch'
 const POLL_MS = 200
-// A `since` this far ahead of now is a tampered lock or a clock set wrong, never a live holder.
-const SINCE_SLACK_MS = 60_000
-// A lease longer than this is stale, whatever it claims.
+// The `until` a written lock carries, for older readers only (row 279).
 const MAX_LEASE_MS = 7 * 86_400_000
 // An empty or unparseable file is a write in progress for this long (lock.ts's grace).
 const UNREADABLE_GRACE_MS = 1_000
@@ -38,6 +46,7 @@ const RETRY_PAUSE_MS = 50
 const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES'])
 
 const lockFile = (root: string) => join(root, SCRATCH_LOCK)
+const WAIT_RE = /^wait-([1-9][0-9]*)\.json$/
 
 // This process's holds, by the root's real path: a depth, so a re-entered hold releases once.
 const holds = new Map<string, number>()
@@ -53,8 +62,14 @@ function parse(text: string): ScratchHolder | 'unreadable' | 'malformed' {
   try { raw = JSON.parse(text) } catch { return 'unreadable' }
   const r = raw as Partial<Record<keyof ScratchHolder, unknown>>
   const num = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0
-  if (!(Number.isInteger(r?.pid) && (r.pid as number) > 0 && num(r.since) && num(r.until))) return 'malformed'
-  return { pid: r.pid as number, since: r.since as number, until: r.until as number }
+  if (!(Number.isInteger(r?.pid) && (r.pid as number) > 0 && num(r.since))) return 'malformed'
+  if (r.until !== undefined && !num(r.until)) return 'malformed'
+  if (r.job !== undefined && typeof r.job !== 'string') return 'malformed'
+  return {
+    pid: r.pid as number, since: r.since as number,
+    ...(r.until !== undefined ? { until: r.until as number } : {}),
+    ...(r.job !== undefined ? { job: r.job as string } : {}),
+  }
 }
 
 // The file's text, or undefined for a link, a missing file or one that cannot be read.
@@ -66,14 +81,16 @@ function readText(p: string): string | undefined {
   }
 }
 
-const live = (l: ScratchHolder, now: number): boolean =>
-  l.until >= l.since && l.until - l.since <= MAX_LEASE_MS && l.since <= now + SINCE_SLACK_MS && now <= l.until && isAlive(l.pid)
+// Row 279: the pid rule, as the turn's. `until` is never read.
+// Neither `since` (slice 1 review M1): with no lease it bounds nothing, and a clock stepped back
+// would read a live holder's `since` as the future and hand its scratch to a second user.
+const live = (l: ScratchHolder): boolean => isAlive(l.pid)
 
 const olderThanGrace = (p: string, now: number): boolean => {
   try { return now - lstatSync(p).mtimeMs >= UNREADABLE_GRACE_MS } catch { return true }
 }
 
-// Stale: no live holder by the lease's rule. A link at the file, a malformed file, or one left
+// Stale: no live holder by the pid rule. A link at the file, a malformed file, or one left
 // unreadable past the grace is stale too, and so is one naming this process, which holds nothing
 // here (its holds are in memory: a reused pid's leftover).
 function stale(p: string, text: string | undefined, now: number): boolean {
@@ -84,14 +101,14 @@ function stale(p: string, text: string | undefined, now: number): boolean {
   const parsed = parse(text)
   if (parsed === 'unreadable') return olderThanGrace(p, now)
   if (parsed === 'malformed') return true
-  return parsed.pid === process.pid || !live(parsed, now)
+  return parsed.pid === process.pid || !live(parsed)
 }
 
-// The live holder, by the lease's rule.
-export function scratchHolder(root: string, now: number = Date.now()): ScratchHolder | undefined {
+// The live holder, by the pid rule.
+export function scratchHolder(root: string): ScratchHolder | undefined {
   const text = readText(lockFile(root))
   const parsed = text === undefined ? undefined : parse(text)
-  return typeof parsed === 'object' && live(parsed, now) ? parsed : undefined
+  return typeof parsed === 'object' && live(parsed) ? parsed : undefined
 }
 
 const unusable = (got: string) => refuse<never>([v('.witness/live/scratch', 'scratch-unusable', got,
@@ -119,21 +136,105 @@ function releaseIf(p: string, text: string): void {
   }
 }
 
-// Runs `fn` holding the scratch for `leaseMs`. Re-entered by a process that holds it (nothing taken,
-// nothing released); a live holder is waited for, said once on stderr; a dead or lapsed holder's
-// lock, or a leftover naming this process, is taken over. The lock goes in a `finally`, so a throw
-// in `fn` releases it too.
-export function withScratchLock<T>(root: string, ctx: Ctx, leaseMs: number, fn: () => Result<T>): Result<T> {
+function parseWaiter(text: string, pid: number): ScratchWaiter | undefined {
+  let r: Partial<Record<keyof ScratchWaiter, unknown>>
+  try { r = JSON.parse(text) as typeof r } catch { return undefined }
+  if (r?.pid !== pid || typeof r.since !== 'number' || !Number.isFinite(r.since) || r.since < 0) return undefined
+  if (r.session !== undefined && typeof r.session !== 'string') return undefined
+  return { pid, since: r.since, ...(r.session !== undefined ? { session: r.session } : {}) }
+}
+
+// Every marker file in the folder, by name: its path, the pid its name gives, its text (undefined
+// for a link or one that cannot be read).
+function markerFiles(root: string): Array<{ p: string; pid: number; text: string | undefined }> {
+  const dir = liveFolder(root, SCRATCH_SUB, false)
+  if (dir === undefined) return []
+  let names: string[]
+  try { names = readdirSync(dir) } catch { return [] }
+  return names.flatMap((name) => {
+    const m = WAIT_RE.exec(name)
+    if (!m) return []
+    const p = join(dir, name)
+    return [{ p, pid: Number(m[1]), text: readText(p) }]
+  })
+}
+
+// Row 279. The live waiters: a marker whose pid is alive.
+export function scratchWaiters(root: string): ScratchWaiter[] {
+  return markerFiles(root).flatMap(({ pid, text }) => {
+    const w = text === undefined ? undefined : parseWaiter(text, pid)
+    return w !== undefined && isAlive(w.pid) ? [w] : []
+  })
+}
+
+// Row 279. Drive's sweep: the markers of dead pids, and any a link or a broken write left past the
+// grace. How many it removed.
+export function sweepScratchWaiters(root: string): number {
+  const now = Date.now()
+  let n = 0
+  for (const { p, pid, text } of markerFiles(root)) {
+    const w = text === undefined ? undefined : parseWaiter(text, pid)
+    const gone = w !== undefined ? !isAlive(w.pid) : olderThanGrace(p, now)
+    if (!gone) continue
+    try { if (takeStale(p, (t) => t === text) === 'taken') n++ } catch { /* left to the next sweep */ }
+  }
+  return n
+}
+
+// This waiter's own marker, best effort: a marker it cannot write leaves the wait unheld, as before
+// row 279. A leftover at its name is a dead process's whose pid this one reuses: replaced once.
+function writeMarker(dir: string, ctx: Ctx): { p: string; text: string } | undefined {
+  const session = sessionToken(ctx.env)
+  const p = join(dir, `wait-${process.pid}.json`)
+  const text = JSON.stringify({ pid: process.pid, since: Date.now(), ...(session !== undefined ? { session } : {}) })
+  for (let i = 0; i < 2; i++) {
+    try {
+      create(p, text)
+      return { p, text }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || i > 0) return undefined
+      try { if (!lstatSync(p).isSymbolicLink()) unlinkSync(p) } catch { return undefined }
+    }
+  }
+  return undefined
+}
+
+// Runs `fn` holding the scratch while this process lives. Re-entered by a process that holds it
+// (nothing taken, nothing released); a live holder is waited for, said once on stderr; a dead
+// holder's lock, or a leftover naming this process, is taken over. `who` names a job's kind on the
+// lock. The lock goes in a `finally`, so a throw in `fn` releases it too. A waiter's marker (row
+// 279) is written before its first pause and goes when it takes the lock, and in a `finally`.
+export function withScratchLock<T>(root: string, ctx: Ctx, fn: () => Result<T>, who?: { job: string }): Result<T> {
   if (holdsScratch(root)) return fn()
   const dir = liveFolder(root, SCRATCH_SUB, true)
   if (dir === undefined) return unusable('a link, or a folder that could not be made')
+  let marker: { p: string; text: string } | undefined
+  let tried = false
+  const unmark = () => {
+    if (marker !== undefined) releaseIf(marker.p, marker.text)
+    marker = undefined
+  }
+  try {
+    return holding(root, ctx, fn, who, {
+      waiting: () => { if (!tried) { tried = true; marker = writeMarker(dir, ctx) } },
+      took: unmark,
+    })
+  } finally {
+    unmark()
+  }
+}
+
+function holding<T>(
+  root: string, ctx: Ctx, fn: () => Result<T>, who: { job: string } | undefined,
+  on: { waiting: () => void; took: () => void },
+): Result<T> {
   const p = lockFile(root)
   const key = holdKey(root)
   let said = false
   let t0 = Date.now()
   for (;;) {
     const now = Date.now()
-    const text = JSON.stringify({ pid: process.pid, since: now, until: now + leaseMs })
+    const text = JSON.stringify({ pid: process.pid, since: now, until: now + MAX_LEASE_MS, ...(who !== undefined ? { job: who.job } : {}) })
     let created = false
     try {
       create(p, text)
@@ -146,6 +247,7 @@ export function withScratchLock<T>(root: string, ctx: Ctx, leaseMs: number, fn: 
       }
     }
     if (created) {
+      on.took()
       holds.set(key, (holds.get(key) ?? 0) + 1)
       try {
         return fn()
@@ -159,8 +261,9 @@ export function withScratchLock<T>(root: string, ctx: Ctx, leaseMs: number, fn: 
     t0 = Date.now()
     const held = readText(p)
     const parsed = held === undefined ? undefined : parse(held)
-    if (typeof parsed === 'object' && parsed.pid !== process.pid && live(parsed, Date.now())) {
+    if (typeof parsed === 'object' && parsed.pid !== process.pid && live(parsed)) {
       if (!said) { ctx.err(`scratch: waiting for pid ${parsed.pid}`); said = true }
+      on.waiting()
       pause(POLL_MS)
       continue
     }
@@ -174,14 +277,15 @@ export function withScratchLock<T>(root: string, ctx: Ctx, leaseMs: number, fn: 
   }
 }
 
-// Drive's sweep (row 218's pattern): a dead holder's lock, or one whose lease passed, goes before
-// Windows can hand its pid to another process. Whether it removed one.
+// Drive's sweep (row 218's pattern): a dead holder's lock goes before Windows can hand its pid to
+// another process. A live holder's never does, drive's own job child included (row 279: a host
+// sleep lapses nothing). Whether it removed one.
 export function releaseDeadScratch(root: string): boolean {
   const p = lockFile(root)
   const text = readText(p)
   if (text === undefined) return false
   const parsed = parse(text)
-  if (typeof parsed !== 'object' || (live(parsed, Date.now()) && !(parsed.pid === process.pid && !holdsScratch(root)))) return false
+  if (typeof parsed !== 'object' || (live(parsed) && !(parsed.pid === process.pid && !holdsScratch(root)))) return false
   try {
     return takeStale(p, (t) => t === text) === 'taken'
   } catch {

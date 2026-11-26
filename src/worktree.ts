@@ -170,7 +170,9 @@ export function materializedCanon(root: string, wtPath: string): CanonResidue[] 
 // (`init --no-cone`, `set --no-cone`), while this trio is stable across the whole range
 // `primaryRoot` already binds (git >=2.31, via `rev-parse --path-format`). The apply is
 // `sparse-checkout reapply` (2.27, flagless; row 250 — `read-tree -mu HEAD` reset staged work).
-export function excludeCanon(root: string, wtPath: string): Result<void> {
+// `beforeApply` runs once worktree config is on and before the sparse reapply, which runs git's
+// `post-index-change` hook: the scratch turns hooks off there (row 279, slice 1 review M3).
+export function excludeCanon(root: string, wtPath: string, opts: { beforeApply?: () => Result<void> } = {}): Result<void> {
   // git's own caveat: enabling worktreeConfig relocates these two to per-worktree scope.
   // Witness must not silently move a setting the user made, so it refuses instead.
   for (const key of ['core.bare', 'core.worktree']) {
@@ -196,6 +198,10 @@ export function excludeCanon(root: string, wtPath: string): Result<void> {
   set(root, '--local', 'extensions.worktreeConfig', 'true')
   set(wtPath, '--worktree', 'core.sparseCheckout', 'true')
   set(wtPath, '--worktree', 'core.sparseCheckoutCone', 'false')
+  if (opts.beforeApply !== undefined) {
+    const before = opts.beforeApply()
+    if (!before.ok) return before
+  }
   // An edit elsewhere in the tree, staged or not, is the NORMAL mid-slice state (the implement
   // stage leaves the worktree dirty by design) and `applySparse` carries it through untouched
   // (row 250: read-tree used to reset staged work); a dirty canon path is what it declines, and

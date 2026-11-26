@@ -349,6 +349,11 @@ in the suite named after that file; under `test.projects`, a name that ends its 
 load failures is reset, prepared again once and re-run, and a second is `load-failure`, never a red. A job kind may
 run in the scratch, whose lock its verb takes after the turn and before its box starts.
 
+**As built (T4a, rows 279–280; C44).** The guard verb is the first session-side scratch run: a test guard holds the
+turn, then the scratch; a lint guard the scratch alone, held while a job holds it (row 279). `expect` and the green-on-
+current reuse dissolved: the verb judges each run's reading itself, and a round's junit summary keeps counts, not
+names, so there is nothing to reuse — green runs in the scratch. No git hook runs there.
+
 ### 3.5 Drive jobs and the queued test turn (DJ) — T2
 
 **What a job is.** Base runs, mutation and explore are jobs that drive schedules, never work inside a session's gate
@@ -476,6 +481,10 @@ modified, deleted while its folder stays tracked, replaced by a symlink, or — 
 removed; a member file either side cannot read as a JSON object restores whole; an added definition stays as the plan
 wrote it, but an added ignore file is removed.
 
+**As built (T4a, row 280).** Typed tokens land with `criteria.byFile`: the guard's overlay test paths (1–400 of
+`[A-Za-z0-9._@+/-]`, no empty, `.` or `..` segment, no segment starting with `-`) are the only words witness appends,
+substituted for `{files}`; a test name, an anchor or a rule id never reaches a command.
+
 ### 3.8 Proof and record models (PM) — record in T1, proof in T6
 
 `proofOf(plan)` and `record(repo)` live in `src/models.ts`, as one computation with many renderers (rows 139/203,
@@ -530,6 +539,10 @@ again under its lock.
 and rule ids, how many commands trust kept from running, and the held criteria's ids — never a check's `detail`, a part's
 `why` or a command; foreign names are spelled out. Every gate's checks read so. A checks-only round says so on the stop's
 round line, as `model: no reviewer was asked`, and in the round history.
+
+**As built (T4a, row 279; C40).** The scratch lock is held by a live pid, as the test turn is: no wall-clock lease
+(`until` is written for older readers only), and drive's sweep never frees a live holder. A session waiting on a job's
+scratch writes a marker naming its session and is held, as one waiting behind a job for the turn.
 
 ---
 
@@ -724,6 +737,32 @@ pinned red still reproduces.
 - A swap of one old spot for one new one is caught.
 - A load error is not a red.
 
+**As built (T4a, rows 279–282; T4 splits at planning, the map's C39–C45).** T4a builds the mark, the verb, the check,
+its waiver and the record's checks added; T4b takes the writers, tolerated sets and ship's regeneration (with "a swap
+of one old spot for one new one is caught"); T4c the births and cleanups. Until T4b every tool is one with no writer:
+a guard lands with zero old spots and the rule's other spots read as the plan's lint diagnostics — the verb counts and
+says them (C39).
+- **The mark** counts only on a blocking, undemoted finding, and asks for a guard without choosing its kind; the four
+  code lenses state it, `null` reads as none. A round with a counting mark pins its reviewed tree.
+- **`witness guard`** answers the newest counting mark at the exact anchor, at implement or ship, in that gate's window.
+  Its overlay holds typed paths (§3.7), each a check definition or a test file, never the anchored file. Both trees run
+  through the base's member definitions (`withBaseScripts`); a member file the splice cannot read takes the base's
+  whole file. A test guard takes the turn then the scratch; a lint guard takes no turn (C43). Only a proof journals.
+- **Test attribution:** names never reach a command — `criteria.byFile` (schema 4) fills `{files}` with the overlay's
+  test paths, else the full suite runs (C42). A named case must come from the guard's own test files where the
+  report names files, and with `criteria.byFile` an added run on the current tree with only the anchored file as the
+  round held it refuses `guard-unattributed` — not measured, naming the booking — when the cases pass there or the
+  anchored file is unchanged since the round (`attributed: false` when that tree cannot load). A name a run
+  never reports is the environment (`guard-not-run`), never a red. Every not-measured refusal is kept per anchor
+  (machine-local) and reaches the guards check and the judge's facts.
+- **Lint attribution:** the declared rule at error severity at the anchored file on the round's bytes, none there
+  now, and the breadth copy: the anchored file beside itself under a stem drawn each run, every local binding and
+  declared method name renamed to drawn names, indentation doubled; JS/TS only, any other file refuses
+  `breadth-unprobed` (C45).
+- **The `guards` check** (judged, after `drift-lane`) reads proven, waived, stale (an overlay file changed since its
+  proof) or owed per marked anchor, in that order. **The waiver** is a decision, `book: { check: 'guards', items: [], findings }`,
+  with no ledger item (C41).
+
 ### T5 — Test strength (decision 4)
 
 **Builds:** mutation adapters.
@@ -890,7 +929,7 @@ decision item names its act on a `book:` row (`witness decide <gate> <plan> --bo
 | Train | Settings |
 |---|---|
 | A (T0–T2) | ship.lint named parts; readers.{biome,eslint,clippy,tsc}; scratch.prepare (as built, T2b–T2c: all schema 3; the map's C5) |
-| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool; by-name test template (optional); mutation list; proof.screens; check-definition paths (as built, T3c: `checks.definitions`, schema 4, the default list in memory for an older file) |
+| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool; by-name test template (optional; as built, T4a: `criteria.byFile`, a command holding `{files}`, schema 4, `none` the full suite — C42); mutation list; proof.screens; check-definition paths (as built, T3c: `checks.definitions`, schema 4, the default list in memory for an older file) |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
 **migrate** detects and proposes values:
@@ -1163,3 +1202,21 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
   tree, part items when the tree holds the base's definitions again.
 - **C38 (T3c, row 277).** The effect layer does not cover inline disables: the base's definitions hold none, and a
   reader cannot be told to ignore them without a flag witness does not own. They stay the token layer's (T3a).
+- **C39 (T4a, rows 279–282).** T4 was more than L and split at planning: T4a the mark, the verb, the check, its waiver
+  and the record's checks added; T4b the writers, tolerated sets and ship's regeneration; T4c the births and cleanups.
+  Until T4b every tool has no writer, so a guard lands with zero old spots.
+- **C40 (T4a, row 279).** T2b's precondition asked drive to extend its job child's scratch lease by slept time; that
+  was racy and incomplete. The scratch lock is held by a live pid instead, as the turn, and a session waiting on a
+  job's scratch is held.
+- **C41 (T4a, row 281).** `--book guards` was mapped as a ledger booking; it is a decision naming the anchors, with no
+  ledger item — nothing observes a waived guard's close, so an item would stand in `status` forever.
+- **C42 (T4a, row 280).** The by-name test template became `criteria.byFile`, a by-file template: test names are agent
+  text a by-name filter would need each tool's regex escaping for through a shell; paths are the typed tokens §3.7
+  allows. Names are matched in junit only.
+- **C43 (T4a, row 280).** "A session verb under the test turn": a test guard takes the turn, then the scratch; a lint
+  guard takes no turn (lint takes none) and waits for the scratch alone.
+- **C44 (T4a, rows 279–280).** `expect` and "a green on current reuses the round's junit" dissolved: the verb judges
+  each reading itself, and a round's summary holds counts, not names.
+- **C45 (T4a, row 280).** The breadth probe covers the JS/TS family only (a Rust copy compiles only when a parent
+  module declares it); fresh names rather than a suffix, then drawn each run with the copy's stem, and every local
+  binding renamed (slice 2 review I1–I2).

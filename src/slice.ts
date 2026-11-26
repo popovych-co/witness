@@ -17,6 +17,8 @@ import { cmd, kv } from './toon.js'
 export const ACT_KINDS: ReadonlySet<string> = new Set<EntryType>([
   'recap', 'write', 'design-write', 'design-reconfirm', 'gate-run', 'human-decision',
   'test-evidence', 'step-close', 'dispatch', 'drift-check', 'adopt', 'revise-returned',
+  // Row 280: a proven guard answers a reviewer's mark, as a test-evidence run answers a step.
+  'guard',
 ])
 
 // The stamp a line carries (§4.8). Lines written before row 191, or outside a harness session,

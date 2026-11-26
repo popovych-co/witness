@@ -72,7 +72,8 @@ export interface GateSettings { model?: string; reviewers: Battery }
 export type GatesConfig = { reviewerTimeoutMs: number } & Record<GateName, GateSettings>
 
 // `report` undefined = none.
-export interface CriteriaConfig { runner?: string; report?: string; exclude: string[] }
+// Row 280: `byFile` the command a test guard's files run with; `none` reads undefined (the full suite).
+export interface CriteriaConfig { runner?: string; report?: string; exclude: string[]; byFile?: string }
 
 // Row 174. How `witness ship` merges its own PR under autonomy. Configured, never detected:
 // a style inferred from history would change the day someone merged one PR by hand.
@@ -202,6 +203,11 @@ export function checkValue(s: Setting, val: unknown): Result<unknown> {
       return val === 'full-suite' || val.includes('{id}')
         ? ok(val)
         : refuse([v(field, 'no-id-placeholder', val, 'template must interpolate {id} (or use full-suite)')])
+    // Row 280. A command witness substitutes typed test paths into: it must hold `{files}`.
+    case 'byFile':
+      if (val === 'none') return ok(undefined)
+      if (typeof val !== 'string' || val.trim() === '') return invalid()
+      return val.includes('{files}') ? ok(val) : refuse([v(field, 'no-files-placeholder', shown(val), s.want)])
     case 'report':
       if (val === 'none') return ok(undefined)
       return typeof val === 'string' && val.startsWith('junit:') ? ok(val) : refuse([v(field, 'report-format', shown(val), s.want)])
@@ -370,7 +376,7 @@ export function resolveSettings(raw: Raw, mode: 'strict' | 'lenient'): Result<Re
   return ok({
     paths: { specs: at('paths.specs'), plans: at('paths.plans'), designs: at('paths.designs') },
     docs,
-    criteria: { runner: at('criteria.runner'), report: at('criteria.report'), exclude: at('criteria.exclude') },
+    criteria: { runner: at('criteria.runner'), report: at('criteria.report'), exclude: at('criteria.exclude'), byFile: at('criteria.byFile') },
     ship: {
       test: at('ship.test'), lint: at('ship.lint'), branch: at('ship.branch'),
       merge: at('ship.merge'), ciSettleMs: at('ship.ciSettleMs'),

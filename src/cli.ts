@@ -45,6 +45,8 @@ const VERBS: Record<string, () => Promise<{ run: Verb }>> = {
   dismiss: () => import('./verbs/dismiss.js'),
   log: () => import('./verbs/log.js'),
   'test-evidence': () => import('./verbs/evidence.js'),
+  // Row 280. The proof that a fix's check fails on the code a reviewer marked and passes now.
+  guard: () => import('./verbs/guard.js'),
   // Row 218. A session's own test run, in the repo's test turn and, on Windows, a job.
   turn: () => import('./verbs/turn.js'),
   // Row 257. One shard of a drive job, run as drive's child and reported on stdout for it.
@@ -97,6 +99,7 @@ const VERB_USAGE: Record<string, string> = {
   drive: 'witness drive [--flow <plan-id>] [--max-spawns <n>] [--manual] [--detach] — runs every session itself · under autonomy it needs no terminal and reports when nothing else can move',
   'dispatch-report': 'witness dispatch-report <plan-id> --steps-assigned <n> --steps-completed <n> [--tokens <n>] [--tool-uses <n>] [--duration-ms <n>]',
   gate: 'witness gate <decompose|plan|implement|ship|design> <target> [--fresh] [--manual] [--unchanged]',
+  guard: 'witness guard <plan-id> --finding <anchor> --files <path>… (--rule <tool>:<rule> | --test <name>…)',
   index: 'witness index',
   init: 'witness init [--agent claude-code|pi|auto]',
   migrate: 'witness migrate [--dry-run]',

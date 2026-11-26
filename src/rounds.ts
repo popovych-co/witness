@@ -35,7 +35,25 @@ export interface GateCheck {
   // check is red then). Never in the signature. Final review I1: `unread` the readers a measured effect could not
   // read on a side — what the arbiter is told was not measured.
   lint_effect?: { read: 'measured' | 'not-checked'; changed: string[]; why?: string; unread?: ReaderTool[] }
+  // Row 281. The guards check's verdict per marked anchor (src/guard.ts); present when non-empty. Each
+  // owed or stale anchor joins the resume signature, so a proof or a waiver since a round moves it.
+  guards?: GuardVerdict[]
 }
+
+// Row 281 (§4 T4). One marked anchor as the guards check reads it: `mark` the reviewer's ask; `state`
+// proven (a guard of this gate journaled since the reset, its files unchanged), stale (such a guard,
+// `moved` naming the overlay files changed or gone since), waived (a booking), or owed; `kind` the
+// proven or stale guard's own kind.
+export type GuardState = 'proven' | 'stale' | 'waived' | 'owed'
+
+// Row 281. The anchors a round's guards check holds owed or stale: what a guards booking waives.
+export function guardsOwed(run: GateRunEntry): string[] {
+  return (run.checks.find((c) => c.name === 'guards')?.guards ?? [])
+    .filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => g.anchor)
+}
+// Final review I4: `unmeasured`, on an owed or stale anchor, the rule of the last attempt witness could
+// not measure (machine-local, src/guard.ts) — what the judge reads to book it.
+export interface GuardVerdict { anchor: string; mark: 'lint' | 'test'; state: GuardState; kind?: 'lint' | 'test'; moved?: string[]; unmeasured?: string }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
 // first new copy's line number, `count` the copies beyond the base's, the rule ids it names, whether a
@@ -194,7 +212,8 @@ export interface DecisionEntry {
   decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort' | 'book'
   // Row 270. A human's booking of a withheld check's red (`decide --book <check>`): the check, and
   // the ledger items it opened or reused, in part order. The gate is then re-run, never settled.
-  book?: { check: string; items: string[] }
+  // Row 281 (C41): a guards booking names the marked anchors it waives in `findings`, and opens no item.
+  book?: { check: string; items: string[]; findings?: string[] }
   override?: boolean
   // Row 109. A revise that buys the one extra round the bound otherwise forbids. Only ever
   // set on a `revise`, only ever at the bound, and only once per budget window — the whole
@@ -308,7 +327,7 @@ export const ROUND_BOUND = 3
 // a "reset" opens a fresh round budget: human approve, a passed run, or a
 // revise-upstream (the plan itself changes — a new plan version is a new game;
 // upstream churn is bounded by the upstream gate's own bound)
-function lastResetIndex(entries: Entry[], gate: string): number {
+export function lastResetIndex(entries: readonly Entry[], gate: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]
     if (isDecision(e, gate)) {
@@ -781,7 +800,8 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   // the round's verdicts (row 112's `cached`), so it spends a round, never a battery.
   const failed = lensesRan(anchor) ? anchor.checks.filter((c) => !c.ok) : []
   if (failed.length > 0 && !moved && !atBound && BOOKS.has(state) && blockingAnchorsOf(anchor).length === 0 &&
-      failed.every((c) => bookingsOf(anchor, c.name).length > 0)) {
+      failed.every((c) => (c.name === 'guards' ? guardsOwed(anchor).length > 0 : bookingsOf(anchor, c.name).length > 0))) {
+    // Row 281: a guards red books while its round owes a guard (a decision naming the anchors, no item).
     acts = [...acts, ...failed.map((c) => d('--book', c.name))]
   }
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
@@ -818,7 +838,7 @@ function approveTwin(gate: string, target: string, acts: readonly Act[]): Act[] 
 // `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells. One set
 // for `decide`'s parser (`decideWords`) and for `actKey`, so the two never disagree on which word is a
 // value.
-export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via', '--book'])
+export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via', '--book', '--finding'])
 // The flags that make an act another act (design §4.2.1). Notes, `--pin`, `--via`, `--trust-cmds`,
 // `--manual` and the upstream's value never do.
 const COUNTED_FLAGS: Record<string, readonly string[]> = {

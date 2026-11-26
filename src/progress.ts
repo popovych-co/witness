@@ -21,6 +21,8 @@ export const ENTRY_PROGRESS: Record<EntryType, 'act' | 'bookkeeping'> = {
   'revise-returned': 'act',
   // Row 269: a booking and a dismissal are a human's acts on the repo ledger.
   'ledger-open': 'act', 'ledger-dismissed': 'act',
+  // Row 280: a proven guard is the author's own stage work on a revise.
+  guard: 'act',
   // A refused write is the CLI saying no (F5). A sync is the merge stamp's or `start`'s
   // automatic act on the human's behalf (D138). A dispatch report is telemetry (row 81). A
   // drift check reads; a policy pin records the rule a decision ran under.

@@ -119,6 +119,8 @@ export function configCommands(cfg: Config): RunCommand[] {
   }
   if (cfg.criteria.runner !== 'full-suite') add(cfg.criteria.runner, 'criteria.runner')
   add(cfg.ship.test, 'ship.test')
+  // Row 280. A test guard's command, its `{files}` template granted whole (as the runner's `{id}`).
+  add(cfg.criteria.byFile, 'criteria.byFile')
   for (const c of lintCommands(cfg)) add(c.cmd, c.source)
   for (const tool of READER_TOOLS) add(cfg.readers[tool], `readers.${tool}`)
   // Row 259. The scratch's setup command, when there is one to run.

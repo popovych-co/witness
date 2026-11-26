@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { EXIT, version, type Ctx } from './cli.js'
 import { loadConfig, loadLocalConfig, type Config, type DocKey } from './config.js'
+import { pinTree } from './cf-tree.js'
 import { writeDoc } from './fm.js'
 import { crashPoint, guardTxn, pendingTxn, withTxn } from './txn.js'
 import { acquireLock } from './lock.js'
@@ -24,7 +25,7 @@ import { refuseClash } from './clash.js'
 import { refuseHeld } from './held.js'
 import { worktreePath } from './worktree.js'
 import { gateRunLines, gateRunView } from './gate-run-view.js'
-import { anchorFromKey, anchorKey, anchorMenu, type Reviewed } from './verdict.js'
+import { anchorFromKey, anchorKey, anchorMenu, guardMarked, type Reviewed } from './verdict.js'
 import {
   basisSha, deltaBlock, demote, demotionsBlock, outstandingDemotions, planDelta, reportedBy, type OutstandingDemotion,
 } from './delta.js'
@@ -919,6 +920,16 @@ async function judge(
       : openDeferrals(entriesNow).filter((d) => !reported.has(d.anchor) && silenceCounts(d.anchor)
         && judgeable(root, d, entriesNow, spec.gate, active))
         .map((d) => ({ v: 1 as const, t: 'deferral-discharged' as const, id: d.id, artifact: target, by_run: entry.run_id }))
+
+    // Row 280 (§4 T4). A round that marks a blocking finding for a guard pins its reviewed tree
+    // before it is journaled: `witness guard` proves the guard red on exactly this tree, and a
+    // snapshot tree is unreachable (gc takes it after gc.pruneExpire). The merge stamp drops the
+    // plan's cf refs with the rest. A tree that cannot be pinned is said and the round journals as
+    // before — the guard verb then refuses tree-unknown, which the judge may book.
+    if (input.snapshot && verdicts.some((rv) => rv.findings.some(guardMarked))) {
+      const pinned = pinTree(root, target, input.snapshot.tree)
+      if (!pinned.ok) ctx.err(`guard: the round's tree could not be pinned — ${pinned.violations[0]!.rule}`)
+    }
 
     const files = [
       journalRel(target), ...stamps.flatMap((s) => [s.rel, journalRel(s.stream)]),

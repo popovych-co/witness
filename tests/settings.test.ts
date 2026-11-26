@@ -13,9 +13,9 @@ import { DEFAULT_DEFINITIONS } from '../src/definitions.js'
 const fixture = (name: string) => readFileSync(join(__dirname, '..', 'fixtures', 'configs', name), 'utf8')
 
 describe('the settings list (row 193)', () => {
-  it('holds 43 settings, each path once, each section in SECTION_ORDER', () => {
-    expect(SETTINGS).toHaveLength(43)
-    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(43)
+  it('holds 44 settings, each path once, each section in SECTION_ORDER', () => {
+    expect(SETTINGS).toHaveLength(44)
+    expect(new Set(SETTINGS.map((s) => s.path)).size).toBe(44)
     for (const s of SETTINGS) expect(SECTION_ORDER, s.path).toContain(s.path.split('.')[0])
     // the list is the file's order: sections appear in SECTION_ORDER, never interleaved
     const sections = SETTINGS.map((s) => s.path.split('.')[0]!).filter((x, i, a) => a[i - 1] !== x)
@@ -143,5 +143,18 @@ describe('checks.definitions (row 277)', () => {
     expect(fingerprint(4)).toBe(SCHEMA_FINGERPRINTS[4])
     expect([1, 2, 3].map((n) => fingerprint(n))).toEqual([1, 2, 3].map((n) => SCHEMA_FINGERPRINTS[n]))
     expect(SETTINGS.findIndex((s) => s.path === 'checks.definitions')).toBe(SETTINGS.findIndex((s) => s.path === 'checks.switchOffs') + 1)
+  })
+})
+
+describe('criteria.byFile (row 280)', () => {
+  it('schema 4 adds criteria.byFile, none by default, after criteria.exclude; fingerprints 1–3 hold (row 280)', () => {
+    expect(settingAt('criteria.byFile')).toMatchObject({ since: 4, shape: { kind: 'byFile' }, defaults: { 4: 'none' }, group: 'setup' })
+    expect(settingAt('criteria.byFile')!.ambient).toBeUndefined()
+    expect(defaultValues({ harness: 'claude-code' })).toMatchObject({ schema: 4, criteria: { byFile: 'none' } })
+    expect(defaultValues({ schema: 3 }).criteria).not.toHaveProperty('byFile')
+    expect(fingerprint(4)).toBe(SCHEMA_FINGERPRINTS[4])
+    expect([1, 2, 3].map((n) => fingerprint(n))).toEqual([1, 2, 3].map((n) => SCHEMA_FINGERPRINTS[n]))
+    expect(SETTINGS.findIndex((s) => s.path === 'criteria.byFile')).toBe(SETTINGS.findIndex((s) => s.path === 'criteria.exclude') + 1)
+    expect(RELEASED_COMMENTS.has(settingAt('criteria.byFile')!.comment)).toBe(true)
   })
 })
