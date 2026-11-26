@@ -7,7 +7,8 @@ import { loadConfig } from '../config.js'
 import { diffBase } from '../evidence.js'
 import { primaryRoot } from '../gitio.js'
 import {
-  findMark, guardTrees, journalGuard, overlayRefusal, proveTest, testRun, type GuardEntry, type GuardMark, type GuardTrees,
+  anchorFile, findMark, guardTrees, journalGuard, overlayRefusal, parseRule, proveLint, proveTest, testRun, type GuardEntry,
+  type GuardMark, type GuardTrees,
 } from '../guard.js'
 import { refuseHeld } from '../held.js'
 import { readStream } from '../journal.js'
@@ -77,6 +78,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     const names = namesRefusal(args.tests)
     if (names !== undefined) return refused([names])
   }
+  const rule = args.rule === undefined ? undefined : parseRule(args.rule)
+  if (args.rule !== undefined && rule === undefined) {
+    return refused([v('--rule', 'rule-shape', visible(args.rule), '<tool>:<rule> — tool biome, eslint, clippy or tsc; the rule id as its report names it (letters, digits and @ / _ . : -)')])
+  }
   const rootR = primaryRoot(ctx.cwd)
   if (!rootR.ok) return refused(rootR.violations)
   const root = rootR.value
@@ -105,8 +110,28 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const overlay = overlayRefusal(root, wt, cfg, mark.anchor, args.files)
   if (overlay !== undefined) return refused([overlay])
-  if (args.rule !== undefined) {
-    return refused([v('--rule', 'guard-kind', visible(args.rule), 'a test guard (--test) — lint guards are not built yet')])
+  if (rule !== undefined) {
+    const anchored = anchorFile(mark.anchor)
+    if (anchored === undefined) {
+      return refused([v('--finding', 'guard-anchor-not-a-file', visible(mark.anchor),
+        "a finding anchored at a file — a lint guard's rule is read at the anchored file; an omission is answered by a test guard")])
+    }
+    const lintTrees = guardTrees(root, wt, base, cfg, mark, args.files)
+    if (!lintTrees.ok) return refused(lintTrees.violations)
+    const proof = proveLint(root, ctx, cfg, args.plan, mark, lintTrees.value, rule, anchored)
+    if (!proof.ok) return refused(proof.violations)
+    const journaled = journalGuard(root, args.plan, {
+      ...markOf(mark), kind: 'lint', rule, ...treesOf(root, base, lintTrees.value, args.files), spots: proof.value.spots, ms: proof.value.ms,
+    })
+    if (!journaled.ok) return refused(journaled.violations)
+    ctx.out(`guard: proven ${visible(mark.anchor)} · lint ${rule.tool}:${rule.rule} — red on round ${mark.run.round}'s tree, green now`)
+    const n = proof.value.spots
+    if (n > 0) {
+      ctx.out(n === 1
+        ? "note: 1 other spot on the current tree — lint reads it as this plan's until it is fixed"
+        : `note: ${n} other spots on the current tree — lint reads them as this plan's until they are fixed`)
+    }
+    return EXIT.OK
   }
 
   // The test guard: the command is checked before anything runs, and its template is what is granted.

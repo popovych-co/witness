@@ -8,13 +8,16 @@ import { definitionFor, withBaseScripts } from './definitions.js'
 import { stateCommit, stateDirs } from './gitio.js'
 import { appendEntry, entryLine, journalRel, type Entry } from './journal.js'
 import { loadFailures, mergeReports, reportFiles, type TestOutcome } from './junit.js'
+import { trustedNow } from './allowlist.js'
+import { readPart, type Diagnostic } from './diagnostics.js'
+import { RULE_RE } from './lint-readers.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
 import { lensesRan, runsSinceReset, type GateRunEntry } from './rounds.js'
 import { execCommand, interrupted } from './runner.js'
 import { withRunnerTurn } from './runner-lock.js'
 import { inScratch, type CfStep } from './scratch-checkout.js'
-import type { ReaderTool } from './settings.js'
+import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { snapshotTree } from './snapshot.js'
 import { isTestPath } from './switch-offs.js'
 import { visible } from './toon.js'
@@ -262,4 +265,69 @@ export function proveTest(
     if (notGreen !== undefined) return refuse([notGreen])
     return ok({ ms: Date.now() - t0 })
   })
+}
+
+// ── The lint proof ───────────────────────────────────────────────────────────────────────────
+
+// `<tool>:<rule>`, split at the first `:` (clippy's `clippy::x` keeps its colons): a reader tool
+// and a rule id the readers can report (RULE_RE).
+export function parseRule(raw: string): { tool: ReaderTool; rule: string } | undefined {
+  const at = raw.indexOf(':')
+  if (at < 0) return undefined
+  const tool = raw.slice(0, at)
+  const rule = raw.slice(at + 1)
+  return (READER_TOOLS as readonly string[]).includes(tool) && RULE_RE.test(rule) ? { tool: tool as ReaderTool, rule } : undefined
+}
+
+const UNTRUSTED_WANT = 'a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation'
+
+// Row 280. The reader of `rule.tool` runs once on each tree in the scratch, with no turn (lint takes
+// none, row 255; C43) and at error severity only (row 262: a warn-level rule never reads red). Red:
+// the rule fires on the anchored file of the red tree — the round's own bytes, which the overlay never
+// holds — and, given `copy`, on the breadth copy beside it too. Green: it fires nowhere in the
+// anchored file now (a fix that deleted the file is green). `spots`: the rule's diagnostics on every
+// other file of the current tree — until T4b's tolerated sets, lint reads them as the plan's. A report
+// the reader cannot read is not measured (`reader-unread`), never a red.
+export function proveLint(
+  root: string, ctx: Ctx, cfg: Config, plan: string, mark: GuardMark, trees: GuardTrees,
+  rule: { tool: ReaderTool; rule: string }, anchored: string, copy?: string,
+): Result<{ spots: number; ms: number }> {
+  const cmd = cfg.readers[rule.tool]
+  if (cmd === undefined) {
+    return refuse([v(`readers.${rule.tool}`, 'reader-unset', 'none', `the command printing ${rule.tool}'s report — witness migrate proposes one; a lint guard reads its rule there`)])
+  }
+  if (!trustedNow(root, ctx.env, cmd)) return refuse([v(`readers.${rule.tool}`, 'untrusted-blocked', cmd, UNTRUSTED_WANT)])
+  const t0 = Date.now()
+  const read = (tree: string): Result<Diagnostic[]> => {
+    const r = inScratch(root, ctx, cfg, { tree, plan }, (dir): Result<CfStep<Diagnostic[]>> => {
+      const part = readPart(dir, ctx, rule.tool, cmd)
+      return part.ok ? ok({ value: part.value.diagnostics, load: [] }) : part
+    })
+    if (r.ok) return ok(r.value.value)
+    const why = r.violations[0]!
+    // A reader's own failures read not measured; the scratch's refusals (and a signal) keep their rule.
+    if (why.field === `readers.${rule.tool}` && why.rule !== 'run-interrupted') {
+      return refuse([v(`readers.${rule.tool}`, 'reader-unread', why.got, `a report the reader prints — ${rule.tool}'s was not read; not measured, never a red`)])
+    }
+    return r
+  }
+  const hits = (ds: readonly Diagnostic[], file: string) => ds.filter((d) => d.tool === rule.tool && d.rule === rule.rule && d.file === file).length
+  const red = read(trees.red)
+  if (!red.ok) return red
+  const shown = `${rule.tool}:${rule.rule}`
+  if (hits(red.value, anchored) === 0) {
+    return refuse([v('--rule', 'guard-not-red', visible(shown),
+      `a rule that reports an error on ${visible(anchored)} in round ${mark.run.round}'s tree, the code the reviewer flagged — it reports none there (a warn-level rule never counts)`)])
+  }
+  if (copy !== undefined && hits(red.value, copy) === 0) {
+    return refuse([v('--rule', 'guard-too-narrow', visible(shown), `a rule that catches this shape of code, not this file's path or names — it missed ${visible(copy)}, a copy with renamed locals and changed indentation`)])
+  }
+  const green = read(trees.green)
+  if (!green.ok) return green
+  const left = hits(green.value, anchored)
+  if (left > 0) {
+    return refuse([v('--rule', 'guard-not-green', visible(shown), `a fix the rule no longer flags — it still reports ${left} on ${visible(anchored)} now`)])
+  }
+  const spots = green.value.filter((d) => d.tool === rule.tool && d.rule === rule.rule && d.file !== anchored).length
+  return ok({ spots, ms: Date.now() - t0 })
 }
