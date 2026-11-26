@@ -218,7 +218,7 @@ describe('witness guard — a lint guard (row 280)', () => {
   }, 180_000)
 
   it('a rule that still fires on the anchored file now is no guard (guard-not-green)', async () => {
-    const b = await lintBench({ rule: { word: 'prev' } })   // a parameter: the breadth copy keeps it
+    const b = await lintBench({ rule: { word: 'return' } })   // a keyword: the breadth copy keeps it
     const r = await b.guard(LINT_ARGS)
     expect(r.code).toBe(1)
     expect(r.stderr).toContain('guard-not-green')
@@ -278,8 +278,21 @@ describe('witness guard — the breadth copy (row 280)', () => {
     const r = await b.guard(LINT_ARGS)
     expect(r.code).toBe(1)
     expect(r.stderr).toContain('guard-too-narrow')
-    expect(r.stderr).toContain('src/token-witness-breadth.ts')
     expect(b.guards()).toEqual([])
+  }, 180_000)
+
+  it("a rule scoped to the anchored file and the copy's old fixed name is still too narrow: the copy's name is drawn each run (slice 2 review I1)", async () => {
+    const b = await lintBench({ rule: { files: ['src/token.ts', 'src/token-witness-breadth.ts'] } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('guard-too-narrow')
+  }, 180_000)
+
+  it("a rule matching a parameter's name is too narrow (slice 2 review I2)", async () => {
+    const b = await lintBench({ rule: { word: 'prev' } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('guard-too-narrow')
   }, 180_000)
 
   it("a rule matching a local's name is too narrow", async () => {
@@ -294,19 +307,15 @@ describe('witness guard — the breadth copy (row 280)', () => {
     const b = await lintBench()
     const r = await b.guard(LINT_ARGS)
     expect(r.code, r.stderr).toBe(0)
-    expect(b.guards()[0]).toMatchObject({ breadth: 'src/token-witness-breadth.ts' })
+    expect((b.guards()[0] as { breadth?: string }).breadth).toMatch(/^src\/[a-z]{8}\.ts$/)
   }, 180_000)
 
-  it('a lint guard on a file outside the JS/TS family refuses breadth-unprobed; a file at the copy\'s name refuses breadth-name-taken', async () => {
+  it('a lint guard on a file outside the JS/TS family refuses breadth-unprobed', async () => {
     const b = await lintBench({ anchor: 'src/lib.rs' })
     const r = await b.guard(['--finding', 'src/lib.rs', '--files', 'fake-lint.json', '--rule', 'biome:lint/test/noSwallow'])
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('breadth-unprobed')
     expect(r.stderr).toContain('--book guards')
-    const c = await lintBench({ main: { 'src/token-witness-breadth.ts': 'export {}\n' } })
-    const taken = await c.guard(LINT_ARGS)
-    expect(taken.code).toBe(2)
-    expect(taken.stderr).toContain('breadth-name-taken')
-    expect([...b.guards(), ...c.guards()]).toEqual([])
+    expect(b.guards()).toEqual([])
   }, 240_000)
 })

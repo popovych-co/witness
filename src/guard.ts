@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { breadthCopy, breadthPath } from './breadth.js'
+import { breadthCopy, breadthPath, breadthSeed } from './breadth.js'
 import { entryAt, foldOverlay, objectType } from './cf-tree.js'
 import { lstatListed, parentsInTree, planChangeSet, witnessPaths } from './change-set.js'
 import type { Ctx } from './cli.js'
@@ -338,9 +338,9 @@ export function proveLint(
 // ── The breadth copy (C45) ───────────────────────────────────────────────────────────────────
 
 // The blob a lint guard's red tree also holds: the breadth copy of the anchored file as the marking
-// round's tree held it (src/breadth.ts), beside it. Refuses `breadth-unprobed` outside the JS/TS
-// family (the judge books it) and `breadth-name-taken` where that tree already holds a file at the
-// copy's name. Undefined where nothing can be copied — the round's tree unknown (guardTrees refuses
+// round's tree held it (src/breadth.ts), beside it, under a name drawn for this run. Refuses
+// `breadth-unprobed` outside the JS/TS family (the judge books it) and `breadth-name-taken` where that
+// tree already holds a file at the drawn name (a draw of 26^8 — kept as the guard it costs nothing). Undefined where nothing can be copied — the round's tree unknown (guardTrees refuses
 // it next) or lacking the anchored file (the red then finds nothing there).
 export function breadthBlob(root: string, mark: GuardMark, anchored: string): Result<{ path: string; mode: string; sha: string } | undefined> {
   if (langOf(anchored) !== 'ts') {
@@ -349,13 +349,15 @@ export function breadthBlob(root: string, mark: GuardMark, anchored: string): Re
   }
   const tree = mark.run.reviewed_tree
   if (tree === undefined || objectType(root, tree) !== 'tree') return ok(undefined)
-  const path = breadthPath(anchored)
+  // Slice 2 review I1: a name and fresh names drawn for this run alone.
+  const seed = breadthSeed()
+  const path = breadthPath(anchored, seed.stem)
   if (entryAt(root, tree, path) !== undefined) {
     return refuse([v('--finding', 'breadth-name-taken', visible(path), `no file at ${visible(path)} in round ${mark.run.round}'s tree — the breadth copy goes there`)])
   }
   const held = entryAt(root, tree, anchored)
   const text = held?.type === 'blob' ? blobText(root, tree, anchored) : undefined
-  const copy = text === undefined ? undefined : breadthCopy(anchored, text)
+  const copy = text === undefined ? undefined : breadthCopy(anchored, text, seed)
   if (copy === undefined) return ok(undefined)
   try {
     const sha = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: copy.text, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
