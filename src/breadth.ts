@@ -51,7 +51,8 @@ export function breadthPath(path: string, stem: string): string {
 // `text` with everything that is not code — `//` and `/* */` comments, '…' and "…" strings, a
 // template's text (its `${…}` holes are code), regex literals — blanked to spaces (line breaks
 // kept), so every offset still points into `text`.
-// `jsx`: a .tsx or .jsx file, where a quote right after a word character is JSX text (`Don't`).
+// `jsx`: a file that may hold JSX (any JS-family file but .ts, .mts, .cts), where a quote right after a
+// word character is JSX text (`Don't`).
 function maskCode(text: string, jsx: boolean): string {
   const out = text.split('')
   const blank = (a: number, b: number) => { for (let k = a; k < b && k < out.length; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ' }
@@ -90,8 +91,8 @@ function maskCode(text: string, jsx: boolean): string {
         blank(i, j); i = j; value(); continue
       }
     }
-    // Final review I2: in a JSX file a quote right after a word character is JSX text (`Don't`), never a
-    // string's opener; elsewhere (`return'x'`) it opens one (security review).
+    // Final review I2: in a file that may hold JSX a quote right after a word character is JSX text
+    // (`Don't`), never a string's opener; in a .ts file (`return'x'`) it opens one (security review).
     if ((c === "'" || c === '"') && !(jsx && /[\w$]/.test(text[i - 1] ?? ''))) {
       let j = i + 1
       while (j < text.length && text[j] !== c && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1
@@ -300,7 +301,8 @@ function bindings(m: string): Binding[] {
 // every line's leading spaces and tabs doubled. Undefined outside the JS/TS family.
 export function breadthCopy(path: string, text: string, seed: BreadthSeed): { path: string; text: string } | undefined {
   if (langOf(path) !== 'ts') return undefined
-  const masked = maskCode(text, /\.[jt]sx$/.test(path))
+  // JSX may sit in any JS-family file but a .ts, .mts or .cts one (security review).
+  const masked = maskCode(text, !/\.[mc]?ts$/.test(path))
   const found = bindings(masked)
   const words = [...masked.matchAll(/(?<![\w$])[A-Za-z_$][\w$]*/g)].map((x) => x[0])
   let prefix = seed.prefix

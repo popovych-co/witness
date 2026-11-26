@@ -64,6 +64,7 @@ describe('the breadth copy (row 280)', () => {
     expect(copy('const { retries = () => 3, timeout } = o\nuse(retries, timeout)\n'))
       .toBe('const { retries: $wb0 = () => 3, timeout: $wb1 } = o\nuse($wb0, $wb1)\n')
     expect(copy("const count = 1\nconst el = <p>Don't {count}</p>\n", 'src/a.tsx')).toBe("const $wb0 = 1\nconst $wb1 = <p>Don't {$wb0}</p>\n")
+    expect(copy("const count = 1\nconst el = <p>Don't {count}</p>\n", 'src/a.js')).toBe("const $wb0 = 1\nconst $wb1 = <p>Don't {$wb0}</p>\n")
   })
 
   it('a quote after a word is JSX text only in a .tsx or .jsx file, and a primitive type name a file binds is renamed (security review)', () => {
