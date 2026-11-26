@@ -7,7 +7,7 @@ import { loadConfig } from '../config.js'
 import { diffBase } from '../evidence.js'
 import { primaryRoot } from '../gitio.js'
 import {
-  anchorFile, breadthBlob, findMark, guardTrees, journalGuard, overlayRefusal, parseRule, proveLint, proveTest, testRun, type GuardEntry,
+  UNMEASURED_RULES, anchorFile, breadthBlob, findMark, guardTrees, journalGuard, noteUnmeasured, overlayRefusal, parseRule, proveLint, proveTest, testRun, type GuardEntry,
   type GuardMark, type GuardTrees,
 } from '../guard.js'
 import { refuseHeld } from '../held.js'
@@ -110,23 +110,31 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   }
   const overlay = overlayRefusal(root, wt, cfg, mark.anchor, args.files)
   if (overlay !== undefined) return refused([overlay])
+  // Final review I4: from here a refusal the environment or witness causes is kept for the anchor, so
+  // the guards check and the judge read it; a proof clears it.
+  const out = (rows: Violation[]): number => {
+    const why = rows.find((x) => UNMEASURED_RULES.has(x.rule))
+    if (why !== undefined) noteUnmeasured(root, args.plan, mark.anchor, why.rule)
+    return refused(rows)
+  }
   if (rule !== undefined) {
     const anchored = anchorFile(mark.anchor)
     if (anchored === undefined) {
-      return refused([v('--finding', 'guard-anchor-not-a-file', visible(mark.anchor),
+      return out([v('--finding', 'guard-anchor-not-a-file', visible(mark.anchor),
         "a finding anchored at a file — a lint guard's rule is read at the anchored file; an omission is answered by a test guard")])
     }
     const copy = breadthBlob(root, mark, anchored)
-    if (!copy.ok) return refused(copy.violations)
+    if (!copy.ok) return out(copy.violations)
     const lintTrees = guardTrees(root, wt, base, cfg, mark, args.files, copy.value !== undefined ? [copy.value] : undefined)
-    if (!lintTrees.ok) return refused(lintTrees.violations)
+    if (!lintTrees.ok) return out(lintTrees.violations)
     const proof = proveLint(root, ctx, cfg, args.plan, mark, lintTrees.value, rule, anchored, copy.value?.path)
-    if (!proof.ok) return refused(proof.violations)
+    if (!proof.ok) return out(proof.violations)
     const journaled = journalGuard(root, args.plan, {
       ...markOf(mark), kind: 'lint', rule, ...treesOf(root, base, lintTrees.value, args.files),
       ...(copy.value !== undefined ? { breadth: copy.value.path } : {}), spots: proof.value.spots, ms: proof.value.ms,
     })
-    if (!journaled.ok) return refused(journaled.violations)
+    if (!journaled.ok) return out(journaled.violations)
+    noteUnmeasured(root, args.plan, mark.anchor, undefined)
     ctx.out(`guard: proven ${visible(mark.anchor)} · lint ${rule.tool}:${rule.rule} — red on round ${mark.run.round}'s tree, green now`)
     const n = proof.value.spots
     if (n > 0) {
@@ -139,10 +147,10 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
 
   // The test guard: the command is checked before anything runs, and its template is what is granted.
   const planned = testRun(cfg, args.files)
-  if (!planned.ok) return refused(planned.violations)
+  if (!planned.ok) return out(planned.violations)
   const trust = await ensureTrusted(root, ctx, planned.value.template)
   if (trust !== 'trusted') {
-    return refused([v(planned.value.source, `untrusted-${trust}`, planned.value.template,
+    return out([v(planned.value.source, `untrusted-${trust}`, planned.value.template,
       trust === 'blocked'
         ? (hasControl(planned.value.template) ? UNGRANTABLE : 'a trusted command — witness next names the grant to make, or set WITNESS_TRUST_CMDS=1 for automation')
         : 'trust was declined')])
@@ -150,14 +158,15 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
   // Slice 2 review I3 (b): with criteria.byFile, the attribution tree too, for a finding at a file.
   const attribute = cfg.criteria.byFile !== undefined ? anchorFile(mark.anchor) : undefined
   const trees = guardTrees(root, wt, base, cfg, mark, args.files, undefined, attribute)
-  if (!trees.ok) return refused(trees.violations)
+  if (!trees.ok) return out(trees.violations)
   const proof = proveTest(root, ctx, cfg, args.plan, mark, trees.value, args.tests, args.files)
-  if (!proof.ok) return refused(proof.violations)
+  if (!proof.ok) return out(proof.violations)
   const journaled = journalGuard(root, args.plan, {
     ...markOf(mark), kind: 'test', tests: [...args.tests], ...treesOf(root, base, trees.value, args.files), ms: proof.value.ms,
     ...(proof.value.attributed !== undefined ? { attributed: proof.value.attributed } : {}),
   })
-  if (!journaled.ok) return refused(journaled.violations)
+  if (!journaled.ok) return out(journaled.violations)
+  noteUnmeasured(root, args.plan, mark.anchor, undefined)
   ctx.out(`guard: proven ${visible(mark.anchor)} · test ${args.tests.length} named — red on round ${mark.run.round}'s tree, green now`)
   return EXIT.OK
 }

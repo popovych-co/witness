@@ -106,6 +106,6 @@ export function checksSignature(checks: readonly GateCheck[]): string {
       ? `:owes=${c.owes.map((o) => `${o.kind}@${o.key}`).sort().join('+')}`
       : ''}${
     c.guards !== undefined
-      ? `:guards=${c.guards.filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => anchorHash(g.anchor)).sort().join('+')}`
+      ? `:guards=${c.guards.filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => `${anchorHash(g.anchor)}${g.unmeasured !== undefined ? `!${g.unmeasured}` : ''}`).sort().join('+')}`
       : ''}`).sort().join('|')
 }

@@ -51,7 +51,9 @@ export function guardsOwed(run: GateRunEntry): string[] {
   return (run.checks.find((c) => c.name === 'guards')?.guards ?? [])
     .filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => g.anchor)
 }
-export interface GuardVerdict { anchor: string; mark: 'lint' | 'test'; state: GuardState; kind?: 'lint' | 'test'; moved?: string[] }
+// Final review I4: `unmeasured`, on an owed or stale anchor, the rule of the last attempt witness could
+// not measure (machine-local, src/guard.ts) — what the judge reads to book it.
+export interface GuardVerdict { anchor: string; mark: 'lint' | 'test'; state: GuardState; kind?: 'lint' | 'test'; moved?: string[]; unmeasured?: string }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
 // first new copy's line number, `count` the copies beyond the base's, the rule ids it names, whether a

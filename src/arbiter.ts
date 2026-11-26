@@ -232,7 +232,7 @@ function guardFacts(c: GateCheck): string[] {
   return [
     `${gs.length} marked`, `${count('proven')} proven`, `${count('waived')} waived`,
     `${owed.length} owed (lint ${owed.filter((g) => g.mark === 'lint').length}, test ${owed.filter((g) => g.mark === 'test').length})`,
-    ...owed.map((g) => `owed ${visible(g.anchor)}`),
+    ...owed.map((g) => `owed ${visible(g.anchor)}${g.unmeasured !== undefined ? ` (not measured: ${g.unmeasured})` : ''}`),
   ]
 }
 

@@ -10,6 +10,9 @@ import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { ENTRY_PROGRESS } from '../src/progress.js'
 import { ACT_KINDS } from '../src/slice.js'
 import { snapshotTree } from '../src/snapshot.js'
+import { guardsCheck } from '../src/guard.js'
+import { checkFacts } from '../src/arbiter.js'
+import { checksSignature } from '../src/checks.js'
 import type { GuardKind } from '../src/verdict.js'
 import { DEFAULT_DEFINITIONS } from '../src/definitions.js'
 import { worktreePath } from '../src/worktree.js'
@@ -332,9 +335,21 @@ describe('witness guard — attribution (row 280, slice 2 review I3)', () => {
       test: `import { expect, it } from 'vitest'\nimport { later } from '../src/clock'\nit('${NAME}', () => { expect(later()).toBe(1) })\n`,
     })
     const r = await b.guard(TEST_ARGS)
-    expect(r.code).toBe(1)
-    expect(r.stderr).toContain('guard-not-attributable')
+    expect(r.code).toBe(2)                                           // not measured: the judge may book it (final review I4)
+    expect(r.stderr).toContain('guard-unattributed')
+    expect(r.stderr).toContain('--book guards --finding src/token.ts')
     expect(b.guards()).toEqual([])
+  }, 240_000)
+
+  it('a fix outside the anchored file proves: with the anchored file unchanged since the round, attribution is skipped and said (final review I4)', async () => {
+    const via = (ratio: string) => ({
+      'src/clock.ts': `export const ratio = () => ${ratio}\n`,
+      'src/token.ts': "import { ratio } from './clock'\nexport function rotateDue(elapsed: number, ttl: number): boolean {\n  return elapsed >= ttl * ratio()\n}\nexport function nextToken(prev: string): string {\n  return prev\n}\n",
+    })
+    const b = await bench({ before: via('2'), after: via('0.8') })
+    const r = await b.guard(TEST_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    expect(b.guards()[0]).toMatchObject({ kind: 'test', attributed: false })
   }, 240_000)
 
   it("a named case from a test file outside the guard's own files refuses guard-not-attributable (full suite)", async () => {
@@ -347,5 +362,19 @@ describe('witness guard — attribution (row 280, slice 2 review I3)', () => {
     expect(r.stderr).toContain('guard-not-attributable')
     expect(b.guards()).toEqual([])
   }, 240_000)
+})
+
+describe('witness guard — what witness could not measure reaches the judge (final review I4)', () => {
+  it('a not-measured refusal is kept for the anchor: the guards check and the arbiter facts name it; a proof clears it', async () => {
+    const b = await lintBench({ anchor: 'src/lib.rs' })
+    const r = await b.guard(['--finding', 'src/lib.rs', '--files', 'fake-lint.json', '--rule', 'biome:lint/test/noSwallow'])
+    expect(r.stderr).toContain('breadth-unprobed')
+    const c = guardsCheck(b.repo.root, b.wt, b.planId, 'implement')
+    expect(c).toMatchObject({ ok: false, guards: [{ anchor: 'src/lib.rs', state: 'owed', unmeasured: 'breadth-unprobed' }] })
+    expect(c.detail).toContain('not measured: breadth-unprobed — the judge may book it')
+    expect(checkFacts(c)).toContain('owed src/lib.rs (not measured: breadth-unprobed)')
+    const unmarked = { ...c, guards: c.guards!.map((g) => ({ ...g, unmeasured: undefined })) }
+    expect(checksSignature([c])).not.toBe(checksSignature([unmarked]))
+  }, 180_000)
 })
 

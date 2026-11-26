@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs'
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { breadthCopy, breadthPath, breadthSeed } from './breadth.js'
 import { entryAt, foldOverlay, objectType } from './cf-tree.js'
@@ -6,6 +6,7 @@ import { lstatListed, parentsInTree, planChangeSet, witnessPaths } from './chang
 import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
 import { definitionFor, withBaseScripts } from './definitions.js'
+import { liveFolder } from './deadline.js'
 import { stateCommit, stateDirs } from './gitio.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { loadFailures, mergeReports, reportFiles, type TestOutcome } from './junit.js'
@@ -130,7 +131,9 @@ export function overlayRefusal(root: string, wt: string, cfg: Config, anchor: st
 // indirection, never the plan's or the overlay's.
 // Slice 2 review I3: `attrib`, when asked for, the current tree with only the anchored file as the
 // marking round held it (through the base's scripts too): a test guard's attribution run.
-export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string }
+// Final review I4: `attributable: false` when attribution was asked for but the anchored file is the
+// same in the round's tree and now — the attribution tree would be the green tree, attributing nothing.
+export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string; attributable?: false }
 
 export function guardTrees(
   root: string, wt: string, base: string, cfg: Config, mark: GuardMark, overlay: readonly string[],
@@ -152,6 +155,9 @@ export function guardTrees(
   const green = withBaseScripts(root, base, current, cfg.checks.definitions)
   if (!green.ok) return green
   if (attribute === undefined) return ok({ pinned, current, red: red.value, green: green.value })
+  if (entryAt(root, pinned, attribute)?.sha === entryAt(root, current, attribute)?.sha) {
+    return ok({ pinned, current, red: red.value, green: green.value, attributable: false })
+  }
   const back = foldOverlay(root, current, { from: pinned, paths: [attribute] })
   if (!back.ok) return back
   const attrib = withBaseScripts(root, base, back.value, cfg.checks.definitions)
@@ -297,7 +303,8 @@ export function proveTest(
     // anchored file put back as the round held it. Named cases all passing there were red for another
     // reason (code the plan changed since) — no guard of this finding. A tree that cannot be read is
     // said in the entry (`attributed: false`), never a refusal: a fix spanning files may not load there.
-    if (trees.attrib === undefined || cfg.criteria.byFile === undefined) return ok({ ms: Date.now() - t0 })
+    if (cfg.criteria.byFile === undefined) return ok({ ms: Date.now() - t0 })
+    if (trees.attrib === undefined) return ok({ ms: Date.now() - t0, ...(trees.attributable === false ? { attributed: false } : {}) })
     const back = run(trees.attrib)
     if (!back.ok) {
       if (back.violations.some((x) => x.rule === 'run-interrupted')) return back
@@ -307,8 +314,10 @@ export function proveTest(
     const seen = (n: string) => cases.filter((t) => t.name === n)
     if (names.some((n) => seen(n).length === 0)) return ok({ ms: Date.now() - t0, attributed: false })
     if (names.every((n) => seen(n).every((t) => t.status === 'passed'))) {
-      return refuse([v('--test', 'guard-not-attributable', namesGot(names),
-        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so their red on that round came from other changes`)])
+      // Final review I4: not measured, never a finding — a fix that spans files reads the same way as a red
+      // from unrelated changes, so the judge decides.
+      return refuse([v('--test', 'guard-unattributed', namesGot(names),
+        `tests that fail with only ${visible(mark.anchor)} put back as round ${mark.run.round} held it — these pass there, so witness cannot tie their red to that file; if the guard is right, the judge or a human may book it: witness decide ${shellWord(mark.gate)} ${shellWord(mark.run.artifact)} --book guards --finding ${shellWord(mark.anchor)}`)])
     }
     return ok({ ms: Date.now() - t0, attributed: true })
   })
@@ -440,6 +449,7 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
   const window = entries.slice(lastResetIndex(entries, gate) + 1)
   const proofs = window.filter((e) => e.t === 'guard' && e.gate === gate) as unknown as GuardEntry[]
   const waived = waivedAnchors(window, gate)
+  const unmeasured = unmeasuredOf(root, plan)
   const verdicts: GuardVerdict[] = marks.map((m) => {
     // A fresh proof reads proven; otherwise a booking reads waived (final review I1: a stale guard the
     // judge or the human books must not stay stale); otherwise stale, or owed.
@@ -447,16 +457,18 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
     const moved = g === undefined ? [] : Object.entries(g.files ?? {}).filter(([p, sha]) => blobNow(wt, p) !== sha).map(([p]) => p).sort()
     if (g !== undefined && moved.length === 0) return { anchor: m.anchor, mark: m.mark, state: 'proven', kind: g.kind }
     if (waived.has(m.anchor)) return { anchor: m.anchor, mark: m.mark, state: 'waived' }
-    if (g !== undefined) return { anchor: m.anchor, mark: m.mark, state: 'stale', kind: g.kind, moved }
-    return { anchor: m.anchor, mark: m.mark, state: 'owed' }
+    const why = unmeasured[m.anchor] !== undefined ? { unmeasured: unmeasured[m.anchor] } : {}
+    if (g !== undefined) return { anchor: m.anchor, mark: m.mark, state: 'stale', kind: g.kind, moved, ...why }
+    return { anchor: m.anchor, mark: m.mark, state: 'owed', ...why }
   })
   const ok = verdicts.every((x) => x.state === 'proven' || x.state === 'waived')
   const seg = (x: GuardVerdict): string => {
     const a = visible(x.anchor)
     if (x.state === 'proven') return `proven: ${a} (${x.kind})`
     if (x.state === 'waived') return `waived: ${a}`
-    if (x.state === 'stale') return `stale: ${a} (${x.kind} guard; ${x.moved!.map(visible).join(', ')} changed since its proof) — ${guardAct(plan, x.anchor)}`
-    return `owed: ${a} (${x.mark}) — ${guardAct(plan, x.anchor)}`
+    const why = x.unmeasured !== undefined ? `; not measured: ${x.unmeasured} — the judge may book it` : ''
+    if (x.state === 'stale') return `stale: ${a} (${x.kind} guard; ${x.moved!.map(visible).join(', ')} changed since its proof${why}) — ${guardAct(plan, x.anchor)}`
+    return `owed: ${a} (${x.mark}${why}) — ${guardAct(plan, x.anchor)}`
   }
   return { name: 'guards', ok, detail: verdicts.map(seg).join(' · '), guards: verdicts }
 }
@@ -472,4 +484,46 @@ function waivedAnchors(window: readonly Entry[], gate: GuardGate): Set<string> {
     for (const f of book.findings) if (typeof f === 'string') out.add(f)
   }
   return out
+}
+
+// ── What witness could not measure (final review I4) ─────────────────────────────────────────
+
+// The refusals of a measured attempt that are the environment or a limit of witness, never the
+// author's check failing: what the judge may book.
+export const UNMEASURED_RULES: ReadonlySet<string> = new Set([
+  'tree-unknown', 'snapshot-failed', 'breadth-unprobed', 'load-failure', 'guard-not-run', 'guard-unattributed', 'reader-unread', 'guard-no-report',
+])
+
+// Machine-local, under `.witness/live/guards/<plan>.json` (anchor → the last such rule): a refusal
+// journals nothing, so this is how the guards check — and through it the judge — learns of it. Best
+// effort; read back only as rules of the set above.
+const unmeasuredFile = (root: string, plan: string, create: boolean): string | undefined => {
+  const dir = liveFolder(root, 'guards', create)
+  return dir === undefined ? undefined : join(dir, `${plan}.json`)
+}
+
+export function unmeasuredOf(root: string, plan: string): Record<string, string> {
+  const p = unmeasuredFile(root, plan, false)
+  if (p === undefined) return {}
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as unknown
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    return Object.fromEntries(Object.entries(raw as Record<string, unknown>)
+      .filter((e): e is [string, string] => typeof e[1] === 'string' && UNMEASURED_RULES.has(e[1])))
+  } catch {
+    return {}
+  }
+}
+
+export function noteUnmeasured(root: string, plan: string, anchor: string, rule: string | undefined): void {
+  const p = unmeasuredFile(root, plan, true)
+  if (p === undefined) return
+  const next = { ...unmeasuredOf(root, plan) }
+  if (rule === undefined) delete next[anchor]
+  else next[anchor] = rule
+  try {
+    const tmp = `${p}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(next))
+    renameSync(tmp, p)
+  } catch { /* best effort: the facts then read a plain owed */ }
 }
