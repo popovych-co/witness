@@ -21,9 +21,7 @@ import { langOf } from './switch-offs.js'
 const KEYWORDS = new Set(('break case catch class const continue debugger default delete do else enum export extends false finally '
   + 'for function if import in instanceof new null return super switch this throw true try typeof var void while with yield let '
   + 'static implements interface package private protected public await async as from of get set type declare namespace module '
-  + 'abstract readonly keyof infer is asserts satisfies override accessor unique never unknown any '
-  // Final review I2: the primitive type names, never a local's.
-  + 'string number boolean object symbol bigint undefined constructor').split(' '))
+  + 'abstract readonly keyof infer is asserts satisfies override accessor unique never unknown any constructor').split(' '))
 // The words after which a `/` opens a regex literal rather than dividing.
 const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'])
 // The characters after which a `/` opens a regex literal.
@@ -53,7 +51,8 @@ export function breadthPath(path: string, stem: string): string {
 // `text` with everything that is not code — `//` and `/* */` comments, '…' and "…" strings, a
 // template's text (its `${…}` holes are code), regex literals — blanked to spaces (line breaks
 // kept), so every offset still points into `text`.
-function maskCode(text: string): string {
+// `jsx`: a .tsx or .jsx file, where a quote right after a word character is JSX text (`Don't`).
+function maskCode(text: string, jsx: boolean): string {
   const out = text.split('')
   const blank = (a: number, b: number) => { for (let k = a; k < b && k < out.length; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ' }
   const holes: number[] = []   // per open template hole, its brace depth
@@ -91,8 +90,9 @@ function maskCode(text: string): string {
         blank(i, j); i = j; value(); continue
       }
     }
-    // Final review I2: a quote right after a word character is JSX text (`Don't`), never a string's opener.
-    if ((c === "'" || c === '"') && !/[\w$]/.test(text[i - 1] ?? '')) {
+    // Final review I2: in a JSX file a quote right after a word character is JSX text (`Don't`), never a
+    // string's opener; elsewhere (`return'x'`) it opens one (security review).
+    if ((c === "'" || c === '"') && !(jsx && /[\w$]/.test(text[i - 1] ?? ''))) {
       let j = i + 1
       while (j < text.length && text[j] !== c && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1
       j = Math.min(j + 1, text.length)
@@ -300,7 +300,7 @@ function bindings(m: string): Binding[] {
 // every line's leading spaces and tabs doubled. Undefined outside the JS/TS family.
 export function breadthCopy(path: string, text: string, seed: BreadthSeed): { path: string; text: string } | undefined {
   if (langOf(path) !== 'ts') return undefined
-  const masked = maskCode(text)
+  const masked = maskCode(text, /\.[jt]sx$/.test(path))
   const found = bindings(masked)
   const words = [...masked.matchAll(/(?<![\w$])[A-Za-z_$][\w$]*/g)].map((x) => x[0])
   let prefix = seed.prefix

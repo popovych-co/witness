@@ -66,6 +66,11 @@ describe('the breadth copy (row 280)', () => {
     expect(copy("const count = 1\nconst el = <p>Don't {count}</p>\n", 'src/a.tsx')).toBe("const $wb0 = 1\nconst $wb1 = <p>Don't {$wb0}</p>\n")
   })
 
+  it('a quote after a word is JSX text only in a .tsx or .jsx file, and a primitive type name a file binds is renamed (security review)', () => {
+    expect(copy("const name = 1\nfunction g() { return'name' }\n")).toBe("const $wb0 = 1\nfunction $wb1() { return'name' }\n")
+    expect(copy('let number = 5\nconsole.log(number)\n')).toBe('let $wb0 = 5\nconsole.log($wb0)\n')
+  })
+
   it("renames the member names the file declares and their this. uses, never another object's (final review I3)", () => {
     expect(copy('class Repo {\n  storedRow(id) {\n    return this.storedRow(id) ?? other.storedRow(id)\n  }\n}\n'))
       .toBe('class $wb0 {\n    $wb1($wb2) {\n        return this.$wb1($wb2) ?? other.storedRow($wb2)\n    }\n}\n')
