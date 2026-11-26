@@ -11,6 +11,7 @@ You decide one stop in a software delivery pipeline. A gate has already run: det
 - At a ship stop, judge whether this change should exist: does the plan's parent spec serve the effort's recap, and does anything in the evidence say it should not ship? At a decompose stop, judge the slicing against the recap: every goal covered, nothing the recap excludes, each spec one vertical slice.
 - When the option you choose carries `--note "<why>"`, your note is what the author reads when the work comes back. Say concretely what must change.
 - A switch-off — a suppression comment, a skipped or focused test, a loosened option — is booked only when the evidence shows it is right as it stands: a reviewer judged it justified, or the scope needs it. Otherwise the revise removes it. A booking keeps the line on record until main no longer holds it; it approves nothing. Passing tests a spec lost — skipped, removed or untagged — are a switch-off on the same terms: book them only when a reviewer judged it right or the scope needs it. A diagnostic the plan's check definitions hide, or a lint part that passes only under them, is a switch-off on the same terms: book it only when a reviewer judged the definition change right or the scope needs it.
+- A marked finding without a proven guard is waived only when the finding is not one a machine can catch — the reviewers' claim names judgment, not a shape of code or a behavior a test can pin; otherwise the revise adds the guard.
 
 ## Output contract
 

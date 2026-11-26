@@ -415,8 +415,15 @@ export function guardsCheck(root: string, wt: string, plan: string, gate: GuardG
   return { name: 'guards', ok, detail: verdicts.map(seg).join(' · '), guards: verdicts }
 }
 
-// The anchors a booking of the gate since its reset waived (row 281, C41): none until Task 9.
+// The anchors a booking of the gate since its reset waived (row 281, C41): a `book` decision of the
+// guards check, its `findings`.
 function waivedAnchors(window: readonly Entry[], gate: GuardGate): Set<string> {
-  void window; void gate
-  return new Set()
+  const out = new Set<string>()
+  for (const e of window) {
+    if (e.t !== 'human-decision' || e.gate !== gate || e.decision !== 'book') continue
+    const book = e.book as { check?: unknown; findings?: unknown } | undefined
+    if (book?.check !== 'guards' || !Array.isArray(book.findings)) continue
+    for (const f of book.findings) if (typeof f === 'string') out.add(f)
+  }
+  return out
 }

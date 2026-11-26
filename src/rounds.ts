@@ -45,6 +45,12 @@ export interface GateCheck {
 // `moved` naming the overlay files changed or gone since), waived (a booking), or owed; `kind` the
 // proven or stale guard's own kind.
 export type GuardState = 'proven' | 'stale' | 'waived' | 'owed'
+
+// Row 281. The anchors a round's guards check holds owed or stale: what a guards booking waives.
+export function guardsOwed(run: GateRunEntry): string[] {
+  return (run.checks.find((c) => c.name === 'guards')?.guards ?? [])
+    .filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => g.anchor)
+}
 export interface GuardVerdict { anchor: string; mark: 'lint' | 'test'; state: GuardState; kind?: 'lint' | 'test'; moved?: string[] }
 
 // Row 273 (§4 T3, C27). One switch-off line the plan adds: its key (token, file, normalized line), the
@@ -204,7 +210,8 @@ export interface DecisionEntry {
   decision: 'approve' | 'revise' | 'revise-upstream' | 'stop' | 'abandon-effort' | 'book'
   // Row 270. A human's booking of a withheld check's red (`decide --book <check>`): the check, and
   // the ledger items it opened or reused, in part order. The gate is then re-run, never settled.
-  book?: { check: string; items: string[] }
+  // Row 281 (C41): a guards booking names the marked anchors it waives in `findings`, and opens no item.
+  book?: { check: string; items: string[]; findings?: string[] }
   override?: boolean
   // Row 109. A revise that buys the one extra round the bound otherwise forbids. Only ever
   // set on a `revise`, only ever at the bound, and only once per budget window — the whole
@@ -791,7 +798,8 @@ export function liveActs(gate: string, target: string, entries: Entry[], facts: 
   // the round's verdicts (row 112's `cached`), so it spends a round, never a battery.
   const failed = lensesRan(anchor) ? anchor.checks.filter((c) => !c.ok) : []
   if (failed.length > 0 && !moved && !atBound && BOOKS.has(state) && blockingAnchorsOf(anchor).length === 0 &&
-      failed.every((c) => bookingsOf(anchor, c.name).length > 0)) {
+      failed.every((c) => (c.name === 'guards' ? guardsOwed(anchor).length > 0 : bookingsOf(anchor, c.name).length > 0))) {
+    // Row 281: a guards red books while its round owes a guard (a decision naming the anchors, no item).
     acts = [...acts, ...failed.map((c) => d('--book', c.name))]
   }
   // A send-upstream with `<effort>` to fill is a slot: no parent resolved, so no exits line lists it.
@@ -828,7 +836,7 @@ function approveTwin(gate: string, target: string, acts: readonly Act[]): Act[] 
 // `decide`'s valued flags: the word after one is its value, never a flag, whatever it spells. One set
 // for `decide`'s parser (`decideWords`) and for `actKey`, so the two never disagree on which word is a
 // value.
-export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via', '--book'])
+export const VALUED_FLAGS: ReadonlySet<string> = new Set(['--note', '--upstream', '--pin', '--via', '--book', '--finding'])
 // The flags that make an act another act (design §4.2.1). Notes, `--pin`, `--via`, `--trust-cmds`,
 // `--manual` and the upstream's value never do.
 const COUNTED_FLAGS: Record<string, readonly string[]> = {
