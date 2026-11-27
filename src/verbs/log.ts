@@ -10,7 +10,7 @@ import { findById, loadCanon } from '../scan.js'
 import { short } from '../sha.js'
 import { stepProgress, stepsLine } from '../steps.js'
 import { kv, logSafe, rows, visible } from '../toon.js'
-import { bookedWhere, looseHeld, offWhere } from '../ledger.js'
+import { bookedWhere, looseHeld, offWhere, ruleShown, toleratedHeld } from '../ledger.js'
 import type { ReaderTool } from '../settings.js'
 import { decidedBy } from '../autonomy.js'
 import { duration } from '../usage.js'
@@ -92,6 +92,12 @@ function detailOf(e: Entry): string {
         const n = Number((e.subject as { cases?: unknown } | undefined)?.cases)
         return `${String(e.id)} booked ${String(e.check)} · tests of ${visible(String(e.spec))} · ${String(e.plan)} ${String(e.gate)} r${String(e.round)} · ${n} case${n === 1 ? '' : 's'}`
       }
+      // Row 284: a tolerated set names its tool and rule, with the spots it holds.
+      if (e.kind === 'tolerated-set') {
+        const spots = (e.subject as { spots?: Record<string, { copies?: unknown }> } | undefined)?.spots ?? {}
+        const held = toleratedHeld(Object.fromEntries(Object.entries(spots).map(([k, s]) => [k, { file: '', copies: Number(s?.copies) }])))
+        return `opened tolerated set ${String(e.id)} · ${String(e.tool)} ${ruleShown(String(e.rule ?? ''))} · ${held}`
+      }
       // Row 278: a booked hidden rule or loosened part names it, with the spots or definitions it holds.
       if (e.kind === 'booked-loosened') {
         const sub = e.subject as { hidden?: Record<string, { copies?: unknown }>; defs?: Record<string, unknown> } | undefined
@@ -109,6 +115,7 @@ function detailOf(e: Entry): string {
     case 'ledger-closed':
       return e.by === 'abandon'
         ? `${String(e.id)} closed — ${String(e.plan)} was abandoned`
+        : e.by === 'guard' ? `${String(e.id)} closed by a re-proof of its guard`
         : `${String(e.id)} closed — gone at the merge of ${String(e.plan)}${e.pr === undefined ? '' : ` (pr #${String(e.pr)})`}`
     case 'ledger-dismissed': return `${String(e.id)} dismissed — ${String(e.cause)}: ${String(e.note)}`
     case 'revise-returned': {

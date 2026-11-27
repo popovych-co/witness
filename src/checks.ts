@@ -11,7 +11,8 @@
 //
 // Row 270 (§3.2's waiver). `waiver` names who may book a check's red: lint's is the human's alone
 // (row 172: the AI judge never books lint). A check with none is never booked. Row 273: a switch-off's
-// is the judge's — the AI judge or the human (§3.2); row 281: so is a guard's.
+// is the judge's — the AI judge or the human (§3.2); row 281: so is a guard's. Row 284: tolerated growth's
+// is the human's alone (§3.2: the AI judge never books it).
 import { createHash } from 'node:crypto'
 import { offUnbooked, timedCheck, type GateCheck } from './rounds.js'
 
@@ -22,6 +23,9 @@ export type CheckWaiver = 'human' | 'judge'
 export const CHECKS: ReadonlyArray<{ name: string; tier: CheckTier; waiver?: CheckWaiver }> = [
   // Row 265. A file scan before the repo's tools: an unresolved conflict is read before it is linted.
   { name: 'markers', tier: 'withholding' },
+  // Row 284 (C46). A new spot of a tolerated rule, which the tool's list hides from the tool: withholding,
+  // the human's to book. Before lint, so a missing Biome `extends` names its own remedy first.
+  { name: 'tolerated', tier: 'withholding', waiver: 'human' },
   { name: 'lint', tier: 'withholding', waiver: 'human' },
   // Row 277. A plan that changes a check definition the base holds waits while drive measures the base's
   // definitions over its tree (C36): red only then, never booked; what it finds is a switch-off.

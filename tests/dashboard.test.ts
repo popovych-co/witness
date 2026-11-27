@@ -191,3 +191,15 @@ describe('status counts the decisions nobody typed (A5)', () => {
     expect((await repo.cli(['status'])).stdout).not.toContain('autonomous:')
   })
 })
+
+describe('a tolerated set where a human reads it (row 284)', () => {
+  it('status lists a tolerated set: its tool, rule and spots (row 284)', async () => {
+    const { bookedRows } = await import('../src/verbs/dashboard.js')
+    const { LEDGER_STREAM } = await import('../src/streams.js')
+    const repo = tmpRepo()
+    appendEntry(repo.root, LEDGER_STREAM, { t: 'ledger-open', id: 'l-00000001', key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: 'p1',
+      gate: 'implement', round: 2, run_id: 'r-1', tool: 'eslint', rule: 'no-x', origin: 'guard', anchor: 'src/token.ts',
+      subject: { spots: { '0123456789abcdef': { file: 'src/a.ts', copies: 1 }, '0123456789abcde0': { file: 'src/b.ts', copies: 1 } } } } as never)
+    expect(bookedRows(repo.root)).toEqual([{ item: 'l-00000001', plan: 'p1', check: 'tolerated', holds: 'eslint no-x tolerated, 2 spots', since: 'implement r2' }])
+  })
+})

@@ -28,14 +28,19 @@ describe('the check registry (row 264)', () => {
     await expect(runChecks([{ name: 'nope', run: () => ({ name: 'nope', ok: true }) }])).rejects.toThrow(/nope/)
     await expect(runChecks([{ name: 'lint', run: () => ({ name: 'tests', ok: true }) }])).rejects.toThrow(/lint/)
   })
-  it("lint's waiver is the human's, guards' and switch-offs' the judge's, and no other check has one (rows 270, 273, 281)", () => {
-    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human'], ['guards', 'judge'], ['switch-offs', 'judge']])
+  it("lint's and tolerated's waiver is the human's, guards' and switch-offs' the judge's, and no other check has one (rows 270, 273, 281, 284)", () => {
+    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['tolerated', 'human'], ['lint', 'human'], ['guards', 'judge'], ['switch-offs', 'judge']])
     expect(checkWaiver('lint')).toBe('human')
     expect(checkWaiver('markers')).toBeUndefined()
   })
   it('a booking made since a round moves the signature: booked is a state term (row 270)', () => {
     const lint = (state: PartState): GateCheck[] => [{ name: 'lint', ok: state === 'booked', parts: [{ part: 'ui', state, key: 'k1' }] }]
     expect(checksSignature(lint('booked'))).not.toBe(checksSignature(lint('not-judged')))
+  })
+  it("tolerated is withholding, the human's to waive, and runs after markers, before lint (row 284)", () => {
+    expect(checkTier('tolerated')).toBe('withholding')
+    expect(checkWaiver('tolerated')).toBe('human')
+    expect(CHECKS.map((c) => c.name).slice(0, 3)).toEqual(['markers', 'tolerated', 'lint'])
   })
   it('lists each check once, the withholding tier first', () => {
     const names = CHECKS.map((c) => c.name)

@@ -3,7 +3,7 @@ import { checkWaiver } from './checks.js'
 import { isId } from './dsl.js'
 import { readStream, type Entry } from './journal.js'
 import { v, type Violation } from './refusal.js'
-import type { GateRunEntry, OffVerdict, PartState } from './rounds.js'
+import type { GateRunEntry, OffVerdict, PartState, ToleratedSpot } from './rounds.js'
 import { RULE_RE } from './lint-readers.js'
 import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { treeReadable } from './snapshot.js'
@@ -28,7 +28,15 @@ import { visible } from './toon.js'
 // (tool, rule) the hidden spots it waives, or one loosened part with its restored definitions' base sides).
 // It closes once main no longer holds what was hidden, or holds the base's definitions again (`mergeCloses`).
 
-export type LedgerKind = 'booked-check' | 'booked-switch-off' | 'booked-dropped' | 'booked-loosened'
+// Row 284 (§3.3, §4 T4). A fifth: `tolerated-set` (per (tool, rule) the old spots of a rule a lint guard's
+// proof found on the base — origin `guard` — or the growth a human booked — origin `book`; check
+// `tolerated`). It applies to its own plan and, once that plan merged, to every plan (src/tolerated.ts);
+// it closes at the merge stamp once the merged tree holds none of its lines, at the abandon, by a
+// re-proof of its guard (`by: 'guard'`), or by `witness dismiss ledger`.
+export type LedgerKind = 'booked-check' | 'booked-switch-off' | 'booked-dropped' | 'booked-loosened' | 'tolerated-set'
+
+// Row 284. A tolerated set holds at most this many keys (as a lint booking, MAX_BOOK_KEYS): past it, none opens.
+export const MAX_TOLERATED_KEYS = 500
 
 // What an item books: the whole part (held at the part's base key: the base commit and its
 // commands, the map's C19), or the multiset of diagnostic keys (16 hex) it covers.
@@ -120,14 +128,38 @@ export interface LoosenedOpen {
   note?: string
 }
 
-export type LedgerOpen = CheckOpen | SwitchOffOpen | DroppedOpen | LoosenedOpen
+// Row 284. A tolerated set: `subject.spots` each key (`diagnosticKey`: tool, rule, file, the line normalized)
+// with its file and copies, 1–MAX_TOLERATED_KEYS keys; `anchor` the guard's finding when `origin` is
+// `guard`. Its key is 16 hex over (kind, check, plan, tool, rule, the spots sorted by key).
+export interface ToleratedOpen {
+  v: 1
+  t: 'ledger-open'
+  id: string
+  key: string
+  kind: 'tolerated-set'
+  check: 'tolerated'
+  plan: string
+  gate: string
+  round: number
+  run_id: string
+  tool: ReaderTool
+  rule: string
+  origin: 'guard' | 'book'
+  anchor?: string
+  subject: { spots: Record<string, ToleratedSpot> }
+  note?: string
+}
 
-// `plan` is the observer: the merging plan, or the abandoned one.
-export interface LedgerClosed { v: 1; t: 'ledger-closed'; id: string; by: 'merge' | 'abandon'; plan: string; pr?: number; tree?: string }
+export type LedgerOpen = CheckOpen | SwitchOffOpen | DroppedOpen | LoosenedOpen | ToleratedOpen
+
+// `plan` is the observer: the merging plan, the abandoned one, or (row 284, `guard`) the plan whose guard's
+// re-proof replaced the set.
+export interface LedgerClosed { v: 1; t: 'ledger-closed'; id: string; by: 'merge' | 'abandon' | 'guard'; plan: string; pr?: number; tree?: string }
 
 export interface LedgerDismissed { v: 1; t: 'ledger-dismissed'; id: string; cause: LedgerCause; note: string }
 
-export type LedgerItem = (Omit<CheckOpen, 'v' | 't'> | Omit<SwitchOffOpen, 'v' | 't'> | Omit<DroppedOpen, 'v' | 't'> | Omit<LoosenedOpen, 'v' | 't'>) & {
+export type LedgerItem = (Omit<CheckOpen, 'v' | 't'> | Omit<SwitchOffOpen, 'v' | 't'> | Omit<DroppedOpen, 'v' | 't'> | Omit<LoosenedOpen, 'v' | 't'>
+  | Omit<ToleratedOpen, 'v' | 't'>) & {
   state: 'open' | 'closed' | 'dismissed'
   end?: LedgerClosed | LedgerDismissed
 }
@@ -139,6 +171,7 @@ export type CheckItem = Extract<LedgerItem, { kind: 'booked-check' }>
 export type SwitchOffItem = Extract<LedgerItem, { kind: 'booked-switch-off' }>
 export type DroppedItem = Extract<LedgerItem, { kind: 'booked-dropped' }>
 export type LoosenedItem = Extract<LedgerItem, { kind: 'booked-loosened' }>
+export type ToleratedItem = Extract<LedgerItem, { kind: 'tolerated-set' }>
 
 // Row 278. A rule id as a human reads it: a rule-less diagnostic says so.
 export const ruleShown = (rule: string): string => (rule === '' ? '(no rule)' : visible(rule))
@@ -147,8 +180,10 @@ export const ruleShown = (rule: string): string => (rule === '' ? '(no rule)' : 
 // spec's tests — spelled out. Row 278: a hidden rule, or a loosened part.
 export function bookedWhere(x:
   | { kind: 'booked-switch-off'; token: string; file: string } | { kind: 'booked-dropped'; spec: string }
-  | { kind: 'booked-loosened'; tool?: ReaderTool; rule?: string; part?: string }): string {
+  | { kind: 'booked-loosened'; tool?: ReaderTool; rule?: string; part?: string }
+  | { kind: 'tolerated-set'; tool: ReaderTool; rule: string }): string {
   if (x.kind === 'booked-switch-off') return offWhere(x.token, x.file)
+  if (x.kind === 'tolerated-set') return `${x.tool} ${ruleShown(x.rule)} tolerated`
   if (x.kind === 'booked-dropped') return `tests of ${visible(x.spec)}`
   return x.part !== undefined ? `lint part ${visible(x.part)} loosened` : `${x.tool ?? '?'} ${ruleShown(x.rule ?? '')} hidden by check definitions`
 }
@@ -163,7 +198,30 @@ export function looseHeld(subject: LoosenedSubject): string {
   return `${n} definition${n === 1 ? '' : 's'}`
 }
 
+// Row 284. What a tolerated set or booking holds, counted: its spots' copies.
+export function toleratedHeld(spots: Readonly<Record<string, ToleratedSpot>>): string {
+  const n = Object.values(spots).reduce((a, s) => a + s.copies, 0)
+  return `${n} spot${n === 1 ? '' : 's'}`
+}
+
 const str = (x: unknown): x is string => typeof x === 'string' && x !== ''
+
+// Row 284. A tolerated set's spots: 1–MAX_TOLERATED_KEYS keys, each 16 hex with a file and positive copies.
+const SPOT_KEY = /^[0-9a-f]{16}$/
+function spotsOf(x: unknown): { spots: Record<string, ToleratedSpot> } | undefined {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return undefined
+  const sp = (x as Record<string, unknown>).spots
+  if (typeof sp !== 'object' || sp === null || Array.isArray(sp)) return undefined
+  const entries = Object.entries(sp as Record<string, unknown>)
+  if (entries.length === 0 || entries.length > MAX_TOLERATED_KEYS) return undefined
+  const spots: Record<string, ToleratedSpot> = {}
+  for (const [k, v0] of entries) {
+    const s = v0 as Record<string, unknown> | null
+    if (!SPOT_KEY.test(k) || typeof s !== 'object' || s === null || !str(s.file) || !Number.isInteger(s.copies) || (s.copies as number) < 1) return undefined
+    spots[k] = { file: s.file, copies: s.copies as number }
+  }
+  return { spots }
+}
 
 function subjectOf(x: unknown): LedgerSubject | undefined {
   if (typeof x !== 'object' || x === null) return undefined
@@ -203,6 +261,12 @@ function openOf(e: Entry): LedgerOpen | undefined {
   if (e.kind === 'booked-loosened') {
     const subject = looseSubjectOf(e)
     return subject === undefined ? undefined : { ...(e as unknown as LoosenedOpen), subject }
+  }
+  if (e.kind === 'tolerated-set') {
+    const subject = spotsOf(e.subject)
+    if (e.check !== 'tolerated' || !(READER_TOOLS as readonly unknown[]).includes(e.tool) || typeof e.rule !== 'string' || !RULE_RE.test(e.rule)) return undefined
+    if ((e.origin !== 'guard' && e.origin !== 'book') || (e.anchor !== undefined && !str(e.anchor)) || subject === undefined) return undefined
+    return { ...(e as unknown as ToleratedOpen), subject }
   }
   if (e.kind === 'booked-dropped') {
     const b = e.base as Record<string, unknown> | undefined
@@ -249,7 +313,7 @@ function looseSubjectOf(e: Entry): LoosenedSubject | undefined {
 
 function endOf(e: Entry): LedgerClosed | LedgerDismissed | undefined {
   if (!str(e.id)) return undefined
-  if (e.t === 'ledger-closed' && (e.by === 'merge' || e.by === 'abandon') && str(e.plan)) return e as unknown as LedgerClosed
+  if (e.t === 'ledger-closed' && (e.by === 'merge' || e.by === 'abandon' || e.by === 'guard') && str(e.plan)) return e as unknown as LedgerClosed
   if (e.t === 'ledger-dismissed' && LEDGER_CAUSES.includes(e.cause as LedgerCause) && typeof e.note === 'string') return e as unknown as LedgerDismissed
   return undefined
 }
@@ -289,6 +353,7 @@ export type KeyFields =
   | Pick<SwitchOffOpen, 'kind' | 'check' | 'plan' | 'file' | 'token' | 'subject'>
   | Pick<DroppedOpen, 'kind' | 'check' | 'plan' | 'spec' | 'base' | 'subject'>
   | Pick<LoosenedOpen, 'kind' | 'check' | 'plan' | 'tool' | 'rule' | 'part' | 'subject'>
+  | Pick<ToleratedOpen, 'kind' | 'check' | 'plan' | 'tool' | 'rule' | 'subject'>
 
 // The idempotence key: a whole part's names the base it was booked against (its part key), a
 // per-diagnostic one names its exact multiset and holds across bases. Row 274: a switch-off item's
@@ -297,7 +362,13 @@ export type KeyFields =
 // formulas are unchanged, so no open item's key moves.
 // Row 278: a loosened item's names its tool, rule or part and its exact subject; the other three formulas
 // are unchanged.
+// Row 284: a tolerated set's names its tool, rule and exact spots — never its origin or anchor; the other
+// four formulas are unchanged.
 export function itemKey(o: KeyFields): string {
+  if (o.kind === 'tolerated-set') {
+    const spots = Object.entries(o.subject.spots).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, s]) => [k, s.file, s.copies])
+    return createHash('sha256').update(JSON.stringify([o.kind, o.check, o.plan, o.tool, o.rule, spots])).digest('hex').slice(0, 16)
+  }
   if (o.kind === 'booked-loosened') {
     const subject = 'hidden' in o.subject
       ? Object.entries(o.subject.hidden).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, h]) => [k, h.file, h.copies, h.lineless === true])
@@ -341,6 +412,7 @@ export type Booking =
   | { kind: 'booked-dropped'; spec: string; base: { passed: number; skipped: number }; subject: { cases: number } }
   | { kind: 'booked-loosened'; tool: ReaderTool; rule: string; part?: undefined; subject: { hidden: Record<string, HiddenSpot> } }
   | { kind: 'booked-loosened'; part: string; tool?: undefined; rule?: undefined; subject: { defs: Record<string, string | null> } }
+  | { kind: 'tolerated-set'; tool: ReaderTool; rule: string; subject: { spots: Record<string, ToleratedSpot> } }
 
 // Never `pending` (drive is measuring the base: book once it lands), `untrusted` (a trust grant comes
 // first) or a passing state.
@@ -383,6 +455,13 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
   }
   const last = run.checks.at(-1)
   if (last === undefined || last.name !== check) return []
+  // Row 284: the tolerated check's growth, one booking per measured rule with grown keys — never one past
+  // the key cap (`over`), whose spots no set could hold.
+  if (check === 'tolerated') {
+    return (last.tolerated ?? []).flatMap((t): Booking[] => (t.state === 'measured' && t.over === undefined && t.grown !== undefined && Object.keys(t.grown).length > 0
+      ? [{ kind: 'tolerated-set', tool: t.tool, rule: t.rule, subject: { spots: Object.fromEntries(Object.entries(t.grown).map(([k, s]) => [k, { file: s.file, copies: s.copies }])) } }]
+      : []))
+  }
   return (last.parts ?? []).flatMap((p) => (BOOKABLE.has(p.state) && p.key !== undefined
     ? [{ kind: 'booked-check' as const, part: p.part, part_key: p.key,
         subject: p.book !== undefined ? { diagnostics: { ...p.book } } : { whole: true as const } }]
@@ -409,6 +488,15 @@ Array<{ id: string; entry?: LedgerOpen }> {
   }
   const common = { gate, round: run.round, run_id: run.run_id, ...(note !== undefined ? { note } : {}) }
   return bookings.map((b) => {
+    // Row 284: a booked growth opens a `book` set per rule; an open item with its key is reused.
+    if (b.kind === 'tolerated-set') {
+      const key = itemKey({ kind: b.kind, check: 'tolerated', plan, tool: b.tool, rule: b.rule, subject: b.subject })
+      const same = open.find((i) => i.kind === 'tolerated-set' && i.key === key)
+      if (same !== undefined) return { id: same.id }
+      const id = mint()
+      const entry: ToleratedOpen = { v: 1, t: 'ledger-open', id, key, kind: b.kind, check: 'tolerated', plan, ...common, tool: b.tool, rule: b.rule, origin: 'book', subject: b.subject }
+      return { id, entry }
+    }
     // Row 276: a loss's item is its spec's (the run's dropped hit for it); an item the hit already applies
     // is never the match, as for a line.
     if (b.kind === 'booked-dropped') {
@@ -486,15 +574,17 @@ Array<{ id: string; entry?: LedgerOpen }> {
 // close when the summary is not short; another merged plan's only where the round's base counts
 // (`junit.base`) were short and the summary is not — this merge restored them (unit review I1, applied to
 // counts). A round with no summary, or no base counts for the spec, observes nothing.
+// Row 284. Whether `plan`'s stream holds its merge stamp's status: a set it opened applies to every plan.
+export function mergedPlan(root: string, plan: string): boolean {
+  return isId(plan) && readStream(root, plan).some((e) => e.t === 'status' && e.to === 'done' && e.cause === 'merge')
+}
+
 export function mergeCloses(root: string, plan: string, pr: number): LedgerClosed[] {
   const runs = readStream(root, plan).filter((e) => e.t === 'gate-run' && e.gate === 'ship') as unknown as GateRunEntry[]
   const mergedBefore = new Map<string, boolean>()
   const merged = (p: string): boolean => {
     if (p === plan) return true
-    if (!isId(p)) return false
-    if (!mergedBefore.has(p)) {
-      mergedBefore.set(p, readStream(root, p).some((e) => e.t === 'status' && e.to === 'done' && e.cause === 'merge'))
-    }
+    if (!mergedBefore.has(p)) mergedBefore.set(p, mergedPlan(root, p))
     return mergedBefore.get(p)!
   }
   const open = openItems(root)

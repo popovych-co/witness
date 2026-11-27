@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { appendEntry, readStream, type Entry } from '../src/journal.js'
 import { actOn } from '../src/act.js'
-import { AFTER_EDIT, BOOK_TRADEOFF, option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
+import { AFTER_EDIT, BOOK_TRADEOFF, bookTradeoff, option, recommend, renderDecision, type Decision, type GateContext } from '../src/recommend.js'
 import { menuFor } from '../src/arbiter.js'
 import { anchorRecurrence, ladderSpent, lastGateRun, liveExits, notePrefill } from '../src/rounds.js'
 import { recommenderRowsFrom } from '../src/verbs/dashboard.js'
@@ -1154,6 +1154,19 @@ describe('the book-owed rule (row 270)', () => {
     const d = checksOnly([{ part: 'ui', state: 'pending', key: KEY }])!
     expect(d.rule).toBe('checks-only')
     expect(d.options.some((o) => o.command.includes('--book'))).toBe(false)
+  })
+})
+
+describe('a checks-only round withheld by tolerated (row 284)', () => {
+  it('a checks-only round withheld by tolerated offers the booking with its own tradeoff (row 284)', () => {
+    const d = recommend({ gate: 'implement', target: 'p1', upstream: undefined, stale: false, entries: [{
+      ...(onlyShip(1) as object), gate: 'implement', checks: [{ name: 'markers', ok: true }, { name: 'tolerated', ok: false, tolerated: [
+        { tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1, grown: { ['d'.repeat(16)]: { file: 'a.ts', copies: 1 } } }] }],
+    } as unknown as Entry] })!
+    expect(d.rule).toBe('checks-only')
+    const book = d.options.find((o) => o.command === 'witness decide implement p1 --book tolerated')
+    expect(book).toMatchObject({ depth: 'deferral', tradeoff: bookTradeoff('tolerated') })
+    expect(bookTradeoff('tolerated')).toBe('opens a tolerated set for these spots: it waives them for this plan and, once the plan merges, for every plan; it closes once main no longer holds their lines, or by witness dismiss ledger')
   })
 })
 

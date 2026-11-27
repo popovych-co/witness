@@ -22,6 +22,10 @@ export function bookWhen(check: string): string {
 // Row 276: a switch-offs booking opens an item per line or lost spec. Row 278: or hidden rule or loosened
 // part, closing once main holds the base's check definitions again.
 export function bookTradeoff(check: string): string {
+  // Row 284: a tolerated booking opens a set — its plan's, then every plan's once it merged.
+  if (check === 'tolerated') {
+    return 'opens a tolerated set for these spots: it waives them for this plan and, once the plan merges, for every plan; it closes once main no longer holds their lines, or by witness dismiss ledger'
+  }
   if (check === 'guards') return "waives the guard for this plan; the PR's proof lists it; nothing reopens it"
   return check === 'switch-offs'
     ? "opens a ledger item per line, spec, hidden rule or loosened part, which waives it for this plan; each closes once main no longer holds the line or the hidden spots, has the spec's passing cases back, or holds the base's check definitions again (the discharge), or by witness dismiss ledger"
@@ -437,7 +441,7 @@ function ruleTable(ctx: GateContext, last: GateRunEntry): Decision | undefined {
   if (last.checks_only === true && !atBound) {
     const name = last.checks.at(-1)?.name ?? 'a check'
     const book = bookingsOf(last, name).length > 0
-      ? [option(d('--book', name), 'deferral', { when: 'the red is not this plan\'s to fix — red on the base too, or one only you accept', tradeoff: BOOK_TRADEOFF })]
+      ? [option(d('--book', name), 'deferral', { when: 'the red is not this plan\'s to fix — red on the base too, or one only you accept', tradeoff: bookTradeoff(name) })]
       : []
     return {
       key: 'decide', rule: 'checks-only',

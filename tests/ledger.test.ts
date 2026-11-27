@@ -222,3 +222,69 @@ describe('booked loosened hits (row 278)', () => {
     expect(entryDetail({ v: 1, ...partOpen('l-00000002') } as never)).toBe('l-00000002 booked switch-offs · lint part lint loosened · p1 implement r2 · 2 definitions')
   })
 })
+
+// Row 284. A tolerated set: per (tool, rule) the old spots a lint guard's proof (or a human's booking) tolerates.
+const K1 = '0123456789abcdef'
+const tolOpen = (id: string, over: Record<string, unknown> = {}) => ({
+  t: 'ledger-open' as const, id, key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: 'p1', gate: 'implement',
+  round: 2, run_id: 'r-1', tool: 'eslint', rule: 'no-x', origin: 'guard', anchor: 'src/token.ts',
+  subject: { spots: { [K1]: { file: 'src/a.ts', copies: 2 } } }, ...over,
+})
+const tolRun = (checksOnly: boolean, tolerated: unknown[]) => ({ checks_only: checksOnly ? true : undefined, outcome: 'stopped', round: 3, run_id: 'r-3',
+  checks: [{ name: 'markers', ok: true }, { name: 'tolerated', ok: false, tolerated }] }) as never
+describe('tolerated sets (row 284)', () => {
+  it('a tolerated-set item opens and keys over its spots; the four other formulas keep their pinned keys (row 284)', () => {
+    const repo = tmpRepo()
+    appendEntry(repo.root, LEDGER_STREAM, tolOpen('l-00000001') as never)
+    expect(ledgerItems(repo.root)).toEqual([expect.objectContaining({ id: 'l-00000001', kind: 'tolerated-set', tool: 'eslint', rule: 'no-x', origin: 'guard', state: 'open' })])
+    const spots = { [K1]: { file: 'src/a.ts', copies: 2 } }
+    expect(itemKey({ kind: 'tolerated-set', check: 'tolerated', plan: 'p', tool: 'eslint', rule: 'no-x', subject: { spots } } as never)).toBe('ec15f22426444f86')  // the fifth formula, computed at GREEN
+    const k = (o: Record<string, unknown>) => itemKey(tolOpen('x', o) as never)
+    expect(k({})).not.toBe(k({ tool: 'biome' })); expect(k({})).not.toBe(k({ rule: 'no-y' })); expect(k({})).not.toBe(k({ plan: 'p2' }))
+    expect(k({})).not.toBe(k({ subject: { spots: { [K1]: { file: 'src/a.ts', copies: 3 } } } }))
+    expect(k({})).toBe(k({ origin: 'book', anchor: undefined }))
+    expect(itemKey(open('x') as never)).toBe('4be5507e7e9c3d22')
+    expect(itemKey(offOpen('x') as never)).toBe('4367487ea42fc1c0')
+    expect(itemKey(dropOpen('x') as never)).toBe('379a201944dc7b85')
+  })
+  it('an open with a malformed tolerated subject is no item (row 284)', () => {
+    const repo = tmpRepo()
+    const many = Object.fromEntries(Array.from({ length: 501 }, (_, i) => [i.toString(16).padStart(16, '0'), { file: 'a.ts', copies: 1 }]))
+    for (const e of [tolOpen('l-00000001', { subject: { spots: {} } }), tolOpen('l-00000002', { subject: { spots: { [K1]: { file: 'a.ts', copies: 0 } } } }),
+      tolOpen('l-00000003', { subject: { spots: { xyz: { file: 'a.ts', copies: 1 } } } }), tolOpen('l-00000004', { origin: 'x' }),
+      tolOpen('l-00000005', { tool: 'rome' }), tolOpen('l-00000006', { subject: { spots: many } }), tolOpen('l-00000007', { rule: 'has space' }),
+      tolOpen('l-00000008', { anchor: '' }), tolOpen('l-00000009', { subject: { spots: { [K1]: { file: '', copies: 1 } } } }),
+      tolOpen('l-0000000a', { check: 'lint' }), tolOpen('l-0000000b', { origin: 'book', anchor: undefined })]) appendEntry(repo.root, LEDGER_STREAM, e as never)
+    expect(ledgerItems(repo.root).map((i) => i.id)).toEqual(['l-0000000b'])
+  })
+  it('a re-proof close ends an item, as the merge and the abandon do (row 284)', () => {
+    const repo = tmpRepo()
+    appendEntry(repo.root, LEDGER_STREAM, tolOpen('l-00000001') as never)
+    appendEntry(repo.root, LEDGER_STREAM, { t: 'ledger-closed', id: 'l-00000001', by: 'guard', plan: 'p1' } as never)
+    expect(ledgerItems(repo.root)[0]).toMatchObject({ state: 'closed', end: { by: 'guard' } })
+  })
+  it("bookingsOf books the tolerated check's growth per rule, never past the cap (row 284)", () => {
+    const verdicts = [
+      { tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1, grown: { k1: { file: 'a.ts', copies: 1 } } },
+      { tool: 'biome', rule: 'lint/a/b', state: 'measured', spots: 503, allowed: 0, grown: {}, over: 3 },
+      { tool: 'biome', rule: 'lint/c/d', state: 'not-measured', why: 'biome-unwired' },
+      { tool: 'eslint', rule: 'no-y', state: 'measured', spots: 1, allowed: 1, grown: {} },
+    ]
+    expect(bookingsOf(tolRun(true, verdicts), 'tolerated')).toEqual([{ kind: 'tolerated-set', tool: 'eslint', rule: 'no-x', subject: { spots: { k1: { file: 'a.ts', copies: 1 } } } }])
+    expect(bookingsOf(tolRun(false, verdicts), 'tolerated')).toEqual([])
+  })
+  it('bookLines opens a tolerated set for a booking, and reuses an open one by key (row 284)', () => {
+    const repo = tmpRepo()
+    const spots = { [K1]: { file: 'a.ts', copies: 1 } }
+    const run = tolRun(true, [{ tool: 'eslint', rule: 'no-x', state: 'measured', spots: 1, allowed: 0, grown: spots }])
+    const [first] = bookLines(repo.root, 'p1', 'implement', run, bookingsOf(run, 'tolerated'), 'mine')
+    expect(first!.entry).toEqual({ v: 1, t: 'ledger-open', id: first!.id, key: itemKey({ kind: 'tolerated-set', check: 'tolerated', plan: 'p1', tool: 'eslint', rule: 'no-x', subject: { spots } } as never),
+      kind: 'tolerated-set', check: 'tolerated', plan: 'p1', gate: 'implement', round: 3, run_id: 'r-3', note: 'mine', tool: 'eslint', rule: 'no-x', origin: 'book', subject: { spots } })
+    appendEntry(repo.root, LEDGER_STREAM, first!.entry as never)
+    expect(bookLines(repo.root, 'p1', 'implement', run, bookingsOf(run, 'tolerated'))).toEqual([{ id: first!.id }])
+  })
+  it("log names a tolerated set's open and its close by a re-proof (row 284)", () => {
+    expect(entryDetail({ v: 1, ...tolOpen('l-00000001') } as never)).toBe('opened tolerated set l-00000001 · eslint no-x · 2 spots')
+    expect(entryDetail({ v: 1, t: 'ledger-closed', id: 'l-00000001', by: 'guard', plan: 'p1' } as never)).toBe('l-00000001 closed by a re-proof of its guard')
+  })
+})
