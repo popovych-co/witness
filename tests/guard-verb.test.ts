@@ -426,6 +426,17 @@ describe('witness guard — a lint guard reads the base (row 286)', () => {
     expect(b.guards()).toEqual([])
   }, 240_000)
 
+  it("a spot in an overlay file the plan changed is never old: it stays the plan's (row 286, security review)", async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
+    writeFileSync(join(b.wt, 'src/token.guard.test.ts'), 'export const t = 1 // SWALLOW in a test\n')
+    const r = await b.guard(['--finding', 'src/token.ts', '--files', 'fake-lint.json', '--files', 'src/token.guard.test.ts', '--rule', 'biome:lint/test/noSwallow'])
+    expect(r.code, r.stderr).toBe(0)
+    const set = tolSets(b.repo.root)[0] as unknown as { subject: { spots: Record<string, unknown> } }
+    expect(Object.keys(set.subject.spots)).toEqual([otherKey()])
+    expect(r.stdout).toContain('note: 1 spot this plan added')
+    expect(b.guards().at(-1)).toMatchObject({ old: 1 })
+  }, 240_000)
+
   it("a re-proof replaces the plan's earlier set for the rule (row 286)", async () => {
     const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
     expect((await b.guard(LINT_ARGS)).code).toBe(0)

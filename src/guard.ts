@@ -139,7 +139,9 @@ export function overlayRefusal(root: string, wt: string, cfg: Config, anchor: st
 // so the proof refuses `guard-unattributed` (not measured).
 // Row 286 (C52): `old`, when asked for, the base commit with the overlay folded over it from the current tree
 // (through the base's scripts) — the rule's spots there are the base's own, red and green count beyond them.
-export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string; attributable?: false; old?: string }
+// Security review: `fresh` the overlay paths the old tree holds at the plan's bytes (not the base's) — a spot
+// there is the plan's, never old, so no violation a plan's test file adds is laundered into its tolerated set.
+export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string; attributable?: false; old?: string; fresh?: string[] }
 
 export function guardTrees(
   root: string, wt: string, base: string, cfg: Config, mark: GuardMark, overlay: readonly string[],
@@ -160,13 +162,13 @@ export function guardTrees(
   if (!red.ok) return red
   const green = withBaseScripts(root, base, current, cfg.checks.definitions)
   if (!green.ok) return green
-  let oldTree: { old: string } | Record<string, never> = {}
+  let oldTree: { old: string; fresh: string[] } | Record<string, never> = {}
   if (old === true) {
     const onBase = foldOverlay(root, base, { from: current, paths: [...overlay] })
     if (!onBase.ok) return onBase
     const held = withBaseScripts(root, base, onBase.value, cfg.checks.definitions)
     if (!held.ok) return held
-    oldTree = { old: held.value }
+    oldTree = { old: held.value, fresh: overlay.filter((p) => entryAt(root, base, p)?.sha !== entryAt(root, current, p)?.sha) }
   }
   if (attribute === undefined) return ok({ pinned, current, red: red.value, green: green.value, ...oldTree })
   if (entryAt(root, pinned, attribute)?.sha === entryAt(root, current, attribute)?.sha) {
@@ -427,7 +429,8 @@ export function proveLint(
   if (trees.old !== undefined) {
     const o = read(trees.old)
     if (!o.ok) return o
-    old = o.value
+    const fresh = new Set(trees.fresh ?? [])
+    old = o.value.filter((d) => !fresh.has(d.file))
   }
   const oldHere = at(old, anchored)
   if (beyond(at(red.value, anchored), oldHere).length === 0) return notRed(oldHere.length)
