@@ -488,10 +488,12 @@ Array<{ id: string; entry?: LedgerOpen }> {
   }
   const common = { gate, round: run.round, run_id: run.run_id, ...(note !== undefined ? { note } : {}) }
   return bookings.map((b) => {
-    // Row 284: a booked growth opens a `book` set per rule; an open item with its key is reused.
+    // Row 284: a booked growth opens a `book` set per rule. Slice 1 review I1: every open set the plan's
+    // allowance already counts — a guard set with the same spots, an earlier booking — waives nothing more,
+    // so only this run's own booking (a decide run twice) is reused.
     if (b.kind === 'tolerated-set') {
       const key = itemKey({ kind: b.kind, check: 'tolerated', plan, tool: b.tool, rule: b.rule, subject: b.subject })
-      const same = open.find((i) => i.kind === 'tolerated-set' && i.key === key)
+      const same = open.find((i) => i.kind === 'tolerated-set' && i.origin === 'book' && i.run_id === run.run_id && itemKey(i) === key)
       if (same !== undefined) return { id: same.id }
       const id = mint()
       const entry: ToleratedOpen = { v: 1, t: 'ledger-open', id, key, kind: b.kind, check: 'tolerated', plan, ...common, tool: b.tool, rule: b.rule, origin: 'book', subject: b.subject }

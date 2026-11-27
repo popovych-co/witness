@@ -283,6 +283,21 @@ describe('tolerated sets (row 284)', () => {
     appendEntry(repo.root, LEDGER_STREAM, first!.entry as never)
     expect(bookLines(repo.root, 'p1', 'implement', run, bookingsOf(run, 'tolerated'))).toEqual([{ id: first!.id }])
   })
+  it("a booking never reuses a set the allowance already counts: only this run's own booking (slice 1 review I1)", () => {
+    const repo = tmpRepo()
+    const spots = { [K1]: { file: 'a.ts', copies: 1 } }
+    // the plan's own guard set holds exactly the spots the plan grew (it duplicated the guarded line)
+    appendEntry(repo.root, LEDGER_STREAM, { ...tolOpen('l-00000001', { subject: { spots } }),
+      key: itemKey({ kind: 'tolerated-set', check: 'tolerated', plan: 'p1', tool: 'eslint', rule: 'no-x', subject: { spots } } as never) } as never)
+    const run = tolRun(true, [{ tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1, grown: spots }])
+    const [first] = bookLines(repo.root, 'p1', 'implement', run, bookingsOf(run, 'tolerated'))
+    expect(first!.id).not.toBe('l-00000001')
+    expect(first!.entry).toMatchObject({ kind: 'tolerated-set', origin: 'book', run_id: 'r-3', subject: { spots } })
+    appendEntry(repo.root, LEDGER_STREAM, first!.entry as never)
+    expect(bookLines(repo.root, 'p1', 'implement', run, bookingsOf(run, 'tolerated'))).toEqual([{ id: first!.id }])
+    const later = { ...(run as object), run_id: 'r-4', round: 4 } as never
+    expect(bookLines(repo.root, 'p1', 'implement', later, bookingsOf(later, 'tolerated'))[0]!.entry).toBeDefined()
+  })
   it("log names a tolerated set's open and its close by a re-proof (row 284)", () => {
     expect(entryDetail({ v: 1, ...tolOpen('l-00000001') } as never)).toBe('opened tolerated set l-00000001 · eslint no-x · 2 spots')
     expect(entryDetail({ v: 1, t: 'ledger-closed', id: 'l-00000001', by: 'guard', plan: 'p1' } as never)).toBe('l-00000001 closed by a re-proof of its guard')

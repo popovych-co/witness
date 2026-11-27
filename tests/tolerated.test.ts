@@ -58,6 +58,19 @@ describe('the allowance (row 284)', () => {
     expect(allowance(repo.root, 'p1', base, sets(repo, 'p1')).get(ruleKey('eslint', RULE))!.get(k)).toBe(1)
   })
 
+  it("the plan's own guard set and a merged set naming one key never allow more than the base's lines (slice 1 review I2)", () => {
+    const repo = tmpRepo()
+    const k = key('src/a.ts', '} catch {')
+    merged(repo, 'old-plan')
+    set(repo, 'p1', { [k]: { file: 'src/a.ts', copies: 1 } })
+    set(repo, 'old-plan', { [k]: { file: 'src/a.ts', copies: 1 } })
+    const base = commit(repo, { 'src/a.ts': '} catch {\n' })
+    expect(allowance(repo.root, 'p1', base, sets(repo, 'p1')).get(ruleKey('eslint', RULE))!.get(k)).toBe(1)
+    // a booked copy is new code: it never uses up a base line
+    set(repo, 'p1', { [k]: { file: 'src/a.ts', copies: 1 } }, { origin: 'book', anchor: undefined })
+    expect(allowance(repo.root, 'p1', base, sets(repo, 'p1')).get(ruleKey('eslint', RULE))!.get(k)).toBe(2)
+  })
+
   it('a git failure reading the base allows none of a merged set (row 284)', () => {
     const repo = tmpRepo()
     const k = key('src/a.ts', '} catch {')

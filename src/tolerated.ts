@@ -34,7 +34,9 @@ export function applicableSets(root: string, plan: string): ToleratedItem[] {
 
 // Per `ruleKey`, per spot key, the copies `plan`'s tree may hold: its own sets' whole, the merged sets'
 // summed and capped by the lines `base` (a commit) holds. A git failure reading the base caps at 0 —
-// red, never green.
+// red, never green. Slice 1 review I2: the plan's own `guard` copies are old spots, base lines too, so
+// the merged sets share the cap with them — `own + min(Σ merged, max(0, base lines − own guard))`; an
+// own booked copy is new code and uses up no base line.
 export function allowance(root: string, plan: string, base: string, sets: readonly ToleratedItem[]): Map<string, Map<string, number>> {
   const out = new Map<string, Map<string, number>>()
   const add = (rk: string, k: string, n: number) => {
@@ -43,10 +45,15 @@ export function allowance(root: string, plan: string, base: string, sets: readon
     out.set(rk, m)
   }
   const merged = new Map<string, { tool: ReaderTool; rule: string; file: string; key: string; copies: number }>()
+  const ownGuard = new Map<string, number>()
   for (const s of sets) {
     const rk = ruleKey(s.tool, s.rule)
     for (const [k, spot] of Object.entries(s.subject.spots)) {
-      if (s.plan === plan) { add(rk, k, spot.copies); continue }
+      if (s.plan === plan) {
+        add(rk, k, spot.copies)
+        if (s.origin === 'guard') ownGuard.set(`${rk}\0${k}`, (ownGuard.get(`${rk}\0${k}`) ?? 0) + spot.copies)
+        continue
+      }
       const at = `${rk}\0${k}`
       const m = merged.get(at) ?? { tool: s.tool, rule: s.rule, file: spot.file, key: k, copies: 0 }
       m.copies += spot.copies
@@ -57,7 +64,9 @@ export function allowance(root: string, plan: string, base: string, sets: readon
   for (const m of merged.values()) {
     const at = `${m.tool}\0${m.rule}\0${m.file}`
     if (!held.has(at)) held.set(at, lineKeys(root, base, m.file, m.tool, m.rule))
-    add(ruleKey(m.tool, m.rule), m.key, Math.min(m.copies, held.get(at)?.get(m.key) ?? 0))
+    const rk = ruleKey(m.tool, m.rule)
+    const room = Math.max(0, (held.get(at)?.get(m.key) ?? 0) - (ownGuard.get(`${rk}\0${m.key}`) ?? 0))
+    add(rk, m.key, Math.min(m.copies, room))
   }
   return out
 }
