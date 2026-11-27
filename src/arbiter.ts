@@ -248,6 +248,13 @@ export function checkFacts(c: GateCheck): string {
     // Final review I1: and each reader a measured effect could not read, never why.
     ...(c.lint_effect?.read === 'measured' ? (c.lint_effect.unread ?? []).map((t) => `${t} not read under the base's definitions`) : []),
     ...guardFacts(c),
+    // Row 284: each tolerated rule, counted — spelled out, never a file.
+    ...(c.tolerated ?? []).map((t) => {
+      const name = `${t.tool} ${visible(t.rule)}`
+      if (t.state !== 'measured') return `${name} not measured (${visible(t.why ?? t.state)})`
+      const grown = (t.spots ?? 0) - (t.allowed ?? 0)
+      return grown > 0 ? `${name} ${grown} new beside ${t.allowed ?? 0} tolerated` : `${name} all ${t.spots ?? 0} tolerated`
+    }),
     ...(n > 0 ? [`${n} command${n === 1 ? '' : 's'} not trusted`] : []),
     ...((c.held ?? []).length > 0 ? [`held: ${(c.held ?? []).map((h) => visible(String(h.criterion))).join(', ')}`] : []),
   ]

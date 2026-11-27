@@ -94,7 +94,8 @@ export async function runChecks(steps: readonly CheckStep[]): Promise<CheckRun> 
 // dismissal since a round moves it. Row 277: a withholding check's owed job keys (the definitions
 // check's lint effect), so a round never resumes over a key no job owes; a judged check's never join.
 // Row 281: each owed or stale guard anchor (16 hex of its journal spelling) — a proof or a waiver since
-// a round moves it.
+// a round moves it. Row 284: each tolerated rule's grown keys with their copies, its count past the key
+// cap, and each rule not measured with why — a booking, a fix or a wiring since a round moves it.
 const anchorHash = (a: string): string => createHash('sha256').update(a).digest('hex').slice(0, 16)
 export function checksSignature(checks: readonly GateCheck[]): string {
   const partTerm = (s: string) => (s === 'pending' || s === 'not-measured' ? 'missing' : s)
@@ -111,5 +112,12 @@ export function checksSignature(checks: readonly GateCheck[]): string {
       : ''}${
     c.guards !== undefined
       ? `:guards=${c.guards.filter((g) => g.state === 'owed' || g.state === 'stale').map((g) => `${anchorHash(g.anchor)}${g.unmeasured !== undefined ? `!${g.unmeasured}` : ''}`).sort().join('+')}`
+      : ''}${
+    c.tolerated !== undefined
+      ? `:tol=${c.tolerated.flatMap((t) => {
+        const rk = anchorHash(`${t.tool}\0${t.rule}`)
+        if (t.state !== 'measured') return [`${rk}!${t.why ?? t.state}`]
+        return [...Object.entries(t.grown ?? {}).map(([k, s]) => `${k}x${s.copies}`), ...(t.over !== undefined ? [`${rk}+over${t.over}`] : [])]
+      }).sort().join('+')}`
       : ''}`).sort().join('|')
 }

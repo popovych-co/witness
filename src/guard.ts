@@ -442,7 +442,8 @@ function blobNow(wt: string, path: string): string | undefined {
   }
 }
 
-const guardAct = (plan: string, anchor: string): string =>
+// Row 284: the tolerated check names it when a rebase moved a line the plan's own guard set tolerates.
+export const guardAct = (plan: string, anchor: string): string =>
   `witness guard ${shellWord(plan)} --finding ${quotedWord(visible(anchor))} --files <path> --rule <tool>:<rule> | --test '<name>'`
 
 // Row 281 (§4 T4). Judged; at implement and ship. Every anchor a blocking finding marked in the gate's

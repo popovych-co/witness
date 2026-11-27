@@ -42,6 +42,17 @@ describe('the check registry (row 264)', () => {
     expect(checkWaiver('tolerated')).toBe('human')
     expect(CHECKS.map((c) => c.name).slice(0, 3)).toEqual(['markers', 'tolerated', 'lint'])
   })
+  it("a tolerated check's growth joins the signature, and a covering booking moves it (row 284)", () => {
+    const tol = (grown: Record<string, { file: string; copies: number }>, extra: Record<string, unknown> = {}): GateCheck[] =>
+      [{ name: 'tolerated', ok: Object.keys(grown).length === 0, tolerated: [{ tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1, grown, ...extra }] }]
+    const k3 = { k3: { file: 'a.ts', copies: 1 } }
+    expect(checksSignature(tol(k3))).not.toBe(checksSignature(tol({})))
+    expect(checksSignature(tol(k3))).toBe(checksSignature(tol({ k3: { file: 'a.ts', copies: 1 } })))
+    expect(checksSignature(tol(k3))).not.toBe(checksSignature(tol({ k3: { file: 'a.ts', copies: 2 } })))
+    expect(checksSignature(tol({}, { over: 3 }))).not.toBe(checksSignature(tol({})))
+    const unmeasured = (why: string): GateCheck[] => [{ name: 'tolerated', ok: false, tolerated: [{ tool: 'eslint', rule: 'no-x', state: 'not-measured', why }] }]
+    expect(checksSignature(unmeasured('reader-unset'))).not.toBe(checksSignature(unmeasured('reader-unread')))
+  })
   it('lists each check once, the withholding tier first', () => {
     const names = CHECKS.map((c) => c.name)
     expect(new Set(names).size).toBe(names.length)

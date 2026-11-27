@@ -9,10 +9,15 @@
 // it exactly. Invariant: every spot of a tolerated rule on main passed a gate that read it as allowed or
 // booked it. Growth is the multiset difference against it: anything beyond is new, whatever the counts
 // (§4 T4: a swap of one old spot for one new one is one new spot).
+import { cliAct } from './act.js'
+import type { Config } from './config.js'
 import { diagnosticKey, lineKeys, type Diagnostic } from './diagnostics.js'
-import { ledgerItems, mergedPlan, type ToleratedItem } from './ledger.js'
-import type { ToleratedSpot } from './rounds.js'
+import { guardAct } from './guard.js'
+import { MAX_TOLERATED_KEYS, ledgerItems, mergedPlan, type ToleratedItem } from './ledger.js'
+import type { GateCheck, ToleratedSpot, ToleratedVerdict } from './rounds.js'
 import type { ReaderTool } from './settings.js'
+import { BIOME_LIST, ESLINT_LIST, extendsWitness } from './tolerated-lists.js'
+import { quotedWord, visible } from './toon.js'
 
 // One (tool, rule), a key no rule id can collide in.
 export const ruleKey = (tool: ReaderTool, rule: string): string => `${tool}\0${rule}`
@@ -91,4 +96,100 @@ export function toleratedRules(sets: readonly ToleratedItem[]): Map<ReaderTool, 
 // Every rule any tolerated set ever named, whatever its state: what a list may hold of witness's writing.
 export function witnessRules(root: string): Map<ReaderTool, Set<string>> {
   return byTool(ledgerItems(root).filter((i): i is ToleratedItem => i.kind === 'tolerated-set'))
+}
+
+// ── The tolerated check (row 284, C46) ────────────────────────────────────────────────────────────
+
+// One tolerated tool's reading on the plan's tree: every spot (errors and tolerated spots together), or
+// why none was read — `why` a refusal rule id, `cmd` the command trust did not grant.
+export type ToolReading = { ok: true; spots: Diagnostic[] } | { ok: false; state: 'not-measured' | 'untrusted'; why: string; cmd?: string }
+
+// What a code gate read for the check: the sets that apply, each tolerated tool's reading, and the list
+// paths it rewrote for the tree.
+export interface ToleratedReading { sets: ToleratedItem[]; tools: Map<ReaderTool, ToolReading>; wrote: string[] }
+
+const HIDES_NOTES = /--diagnostic-level(?:=|\s+)(?:warn|error)\b/
+const SHOWN = 10
+
+const listOf = (tool: ReaderTool): string => (tool === 'biome' ? BIOME_LIST : ESLINT_LIST)
+function want(tool: ReaderTool, why: string): string {
+  switch (why) {
+    case 'reader-unset': return `readers.${tool} is not set — a tolerated set reads its spots there`
+    case 'reader-unread': return 'its report could not be read — never green'
+    case 'run-interrupted': return 'its run was ended before it reported — never green'
+    case 'biome-unwired': return 'biome.json does not extend ./biome.witness.json — add it to "extends"'
+    case 'reader-hides-notes': return 'readers.biome hides info diagnostics (--diagnostic-level) — tolerated spots arrive as notes'
+    case 'list-ignored': return `${listOf(tool)} is gitignored — the tolerated list must be committed`
+    default: return `${visible(why)} — never green`
+  }
+}
+
+// Row 284 (§4 T4; C46). Withholding, the human's to book; runs at implement and ship wherever a set
+// applies. Per tolerated (tool, rule), sorted: the plan's spots of the rule beyond the allowance are
+// growth — red until fixed or booked. A rule witness cannot read (its reader unset, untrusted or unread;
+// Biome not extending the witness file, or its reader hiding notes; a list the repo ignores) is red too,
+// never green.
+export function toleratedCheck(root: string, wt: string, cfg: Config, plan: string, base: string, gate: 'implement' | 'ship', reading: ToleratedReading): GateCheck {
+  const rules = toleratedRules(reading.sets)
+  const allowed = allowance(root, plan, base, reading.sets)
+  const verdicts: ToleratedVerdict[] = []
+  const untrusted: string[] = []
+  const segs: string[] = []
+  const book = cliAct('decide', gate, plan, '--book', 'tolerated').line
+  const wired = rules.has('biome') ? extendsWitness(wt) === true : true
+  const hides = HIDES_NOTES.test(cfg.readers?.biome ?? '')
+  for (const tool of [...rules.keys()].sort()) {
+    const r = reading.tools.get(tool) ?? { ok: false as const, state: 'not-measured' as const, why: 'reader-unread' }
+    for (const rule of [...rules.get(tool)!].sort()) {
+      const name = `${tool} ${visible(rule)}`
+      const off = !r.ok ? { state: r.state, why: r.why }
+        : tool === 'biome' && !wired ? { state: 'not-measured' as const, why: 'biome-unwired' }
+        : tool === 'biome' && hides ? { state: 'not-measured' as const, why: 'reader-hides-notes' }
+        : undefined
+      if (off !== undefined) {
+        verdicts.push({ tool, rule, ...off })
+        if (!r.ok && r.state === 'untrusted' && r.cmd !== undefined && !untrusted.includes(r.cmd)) untrusted.push(r.cmd)
+        segs.push(off.state === 'untrusted' ? `${name}: not run — readers.${tool} is not trusted` : `${name}: not measured — ${want(tool, off.why)}`)
+        continue
+      }
+      const spots = (r as { spots: Diagnostic[] }).spots.filter((d) => d.tool === tool && d.rule === rule)
+      const g = growth(spots, allowed.get(ruleKey(tool, rule)))
+      const keys = Object.keys(g.grown)
+      const kept = keys.slice(0, MAX_TOLERATED_KEYS)
+      const over = keys.slice(MAX_TOLERATED_KEYS).reduce((a, k) => a + g.grown[k]!.copies, 0)
+      const grown = Object.fromEntries(kept.map((k) => [k, g.grown[k]!]))
+      const lines = Object.fromEntries(kept.filter((k) => Object.hasOwn(g.lines, k)).map((k) => [k, g.lines[k]!]))
+      verdicts.push({ tool, rule, state: 'measured', spots: spots.length, allowed: spots.length - g.total, grown,
+        ...(over > 0 ? { over } : {}), ...(Object.keys(lines).length > 0 ? { lines } : {}) })
+      if (g.total === 0) {
+        segs.push(`${name}: ${spots.length} spot${spots.length === 1 ? '' : 's'}, all tolerated`)
+        continue
+      }
+      const where = (k: string) => `${visible(g.grown[k]!.file)}${Object.hasOwn(g.lines, k) ? `:${g.lines[k]}` : ''}${g.grown[k]!.copies > 1 ? ` ×${g.grown[k]!.copies}` : ''}`
+      const shown = keys.slice(0, SHOWN)
+      const more = g.total - shown.reduce((a, k) => a + g.grown[k]!.copies, 0)
+      let seg = `${name}: ${g.total} new beside ${spots.length - g.total} tolerated — ${shown.map(where).join(', ')}${more > 0 ? `, and ${more} more` : ''}`
+      seg += ` — fix them, or a human books them: ${book}`
+      const proof = reproof(root, plan, base, reading.sets, tool, rule, keys.map((k) => ({ key: k, ...g.grown[k]!, line: g.lines[k] })))
+      if (proof !== undefined) seg += ` — the base holds ${proof.where}: re-prove the guard of ${quotedWord(visible(proof.anchor))} (${guardAct(plan, proof.anchor)}) to tolerate it`
+      segs.push(seg)
+    }
+  }
+  const ok = verdicts.every((x) => x.state === 'measured' && Object.keys(x.grown ?? {}).length === 0 && x.over === undefined)
+  return { name: 'tolerated', ok, detail: segs.join(' · '), tolerated: verdicts, ...(untrusted.length > 0 ? { untrusted } : {}) }
+}
+
+// Review Focus 1. A grown spot whose line the plan's base already holds, under a `guard` set of the plan's
+// own for the rule — a rebase moved a line the guard tolerated: the newest such set's anchor, and the
+// first such spot, to name the re-proof.
+function reproof(root: string, plan: string, base: string, sets: readonly ToleratedItem[], tool: ReaderTool, rule: string,
+  grown: ReadonlyArray<{ key: string; file: string; line?: number }>): { anchor: string; where: string } | undefined {
+  const own = sets.filter((s) => s.plan === plan && s.origin === 'guard' && s.anchor !== undefined && s.tool === tool && s.rule === rule).at(-1)
+  if (own === undefined) return undefined
+  const held = new Map<string, Map<string, number> | undefined>()
+  for (const x of grown) {
+    if (!held.has(x.file)) held.set(x.file, lineKeys(root, base, x.file, tool, rule))
+    if ((held.get(x.file)?.get(x.key) ?? 0) > 0) return { anchor: own.anchor!, where: `${visible(x.file)}${x.line !== undefined ? `:${x.line}` : ''}` }
+  }
+  return undefined
 }

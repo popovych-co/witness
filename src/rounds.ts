@@ -47,7 +47,7 @@ export interface GateCheck {
 export interface ToleratedSpot { file: string; copies: number }
 
 // Row 284. One tolerated (tool, rule) as the tolerated check reads it: measured — `spots` the plan's tree
-// holds, `allowed` the allowance's copies, `grown` the copies beyond it per key (at most
+// holds, `allowed` how many of them the allowance covers, `grown` the copies beyond it per key (at most
 // MAX_TOLERATED_KEYS keys, `over` the rest counted), `lines` each grown key's first line on the plan's
 // tree — or not measured / untrusted, `why` a refusal rule id (never a path or a command).
 export interface ToleratedVerdict {
