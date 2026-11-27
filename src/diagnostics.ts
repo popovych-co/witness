@@ -14,8 +14,11 @@ import { parseReport, type RawDiagnostic } from './lint-readers.js'
 import { ok, refuse, v, type Result } from './refusal.js'
 import { captureCommand } from './runner.js'
 import type { ReaderTool } from './settings.js'
+import { BIOME_LIST, biomePairs, pairKey } from './tolerated-lists.js'
 
-export interface Diagnostic { tool: ReaderTool; rule: string; file: string; line?: number; snippet: string }
+// `tolerated`: a spot the tool's list holds (row 283) — never an error, read by the tolerated check,
+// the guard and the lint effect only.
+export interface Diagnostic { tool: ReaderTool; rule: string; file: string; line?: number; snippet: string; tolerated?: true }
 
 // §3.7: whitespace runs collapsed, the ends trimmed — a re-indented line keeps its key.
 export function normalizeSnippet(text: string): string {
@@ -93,22 +96,39 @@ function lineOnDisk(dir: string, file: string, line: number | undefined, cache: 
   return cache.get(file)?.[line - 1] ?? ''
 }
 
-export function toDiagnostics(tool: ReaderTool, raw: readonly RawDiagnostic[], dir: string): Diagnostic[] {
+// Row 283. A Biome `note` is a tolerated spot only at a (placed file, rule) pair the witness file
+// lists (`pairs`); any other note is dropped. An ESLint raw its list holds is kept, flagged.
+export function toDiagnostics(tool: ReaderTool, raw: readonly RawDiagnostic[], dir: string, pairs?: ReadonlySet<string>): Diagnostic[] {
   const own = new Set(witnessPaths())
   const cache = new Map<string, string[] | undefined>()
   const out: Diagnostic[] = []
   for (const r of raw) {
     const file = placeFile(dir, r.file, r.base)
     if (own.has(file)) continue
+    if (r.note === true && !pairs?.has(pairKey(file, r.rule))) continue
     const snippet = normalizeSnippet(r.text ?? lineOnDisk(dir, file, r.line, cache))
-    out.push({ tool, rule: r.rule, file, ...(r.line !== undefined ? { line: r.line } : {}), snippet })
+    out.push({
+      tool, rule: r.rule, file, ...(r.line !== undefined ? { line: r.line } : {}), snippet,
+      ...(r.tolerated === true || r.note === true ? { tolerated: true as const } : {}),
+    })
   }
   return out
 }
 
-// A reader's reading: its diagnostics, and how many errors it reported before witness's own paths
-// were dropped (slice 3 review: a part red only on witness's payload reported errors all the same).
-export interface PartReading { diagnostics: Diagnostic[]; reported: number }
+// A reader's reading: its error diagnostics, the spots its tool's list tolerates (row 283), and how
+// many errors it reported before witness's own paths were dropped (slice 3 review: a part red only
+// on witness's payload reported errors all the same).
+export interface PartReading { diagnostics: Diagnostic[]; tolerated: Diagnostic[]; reported: number }
+
+// The run folder's witness file's pairs; missing or unreadable reads none.
+function biomeFilePairs(dir: string): Set<string> {
+  try {
+    const p = join(dir, BIOME_LIST)
+    return lstatSync(p).isFile() ? biomePairs(readFileSync(p, 'utf8')) : new Set()
+  } catch {
+    return new Set()
+  }
+}
 
 // The reader run in `dir`, its whole stdout parsed; a signal saw no report (row 247).
 export function readPart(dir: string, ctx: Ctx, tool: ReaderTool, cmd: string): Result<PartReading> {
@@ -118,7 +138,13 @@ export function readPart(dir: string, ctx: Ctx, tool: ReaderTool, cmd: string): 
       're-run it where nothing stops it before it ends — no report was read')])
   }
   const parsed = parseReport(tool, c.stdout, c.status)
-  return parsed.ok ? ok({ diagnostics: toDiagnostics(tool, parsed.value, dir), reported: parsed.value.length }) : parsed
+  if (!parsed.ok) return parsed
+  const all = toDiagnostics(tool, parsed.value, dir, tool === 'biome' ? biomeFilePairs(dir) : undefined)
+  return ok({
+    diagnostics: all.filter((d) => d.tolerated !== true),
+    tolerated: all.filter((d) => d.tolerated === true),
+    reported: parsed.value.filter((r) => r.tolerated !== true && r.note !== true).length,
+  })
 }
 
 export function diagnosticKey(d: Diagnostic): string {
@@ -146,6 +172,25 @@ export function hiddenInTree(
   if (blob === undefined) return undefined
   return blob.toString('utf8').split(/\r?\n/)
     .filter((line) => keys.has(loosenedKey({ tool, rule, file, snippet: normalizeSnippet(line) }))).length
+}
+
+// Row 283. Per `diagnosticKey` of (tool, rule, file, a line normalized), how many of `tree`'s lines
+// of `file` (a tree or a commit) give it — what a tolerated spot's key can still find there. A file
+// the tree lacks holds none — confirmed by `ls-tree` — and a read git fails reads undefined.
+export function lineKeys(root: string, tree: string, file: string, tool: ReaderTool, rule: string): Map<string, number> | undefined {
+  const listed = tryGitC(root, '--literal-pathspecs', 'ls-tree', '-z', tree, '--', file)
+  if (!listed.ok) return undefined
+  const out = new Map<string, number>()
+  if (listed.out.trim() === '') return out
+  const blob = gitBlob(root, tree, file)
+  if (blob === undefined) return undefined
+  const lines = blob.toString('utf8').split(/\r?\n/)
+  if (lines.at(-1) === '') lines.pop() // the final newline ends the last line, it starts none
+  for (const line of lines) {
+    const k = diagnosticKey({ tool, rule, file, snippet: normalizeSnippet(line) })
+    out.set(k, (out.get(k) ?? 0) + 1)
+  }
+  return out
 }
 
 export function keyCounts(ds: readonly Diagnostic[]): Map<string, number> {
