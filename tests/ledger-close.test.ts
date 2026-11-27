@@ -11,7 +11,7 @@ import { lazyStamp } from '../src/stamp.js'
 import { LEDGER_STREAM } from '../src/streams.js'
 import { switchOffKey } from '../src/switch-offs.js'
 import { createHash } from 'node:crypto'
-import { hiddenInTree, loosenedKey } from '../src/diagnostics.js'
+import { diagnosticKey, hiddenInTree, loosenedKey } from '../src/diagnostics.js'
 import { bookedRows } from '../src/verbs/dashboard.js'
 import { run as dismiss } from '../src/verbs/dismiss.js'
 import {
@@ -566,5 +566,55 @@ describe('a booked loosening ends by observation (row 278)', () => {
     const r = await repo.cli(['abandon', planId])
     expect(r.code, r.stderr).toBe(0)
     expect([byId(repo.root, mine).state, byId(repo.root, part).state]).toEqual(['closed', 'closed'])
+  }, 120_000)
+})
+
+// Row 284. A tolerated set, as a guard's proof opens it: one key per old spot (tool, rule, file, line normalized).
+const tolItem = (repo: TestRepo, o: { plan: string; spots: Array<{ file: string; snippet: string }> }): string => {
+  const id = newItemId()
+  const spots = Object.fromEntries(o.spots.map((x) => [diagnosticKey({ tool: 'eslint', rule: 'no-swallow', file: x.file, snippet: x.snippet }), { file: x.file, copies: 1 }]))
+  line(repo, LEDGER_STREAM, { t: 'ledger-open', id, key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: o.plan, gate: 'implement',
+    round: 1, run_id: 'r-1', tool: 'eslint', rule: 'no-swallow', origin: 'guard', anchor: 'src/token.ts', subject: { spots } })
+  return id
+}
+const SWALLOW = '} catch { /* SWALLOW */ }'
+
+describe('a tolerated set ends by observation (row 284)', () => {
+  it('a tolerated set closes at the merge stamp once the merged tree holds none of its lines (row 284)', async () => {
+    const s = await mergedSeed()
+    const id = tolItem(s.repo, { plan: s.planId, spots: [{ file: 'src/a.ts', snippet: SWALLOW }] })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': `    ${SWALLOW}\n` }), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)
+    const tree = treeWith(s.repo, { 'src/a.ts': 'fine\n' })
+    shipRunAt(s.repo, s.planId, tree, baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toContainEqual({ v: 1, t: 'ledger-closed', id, by: 'merge', plan: s.planId, pr: 7, tree })
+  }, 120_000)
+
+  it("another merged plan's tolerated set closes only where this merge took its last line out (row 284)", async () => {
+    const s = await mergedSeed()
+    mergedPlan(s.repo, 'old-plan')
+    const id = tolItem(s.repo, { plan: 'old-plan', spots: [{ file: 'src/a.ts', snippet: SWALLOW }] })
+    const lacking = treeWith(s.repo, { 'src/a.ts': 'fine\n' })
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, { 'src/z.ts': 'z\n' }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)
+    shipRunAt(s.repo, s.planId, lacking, baseWith(s.repo, { 'src/a.ts': `${SWALLOW}\n` }))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).toContain(id)
+  }, 120_000)
+
+  it('a tolerated set whose lines remain stays open; an unreadable tree observes nothing (row 284)', async () => {
+    const s = await mergedSeed()
+    const id = tolItem(s.repo, { plan: s.planId, spots: [{ file: 'src/a.ts', snippet: SWALLOW }, { file: 'src/b.ts', snippet: SWALLOW }] })
+    shipRunAt(s.repo, s.planId, treeWith(s.repo, { 'src/a.ts': 'fine\n', 'src/b.ts': `${SWALLOW}\n` }), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7).map((c) => c.id)).not.toContain(id)
+    shipRunAt(s.repo, s.planId, 'b'.repeat(40), baseWith(s.repo, {}))
+    expect(mergeCloses(s.repo.root, s.planId, 7)).toEqual([])
+  }, 120_000)
+
+  it("the abandon closes the plan's tolerated sets (row 284)", async () => {
+    const { repo, planId } = await shippableRepo()
+    const mine = tolItem(repo, { plan: planId, spots: [{ file: 'src/a.ts', snippet: SWALLOW }] })
+    const r = await repo.cli(['abandon', planId])
+    expect(r.code, r.stderr).toBe(0)
+    expect(byId(repo.root, mine)).toMatchObject({ state: 'closed', end: { by: 'abandon' } })
   }, 120_000)
 })

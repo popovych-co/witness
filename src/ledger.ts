@@ -10,7 +10,7 @@ import { treeReadable } from './snapshot.js'
 import { LEDGER_STREAM } from './streams.js'
 import { copiesInTree } from './switch-offs.js'
 import { defsHeld } from './definitions.js'
-import { hiddenInTree } from './diagnostics.js'
+import { hiddenInTree, lineKeys } from './diagnostics.js'
 import { visible } from './toon.js'
 
 // Row 269 (the trust design §3.3, LD). The repo ledger: what a human booked, kept on witness's own
@@ -658,7 +658,29 @@ export function mergeCloses(root: string, plan: string, pr: number): LedgerClose
     const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
     return [close]
   })
-  return [...lint, ...offs, ...drops, ...loose]
+  // Row 284 (§3.3). A tolerated set closes once main holds none of its lines, read from the same newest
+  // round's tree and base by line keys (`lineKeys`: the set's tool and rule, the file, the line normalized):
+  // the plan's own sets read the tree alone; another merged plan's only where the base held a line and the
+  // tree holds none — this merge took it out. A read git fails observes nothing.
+  const tolHolds = (at: string, i: ToleratedItem): boolean | undefined => {
+    const byFile = new Map<string, string[]>()
+    for (const [key, spot] of Object.entries(i.subject.spots)) byFile.set(spot.file, [...(byFile.get(spot.file) ?? []), key])
+    let any = false
+    for (const [file, keys] of byFile) {
+      const held = lineKeys(root, at, file, i.tool, i.rule)
+      if (held === undefined) return undefined
+      if (keys.some((k) => (held.get(k) ?? 0) > 0)) any = true
+    }
+    return any
+  }
+  const tol = tree === undefined ? [] : open.flatMap((i) => {
+    if (i.kind !== 'tolerated-set' || !merged(i.plan)) return []
+    if (tolHolds(tree, i) !== false) return []
+    if (i.plan !== plan && (base === undefined || tolHolds(base, i) !== true)) return []
+    const close: LedgerClosed = { v: 1, t: 'ledger-closed', id: i.id, by: 'merge', plan, pr, tree }
+    return [close]
+  })
+  return [...lint, ...offs, ...drops, ...loose, ...tol]
 }
 
 // Row 269. An abandoned plan never merges, so nothing it booked reaches main: each of its open items
