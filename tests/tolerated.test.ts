@@ -95,7 +95,10 @@ describe('the allowance (row 284)', () => {
     appendEntry(repo.root, LEDGER_STREAM, { t: 'ledger-closed', id: gone, by: 'abandon', plan: 'p1' } as never)
     set(repo, 'p1', { [key('a.ts', 'x')]: { file: 'a.ts', copies: 1 } }, { tool: 'biome', rule: 'lint/a/b' })
     expect(toleratedRules(sets(repo, 'p1'))).toEqual(new Map([['biome', new Set(['lint/a/b'])]]))
-    expect(witnessRules(repo.root)).toEqual(new Map([['eslint', new Set(['no-gone'])], ['biome', new Set(['lint/a/b'])]]))
+    set(repo, 'in-flight', { [key('a.ts', 'x')]: { file: 'a.ts', copies: 1 } }, { rule: 'no-theirs' })
+    expect(witnessRules(repo.root, 'p1')).toEqual(new Map([['eslint', new Set(['no-gone'])], ['biome', new Set(['lint/a/b'])]]))
+    merged(repo, 'in-flight')
+    expect(witnessRules(repo.root, 'p1').get('eslint')).toEqual(new Set(['no-gone', 'no-theirs']))
   })
 })
 

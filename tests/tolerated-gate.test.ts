@@ -4,7 +4,9 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { appendEntry } from '../src/journal.js'
 import { rebaseIfMoved } from '../src/ship.js'
+import { LEDGER_STREAM } from '../src/streams.js'
 import { TOLERATED_L1, TOLERATED_L2, TOLERATED_SET, TOLERATED_TWO, addOrigin, shippableRepo, toleratedBench } from './helpers.js'
 
 const PLAN = 'auth-refresh-plan-1'
@@ -58,7 +60,8 @@ describe('the gates rewrite the tolerated lists (row 285)', () => {
     expect(b.read('src/a.ts')).toBe('x1\nx2\nx3\n')
     await b.gate('ship')
     expect(g(b.wt, 'log', '-1', '--format=%s%n%b').trim()).toBe(`ship(${PLAN}): tolerated lists rewritten for its base\nWitness-State: 1`)
-    expect(existsSync(join(b.wt, 'eslint-suppressions.json'))).toBe(false)
+    // slice 2 review I2: an emptied list is kept as {} — a removal is a modify/delete no merge driver sees
+    expect(b.read('eslint-suppressions.json')).toBe('{}\n')
     expect(g(b.wt, 'status', '--porcelain', '--', 'eslint-suppressions.json')).toBe('')
   }, 240_000)
 
@@ -97,6 +100,20 @@ describe('the gates rewrite the tolerated lists (row 285)', () => {
     expect(b.check('tolerated')!.detail).toContain('eslint-suppressions.json is not a regular file')
   }, 240_000)
 
+  it("another plan's set in flight never strips the repo's own entries from a plan it does not apply to (slice 2 review I1)", async () => {
+    const list = listText({ 'src/b.ts': { 'no-bad': { count: 1 } } })
+    const b = await bench({ main: { 'src/b.ts': 'export const b = "BAD"\n', 'eslint-suppressions.json': list } })
+    appendEntry(b.repo.root, LEDGER_STREAM, { t: 'ledger-open', id: 'l-0000000b', key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: 'other-plan',
+      gate: 'implement', round: 1, run_id: 'r-1', tool: 'eslint', rule: 'no-bad', origin: 'guard', anchor: 'src/x.ts',
+      subject: { spots: { ['ab'.repeat(8)]: { file: 'src/b.ts', copies: 1 } } } } as never)
+    b.repo.git('add', '.witness'); b.repo.git('commit', '-q', '-m', 'another plan in flight')
+    b.put('src/c.ts', 'export const c = 1\n')
+    await b.gate()
+    expect(b.read('eslint-suppressions.json')).toBe(list)
+    expect(b.last().checks.map((c) => c.name)).not.toContain('tolerated')
+    expect(b.check('lint')).toMatchObject({ ok: true })
+  }, 240_000)
+
   it('a gitignored list reads list-ignored and is never written (row 285)', async () => {
     const b = await bench({ main: { 'src/a.ts': `${L1}\n${L2}\n`, '.gitignore': 'node_modules/\neslint-suppressions.json\n' }, set: SET })
     b.put('src/a.ts', `${L1}\n${L2}\nexport const x = 1\n`)
@@ -121,6 +138,25 @@ describe("ship's rebase passes the lists (row 285, probe §6)", () => {
     }
     return { repo, wt, planId, moveMain, run: { planId, hasPr: false, env: {} } }
   }
+
+  it('a list the plan created untracked, which the moved base also created, never stops the move (slice 2 review I2)', async () => {
+    const seed = await shippableRepo()
+    const { repo, wt, planId } = seed
+    addOrigin(repo)
+    writeFileSync(join(wt, 'eslint-suppressions.json'), listText({ 'src/a.ts': { 'no-x': { count: 1 } } }))
+    repo.write('eslint-suppressions.json', listText({ 'src/b.ts': { 'no-y': { count: 2 } } }))
+    repo.git('add', 'eslint-suppressions.json'); repo.git('commit', '-q', '-m', 'another flow'); repo.git('push', '-q', 'origin', 'main')
+    expect(rebaseIfMoved(wt, repo.root, 'main', { planId, hasPr: false, env: {} })).toEqual({ ok: true, value: 'rebased' })
+    expect(JSON.parse(readFileSync(join(wt, 'eslint-suppressions.json'), 'utf8'))).toEqual({ 'src/b.ts': { 'no-y': { count: 2 } } })
+  }, 240_000)
+
+  it('a list the plan removed uncommitted, which the moved base changed, never stops the move (slice 2 review I2)', async () => {
+    const m = await moved()
+    rmSync(join(m.wt, 'eslint-suppressions.json'))
+    m.moveMain(3)
+    expect(rebaseIfMoved(m.wt, m.repo.root, 'main', m.run)).toEqual({ ok: true, value: 'rebased' })
+    expect(JSON.parse(readFileSync(join(m.wt, 'eslint-suppressions.json'), 'utf8'))).toEqual({ 'src/a.ts': { 'no-x': { count: 3 } } })
+  }, 240_000)
 
   it("ship's rebase never stops on a list both sides changed, committed or carried (row 285, probe §6)", async () => {
     const m = await moved()

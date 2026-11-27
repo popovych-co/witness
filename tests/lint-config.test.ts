@@ -22,6 +22,8 @@ describe('jsonStyle (row 250)', () => {
     ['a config that extends: the file decides', { 'biome.json': '{"extends":["ultracite/biome/core"]}' }, SPACED, '  ', 80, 2],
     ['formatter settings', { 'biome.json': '{"formatter":{"indentStyle":"space","indentWidth":4,"lineWidth":100}}' }, undefined, '    ', 100, 4],
     ['json.formatter over formatter', { 'biome.json': '{"formatter":{"indentStyle":"tab"},"json":{"formatter":{"indentStyle":"space"}}}' }, undefined, '  ', 80, 2],
+    ['extending only the witness file keeps Biome\'s tab (slice 2 review M1)', { 'biome.json': '{"extends":["./biome.witness.json"]}' }, SPACED, '\t', 80, 2],
+    ['extending the witness file and a preset: the file decides', { 'biome.json': '{"extends":["biome.witness.json","ultracite/biome/core"]}' }, SPACED, '  ', 80, 2],
     ['biome.jsonc with comments and trailing commas', { 'biome.jsonc': '{ // c\n "formatter": { "indentStyle": "space", }, /* x */ }' }, undefined, '  ', 80, 2],
   ] as const)('%s', (_name, files, existing, indent, lineWidth, tabWidth) => {
     expect(jsonStyle(dirWith(files), existing)).toEqual({ indent, lineWidth, tabWidth })

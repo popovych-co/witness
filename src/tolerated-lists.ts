@@ -4,7 +4,7 @@
 // witness-owned Biome config the repo's `biome.json` extends, one override per file setting each
 // tolerated rule to `info` — the tool stays green and its SARIF reports each spot as a `note`
 // (probe §3). Writers are witness code: no setting, no command.
-import { lstatSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Diagnostic } from './diagnostics.js'
@@ -228,4 +228,21 @@ export function withListsDriver<T>(wt: string, use: (args: string[]) => T): T {
     writeFileSync(attrs, `${carried}${carried === '' || carried.endsWith('\n') ? '' : '\n'}${lines}\n`)
     return use(['-c', `core.attributesFile=${attrs}`, '-c', `merge.${LISTS_DRIVER}.driver=true`])
   })
+}
+
+// Slice 2 review I2. Before ship's move captures the plan's work: each list back to HEAD's — a tracked one
+// restored, an untracked one removed (never a folder) — so the carry never holds a list and no base that
+// created or changed one stops the move; the ship gate rewrites both for the rebased tree.
+export function listsBackToHead(wt: string): void {
+  for (const rel of [ESLINT_LIST, BIOME_LIST]) {
+    if (tryGit(wt, 'cat-file', '-e', `HEAD:${rel}`).ok) {
+      tryGit(wt, '--literal-pathspecs', 'checkout', '-q', 'HEAD', '--', rel)
+      continue
+    }
+    try {
+      const st = lstatSync(join(wt, rel))
+      if (st.isFile() || st.isSymbolicLink()) rmSync(join(wt, rel))
+    } catch { /* absent */ }
+    tryGit(wt, '--literal-pathspecs', 'rm', '-q', '--cached', '--ignore-unmatch', '--', rel)
+  }
 }

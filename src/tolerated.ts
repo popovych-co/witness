@@ -9,7 +9,8 @@
 // it exactly. Invariant: every spot of a tolerated rule on main passed a gate that read it as allowed or
 // booked it. Growth is the multiset difference against it: anything beyond is new, whatever the counts
 // (§4 T4: a swap of one old spot for one new one is one new spot).
-import { lstatSync, readFileSync, rmSync } from 'node:fs'
+import { lstatSync, readFileSync } from 'node:fs'
+import { formatJson } from './json-format.js'
 import { join } from 'node:path'
 import { cliAct } from './act.js'
 import { ensureTrusted } from './allowlist.js'
@@ -111,9 +112,17 @@ export function toleratedRules(sets: readonly ToleratedItem[]): Map<ReaderTool, 
   return byTool(sets)
 }
 
-// Every rule any tolerated set ever named, whatever its state: what a list may hold of witness's writing.
-export function witnessRules(root: string): Map<ReaderTool, Set<string>> {
-  return byTool(ledgerItems(root).filter((i): i is ToleratedItem => i.kind === 'tolerated-set'))
+// Every rule a tolerated set that ever applied to `plan`'s tree named — its own or a merged plan's, whatever its
+// state now: what a list may hold of witness's writing. Slice 2 review I1: another plan's set (in flight, or
+// abandoned) never wrote this tree's list, so its rule's entries here are the repo's own.
+export function witnessRules(root: string, plan: string): Map<ReaderTool, Set<string>> {
+  const merged = new Map<string, boolean>()
+  const applied = (p: string): boolean => {
+    if (p === plan) return true
+    if (!merged.has(p)) merged.set(p, mergedPlan(root, p))
+    return merged.get(p)!
+  }
+  return byTool(ledgerItems(root).filter((i): i is ToleratedItem => i.kind === 'tolerated-set' && applied(i.plan)))
 }
 
 // ── The tolerated check (row 284, C46) ────────────────────────────────────────────────────────────
@@ -237,7 +246,7 @@ export async function prepareTolerated(root: string, wt: string, ctx: Ctx, cfg: 
 Promise<ToleratedReading | undefined> {
   const sets = applicableSets(root, plan)
   const rules = toleratedRules(sets)
-  const witness = witnessRules(root)
+  const witness = witnessRules(root, plan)
   const eslintNow = fileText(wt, ESLINT_LIST)
   const biomeNow = fileText(wt, BIOME_LIST)
   const eslintHeld = eslintNow !== undefined && Object.values(parseEslintList(eslintNow) ?? {})
@@ -272,8 +281,10 @@ Promise<ToleratedReading | undefined> {
     if (tool === 'eslint') {
       const prior = parseEslintList(gitBlob(root, base, ESLINT_LIST)?.toString('utf8') ?? '')
       const text = eslintListText(eslintList(spots, rules.get('eslint') ?? new Set(), witness.get('eslint') ?? new Set(), prior), jsonStyle(wt, eslintNow))
-      if (text === undefined && eslintNow !== undefined) { rmSync(join(wt, ESLINT_LIST), { force: true }); wrote.push(ESLINT_LIST) }
-      if (text !== undefined && text !== eslintNow) { writeListFile(wt, ESLINT_LIST, text); wrote.push(ESLINT_LIST) }
+      // Slice 2 review I2: an emptied list is kept as `{}` (ESLint reads it as none), never removed — a removal
+      // against an upstream edit is a modify/delete no merge driver ever sees.
+      const next = text ?? (eslintNow !== undefined ? formatJson({}) : undefined)
+      if (next !== undefined && next !== eslintNow) { writeListFile(wt, ESLINT_LIST, next); wrote.push(ESLINT_LIST) }
     }
     if (tool === 'biome' && (rules.has('biome') || biomeNow !== undefined)) {
       const text = biomeListText(biomeList(spots, rules.get('biome') ?? new Set()), jsonStyle(wt, biomeNow))
