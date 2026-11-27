@@ -21,6 +21,15 @@ type Obj = Record<string, unknown>
 const isObj = (x: unknown): x is Obj => typeof x === 'object' && x !== null && !Array.isArray(x)
 const GLOB = /[*?[\]{}!]/
 
+// Security review (row 285). The one path shape the witness file ever names, written and read alike: a
+// repo-relative path Biome reads literally — no glob character (a glob widens the override to other
+// files, whose notes no pair then claims, so their spots would vanish from errors and tolerated alike),
+// no backslash, no `.` or `..` segment, not absolute.
+export function biomePath(f: string): boolean {
+  return f !== '' && !GLOB.test(f) && !f.includes('\\') && !f.startsWith('/') && !/^[A-Za-z]:/.test(f)
+    && !f.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')
+}
+
 // The (file, rule) pairs the witness file sets to `info`: an override of exactly
 // `{ includes: [<one path, no glob>], linter: { rules: { <group>: { <name>: 'info' } } } }`. Any other
 // shape is none of witness's writing and contributes nothing; text that does not parse reads empty.
@@ -36,7 +45,7 @@ export function biomePairs(text: string): Set<string> {
   for (const o of doc.overrides) {
     if (!isObj(o) || Object.keys(o).some((k) => k !== 'includes' && k !== 'linter')) continue
     const inc = o.includes
-    if (!Array.isArray(inc) || inc.length !== 1 || typeof inc[0] !== 'string' || inc[0] === '' || GLOB.test(inc[0])) continue
+    if (!Array.isArray(inc) || inc.length !== 1 || typeof inc[0] !== 'string' || !biomePath(inc[0])) continue
     if (!isObj(o.linter) || Object.keys(o.linter).some((k) => k !== 'rules') || !isObj(o.linter.rules)) continue
     const pairs: string[] = []
     let shaped = true
@@ -138,7 +147,7 @@ export function biomeList(spots: readonly Diagnostic[], tolerated: ReadonlySet<s
   const byFile = new Map<string, Map<string, Set<string>>>()
   for (const d of spots) {
     const m = BIOME_RULE.exec(d.rule)
-    if (m === null || !tolerated.has(d.rule) || !listable(d)) continue
+    if (m === null || !tolerated.has(d.rule) || !listable(d) || !biomePath(d.file)) continue
     const groups = byFile.get(d.file) ?? new Map<string, Set<string>>()
     groups.set(m[1]!, (groups.get(m[1]!) ?? new Set<string>()).add(m[2]!))
     byFile.set(d.file, groups)

@@ -60,6 +60,14 @@ describe('the writers (row 285)', () => {
     expect(biomePairs(biomeListText(list))).toEqual(new Set([pairKey('scripts/a.ts', 'lint/suspicious/noConsole'), pairKey('scripts/b.ts', 'lint/suspicious/noConsole')]))
     expect(biomeListText(biomeList([], new Set()))).toBe('{\n  "overrides": []\n}\n')
   })
+  it('a path Biome would read as a glob, or one leaving the root, is never written nor read as a pair (row 285, security review)', () => {
+    const rule = 'lint/suspicious/noConsole'
+    const odd = ['src/*.ts', 'src/[ab].ts', 'src/{a,b}.ts', 'src/?.ts', 'src/!a.ts', 'src/../x.ts', '../x.ts', 'src\\a.ts', './a.ts']
+    expect(biomeList(odd.map((f, i) => d(rule, f, i + 1, 'biome')), new Set([rule]))).toEqual({ overrides: [] })
+    for (const f of odd) {
+      expect(biomePairs(JSON.stringify({ overrides: [{ includes: [f], linter: { rules: { suspicious: { noConsole: 'info' } } } }] })).size).toBe(0)
+    }
+  })
   it('a plugin rule is never listed, and only eslint and biome rules are writable (row 285, probe B6)', () => {
     expect(writable('biome', 'plugin')).toBe(false); expect(writable('biome', 'lint/suspicious/noConsole')).toBe(true)
     expect(writable('tsc', 'TS2345')).toBe(false); expect(writable('clippy', 'clippy::unwrap_used')).toBe(false); expect(writable('eslint', 'no-x')).toBe(true)
