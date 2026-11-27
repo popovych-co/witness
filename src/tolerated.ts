@@ -9,7 +9,7 @@
 // it exactly. Invariant: every spot of a tolerated rule on main passed a gate that read it as allowed or
 // booked it. Growth is the multiset difference against it: anything beyond is new, whatever the counts
 // (§4 T4: a swap of one old spot for one new one is one new spot).
-import { lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cliAct } from './act.js'
 import { ensureTrusted } from './allowlist.js'
@@ -137,6 +137,7 @@ function want(tool: ReaderTool, why: string): string {
     case 'biome-unwired': return 'biome.json does not extend ./biome.witness.json — add it to "extends"'
     case 'reader-hides-notes': return 'readers.biome hides info diagnostics (--diagnostic-level) — tolerated spots arrive as notes'
     case 'list-ignored': return `${listOf(tool)} is gitignored — the tolerated list must be committed`
+    case 'list-not-file': return `${listOf(tool)} is not a regular file — the tolerated list must be one; witness never writes through a link`
     default: return `${visible(why)} — never green`
   }
 }
@@ -224,6 +225,24 @@ function fileText(dir: string, rel: string): string | undefined {
 
 const LIST_OF: Partial<Record<ReaderTool, string>> = { eslint: ESLINT_LIST, biome: BIOME_LIST }
 
+// Security review (row 285). Whether `rel` under `dir` is absent or a regular file — never a link, a
+// folder or anything else witness would write through.
+function plainOrAbsent(dir: string, rel: string): boolean {
+  try {
+    return lstatSync(join(dir, rel)).isFile()
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+  }
+}
+
+// A list written beside itself and renamed over its path: a rename replaces whatever entry is there, never
+// a link's target.
+function writeList(dir: string, rel: string, text: string): void {
+  const tmp = join(dir, `.${rel}.witness-${process.pid}`)
+  writeFileSync(tmp, text, { flag: 'wx' })
+  renameSync(tmp, join(dir, rel))
+}
+
 // Row 285 (C51). Before anything reads the tree: each tolerated tool's reader runs in the worktree (as lint's,
 // `ensureTrusted`), and each list is written for the tree — ESLint's tolerating every spot of a tolerated
 // rule (growth included: the tool never reports one, the tolerated check alone judges), dropping a rule a
@@ -256,6 +275,10 @@ Promise<ToleratedReading | undefined> {
       tools.set(tool, { ok: false, state: 'not-measured', why: 'list-ignored' })
       continue
     }
+    if (list !== undefined && !plainOrAbsent(wt, list)) {
+      tools.set(tool, { ok: false, state: 'not-measured', why: 'list-not-file' })
+      continue
+    }
     const r = readPart(wt, ctx, tool, cmd)
     if (!r.ok) {
       tools.set(tool, { ok: false, state: 'not-measured', why: r.violations[0]?.rule === 'run-interrupted' ? 'run-interrupted' : 'reader-unread' })
@@ -267,11 +290,11 @@ Promise<ToleratedReading | undefined> {
       const prior = parseEslintList(gitBlob(root, base, ESLINT_LIST)?.toString('utf8') ?? '')
       const text = eslintListText(eslintList(spots, rules.get('eslint') ?? new Set(), witness.get('eslint') ?? new Set(), prior), jsonStyle(wt, eslintNow))
       if (text === undefined && eslintNow !== undefined) { rmSync(join(wt, ESLINT_LIST), { force: true }); wrote.push(ESLINT_LIST) }
-      if (text !== undefined && text !== eslintNow) { writeFileSync(join(wt, ESLINT_LIST), text); wrote.push(ESLINT_LIST) }
+      if (text !== undefined && text !== eslintNow) { writeList(wt, ESLINT_LIST, text); wrote.push(ESLINT_LIST) }
     }
     if (tool === 'biome' && (rules.has('biome') || biomeNow !== undefined)) {
       const text = biomeListText(biomeList(spots, rules.get('biome') ?? new Set()), jsonStyle(wt, biomeNow))
-      if (text !== biomeNow) { writeFileSync(join(wt, BIOME_LIST), text); wrote.push(BIOME_LIST) }
+      if (text !== biomeNow) { writeList(wt, BIOME_LIST, text); wrote.push(BIOME_LIST) }
     }
   }
   if (commit !== undefined && wrote.length > 0) {

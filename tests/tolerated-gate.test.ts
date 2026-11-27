@@ -1,7 +1,7 @@
 // Row 285 (C51) and row 284. Every code gate rewrites the tolerated lists for its tree before anything reads
 // it, then runs the tolerated check; ship commits them; ship's rebase never stops on them.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { rebaseIfMoved } from '../src/ship.js'
@@ -82,6 +82,19 @@ describe('the gates rewrite the tolerated lists (row 285)', () => {
     expect(b.check('lint')).toMatchObject({ ok: false })
     const report = JSON.parse(b.eslint().stdout) as Array<{ filePath: string; messages: unknown[] }>
     expect(report.find((r) => r.filePath.endsWith('src/b.ts'))!.messages).toHaveLength(2)
+  }, 240_000)
+
+  it('a list that is a link is never written through: not measured, the target untouched (row 285, security review)', async () => {
+    const b = await bench({ main: TWO, set: SET })
+    const outside = join(b.repo.root, '..', `outside-${Date.now()}.txt`)
+    writeFileSync(outside, 'keep me\n')
+    rmSync(join(b.wt, 'eslint-suppressions.json'))
+    symlinkSync(outside, join(b.wt, 'eslint-suppressions.json'))
+    b.put('src/a.ts', `${L1}\n`)
+    await b.gate()
+    expect(readFileSync(outside, 'utf8')).toBe('keep me\n')
+    expect(b.check('tolerated')).toMatchObject({ ok: false, tolerated: [{ tool: 'eslint', rule: 'no-swallow', state: 'not-measured', why: 'list-not-file' }] })
+    expect(b.check('tolerated')!.detail).toContain('eslint-suppressions.json is not a regular file')
   }, 240_000)
 
   it('a gitignored list reads list-ignored and is never written (row 285)', async () => {
