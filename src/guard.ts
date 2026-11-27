@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { breadthCopy, breadthPath, breadthSeed } from './breadth.js'
 import { entryAt, foldOverlay, objectType } from './cf-tree.js'
@@ -11,7 +11,7 @@ import { stateCommit, stateDirs } from './gitio.js'
 import { appendEntry, entryLine, journalRel, readStream, type Entry } from './journal.js'
 import { loadFailures, mergeReports, reportFiles, type TestOutcome } from './junit.js'
 import { trustedNow } from './allowlist.js'
-import { readPart, type Diagnostic } from './diagnostics.js'
+import { keyCounts, newDiagnostics, readPart, type Diagnostic } from './diagnostics.js'
 import { RULE_RE } from './lint-readers.js'
 import { acquireLock } from './lock.js'
 import { ok, refuse, v, type Result, type Violation } from './refusal.js'
@@ -27,6 +27,9 @@ import { isTestPath, langOf } from './switch-offs.js'
 import { quotedWord, shellWord, visible } from './toon.js'
 import { withTxn } from './txn.js'
 import { anchorKey, guardMarked, type GuardKind } from './verdict.js'
+import type { LedgerClosed, LedgerOpen } from './ledger.js'
+import { LEDGER_STREAM } from './streams.js'
+import { BIOME_LIST, biomeListText, extendsWitness, writeListFile } from './tolerated-lists.js'
 
 // Row 280 (§4 T4). A fix adds a check. A reviewer marks a blocking finding a machine could catch
 // from now on (`guard: lint | test`, src/verdict.ts); the round that marks one pins its reviewed tree
@@ -134,11 +137,13 @@ export function overlayRefusal(root: string, wt: string, cfg: Config, anchor: st
 // Final review I4: `attributable: false` when attribution was asked for but the anchored file is the
 // same in the round's tree and now — the attribution tree would be the green tree, attributing nothing,
 // so the proof refuses `guard-unattributed` (not measured).
-export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string; attributable?: false }
+// Row 286 (C52): `old`, when asked for, the base commit with the overlay folded over it from the current tree
+// (through the base's scripts) — the rule's spots there are the base's own, red and green count beyond them.
+export interface GuardTrees { pinned: string; current: string; red: string; green: string; attrib?: string; attributable?: false; old?: string }
 
 export function guardTrees(
   root: string, wt: string, base: string, cfg: Config, mark: GuardMark, overlay: readonly string[],
-  extra?: Array<{ path: string; mode: string; sha: string }>, attribute?: string,
+  extra?: Array<{ path: string; mode: string; sha: string }>, attribute?: string, old?: boolean,
 ): Result<GuardTrees> {
   const pinned = mark.run.reviewed_tree
   if (pinned === undefined || objectType(root, pinned) !== 'tree') {
@@ -155,15 +160,23 @@ export function guardTrees(
   if (!red.ok) return red
   const green = withBaseScripts(root, base, current, cfg.checks.definitions)
   if (!green.ok) return green
-  if (attribute === undefined) return ok({ pinned, current, red: red.value, green: green.value })
+  let oldTree: { old: string } | Record<string, never> = {}
+  if (old === true) {
+    const onBase = foldOverlay(root, base, { from: current, paths: [...overlay] })
+    if (!onBase.ok) return onBase
+    const held = withBaseScripts(root, base, onBase.value, cfg.checks.definitions)
+    if (!held.ok) return held
+    oldTree = { old: held.value }
+  }
+  if (attribute === undefined) return ok({ pinned, current, red: red.value, green: green.value, ...oldTree })
   if (entryAt(root, pinned, attribute)?.sha === entryAt(root, current, attribute)?.sha) {
-    return ok({ pinned, current, red: red.value, green: green.value, attributable: false })
+    return ok({ pinned, current, red: red.value, green: green.value, attributable: false, ...oldTree })
   }
   const back = foldOverlay(root, current, { from: pinned, paths: [attribute] })
   if (!back.ok) return back
   const attrib = withBaseScripts(root, base, back.value, cfg.checks.definitions)
   if (!attrib.ok) return attrib
-  return ok({ pinned, current, red: red.value, green: green.value, attrib: attrib.value })
+  return ok({ pinned, current, red: red.value, green: green.value, attrib: attrib.value, ...oldTree })
 }
 
 // ── The proof's record ───────────────────────────────────────────────────────────────────────
@@ -178,23 +191,41 @@ export interface GuardEntry {
   v: 1; t: 'guard'; gate: GuardGate; anchor: string; round: number; run: string; kind: GuardKind
   rule?: { tool: ReaderTool; rule: string }; tests?: string[]; files: Record<string, string>
   base: string; red: string; green: string; breadth?: string; spots?: number; ms: number
+  // Row 286: `old` the rule's spots on the base with the overlay (a lint guard's old tree); `tolerated` the
+  // tolerated set the proof opened for them, in the same transaction.
+  old?: number; tolerated?: string
   // Slice 2 review I3: a test guard's attribution run — true when the named cases failed with only the
   // anchored file put back, false when that tree could not be read (a load failure, no report); absent
   // when it did not run (full-suite mode, an omission anchor).
   attributed?: boolean
 }
 
-// One `guard` entry under the repo lock, in one transaction with its state commit.
-export function journalGuard(root: string, plan: string, entry: Omit<GuardEntry, 'v' | 't'>): Result<{ sha: string }> {
-  const line: GuardEntry = { v: 1, t: 'guard', ...entry }
+// Row 286. What a lint guard's proof does to the ledger, read under the repo lock: the tolerated set it
+// opens (its id is the entry's `tolerated`) and the plan's earlier sets for the rule it closes.
+export interface GuardLedger { opens: LedgerOpen[]; closes: LedgerClosed[]; tolerated?: string; held: number; over: boolean }
+
+// One `guard` entry under the repo lock, in one transaction with its state commit. Row 286: with `ledger`,
+// read under the same lock, its opens and closes go on the ledger stream in that transaction too.
+export function journalGuard(root: string, plan: string, entry: Omit<GuardEntry, 'v' | 't'>, ledger?: () => GuardLedger):
+Result<{ sha: string; ledger?: GuardLedger }> {
   const lock = acquireLock(root)
   if (!lock.ok) return lock
   try {
-    const marker = { op: `guard(${plan})`, files: [journalRel(plan)], journalMulti: [{ stream: plan, line: entryLine(line as unknown as { t: 'guard'; [k: string]: unknown }) }] }
-    return withTxn(root, marker, () => {
+    const l = ledger?.()
+    const line: GuardEntry = { v: 1, t: 'guard', ...entry, ...(l?.tolerated !== undefined ? { tolerated: l.tolerated } : {}) }
+    const toLedger = [...(l?.opens ?? []), ...(l?.closes ?? [])]
+    const asLine = (x: unknown) => entryLine(x as { t: 'guard'; [k: string]: unknown })
+    const marker = {
+      op: `guard(${plan})`,
+      files: [journalRel(plan), ...(toLedger.length > 0 ? [journalRel(LEDGER_STREAM)] : [])],
+      journalMulti: [{ stream: plan, line: asLine(line) }, ...toLedger.map((x) => ({ stream: LEDGER_STREAM, line: asLine(x) }))],
+    }
+    const done = withTxn(root, marker, () => {
       appendEntry(root, plan, line as unknown as Entry)
+      for (const x of toLedger) appendEntry(root, LEDGER_STREAM, x as unknown as Entry)
       return stateCommit(root, marker.files, marker.op)
     })
+    return done.ok ? ok({ sha: done.value.sha, ...(l !== undefined ? { ledger: l } : {}) }) : done
   } finally {
     lock.value()
   }
@@ -349,13 +380,18 @@ const UNTRUSTED_WANT = 'a trusted command — witness next names the grant to ma
 // none, row 255; C43) and at error severity only (row 262: a warn-level rule never reads red). Red:
 // the rule fires on the anchored file of the red tree — the round's own bytes, which the overlay never
 // holds — and, given `copy`, on the breadth copy beside it too. Green: it fires nowhere in the
-// anchored file now (a fix that deleted the file is green). `spots`: the rule's diagnostics on every
-// other file of the current tree — until T4b's tolerated sets, lint reads them as the plan's. A report
-// the reader cannot read is not measured (`reader-unread`), never a red.
+// anchored file now (a fix that deleted the file is green). A report the reader cannot read is not
+// measured (`reader-unread`), never a red.
+// Row 286 (C52). A third read, the old tree (the base with the overlay), when the trees hold one: red counts
+// the anchored file's spots beyond the old tree's spots there (per key) — a rule firing only on a line the
+// base already held never proves red — and green requires none beyond them. Every read takes errors and
+// tolerated spots alike (a list never hides a spot from the guard), with Biome's witness file emptied in the
+// scratch so no override a tree carries can hide one. `old` the rule's spots on the old tree; `spots` the
+// rule's spots on every other file now, `mine` those beyond the old tree's.
 export function proveLint(
   root: string, ctx: Ctx, cfg: Config, plan: string, mark: GuardMark, trees: GuardTrees,
   rule: { tool: ReaderTool; rule: string }, anchored: string, copy?: string,
-): Result<{ spots: number; ms: number }> {
+): Result<{ spots: number; ms: number; old: Diagnostic[]; mine: number }> {
   const cmd = cfg.readers[rule.tool]
   if (cmd === undefined) {
     return refuse([v(`readers.${rule.tool}`, 'reader-unset', 'none', `the command printing ${rule.tool}'s report — witness migrate proposes one; a lint guard reads its rule there`)])
@@ -364,10 +400,13 @@ export function proveLint(
   const t0 = Date.now()
   const read = (tree: string): Result<Diagnostic[]> => {
     const r = inScratch(root, ctx, cfg, { tree, plan }, (dir): Result<CfStep<Diagnostic[]>> => {
+      if (rule.tool === 'biome' && (existsInDir(dir, BIOME_LIST) || extendsWitness(dir) === true)) {
+        try { writeListFile(dir, BIOME_LIST, biomeListText({ overrides: [] })) } catch { /* a folder there: Biome reads the tree as it is */ }
+      }
       const part = readPart(dir, ctx, rule.tool, cmd)
-      return part.ok ? ok({ value: part.value.diagnostics, load: [] }) : part
+      return part.ok ? ok({ value: [...part.value.diagnostics, ...part.value.tolerated], load: [] }) : part
     })
-    if (r.ok) return ok(r.value.value)
+    if (r.ok) return ok(r.value.value.filter((d) => d.tool === rule.tool && d.rule === rule.rule))
     const why = r.violations[0]!
     // A reader's own failures read not measured; the scratch's refusals (and a signal) keep their rule.
     if (why.field === `readers.${rule.tool}` && why.rule !== 'run-interrupted') {
@@ -375,25 +414,45 @@ export function proveLint(
     }
     return r
   }
-  const hits = (ds: readonly Diagnostic[], file: string) => ds.filter((d) => d.tool === rule.tool && d.rule === rule.rule && d.file === file).length
+  const at = (ds: readonly Diagnostic[], file: string) => ds.filter((d) => d.file === file)
+  const beyond = (now: readonly Diagnostic[], before: readonly Diagnostic[]) => newDiagnostics(now, keyCounts(before))
   const red = read(trees.red)
   if (!red.ok) return red
   const shown = `${rule.tool}:${rule.rule}`
-  if (hits(red.value, anchored) === 0) {
-    return refuse([v('--rule', 'guard-not-red', visible(shown),
-      `a rule that reports an error on ${visible(anchored)} in round ${mark.run.round}'s tree, the code the reviewer flagged — it reports none there (a warn-level rule never counts)`)])
+  const notRed = (held: number) => refuse<never>([v('--rule', 'guard-not-red', visible(shown),
+    `a rule that reports an error on ${visible(anchored)} in round ${mark.run.round}'s tree, the code the reviewer flagged — it reports none there${
+      held > 0 ? ` beyond the ${held} the base already holds in that file` : ''} (a warn-level rule never counts)`)])
+  if (at(red.value, anchored).length === 0) return notRed(0)
+  let old: Diagnostic[] = []
+  if (trees.old !== undefined) {
+    const o = read(trees.old)
+    if (!o.ok) return o
+    old = o.value
   }
-  if (copy !== undefined && hits(red.value, copy) === 0) {
+  const oldHere = at(old, anchored)
+  if (beyond(at(red.value, anchored), oldHere).length === 0) return notRed(oldHere.length)
+  if (copy !== undefined && at(red.value, copy).length === 0) {
     return refuse([v('--rule', 'guard-too-narrow', visible(shown), `a rule that catches this shape of code, not this file's path or names — it missed ${visible(copy)}, a copy with renamed locals and changed indentation`)])
   }
   const green = read(trees.green)
   if (!green.ok) return green
-  const left = hits(green.value, anchored)
+  const left = beyond(at(green.value, anchored), oldHere).length
   if (left > 0) {
-    return refuse([v('--rule', 'guard-not-green', visible(shown), `a fix the rule no longer flags — it still reports ${left} on ${visible(anchored)} now`)])
+    return refuse([v('--rule', 'guard-not-green', visible(shown), `a fix the rule no longer flags — it still reports ${left} on ${visible(anchored)} now${
+      oldHere.length > 0 ? ` beyond the ${oldHere.length} the base holds there` : ''}`)])
   }
-  const spots = green.value.filter((d) => d.tool === rule.tool && d.rule === rule.rule && d.file !== anchored).length
-  return ok({ spots, ms: Date.now() - t0 })
+  const elsewhere = green.value.filter((d) => d.file !== anchored)
+  const mine = beyond(elsewhere, old.filter((d) => d.file !== anchored)).length
+  return ok({ spots: elsewhere.length, ms: Date.now() - t0, old, mine })
+}
+
+const existsInDir = (dir: string, rel: string): boolean => {
+  try {
+    lstatSync(join(dir, rel))
+    return true
+  } catch {
+    return false
+  }
 }
 
 // ── The breadth copy (C45) ───────────────────────────────────────────────────────────────────

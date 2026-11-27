@@ -16,6 +16,9 @@ import { checksSignature } from '../src/checks.js'
 import type { GuardKind } from '../src/verdict.js'
 import { DEFAULT_DEFINITIONS } from '../src/definitions.js'
 import { worktreePath } from '../src/worktree.js'
+import { diagnosticKey, normalizeSnippet } from '../src/diagnostics.js'
+import { ledgerItems } from '../src/ledger.js'
+import { LEDGER_STREAM } from '../src/streams.js'
 import type { AnchorInput } from '../src/verdict.js'
 import {
   TOKEN_BROKEN, TOKEN_FIXED, approve, fakeLint, fixtureEnv, patchConfig, runScript, seededRepo, shippableRepo, trustConfig, unwrap,
@@ -164,6 +167,7 @@ describe('witness guard — a test guard (row 280)', () => {
 const SWALLOWED = `${TOKEN_BROKEN}// SWALLOW the error\n`
 async function lintBench(opts: {
   main?: Record<string, string>; rule?: Record<string, unknown>; reader?: string; anchor?: AnchorInput; planPkg?: string; mark?: GuardKind
+  round?: string; now?: string; ruleId?: string
 } = {}) {
   const repo = await seededRepo()
   const lint = fakeLint(repo)
@@ -187,17 +191,17 @@ async function lintBench(opts: {
   const base = unwrap(diffBase(wt, cfg))
   mkdirSync(join(wt, 'src'), { recursive: true })
   if (opts.planPkg !== undefined) writeFileSync(join(wt, 'package.json'), opts.planPkg)
-  writeFileSync(join(wt, 'src/token.ts'), SWALLOWED)
+  writeFileSync(join(wt, 'src/token.ts'), opts.round ?? SWALLOWED)
   const tree = snapshotTree(wt, base, planChangeSet(wt, base))!
   unwrap(pinTree(repo.root, planId, tree))
-  writeFileSync(join(wt, 'src/token.ts'), TOKEN_FIXED)
+  writeFileSync(join(wt, 'src/token.ts'), opts.now ?? TOKEN_FIXED)
   appendEntry(repo.root, planId, {
     v: 1, t: 'gate-run', gate: 'implement', artifact: planId, round: 1, run_id: 'r-lint-1', reviewed_sha: 's', prompts_sha: 'p',
     witness: '0', model: 'm', pin: 'm', harness: 'claude-code', checks: [], reviewed_tree: tree,
     verdicts: [{ reviewer: 'silent-failure-hunter', coverage: [], findings: [{ anchor: opts.anchor ?? 'src/token.ts', claim: 'swallows the error', blocking: true, guard: opts.mark ?? 'lint' }] }],
     outcome: 'stopped',
   } as unknown as Entry)
-  writeFileSync(join(wt, 'fake-lint.json'), `${JSON.stringify({ rules: { 'lint/test/noSwallow': { word: 'SWALLOW', ...opts.rule } } })}\n`)
+  writeFileSync(join(wt, 'fake-lint.json'), `${JSON.stringify({ rules: { [opts.ruleId ?? 'lint/test/noSwallow']: { word: 'SWALLOW', ...opts.rule } } })}\n`)
   const guard = (args: string[], env = fixtureEnv()) => repo.cli(['guard', planId, ...args], { cwd: wt, env })
   const guards = () => readStream(repo.root, planId).filter((e) => e.t === 'guard')
   return { repo, wt, planId, guard, guards }
@@ -232,12 +236,12 @@ describe('witness guard — a lint guard (row 280)', () => {
     expect(b.guards()).toEqual([])
   }, 180_000)
 
-  it("the rule's other spots on the current tree are counted and said", async () => {
+  it("the rule's other spots on the current tree are counted and said: old ones tolerated (rows 280, 286)", async () => {
     const b = await lintBench({ main: { 'src/other.ts': 'export const o = 1 // SWALLOW\n' } })
     const r = await b.guard(LINT_ARGS)
     expect(r.code, r.stderr).toBe(0)
-    expect(r.stdout).toContain("note: 1 other spot on the current tree — lint reads it as this plan's until it is fixed")
-    expect(b.guards()[0]).toMatchObject({ spots: 1 })
+    expect(r.stdout).toContain('tolerated: 1 old spot of biome lint/test/noSwallow')
+    expect(b.guards()[0]).toMatchObject({ spots: 1, old: 1 })
   }, 180_000)
 
   it("a lint guard runs the base's scripts: a reader through a script the plan rewrote reads the base's", async () => {
@@ -382,3 +386,80 @@ describe('witness guard — what witness could not measure reaches the judge (fi
   }, 180_000)
 })
 
+
+// Row 286 (C52). A lint guard reads a third tree, the base with the overlay folded over it: red and green count
+// the anchored file's spots beyond the base's, and the rule's old spots open the plan's tolerated set.
+const OTHER = 'export const other = 1 // SWALLOW old'
+const otherKey = (line = OTHER, file = 'src/other.ts') => diagnosticKey({ tool: 'biome', rule: 'lint/test/noSwallow', file, snippet: normalizeSnippet(line) })
+const tolSets = (root: string) => ledgerItems(root).filter((i) => i.kind === 'tolerated-set')
+
+describe('witness guard — a lint guard reads the base (row 286)', () => {
+  it("a lint guard tolerates the rule's old spots: its set opens in the guard's own transaction (row 286)", async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    const sets = tolSets(b.repo.root)
+    expect(sets).toEqual([expect.objectContaining({ kind: 'tolerated-set', check: 'tolerated', plan: b.planId, tool: 'biome', rule: 'lint/test/noSwallow',
+      origin: 'guard', anchor: 'src/token.ts', state: 'open', subject: { spots: { [otherKey()]: { file: 'src/other.ts', copies: 1 } } } })])
+    expect(b.guards().at(-1)).toMatchObject({ tolerated: sets[0]!.id, old: 1 })
+    const head = execFileSync('git', ['show', '--name-only', '--format=%s', 'HEAD'], { cwd: b.repo.root, encoding: 'utf8' })
+    expect(head).toContain(`guard(${b.planId})`)
+    expect(head).toContain(`.witness/journal/${b.planId}.jsonl`)
+    expect(head).toContain(`.witness/journal/${LEDGER_STREAM}.jsonl`)
+    expect(r.stdout).toContain(`tolerated: 1 old spot of biome lint/test/noSwallow — set ${sets[0]!.id}; the next gate writes biome.witness.json`)
+  }, 240_000)
+
+  it('a spot the plan added is no old spot: the verb says it, and the set leaves it out (row 286)', async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
+    writeFileSync(join(b.wt, 'src/new.ts'), 'export const fresh = 1 // SWALLOW new\n')
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toContain('note: 1 spot this plan added — the tolerated check reads them red until they are fixed')
+    expect(Object.keys(tolSets(b.repo.root)[0]!.kind === 'tolerated-set' ? (tolSets(b.repo.root)[0] as { subject: { spots: object } }).subject.spots : {})).toEqual([otherKey()])
+  }, 240_000)
+
+  it('a rule firing only on a line the base already holds in the anchored file is not red (row 286, C52)', async () => {
+    const held = 'export const kept = 1 // SWALLOW kept'
+    const b = await lintBench({ main: { 'src/token.ts': `${TOKEN_FIXED}${held}\n` }, round: `${TOKEN_BROKEN}${held}\n`, now: `${TOKEN_FIXED}${held}\n` })
+    const r = await b.guard(LINT_ARGS)
+    expect([r.code, r.stderr]).toEqual([1, expect.stringContaining('guard-not-red')])
+    expect(b.guards()).toEqual([])
+  }, 240_000)
+
+  it("a re-proof replaces the plan's earlier set for the rule (row 286)", async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
+    expect((await b.guard(LINT_ARGS)).code).toBe(0)
+    const first = tolSets(b.repo.root)[0]!.id
+    expect((await b.guard(LINT_ARGS)).code).toBe(0)
+    const sets = tolSets(b.repo.root)
+    expect(sets.find((x) => x.id === first)).toMatchObject({ state: 'closed', end: { by: 'guard', plan: b.planId } })
+    expect(sets.filter((x) => x.state === 'open')).toHaveLength(1)
+  }, 240_000)
+
+  it('a rule past 500 old spots opens no set and says so (row 286)', async () => {
+    const many = Array.from({ length: 501 }, (_, i) => `export const s${i} = ${i} // SWALLOW ${i}`).join('\n')
+    const b = await lintBench({ main: { 'src/many.ts': `${many}\n` } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    expect(b.guards()).toHaveLength(1)
+    expect(b.guards()[0]).not.toHaveProperty('tolerated')
+    expect(tolSets(b.repo.root)).toEqual([])
+    expect(r.stdout).toContain('note: 501 old spots — more than 500, so no tolerated set: lint reads them as this plan\'s until they are fixed')
+  }, 240_000)
+
+  it('a rule with no list (a Biome plugin, tsc) opens no set and says so (row 286)', async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` }, ruleId: 'plugin' })
+    const r = await b.guard(['--finding', 'src/token.ts', '--files', 'fake-lint.json', '--rule', 'biome:plugin'])
+    expect(r.code, r.stderr).toBe(0)
+    expect(tolSets(b.repo.root)).toEqual([])
+    expect(r.stdout).toContain("note: biome plugin has no tolerated list — lint reads its 1 other spot as this plan's until it is fixed")
+  }, 240_000)
+
+  it('Biome not wired to the witness file is said at the proof (row 286)', async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toContain('note: biome.json does not extend ./biome.witness.json — add "./biome.witness.json" to its "extends", or Biome reads the old spots as errors')
+    expect(tolSets(b.repo.root)).toHaveLength(1)
+  }, 240_000)
+})

@@ -129,6 +129,18 @@ describe("a guard's overlay and trees (row 280)", () => {
     expect(t.current).toBe(t.green)
   })
 
+  it("the old tree is the base with the overlay folded over it, through the base's scripts (row 286)", async () => {
+    const { repo, wt, base, cfg, m, show } = await guardRepo()
+    const t = value(guardTrees(repo.root, wt, base, cfg, m, ['tests/guard.test.ts'], undefined, undefined, true))
+    expect(show(t.old!, 'tests/guard.test.ts')).toBe(show(t.current, 'tests/guard.test.ts'))
+    const atBase = (path: string) => { try { return show(base, path) } catch { return undefined } }
+    const atOld = (path: string) => { try { return show(t.old!, path) } catch { return undefined } }
+    expect(atOld('src/token.ts')).toBe(atBase('src/token.ts'))
+    expect(atOld('src/other.ts')).toBeUndefined()
+    expect(atOld('eslint.config.mjs')).toBe(atBase('eslint.config.mjs'))
+    expect(value(guardTrees(repo.root, wt, base, cfg, m, ['tests/guard.test.ts'])).old).toBeUndefined()
+  })
+
   it("both trees run the base's scripts: the plan's and the overlay's package.json scripts never reach a guard", async () => {
     const { repo, wt, base, cfg } = await guardRepo()
     const git = (args: string[], input = '') => execFileSync('git', args, { cwd: repo.root, input, encoding: 'utf8' }).trim()
@@ -146,6 +158,8 @@ describe("a guard's overlay and trees (row 280)", () => {
     const m: GuardMark = { gate: 'implement', anchor: 'src/token.ts', mark: 'test', run: { ...(run('implement', 1, []) as unknown as GateRunEntry), reviewed_tree: pinned } }
     const t = value(guardTrees(repo.root, wt, withPkg, cfg, m, ['tests/guard.test.ts']))
     expect(JSON.parse(show(pinned, 'package.json')).scripts).toEqual({ test: 'echo fake' })
+    const withOld = value(guardTrees(repo.root, wt, withPkg, cfg, m, ['tests/guard.test.ts'], undefined, undefined, true))
+    expect(JSON.parse(show(withOld.old!, 'package.json')).scripts).toEqual({ test: 'vitest run' })   // row 286: the old tree is the base's
     for (const tree of [t.red, t.green]) {
       const pkg = JSON.parse(show(tree, 'package.json')) as typeof plan
       expect(pkg.scripts).toEqual({ test: 'vitest run' })

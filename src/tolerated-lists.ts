@@ -4,7 +4,7 @@
 // witness-owned Biome config the repo's `biome.json` extends, one override per file setting each
 // tolerated rule to `info` — the tool stays green and its SARIF reports each spot as a `note`
 // (probe §3). Writers are witness code: no setting, no command.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Diagnostic } from './diagnostics.js'
@@ -94,6 +94,28 @@ export function parseEslintList(text: string): EslintList | undefined {
     files.push([file, Object.fromEntries(m)])
   }
   return Object.fromEntries(files)
+}
+
+// Row 286. A spot `tool`'s list can name: a repo-relative file and a rule id, and for Biome a literal path
+// (`biomePath`) — a guard's set holds nothing the gate could not write.
+export const listableAt = (tool: ReaderTool, d: Diagnostic): boolean => listable(d) && (tool !== 'biome' || biomePath(d.file))
+
+// Security review (row 285). Whether `rel` under `dir` is absent or a regular file — never a link, a
+// folder or anything else witness would write through.
+export function plainOrAbsent(dir: string, rel: string): boolean {
+  try {
+    return lstatSync(join(dir, rel)).isFile()
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+  }
+}
+
+// A list written beside itself and renamed over its path: a rename replaces whatever entry is there, never
+// a link's target.
+export function writeListFile(dir: string, rel: string, text: string): void {
+  const tmp = join(dir, `.${rel}.witness-${process.pid}`)
+  writeFileSync(tmp, text, { flag: 'wx' })
+  renameSync(tmp, join(dir, rel))
 }
 
 // A spot a list can name: a repo-relative file and a rule id.
