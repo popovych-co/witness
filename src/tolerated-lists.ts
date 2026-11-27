@@ -4,10 +4,15 @@
 // witness-owned Biome config the repo's `biome.json` extends, one override per file setting each
 // tolerated rule to `info` — the tool stays green and its SARIF reports each spot as a `note`
 // (probe §3). Writers are witness code: no setting, no command.
+import { readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Diagnostic } from './diagnostics.js'
+import { tryGit } from './gitio.js'
 import { DEFAULT_JSON_STYLE, formatJson, type JsonStyle } from './json-format.js'
 import { readBiomeConfig } from './lint-config.js'
 import { RULE_RE } from './lint-readers.js'
+import { withScratch } from './scratch.js'
 import type { ReaderTool } from './settings.js'
 
 export const ESLINT_LIST = 'eslint-suppressions.json'
@@ -180,4 +185,25 @@ export function writable(tool: ReaderTool, rule: string): boolean {
   if (tool === 'eslint') return rule !== '?' && RULE_RE.test(rule)
   if (tool === 'biome') return BIOME_RULE.test(rule)
   return false
+}
+
+// Row 285 (C51, probe §6). git's arguments for a rebase or a put-back that must never stop on the two lists:
+// a merge driver that keeps the side being built on (`true` leaves %A — upstream's list in a rebase, the
+// rebased HEAD's in `stash apply`), declared for this one command through a scratch attributes file that
+// first carries the user's own (core.attributesFile, else git's XDG default). Nothing persists; the gate
+// that follows rewrites both lists for the tree.
+export const LISTS_DRIVER = 'witness-tolerated'
+export function withListsDriver<T>(wt: string, use: (args: string[]) => T): T {
+  const own = tryGit(wt, 'config', '--path', '--get', 'core.attributesFile')
+  const xdg = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'git', 'attributes')
+  let carried = ''
+  try {
+    carried = readFileSync(own.ok && own.out.trim() !== '' ? own.out.trim() : xdg, 'utf8')
+  } catch { /* none, or unreadable: nothing to carry */ }
+  return withScratch('witness-lists-', (dir) => {
+    const attrs = join(dir, 'attributes')
+    const lines = [ESLINT_LIST, BIOME_LIST].map((f) => `/${f} merge=${LISTS_DRIVER}`).join('\n')
+    writeFileSync(attrs, `${carried}${carried === '' || carried.endsWith('\n') ? '' : '\n'}${lines}\n`)
+    return use(['-c', `core.attributesFile=${attrs}`, '-c', `merge.${LISTS_DRIVER}.driver=true`])
+  })
 }

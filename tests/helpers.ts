@@ -22,6 +22,8 @@ import { findById, loadCanon } from '../src/scan.js'
 import { canonicalSha } from '../src/sha.js'
 import { worktreePath } from '../src/worktree.js'
 import { stateDirs } from '../src/gitio.js'
+import { diagnosticKey, normalizeSnippet } from '../src/diagnostics.js'
+import { LEDGER_STREAM } from '../src/streams.js'
 import type { Clock } from '../src/usage.js'
 import { isMap as isYamlMap, parseDocument, stringify } from 'yaml'
 import { defaultValues, withValues } from '../src/settings.js'
@@ -538,6 +540,11 @@ const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'o
 // "files"?: ["<path>"] } }` — each line holding `word` in a .ts file under src/ (only the listed files,
 // when given) is a diagnostic with that rule at that level (SARIF error / warning); `check` counts
 // errors only.
+// Row 285. Mode `eslint` prints ESLint's JSON (rule ids as given, a BAD line as `no-bad`) and applies
+// eslint-suppressions.json as ESLint 10 does (probe §1): per (file, rule) a list count at least the errors
+// moves them all to `suppressedMessages` (kind `file`), else all stay in `messages`; it exits 1 with any
+// error message, 2 when a list entry is unused and none is, else 0. In `sarif` and `check`, when biome.json
+// extends ./biome.witness.json, a spot at a pair that file sets to `info` is a SARIF `note`, never a failure.
 const FAKE_LINT = `// A lint tool for tests: an error is each line holding BAD in a .ts file under src/.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 const ignored = existsSync('.gitignore') ? readFileSync('.gitignore', 'utf8').split('\\n').map((l) => l.trim()).filter(Boolean) : []
@@ -559,16 +566,88 @@ if (existsSync('src')) {
   }
 }
 const mode = process.argv[2] === 'sarif' && conf.report === 'garbage' ? 'garbage' : process.argv[2]
+const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')) } catch { return undefined } }
+const biomeCfg = readJson('biome.json')
+if (mode !== 'eslint' && Array.isArray(biomeCfg?.extends) && biomeCfg.extends.some((e) => e === './biome.witness.json' || e === 'biome.witness.json')) {
+  const pairs = new Set()
+  for (const o of readJson('biome.witness.json')?.overrides ?? []) {
+    for (const [g, names] of Object.entries(o.linter?.rules ?? {})) for (const [n, lvl] of Object.entries(names)) if (lvl === 'info') pairs.add(\`\${o.includes?.[0]}\\0lint/\${g}/\${n}\`)
+  }
+  for (const x of found) if (pairs.has(\`\${x.file}\\0\${x.rule}\`)) x.level = 'note'
+}
 const result = (ruleId, file, line, level = 'error') => ({ ruleId, level, locations: [{ physicalLocation: { artifactLocation: { uri: \`\${process.cwd()}/\${file}\` }, region: { startLine: line } } }] })
 if (mode === 'sarif') process.stdout.write(JSON.stringify({ version: '2.1.0', runs: [{ results: found.map((x) => result(x.rule, x.file, x.line, x.level)) }] }))
+let eslintExit = 0
+if (mode === 'eslint') {
+  const list = readJson('eslint-suppressions.json') ?? {}
+  const idOf = (x) => (x.rule === 'lint/test/noBad' ? 'no-bad' : x.rule)
+  const errors = new Map()
+  for (const x of found) if (x.level === 'error') { const k = \`\${x.file}\\0\${idOf(x)}\`; errors.set(k, (errors.get(k) ?? 0) + 1) }
+  const byFile = new Map()
+  for (const x of found) {
+    const r = byFile.get(x.file) ?? { filePath: \`\${process.cwd()}/\${x.file}\`, messages: [], suppressedMessages: [] }
+    const id = idOf(x)
+    const n = errors.get(\`\${x.file}\\0\${id}\`) ?? 0
+    const m = { ruleId: id, severity: x.level === 'error' ? 2 : 1, line: x.line, column: 1 }
+    if (x.level === 'error' && (list[x.file]?.[id]?.count ?? 0) >= n) r.suppressedMessages.push({ ...m, suppressions: [{ kind: 'file', justification: '' }] })
+    else r.messages.push(m)
+    byFile.set(x.file, r)
+  }
+  const report = [...byFile.values()]
+  const unused = Object.entries(list).some(([f, rules]) => Object.entries(rules).some(([id, e]) => e.count > (errors.get(\`\${f}\\0\${id}\`) ?? 0)))
+  process.stdout.write(JSON.stringify(report))
+  eslintExit = report.some((r) => r.messages.some((m) => m.severity === 2)) ? 1 : unused ? 2 : 0
+}
 if (mode === 'many') process.stdout.write(JSON.stringify({ runs: [{ results: Array.from({ length: 2_001 }, (_, i) => result(\`lint/test/r\${i}\`, 'src/many.ts', 1)) }] }))
 if (mode === 'garbage') process.stdout.write('> banner\\nnot a report')
-process.exitCode = mode === 'many' || found.some((x) => x.level === 'error') ? 1 : 0
+process.exitCode = mode === 'eslint' ? eslintExit : mode === 'many' || found.some((x) => x.level === 'error') ? 1 : 0
 `
-export function fakeLint(repo: TestRepo): { check: string; sarif: string; garbage: string; many: string } {
+export function fakeLint(repo: TestRepo): { check: string; sarif: string; garbage: string; many: string; eslint: string } {
   repo.write('fake-lint.mjs', FAKE_LINT)
   const at = (mode: string) => `node fake-lint.mjs ${mode}`
-  return { check: at('check'), sarif: at('sarif'), garbage: at('garbage'), many: at('many') }
+  return { check: at('check'), sarif: at('sarif'), garbage: at('garbage'), many: at('many'), eslint: at('eslint') }
+}
+
+// Row 285. A tolerated-set bench: shippableRepo (its s1 proven, so the implement gate runs), then main gains
+// fake-lint.mjs in its `eslint` mode as the lint part and readers.eslint, rule no-swallow (word SWALLOW), and
+// `main`'s files, and the plan's worktree is rebased onto it; `set` is a merged plan's open tolerated set over
+// (file, line) pairs. `gate` runs a round with three clean lenses; `outs` holds its output.
+export const TOLERATED_L1 = 'export const one = 1 // SWALLOW one'
+export const TOLERATED_L2 = 'export const two = 2 // SWALLOW two'
+export const TOLERATED_TWO = {
+  'src/a.ts': `${TOLERATED_L1}\n${TOLERATED_L2}\n`,
+  'eslint-suppressions.json': `${JSON.stringify({ 'src/a.ts': { 'no-swallow': { count: 2 } } }, null, 2)}\n`,
+}
+export const TOLERATED_SET: Array<[string, string]> = [['src/a.ts', TOLERATED_L1], ['src/a.ts', TOLERATED_L2]]
+export async function toleratedBench(opts: { main: Record<string, string>; set?: Array<[string, string]> }) {
+  const { repo, wt, planId } = await shippableRepo()
+  const lint = fakeLint(repo)
+  repo.write('fake-lint.json', `${JSON.stringify({ rules: { 'no-swallow': { word: 'SWALLOW' } } })}\n`)
+  for (const [p, t] of Object.entries(opts.main)) repo.write(p, t)
+  patchConfig(repo, { ship: { test: 'true', lint: { eslint: lint.eslint } }, readers: { eslint: lint.eslint } })
+  repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base with lint')
+  trustConfig(repo)
+  if (opts.set !== undefined) {
+    const key = (file: string, line: string) => diagnosticKey({ tool: 'eslint', rule: 'no-swallow', file, snippet: normalizeSnippet(line) })
+    appendEntry(repo.root, 'old-plan', { t: 'status', artifact: 'old-plan', from: 'in-progress', to: 'done', cause: 'merge', pr: 3 } as never)
+    appendEntry(repo.root, LEDGER_STREAM, { t: 'ledger-open', id: 'l-0000000a', key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: 'old-plan',
+      gate: 'implement', round: 1, run_id: 'r-1', tool: 'eslint', rule: 'no-swallow', origin: 'guard', anchor: 'src/token.ts',
+      subject: { spots: Object.fromEntries(opts.set.map(([f, l]) => [key(f, l), { file: f, copies: 1 }])) } } as never)
+    repo.git('add', '.witness'); repo.git('commit', '-q', '-m', 'ledger')
+  }
+  execFileSync('git', ['rebase', '-q', 'main'], { cwd: wt, env: { ...process.env, ...FIXTURE_GIT_ENV } })
+  const scenario = fakeScenario()
+  const outs: string[] = []
+  const gate = async (name: 'implement' | 'ship' = 'implement') => {
+    putVerdict(scenario, CLEAN_THREE)
+    outs.length = 0
+    return runGate(fakeCtx(repo.root, { env: gateEnv(scenario), out: (l) => outs.push(l), err: (l) => outs.push(l) }), name, planId, { fresh: false, manual: false })
+  }
+  const last = () => readStream(repo.root, planId).filter((e) => e.t === 'gate-run').at(-1) as unknown as GateRunEntry
+  const check = (name: string) => last().checks.find((c) => c.name === name)
+  const put = (f: string, t: string) => writeFileSync(join(wt, f), t)
+  const read = (f: string) => readFileSync(join(wt, f), 'utf8')
+  return { repo, wt, planId, scenario, outs, gate, last, check, put, read }
 }
 
 // Row 277. `pnpm lint`'s shape for tests: run-script.mjs runs package.json's `scripts[argv[2]]` through

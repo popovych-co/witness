@@ -27,6 +27,7 @@ import { execFileSync } from './spawn.js'
 // Static, unlike gate.ts and next.ts: this module lies outside gate.ts's static import graph,
 // so reaching decide.ts from here closes no registration cycle.
 import { busyLine, hhmm, settleStop, settledCode, waitingLine } from './settle.js'
+import { withListsDriver } from './tolerated-lists.js'
 import {
   carryClashViolations, clashGuard, clashLeft, clashViolations, refuseClash, replayConflictViolations,
 } from './clash.js'
@@ -409,15 +410,21 @@ export function rebaseIfMoved(
   const appeared = operationInProgress(wt)
   if (appeared !== undefined) return refuse(sessionOperation(wt, planId, appeared, carry))
   const reflog = headReflog(wt)
-  const rebase = carryGit(wt, 'rebase', '--no-autostash', base)
-  // A rebase stopped on a conflict is still in progress here; a clean one is done, the work not back.
-  crashPoint(run.env, 'carry-mid-rebase')
-  if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`, reflog, say))
-  // Step 7. The work back, or the refusal that keeps it.
-  if (carry !== undefined) {
-    const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry), say)
-    if (refused !== undefined) return refuse(refused)
-  }
+  // Row 285 (C51): the rebase and the put-back keep the upstream's tolerated lists, never stopping on them;
+  // the ship gate rewrites them for the rebased tree.
+  const moved = withListsDriver(wt, (lists): Result<'moved'> => {
+    const rebase = carryGit(wt, ...lists, 'rebase', '--no-autostash', base)
+    // A rebase stopped on a conflict is still in progress here; a clean one is done, the work not back.
+    crashPoint(run.env, 'carry-mid-rebase')
+    if (rebase.code !== 0) return refuse(failedRebase(wt, planId, base, carry, at, `${rebase.stdout}${rebase.stderr}`, reflog, say))
+    // Step 7. The work back, or the refusal that keeps it.
+    if (carry !== undefined) {
+      const refused = putBackRefusal(wt, planId, base, reapply(wt, planId, carry, lists), say)
+      if (refused !== undefined) return refuse(refused)
+    }
+    return ok('moved')
+  })
+  if (!moved.ok) return moved
   // Step 8. With a PR the push result is the whole point: reporting 'rebased' after a failed push
   // leaves the PR head on the pre-rebase commit, and CI goes green on a tree nobody will merge. A
   // clash or a refused put-back withholds it (returned above); the next ship run carries it, under

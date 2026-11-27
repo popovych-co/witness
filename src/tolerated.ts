@@ -9,14 +9,22 @@
 // it exactly. Invariant: every spot of a tolerated rule on main passed a gate that read it as allowed or
 // booked it. Growth is the multiset difference against it: anything beyond is new, whatever the counts
 // (§4 T4: a swap of one old spot for one new one is one new spot).
+import { lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cliAct } from './act.js'
+import { ensureTrusted } from './allowlist.js'
+import type { Ctx } from './cli.js'
 import type { Config } from './config.js'
-import { diagnosticKey, lineKeys, type Diagnostic } from './diagnostics.js'
+import { diagnosticKey, lineKeys, readPart, type Diagnostic } from './diagnostics.js'
+import { commitWithTrailer, gitBlob, tryGit } from './gitio.js'
+import { jsonStyle } from './lint-config.js'
 import { guardAct } from './guard.js'
 import { MAX_TOLERATED_KEYS, ledgerItems, mergedPlan, type ToleratedItem } from './ledger.js'
 import type { GateCheck, ToleratedSpot, ToleratedVerdict } from './rounds.js'
 import type { ReaderTool } from './settings.js'
-import { BIOME_LIST, ESLINT_LIST, extendsWitness } from './tolerated-lists.js'
+import {
+  BIOME_LIST, ESLINT_LIST, biomeList, biomeListText, biomePairs, eslintList, eslintListText, extendsWitness, parseEslintList,
+} from './tolerated-lists.js'
 import { quotedWord, visible } from './toon.js'
 
 // One (tool, rule), a key no rule id can collide in.
@@ -201,4 +209,74 @@ function reproof(root: string, plan: string, base: string, sets: readonly Tolera
     if ((held.get(x.file)?.get(x.key) ?? 0) > 0) return { anchor: own.anchor!, where: `${visible(x.file)}${x.line !== undefined ? `:${x.line}` : ''}` }
   }
   return undefined
+}
+
+// ── The lists every code gate writes (row 285, C51) ───────────────────────────────────────────────
+
+// A regular file's text at `rel` under `dir` (never through a link); undefined when there is none.
+function fileText(dir: string, rel: string): string | undefined {
+  try {
+    return lstatSync(join(dir, rel)).isFile() ? readFileSync(join(dir, rel), 'utf8') : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const LIST_OF: Partial<Record<ReaderTool, string>> = { eslint: ESLINT_LIST, biome: BIOME_LIST }
+
+// Row 285 (C51). Before anything reads the tree: each tolerated tool's reader runs in the worktree (as lint's,
+// `ensureTrusted`), and each list is written for the tree — ESLint's tolerating every spot of a tolerated
+// rule (growth included: the tool never reports one, the tolerated check alone judges), dropping a rule a
+// set once named but none applies to now, keeping the repo's own entries at most at the base's count;
+// Biome's per file, never deleted once present. Undefined when no set applies and neither list holds what
+// witness wrote, so every other plan's round is untouched. With `commit` (ship), the paths it changed are
+// committed with the trailer, as `dropRetired`; implement leaves them for the reviewed tree.
+export async function prepareTolerated(root: string, wt: string, ctx: Ctx, cfg: Config, plan: string, base: string, commit?: string):
+Promise<ToleratedReading | undefined> {
+  const sets = applicableSets(root, plan)
+  const rules = toleratedRules(sets)
+  const witness = witnessRules(root)
+  const eslintNow = fileText(wt, ESLINT_LIST)
+  const biomeNow = fileText(wt, BIOME_LIST)
+  const eslintHeld = eslintNow !== undefined && Object.values(parseEslintList(eslintNow) ?? {})
+    .some((byRule) => Object.keys(byRule).some((r) => witness.get('eslint')?.has(r) === true))
+  const biomeHeld = biomeNow !== undefined && biomePairs(biomeNow).size > 0
+  if (sets.length === 0 && !eslintHeld && !biomeHeld) return undefined
+  const read = new Set<ReaderTool>(rules.keys())
+  if (eslintHeld) read.add('eslint')
+  if (biomeHeld) read.add('biome')
+  const tools = new Map<ReaderTool, ToolReading>()
+  const wrote: string[] = []
+  for (const tool of [...read].sort()) {
+    const cmd = cfg.readers?.[tool]
+    if (cmd === undefined) { tools.set(tool, { ok: false, state: 'not-measured', why: 'reader-unset' }); continue }
+    if (await ensureTrusted(root, ctx, cmd) !== 'trusted') { tools.set(tool, { ok: false, state: 'untrusted', why: 'untrusted', cmd }); continue }
+    const list = LIST_OF[tool]
+    if (list !== undefined && tryGit(wt, 'check-ignore', '-q', '--', list).ok) {
+      tools.set(tool, { ok: false, state: 'not-measured', why: 'list-ignored' })
+      continue
+    }
+    const r = readPart(wt, ctx, tool, cmd)
+    if (!r.ok) {
+      tools.set(tool, { ok: false, state: 'not-measured', why: r.violations[0]?.rule === 'run-interrupted' ? 'run-interrupted' : 'reader-unread' })
+      continue
+    }
+    const spots = [...r.value.diagnostics, ...r.value.tolerated]
+    tools.set(tool, { ok: true, spots })
+    if (tool === 'eslint') {
+      const prior = parseEslintList(gitBlob(root, base, ESLINT_LIST)?.toString('utf8') ?? '')
+      const text = eslintListText(eslintList(spots, rules.get('eslint') ?? new Set(), witness.get('eslint') ?? new Set(), prior), jsonStyle(wt, eslintNow))
+      if (text === undefined && eslintNow !== undefined) { rmSync(join(wt, ESLINT_LIST), { force: true }); wrote.push(ESLINT_LIST) }
+      if (text !== undefined && text !== eslintNow) { writeFileSync(join(wt, ESLINT_LIST), text); wrote.push(ESLINT_LIST) }
+    }
+    if (tool === 'biome' && (rules.has('biome') || biomeNow !== undefined)) {
+      const text = biomeListText(biomeList(spots, rules.get('biome') ?? new Set()), jsonStyle(wt, biomeNow))
+      if (text !== biomeNow) { writeFileSync(join(wt, BIOME_LIST), text); wrote.push(BIOME_LIST) }
+    }
+  }
+  if (commit !== undefined && wrote.length > 0) {
+    const committed = commitWithTrailer(wt, wrote, commit)
+    if (!committed.ok) throw new Error(committed.violations.map((x) => x.got).join('; '))
+  }
+  return { sets, tools, wrote }
 }
