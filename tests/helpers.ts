@@ -539,7 +539,7 @@ const isPatchMap = (x: unknown): x is Record<string, unknown> => typeof x === 'o
 // Row 280. fake-lint.json's `rules`: `{ "<rule id>": { "word": "<text>", "level"?: "error" | "warn",
 // "files"?: ["<path>"] } }` — each line holding `word` in a .ts file under src/ (only the listed files,
 // when given) is a diagnostic with that rule at that level (SARIF error / warning); `check` counts
-// errors only.
+// errors only. Final review C1: `"perLine": n` reports n spots on each such line.
 // Row 285. Mode `eslint` prints ESLint's JSON (rule ids as given, a BAD line as `no-bad`) and applies
 // eslint-suppressions.json as ESLint 10 does (probe §1): per (file, rule) a list count at least the errors
 // moves them all to `suppressedMessages` (kind `file`), else all stay in `messages`; it exits 1 with any
@@ -560,7 +560,7 @@ if (existsSync('src')) {
     readFileSync(file, 'utf8').split('\\n').forEach((l, i) => {
       if (l.includes('BAD')) found.push({ file, line: i + 1, rule: 'lint/test/noBad', level: 'error' })
       for (const [rule, r] of rules) {
-        if ((r.files === undefined || r.files.includes(file)) && l.includes(r.word)) found.push({ file, line: i + 1, rule, level: r.level === 'warn' ? 'warning' : 'error' })
+        if ((r.files === undefined || r.files.includes(file)) && l.includes(r.word)) for (let n = 0; n < (r.perLine ?? 1); n++) found.push({ file, line: i + 1, rule, level: r.level === 'warn' ? 'warning' : 'error' })
       }
     })
   }
@@ -619,10 +619,10 @@ export const TOLERATED_TWO = {
   'eslint-suppressions.json': `${JSON.stringify({ 'src/a.ts': { 'no-swallow': { count: 2 } } }, null, 2)}\n`,
 }
 export const TOLERATED_SET: Array<[string, string]> = [['src/a.ts', TOLERATED_L1], ['src/a.ts', TOLERATED_L2]]
-export async function toleratedBench(opts: { main: Record<string, string>; set?: Array<[string, string]> }) {
+export async function toleratedBench(opts: { main: Record<string, string>; set?: Array<[string, string] | [string, string, number, number]>; perLine?: number }) {
   const { repo, wt, planId } = await shippableRepo()
   const lint = fakeLint(repo)
-  repo.write('fake-lint.json', `${JSON.stringify({ rules: { 'no-swallow': { word: 'SWALLOW' } } })}\n`)
+  repo.write('fake-lint.json', `${JSON.stringify({ rules: { 'no-swallow': { word: 'SWALLOW', ...(opts.perLine !== undefined ? { perLine: opts.perLine } : {}) } } })}\n`)
   for (const [p, t] of Object.entries(opts.main)) repo.write(p, t)
   patchConfig(repo, { ship: { test: 'true', lint: { eslint: lint.eslint } }, readers: { eslint: lint.eslint } })
   repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base with lint')
@@ -632,7 +632,7 @@ export async function toleratedBench(opts: { main: Record<string, string>; set?:
     appendEntry(repo.root, 'old-plan', { t: 'status', artifact: 'old-plan', from: 'in-progress', to: 'done', cause: 'merge', pr: 3 } as never)
     appendEntry(repo.root, LEDGER_STREAM, { t: 'ledger-open', id: 'l-0000000a', key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: 'old-plan',
       gate: 'implement', round: 1, run_id: 'r-1', tool: 'eslint', rule: 'no-swallow', origin: 'guard', anchor: 'src/token.ts',
-      subject: { spots: Object.fromEntries(opts.set.map(([f, l]) => [key(f, l), { file: f, copies: 1 }])) } } as never)
+      subject: { spots: Object.fromEntries(opts.set.map(([f, l, copies, lines]) => [key(f, l), { file: f, copies: copies ?? 1, ...(lines !== undefined ? { lines } : {}) }])) } } as never)
     repo.git('add', '.witness'); repo.git('commit', '-q', '-m', 'ledger')
   }
   execFileSync('git', ['rebase', '-q', 'main'], { cwd: wt, env: { ...process.env, ...FIXTURE_GIT_ENV } })

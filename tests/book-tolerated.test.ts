@@ -35,7 +35,7 @@ describe('a human books tolerated growth (row 284)', () => {
     expect(await decide({ ...fakeCtx(b.repo.root), out: (l) => out.push(l) }, ['implement', b.planId, '--book', 'tolerated'])).toBe(0)
     const sets = ledgerItems(b.repo.root).filter((i) => i.kind === 'tolerated-set' && i.plan === b.planId)
     expect(sets).toEqual([expect.objectContaining({ kind: 'tolerated-set', check: 'tolerated', origin: 'book', state: 'open',
-      subject: { spots: { [keyOf('src/a.ts', NEW)]: { file: 'src/a.ts', copies: 1 } } } })])
+      subject: { spots: { [keyOf('src/a.ts', NEW)]: { file: 'src/a.ts', copies: 1, lines: 1 } } } })])
     expect(sets[0]).not.toHaveProperty('anchor')
     expect(b.decisions().at(-1)).toMatchObject({ decision: 'book', book: { check: 'tolerated', items: [sets[0]!.id] } })
     expect(out.join('\n')).toContain('tolerated · eslint no-swallow tolerated')

@@ -24,7 +24,7 @@ import { MAX_TOLERATED_KEYS, ledgerItems, mergedPlan, type ToleratedItem } from 
 import type { GateCheck, ToleratedSpot, ToleratedVerdict } from './rounds.js'
 import type { ReaderTool } from './settings.js'
 import {
-  BIOME_LIST, ESLINT_LIST, biomeList, biomeListText, biomePairs, eslintList, eslintListText, extendsWitness, parseEslintList,
+  BIOME_LIST, ESLINT_LIST, biomeList, biomeListText, biomePairs, eslintList, eslintListText, extendsWitness, listableAt, parseEslintList,
   plainOrAbsent, writeListFile,
 } from './tolerated-lists.js'
 import { quotedWord, visible } from './toon.js'
@@ -45,8 +45,11 @@ export function applicableSets(root: string, plan: string): ToleratedItem[] {
 // Per `ruleKey`, per spot key, the copies `plan`'s tree may hold: its own sets' whole, the merged sets'
 // summed and capped by the lines `base` (a commit) holds. A git failure reading the base caps at 0 —
 // red, never green. Slice 1 review I2: the plan's own `guard` copies are old spots, base lines too, so
-// the merged sets share the cap with them — `own + min(Σ merged, max(0, base lines − own guard))`; an
-// own booked copy is new code and uses up no base line.
+// the merged sets share the cap with them — `own + min(Σ merged, max(0, cap − own guard))`; an own booked
+// copy is new code and uses up no base line. Final review C1: the cap is in spots, not lines — the base's
+// lines holding the key times the most copies per line any set naming it saw (two spots of one rule on one
+// line share a key).
+const perLine = (s: ToleratedSpot): number => Math.ceil(s.copies / (s.lines ?? s.copies))
 export function allowance(root: string, plan: string, base: string, sets: readonly ToleratedItem[]): Map<string, Map<string, number>> {
   const out = new Map<string, Map<string, number>>()
   const add = (rk: string, k: string, n: number) => {
@@ -56,9 +59,11 @@ export function allowance(root: string, plan: string, base: string, sets: readon
   }
   const merged = new Map<string, { tool: ReaderTool; rule: string; file: string; key: string; copies: number }>()
   const ownGuard = new Map<string, number>()
+  const most = new Map<string, number>()
   for (const s of sets) {
     const rk = ruleKey(s.tool, s.rule)
     for (const [k, spot] of Object.entries(s.subject.spots)) {
+      most.set(`${rk}\0${k}`, Math.max(most.get(`${rk}\0${k}`) ?? 1, perLine(spot)))
       if (s.plan === plan) {
         add(rk, k, spot.copies)
         if (s.origin === 'guard') ownGuard.set(`${rk}\0${k}`, (ownGuard.get(`${rk}\0${k}`) ?? 0) + spot.copies)
@@ -75,26 +80,30 @@ export function allowance(root: string, plan: string, base: string, sets: readon
     const at = `${m.tool}\0${m.rule}\0${m.file}`
     if (!held.has(at)) held.set(at, lineKeys(root, base, m.file, m.tool, m.rule))
     const rk = ruleKey(m.tool, m.rule)
-    const room = Math.max(0, (held.get(at)?.get(m.key) ?? 0) - (ownGuard.get(`${rk}\0${m.key}`) ?? 0))
+    const cap = (held.get(at)?.get(m.key) ?? 0) * (most.get(`${rk}\0${m.key}`) ?? 1)
+    const room = Math.max(0, cap - (ownGuard.get(`${rk}\0${m.key}`) ?? 0))
     add(rk, m.key, Math.min(m.copies, room))
   }
   return out
 }
 
 // Per key, the copies of `spots` beyond `allowed` — the last copies of a key, in the reading's order —
-// each with its file and the first such copy's line; `total` every copy beyond.
+// each with its file, the lines they sit on (final review C1), and the first such copy's line; `total` every
+// copy beyond.
 export function growth(spots: readonly Diagnostic[], allowed: ReadonlyMap<string, number> | undefined):
 { grown: Record<string, ToleratedSpot>; lines: Record<string, number>; total: number } {
   const seen = new Map<string, number>()
   const grown: Record<string, ToleratedSpot> = {}
   const lines: Record<string, number> = {}
+  const at = new Map<string, Set<number | undefined>>()
   let total = 0
   for (const d of spots) {
     const k = diagnosticKey(d)
     const n = (seen.get(k) ?? 0) + 1
     seen.set(k, n)
     if (n <= (allowed?.get(k) ?? 0)) continue
-    grown[k] = { file: d.file, copies: (grown[k]?.copies ?? 0) + 1 }
+    at.set(k, (at.get(k) ?? new Set()).add(d.line))
+    grown[k] = { file: d.file, copies: (grown[k]?.copies ?? 0) + 1, lines: at.get(k)!.size }
     if (!Object.hasOwn(lines, k) && d.line !== undefined) lines[k] = d.line
     total += 1
   }
@@ -181,7 +190,8 @@ export function toleratedCheck(root: string, wt: string, cfg: Config, plan: stri
         segs.push(off.state === 'untrusted' ? `${name}: not run — readers.${tool} is not trusted` : `${name}: not measured — ${want(tool, off.why)}`)
         continue
       }
-      const spots = (r as { spots: Diagnostic[] }).spots.filter((d) => d.tool === tool && d.rule === rule)
+      // Final review M1: a spot no list can name is never hidden from its tool, so lint judges it, never this check.
+      const spots = (r as { spots: Diagnostic[] }).spots.filter((d) => d.tool === tool && d.rule === rule && listableAt(tool, d))
       const g = growth(spots, allowed.get(ruleKey(tool, rule)))
       const keys = Object.keys(g.grown)
       const kept = keys.slice(0, MAX_TOLERATED_KEYS)

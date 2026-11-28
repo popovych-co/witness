@@ -149,7 +149,7 @@ export async function run(ctx: Ctx, argv: string[]): Promise<number> {
     if (set?.tolerated !== undefined) {
       ctx.out(`tolerated: ${set.held} old ${s(set.held, 'spot', 'spots')} of ${name} — set ${set.tolerated}; the next gate writes ${rule.tool === 'eslint' ? ESLINT_LIST : BIOME_LIST}`)
       if (rule.tool === 'biome' && extendsWitness(wt) !== true) {
-        ctx.out('note: biome.json does not extend ./biome.witness.json — add "./biome.witness.json" to its "extends", or Biome reads the old spots as errors')
+        ctx.out('note: biome.json does not extend ./biome.witness.json — add "./biome.witness.json" to its "extends", or Biome reads the old spots as errors; then re-prove this guard if biome.json is among its files (the edit changes them)')
       }
     }
     if (set?.over === true) ctx.out(`note: ${set.held} old spots — more than ${MAX_TOLERATED_KEYS}, so no tolerated set: lint reads them as this plan's until they are fixed`)

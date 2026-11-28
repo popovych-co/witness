@@ -314,7 +314,9 @@ a rule a lint guard's proof found old (origin `guard`, with its anchor) or growt
 diagnostic key with its file and copies, 1–500 keys; its key is 16 hex over (kind, check, plan, tool, rule, the sorted
 spots), the other formulas unchanged. A set applies to its own plan, and to every plan once its plan merged. The
 allowance is the ledger, not a base run: per rule and key, the plan's own sets whole plus the merged sets' copies capped
-by the lines the plan's base holds less the plan's own guard copies; an own booked copy uses no base line. It closes at
+by the base's spots less the plan's own guard copies — the lines the base holds with the key times the most copies per
+line a set saw (each spot records its lines: two spots of one rule on one line share a key); an own booked copy uses no
+base line. It closes at
 the merge stamp once the merged tree holds none of its lines (another merged plan's only where this merge took the last
 one out), at the abandon with its plan, by a re-proof of its guard (`by: 'guard'`), or by `witness dismiss ledger`.
 

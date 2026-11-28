@@ -72,6 +72,10 @@ describe('the writers (row 285)', () => {
     expect(writable('biome', 'plugin')).toBe(false); expect(writable('biome', 'lint/suspicious/noConsole')).toBe(true)
     expect(writable('tsc', 'TS2345')).toBe(false); expect(writable('clippy', 'clippy::unwrap_used')).toBe(false); expect(writable('eslint', 'no-x')).toBe(true)
     expect(writable('eslint', '')).toBe(false); expect(writable('biome', 'format')).toBe(false)
+    // final review I1: Biome's a11y group holds digits
+    expect(writable('biome', 'lint/a11y/useAltText')).toBe(true)
+    const list = biomeList([d('lint/a11y/useAltText', 'src/a.tsx', 1, 'biome')], new Set(['lint/a11y/useAltText']))
+    expect(biomePairs(biomeListText(list))).toEqual(new Set([pairKey('src/a.tsx', 'lint/a11y/useAltText')]))
   })
   it("extendsWitness reads biome.json's and biome.jsonc's extends (row 285)", () => {
     const a = tmpRepo(); a.write('biome.json', JSON.stringify({ extends: ['x', './biome.witness.json'] }))

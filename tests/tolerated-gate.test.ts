@@ -65,6 +65,16 @@ describe('the gates rewrite the tolerated lists (row 285)', () => {
     expect(g(b.wt, 'status', '--porcelain', '--', 'eslint-suppressions.json')).toBe('')
   }, 240_000)
 
+  it('two spots of one rule on one line, tolerated by a merged set, never read as a later plan\'s growth (final review C1)', async () => {
+    const both = 'export function f(a: any, b: any) {} // SWALLOW SWALLOW'
+    const b = await bench({ main: { 'src/a.ts': `${both}\n`, 'eslint-suppressions.json': listText({ 'src/a.ts': { 'no-swallow': { count: 2 } } }) },
+      set: [['src/a.ts', both, 2, 1]], perLine: 2 })
+    b.put('src/c.ts', 'export const c = 1\n')
+    await b.gate()
+    expect(b.check('tolerated')).toMatchObject({ ok: true, tolerated: [{ state: 'measured', spots: 2, allowed: 2 }] })
+    expect(b.check('lint')).toMatchObject({ ok: true })
+  }, 240_000)
+
   it('a plan with no tolerated set gains no tolerated check and writes nothing (row 285)', async () => {
     const b = await bench({ main: { 'src/a.ts': 'export const clean = 1\n' } })
     b.put('src/a.ts', 'export const clean = 2\n')

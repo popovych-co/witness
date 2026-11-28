@@ -166,7 +166,8 @@ export function eslintListText(list: EslintList, style: JsonStyle = DEFAULT_JSON
 // Row 285 (C48). The witness-owned Biome config: one override per file, each tolerated rule of the file at `info`.
 export interface BiomeList { overrides: Array<{ includes: [string]; linter: { rules: Record<string, Record<string, 'info'>> } }> }
 
-const BIOME_RULE = /^lint\/([A-Za-z]+)\/([A-Za-z]+)$/
+// Final review I1: a group or a name may hold digits (Biome's `a11y`).
+const BIOME_RULE = /^lint\/([A-Za-z0-9]+)\/([A-Za-z0-9]+)$/
 
 // Every spot of a `tolerated` rule of the form `lint/<group>/<name>` (never `plugin`, B6); files, groups and
 // names sorted.

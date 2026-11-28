@@ -71,6 +71,18 @@ describe('the allowance (row 284)', () => {
     expect(allowance(repo.root, 'p1', base, sets(repo, 'p1')).get(ruleKey('eslint', RULE))!.get(k)).toBe(2)
   })
 
+  it('two spots of one rule on one line: a merged set allows them as long as the base holds the line (final review C1)', () => {
+    const repo = tmpRepo()
+    const k = key('src/a.ts', 'function f(a: any, b: any) {}')
+    merged(repo, 'old-plan')
+    set(repo, 'old-plan', { [k]: { file: 'src/a.ts', copies: 2, lines: 1 } })
+    const base = commit(repo, { 'src/a.ts': 'function f(a: any, b: any) {}\n' })
+    expect(allowance(repo.root, 'p1', base, sets(repo, 'p1')).get(ruleKey('eslint', RULE))!.get(k)).toBe(2)
+    // the plan's own guard set takes its share of the base's spots, never more
+    set(repo, 'p1', { [k]: { file: 'src/a.ts', copies: 2, lines: 1 } })
+    expect(allowance(repo.root, 'p1', base, sets(repo, 'p1')).get(ruleKey('eslint', RULE))!.get(k)).toBe(2)
+  })
+
   it('a git failure reading the base allows none of a merged set (row 284)', () => {
     const repo = tmpRepo()
     const k = key('src/a.ts', '} catch {')
@@ -108,12 +120,17 @@ describe('growth (row 284)', () => {
     const k2 = key('a.ts', 'old two')
     const k3 = key('a.ts', 'new one')
     const g = growth([at('a.ts', 'old one', 3), at('a.ts', 'new one', 9)], new Map([[k1, 1], [k2, 1]]))
-    expect(g).toEqual({ grown: { [k3]: { file: 'a.ts', copies: 1 } }, lines: { [k3]: 9 }, total: 1 })
+    expect(g).toEqual({ grown: { [k3]: { file: 'a.ts', copies: 1, lines: 1 } }, lines: { [k3]: 9 }, total: 1 })
+  })
+
+  it('growth counts the lines its copies sit on (final review C1)', () => {
+    const k1 = key('a.ts', 'old one')
+    expect(growth([at('a.ts', 'old one', 3), at('a.ts', 'old one', 3), at('a.ts', 'old one', 7)], undefined).grown).toEqual({ [k1]: { file: 'a.ts', copies: 3, lines: 2 } })
   })
 
   it('a second copy of an allowed key is growth, its line the copy beyond the allowance (row 284)', () => {
     const k1 = key('a.ts', 'old one')
-    expect(growth([at('a.ts', 'old one', 3), at('a.ts', 'old one', 7)], new Map([[k1, 1]]))).toEqual({ grown: { [k1]: { file: 'a.ts', copies: 1 } }, lines: { [k1]: 7 }, total: 1 })
-    expect(growth([at('a.ts', 'old one', 3)], undefined)).toEqual({ grown: { [k1]: { file: 'a.ts', copies: 1 } }, lines: { [k1]: 3 }, total: 1 })
+    expect(growth([at('a.ts', 'old one', 3), at('a.ts', 'old one', 7)], new Map([[k1, 1]]))).toEqual({ grown: { [k1]: { file: 'a.ts', copies: 1, lines: 1 } }, lines: { [k1]: 7 }, total: 1 })
+    expect(growth([at('a.ts', 'old one', 3)], undefined)).toEqual({ grown: { [k1]: { file: 'a.ts', copies: 1, lines: 1 } }, lines: { [k1]: 3 }, total: 1 })
   })
 })

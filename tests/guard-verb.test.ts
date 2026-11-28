@@ -400,7 +400,7 @@ describe('witness guard — a lint guard reads the base (row 286)', () => {
     expect(r.code, r.stderr).toBe(0)
     const sets = tolSets(b.repo.root)
     expect(sets).toEqual([expect.objectContaining({ kind: 'tolerated-set', check: 'tolerated', plan: b.planId, tool: 'biome', rule: 'lint/test/noSwallow',
-      origin: 'guard', anchor: 'src/token.ts', state: 'open', subject: { spots: { [otherKey()]: { file: 'src/other.ts', copies: 1 } } } })])
+      origin: 'guard', anchor: 'src/token.ts', state: 'open', subject: { spots: { [otherKey()]: { file: 'src/other.ts', copies: 1, lines: 1 } } } })])
     expect(b.guards().at(-1)).toMatchObject({ tolerated: sets[0]!.id, old: 1 })
     const head = execFileSync('git', ['show', '--name-only', '--format=%s', 'HEAD'], { cwd: b.repo.root, encoding: 'utf8' })
     expect(head).toContain(`guard(${b.planId})`)
@@ -437,6 +437,13 @@ describe('witness guard — a lint guard reads the base (row 286)', () => {
     expect(b.guards().at(-1)).toMatchObject({ old: 1 })
   }, 240_000)
 
+  it('two spots of the rule on one old line: the set records both copies on one line (final review C1)', async () => {
+    const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` }, rule: { perLine: 2 } })
+    const r = await b.guard(LINT_ARGS)
+    expect(r.code, r.stderr).toBe(0)
+    expect(tolSets(b.repo.root)[0]).toMatchObject({ subject: { spots: { [otherKey()]: { file: 'src/other.ts', copies: 2, lines: 1 } } } })
+  }, 240_000)
+
   it("a re-proof replaces the plan's earlier set for the rule (row 286)", async () => {
     const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
     expect((await b.guard(LINT_ARGS)).code).toBe(0)
@@ -470,7 +477,7 @@ describe('witness guard — a lint guard reads the base (row 286)', () => {
     const b = await lintBench({ main: { 'src/other.ts': `${OTHER}\n` } })
     const r = await b.guard(LINT_ARGS)
     expect(r.code, r.stderr).toBe(0)
-    expect(r.stdout).toContain('note: biome.json does not extend ./biome.witness.json — add "./biome.witness.json" to its "extends", or Biome reads the old spots as errors')
+    expect(r.stdout).toContain('note: biome.json does not extend ./biome.witness.json — add "./biome.witness.json" to its "extends", or Biome reads the old spots as errors; then re-prove this guard if biome.json is among its files (the edit changes them)')
     expect(tolSets(b.repo.root)).toHaveLength(1)
   }, 240_000)
 })

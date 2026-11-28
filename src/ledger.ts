@@ -218,7 +218,8 @@ function spotsOf(x: unknown): { spots: Record<string, ToleratedSpot> } | undefin
   for (const [k, v0] of entries) {
     const s = v0 as Record<string, unknown> | null
     if (!SPOT_KEY.test(k) || typeof s !== 'object' || s === null || !str(s.file) || !Number.isInteger(s.copies) || (s.copies as number) < 1) return undefined
-    spots[k] = { file: s.file, copies: s.copies as number }
+    if (s.lines !== undefined && (!Number.isInteger(s.lines) || (s.lines as number) < 1 || (s.lines as number) > (s.copies as number))) return undefined
+    spots[k] = { file: s.file, copies: s.copies as number, ...(s.lines !== undefined ? { lines: s.lines as number } : {}) }
   }
   return { spots }
 }
@@ -366,7 +367,8 @@ export type KeyFields =
 // four formulas are unchanged.
 export function itemKey(o: KeyFields): string {
   if (o.kind === 'tolerated-set') {
-    const spots = Object.entries(o.subject.spots).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, s]) => [k, s.file, s.copies])
+    const spots = Object.entries(o.subject.spots).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, s]) => (s.lines !== undefined ? [k, s.file, s.copies, s.lines] : [k, s.file, s.copies]))
     return createHash('sha256').update(JSON.stringify([o.kind, o.check, o.plan, o.tool, o.rule, spots])).digest('hex').slice(0, 16)
   }
   if (o.kind === 'booked-loosened') {
@@ -459,7 +461,7 @@ export function bookingsOf(run: GateRunEntry, check: string): Booking[] {
   // the key cap (`over`), whose spots no set could hold.
   if (check === 'tolerated') {
     return (last.tolerated ?? []).flatMap((t): Booking[] => (t.state === 'measured' && t.over === undefined && t.grown !== undefined && Object.keys(t.grown).length > 0
-      ? [{ kind: 'tolerated-set', tool: t.tool, rule: t.rule, subject: { spots: Object.fromEntries(Object.entries(t.grown).map(([k, s]) => [k, { file: s.file, copies: s.copies }])) } }]
+      ? [{ kind: 'tolerated-set', tool: t.tool, rule: t.rule, subject: { spots: Object.fromEntries(Object.entries(t.grown).map(([k, s]) => [k, { file: s.file, copies: s.copies, ...(s.lines !== undefined ? { lines: s.lines } : {}) }])) } }]
       : []))
   }
   return (last.parts ?? []).flatMap((p) => (BOOKABLE.has(p.state) && p.key !== undefined

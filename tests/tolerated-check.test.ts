@@ -43,7 +43,7 @@ describe('the tolerated check (row 284)', () => {
     expect(c.name).toBe('tolerated')
     expect(c.ok).toBe(false)
     expect(c.tolerated).toEqual([{ tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1,
-      grown: { [key(at('src/a.ts', 'new one', 9))]: { file: 'src/a.ts', copies: 1 } }, lines: { [key(at('src/a.ts', 'new one', 9))]: 9 } }])
+      grown: { [key(at('src/a.ts', 'new one', 9))]: { file: 'src/a.ts', copies: 1, lines: 1 } }, lines: { [key(at('src/a.ts', 'new one', 9))]: 9 } }])
     expect(c.detail).toContain('eslint no-x: 1 new beside 1 tolerated')
     expect(c.detail).toContain('src/a.ts:9')
     expect(c.detail).not.toContain('src/a.ts:3')
@@ -107,6 +107,16 @@ describe('the tolerated check (row 284)', () => {
     expect(c.ok).toBe(false)
     expect(c.detail).toContain("the base holds src/a.ts:2: re-prove the guard of 'src/token.ts'")
     expect(c.detail).toContain("witness guard p1 --finding 'src/token.ts'")
+  })
+
+  it('a spot at a path no list can name is never growth: lint judges it (final review M1)', () => {
+    const repo = tmpRepo()
+    const listed = at('src/a.ts', 'console.log(1)', 1, 'biome', 'lint/suspicious/noConsole')
+    set(repo, PLAN, [listed])
+    const base = commit(repo, { 'src/a.ts': 'console.log(1)\n', 'biome.json': '{ "extends": ["./biome.witness.json"] }\n' })
+    const bracket = at('app/[slug]/page.tsx', 'console.log(2)', 4, 'biome', 'lint/suspicious/noConsole')
+    const c = toleratedCheck(repo.root, repo.root, cfg(), PLAN, base, 'implement', reading(repo, [['biome', { ok: true, spots: [listed, bracket] }]]))
+    expect(c).toMatchObject({ ok: true, tolerated: [{ state: 'measured', spots: 1, allowed: 1 }] })
   })
 
   it('ten new spots are listed, the rest counted (row 284)', () => {
