@@ -4,6 +4,9 @@ import { mergeClock, mergesBetween, type MergeClock } from './merge-clock.js'
 import type { Canon } from './scan.js'
 import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { kv, rows, visible } from './toon.js'
+import { tryGit } from './gitio.js'
+import { ledgerItems, mergedPlan, type ToleratedItem } from './ledger.js'
+import { allowance, ruleKey } from './tolerated.js'
 
 // Row 254. The track record: a measured baseline for the human, computed from the journal, canon and
 // the merge clock, never inferred — a fold with no data reads "not measured". Decision 8: no gate,
@@ -196,18 +199,44 @@ export function checksFold(root: string, canon: Canon): ChecksFold {
   return { measured: true, lint: rowsOut, tests }
 }
 
+// Row 287 (§4 T1). The tolerated spots main still holds: per (tool, rule) of the open sets whose plan merged,
+// Σ per key of the copies capped by the lines main's HEAD holds (the allowance's cap, so two sets naming one
+// key never count past HEAD's lines), and how many such sets. Measured once checks added is; a HEAD git cannot
+// name reads not measured.
+export type ToleratedFold = { measured: false } | { measured: true; rules: Array<{ tool: ReaderTool; rule: string; spots: number; sets: number }> }
+
+export function toleratedFold(root: string, _canon: Canon, checks: ChecksFold): ToleratedFold {
+  if (!checks.measured) return { measured: false }
+  const head = tryGit(root, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+  if (!head.ok || head.out.trim() === '') return { measured: false }
+  const sets = ledgerItems(root).filter((i): i is ToleratedItem => i.kind === 'tolerated-set' && i.state === 'open' && mergedPlan(root, i.plan))
+  // No plan is "own" here: every set is a merged one, capped by HEAD's lines.
+  const allowed = allowance(root, '', head.out.trim(), sets)
+  const byRule = new Map<string, { tool: ReaderTool; rule: string; spots: number; sets: number }>()
+  for (const s of sets) {
+    const rk = ruleKey(s.tool, s.rule)
+    const row = byRule.get(rk) ?? { tool: s.tool, rule: s.rule, spots: [...(allowed.get(rk)?.values() ?? [])].reduce((a, n) => a + n, 0), sets: 0 }
+    row.sets += 1
+    byRule.set(rk, row)
+  }
+  const rules = [...byRule.values()].sort((a, b) => (a.tool !== b.tool ? (a.tool < b.tool ? -1 : 1) : a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0))
+  return { measured: true, rules }
+}
+
 // Row 254. The track record: its four folds, each "not measured" until it has data. `checks` (checks
-// added) lands with T4a (row 282) — tolerated spots with T4b — and `repairs` with T8b. Plain data: the
-// models entry exports it.
+// added) lands with T4a (row 282) — tolerated spots with T4b (row 287) — and `repairs` with T8b. Plain
+// data: the models entry exports it.
 export interface TrackRecord {
   escapes: EscapesFold
   live: LiveFold
   checks: ChecksFold
+  tolerated: ToleratedFold
   repairs: { measured: false }
 }
 
 export function record(root: string, canon: Canon): TrackRecord {
-  return { escapes: escapesFold(root, canon), live: liveFold(root, canon), checks: checksFold(root, canon), repairs: { measured: false } }
+  const checks = checksFold(root, canon)
+  return { escapes: escapesFold(root, canon), live: liveFold(root, canon), checks, tolerated: toleratedFold(root, canon, checks), repairs: { measured: false } }
 }
 
 // Row 282: lint guards count once per plan that added each (tool, rule).
@@ -225,8 +254,10 @@ export function recordLine(r: TrackRecord): string {
     ? `live specs failing ${r.live.failing.length} · could not verify ${r.live.couldNotVerify.length} of ${r.live.specs}`
     : 'live specs failing not measured'
   const c = r.checks
+  const t = r.tolerated
+  const held = t.measured ? `tolerated spots ${t.rules.reduce((n, x) => n + x.spots, 0)}` : 'tolerated spots not measured'
   const checks = c.measured
-    ? `checks added ${lintAdded(c) + c.tests} (lint ${lintAdded(c)} · test ${c.tests}) · tolerated spots not measured`
+    ? `checks added ${lintAdded(c) + c.tests} (lint ${lintAdded(c)} · test ${c.tests}) · ${held}`
     : 'checks added not measured'
   return [escapes, live, checks, 'repairs not measured'].join(' · ')
 }
@@ -264,6 +295,10 @@ export function recordTables(r: TrackRecord): string[] {
     // Row 282: each lint check a fix added, by tool and rule (spelled out), with the plans that added it.
     ...(r.checks.measured && r.checks.lint.length > 0
       ? rows('checks-added', ['check', 'plans'], r.checks.lint.map((x) => ({ check: `${x.tool} ${visible(x.rule)}`, plans: x.plans.join(' · ') })))
+      : []),
+    // Row 287: the tolerated spots main still holds, by tool and rule (spelled out), with the sets holding them.
+    ...(r.tolerated.measured && r.tolerated.rules.length > 0
+      ? rows('tolerated', ['tool', 'rule', 'spots', 'sets'], r.tolerated.rules.map((x) => ({ tool: x.tool, rule: visible(x.rule), spots: x.spots, sets: x.sets })))
       : []),
     ...owedRows(r),
   ]
