@@ -33,6 +33,8 @@ import { withScratchLock } from './scratch-lock.js'
 import { READER_TOOLS, type ReaderTool } from './settings.js'
 import { snapshotTree, treePaths } from './snapshot.js'
 import { visible } from './toon.js'
+import { ledgerItems, type ToleratedItem } from './ledger.js'
+import { toleratedRules, witnessRules, writeSideLists } from './tolerated.js'
 
 export const LINT_EFFECT = 'lint-effect'
 // Two resets, two prepares at most, every part and every reader twice.
@@ -196,7 +198,11 @@ interface Side { exits: Record<string, 0 | 1>; readers: Map<ReaderTool, Read> }
 
 // One side's step (row 258's contract): every part, then every set reader, keeping a diagnostic only on a
 // non-empty file the side's tree tracks (a part's build output never counts). Lint has no load rule.
-function sideStep(dir: string, ctx: Ctx, cfg: Config, tracked: ReadonlySet<string>): Result<CfStep<Side>> {
+// Row 285 (C51): first each tolerated tool's list is written for this side's own code; every reading keeps
+// errors and tolerated spots alike, so `hidden` sees a spot a list tolerates on one side only.
+type Lists = { tolerated: ReadonlyMap<ReaderTool, ReadonlySet<string>>; witness: ReadonlyMap<ReaderTool, ReadonlySet<string>> }
+function sideStep(dir: string, ctx: Ctx, cfg: Config, tracked: ReadonlySet<string>, lists: Lists): Result<CfStep<Side>> {
+  writeSideLists(dir, ctx, cfg, lists.tolerated, lists.witness)
   const exits: Record<string, 0 | 1> = {}
   for (const part of cfg.ship.lint ?? []) {
     const run = execCommand(dir, ctx, part.cmd, { turn: false })
@@ -213,7 +219,7 @@ function sideStep(dir: string, ctx: Ctx, cfg: Config, tracked: ReadonlySet<strin
       readers.set(tool, { diagnostics: [], unread: cut(`${first.rule}: ${first.got}`) })
       continue
     }
-    const diagnostics = read.value.diagnostics.filter((d) => d.file !== '' && tracked.has(d.file)).map((d) => {
+    const diagnostics = [...read.value.diagnostics, ...read.value.tolerated].filter((d) => d.file !== '' && tracked.has(d.file)).map((d) => {
       const text = d.line !== undefined ? lineIn(dir, d.file, d.line, cache) : undefined
       return { ...d, keySnippet: text !== undefined ? normalizeSnippet(text) : d.snippet }
     })
@@ -280,9 +286,14 @@ function run(root: string, ctx: Ctx, cfg: Config, unit: JobUnit): JobResult {
   }
   const untrusted = effectCommands(cfg).find((c) => !trustedNow(root, ctx.env, c.cmd))
   if (untrusted !== undefined) return { outcome: 'failed', why: cut(`untrusted: ${shownCmd(untrusted)}`) }
+  // Row 285: every open tolerated set's rules, repo-wide, and every rule any set named (what a list may hold of witness's).
+  const lists: Lists = {
+    tolerated: toleratedRules(ledgerItems(root).filter((i): i is ToleratedItem => i.kind === 'tolerated-set' && i.state === 'open')),
+    witness: witnessRules(root),
+  }
   const side = (commit: string): Result<Side> => {
     const tracked = new Set(treePaths(root, commit))
-    const r = inScratch(root, ctx, cfg, { tree: commit }, (dir) => sideStep(dir, ctx, cfg, tracked))
+    const r = inScratch(root, ctx, cfg, { tree: commit }, (dir) => sideStep(dir, ctx, cfg, tracked, lists))
     return r.ok ? ok(r.value.value) : r
   }
   // Both sides under one scratch hold (re-entrant: the job verb already holds it).

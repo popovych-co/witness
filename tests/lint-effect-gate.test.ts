@@ -22,7 +22,9 @@ import '../src/gates/index.js'
 import { journalShard } from '../src/jobs.js'
 import { loadCanon } from '../src/scan.js'
 import { actFacts } from '../src/verbs/next.js'
-import { readStream } from '../src/journal.js'
+import { appendEntry, readStream } from '../src/journal.js'
+import { diagnosticKey, normalizeSnippet } from '../src/diagnostics.js'
+import { LEDGER_STREAM } from '../src/streams.js'
 import { LINT_EFFECT, definitionsCheck, lintEffectKind, loosenedOffs, type LintEffectResult } from '../src/lint-effect.js'
 import type { GateCheck, GateRunEntry } from '../src/rounds.js'
 import {
@@ -270,15 +272,26 @@ describe('the wait on the lint effect (row 277)', () => {
 async function planRepo(o: {
   main: Record<string, string>; plan: Record<string, string>; force?: string[]; reader?: boolean; extra?: string[]
   lint: (cmd: ReturnType<typeof fakeLint>, script: string) => Record<string, string>
+  readers?: (cmd: ReturnType<typeof fakeLint>) => Record<string, string>
+  sets?: Array<{ plan: string; merged?: boolean; spots: Array<[string, string]> }>
 }) {
   const repo = await seededRepo()
   const cmd = fakeLint(repo)
   const script = runScript(repo)
   for (const [f, text] of Object.entries(o.main)) repo.write(f, text)
-  patchConfig(repo, { autonomy: 'on', ship: { test: 'true', lint: o.lint(cmd, script) }, ...(o.reader === true ? { readers: { biome: cmd.sarif } } : {}),
+  patchConfig(repo, { autonomy: 'on', ship: { test: 'true', lint: o.lint(cmd, script) },
+    ...(o.reader === true ? { readers: { biome: cmd.sarif } } : o.readers !== undefined ? { readers: o.readers(cmd) } : {}),
     checks: { definitions: [...DEFAULT_DEFINITIONS, ...(o.extra ?? [])] } })
   repo.git('add', '-A'); repo.git('commit', '-q', '-m', 'base')
   trustConfig(repo)
+  // Row 285: tolerated sets for (eslint, no-swallow), each over (file, line) pairs; a merged one's plan holds its merge stamp.
+  for (const [i, t] of (o.sets ?? []).entries()) {
+    if (t.merged === true) appendEntry(repo.root, t.plan, { t: 'status', artifact: t.plan, from: 'in-progress', to: 'done', cause: 'merge', pr: 3 } as never)
+    appendEntry(repo.root, LEDGER_STREAM, { t: 'ledger-open', id: `l-0000000${i}`, key: '0'.repeat(16), kind: 'tolerated-set', check: 'tolerated', plan: t.plan,
+      gate: 'implement', round: 1, run_id: 'r-1', tool: 'eslint', rule: 'no-swallow', origin: 'guard', anchor: 'src/token.ts',
+      subject: { spots: Object.fromEntries(t.spots.map(([f, l]) => [diagnosticKey({ tool: 'eslint', rule: 'no-swallow', file: f, snippet: normalizeSnippet(l) }), { file: f, copies: 1 }])) } } as never)
+  }
+  if ((o.sets ?? []).length > 0) { repo.git('add', '.witness'); repo.git('commit', '-q', '-m', 'sets') }
   await writeSpec(repo, 'auth-refresh')
   approve(repo, 'auth-refresh')
   // scaffoldingPlan's shape: the spec's first plan done and the spec live, then a plan of one scaffolding
@@ -445,4 +458,38 @@ describe('the judge books what a plan\'s check definitions hide (row 278)', () =
     expect(asked).not.toContain('src/hidden.ts')
     expect(asked).not.toContain('noBad')
   }, 300_000)
+})
+
+// Row 285 (C51). The lint effect writes each side's tolerated lists for its own code before its parts run, and
+// `hidden` reads errors and tolerated spots on both sides.
+const SA = 'export const a = 1 // SWALLOW a'
+const SB = 'export const b = 2 // SWALLOW b'
+const ESLINT = (cmd: ReturnType<typeof fakeLint>) => ({ eslint: cmd.eslint })
+const listOf = (o: unknown) => `${JSON.stringify(o, null, 2)}\n`
+
+describe("the lint effect's sides write their own tolerated lists (row 285)", () => {
+  it("a lint guard's plan with an ESLint list reads no loosened part: each side's list matches its code (row 285)", async () => {
+    const b = await planRepo({
+      main: { 'fake-lint.json': '{}\n', 'src/a.ts': `${SA}\n` }, extra: ['fake-lint.json'], readers: ESLINT, lint: ESLINT,
+      sets: [{ plan: 'auth-refresh-plan-2', spots: [['src/a.ts', SA]] }],
+      plan: { 'fake-lint.json': `${JSON.stringify({ rules: { 'no-swallow': { word: 'SWALLOW' } } })}\n`,
+        'eslint-suppressions.json': listOf({ 'src/a.ts': { 'no-swallow': { count: 1 } } }) },
+    })
+    await b.measure()
+    expect(b.check('definitions')).toMatchObject({ lint_effect: { read: 'measured' } })
+    expect((b.check('switch-offs').offs ?? []).filter((x) => x.kind === 'loosened')).toEqual([])
+  }, 240_000)
+
+  it("a plan that narrows a tolerated rule's config hides its spots: the effect names them (row 285)", async () => {
+    const b = await planRepo({
+      main: { 'fake-lint.json': `${JSON.stringify({ rules: { 'no-swallow': { word: 'SWALLOW' } } })}\n`, 'src/a.ts': `${SA}\n`, 'src/b.ts': `${SB}\n`,
+        'eslint-suppressions.json': listOf({ 'src/a.ts': { 'no-swallow': { count: 1 } }, 'src/b.ts': { 'no-swallow': { count: 1 } } }) },
+      extra: ['fake-lint.json'], readers: ESLINT, lint: ESLINT,
+      sets: [{ plan: 'old-plan', merged: true, spots: [['src/a.ts', SA], ['src/b.ts', SB]] }],
+      plan: { 'fake-lint.json': `${JSON.stringify({ rules: { 'no-swallow': { word: 'SWALLOW', files: ['src/a.ts'] } } })}\n` },
+    })
+    await b.measure()
+    const loosened = (b.check('switch-offs').offs ?? []).filter((x) => x.kind === 'loosened')
+    expect(loosened).toEqual([expect.objectContaining({ kind: 'loosened', tool: 'eslint', rule: 'no-swallow', file: 'src/b.ts', line: 1 })])
+  }, 240_000)
 })

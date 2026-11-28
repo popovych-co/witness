@@ -114,11 +114,12 @@ export function toleratedRules(sets: readonly ToleratedItem[]): Map<ReaderTool, 
 
 // Every rule a tolerated set that ever applied to `plan`'s tree named — its own or a merged plan's, whatever its
 // state now: what a list may hold of witness's writing. Slice 2 review I1: another plan's set (in flight, or
-// abandoned) never wrote this tree's list, so its rule's entries here are the repo's own.
-export function witnessRules(root: string, plan: string): Map<ReaderTool, Set<string>> {
+// abandoned) never wrote this tree's list, so its rule's entries here are the repo's own. With no plan (the lint
+// effect, row 285), every set any plan ever opened.
+export function witnessRules(root: string, plan?: string): Map<ReaderTool, Set<string>> {
   const merged = new Map<string, boolean>()
   const applied = (p: string): boolean => {
-    if (p === plan) return true
+    if (plan === undefined || p === plan) return true
     if (!merged.has(p)) merged.set(p, mergedPlan(root, p))
     return merged.get(p)!
   }
@@ -278,22 +279,55 @@ Promise<ToleratedReading | undefined> {
     }
     const spots = [...r.value.diagnostics, ...r.value.tolerated]
     tools.set(tool, { ok: true, spots })
-    if (tool === 'eslint') {
-      const prior = parseEslintList(gitBlob(root, base, ESLINT_LIST)?.toString('utf8') ?? '')
-      const text = eslintListText(eslintList(spots, rules.get('eslint') ?? new Set(), witness.get('eslint') ?? new Set(), prior), jsonStyle(wt, eslintNow))
-      // Slice 2 review I2: an emptied list is kept as `{}` (ESLint reads it as none), never removed — a removal
-      // against an upstream edit is a modify/delete no merge driver ever sees.
-      const next = text ?? (eslintNow !== undefined ? formatJson({}) : undefined)
-      if (next !== undefined && next !== eslintNow) { writeListFile(wt, ESLINT_LIST, next); wrote.push(ESLINT_LIST) }
-    }
-    if (tool === 'biome' && (rules.has('biome') || biomeNow !== undefined)) {
-      const text = biomeListText(biomeList(spots, rules.get('biome') ?? new Set()), jsonStyle(wt, biomeNow))
-      if (text !== biomeNow) { writeListFile(wt, BIOME_LIST, text); wrote.push(BIOME_LIST) }
-    }
+    const prior = tool === 'eslint' ? parseEslintList(gitBlob(root, base, ESLINT_LIST)?.toString('utf8') ?? '') : undefined
+    wrote.push(...writeToolList(wt, tool, spots, rules, witness, prior))
   }
   if (commit !== undefined && wrote.length > 0) {
     const committed = commitWithTrailer(wt, wrote, commit)
     if (!committed.ok) throw new Error(committed.violations.map((x) => x.got).join('; '))
   }
   return { sets, tools, wrote }
+}
+
+// Row 285. `tool`'s list in `dir` written for `spots`, in the folder's JSON style, the paths it changed: ESLint's
+// from `prior` (the repo's own entries, kept at most at its counts), kept as `{}` once present — slice 2 review
+// I2: never removed, as a removal against an upstream edit is a modify/delete no merge driver sees; Biome's
+// where a Biome rule is tolerated or the file is there, never removed.
+export function writeToolList(dir: string, tool: ReaderTool, spots: readonly Diagnostic[], rules: ReadonlyMap<ReaderTool, ReadonlySet<string>>,
+  witness: ReadonlyMap<ReaderTool, ReadonlySet<string>>, prior: ReturnType<typeof parseEslintList>): string[] {
+  if (tool === 'eslint') {
+    const now = fileText(dir, ESLINT_LIST)
+    const text = eslintListText(eslintList(spots, rules.get('eslint') ?? new Set(), witness.get('eslint') ?? new Set(), prior), jsonStyle(dir, now))
+    const next = text ?? (now !== undefined ? formatJson({}) : undefined)
+    if (next === undefined || next === now) return []
+    writeListFile(dir, ESLINT_LIST, next)
+    return [ESLINT_LIST]
+  }
+  if (tool !== 'biome') return []
+  const now = fileText(dir, BIOME_LIST)
+  if (!rules.has('biome') && now === undefined) return []
+  const text = biomeListText(biomeList(spots, rules.get('biome') ?? new Set()), jsonStyle(dir, now))
+  if (text === now) return []
+  writeListFile(dir, BIOME_LIST, text)
+  return [BIOME_LIST]
+}
+
+// Row 285 (C51). One side of the lint effect, before its parts run: each tolerated tool with a set reader is
+// read in `dir` and its list written for that side's own code (every open set's rules, repo-wide; the repo's
+// own entries kept at the side's counts), so a list the other side's code needs never fails this side's part.
+// A reader that cannot be read writes nothing — the side's own reading says so next.
+export function writeSideLists(dir: string, ctx: Ctx, cfg: Config, rules: ReadonlyMap<ReaderTool, ReadonlySet<string>>,
+  witness: ReadonlyMap<ReaderTool, ReadonlySet<string>>): void {
+  for (const tool of ['biome', 'eslint'] as const) {
+    const cmd = cfg.readers?.[tool]
+    const list = LIST_OF[tool]!
+    if (cmd === undefined || !plainOrAbsent(dir, list)) continue
+    const now = fileText(dir, list)
+    const held = now !== undefined && (tool === 'biome' ? biomePairs(now).size > 0
+      : Object.values(parseEslintList(now) ?? {}).some((byRule) => Object.keys(byRule).some((r) => witness.get('eslint')?.has(r) === true)))
+    if (!rules.has(tool) && !held) continue
+    const r = readPart(dir, ctx, tool, cmd)
+    if (!r.ok) continue
+    writeToolList(dir, tool, [...r.value.diagnostics, ...r.value.tolerated], rules, witness, tool === 'eslint' ? parseEslintList(now ?? '') : undefined)
+  }
 }
